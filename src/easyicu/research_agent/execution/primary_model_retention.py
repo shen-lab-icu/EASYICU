@@ -29,6 +29,7 @@ from ..contracts.model_retention import (
     RequirementRetention,
 )
 from ..contracts.model_terms import PlannedModelRequirement
+from ..contracts.model_terms import preparation_for_step
 from .model_matrix import (
     ModelTermCompilationError,
     compile_model_terms,
@@ -114,6 +115,7 @@ def _requirement_retention(
     step_id: str,
     requirement: PlannedModelRequirement,
     population: Any,
+    preparation: Any = None,
 ) -> RequirementRetention:
     import pandas as pd
 
@@ -121,10 +123,13 @@ def _requirement_retention(
     exposure = requirement.exposure_source
     outcome_column = requirement.outcome
     listed = requirement.missing_category_covariates()
+    mi_primary = preparation is not None and preparation.missing_data is not None and preparation.missing_data.strategy == "multiple_imputation"
     compiled = compile_model_terms(population, terms=terms, exposure=exposure)
     design = compiled.design
     outcome = pd.to_numeric(population[outcome_column], errors="coerce").astype(float)
     evaluable = outcome.notna() & design[list(compiled.exposure_columns)].notna().all(axis=1)
+    if mi_primary:
+        evaluable = outcome.notna()
     rows = primary_model_rows(
         population,
         terms=terms,
@@ -133,6 +138,8 @@ def _requirement_retention(
         missing_category_covariates=listed,
     )
     kept_rows = population.index.isin(rows.design.index)
+    if mi_primary:
+        kept_rows = evaluable.copy()
     columns_by_source: dict[str, list[str]] = {}
     for column, source in compiled.source_by_design_column.items():
         columns_by_source.setdefault(source, []).append(column)
@@ -140,7 +147,7 @@ def _requirement_retention(
     dropped_states = {item.covariate: item.reason_code for item in rows.unmeasured_rows_dropped}
     binary = bool(outcome.loc[evaluable].dropna().isin([0.0, 1.0]).all())
     evaluable_n = int(evaluable.sum())
-    complete = evaluable.copy()
+    complete = evaluable & design[list(compiled.exposure_columns)].notna().all(axis=1)
     covariates: list[CovariateRetention] = []
     for name in requirement.covariates or ():
         if name not in columns_by_source:
@@ -150,7 +157,9 @@ def _requirement_retention(
         missing = evaluable & ~observed
         n_missing = int(missing.sum())
         handling = (
-            "unmeasured_category"
+            "multiple_imputation"
+            if mi_primary
+            else "unmeasured_category"
             if name in kept_states
             else "unmeasured_rows_dropped"
             if name in dropped_states
@@ -175,7 +184,7 @@ def _requirement_retention(
     return RequirementRetention(
         step_id=step_id,
         requirement_id=requirement.requirement_id,
-        policy="explicit_missing_category" if listed else "drop_missing_baseline",
+        policy="multiple_imputation" if mi_primary else "explicit_missing_category" if listed else "drop_missing_baseline",
         population_n=int(len(population)),
         evaluable_n=evaluable_n,
         model_n=model_n,
@@ -330,7 +339,8 @@ def measure_primary_model_retention(
                 )
                 population = frame.loc[nonnegative & alive & observed]
             measured = _requirement_retention(
-                step_id=step.step_id, requirement=requirement, population=population
+                step_id=step.step_id, requirement=requirement, population=population,
+                preparation=preparation_for_step(step),
             )
     except ModelTermCompilationError as exc:
         return evidence("not_evaluable", f"model_term_{exc.reason_code}")

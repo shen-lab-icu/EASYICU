@@ -75,6 +75,10 @@ from ...schema import (
     PlannedModelRequirement,
 )
 from ...numeric_scalars import coerce_optional_finite_float as _finite
+from ...contracts.model_terms import DataPreparationPlan, PreparationRefusal, preparation_for_step
+from ..model_matrix import (
+    compile_prepared_terms, fit_association_missing_data, prepare_analysis_frame, write_preparation_receipt,
+)
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import load_step_cohort_frame, sole_typed_cohort_input
 
@@ -329,6 +333,9 @@ def adjusted_association_executor_scaffold(
             '\n        declared_model["outcome_definition"] = '
             + repr(requirement.outcome_definition.model_dump(mode="json"))
         )
+    preparation = preparation_for_step(step)
+    if preparation is not None:
+        declared_missing += "\n        declared_model[\"data_preparation\"] = " + repr(preparation.model_dump(mode="json"))
     receipt_code = (
         render_standard_plausibility_receipt_code(
             plausibility_scope, frame_name="frame"
@@ -631,6 +638,7 @@ def run_adjusted_association_from_env(
     cohort_path: Any = None,
     emit_step_summary: bool = True,
     output_dir: Any = None,
+    data_preparation: DataPreparationPlan | Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Fit the declared model and write the estimates table.
 
@@ -661,6 +669,13 @@ def run_adjusted_association_from_env(
     except ValueError as exc:
         raise AdjustedAssociationError(str(exc), code=getattr(exc, "code", None),
                                        database=getattr(exc, "database", None)) from exc
+    preparation = (data_preparation if isinstance(data_preparation, DataPreparationPlan)
+                   else DataPreparationPlan.model_validate(data_preparation) if data_preparation is not None else None)
+    preparation_execution, imputation_diagnostics, missing_sensitivity = {}, None, None
+    if preparation is not None:
+        if missing_category_covariates and preparation.missing_data is not None:
+            raise PreparationRefusal("preparation_missing_policy_conflict", "MI/complete-case choices cannot combine with missing-category coding")
+        frame, preparation_execution = prepare_analysis_frame(frame, preparation, run_dir=os.environ.get("EASYICU_RUN_DIR"))
     canonical_method = canonical_association_method(method_family)
     expected_method = _FIT_METHODS.get(estimator_kind)
     if expected_method is None or canonical_method != expected_method:
@@ -698,6 +713,8 @@ def run_adjusted_association_from_env(
     needed = [outcome, *[item.name for item in parsed_terms]]
     if parsed_outcome is not None and parsed_outcome.count:
         needed.extend(parsed_outcome.input_columns)
+    if preparation is not None and preparation.missing_data is not None:
+        needed.extend(preparation.missing_data.auxiliaries)
     if parsed_dependence is not None:
         needed.append(parsed_dependence.group_source)
     missing = [column for column in needed if column not in frame.columns]
@@ -713,7 +730,7 @@ def run_adjusted_association_from_env(
         dependence=parsed_dependence,
     )
     try:
-        compiled = primary_model_rows(
+        compiled = None if preparation is not None and preparation.missing_data is not None else primary_model_rows(
             model_frame,
             terms=parsed_terms,
             exposure=exposure,
@@ -723,7 +740,8 @@ def run_adjusted_association_from_env(
         )
     except ModelTermCompilationError as exc:
         raise AdjustedAssociationError(str(exc)) from exc
-    fitting_rows = compiled.design.index
+    if compiled is not None and preparation is not None:
+        compiled = compile_prepared_terms(model_frame, plan=preparation, terms=parsed_terms, exposure=exposure, outcome=outcome)
     contrasts: Optional[_DeclaredContrasts] = None
     if exposure_term.transform == "treatment_contrast":
         contrast_levels = exposure_term.contrast_levels
@@ -743,27 +761,36 @@ def run_adjusted_association_from_env(
         )
         focal_term = _contrast_column(exposure, primary)
     else:
-        focal_term = compiled.exposure_columns[0]
-    fitting_function = fit_declared_outcome if parsed_outcome is not None else fit_estimator
-    fitting_options = (
-        {"definition": parsed_outcome, "frame": model_frame} if parsed_outcome is not None
-        else {"cohort": None}
-    )
-    try:
-        result = fitting_function(
-            **fitting_options,
-            X=compiled.design,
-            y=model_frame.loc[fitting_rows, outcome],
-            kind=estimator_kind,
-            term=focal_term,
-            source_by_design_column=compiled.source_by_design_column,
-            variance_estimator=variance_estimator,
-            cluster_groups=(
-                cluster_groups.loc[fitting_rows] if cluster_groups is not None else None
-            ),
+        focal_term = exposure_term.name
+    if preparation is not None and preparation.missing_data is not None:
+        compiled, result, imputation_diagnostics, missing_sensitivity = fit_association_missing_data(
+            model_frame, plan=preparation, terms=parsed_terms, exposure=exposure, outcome=outcome,
+            focal_term=focal_term, kind=estimator_kind, variance_estimator=variance_estimator, cluster_groups=cluster_groups,
+            outcome_definition=parsed_outcome, fit_function=fit_declared_outcome if parsed_outcome is not None else None,
         )
-    except ValueError as exc:
-        raise AdjustedAssociationError(str(exc)) from exc
+    else:
+        fitting_rows = compiled.design.index
+        fitting_function = fit_declared_outcome if parsed_outcome is not None else fit_estimator
+        fitting_options = (
+            {"definition": parsed_outcome, "frame": model_frame} if parsed_outcome is not None
+            else {"cohort": None}
+        )
+        try:
+            result = fitting_function(
+                **fitting_options,
+                X=compiled.design,
+                y=model_frame.loc[fitting_rows, outcome],
+                kind=estimator_kind,
+                term=focal_term,
+                source_by_design_column=compiled.source_by_design_column,
+                variance_estimator=variance_estimator,
+                cluster_groups=(
+                    cluster_groups.loc[fitting_rows] if cluster_groups is not None else None
+                ),
+            )
+        except ValueError as exc:
+            raise AdjustedAssociationError(str(exc)) from exc
+    fitting_rows = compiled.design.index
     estimate = _finite(result.point_estimate)
     ci_low = _finite(result.ci_low)
     ci_high = _finite(result.ci_high)
@@ -908,7 +935,8 @@ def run_adjusted_association_from_env(
         "analysis_role": analysis_role,
         "analysis_set": analysis_set,
         "baseline_missing_policy": (
-            _MISSING_CATEGORY_POLICY
+            "multiple_imputation" if preparation is not None and preparation.missing_data is not None
+            and preparation.missing_data.strategy == "multiple_imputation" else _MISSING_CATEGORY_POLICY
             if missing_category_covariates
             else _BASELINE_MISSING_POLICY
         ),
@@ -1028,6 +1056,12 @@ def run_adjusted_association_from_env(
     if estimator_kind == "glm_poisson":
         summary["primary_rr"] = estimate
         summary["primary_rr_ci"] = [ci_low, ci_high]
+    if preparation is not None:
+        receipt = write_preparation_receipt(out_dir, plan=preparation, execution=preparation_execution,
+                                            missing_data=imputation_diagnostics, sensitivity=missing_sensitivity)
+        summary["data_preparation"] = receipt
+        summary["executed_method_design"] = receipt["executed_method_design"]
+        summary["data_preparation_provenance"] = "data_preparation_provenance.json"
     if not emit_step_summary:
         return summary
     (out_dir / "step_summary.json").write_text(

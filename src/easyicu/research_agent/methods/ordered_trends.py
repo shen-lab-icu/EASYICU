@@ -686,6 +686,7 @@ def fit_outcome_model(
         raise ValueError("declared outcome model returned non-finite effects or intervals")
     primary = next(row for row in terms if row.term == term)
     diagnostics["aic"] = float(fit.aic)
+    diagnostics["residual_df"] = len(y) - len(fit.params)
     diagnostics["effect_direction"] = "higher_ordered_category" if kind == "proportional_odds" else "higher_event_rate"
     violated = diagnostics.get("proportional_odds", {}).get("violated", False)
     return OutcomeFit(primary.estimate, primary.ci_low, primary.ci_high, primary.se, len(y), terms,

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Literal, Sequence
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .model_terms import ModelTermSpec, validate_model_term_roster
+from .model_terms import MissingDataPlan
 from .model_tokens import (
     SURVIVAL_COX_ESTIMATOR,
     SURVIVAL_PH_DIAGNOSTIC,
@@ -89,6 +90,7 @@ def canonical_survival_applied_filter(
     model_terms: Sequence[ModelTermSpec],
     time_horizon_value: float,
     time_unit: str,
+    missing_data_plan=None,
 ) -> str:
     """Describe the exact host transformation without copying policy at gates."""
 
@@ -99,7 +101,8 @@ def canonical_survival_applied_filter(
     return (
         "strict_numeric(" + ",".join([time_column, event_column]) + "); "
         f"declared_model_terms({term_summary}); "
-        "complete_case(" + ",".join(needed) + "); time>0; "
+        + ("multiple_imputation(" if missing_data_plan is not None and missing_data_plan.strategy == "multiple_imputation" else "complete_case(")
+        + ",".join(needed) + "); time>0; "
         f"{event_column}=({event_column}=={int(event_value)}); "
         f"administrative_censor_at={float(time_horizon_value):g}_{time_unit}"
     )
@@ -156,6 +159,7 @@ class SurvivalAnalysisReceipt(BaseModel):
     design_columns: List[str]
     exposure_design_column: str
     applied_filter: str
+    missing_data_plan: MissingDataPlan | None = Field(default=None, exclude_if=lambda value: value is None)
     time_unit_authority: Literal["research_context_concept_descriptor"] = (
         "research_context_concept_descriptor"
     )
@@ -335,6 +339,7 @@ class SurvivalAnalysisReceipt(BaseModel):
             model_terms=self.model_terms,
             time_horizon_value=self.time_horizon_value,
             time_unit=self.time_unit,
+            missing_data_plan=self.missing_data_plan,
         )
         if self.applied_filter != expected_filter:
             raise ValueError("survival receipt filter is not the canonical host filter")

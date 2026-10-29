@@ -16,41 +16,53 @@ import json
 import math
 import os
 import textwrap
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
+
+import pandas as pd
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.family_primary import FamilyPrimaryResultRequirement
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.model_terms import (
+    DataPreparationPlan,
     ModelTermSpec,
+    PreparationRefusal,
+    preparation_for_step,
+    require_matching_survival_policy,
     serialise_model_terms,
     validate_model_term_roster,
 )
-from ...contracts.model_tokens import (
-    SURVIVAL_COX_ESTIMATOR,
-    SURVIVAL_PH_DIAGNOSTIC,
-)
-from ...contracts.survival import (
-    CIF_PRODUCT, FINE_GRAY_PRODUCT, GRAY_PRODUCT, LOGRANK_PRODUCT, validate_competing_event,
-)
+from ...contracts.model_tokens import SURVIVAL_COX_ESTIMATOR, SURVIVAL_PH_DIAGNOSTIC
 from ...contracts.ownership_verdict import OwnershipVerdict
-from ...contracts.survival_execution import (
-    SURVIVAL_PRIMARY_ANALYSIS_KIND,
-    survival_execution_verdict,
-)
 from ...contracts.survival import (
+    CIF_PRODUCT,
+    FINE_GRAY_PRODUCT,
+    GRAY_PRODUCT,
+    LOGRANK_PRODUCT,
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     SURVIVAL_PH_DIAGNOSTIC_PRODUCT,
     SURVIVAL_PRIMARY_OWNER,
     SurvivalAnalysisReceipt,
     canonical_survival_applied_filter,
     canonical_survival_formula,
+    validate_competing_event,
 )
+from ...contracts.survival_execution import (
+    SURVIVAL_PRIMARY_ANALYSIS_KIND,
+    survival_execution_verdict,
+)
+from ...methods.missing_data import multiple_impute, rubin_pool
 from ...methods.ph_schoenfeld import ph_test
 from ...schema import AnalysisStep
-from ..model_matrix import ModelTermCompilationError, compile_model_terms
+from ..model_matrix import (
+    ModelTermCompilationError,
+    compile_model_terms,
+    compile_prepared_terms,
+    prepare_analysis_frame,
+    write_preparation_receipt,
+)
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import read_frame, sha256_file
 
@@ -224,6 +236,7 @@ def survival_primary_executor_scaffold(
     verdict = survival_primary_executor_verdict(step)
     if not verdict.claimed:
         raise ValueError(verdict.reason)
+    require_matching_survival_policy(step)
     if plausibility_scope is not None:
         plausibility_scope.require_step(step.step_id)
     requirement = _requirement(step)
@@ -261,6 +274,7 @@ def survival_primary_executor_scaffold(
         "ph_diagnostic": requirement.proportional_hazards_diagnostic,
         "ph_alpha": requirement.proportional_hazards_alpha,
         "ph_policy": requirement.proportional_hazards_policy,
+        "data_preparation": preparation_for_step(step).model_dump(mode="json") if preparation_for_step(step) else None,
     }
     prologue = textwrap.dedent(
         f"""
@@ -449,6 +463,7 @@ def run_survival_primary(
     competing_event_value: int | None = None,
     competing_event_definition: str | None = None,
     emit_step_summary: bool = True,
+    data_preparation: DataPreparationPlan | Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Fit, diagnose and receipt-bind the exact Planner-declared Cox model."""
 
@@ -468,6 +483,10 @@ def run_survival_primary(
             "Bound cohort digest changed before fit",
         )
     frame = read_frame(input_path)
+    preparation = DataPreparationPlan.model_validate(data_preparation) if data_preparation is not None else None
+    preparation_execution, imputed, imputation_diagnostics, missing_sensitivity = {}, None, None, None
+    if preparation is not None:
+        frame, preparation_execution = prepare_analysis_frame(frame, preparation, run_dir=os.environ.get("EASYICU_RUN_DIR"))
     if not input_evidence_id:
         raise SurvivalPrimaryExecutionError(
             "survival_input_evidence_missing",
@@ -518,6 +537,8 @@ def run_survival_primary(
     adjustment = [term.name for term in adjustment_terms]
     source_terms = [term.name for term in parsed_terms]
     needed = [time_column, event_column, *source_terms]
+    if preparation is not None and preparation.missing_data is not None:
+        needed.extend(preparation.missing_data.auxiliaries)
     if len(needed) != len(set(needed)):
         raise SurvivalPrimaryExecutionError(
             "survival_columns_not_distinct",
@@ -542,12 +563,27 @@ def run_survival_primary(
                 f"Declared numeric column {column!r} contains non-numeric values",
             )
         source[column] = numeric
+    source_before_imputation = source.copy()
+    if preparation is not None and preparation.missing_data is not None:
+        try:
+            imputed = impute_survival_source(source, plan=preparation, time_column=time_column, event_column=event_column,
+                                             event_value=event_value, horizon=time_horizon_value, exposure=exposure, competing=competing)
+        except PreparationRefusal as exc:
+            if preparation.missing_data.strategy == "multiple_imputation":
+                raise
+            missing_sensitivity = {"strategy": "multiple_imputation", "status": "not_estimable", "reason_code": exc.reason_code}
+        if imputed is not None and preparation.missing_data.strategy == "multiple_imputation":
+            source = imputed.datasets[0]
     try:
         compiled = compile_model_terms(
             source,
             terms=parsed_terms,
             exposure=exposure,
         )
+        if preparation is not None:
+            from ..model_matrix import compile_prepared_terms
+
+            compiled = compile_prepared_terms(source, plan=preparation, terms=parsed_terms, exposure=exposure, outcome=event_column)
     except ModelTermCompilationError as exc:
         raise SurvivalPrimaryExecutionError(exc.reason_code, str(exc)) from exc
     if len(compiled.exposure_columns) != 1:
@@ -649,6 +685,12 @@ def run_survival_primary(
             "survival_ph_diagnostic_failed",
             "The declared Schoenfeld PH diagnostic could not be executed",
         ) from exc
+    if imputed is not None:
+        estimate, ph_table, imputation_diagnostics, missing_sensitivity = pool_survival_imputations(
+            source=source_before_imputation, imputed=imputed, plan=preparation, terms=parsed_terms, exposure=exposure,
+            time_column=time_column, event_column=event_column, event_value=event_value, horizon=time_horizon_value,
+            fit_cox=_fit_declared_cox, ph_test=ph_test, primary_estimate=estimate, primary_ph=ph_table,
+        )
     global_rows = ph_table.loc[ph_table["covariate"].astype(str) == "global"]
     if len(global_rows) != 1:
         raise SurvivalPrimaryExecutionError(
@@ -772,6 +814,7 @@ def run_survival_primary(
         model_terms=parsed_terms,
         time_horizon_value=time_horizon_value,
         time_unit=time_unit,
+        missing_data_plan=preparation.missing_data if preparation else None,
     )
     receipt = SurvivalAnalysisReceipt(
         issuer=SURVIVAL_PRIMARY_OWNER,
@@ -827,6 +870,7 @@ def run_survival_primary(
         proportional_hazards_policy=ph_policy,
         proportional_hazards_status=ph_status,
         paper_authorization_allowed=paper_authorization_allowed,
+        missing_data_plan=preparation.missing_data if preparation else None,
     )
     receipt_path = out_dir / _RECEIPT_FILENAME
     receipt_path.write_text(
@@ -886,6 +930,13 @@ def run_survival_primary(
             **supplementary_files,
         },
     }
+    if preparation is not None:
+        summary["data_preparation"] = write_preparation_receipt(
+            out_dir, plan=preparation, execution=preparation_execution,
+            missing_data=imputation_diagnostics, sensitivity=missing_sensitivity,
+        )
+        summary["data_preparation_provenance"] = "data_preparation_provenance.json"
+        summary["executed_method_design"] = summary["data_preparation"]["executed_method_design"]
     if not emit_step_summary:
         return summary
     (out_dir / "step_summary.json").write_text(
@@ -894,6 +945,213 @@ def run_survival_primary(
     )
     print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
     return summary
+
+
+def impute_survival_source(
+    source,
+    *,
+    plan,
+    time_column,
+    event_column,
+    event_value,
+    horizon,
+    exposure,
+    competing=False,
+):
+    missing = plan.missing_data
+    if competing:
+        raise PreparationRefusal(
+            "mi_competing_risks_unsupported",
+            "The MI owner supports ordinary Cox, not pooled competing-risk supplements",
+        )
+    if source[[time_column, event_column]].isna().any().any():
+        raise PreparationRefusal(
+            "mi_outcome_missing", "Cox MI requires observed follow-up and event status"
+        )
+    if {time_column, event_column} & {item.name for item in missing.variables}:
+        raise PreparationRefusal(
+            "mi_survival_endpoint_imputation_unsupported",
+            "Follow-up and event status cannot be imputed by this owner",
+        )
+    if source[exposure].isna().any():
+        raise PreparationRefusal(
+            "mi_survival_exposure_missing",
+            "This Cox owner imputes covariates and retains observed exposure groups",
+        )
+    times = source[time_column].clip(upper=horizon)
+    event = source[event_column].eq(event_value) & source[time_column].le(horizon)
+    counts = (
+        pd.DataFrame({"time": times, "event": event})
+        .groupby("time")
+        .agg(n=("event", "size"), d=("event", "sum"))
+    )
+    risks = counts.n.iloc[::-1].cumsum().iloc[::-1]
+    cumulative = (counts.d / risks).cumsum()
+    model = source.drop(columns=time_column).copy()
+    model[event_column] = event.astype(int)
+    hazard = "__mi_nelson_aalen_hazard"
+    if hazard in model:
+        raise PreparationRefusal(
+            "mi_reserved_column",
+            "The cumulative-hazard coordinate collides with an input",
+        )
+    model[hazard] = times.map(cumulative)
+    result = multiple_impute(model, plan=missing, outcome=event_column)
+    datasets = []
+    for data in result.datasets:
+        data = data.drop(columns=hazard)
+        data[time_column] = source[time_column]
+        data[event_column] = source[event_column]
+        datasets.append(data)
+    result.datasets = tuple(datasets)
+    result.diagnostics["survival_predictors"] = (
+        "Observed event indicator and Nelson–Aalen cumulative hazard at administratively censored follow-up"
+    )
+    return result
+
+
+def _analysis(
+    source, *, plan, terms, exposure, time_column, event_column, event_value, horizon
+):
+    compiled = compile_prepared_terms(
+        source, plan=plan, terms=terms, exposure=exposure, outcome=event_column
+    )
+    frame = source.loc[compiled.design.index, [time_column, event_column]].join(
+        compiled.design
+    )
+    frame[event_column] = (
+        frame[event_column].eq(event_value) & frame[time_column].le(horizon)
+    ).astype(int)
+    frame[time_column] = frame[time_column].clip(upper=horizon)
+    return frame, compiled
+
+
+def pool_survival_imputations(
+    *,
+    source,
+    imputed,
+    plan,
+    terms,
+    exposure,
+    time_column,
+    event_column,
+    event_value,
+    horizon,
+    fit_cox,
+    ph_test,
+    primary_estimate,
+    primary_ph,
+):
+    missing = plan.missing_data
+    fits, diagnostics = [], []
+    for index, data in enumerate(imputed.datasets):
+        analysis, compiled = _analysis(
+            data,
+            plan=plan,
+            terms=terms,
+            exposure=exposure,
+            time_column=time_column,
+            event_column=event_column,
+            event_value=event_value,
+            horizon=horizon,
+        )
+        if len(analysis) != len(source):
+            raise PreparationRefusal(
+                "mi_rows_dropped", "Imputed Cox analyses may not drop rows"
+            )
+        if index == 0 and missing.strategy == "multiple_imputation":
+            fit, ph = primary_estimate, primary_ph
+        else:
+            fit = fit_cox(
+                analysis,
+                duration_column=time_column,
+                event_column=event_column,
+                exposure=compiled.exposure_columns[0],
+            )
+            ph = ph_test(
+                analysis,
+                duration_col=time_column,
+                event_col=event_column,
+                covariates=list(compiled.design.columns),
+                time_transform="km",
+            )
+        fits.append(fit)
+        diagnostics.append(ph)
+    pool = rubin_pool(
+        [fit.coefficient for fit in fits],
+        [fit.standard_error**2 for fit in fits],
+        complete_df=int(
+            (
+                source[event_column].eq(event_value) & source[time_column].le(horizon)
+            ).sum()
+        )
+        - len(compiled.design.columns),
+    )
+    estimate = replace(
+        fits[0],
+        hazard_ratio=math.exp(pool.estimate),
+        ci_low=math.exp(pool.ci_low),
+        ci_high=math.exp(pool.ci_high),
+        standard_error=pool.standard_error,
+        coefficient=pool.estimate,
+        p_value=pool.p_value,
+    )
+    aggregate = (
+        pd.concat(diagnostics)
+        .groupby("covariate", sort=False)
+        .agg(
+            test_statistic=("test_statistic", "max"),
+            p_value=("p_value", "min"),
+        )
+        .reset_index()
+    )
+    aggregate["p_value"] = (aggregate.p_value * len(fits)).clip(upper=1)
+    aggregate["method"] = "across_imputations_Bonferroni_minimum_p"
+    aggregate["m"] = len(fits)
+    diagnostic = {**imputed.diagnostics, "pooling": pool.to_json()}
+    if missing.strategy == "complete_case":
+        sensitivity = {
+            "strategy": "multiple_imputation",
+            "status": "fitted",
+            "n": len(source),
+            "estimate": estimate.hazard_ratio,
+            "ci_low": estimate.ci_low,
+            "ci_high": estimate.ci_high,
+        }
+        return primary_estimate, primary_ph, diagnostic, sensitivity
+    cc, cc_compiled = _analysis(
+        source,
+        plan=plan,
+        terms=terms,
+        exposure=exposure,
+        time_column=time_column,
+        event_column=event_column,
+        event_value=event_value,
+        horizon=horizon,
+    )
+    try:
+        fit = fit_cox(
+            cc,
+            duration_column=time_column,
+            event_column=event_column,
+            exposure=cc_compiled.exposure_columns[0],
+        )
+        sensitivity = {
+            "strategy": "complete_case",
+            "status": "fitted",
+            "n": len(cc),
+            "estimate": fit.hazard_ratio,
+            "ci_low": fit.ci_low,
+            "ci_high": fit.ci_high,
+        }
+    except RuntimeError:
+        sensitivity = {
+            "strategy": "complete_case",
+            "status": "not_estimable",
+            "reason_code": "complete_case_cox_fit_failed",
+            "n": len(cc),
+        }
+    return estimate, aggregate, diagnostic, sensitivity
 
 
 __all__ = [

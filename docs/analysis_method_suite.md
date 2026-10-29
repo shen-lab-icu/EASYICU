@@ -15,6 +15,11 @@ These exact coordinates are published to Planner through the scientific-action c
 
 | Scientific action | Reviewed kernels | Runtime packages |
 | --- | --- | --- |
+| `data_preparation.outlier_rules` | `missing` | — |
+| `data_preparation.window_aggregation` | `missing` | — |
+| `data_preparation.unit_harmonisation` | `missing` | — |
+| `data_preparation.missing_data` | `missing_data` | — |
+| `data_preparation.scaling_coding` | `missing`, `rcs_dose_response` | — |
 | `time_to_event.cox_hr` | — | `lifelines` |
 | `time_to_event.km_logrank` | — | `lifelines` |
 | `time_to_event.ph_check` | `ph_schoenfeld` | `lifelines` |
@@ -40,6 +45,16 @@ These exact coordinates are published to Planner through the scientific-action c
 | `prediction.dynamic_prediction` | `dynamic_prediction`, `temporal_features` | `sklearn` |
 | `phenotyping.early_subtype_assignment` | `subtype_assignment` | `sklearn` |
 | `phenotyping.mixed_effects_growth` | `mixed_effects` | `statsmodels` |
+
+## Data preparation
+
+| Method | Tier | Implementation | Produces | Runner |
+| --- | --- | --- | --- | --- |
+| Plausibility ranges and winsorization | standard_supporting | deterministic ✅ | data_preparation_provenance.json: outlier rule and removed/capped counts | `methods.missing` |
+| Time-window aggregation | standard_supporting | deterministic ✅ | data_preparation_provenance.json: window, function and measurement counts | `methods.missing` |
+| Unit harmonisation status | standard_supporting | deterministic ✅ | data_preparation_provenance.json: captured per-database unit conversion status | `methods.missing` |
+| Complete case and multiple imputation | standard_supporting | deterministic ✅ | pooled coefficients, within/between variance, df, FMI and aggregate diagnostics in data_preparation_provenance.json | `methods.missing_data` |
+| Standardization, reference coding and spline knots | standard_supporting | deterministic ✅ | model design columns and data_preparation_provenance.json: reviewed scaling/coding choices | `methods.missing` |
 
 ## Survival / time-to-event
 

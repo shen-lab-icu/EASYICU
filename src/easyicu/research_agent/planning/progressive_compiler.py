@@ -3025,6 +3025,10 @@ def _compile_one_step(
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
     }
+    if step.data_preparation is not None:
+        from ..contracts.model_terms import preparation_method
+
+        kwargs["method"] = preparation_method(kwargs["method"], step.data_preparation)
     if (step.step_id == "family_cohort_flow_figure" and step.module_id == "visualization"
         and inputs == ["table:cohort_flow"] and output_pairs == [("figure:cohort_flow", "figure")]):
         from ..contracts.figure_plan import COHORT_FLOW_FIGURE_PANELS

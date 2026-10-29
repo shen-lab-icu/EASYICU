@@ -45,6 +45,7 @@ _FEATURES = ["marker_a", "marker_b"]
 _COMPARISONS = [{"name": "event_flag", "summary": "count_percent"}]
 _FORM = {"target_column": "marker_a", "knot_quantiles": [0.1, 0.5, 0.9]}
 _VALUES = {
+    "data_preparation": {"missing_data": {"strategy": "complete_case"}},
     "bootstrap_spec": {"replicates": 20, "seed": 12},
     "external_validation_spec": {
         "development_database": "miiv", "validation_databases": ["eicu"],
@@ -177,10 +178,10 @@ def test_the_planner_prompt_names_exactly_the_fields_the_step_owns(name):
     ("custom_analysis", None, "sensitivity", {"functional_form_spec"}),
     ("custom_analysis", None, "primary", set()),
     ("measurement_audit", None, "sensitivity", set()),
-    ("adjusted_association", "association.adjusted_association", "primary", {"effect_measure"}),
-    ("adjusted_association", None, "secondary", {"effect_measure"}),
-    ("custom_analysis", "prediction.external_validation", "secondary", {"external_validation_spec"}),
-    ("custom_analysis", "prediction.external_validation", "primary", set()),
+    ("adjusted_association", "association.adjusted_association", "primary", {"effect_measure", "data_preparation"}),
+    ("adjusted_association", None, "secondary", {"effect_measure", "data_preparation"}),
+    ("custom_analysis", "prediction.external_validation", "secondary", {"external_validation_spec", "data_preparation"}),
+    ("custom_analysis", "prediction.external_validation", "primary", {"data_preparation"}),
 ])
 def test_the_ownership_rule(module, action, role, expected):
     assert coordinate_owned_step_fields(

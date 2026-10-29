@@ -8,12 +8,14 @@ import json
 import textwrap
 from pathlib import Path
 from typing import Mapping
+from ...contracts.model_terms import DataPreparationPlan, PreparationRefusal, preparation_for_step
 from ...contracts.prediction_validation import (
     EXTERNAL_ACTION, FROZEN_MODEL_INPUT, ExternalValidationError, ExternalValidationSpec,
     external_cohort_input, external_validation_spec_for_step, external_validation_step_matches,
 )
 from ...intake.typed_cohort_source import validation_source_from_binding
 from ...methods.prediction_validation import run_external_validation
+from ...methods.missing_data import ImputationRefusal
 from ...reporting.supplement_package import write_external_validation_report
 from ..step_executor_registry import StepExecutor
 from .typed_input_binding import load_typed_input
@@ -48,6 +50,7 @@ def prediction_external_executor_code(step) -> str:
         from easyicu.research_agent.execution.runners.prediction_validation_executor import run_external_validation_step
         summary = run_external_validation_step(
             spec={external_validation_spec_for_step(step).model_dump(mode="json")!r},
+            data_preparation={preparation_for_step(step).model_dump(mode="json") if preparation_for_step(step) else None!r},
             run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r}, out_dir=Path(os.environ["STEP_OUT_DIR"]),
@@ -72,7 +75,18 @@ def external_validation_executor() -> StepExecutor:
 def run_external_validation_step(
     *, spec: ExternalValidationSpec | Mapping, run_dir: Path,
     resolved_inputs: Path | Mapping, step_id: str, out_dir: Path,
+    data_preparation: DataPreparationPlan | Mapping | None = None,
 ) -> dict:
+    preparation = DataPreparationPlan.model_validate(data_preparation) if data_preparation is not None else None
+    if preparation is not None:
+        if preparation.missing_data is not None:
+            raise ImputationRefusal(
+                "mi_external_validation_model_unavailable",
+                "The frozen transport model contains development medians, not fitted development MI conditionals; a validation cohort cannot fit an imputer",
+            )
+        raise PreparationRefusal(
+            "preparation_external_frozen_pipeline", "External transport must retain the frozen development preprocessing",
+        )
     spec = ExternalValidationSpec.model_validate(spec)
     manifest = dict(resolved_inputs) if isinstance(resolved_inputs, Mapping) else json.loads(resolved_inputs.read_text("utf-8"))
     expected_inputs = {FROZEN_MODEL_INPUT, *(external_cohort_input(db) for db in spec.validation_databases)}

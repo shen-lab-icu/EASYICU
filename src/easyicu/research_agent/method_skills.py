@@ -641,6 +641,7 @@ _CAPABILITY_BY_ID = {row.capability_id: row for row in CAPABILITY_REGISTRY}
 _ACTION_IDS = {row.action_id for row in HIGH_FREQUENCY_METHOD_ADAPTERS}
 
 _FAMILY_ZH = {
+    "data_preparation": "数据预处理",
     "time_to_event": "生存分析",
     "causal_emulation": "因果推断",
     "association": "关联分析",
@@ -653,6 +654,11 @@ _COMPONENT_ZH = {
     "association.mixed_effects": ("重复测量线性混合模型", "用随机截距及可选时间随机斜率估计连续结局变化，报告区间、方差及 ICC。"),
     "association.gee": ("重复测量广义估计方程", "按预设工作相关结构估计二元或连续结局的平均变化，报告稳健标准误及可用的 QIC。"),
     "phenotyping.mixed_effects_growth": ("混合效应增长曲线", "用随机截距和时间随机斜率描述增长曲线，保留死亡脱落局限；不生成潜在类别。"),
+    "data_preparation.outlier_rules": ("合理范围与异常值处理", "按变量选择范围过滤或固定边界截尾，报告移除或截尾数量；无原始数值的数据源不可执行。"),
+    "data_preparation.window_aggregation": ("时间窗聚合", "逐变量审阅时间窗与首值、最小值、最大值、均值或末值；需要原始测量时间。"),
+    "data_preparation.unit_harmonisation": ("单位统一状态", "只读查看概念字典在各数据库应用的单位换算规则，不重复换算。"),
+    "data_preparation.missing_data": ("缺失数据处理与多重插补", "审阅完整病例或多重插补主分析及互补敏感性分析；记录随机种子并合并估计与不确定性。"),
+    "data_preparation.scaling_coding": ("标准化与变量编码", "审阅标准化、参照水平及协变量样条结点；预测模型在训练分区内拟合预处理。"),
     "time_to_event.cox_hr": ("Cox 比例风险模型", "估计暴露与事件风险的调整后风险比。"),
     "time_to_event.km_logrank": ("Kaplan–Meier 与 log-rank", "展示分组生存曲线并进行未调整的 log-rank 比较。"),
     "time_to_event.ph_check": ("比例风险假设检验", "使用 Schoenfeld 残差检查 Cox 模型的比例风险假设。"),

@@ -234,6 +234,27 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "offset_scale",
         "external_validation_spec",
         "repeated_measure_spec",
+        # Reviewed preparation coordinates; column names and rejected values
+        # still pass through the existing closed projection below.
+        "data_preparation",
+        "missing_data",
+        "strategy",
+        "m",
+        "iterations",
+        "donors",
+        "auxiliaries",
+        "outliers",
+        "variable",
+        "lower",
+        "upper",
+        "windows",
+        "group_column",
+        "time_column",
+        "function",
+        "scaling_coding",
+        "standardize",
+        "spline_knots",
+        "unit_harmonisation",
     }
 )
 

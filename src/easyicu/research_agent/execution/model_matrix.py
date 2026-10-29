@@ -10,17 +10,32 @@ dtype-based encoding.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
 import math
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
+import numpy as np
+
+from ..canonical_json import canonical_sha256
 from ..contracts.model_retention import estimable_missing_category_rows
-from ..methods.descriptive_inputs import require_observed_columns
 from ..contracts.model_terms import (
+    DataPreparationPlan,
     ModelTermSpec,
+    PreparationRefusal,
     level_identity_class,
     level_spelling,
 )
+from ..methods.descriptive_inputs import require_observed_columns
+from ..methods.missing import (
+    aggregate_windows,
+    apply_outliers,
+    database_preparation_status,
+    source_has_raw_values,
+    standardize_columns,
+)
+from ..methods.missing_data import ImputationRefusal, multiple_impute, rubin_pool
 
 
 class ModelTermCompilationError(ValueError):
@@ -450,6 +465,377 @@ def covariate_model_rows(
         outcome=outcome,
         missing_category_covariates=missing_category_covariates,
     )
+
+
+def prepare_analysis_frame(frame, plan, *, run_dir=None):
+    plan = (
+        plan
+        if isinstance(plan, DataPreparationPlan)
+        else DataPreparationPlan.model_validate(plan)
+    )
+    raw_variables, status = set(), {}
+    if not (plan.outliers or plan.windows or plan.unit_harmonisation):
+        return frame.copy(), {"outliers": [], "windows": [], "unit_harmonisation": {}}
+    if run_dir is not None:
+        from easyicu.concept.provenance import ExportDataProvenance
+
+        context = json.loads((Path(run_dir) / "research_context.json").read_text())
+        captured = (context.get("cohort", {}).get("provenance") or {}).get(
+            "data_provenance"
+        )
+        provenance = ExportDataProvenance.model_validate(captured) if captured else None
+        for variable in context.get("variables", []):
+            name = variable["name"]
+            status[name] = database_preparation_status(
+                provenance, variable.get("source_concept")
+            )
+            # Numeric materialized aggregates are not raw measurements. The
+            # selected operation may run only on a captured raw-value column.
+            is_raw = (
+                variable.get("analysis_window") is None
+                and variable.get("aggregation_default") is None
+                and name == variable.get("source_concept")
+            )
+            if is_raw and source_has_raw_values(
+                status[name], context.get("cohort", {}).get("database")
+            ):
+                raw_variables.add(name)
+    prepared, outliers = apply_outliers(
+        frame, plan.outliers, raw_variables=raw_variables
+    )
+    prepared, windows = aggregate_windows(
+        prepared, plan.windows, raw_variables=raw_variables
+    )
+    return prepared, {
+        "outliers": outliers,
+        "windows": windows,
+        "unit_harmonisation": status if plan.unit_harmonisation else {},
+    }
+
+
+def write_preparation_receipt(
+    out_dir, *, plan, execution, missing_data=None, sensitivity=None
+):
+    """One step-local provenance owner; never rewrite immutable extraction metadata."""
+    plan = (
+        plan
+        if isinstance(plan, DataPreparationPlan)
+        else DataPreparationPlan.model_validate(plan)
+    )
+    missing = plan.missing_data
+    from ..contracts.executed_method_design import (
+        EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+        DataPreparationDesign,
+    )
+
+    design = DataPreparationDesign(
+        schema_version=EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+        design_kind="data_preparation",
+        preparation=plan,
+        imputation_fit_scope="training_partition_only"
+        if (missing_data or execution).get("fit_scope") == "training_partition_only"
+        else "analysis_cohort",
+        sensitivity_status=(sensitivity or {}).get("status"),
+    )
+    method = design.reader_text()
+    payload = {
+        "schema_version": "easyicu.data_preparation_provenance/1",
+        "plan": plan.model_dump(mode="json"),
+        "plan_sha256": canonical_sha256(plan.model_dump(mode="json")),
+        "execution": execution,
+        "missing_data": missing_data,
+        "sensitivity": sensitivity,
+        "methods_text": method,
+        "executed_method_design": design.model_dump(mode="json"),
+        "reporting_checklist": [
+            {
+                "item": "STROBE 12c",
+                "status": "reported" if missing else "not_assessed",
+                "method": method,
+            },
+            {
+                "item": "TRIPOD+AI 7",
+                "status": "reported" if missing else "not_assessed",
+                "method": method,
+            },
+        ],
+        "claim_ceiling": "analysis_only",
+    }
+    path = Path(out_dir) / "data_preparation_provenance.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, allow_nan=False, indent=2))
+    return payload
+
+
+def _pool_association(fits, *, focal_term, kind):
+    from ..methods.ordered_trends import OutcomeFit
+    from ..robustness.estimators import EstimatorTerm
+
+    if any(not fit.converged or fit.separation_detected for fit in fits):
+        raise ImputationRefusal(
+            "mi_analysis_fit_failed",
+            "Every imputed analysis must converge without separation",
+        )
+    names = [term.term for term in fits[0].terms]
+    if any(
+        [term.term for term in fit.terms] != names or fit.n != fits[0].n for fit in fits
+    ):
+        raise ImputationRefusal(
+            "mi_analysis_design_mismatch",
+            "All imputations must fit the same rows and terms",
+        )
+    exponential = kind != "linear"
+    pooled, terms = {}, []
+    coefficients = []
+    for index, name in enumerate(names):
+        rows = [fit.terms[index] for fit in fits]
+        if any(
+            row.se is None or not math.isfinite(row.se) or row.se <= 0
+            for row in rows
+        ):
+            raise ImputationRefusal(
+                "mi_analysis_variance_unavailable",
+                "Every imputed coefficient requires a finite positive within-imputation variance",
+            )
+        if any(
+            row.estimate is None or not math.isfinite(row.estimate)
+            or (exponential and row.estimate <= 0) for row in rows
+        ):
+            raise ImputationRefusal("mi_analysis_fit_failed", "An imputed coefficient is not poolable")
+        estimates = [
+            math.log(row.estimate) if exponential else row.estimate for row in rows
+        ]
+        coefficients.append(estimates)
+        value = rubin_pool(
+            estimates, [row.se**2 for row in rows],
+            complete_df=min(
+                fit.cluster_count - 1 if fit.variance_estimator == "cluster_robust"
+                else fit.diagnostics["residual_df"] if isinstance(fit, OutcomeFit)
+                else fit.n - len(names) for fit in fits
+            ),
+        )
+        pooled[name] = value.to_json()
+        scale = math.exp if exponential else float
+        terms.append(
+            EstimatorTerm(
+                name,
+                rows[0].source_variable,
+                scale(value.estimate),
+                scale(value.ci_low),
+                scale(value.ci_high),
+                value.standard_error,
+            )
+        )
+    focal = terms[names.index(focal_term)]
+    covariance = ()
+    if all(getattr(fit, "coefficient_covariance", ()) for fit in fits):
+        within = np.mean([fit.coefficient_covariance for fit in fits], axis=0)
+        between = np.atleast_2d(np.cov(np.asarray(coefficients), ddof=1))
+        covariance = tuple(map(tuple, within + (1 + 1 / len(fits)) * between))
+    changes = dict(
+        ci_low=focal.ci_low,
+        ci_high=focal.ci_high,
+        se=focal.se,
+        terms=tuple(terms),
+        notes="; ".join(dict.fromkeys([
+            "Rubin-pooled stochastic chained-equation multiple imputation",
+            *(fit.notes for fit in fits if fit.notes),
+        ])),
+    )
+    if isinstance(fits[0], OutcomeFit):
+        changes.update(estimate=focal.estimate, diagnostics={
+            "multiple_imputation": {
+                "diagnostics_scope": "per_imputation",
+                "imputations": [fit.diagnostics for fit in fits],
+            },
+            "proportional_odds": {
+                "violated": any(fit.diagnostics.get("proportional_odds", {}).get("violated", False) for fit in fits),
+                "scope": "any_imputation",
+            },
+        })
+    else:
+        changes.update(point_estimate=focal.estimate, coefficient_covariance=covariance)
+    return replace(fits[0], **changes), pooled
+
+
+def fit_association_missing_data(
+    frame,
+    *,
+    plan,
+    terms,
+    exposure,
+    outcome,
+    focal_term,
+    kind,
+    variance_estimator="model_based",
+    cluster_groups=None,
+    outcome_definition=None,
+    fit_function=None,
+):
+    """Primary and complementary sensitivity use the same signed model roster."""
+    from ..robustness.estimators import fit_estimator
+
+    missing = plan.missing_data
+    needed = [outcome, *[term.name for term in terms], *missing.auxiliaries]
+    if outcome_definition is not None and outcome_definition.count:
+        needed.extend(outcome_definition.input_columns)
+        if missing.strategy == "multiple_imputation" and any(
+            frame[column].isna().any() for column in outcome_definition.input_columns
+        ):
+            raise ImputationRefusal(
+                "mi_analysis_coordinate_unobserved", "Count exposure/offset coordinates must be observed",
+            )
+    model_frame = frame[list(dict.fromkeys(needed))]
+    imputed = (
+        multiple_impute(model_frame, plan=missing, outcome=outcome)
+        if missing.strategy == "multiple_imputation"
+        else None
+    )
+
+    def fit(data):
+        compiled = compile_prepared_terms(
+            data, plan=plan, terms=terms, exposure=exposure, outcome=outcome
+        )
+        fitting_function = fit_function or fit_estimator
+        options = {"definition": outcome_definition, "frame": data} if outcome_definition is not None else {"cohort": None}
+        result = fitting_function(
+            **options,
+            X=compiled.design,
+            y=data.loc[compiled.design.index, outcome],
+            term=focal_term,
+            kind=kind,
+            source_by_design_column=compiled.source_by_design_column,
+            variance_estimator=variance_estimator,
+            cluster_groups=cluster_groups.loc[compiled.design.index]
+            if cluster_groups is not None
+            else None,
+        )
+        return compiled, result
+
+    try:
+        cc_compiled, cc_fit = fit(model_frame)
+    except ValueError:
+        if missing.strategy == "complete_case":
+            raise
+        from ..robustness.estimators import EstimatorResult
+
+        cc_compiled, cc_fit = (
+            None,
+            EstimatorResult(
+                None,
+                None,
+                None,
+                None,
+                0,
+                False,
+                "complete-case sensitivity not estimable",
+            ),
+        )
+    sensitivity = {
+        "strategy": "complete_case",
+        "status": "fitted" if cc_fit.converged else "not_estimable",
+        "n": cc_fit.n,
+        "estimate": cc_fit.point_estimate,
+        "ci_low": cc_fit.ci_low,
+        "ci_high": cc_fit.ci_high,
+    }
+    try:
+        if imputed is None:
+            imputed = multiple_impute(model_frame, plan=missing, outcome=outcome)
+        try:
+            products = [fit(data) for data in imputed.datasets]
+        except (ValueError, NotImplementedError) as exc:
+            if isinstance(exc, PreparationRefusal):
+                raise
+            raise ImputationRefusal(
+                "mi_analysis_fit_failed", "An imputed analysis cannot fit the declared model",
+            ) from exc
+        if any(product[1].n != len(model_frame) for product in products):
+            raise ImputationRefusal(
+                "mi_rows_dropped", "Imputed analyses may not drop incomplete rows"
+            )
+        pooled, pooling = _pool_association(
+            [item[1] for item in products], focal_term=focal_term, kind=kind
+        )
+    except PreparationRefusal as exc:
+        if missing.strategy == "multiple_imputation":
+            raise
+        return (
+            cc_compiled,
+            cc_fit,
+            None,
+            {
+                "strategy": "multiple_imputation",
+                "status": "not_estimable",
+                "reason_code": exc.reason_code,
+            },
+        )
+    diagnostics = {**imputed.diagnostics, "pooling": pooling}
+    if missing.strategy == "complete_case":
+        return (
+            cc_compiled,
+            cc_fit,
+            diagnostics,
+            {
+                "strategy": "multiple_imputation",
+                "status": "fitted",
+                "n": pooled.n,
+                "estimate": pooled.point_estimate,
+                "ci_low": pooled.ci_low,
+                "ci_high": pooled.ci_high,
+            },
+        )
+    return products[0][0], pooled, diagnostics, sensitivity
+
+
+def compile_prepared_terms(frame, *, plan, terms, exposure, outcome):
+    """Compile declared references and expand selected covariate spline bases."""
+
+    choices = {item.variable: item for item in plan.scaling_coding} if plan else {}
+    for term in terms:
+        choice = choices.get(term.name)
+        if (
+            choice
+            and choice.reference_level is not None
+            and choice.reference_level != term.reference_level
+        ):
+            raise PreparationRefusal(
+                "preparation_coding_conflict",
+                "The model reference must agree with the reviewed preparation choice",
+            )
+        if choice and choice.spline_knots and term.name == exposure:
+            raise PreparationRefusal(
+                "preparation_exposure_spline_requires_curve",
+                "An exposure spline requires the dedicated dose-response result contract",
+            )
+    transformed, _, _ = standardize_columns(
+        frame, frame, plan.scaling_coding if plan else ()
+    )
+    compiled = primary_model_rows(
+        transformed, terms=terms, exposure=exposure, outcome=outcome
+    )
+    design = compiled.design.copy()
+    source_map = dict(compiled.source_by_design_column)
+    for name, choice in choices.items():
+        if not choice.spline_knots:
+            continue
+        if name not in design:
+            raise PreparationRefusal(
+                "preparation_spline_type_unsupported",
+                "Spline expansion requires a declared continuous covariate",
+            )
+        from ..methods.rcs_dose_response import rcs_basis
+
+        basis = rcs_basis(
+            transformed.loc[design.index, name].to_numpy(), knots=choice.spline_knots
+        )
+        design = design.drop(columns=name)
+        source_map.pop(name, None)
+        for index in range(basis.as_array().shape[1]):
+            column = f"{name}__rcs_{index}"
+            design[column] = basis.as_array()[:, index]
+            source_map[column] = name
+    return replace(compiled, design=design, source_by_design_column=source_map)
 
 
 __all__ = [

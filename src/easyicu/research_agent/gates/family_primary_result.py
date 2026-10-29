@@ -233,6 +233,13 @@ def _survival_receipt_findings(
         "proportional_hazards_alpha": requirement.proportional_hazards_alpha,
         "proportional_hazards_policy": requirement.proportional_hazards_policy,
     }
+    from ..contracts.model_terms import preparation_for_step
+    from ..contracts.model_terms import preparation_result_issues
+
+    preparation = preparation_for_step(step)
+    expected_values["missing_data_plan"] = preparation.missing_data if preparation else None
+    if issues := preparation_result_issues(step, step_summary):
+        return [_finding(step, "survival_execution_receipt_contract_mismatch", preparation_issues=issues)]
     mismatches = {
         field: {"expected": expected, "reported": getattr(receipt, field)}
         for field, expected in expected_values.items()

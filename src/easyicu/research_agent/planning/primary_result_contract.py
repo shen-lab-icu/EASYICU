@@ -5,13 +5,32 @@ from __future__ import annotations
 import re
 from typing import Collection, Sequence
 
+from ..contracts.association_execution import association_execution_verdict
+from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
+from ..contracts.model_terms import (
+    PreparationRefusal,
+    preparation_for_step,
+    require_matching_survival_policy,
+)
+from ..contracts.prediction_execution import (
+    static_prediction_bootstrap_spec,
+    static_prediction_execution_verdict,
+)
+from ..contracts.source_feasibility_validation import (
+    context_declares_source_feasibility_scope,
+    plan_names_sealed_feasibility_owner,
+)
+from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
+from ..contracts.survival_execution import survival_execution_verdict
+from ..contracts.time_units import canonical_time_unit
 from ..schema import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     AnalysisPlan,
     AnalysisStep,
     ResearchContext,
 )
-from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
+from .analysis_types import infer_analysis_type
+from .capability_registry import resolve_primary_capability
 
 #: Plan method of the host-sealed fixed-landmark survival suite
 #: (``authority/current_case_scientific_runtime.LandmarkSurvivalRuntimeAuthority``).
@@ -29,15 +48,6 @@ _SEALED_SUITE_METHODS_BY_FAMILY = {
     "survival": SEALED_LANDMARK_SURVIVAL_SUITE_METHODS,
     "causal_inference": frozenset({"signed_target_trial_suite"}),
 }
-from ..contracts.survival_execution import survival_execution_verdict
-from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
-from ..contracts.source_feasibility_validation import (
-    context_declares_source_feasibility_scope,
-    plan_names_sealed_feasibility_owner,
-)
-from ..contracts.time_units import canonical_time_unit
-from .analysis_types import infer_analysis_type
-from .capability_registry import resolve_primary_capability
 
 
 #: Capability verdicts a plan cannot repair by declaring a missing field: the
@@ -462,6 +472,116 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
         "Do not substitute chart geometry, prose, or an unregistered side file "
         "for this evidence table.\n"
     )
+
+
+def preparation_step_issue(step, context):
+    try:
+        preparation = preparation_for_step(step)
+        if preparation is None:
+            require_matching_survival_policy(step)
+            return None
+        if step.scientific_action_id == "prediction.external_validation":
+            return (
+                "mi_external_validation_model_unavailable" if preparation.missing_data is not None
+                else "preparation_external_frozen_pipeline"
+            )
+        association = association_execution_verdict(step).claimed
+        prediction = static_prediction_execution_verdict(step).claimed
+        family = step.family_primary_result_requirement
+        survival = family is not None and family.analysis_family == "survival"
+        if not (association or prediction or survival):
+            return "preparation_owner_unsupported"
+        require_matching_survival_policy(step)
+        if (
+            prediction
+            and preparation.missing_data is not None
+            and static_prediction_bootstrap_spec(step) is not None
+        ):
+            return "mi_prediction_bootstrap_unsupported"
+        missing = preparation.missing_data
+        if missing is not None:
+            if association:
+                requirement = step.model_requirements[0]
+                if requirement.baseline_missing_handling is not None:
+                    return "preparation_missing_policy_conflict"
+                if (
+                    missing.strategy == "multiple_imputation"
+                    and requirement.analysis_set == "complete_case"
+                ):
+                    return "preparation_analysis_set_conflict"
+                outcome = requirement.outcome
+                terms = requirement.model_terms or ()
+            elif survival:
+                if family.competing_risk_strategy != "none":
+                    return "mi_competing_risks_unsupported"
+                outcome, terms = family.event_column, family.model_terms or ()
+            else:
+                outcome, terms = context.target_outcome, ()
+            if outcome in {item.name for item in missing.variables}:
+                return "mi_outcome_imputation_unsupported"
+            known = {item.name for item in context.variables}
+            if not set(missing.auxiliaries).issubset(known) or not {
+                item.name for item in missing.variables
+            }.issubset(known):
+                return "mi_column_missing"
+            methods = {item.name: item.method for item in missing.variables}
+            for term in terms:
+                if term.name in methods:
+                    expected = (
+                        "pmm"
+                        if term.coding == "continuous"
+                        else "logistic"
+                        if len(term.levels or ()) == 2
+                        else "polytomous"
+                    )
+                    if methods[term.name] != expected:
+                        return "mi_variable_type_unsupported"
+        references = {
+            term.name: term.reference_level
+            for term in (
+                step.model_requirements[0].model_terms or ()
+                if association
+                else family.model_terms or ()
+                if survival
+                else ()
+            )
+        }
+        for choice in preparation.scaling_coding:
+            if (
+                choice.reference_level is not None
+                and choice.reference_level != references.get(choice.variable)
+            ):
+                return "preparation_coding_conflict"
+            if prediction and (
+                choice.reference_level is not None or choice.spline_knots
+            ):
+                return "prediction_coding_unsupported"
+        if preparation.outliers or preparation.windows:
+            from easyicu.concept.provenance import ExportDataProvenance
+
+            from ..methods.missing import database_preparation_status, source_has_raw_values
+
+            captured = (context.cohort.provenance or {}).get("data_provenance")
+            provenance = (
+                ExportDataProvenance.model_validate(captured) if captured else None
+            )
+            variables = {item.name: item for item in context.variables}
+            for choice in (*preparation.outliers, *preparation.windows):
+                variable = variables.get(choice.variable)
+                if (
+                    variable is None
+                    or variable.analysis_window
+                    or variable.aggregation_default is not None
+                ):
+                    return "preparation_raw_values_unavailable"
+                status = database_preparation_status(
+                    provenance, variable.source_concept
+                )
+                if not source_has_raw_values(status, context.cohort.database):
+                    return "preparation_raw_values_unavailable"
+        return None
+    except PreparationRefusal as exc:
+        return exc.reason_code
 
 
 __all__ = [

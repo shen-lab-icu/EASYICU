@@ -87,7 +87,7 @@ class CovariateRetention(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1)
-    handling: Literal["drop_row", "unmeasured_category", "unmeasured_rows_dropped"]
+    handling: Literal["drop_row", "unmeasured_category", "unmeasured_rows_dropped", "multiple_imputation"]
     n_missing: int = Field(ge=0)
     missing_share: float = Field(ge=0.0, le=1.0)
     #: Outcome rates by measurement status; ``None`` below the disclosure size.
@@ -104,7 +104,7 @@ class RequirementRetention(BaseModel):
 
     step_id: str = Field(min_length=1)
     requirement_id: str = Field(min_length=1)
-    policy: Literal["drop_missing_baseline", "explicit_missing_category"]
+    policy: Literal["drop_missing_baseline", "explicit_missing_category", "multiple_imputation"]
     #: Rows of the population the model is fitted in.
     population_n: int = Field(ge=0)
     #: Population rows whose outcome and exposure are both available.

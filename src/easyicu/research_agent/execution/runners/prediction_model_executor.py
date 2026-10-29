@@ -9,10 +9,11 @@ evaluation mechanics.  It deliberately grants no paper authorization.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import math
 import textwrap
-from typing import Any, Mapping, Sequence
 import warnings
+from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -20,17 +21,26 @@ from sklearn.compose import ColumnTransformer
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    average_precision_score,
-    brier_score_loss,
-)
+from sklearn.metrics import average_precision_score, brier_score_loss
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from easyicu.research_agent.methods.prediction_validation import (
+    bootstrap_optimism_validation,
+    calibration_in_the_large,
+    recalibrate_score,
+)
+from easyicu.research_agent.methods.reclassification import continuous_nri, idi
+
 from ...contracts.concept_values import columns_without_values
 from ...contracts.dependence import resolve_patient_groups
 from ...contracts.executor_stop import ExecutorStop, write_executor_stop_record
+from ...contracts.model_terms import (
+    DataPreparationPlan,
+    PreparationRefusal,
+    preparation_for_step,
+)
 from ...contracts.prediction_execution import (
     PREDICTION_BENCHMARK_ACTION,
     PREDICTION_BENCHMARK_PRODUCT,
@@ -41,7 +51,6 @@ from ...contracts.prediction_execution import (
     PREDICTION_PERFORMANCE_PRODUCT,
     PREDICTION_PRIMARY_ACTION,
     PREDICTION_SCORES_PRODUCT,
-    STATIC_PREDICTION_ACTION_OUTPUTS as _ACTION_OUTPUTS,
     static_prediction_benchmark_cohort_input,
     static_prediction_benchmark_columns,
     static_prediction_bootstrap_spec,
@@ -50,15 +59,13 @@ from ...contracts.prediction_execution import (
     static_prediction_model_columns,
     static_prediction_owns_step,
 )
-from ...contracts.prediction_validation import BootstrapSpec, PredictionValidationSpec
-from easyicu.research_agent.methods.prediction_validation import (
-    bootstrap_optimism_validation,
-    calibration_in_the_large,
-    recalibrate_score,
+from ...contracts.prediction_execution import (
+    STATIC_PREDICTION_ACTION_OUTPUTS as _ACTION_OUTPUTS,
 )
+from ...contracts.prediction_validation import BootstrapSpec, PredictionValidationSpec
 from ...methods.auc_interval import AUCInterval, auc_interval, paired_auc_difference
 from ...methods.delong_auc import delong_auc_ci
-from easyicu.research_agent.methods.reclassification import continuous_nri, idi
+from ...methods.missing_data import multiple_impute, rubin_pool
 from ...planning.benchmark_comparator import (
     benchmark_comparator_facts,
     benchmark_source_omission,
@@ -70,22 +77,19 @@ from ...prediction_validation_owner import (
     run_prediction_validation,
     run_prediction_validation_csv,
 )
-from ...robustness.panel import (
-    ROBUSTNESS_NOT_ESTIMABLE_REASONS,
-    load_locked_robustness_specs,
-)
 from ...research_context.materialization_window import bound_feature_window_end_hours
 from ...research_context.typed import (
     ResearchContextAuthority,
     parse_research_context_json,
 )
-from ...schema import AnalysisStep
-from .patient_groups import step_patient_group_authority
-from .typed_input_binding import (
-    load_typed_input,
-    sha256_file,
-    sole_typed_cohort_input,
+from ...robustness.panel import (
+    ROBUSTNESS_NOT_ESTIMABLE_REASONS,
+    load_locked_robustness_specs,
 )
+from ...schema import AnalysisStep
+from ..model_matrix import prepare_analysis_frame, write_preparation_receipt
+from .patient_groups import step_patient_group_authority
+from .typed_input_binding import load_typed_input, sha256_file, sole_typed_cohort_input
 
 _PRIMARY_ACTION = PREDICTION_PRIMARY_ACTION
 _SCORE_COLUMNS = ("unit_id", "subject_id", "split", "outcome", "probability")
@@ -148,6 +152,7 @@ def prediction_model_executor_code(step: AnalysisStep) -> str:
                 run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
                 step_id={step.step_id!r},
                 bootstrap_spec={bootstrap_spec.model_dump() if bootstrap_spec else None!r},
+                data_preparation={preparation_for_step(step).model_dump(mode="json") if preparation_for_step(step) else None!r},
             )
             print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
             """
@@ -273,6 +278,7 @@ def _repeated_group_split_validation(
     groups: pd.Series,
     unit_ids: pd.Series,
     features: tuple[str, ...],
+    data_preparation: DataPreparationPlan | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Refit ten fixed patient-group splits and return auditable uncertainty."""
 
@@ -287,6 +293,7 @@ def _repeated_group_split_validation(
             features=features,
             development=development,
             prediction_rows=validation,
+            data_preparation=data_preparation,
         )
         scores = pd.DataFrame(
             {
@@ -417,6 +424,9 @@ def _fit_probabilities(
     features: tuple[str, ...],
     development: np.ndarray,
     prediction_rows: np.ndarray,
+    data_preparation: DataPreparationPlan | None = None,
+    imputation_diagnostics: dict | None = None,
+    imputation_groups: pd.Series | None = None,
 ) -> np.ndarray:
     """Fit once on the declared development rows and score declared rows."""
 
@@ -424,6 +434,22 @@ def _fit_probabilities(
         raise RuntimeError("prediction fit requires non-empty development and scoring rows")
     if outcome.loc[development].nunique() != 2:
         raise RuntimeError("prediction development rows do not contain both outcome classes")
+    if data_preparation is not None:
+        for choice in data_preparation.scaling_coding:
+            if choice.reference_level is not None or choice.spline_knots:
+                raise PreparationRefusal("prediction_coding_unsupported", "This prediction owner cannot execute reference or spline overrides")
+            if choice.standardize and (choice.variable not in features or not pd.api.types.is_numeric_dtype(frame[choice.variable])):
+                raise PreparationRefusal("preparation_variable_not_numeric", "Selected prediction standardization requires a numeric predictor")
+    if data_preparation is not None and data_preparation.missing_data is not None:
+        if data_preparation.missing_data.strategy == "multiple_imputation":
+            return imputed_prediction_probabilities(
+                frame=frame, outcome=outcome, features=features, development=development,
+                prediction_rows=prediction_rows, plan=data_preparation, pipeline_factory=_model_pipeline,
+                diagnostics=imputation_diagnostics,
+                groups=imputation_groups,
+            )
+        if frame.loc[development, list(features)].isna().any().any() or frame.loc[prediction_rows, list(features)].isna().any().any():
+            raise PreparationRefusal("prediction_complete_case_rows_not_selected", "Complete-case prediction requires explicit complete-row selection within each split")
     unobserved = columns_without_values(frame.loc[development], features)
     if unobserved:
         raise _PredictorsWithoutValues(unobserved, int(np.count_nonzero(development)))
@@ -684,10 +710,19 @@ def run_prediction_model(
     run_dir: Path,
     step_id: str,
     bootstrap_spec: BootstrapSpec | Mapping[str, Any] | None = None,
+    data_preparation: DataPreparationPlan | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fit the exact Planner roster with one fixed analysis-only pipeline."""
 
+    preparation = (DataPreparationPlan.model_validate(data_preparation) if data_preparation is not None else None)
+    if preparation is not None and preparation.missing_data is not None and bootstrap_spec is not None:
+        raise PreparationRefusal("mi_prediction_bootstrap_unsupported", "This bootstrap owner cannot yet refit a declared MI pipeline")
     context = _load_context(Path(run_dir))
+    preparation_execution = {}
+    if preparation is not None:
+        frame, preparation_execution = prepare_analysis_frame(frame, preparation, run_dir=run_dir)
+        preparation_execution["fit_scope"] = "training_partition_only"
+    runtime_preparation = preparation.model_copy(update={"outliers": (), "windows": ()}) if preparation else None
     outcome_column = str(context.target_outcome or "").strip()
     group_authority = step_patient_group_authority(
         context=context,
@@ -716,7 +751,19 @@ def run_prediction_model(
     )
     split = _split_labels(groups, outcome)
     development = split == "development"
+    missing_sensitivity = None
+    if preparation is not None and preparation.missing_data is not None:
+        missing_sensitivity = prediction_missing_sensitivity(
+            frame=frame, outcome=outcome, features=features, development=development,
+            plan=runtime_preparation, fit_probabilities=_fit_probabilities,
+            groups=groups,
+        )
+        if preparation.missing_data.strategy == "complete_case":
+            observed = frame[list(features)].notna().all(axis=1).to_numpy()
+            frame, outcome, groups, split = frame.loc[observed], outcome.loc[observed], groups.loc[observed], split[observed]
+            development = split == "development"
     all_rows = np.ones(len(frame), dtype=bool)
+    imputation_diagnostics = {}
     try:
         probabilities = _fit_probabilities(
             frame=frame,
@@ -724,6 +771,9 @@ def run_prediction_model(
             features=features,
             development=development,
             prediction_rows=all_rows,
+            data_preparation=runtime_preparation,
+            imputation_diagnostics=imputation_diagnostics,
+            imputation_groups=groups,
         )
     except _PredictorsWithoutValues as found:
         stop = ExecutorStop("prediction_predictor_unobserved", detail=str(found))
@@ -754,6 +804,7 @@ def run_prediction_model(
         groups=groups,
         unit_ids=unit_ids,
         features=features,
+        data_preparation=runtime_preparation,
     )
     bootstrap = None
     if bootstrap_spec is not None:
@@ -832,6 +883,19 @@ def run_prediction_model(
     )
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    preparation_receipt = None
+    if preparation is not None:
+        preparation_receipt = write_preparation_receipt(
+            out_dir, plan=preparation, execution=preparation_execution,
+            missing_data=imputation_diagnostics or None, sensitivity=missing_sensitivity,
+        )
+        if imputation_diagnostics.get("pooled_auroc"):
+            pooled_auc = imputation_diagnostics["pooled_auroc"]
+            performance["ensemble_auroc"] = performance["auroc"]
+            performance["auroc"] = pooled_auc["estimate"]
+            performance["auroc_ci_low"] = pooled_auc["ci_low"]
+            performance["auroc_ci_high"] = pooled_auc["ci_high"]
+            performance["auroc_ci_method"] = pooled_auc["method"]
     scores.to_csv(out_dir / "prediction_scores.csv", index=False)
     performance.to_csv(out_dir / "prediction_performance.csv", index=False)
     validation_receipt = run_prediction_validation_csv(
@@ -868,6 +932,9 @@ def run_prediction_model(
         },
         **({"bootstrap_optimism": bootstrap} if bootstrap else {}),
         "robustness_rows": robustness_rows,
+        **({"data_preparation": preparation_receipt,
+            "executed_method_design": preparation_receipt["executed_method_design"],
+            "data_preparation_provenance": "data_preparation_provenance.json"} if preparation_receipt else {}),
         "prediction_robustness_results": prediction_robustness,
         "source_cohort": str(Path(source_cohort).resolve()),
         "source_cohort_sha256": sha256_file(Path(source_cohort)),
@@ -1443,6 +1510,176 @@ def run_prediction_benchmark_comparison(
         encoding="utf-8",
     )
     return summary
+
+
+def imputed_prediction_probabilities(
+    *,
+    frame,
+    outcome,
+    features,
+    development,
+    prediction_rows,
+    plan,
+    pipeline_factory,
+    diagnostics=None,
+    groups=None,
+):
+    missing = plan.missing_data
+    if plan.windows or plan.outliers:
+        raise PreparationRefusal(
+            "prediction_preparation_requires_materialization",
+            "Raw range/window operations must be applied by the source preparation owner before splitting",
+        )
+    if any(
+        item.reference_level is not None or item.spline_knots
+        for item in plan.scaling_coding
+    ):
+        raise PreparationRefusal(
+            "prediction_coding_unsupported",
+            "This prediction owner supports training-only standardization and one-hot coding",
+        )
+    names = tuple(dict.fromkeys([*features, *missing.auxiliaries]))
+    target = str(outcome.name or "__imputation_outcome")
+    if target in names or not set(names).issubset(frame):
+        raise PreparationRefusal(
+            "mi_column_missing",
+            "Prediction imputation requires distinct, present predictors and outcome",
+        )
+    training = frame.loc[development, list(names)].copy()
+    training[target] = outcome.loc[development]
+    # Fitting happens here, after the caller's patient-group split. Neither
+    # validation covariates nor validation outcomes participate in a fit.
+    imputed = multiple_impute(
+        training, plan=missing, outcome=target, fit_for_prediction=True
+    )
+    scoring = frame.loc[prediction_rows, list(names)]
+    completed_scoring = imputed.transform(scoring)
+    probabilities = []
+    for train, score in zip(imputed.datasets, completed_scoring):
+        common = score.index.intersection(train.index)
+        score.loc[common, list(names)] = train.loc[common, list(names)]
+        model = pipeline_factory(train, features)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ConvergenceWarning)
+            model.fit(train[list(features)], outcome.loc[development])
+        if any(issubclass(item.category, ConvergenceWarning) for item in caught):
+            raise PreparationRefusal(
+                "mi_prediction_fit_failed", "Every imputed prediction fit must converge"
+            )
+        probabilities.append(model.predict_proba(score[list(features)])[:, 1])
+    array = np.asarray(probabilities)
+    if not np.isfinite(array).all() or ((array < 0) | (array > 1)).any():
+        raise PreparationRefusal(
+            "mi_prediction_nonfinite",
+            "Imputed prediction produced invalid probabilities",
+        )
+    if diagnostics is not None:
+        diagnostics.update(imputed.diagnostics)
+        diagnostics["fit_scope"] = "training_partition_only"
+        diagnostics["prediction_pooling"] = "mean_probability_across_imputations"
+        diagnostics["training_n"] = len(training)
+        validation = ~np.asarray(development)[np.flatnonzero(prediction_rows)]
+        truth = outcome.loc[prediction_rows].to_numpy()[validation]
+        if len(np.unique(truth)) == 2:
+            validation_groups = (
+                groups.loc[prediction_rows].to_numpy()[validation]
+                if groups is not None
+                else np.arange(len(truth))
+            )
+            aucs = [
+                auc_interval(truth, values[validation], validation_groups)
+                for values in array
+            ]
+            diagnostics["per_imputation_auroc"] = [
+                {"auroc": item.auc, "standard_error": item.se, "method": item.method}
+                for item in aucs
+            ]
+            if all(0 < item.auc < 1 and item.se > 0 for item in aucs):
+                pooled = rubin_pool(
+                    [math.log(item.auc / (1 - item.auc)) for item in aucs],
+                    [(item.se / (item.auc * (1 - item.auc))) ** 2 for item in aucs],
+                    complete_df=len(truth) - 1,
+                )
+                diagnostics["pooled_auroc_logit"] = pooled.to_json()
+                diagnostics["pooled_auroc"] = {
+                    "estimate": float(1 / (1 + np.exp(-pooled.estimate))),
+                    "ci_low": float(1 / (1 + np.exp(-pooled.ci_low))),
+                    "ci_high": float(1 / (1 + np.exp(-pooled.ci_high))),
+                    "method": "Rubin_logit_" + aucs[0].method + "_within_imputation",
+                }
+        if "pooled_auroc" not in diagnostics:
+            raise PreparationRefusal(
+                "mi_prediction_pooling_not_estimable",
+                "Every imputed validation AUROC requires finite positive within-imputation uncertainty",
+            )
+    return array.mean(axis=0)
+
+
+def prediction_missing_sensitivity(
+    *, frame, outcome, features, development, plan, fit_probabilities, groups=None
+):
+    """Report the complementary analysis on the same patient-group partition."""
+    if plan.missing_data.strategy == "complete_case":
+        mi_plan = plan.model_copy(
+            update={
+                "missing_data": plan.missing_data.model_copy(
+                    update={"strategy": "multiple_imputation"}
+                )
+            }
+        )
+        try:
+            diagnostics = {}
+            values = fit_probabilities(
+                frame=frame,
+                outcome=outcome,
+                features=features,
+                development=development,
+                prediction_rows=~development,
+                data_preparation=mi_plan,
+                imputation_diagnostics=diagnostics,
+                imputation_groups=groups,
+            )
+            auc = delong_auc_ci(outcome.loc[~development], values)
+            return {
+                "strategy": "multiple_imputation",
+                "status": "fitted",
+                "auroc": auc.auc,
+                "development_n": int(development.sum()),
+                "validation_n": int((~development).sum()),
+                "pooling": diagnostics.get("pooled_auroc"),
+            }
+        except PreparationRefusal as exc:
+            return {
+                "strategy": "multiple_imputation",
+                "status": "not_estimable",
+                "reason_code": exc.reason_code,
+            }
+    observed = frame[list(features)].notna().all(axis=1).to_numpy()
+    training, validation = development & observed, ~development & observed
+    if (
+        not training.any()
+        or not validation.any()
+        or any(outcome.loc[mask].nunique() < 2 for mask in (training, validation))
+    ):
+        return {
+            "strategy": "complete_case",
+            "status": "not_estimable",
+            "reason_code": "complete_case_partition_insufficient",
+        }
+    values = fit_probabilities(
+        frame=frame,
+        outcome=outcome,
+        features=features,
+        development=training,
+        prediction_rows=validation,
+    )
+    return {
+        "strategy": "complete_case",
+        "status": "fitted",
+        "auroc": delong_auc_ci(outcome.loc[validation], values).auc,
+        "development_n": int(training.sum()),
+        "validation_n": int(validation.sum()),
+    }
 
 
 __all__ = [

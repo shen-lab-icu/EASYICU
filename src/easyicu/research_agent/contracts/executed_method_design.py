@@ -25,6 +25,7 @@ from pydantic import (
 )
 
 from ..methods.time_varying_cox import TimeVaryingNotEstimableReason
+from .model_terms import DataPreparationPlan
 
 EXECUTED_METHOD_DESIGN_KEY = "executed_method_design"
 EXECUTED_METHOD_DESIGN_SCHEMA_VERSION = "easyicu.executed_method_design/1"
@@ -406,6 +407,67 @@ class TargetTrialDesign(_ExecutedDesign):
         return self
 
 
+class DataPreparationDesign(_ExecutedDesign):
+    """The reviewed preparation that an analysis owner actually executed."""
+
+    design_kind: Literal["data_preparation"]
+    preparation: DataPreparationPlan
+    imputation_fit_scope: Literal["analysis_cohort", "training_partition_only"]
+    sensitivity_status: Literal["fitted", "not_estimable"] | None = None
+
+    def reader_text(self, quote=str) -> str:
+        plan = self.preparation
+        missing = plan.missing_data
+        if missing is None:
+            text = "Executed data preparation: missing-data handling retained the analysis owner's default"
+        elif missing.strategy == "multiple_imputation":
+            text = (f"Executed data preparation: stochastic chained equations generated {missing.m} imputations "
+                    f"with {missing.iterations} iterations, {missing.donors} predictive mean matching donors and seed {missing.seed}; "
+                    "the outcome and declared auxiliaries were included in the imputation model; "
+                    "coefficients were pooled using Rubin's rules with Barnard–Rubin degrees of freedom, "
+                    "within- and between-imputation variance and fraction of missing information")
+            if self.imputation_fit_scope == "training_partition_only":
+                text = (f"Executed data preparation: stochastic chained equations generated {missing.m} imputations "
+                        f"with {missing.iterations} iterations, {missing.donors} predictive mean matching donors and seed {missing.seed}; "
+                        "the observed training outcome and declared auxiliaries entered the imputation model; "
+                        "predicted probabilities were averaged across imputations, and validation AUROC was pooled on the logit scale "
+                        "using Rubin's rules with within- and between-imputation variance, degrees of freedom and fraction of missing information")
+        else:
+            text = "Executed data preparation: the primary analysis used complete cases, with multiple imputation prespecified as sensitivity"
+        if missing is not None:
+            methods = ", ".join(f"{quote(item.name)} by {item.method}" for item in missing.variables)
+            if methods:
+                text += "; conditional methods were " + methods
+            if self.imputation_fit_scope == "training_partition_only":
+                text += "; every imputation model and donor set was fitted within its training partition, and held-out outcomes were unavailable to imputation"
+            text += f"; the complementary {missing.sensitivity_strategy.replace('_', ' ')} analysis was " + (
+                "estimated" if self.sensitivity_status == "fitted" else "not estimable")
+        for rule in plan.outliers:
+            text += f"; {quote(rule.variable)} used {rule.rule.replace('_', ' ')} at bounds {rule.lower:g} and {rule.upper:g}"
+        for window in plan.windows:
+            text += f"; {quote(window.variable)} used {window.function} from {window.start_hours:g} inclusive to {window.end_hours:g} exclusive hours"
+        for coding in plan.scaling_coding:
+            if coding.standardize:
+                text += f"; {quote(coding.variable)} was standardized using the fitting partition"
+            if coding.reference_level is not None:
+                text += f"; {quote(coding.variable)} used reference level {quote(coding.reference_level)}"
+            if coding.spline_knots:
+                text += f"; {quote(coding.variable)} used spline knots " + ", ".join(f"{value:g}" for value in coding.spline_knots)
+        if plan.unit_harmonisation:
+            text += "; captured dictionary unit-conversion rules were reported separately per database without applying conversions again"
+        return text
+
+    def numeric_values(self) -> tuple[float, ...]:
+        plan = self.preparation
+        values = []
+        if plan.missing_data:
+            values.extend(getattr(plan.missing_data, name) for name in ("m", "iterations", "donors", "seed"))
+        values.extend(value for rule in plan.outliers for value in (rule.lower, rule.upper))
+        values.extend(value for window in plan.windows for value in (window.start_hours, window.end_hours))
+        values.extend(value for coding in plan.scaling_coding for value in coding.spline_knots)
+        return tuple(float(value) for value in values)
+
+
 ExecutedMethodDesign = Annotated[
     Union[
         FixedWindowRepresentationDesign,
@@ -413,6 +475,7 @@ ExecutedMethodDesign = Annotated[
         LandmarkSurvivalDesign,
         LandmarkContinuousSurvivalDesign,
         TargetTrialDesign,
+        DataPreparationDesign,
     ],
     Field(discriminator="design_kind"),
 ]

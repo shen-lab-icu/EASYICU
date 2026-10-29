@@ -242,7 +242,7 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "id": "12c",
         "section": "Methods",
         "statement": "Explain how missing data were addressed.",
-        "required_evidence_aliases": ("missingness",),
+        "required_evidence_aliases": ("missingness", "data_preparation_provenance"),
     },
     {
         "id": "12d",

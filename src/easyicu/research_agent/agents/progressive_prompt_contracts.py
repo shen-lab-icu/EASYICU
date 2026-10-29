@@ -721,6 +721,15 @@ _COORDINATE_OWNED_FIELD_GUIDANCE = {
         "frozen_model_sha256, predictor_concepts, outcome_concept, recalibration and confirmed_changes. "
         "Use the supplied frozen model digest and exact reviewed meanings; never invent a model digest. "
     ),
+    "data_preparation": (
+        "Set data_preparation=null to retain the owner's current defaults. For an explicitly selected preparation module, "
+        "declare missing_data, outliers, windows, scaling_coding and unit_harmonisation in this typed field. "
+        "missing_data chooses strategy=complete_case or multiple_imputation, variables=[{name,method,levels}] "
+        "with pmm/logistic/polytomous methods and optional auxiliaries; levels=[] uses the observed training vocabulary. Numeric MI controls default from runtime configuration. "
+        "The complementary missing-data analysis is always reported as sensitivity. Raw outlier/window operations require verified raw source values; "
+        "unit_harmonisation is a read-only status. No imputation failure authorizes complete-case fallback. "
+        "External frozen-model validation cannot accept MI without the frozen development imputation models; this owner refuses that choice. "
+    ),
     "bootstrap_spec": (
         'Set bootstrap_spec to {"replicates": 200, "seed": 1729} for full-pipeline '
         "patient bootstrap optimism correction in the development partition, or null for split validation only. "
@@ -836,6 +845,7 @@ def step_materialization_shape_contract(
         "bootstrap_spec": None,
         "external_validation_spec": None,
         "repeated_measure_spec": None,
+        "data_preparation": None,
         "repeated_unit_interval_method": None,
         "patient_weighted_interval_assumptions": None,
         "phenotyping_feature_columns": None,

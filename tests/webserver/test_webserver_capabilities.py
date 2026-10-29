@@ -75,7 +75,7 @@ def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) 
     components = {row["id"]: row for row in catalog["components"]}
 
     assert len(by_id) == 24
-    assert len(components) == 55
+    assert len(components) == 60
     assert "cross_database.meta_analysis" in components
     assert {"association.proportional_odds", "association.free_days", "association.count_outcome"} <= set(components)
     assert catalog["workflow_count"] == 11
@@ -83,8 +83,11 @@ def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) 
     assert catalog["data_definition_count"] == 2
     assert catalog["planning_aid_count"] == 1
     assert catalog["builtin_skill_count"] == 24
-    assert catalog["available_method_count"] == 55
+    assert catalog["available_method_count"] == 60
     assert catalog["planned_method_count"] == 4
+    assert {row["method_key"] for row in components.values() if row["method_family"] == "data_preparation"} == {
+        "outlier_rules", "window_aggregation", "unit_harmonisation", "missing_data", "scaling_coding",
+    }
     assert by_id["survival-time-to-event"]["capability_id"] == (
         "survival_time_to_event_v1"
     )

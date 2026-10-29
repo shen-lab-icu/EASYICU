@@ -103,6 +103,20 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         fallback="Refuse if the frozen model, complete predictor roster or reviewed source meanings cannot be verified; never refit.",
     ),
     MethodKernel(
+        module="missing_data", requires=("numpy", "pandas", "scipy", "statsmodels"),
+        entrypoints=("multiple_impute", "rubin_pool", "ImputationRefusal"),
+        capability="Stochastic chained-equation MI, outcome/auxiliary models, fold-local training and Rubin/Barnard–Rubin pooling with aggregate diagnostics.",
+        families=("data_preparation",),
+        fallback="Refuse with the typed MI reason; never substitute complete case for a signed MI primary.",
+    ),
+    MethodKernel(
+        module="missing", requires=("numpy", "pandas"),
+        entrypoints=("apply_outliers", "aggregate_windows", "database_preparation_status", "standardize_columns"),
+        capability="Reviewed raw-value range/winsor rules, chronological window summaries, captured per-database unit status and training-only standardization.",
+        families=("data_preparation",),
+        fallback="Refuse an unavailable source operation; do not invent raw values or conversion rules for another database.",
+    ),
+    MethodKernel(
         module="survival_inputs",
         requires=("numpy", "pandas"),
         entrypoints=("event_time_reconciliation_receipt", "SurvivalInputError"),
