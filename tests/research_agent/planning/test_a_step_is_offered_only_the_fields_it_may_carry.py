@@ -20,6 +20,7 @@ from easyicu.research_agent.agents.progressive_prompt_contracts import (
     step_materialization_shape_contract,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.contracts.trajectory_design import canonical_repeated_measure_spec
 from easyicu.research_agent.planning.progressive_contract import (
     COORDINATE_OWNED_STEP_FIELDS,
     ProgressiveOutlineStep,
@@ -33,6 +34,7 @@ from tests.research_agent.core.patient_weighted_distribution_fixtures import ASS
 
 _ROSTER = (
     "prediction.discrimination_calibration",
+    "prediction.external_validation",
     "phenotyping.cluster_solution",
     "phenotyping.trajectory_feature_clustering",
     "phenotyping.outcome_by_cluster",
@@ -44,6 +46,12 @@ _COMPARISONS = [{"name": "event_flag", "summary": "count_percent"}]
 _FORM = {"target_column": "marker_a", "knot_quantiles": [0.1, 0.5, 0.9]}
 _VALUES = {
     "bootstrap_spec": {"replicates": 20, "seed": 12},
+    "external_validation_spec": {
+        "development_database": "miiv", "validation_databases": ["eicu"],
+        "frozen_model_sha256": "a" * 64, "predictor_concepts": _FEATURES,
+        "outcome_concept": "event_flag",
+    },
+    "repeated_measure_spec": canonical_repeated_measure_spec().model_dump_json(),
     "phenotyping_feature_columns": _FEATURES,
     "phenotyping_comparison_variables": _COMPARISONS,
     "functional_form_spec": _FORM,
@@ -53,6 +61,8 @@ _VALUES = {
 }
 _COORDINATES = {
     "prediction_primary": ("prediction.discrimination_calibration", "primary"),
+    "external_validation_secondary": ("prediction.external_validation", "secondary"),
+    "external_validation_as_primary": ("prediction.external_validation", "primary"),
     "trajectory_primary": ("phenotyping.trajectory_feature_clustering", "primary"),
     "cross_sectional_primary": ("phenotyping.cluster_solution", "primary"),
     "outcome_comparison": ("phenotyping.outcome_by_cluster", "secondary"),
@@ -169,6 +179,8 @@ def test_the_planner_prompt_names_exactly_the_fields_the_step_owns(name):
     ("measurement_audit", None, "sensitivity", set()),
     ("adjusted_association", "association.adjusted_association", "primary", {"effect_measure"}),
     ("adjusted_association", None, "secondary", {"effect_measure"}),
+    ("custom_analysis", "prediction.external_validation", "secondary", {"external_validation_spec"}),
+    ("custom_analysis", "prediction.external_validation", "primary", set()),
 ])
 def test_the_ownership_rule(module, action, role, expected):
     assert coordinate_owned_step_fields(
@@ -179,6 +191,7 @@ def test_the_ownership_rule(module, action, role, expected):
 def test_the_owners_keep_their_fields_in_both_transports():
     for action, role, field in (
         ("prediction.discrimination_calibration", "primary", "bootstrap_spec"),
+        ("prediction.external_validation", "secondary", "external_validation_spec"),
         ("phenotyping.cluster_solution", "primary", "phenotyping_feature_columns"),
         ("phenotyping.outcome_by_cluster", "secondary", "phenotyping_comparison_variables"),
     ):

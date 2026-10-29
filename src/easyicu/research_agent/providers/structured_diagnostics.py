@@ -220,6 +220,20 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "kind",
         "concepts",
         "effect_measure",
+        # Owned outcome definitions and the compact external-validation field.
+        "outcome_definition",
+        "free_days",
+        "horizon_days",
+        "support_concept",
+        "death_score",
+        "time_origin",
+        "ordered_levels",
+        "count",
+        "family",
+        "exposure_column",
+        "offset_scale",
+        "external_validation_spec",
+        "repeated_measure_spec",
     }
 )
 

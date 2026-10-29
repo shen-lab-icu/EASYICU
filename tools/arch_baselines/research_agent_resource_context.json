@@ -1,7 +1,16 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [],
-    "summary_changes": {}
+    "summary_changes": {
+      "max_planner_with_resources_bytes": {
+        "now": 63625,
+        "was": 64131
+      },
+      "max_planner_without_resources_bytes": {
+        "now": 59217,
+        "was": 59723
+      }
+    }
   },
   "baseline_history": [
     {
@@ -115,9 +124,23 @@
       "reason": "merge gm1 g-methods and lon1 repeated-measure capabilities onto one catalogue",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "reg1: planning contract regression repairs",
+      "source_digest_changes": [],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 63625,
+          "was": 64131
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 59217,
+          "was": 59723
+        }
+      }
     }
   ],
-  "baseline_reason": "merge gm1 g-methods and lon1 repeated-measure capabilities onto one catalogue",
+  "baseline_reason": "reg1: planning contract regression repairs",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -157,8 +180,8 @@
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 64131,
-    "max_planner_without_resources_bytes": 59723,
+    "max_planner_with_resources_bytes": 63625,
+    "max_planner_without_resources_bytes": 59217,
     "max_resource_added_bytes": 4565,
     "selected_resource_count": 7,
     "task_count": 9
@@ -211,15 +234,15 @@
       "know_how_prompt_bytes": 4029,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14637,
+        "approx_input_tokens": 14588,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45536,
+            "bytes": 45340,
             "included": true,
             "required": true,
-            "sha256": "d323681c788a928fd9e6f89892eacdd2cf41348f3e02d2e39e863fa70c4ed376"
+            "sha256": "59df3ec24ea73ab40f2e7afcbfa9f416ffcd6a19d32481e745f41cd63307f0f7"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -230,27 +253,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 58545,
+        "total_bytes": 58349,
         "truncated_strings": false,
-        "user_bytes": 50101
+        "user_bytes": 49905
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13495,
+        "approx_input_tokens": 13446,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45536,
+            "bytes": 45340,
             "included": true,
             "required": true,
-            "sha256": "d323681c788a928fd9e6f89892eacdd2cf41348f3e02d2e39e863fa70c4ed376"
+            "sha256": "59df3ec24ea73ab40f2e7afcbfa9f416ffcd6a19d32481e745f41cd63307f0f7"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 53980,
+        "total_bytes": 53784,
         "truncated_strings": false,
-        "user_bytes": 45536
+        "user_bytes": 45340
       },
       "planning_contract_bytes": 6128,
       "planning_contract_sha256": "703681b904a34c690aacf7f56dedb766cf1d8f311dabbc8988ef54d93dfb9d4f",
@@ -325,15 +348,15 @@
       "know_how_prompt_bytes": 3791,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15192,
+        "approx_input_tokens": 15079,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47995,
+            "bytes": 47543,
             "included": true,
             "required": true,
-            "sha256": "1829d44f22afcb3c9383c4c075c206adb6bd1fb869ba235c119130d695a55f4e"
+            "sha256": "9e6b8755da32a1268858d19798308a30506dbd94045484242d1892c4a8cfd4cf"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -344,27 +367,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60766,
+        "total_bytes": 60314,
         "truncated_strings": false,
-        "user_bytes": 52322
+        "user_bytes": 51870
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14110,
+        "approx_input_tokens": 13997,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47995,
+            "bytes": 47543,
             "included": true,
             "required": true,
-            "sha256": "1829d44f22afcb3c9383c4c075c206adb6bd1fb869ba235c119130d695a55f4e"
+            "sha256": "9e6b8755da32a1268858d19798308a30506dbd94045484242d1892c4a8cfd4cf"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 56439,
+        "total_bytes": 55987,
         "truncated_strings": false,
-        "user_bytes": 47995
+        "user_bytes": 47543
       },
       "planning_contract_bytes": 7541,
       "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",
@@ -440,39 +463,39 @@
       "know_how_prompt_bytes": 0,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13435,
+        "approx_input_tokens": 13386,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45295,
+            "bytes": 45099,
             "included": true,
             "required": true,
-            "sha256": "3277c432ba0011781b3e2b867d5b396612ea9daabfbb00714e365349060ea063"
+            "sha256": "a3ae38833f3dc12b72bd185d58df325e9b97544723be03eda6ec07b80bf9c4ff"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 53739,
+        "total_bytes": 53543,
         "truncated_strings": false,
-        "user_bytes": 45295
+        "user_bytes": 45099
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13435,
+        "approx_input_tokens": 13386,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 45295,
+            "bytes": 45099,
             "included": true,
             "required": true,
-            "sha256": "3277c432ba0011781b3e2b867d5b396612ea9daabfbb00714e365349060ea063"
+            "sha256": "a3ae38833f3dc12b72bd185d58df325e9b97544723be03eda6ec07b80bf9c4ff"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 53739,
+        "total_bytes": 53543,
         "truncated_strings": false,
-        "user_bytes": 45295
+        "user_bytes": 45099
       },
       "planning_contract_bytes": 5784,
       "planning_contract_sha256": "9ec94c6b086f85e8708e27dfb0e64c1720dc0b6edbeb2df65752f710c7795862",
@@ -540,39 +563,39 @@
       "know_how_prompt_bytes": 0,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13027,
+        "approx_input_tokens": 12978,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 43662,
+            "bytes": 43466,
             "included": true,
             "required": true,
-            "sha256": "e0a83c9e443bdedc39cec07b8367f42a20f317d36e20d2979929b0c0466e5610"
+            "sha256": "7fd7fff26e82cdb2d8a749afb805d4be544831fd6a6faace38aa9cc36e9201cb"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 52106,
+        "total_bytes": 51910,
         "truncated_strings": false,
-        "user_bytes": 43662
+        "user_bytes": 43466
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13027,
+        "approx_input_tokens": 12978,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 43662,
+            "bytes": 43466,
             "included": true,
             "required": true,
-            "sha256": "e0a83c9e443bdedc39cec07b8367f42a20f317d36e20d2979929b0c0466e5610"
+            "sha256": "7fd7fff26e82cdb2d8a749afb805d4be544831fd6a6faace38aa9cc36e9201cb"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 52106,
+        "total_bytes": 51910,
         "truncated_strings": false,
-        "user_bytes": 43662
+        "user_bytes": 43466
       },
       "planning_contract_bytes": 5559,
       "planning_contract_sha256": "7787cb4516d89155e10167ef38a1fe6a75c18f2cab1dd33029a381712f6093de",
@@ -640,15 +663,15 @@
       "know_how_prompt_bytes": 4012,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15420,
+        "approx_input_tokens": 15292,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48686,
+            "bytes": 48176,
             "included": true,
             "required": true,
-            "sha256": "9cb5d827d25257eb7e71f6405cd3d6730c5ea203cb42a5a61e3c315b91d09e9c"
+            "sha256": "a0808fce973ff780414ec1e18f5371be6e9790f8fa21c4d137a79c8bdfc4a242"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -659,27 +682,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 61678,
+        "total_bytes": 61168,
         "truncated_strings": false,
-        "user_bytes": 53234
+        "user_bytes": 52724
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14283,
+        "approx_input_tokens": 14155,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48686,
+            "bytes": 48176,
             "included": true,
             "required": true,
-            "sha256": "9cb5d827d25257eb7e71f6405cd3d6730c5ea203cb42a5a61e3c315b91d09e9c"
+            "sha256": "a0808fce973ff780414ec1e18f5371be6e9790f8fa21c4d137a79c8bdfc4a242"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 57130,
+        "total_bytes": 56620,
         "truncated_strings": false,
-        "user_bytes": 48686
+        "user_bytes": 48176
       },
       "planning_contract_bytes": 7361,
       "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",
@@ -749,15 +772,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 16033,
+        "approx_input_tokens": 15907,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 51279,
+            "bytes": 50773,
             "included": true,
             "required": true,
-            "sha256": "5a3251125bf998fdaa4871dff56d133137667368416e1e9e4eb5fd90d40574e3"
+            "sha256": "1616285a92adc19bee846075e6d3ff897f1f4dc2f64cfb0d7767a7272b6d1776"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -768,27 +791,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 64131,
+        "total_bytes": 63625,
         "truncated_strings": false,
-        "user_bytes": 55687
+        "user_bytes": 55181
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14931,
+        "approx_input_tokens": 14805,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 51279,
+            "bytes": 50773,
             "included": true,
             "required": true,
-            "sha256": "5a3251125bf998fdaa4871dff56d133137667368416e1e9e4eb5fd90d40574e3"
+            "sha256": "1616285a92adc19bee846075e6d3ff897f1f4dc2f64cfb0d7767a7272b6d1776"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59723,
+        "total_bytes": 59217,
         "truncated_strings": false,
-        "user_bytes": 51279
+        "user_bytes": 50773
       },
       "planning_contract_bytes": 6797,
       "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",
@@ -863,15 +886,15 @@
       "know_how_prompt_bytes": 4015,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14798,
+        "approx_input_tokens": 14725,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46197,
+            "bytes": 45903,
             "included": true,
             "required": true,
-            "sha256": "7fb9a5bab646dcf8a6670932bb63bd1ddf2f494e1cc2422c87845db3d662b1ed"
+            "sha256": "709f1df8a4b7b5ba87f72e41f14988f76be300f5c608d901c909502f21d87b48"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -882,27 +905,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59192,
+        "total_bytes": 58898,
         "truncated_strings": false,
-        "user_bytes": 50748
+        "user_bytes": 50454
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13661,
+        "approx_input_tokens": 13587,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46197,
+            "bytes": 45903,
             "included": true,
             "required": true,
-            "sha256": "7fb9a5bab646dcf8a6670932bb63bd1ddf2f494e1cc2422c87845db3d662b1ed"
+            "sha256": "709f1df8a4b7b5ba87f72e41f14988f76be300f5c608d901c909502f21d87b48"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54641,
+        "total_bytes": 54347,
         "truncated_strings": false,
-        "user_bytes": 46197
+        "user_bytes": 45903
       },
       "planning_contract_bytes": 6777,
       "planning_contract_sha256": "7426aa9258538c2435537b62ad55d33c38c7c0acffa9624978eddce8b2f6dd06",
@@ -978,15 +1001,15 @@
       "know_how_prompt_bytes": 3905,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15171,
+        "approx_input_tokens": 15072,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47799,
+            "bytes": 47403,
             "included": true,
             "required": true,
-            "sha256": "36942caff41e4c772c92c62f13d13bf1f84f063b8302fdc6d2e8231148bc8404"
+            "sha256": "6d327db43d7fc1ea41304a41ef5d9a0bd50d94c795d51fcef8b9f6b87755e7f1"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -997,27 +1020,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60684,
+        "total_bytes": 60288,
         "truncated_strings": false,
-        "user_bytes": 52240
+        "user_bytes": 51844
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14061,
+        "approx_input_tokens": 13962,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47799,
+            "bytes": 47403,
             "included": true,
             "required": true,
-            "sha256": "36942caff41e4c772c92c62f13d13bf1f84f063b8302fdc6d2e8231148bc8404"
+            "sha256": "6d327db43d7fc1ea41304a41ef5d9a0bd50d94c795d51fcef8b9f6b87755e7f1"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 56243,
+        "total_bytes": 55847,
         "truncated_strings": false,
-        "user_bytes": 47799
+        "user_bytes": 47403
       },
       "planning_contract_bytes": 7064,
       "planning_contract_sha256": "aafe0c660d3095ecd5bb1da2d748f729f6bb180d98012f6af64edc302a9de199",
@@ -1085,15 +1108,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15098,
+        "approx_input_tokens": 14972,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47540,
+            "bytes": 47034,
             "included": true,
             "required": true,
-            "sha256": "23e58662eea484978448b1a8787dc632688e712821c3110f4ca6efaf7d4751dd"
+            "sha256": "4d7f84600c6c2a663013ee79cab84d7e9f0ff3eccd2dffb8d2acac3314e643e5"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1104,27 +1127,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60392,
+        "total_bytes": 59886,
         "truncated_strings": false,
-        "user_bytes": 51948
+        "user_bytes": 51442
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13996,
+        "approx_input_tokens": 13870,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47540,
+            "bytes": 47034,
             "included": true,
             "required": true,
-            "sha256": "23e58662eea484978448b1a8787dc632688e712821c3110f4ca6efaf7d4751dd"
+            "sha256": "4d7f84600c6c2a663013ee79cab84d7e9f0ff3eccd2dffb8d2acac3314e643e5"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55984,
+        "total_bytes": 55478,
         "truncated_strings": false,
-        "user_bytes": 47540
+        "user_bytes": 47034
       },
       "planning_contract_bytes": 6791,
       "planning_contract_sha256": "62e1d3ad93ceab51cf7fcb9c872658398efcd2b4de7fe3d55fe660a6d87aaeb2",

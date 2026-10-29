@@ -165,7 +165,12 @@ def test_the_outcome_free_plan_describes_its_features_and_needs_no_outcome() -> 
         "primary_cluster_solution",
         "cluster_number_selection",
         "cluster_stability",
+        "family_cohort_flow_figure",
     ]
+    assert [step.step_id for step in plan.steps if step.planned_analysis_role == "primary"] == [
+        "primary_cluster_solution",
+    ]
+    assert plan.steps[-1].planned_analysis_role == "auxiliary"
     assert all(name for step in plan.steps for name in step.inputs)
     selected = plan.design_selection.selected
     assert "No outcome; clusters are described by their features only." in selected.reviewable_plan
@@ -191,8 +196,9 @@ def test_a_study_with_an_outcome_still_describes_it_by_cluster() -> None:
 
     plan = _plan(context, baseline=["age"])
 
-    characterization = plan.steps[-1]
+    characterization = next(step for step in plan.steps if step.step_id == "cluster_characterization")
     assert characterization.step_id == "cluster_characterization"
+    assert characterization.planned_analysis_role == "secondary"
     spec = characterization.phenotype_comparison_spec
     assert spec is not None and spec.outcome_columns == ["death"]
     assert [variable.name for variable in spec.variables][:2] == ["death", "age"]

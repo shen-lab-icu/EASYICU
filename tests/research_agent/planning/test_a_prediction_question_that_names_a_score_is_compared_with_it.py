@@ -149,7 +149,7 @@ def test_a_plan_without_a_benchmark_is_unchanged() -> None:
     assert [step.step_id for step in result.output.steps] == [
         "cohort_accounting", "baseline_context", "measurement_audit", "primary_performance",
         "calibration_metrics", "internal_validation", "clinical_utility", "visualization",
-        "report",
+        "report", "family_cohort_flow_figure",
     ]
 
 

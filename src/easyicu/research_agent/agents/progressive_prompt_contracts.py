@@ -717,7 +717,7 @@ _COORDINATE_OWNED_FIELD_GUIDANCE = {
         "or 'joint_model_note'. Bind every coordinate column as raw input and use the action's exact aggregate products."
     ),
     "external_validation_spec": (
-        "external_validation_spec is a JSON-text object naming development_database, validation_databases, "
+        "Set external_validation_spec to a JSON-text object naming development_database, validation_databases, "
         "frozen_model_sha256, predictor_concepts, outcome_concept, recalibration and confirmed_changes. "
         "Use the supplied frozen model digest and exact reviewed meanings; never invent a model digest. "
     ),

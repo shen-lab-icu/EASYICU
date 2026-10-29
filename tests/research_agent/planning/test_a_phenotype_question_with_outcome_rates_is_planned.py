@@ -152,7 +152,14 @@ def test_the_phenotype_plan_covers_the_outcome_it_describes_by_cluster() -> None
 
     assert len(llm.calls) == 1
     plan = result.output
-    assert plan.steps[-1].scientific_action_id == "phenotyping.outcome_by_cluster"
+    comparison = next(step for step in plan.steps if step.step_id == "cluster_characterization")
+    assert comparison.scientific_action_id == "phenotyping.outcome_by_cluster"
+    assert comparison.planned_analysis_role == "secondary"
+    assert [step.step_id for step in plan.steps if step.planned_analysis_role == "primary"] == [
+        "primary_cluster_solution",
+    ]
+    figure = next(step for step in plan.steps if step.step_id == "family_cohort_flow_figure")
+    assert figure.planned_analysis_role == "auxiliary"
     review = build_plan_scientific_review(
         context=context, plan=plan, literature=None,
         figure_strategy=build_article_figure_strategy(context), runtime_authority=None,

@@ -34,6 +34,16 @@ def test_planner_action_guide_closes_family_and_auxiliary_boundaries():
     assert "association.adjusted_association" in guide
     assert "Cohort-definition, Table 1, raw distribution" in guide
     assert "import another family prefix" in guide
+    # The tier/mode rows are the single complete id roster in the compact guide.
+    rows = [line.split(": ", 1) for line in guide.splitlines() if ": " in line]
+    offered = {
+        action_id: group for group, ids in rows if "/" in group
+        for action_id in ids.split(",")
+    }
+    assert offered == {
+        action.action_id: f"{action.tier}/{action.execution_mode}"
+        for action in scientific_actions_for_analysis_type("association_study").actions
+    }
 
 
 def test_prediction_methods_bind_reviewed_resources_and_exact_host_contracts():
