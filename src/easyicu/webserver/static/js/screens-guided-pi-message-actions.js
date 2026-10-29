@@ -10,6 +10,8 @@
   function create(context) {
     const tr = context.tr;
     const iconHtml = context.iconHtml;
+    const unsafeRetryIds = new Set();
+    const continuationTargets = new Map();
 
     function action(kind, label, icon, disabled) {
       return `<button type="button" data-gpi-message-${kind} title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? 'disabled' : ''}>${iconHtml(icon, 14)}</button>`;
@@ -22,6 +24,15 @@
         return { editorHtml: '', actionsHtml: '' };
       }
       const id = String(row.id || '');
+      const completedFailure = role === 'assistant' && Boolean(row.errorCode || row.error_code)
+        && Boolean(options && (options.hasCompletedAction || options.hasSideEffectAttempt || options.canContinueReply || options.continuationReasonCode));
+      const pendingContinuation = Boolean(options && options.continuationPending);
+      if (completedFailure || row.replyContinuation) unsafeRetryIds.add(id);
+      else unsafeRetryIds.delete(id);
+      const continuationId = options && options.canContinueReply
+        ? String(options.sourceErrorEntryId || '') : '';
+      if (completedFailure && continuationId) continuationTargets.set(id, continuationId);
+      else continuationTargets.delete(id);
       const editing = role === 'user' && Boolean(options && options.editing);
       if (editing) {
         return {
@@ -37,15 +48,27 @@
       const edit = role === 'user' && options && options.allowEdit
         ? action('edit', tr('Edit and resend from here', '编辑并从这里重新发送'), 'edit', !options.canEdit)
         : '';
-      const retry = role === 'assistant' && options && options.canRetry && options.retryUserEntryId
+      const retry = role === 'assistant' && options && options.canRetry && options.retryUserEntryId && !completedFailure && !row.replyContinuation
         ? action('retry', tr('Regenerate response', '重新生成回答'), 'refresh', false)
         : '';
+      const continueReply = completedFailure && (continuationId || pendingContinuation) && typeof context.continueReply === 'function'
+        ? `<button type="button" data-gpi-message-continue-reply ${pendingContinuation ? 'disabled aria-busy="true"' : ''} title="${tr('Continue explanation without repeating completed actions', '保留已完成操作，继续完成说明')}" aria-label="${tr('Continue explanation', '继续完成说明')}">${iconHtml('refresh', 14)}<span>${pendingContinuation ? tr('Continuing explanation…', '正在继续完成说明…') : tr('Continue explanation', '继续完成说明')}</span></button>`
+        : '';
+      const blockedCode = completedFailure && !continuationId && !pendingContinuation && options
+        ? String(options.continuationReasonCode || '') : '';
+      const blockedNote = !blockedCode ? '' : `<small class="gpi-message-continuation-note">${esc(
+        /budget_exhausted/.test(blockedCode)
+          ? tr('This message has exhausted its budget. Completed actions remain saved; explanation continuation is unavailable.', '本条消息的预算已用尽，无法继续说明；已完成操作已保留。')
+          : blockedCode === 'pi_reply_continuation_tool_outcome_unknown'
+            ? tr('A tool outcome is unconfirmed. Explanation continuation is unavailable until the execution record is checked.', '还有工具结果未确认，请先查看执行记录，暂不能继续说明。')
+            : tr('The original reply state cannot be verified safely. Completed records remain saved; explanation continuation is unavailable.', '原回复的模型或预算状态无法确认，暂不能继续说明；已完成记录已保留。')
+      )}</small>`;
       // Copy, edit-and-resend, and regenerate each reach an owner. Rating
       // buttons were removed: EasyICU keeps no feedback ledger, so a thumb
       // that only toggled a class would promise a record it never wrote.
       return {
         editorHtml: '',
-        actionsHtml: `<div class="gpi-message-actions" role="group" aria-label="${tr('Message actions', '消息操作')}">${copy}${edit}${retry}</div>`,
+        actionsHtml: `<div class="gpi-message-actions" role="group" aria-label="${tr('Message actions', '消息操作')}">${copy}${edit}${retry}${continueReply}</div>${blockedNote}`,
       };
     }
 
@@ -144,8 +167,16 @@
         context.renderHost();
         return true;
       }
+      const continueReply = event.target.closest('[data-gpi-message-continue-reply]');
+      if (continueReply) {
+        const id = String(articleId(continueReply) || '');
+        const target = continuationTargets.get(id);
+        if (target && typeof context.continueReply === 'function') context.continueReply(target, id);
+        return true;
+      }
       const retry = event.target.closest('[data-gpi-message-retry]');
       if (retry) {
+        if (unsafeRetryIds.has(String(articleId(retry) || ''))) return true;
         const user = precedingUser(articleId(retry));
         // Retrying the answer to a host-owned plan action must invoke the same
         // governed plan starter as editing/resubmitting that action. Sending

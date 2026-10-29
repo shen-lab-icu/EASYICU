@@ -16,6 +16,7 @@ from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.projections import _project_replay_resource
 from easyicu.webserver.pi_copilot.tools import _workspace_resource
 from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
+from easyicu.webserver.pi_copilot.workspace_runtime_qa import RuntimeQaStore
 from easyicu.webserver.pi_copilot.workspace_csv_download import MAX_CSV_BYTES, MAX_FORM_BYTES, read_csv_download_form
 from easyicu.webserver.routes import pi_copilot as routes
 
@@ -23,6 +24,8 @@ from easyicu.webserver.routes import pi_copilot as routes
 def test_host_checked_file_digest_survives_replay_without_promoting_write_sha():
     written = _workspace_resource({"file": "demo.html", "sha256": "a" * 64})
     assert "checked_sha256" not in written
+    assert written["sha256"] == "a" * 64
+    assert _project_replay_resource(written)["sha256"] == "a" * 64
     checked = _workspace_resource({"file": "demo.html", "checked_sha256": "b" * 64})
     assert checked["kind"] == "file"
     assert _project_replay_resource(checked)["checked_sha256"] == "b" * 64
@@ -44,6 +47,7 @@ def workspace_client(tmp_path, monkeypatch):
 
     service = Service()
     service.workspace = workspace
+    service.runtime_qa = RuntimeQaStore()
     monkeypatch.setattr(routes, "get_pi_copilot_service", lambda: service)
     return workspace, TestClient(app)
 

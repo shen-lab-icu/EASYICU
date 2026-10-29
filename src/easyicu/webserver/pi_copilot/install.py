@@ -31,6 +31,7 @@ RUNTIME_SOURCE_FILES = (
     "src/shell-usage.mjs",
     "src/personal-preferences.mjs",
     "src/provider-retry.mjs",
+    "src/reply-continuation.mjs",
     "src/session-lifecycle.mjs",
     "src/research-context.mjs",
     "src/conversation-model.mjs",

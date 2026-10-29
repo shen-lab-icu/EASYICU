@@ -36,6 +36,7 @@ import {
   appendModelRequestReceipt,
 } from "./shell-budget.mjs";
 import { retryTransientProviderStream } from "./provider-retry.mjs";
+import { prepareReplyContinuation, replyContinuationState } from "./reply-continuation.mjs";
 import { ShellUsageLedger } from "./shell-usage.mjs";
 import { normalizePreferences, preferenceAdvisory } from "./personal-preferences.mjs";
 import { ResearchContextMemory } from "./research-context.mjs";
@@ -1147,6 +1148,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
     hostTool(sessionId, { name: "easyicu_edit_project_file", label: "Edit project file", description: "Apply one exact replacement after reading the artifact and passing its current SHA-256 digest. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, old_text: Type.String({ minLength: 1, maxLength: 120000 }), new_text: Type.String({ maxLength: 120000 }), expected_sha256: fileSha256 }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_check_project_file", label: "Check project file", description: "Run a bounded non-executing syntax or structure check on a project artifact.", parameters: Type.Object({ file: projectFile }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_preview_project_file", label: "Prepare web preview", description: "Preview the exact HTML bytes that already passed the bounded static check.", parameters: Type.Object({ file: projectFile, checked_sha256: fileSha256 }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_get_project_runtime_qa", label: "Read browser checks", description: "Read current-version declared browser UI checks; missing or partial receipts are not runtime success or scientific validation.", parameters: Type.Object({ file: projectFile, checked_sha256: fileSha256 }, { additionalProperties: false }) }),
   ]), ALL_TOOL_NAMES);
 }
 
@@ -1294,6 +1296,7 @@ function sessionState(record, options = {}) {
     enabled_tools: session.getActiveToolNames().filter((name) => ALL_TOOL_NAMES.includes(name)),
     transcript: transcript.items,
     transcript_page: transcript,
+    reply_continuation: replyContinuationState(record),
     shell_usage: {
       tokens: stats.tokens,
       cost: null,
@@ -1615,6 +1618,41 @@ async function regenerateSession(requestId, params) {
   }
 }
 
+async function continueReplySession(requestId, params) {
+  assertExactKeys(params, new Set(["session_id", "source_error_entry_id", "validation_context"]), "pi_reply_continuation_invalid");
+  const sessionId = boundedText(params.session_id, 160).trim();
+  const record = sessions.get(sessionId);
+  if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+  if (activeRequestBySession.has(sessionId) || record.session.isStreaming) {
+    throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
+  }
+  sessionLifecycle.admit({ excludeSessionId: sessionId });
+  sessionLifecycle.touch(sessionId);
+  const continuation = prepareReplyContinuation(record, params.source_error_entry_id, params.validation_context);
+  const activeTools = record.session.getActiveToolNames();
+  activeRequestBySession.set(sessionId, requestId);
+  try {
+    // Retain the current branch, failed assistant, receipts, and cumulative
+    // usage. This call appends a hidden host instruction, never the original
+    // user prompt; no tool capability or scientific grant is reissued.
+    record.session.setActiveToolsByName([]);
+    record.sessionManager.appendCustomEntry("easyicu.reply-continuation/1", {
+      ...continuation.message.details, state: "started",
+    });
+    await record.session.sendCustomMessage(continuation.message, { triggerTurn: true });
+    const last = record.session.messages.at(-1);
+    record.sessionManager.appendCustomEntry("easyicu.reply-continuation/1", {
+      ...continuation.message.details,
+      state: last?.role === "assistant" && last.stopReason === "stop" ? "completed" : "failed",
+    });
+  } finally {
+    record.session.setActiveToolsByName(activeTools);
+    record.budgetGuard.endMessage();
+    activeRequestBySession.delete(sessionId);
+  }
+  return sessionState(record);
+}
+
 async function handleRequest(request) {
   assertExactKeys(request, new Set(["protocol_version", "kind", "request_id", "method", "params"]), "pi_protocol_unknown_fields");
   const requestId = boundedText(request.request_id, 160).trim();
@@ -1658,6 +1696,8 @@ async function handleRequest(request) {
       return await createSession(params);
     case "session.prompt":
       return await promptSession(requestId, params);
+    case "session.continue_reply":
+      return await continueReplySession(requestId, params);
     case "session.regenerate.inspect": {
       assertExactKeys(params, new Set(["session_id", "user_entry_id"]), "pi_regenerate_inspect_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());

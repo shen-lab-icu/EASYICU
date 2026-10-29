@@ -208,9 +208,15 @@
         canEdit: Boolean(options && options.canEdit),
         canRetry: Boolean(options && options.canRetry),
         retryUserEntryId: String(options && options.retryUserEntryId || ''),
+        hasCompletedAction: Boolean(options && options.hasCompletedAction),
+        hasSideEffectAttempt: Boolean(options && options.hasSideEffectAttempt),
+        continuationPending: Boolean(options && options.continuationPending),
+        canContinueReply: Boolean(options && options.canContinueReply),
+        sourceErrorEntryId: String(options && options.sourceErrorEntryId || ''),
+        continuationReasonCode: String(options && options.continuationReasonCode || ''),
       });
       const contentHtml = messageActions.editorHtml
-        || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
+        || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
       const streaming = row.role === 'assistant' && row.complete === false && !messageActions.editorHtml;
       const followUpsHtml = interactive && lifted && lifted.questions.length
         ? FOLLOW_UPS.render(lifted.questions, { tr, iconHtml, disabled: state.busy || sessionIsStale() }) : '';
@@ -363,9 +369,9 @@
         const text = publicAssistantText(String(displayRow.text || ''));
         if (!text) return '';
         if (kind === 'intro') {
-          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text)}</div></div></article>`;
+          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text, displayRow.resources)}</div></div></article>`;
         }
-        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}>${assistantTextHtml(text)}</div>`;
+        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}>${assistantTextHtml(text, displayRow.resources)}</div>`;
       };
       const messages = ACTIVITY.renderTimeline(timeline, (row, trace) => {
         const displayRow = projectRow(row);
@@ -380,6 +386,18 @@
           canRetry: row.role === 'assistant' && !interactionLocked && !stale,
           retryText: row.role === 'assistant' ? precedingUserText : '',
           retryUserEntryId: row.role === 'assistant' ? precedingUserEntryId : '',
+          hasCompletedAction: Boolean(row.hasCompletedAction),
+          hasSideEffectAttempt: Boolean(row.hasSideEffectAttempt),
+          continuationPending: Boolean(state.continuingReplyEntryId)
+            && String(row.entryId || '') === String(state.continuingReplyEntryId),
+          canContinueReply: row.role === 'assistant' && !interactionLocked && !stale
+            && Boolean(state.session && state.session.reply_continuation && state.session.reply_continuation.available)
+            && String(row.entryId || '') === String(state.session.reply_continuation.source_error_entry_id || ''),
+          sourceErrorEntryId: state.session && state.session.reply_continuation
+            ? state.session.reply_continuation.source_error_entry_id : '',
+          continuationReasonCode: state.session && state.session.reply_continuation
+            && String(row.entryId || '') === String(state.session.reply_continuation.source_error_entry_id || '')
+            ? state.session.reply_continuation.reason_code : '',
           historicalDataConsent,
           historicalChoiceAnswered: row.role === 'assistant'
             && answeredAssistantIds.has(String(row.id || '')),

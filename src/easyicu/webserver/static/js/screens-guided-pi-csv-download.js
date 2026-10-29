@@ -86,6 +86,9 @@
         link.textContent = (window.EU_LANG === 'zh' ? 'CSV 已生成，下载：' : 'CSV ready — Download CSV: ') + data.filename;
         link.addEventListener('click', event => { if (!bound()) event.preventDefault(); });
         slot.replaceChildren(link);
+        document.dispatchEvent(new CustomEvent('easyicu:workspace-csv-ready', {
+          detail: { projectId: source.projectId, file: source.file, sha256: source.sha256 },
+        }));
       } catch (_) {
         if (bound()) status.textContent = window.EU_LANG === 'zh'
           ? 'CSV 下载准备失败，请核对当前文件后再次导出。'

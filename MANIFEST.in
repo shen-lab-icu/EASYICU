@@ -43,6 +43,7 @@ include src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/shell-usage.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/personal-preferences.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/provider-retry.mjs
+include src/easyicu/webserver/pi_copilot/node_app/src/reply-continuation.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/session-lifecycle.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/research-context.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/conversation-model.mjs

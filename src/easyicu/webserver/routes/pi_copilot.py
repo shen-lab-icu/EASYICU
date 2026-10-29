@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from html import escape as html_escape
+import json
 from typing import Annotated, Literal
 from urllib.parse import quote
 
@@ -33,6 +34,7 @@ from easyicu.webserver.pi_copilot.provider_config import (
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver.pi_copilot import openrouter_login
 from easyicu.webserver.pi_copilot.workspace_csv_download import csv_preview_bridge, read_csv_download_form
+from easyicu.webserver.pi_copilot.workspace_runtime_qa import RuntimeQaError, runtime_qa_bridge
 from .research_append import router as append_router
 from .personal_preferences import router as preferences_router
 from .pi_run_scientific_review import router as scientific_review_router
@@ -298,6 +300,13 @@ class PiMessageRequest(BaseModel):
     message_origin: Literal["typed", "model_option", "host_prompt"] | None = None
 
 
+class PiContinueReplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    source_error_entry_id: ShortText
+
+
 class PiRegenerateRequest(PiMessageRequest):
     user_entry_id: ShortText
     regeneration_intent: (
@@ -527,15 +536,20 @@ def _raise_codex_http(error: codex_account_sessions.CodexAccountSessionError) ->
 
 def _workspace_preview_document(
     *, file_name: str, artifact_html: str, allow_downloads: bool = False,
-    download_nonce: str = "",
+    download_nonce: str = "", runtime_nonce: str = "",
+    source_sha256: str = "", runtime_contract: dict | None = None, generate_csv: bool = False,
 ) -> str:
     """Keep Host provenance outside the sandboxed model-authored document."""
 
     safe_file = html_escape(file_name, quote=True)
     bridge = ""
     if allow_downloads and download_nonce:
-        child, bridge = csv_preview_bridge(download_nonce)
+        child, bridge = csv_preview_bridge(download_nonce, generate_csv=generate_csv)
         artifact_html = "<!doctype html>" + child + artifact_html
+    if runtime_nonce:
+        child, runtime_bridge = runtime_qa_bridge(runtime_nonce, source_sha256, runtime_contract)
+        artifact_html = "<!doctype html>" + child + artifact_html
+        bridge += runtime_bridge
     safe_srcdoc = html_escape(artifact_html, quote=True)
     sandbox = "allow-scripts allow-downloads" if allow_downloads else "allow-scripts"
     return f"""<!doctype html>
@@ -928,15 +942,23 @@ def get_pi_copilot_workspace_preview(
     checked_sha256: Sha256Text,
     allow_downloads: bool = False,
     download_nonce: Annotated[str, Query(pattern=r"^(?:[a-f0-9]{64})?$")] = "",
+    runtime_nonce: Annotated[str, Query(pattern=r"^(?:[a-f0-9]{64})?$")] = "",
+    generate_csv: bool = False,
 ) -> HTMLResponse:
     try:
-        payload = get_pi_copilot_service().get_workspace_preview(
+        service = get_pi_copilot_service()
+        payload = service.get_workspace_preview(
             project_id=project_id,
             relative_file=file,
             checked_sha256=checked_sha256,
         )
+        runtime_request = service.runtime_qa.request(
+            project_id, payload["artifact"]["file"], payload["artifact"]["checked_sha256"], runtime_nonce,
+        ) if runtime_nonce else None
     except PiCopilotError as exc:
         _raise_http(exc)
+    except RuntimeQaError as exc:
+        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
     artifact = payload["artifact"]
     return HTMLResponse(
         content=_workspace_preview_document(
@@ -944,6 +966,10 @@ def get_pi_copilot_workspace_preview(
             artifact_html=str(artifact["text"]),
             allow_downloads=allow_downloads,
             download_nonce=download_nonce,
+            runtime_nonce=runtime_nonce,
+            source_sha256=artifact["checked_sha256"],
+            runtime_contract=runtime_request,
+            generate_csv=generate_csv and allow_downloads,
         ),
         headers={
             "Content-Security-Policy": (
@@ -961,6 +987,63 @@ def get_pi_copilot_workspace_preview(
     )
 
 
+class PiRuntimeQaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: WorkspaceFileText
+    checked_sha256: Sha256Text
+
+
+class PiRuntimeQaReportRequest(PiRuntimeQaRequest):
+    nonce: Sha256Text
+    report: dict
+
+
+@router.post("/api/copilot/pi/projects/{project_id}/workspace/runtime-qa")
+def begin_pi_copilot_workspace_runtime_qa(project_id: ShortText, body: PiRuntimeQaRequest) -> dict:
+    try:
+        return get_pi_copilot_service().begin_workspace_runtime_qa(
+            project_id=project_id, relative_file=body.file, checked_sha256=body.checked_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    except RuntimeQaError as exc:
+        raise HTTPException(status_code=422, detail={"error": str(exc)}) from exc
+
+
+@router.get("/api/copilot/pi/projects/{project_id}/workspace/runtime-qa")
+def get_pi_copilot_workspace_runtime_qa(
+    project_id: ShortText, file: WorkspaceFileText, checked_sha256: Sha256Text,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_workspace_runtime_qa(
+            project_id=project_id, relative_file=file, checked_sha256=checked_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/projects/{project_id}/workspace/runtime-qa/report")
+async def post_pi_copilot_workspace_runtime_qa_report(project_id: ShortText, request: Request) -> dict:
+    chunks = bytearray()
+    async for chunk in request.stream():
+        chunks.extend(chunk)
+        if len(chunks) > 32_768:
+            raise HTTPException(status_code=413, detail={"error": "runtime_qa_report_too_large"})
+    try:
+        body = PiRuntimeQaReportRequest.model_validate(json.loads(chunks))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail={"error": "runtime_qa_report_invalid"}) from exc
+    try:
+        return get_pi_copilot_service().record_workspace_runtime_qa(
+            project_id=project_id, relative_file=body.file, checked_sha256=body.checked_sha256,
+            nonce=body.nonce, report=body.report,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    except RuntimeQaError as exc:
+        raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+
+
 @router.post("/api/copilot/pi/projects/{project_id}/workspace/download-csv")
 async def post_pi_copilot_workspace_csv_download(project_id: ShortText, request: Request) -> Response:
     fields = await read_csv_download_form(request)
@@ -973,6 +1056,9 @@ async def post_pi_copilot_workspace_csv_download(project_id: ShortText, request:
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+    get_pi_copilot_service().runtime_qa.note_csv_ready(
+        project_id, payload["artifact"]["file"], payload["artifact"]["checked_sha256"],
+    )
     return Response(
         content=fields["csv"].encode("utf-8"), media_type="application/octet-stream",
         headers={
@@ -1366,6 +1452,16 @@ def post_pi_copilot_population_preparation(
         return get_pi_copilot_service().apply_population_preparation(
             session_id, project_id=body.project_id, expected_revision=body.expected_revision,
             run_id=body.run_id, proposal_sha256=body.proposal_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/continue-reply")
+def post_pi_copilot_continue_reply(session_id: ShortText, body: PiContinueReplyRequest) -> dict:
+    try:
+        return get_pi_copilot_service().continue_reply(
+            session_id, project_id=body.project_id, source_error_entry_id=body.source_error_entry_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

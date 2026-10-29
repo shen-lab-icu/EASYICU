@@ -110,6 +110,23 @@
     ));
   }
 
+  function markReplyContinuations(messages, turns, timeMs) {
+    (Array.isArray(turns) ? turns : []).filter(turn => turn && turn.kind === 'reply_continuation').forEach(turn => {
+      const entryId = String(turn.assistant_entry_id || '');
+      const events = Array.isArray(turn.events) ? turn.events : [];
+      const start = timeMs((events[0] && events[0].at) || turn.started_at);
+      const end = timeMs((events[events.length - 1] && events[events.length - 1].at) || turn.ended_at);
+      const candidates = (Array.isArray(messages) ? messages : []).filter(message => message.role === 'assistant'
+        && (entryId ? String(message.entryId || '') === entryId
+          : Number(message.timelineAt) >= start - 1000 && Number(message.timelineAt) <= end + 1000));
+      // Older completed continuation receipts did not carry the assistant's
+      // entry id. Its final assistant is still bound by the job event window;
+      // never depend on reply text, which the public replay deliberately omits.
+      const target = candidates.sort((left, right) => Number(left.timelineAt) - Number(right.timelineAt)).at(-1);
+      if (target) target.replyContinuation = true;
+    });
+  }
+
   function create(host) {
     const tr = typeof host.tr === 'function' ? host.tr : (en => en);
     const ACTIVITY = host.activity;
@@ -118,6 +135,7 @@
     const resourceKey = host.resourceKey;
     const modelErrorText = host.modelErrorText;
     const activityHasCompletedAction = host.activityHasCompletedAction || (() => false);
+    const activityHasSideEffectAttempt = host.activityHasSideEffectAttempt || (() => false);
     const workflowActionCode = host.workflowActionCode;
     const runFailureText = typeof host.runFailureText === 'function' ? host.runFailureText : (() => '');
 
@@ -485,6 +503,10 @@
       let turnResources = [];
       let lastTimestamp = Date.now();
       function addTurnResources(resources) {
+        if (typeof host.mergeResources === 'function') {
+          turnResources = host.mergeResources(turnResources, resources);
+          return;
+        }
         (Array.isArray(resources) ? resources : []).forEach(resource => {
           const key = resourceKey(resource);
           if (key && !turnResources.some(item => resourceKey(item) === key)) turnResources.push(resource);
@@ -576,6 +598,8 @@
             id: 'history-' + index, role: row.role || 'assistant', text, complete: true,
             entryId: String(row.entry_id || ''),
             errorCode: row.error_code || '',
+            hasCompletedAction: Boolean(row.error_code && activityHasCompletedAction(activity)),
+            hasSideEffectAttempt: Boolean(row.error_code && activityHasSideEffectAttempt(activity)),
             resources: row.role === 'assistant' ? turnResources.slice(0, 24) : [],
             afterSteps: toolsBeforeRow,
             timelineAt: rowAt, timelineOrder: index * 10 + 2,
@@ -593,6 +617,9 @@
             id: 'history-' + index, role: 'assistant',
             text: modelErrorText(row.error_code, activityHasCompletedAction(activity)),
             complete: true, errorCode: row.error_code,
+            entryId: String(row.entry_id || ''),
+            hasCompletedAction: activityHasCompletedAction(activity),
+            hasSideEffectAttempt: activityHasSideEffectAttempt(activity),
             timelineAt: rowAt, timelineOrder: index * 10 + 2,
           });
           closeHistoryActivity(rowAt);
@@ -604,6 +631,7 @@
         ? replayOwner.lifecycleTurns(session) : [];
       const replayTurns = lifecycleTurns.filter(turn => turn && turn.kind !== 'host_action');
       const hostTurns = lifecycleTurns.filter(turn => turn && turn.kind === 'host_action');
+      markReplyContinuations(messages, lifecycleTurns, timeMs);
       const historyActivities = messages.filter(row => row.role === 'activity' && !row.childJobId);
       // A lifecycle turn belongs to the user message it answered: the job
       // starts within moments of that message. Host-advanced model turns
@@ -820,6 +848,6 @@
   }
 
   window.EasyICU.guidedPi.declare('transcript', {
-    create, latestTurnCompletedIdeaExploration,
+    create, latestTurnCompletedIdeaExploration, markReplyContinuations,
   });
 })();

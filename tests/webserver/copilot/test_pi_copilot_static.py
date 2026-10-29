@@ -79,7 +79,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
     assert "css/guided-pi-idea-source.css?v=20260922-connectors1" in index
     assert "css/guided-pi-demo.css?v=20261026-fig1" in index
-    assert "css/guided-pi-preview.css?v=20261026-lineage1" in index
+    assert "css/guided-pi-preview.css?v=20261029-csv2" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
@@ -88,19 +88,19 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-literature.css?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
-    assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
+    assert "js/screens-guided-pi-markdown.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
-    assert "js/screens-guided-pi-message-actions.js?v=20261021-turn-layout1" in index
+    assert "js/screens-guided-pi-message-actions.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20261028-hub2" in index
+    assert "js/screens-guided-pi-starters.js?v=20261028-ux1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261026-mention1" in index
     assert "js/screens-guided-pi-header.js?v=20261028-proj2" in index
-    assert "js/screens-guided-pi-model-menu.js?v=20261027-dc1" in index
+    assert "js/screens-guided-pi-model-menu.js?v=20261028-ux1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261028-fit2" in index
+    assert "css/guided-pi-workspace.css?v=20261028-ux1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert index.index("css/guided-pi-skin.css?") < index.index("css/guided-pi-task-list.css?v=20261028-task1")
-    assert index.index("js/screens-guided-pi-task-table.js?v=20261028-task1") < index.index("js/screens-guided-pi.js?")
+    assert index.index("js/screens-guided-pi-task-table.js?v=20261028-ux1") < index.index("js/screens-guided-pi.js?")
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
     assert "js/screens-guided-pi-demo-walkthrough.js?v=20261026-demo3" in index
@@ -116,15 +116,15 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261022-prose1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261021-where1" in index
+    assert "js/screens-guided-pi-preview.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
+    assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
     assert "js/screens-guided-pi-result-append.js?v=20261026-followups1" in index
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
-    assert "js/screens-guided-pi-activity.js?v=20261026-quick1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261029-uxcomplete2" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261027-dcl1-cfg1"
+        "js/screens-guided-pi-provider.js?v=20261028-ux1"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20261027-dcl1-cfg1" in index
@@ -132,12 +132,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
-    assert "js/screens-guided-pi-study-workspace.js?v=20261028-task1" in index
-    assert "js/screens-guided-pi-events.js?v=20261028-slash1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20261028-ux1" in index
+    assert "js/screens-guided-pi-events.js?v=20261028-ux1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261028-wait1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261028-hub2" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261029-uxcomplete2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -171,14 +171,14 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261028-surv1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261027-coord1" in index
-    assert "js/screens-guided-pi.js?v=20261028-slash1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261029-csv2" in index
+    assert "js/screens-guided-pi.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261028-cfg1" in index
+    assert "js/api.js?v=20261029-uxcomplete2" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -1236,8 +1236,8 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     assert "试试这些问题" in completed.stdout
     assert "乳酸与院内死亡" in completed.stdout and "AmsterdamUMCdb · 表型与亚型" in completed.stdout
     assert "浏览全部技能与方法" in completed.stdout
-    # The home offers example questions, not a workflow search or shuffle.
-    assert "data-gpi-starter-search" not in completed.stdout
+    # Example questions support the deployed database/question search.
+    assert "data-gpi-starter-search" in completed.stdout
     assert "data-gpi-starter-shuffle" not in completed.stdout
     assert "工作流1" not in completed.stdout
     assert '"kind":"compose"' in completed.stdout
@@ -1250,7 +1250,8 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     assert "STUDY_WORKSPACE.selectMethodTemplate" in events
     assert "function selectMethodTemplate" in workspace
     assert "capabilityId: String(descriptor.capabilityId" in workspace
-    assert "STARTERS.filter(" not in events and "STARTERS.shuffle(" not in events
+    assert "STARTERS.filter(state.host, event.target.value)" in events
+    assert "STARTERS.shuffle(" not in events
     assert "STARTERS.actionFromDiscoveryChoice(message, tr)" in events
     assert "prepareEntryCompose(discoveryAction);" in events
     assert "sendText(discoveryAction.text, [], discoveryAction.intent, true, 'host_prompt');" in events
@@ -2420,7 +2421,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "tool arguments, credentials, and patient rows are never displayed" in activity_owner
     assert "assistantTextHtml" in pi_owner
     assert (
-        "row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)"
+        "row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources) : esc(visibleText)"
         in pi_owner
     )
     live_stream_owner = _read("js/screens-guided-pi-live-stream.js")
@@ -4059,8 +4060,9 @@ def test_empty_research_session_prioritizes_the_conversation_entry() -> None:
         _read("css/guided-pi-desktop.css"),
     ))
 
-    assert "const emptyResearch = !workspace && !messages" in owner
-    assert "gpi-empty-session'" in owner
+    view = _read("js/screens-guided-pi-session-view.js")
+    assert "const emptyResearch = !workspace && !lightweight && !messages && !outcome" in view
+    assert "gpi-empty-session'" in view
     assert "main.classList.toggle('gpi-empty-session-focus', emptySessionFocused)" in owner
     assert "state.messages.length === 0 && state.workflowReceipts.length === 0" in owner
     assert "api().loadCapabilities()" in owner
@@ -6034,7 +6036,9 @@ def test_workspace_resource_button_preserves_checked_preview_digest() -> None:
         "resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256"
         in owner
     )
-    assert "checked_sha256: element.dataset.gpiResourceDigest" in owner
+    assert "checked_sha256: element.dataset.gpiResourceCheckedDigest" in owner
+    assert "checked_sha256: element.dataset.gpiResourceDigest" not in owner
+    assert "element.dataset.gpiResourceKind === 'webpage' ? element.dataset.gpiResourceDigest" not in owner
     assert 'data-gpi-resource-entry-mode="${esc(resource.entry_mode || \'\')}"' in owner
     assert "entry_mode: element.dataset.gpiResourceEntryMode" in owner
 
@@ -6678,8 +6682,8 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261028-pend2" in index
-    assert "screens-guided-pi.js?v=20261028-slash1" in index
+    assert "screens-guided-pi-transcript.js?v=20261029-uxcomplete2" in index
+    assert "screens-guided-pi.js?v=20261029-uxcomplete2" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

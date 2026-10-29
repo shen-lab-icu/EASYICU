@@ -50,7 +50,7 @@ def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
     assert f"src/easyicu/webserver/{model_relative}" in manifest
     assert f'"{model_relative}"' in pyproject
     assert "src/conversation-model.mjs" in runtime_manifest()["files"]
-    for name in ("personal-preferences.mjs", "shell-usage.mjs"):
+    for name in ("personal-preferences.mjs", "shell-usage.mjs", "reply-continuation.mjs"):
         relative = f"pi_copilot/node_app/src/{name}"
         assert f"src/easyicu/webserver/{relative}" in manifest
         assert f'"{relative}"' in pyproject
@@ -92,6 +92,7 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
     )
     (source / "src" / "shell-budget.mjs").write_text("", encoding="utf-8")
     (source / "src" / "provider-retry.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "reply-continuation.mjs").write_text("", encoding="utf-8")
     (source / "src" / "session-lifecycle.mjs").write_text("", encoding="utf-8")
     (source / "src" / "research-context.mjs").write_text("", encoding="utf-8")
     (source / "src" / "conversation-model.mjs").write_text("", encoding="utf-8")

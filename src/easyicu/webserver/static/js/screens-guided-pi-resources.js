@@ -11,8 +11,20 @@
     function name(resource) {
       return resource && String(resource.label || resource.artifact || resource.file || '').trim();
     }
+    function isWorkspaceFile(resource) {
+      return Boolean(resource && (!resource.kind || ['file', 'webpage'].includes(resource.kind))
+        && String(resource.file || '').trim());
+    }
+    function workspaceFile(resource) {
+      return String(resource && resource.file || '').trim().replace(/\\/g, '/');
+    }
+    function digest(value) {
+      const text = String(value || '').trim().toLowerCase();
+      return /^[a-f0-9]{64}$/.test(text) ? text : '';
+    }
     function key(resource) {
       if (!resource) return '';
+      if (isWorkspaceFile(resource)) return `workspace:${workspaceFile(resource)}`;
       if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
       if (resource.kind === 'demo_artifact') return `demo:${resource.artifact || ''}`;
       if (resource.kind === 'demo_document') return `demo-document:${resource.artifact || ''}`;
@@ -23,6 +35,34 @@
       return resource.kind === 'research_artifact' || resource.kind === 'research_report' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
         ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
         : `${resource.kind || 'file'}:${resource.file || ''}`;
+    }
+    function workspaceSnapshot(previous, resource) {
+      const snapshot = { ...resource };
+      const checked = digest(resource.checked_sha256);
+      const current = digest(resource.sha256);
+      const currentValue = String(resource.sha256 || '').trim();
+      delete snapshot.checked_sha256;
+      if (checked) {
+        // An explicit check must describe this same byte version.
+        if (!currentValue || checked === current) snapshot.checked_sha256 = checked;
+      } else if (!resource.checked_sha256 && previous) {
+        const priorCheck = digest(previous.checked_sha256);
+        // A later read of identical bytes retains the real Host check. A write
+        // with a different (or missing) digest cannot inherit that check.
+        if (current && current === priorCheck) snapshot.checked_sha256 = priorCheck;
+      }
+      return snapshot;
+    }
+    function merge(existing, incoming) {
+      const unique = new Map();
+      [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]
+        .forEach(resource => {
+          const identity = key(resource);
+          if (!identity) return;
+          if (isWorkspaceFile(resource)) unique.set(identity, workspaceSnapshot(unique.get(identity), resource));
+          else if (!unique.has(identity)) unique.set(identity, resource);
+        });
+      return [...unique.values()];
     }
     function label(resource) {
       if (!resource) return '';
@@ -66,17 +106,26 @@
     }
     function forMessage(row, limit) {
       const rows = Array.isArray(row && row.resources) ? row.resources : [];
-      const unique = new Map();
-      rows.forEach(resource => {
-        const identity = key(resource);
-        if (!identity) return;
-        // Keep the latest Host snapshot for a workspace file: an earlier
-        // write must not hide its later check, or retain a superseded check.
-        if (!unique.has(identity) || ['file', 'webpage'].includes(resource.kind)) unique.set(identity, resource);
-      });
-      return [...unique.values()]
+      return merge([], rows)
         .sort((left, right) => rank(left) - rank(right))
         .slice(0, Number.isFinite(limit) ? limit : 8);
+    }
+
+    function relativeFile(value) {
+      let file;
+      try { file = decodeURIComponent(String(value || '').trim()); } catch (_) { return ''; }
+      if (file.startsWith('./')) file = file.slice(2);
+      if (!file || file.length > 240 || /[:?#\\\u0000-\u001f]/.test(file) || file.startsWith('/')) return '';
+      if (file.split('/').some(part => !part || part === '.' || part === '..')) return '';
+      return file;
+    }
+    function relativeLink(resources, target, title) {
+      const file = relativeFile(target);
+      if (!file) return '';
+      const resource = merge([], resources).find(row => isWorkspaceFile(row) && workspaceFile(row) === file);
+      if (resource) return button(resource, title, { className: 'gpi-resource-link gpi-inline-resource-link' });
+      // An unbound filename is prose, not a credential for the workspace API.
+      return `<span>${esc(title)}${String(title) === file ? '' : `（<code>${esc(file)}</code>）`}</span>`;
     }
 
     function groupForMessage(row, limit) {
@@ -165,9 +214,10 @@
       }
       if (grouped.primary.length) {
         const onlyPlan = grouped.primary.every(resource => resource.kind === 'idea_plan');
+        const onlyWorkspace = grouped.primary.every(isWorkspaceFile);
         const primary = grouped.primary.filter(resource => !technicalArtifacts.has(resource.artifact));
         const technical = grouped.primary.filter(resource => technicalArtifacts.has(resource.artifact));
-        if (primary.length) sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(onlyPlan ? (zh ? '研究方案' : 'Research plan') : (zh ? '本轮文件' : 'Files from this step'))}</span>${cards(primary)}</div>`);
+        if (primary.length) sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(onlyPlan ? (zh ? '研究方案' : 'Research plan') : onlyWorkspace ? (zh ? '本轮产物' : 'Task outputs') : (zh ? '本轮文件' : 'Files from this step'))}</span>${cards(primary)}</div>`);
         if (technical.length) sections.push(`<details class="gpi-resource-technical"><summary>${esc(zh ? '来源与校验' : 'Sources and validation')}</summary>${list(technical)}</details>`);
       }
       if (hasLiterature) {
@@ -178,7 +228,11 @@
       if (grouped.methodLiterature.length) {
         sections.push(`<details class="gpi-method-literature"><summary aria-label="${esc(zh ? `方法学参考（${grouped.methodLiterature.length}）。通用设计参考，不是本题检索结果` : `Method references (${grouped.methodLiterature.length}). General design references, not topic-search results`)}">${esc(zh ? '方法学参考' : 'Method references')}</summary>${list(grouped.methodLiterature)}</details>`);
       }
-      return `<div class="gpi-message-resources" aria-label="${esc(zh ? '本轮方案与文献' : 'Plan and literature for this turn')}">${sections.join('')}</div>`;
+      const workspace = grouped.primary.length && grouped.primary.every(isWorkspaceFile);
+      const title = workspace
+        ? (hasLiterature ? (zh ? '本轮产物与文献' : 'Task outputs and literature') : (zh ? '本轮产物' : 'Task outputs'))
+        : (zh ? '本轮方案与文献' : 'Plan and literature for this turn');
+      return `<div class="gpi-message-resources" aria-label="${esc(title)}">${sections.join('')}</div>`;
     }
 
     function fromButton(element) {
@@ -211,13 +265,12 @@
         authority_class: element.dataset.gpiResourceAuthority,
         snapshot_sha256: element.dataset.gpiResourceDigest,
         review_sha256: element.dataset.gpiResourceDigest,
-        checked_sha256: element.dataset.gpiResourceCheckedDigest
-          || (element.dataset.gpiResourceKind === 'webpage' ? element.dataset.gpiResourceDigest : ''),
+        checked_sha256: element.dataset.gpiResourceCheckedDigest,
         sha256: element.dataset.gpiResourceDigest,
       };
     }
 
-    return { name, key, label, button, forMessage, groupForMessage, renderForMessage, fromButton };
+    return { name, key, label, button, merge, forMessage, groupForMessage, renderForMessage, fromButton, relativeLink };
   }
 
   window.EasyICU.guidedPi.declare('resources', { create });

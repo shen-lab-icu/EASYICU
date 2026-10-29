@@ -4465,6 +4465,11 @@ def _workspace_resource(
         "media_type": str(payload.get("media_type") or "text/plain"),
         **dict(WORKSPACE_ARTIFACT_AUTHORITY),
     }
+    # Ordinary reads/writes carry identity without becoming a static check.
+    # The UI can retain a genuine prior check only for identical bytes.
+    digest = str(payload.get("sha256") or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", digest):
+        resource["sha256"] = digest
     checked_sha256 = str(payload.get("checked_sha256") or "").strip().lower()
     if re.fullmatch(r"[0-9a-f]{64}", checked_sha256):
         resource["checked_sha256"] = checked_sha256
@@ -4801,8 +4806,9 @@ def _check_project_file(
         context,
         status="ok",
         code="pi_workspace_file_checked",
-        summary=f"Checked {payload['file']} with {payload['checker']}.",
-        details={**payload, "resource": _workspace_resource(payload)},
+        summary=f"Statically checked {payload['file']} with {payload['checker']}; browser behavior remains pending.",
+        details={**payload, "verification_scope": "static_only", "runtime_status": "pending",
+                 "resource": _workspace_resource(payload)},
     )
 
 
@@ -4828,7 +4834,35 @@ def _preview_project_file(
             "file": payload["file"],
             "media_type": payload["media_type"],
             "resource": resource,
+            "verification_scope": "preview_prepared",
+            "runtime_status": "pending",
         },
+    )
+
+
+def _get_project_runtime_qa(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    workspace, blocked = _workspace_access(context)
+    if blocked:
+        return blocked
+    assert workspace is not None and context.session.project_id
+    # This rechecks current bytes and the static-check digest, before returning
+    # a receipt. An earlier version cannot confer runtime status on this file.
+    payload = workspace.preview_file(
+        context.session.project_id, params["file"], checked_sha256=params["checked_sha256"]
+    )
+    store = context.runtime_qa_store
+    receipt = store.read(context.session.project_id, payload["file"], params["checked_sha256"].lower()) if store else {
+        "status": "partial", "code": "browser_runtime_pending", "coverage": [],
+        "checks": [], "scientific_verified": False, "browser_download_verified": False,
+        "csv_export_ready": False,
+    }
+    return _workspace_result(
+        context, status="ok", code="pi_workspace_runtime_qa_read",
+        summary=f"Current browser check status for {payload['file']}: {receipt['status']}.",
+        details={"file": payload["file"], "checked_sha256": params["checked_sha256"].lower(),
+                 "runtime_qa": receipt, "verification_scope": "declared_ui_consistency_checks"},
     )
 
 
@@ -4881,6 +4915,7 @@ _DISPATCH = {
     "easyicu_edit_project_file": _edit_project_file,
     "easyicu_check_project_file": _check_project_file,
     "easyicu_preview_project_file": _preview_project_file,
+    "easyicu_get_project_runtime_qa": _get_project_runtime_qa,
 }
 _dispatch_names = frozenset(_DISPATCH)
 if _dispatch_names != ALLOWED_TOOLS:

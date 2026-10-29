@@ -69,13 +69,18 @@ async def read_csv_download_form(request: Request) -> dict[str, str]:
         raise HTTPException(422, detail={"error": "pi_workspace_csv_form_invalid"}) from exc
 
 
-def csv_preview_bridge(nonce: str) -> tuple[str, str]:
-    """The generated page can supply CSV bytes only; it receives no Host capability."""
+def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, str]:
+    """Supply CSV bytes without Host capability; optionally invoke one page export.
+
+    ``generate_csv`` is for an explicit Host user action on an enabled preview.
+    It invokes only the page's own unambiguous export control, leaving the
+    existing nonce, snapshot checks, and Host save action in place.
+    """
 
     configuration = json.dumps(nonce)
     child = r"""<script>(function(){
       'use strict';
-      const nonce=NONCE, limit=1048576, objects=new Map();
+      const nonce=NONCE, generateCsv=GENERATE_CSV, limit=1048576, objects=new Map();
       const create=URL.createObjectURL.bind(URL), revoke=URL.revokeObjectURL.bind(URL);
       const safeName=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.csv$/;
       let busy=false, count=0, last=0;
@@ -103,7 +108,83 @@ def csv_preview_bridge(nonce: str) -> tuple[str, str]:
         const anchor=event.target.closest && event.target.closest('a[download]');
         if(anchor && deliver(anchor)){event.preventDefault();event.stopImmediatePropagation();}
       },true);
-    })();</script>""".replace("NONCE", configuration)
+      if(generateCsv){
+        let attempted=false,expired=false,waiting=false,waitTimer=0;
+        function usable(element){
+          const tag=String(element.tagName||'').toLowerCase();
+          if(tag!=='button' && !(tag==='input' && /^(button|submit)$/i.test(element.type||''))
+            && !(tag==='a' && element.hasAttribute('download'))) return false;
+          if(element.disabled || element.matches(':disabled') || element.getAttribute('aria-disabled')==='true'
+            || element.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
+          const style=getComputedStyle(element);
+          return style.display!=='none' && style.visibility==='visible' && Number(style.opacity)!==0
+            && Array.from(element.getClientRects()).some(rect=>rect.width>0 && rect.height>0);
+        }
+        function csvAction(element){
+          const text=[element.textContent,element.value,element.getAttribute('aria-label'),
+            element.getAttribute('title'),element.getAttribute('download')].join(' ');
+          return /\bcsv\b/i.test(text) && /download|export|下载|导出/i.test(text);
+        }
+        function declaredControls(){
+          const declarations=document.querySelectorAll('script[data-easyicu-runtime-qa]');
+          if(!declarations.length) return null;
+          if(declarations.length!==1 || String(declarations[0].type).toLowerCase()!=='application/json'
+            || declarations[0].textContent.length>16384) return [];
+          try{
+            const contract=JSON.parse(declarations[0].textContent);
+            if(!contract || contract.schema!=='easyicu.web-runtime-qa/1' || !Array.isArray(contract.checks)
+              || contract.checks.length>32) return [];
+            const checks=contract.checks.filter(check=>check && check.kind==='download_control');
+            if(!checks.length) return null;
+            const controls=new Set();
+            for(const check of checks){
+              if(typeof check.selector!=='string' || !check.selector.length || check.selector.length>256
+                || /[\u0000-\u001f]/.test(check.selector)) return [];
+              const matches=Array.from(document.querySelectorAll(check.selector)).filter(usable);
+              if(matches.length!==1) return [];
+              controls.add(matches[0]);
+            }
+            return Array.from(controls);
+          }catch(_){return [];}
+        }
+        function generate(){
+          if(attempted || expired) return;
+          if(window.__easyicuRuntimeQaRunning===true){waitForQa();return;}
+          attempted=true;
+          let controls=declaredControls();
+          if(controls===null){
+            const marked=document.querySelectorAll('[data-easyicu-export="csv"]');
+            controls=marked.length ? Array.from(marked).filter(usable)
+              : Array.from(document.querySelectorAll('button,input[type="button"],input[type="submit"],a[download]'))
+                .filter(element=>usable(element) && csvAction(element));
+          }
+          if(controls.length===1){try{controls[0].click();}catch(_){/* Manual export stays available. */}}
+        }
+        function qaFinished(){
+          if(expired) return;
+          waiting=false;clearTimeout(waitTimer);
+          if(window.__easyicuRuntimeQaRunning===true){expired=true;return;}
+          schedule();
+        }
+        function waitForQa(){
+          if(waiting || expired) return;
+          waiting=true;
+          document.addEventListener('easyicu:runtime-qa-finished',qaFinished,{once:true});
+          waitTimer=setTimeout(function(){
+            expired=true;document.removeEventListener('easyicu:runtime-qa-finished',qaFinished);
+          },15000);
+        }
+        function schedule(){
+          if(attempted || expired) return;
+          if(window.__easyicuRuntimeQaRunning===true){waitForQa();return;}
+          requestAnimationFrame(()=>requestAnimationFrame(generate));
+        }
+        if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',schedule,{once:true});
+        else schedule();
+      }
+    })();</script>""".replace("NONCE", configuration).replace(
+        "GENERATE_CSV", json.dumps(generate_csv is True)
+    )
     wrapper = r"""<script>(function(){
       'use strict';
       const nonce=NONCE, frame=document.getElementById('easyicu-workspace-preview-content');

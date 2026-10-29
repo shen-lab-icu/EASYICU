@@ -260,6 +260,37 @@ export class ShellBudgetGuard {
     this.messageActive = false;
   }
 
+  validateMessageContinuation(budget, context = {}) {
+    if (!budget || ![
+      budget.messageProviderCalls, budget.messageReservedCostMicroUsd,
+      budget.sessionProviderCalls, budget.sessionReservedCostMicroUsd,
+    ].every(value => Number.isSafeInteger(value) && value >= 0)
+        || budget.sessionProviderCalls !== this.sessionProviderCalls
+        || budget.sessionReservedCostMicroUsd !== this.sessionReservedCostMicroUsd
+        || budget.messageProviderCalls > budget.sessionProviderCalls
+        || budget.messageReservedCostMicroUsd > budget.sessionReservedCostMicroUsd) {
+      throw budgetError("pi_reply_continuation_budget_unknown", "Original message budget cannot be proved.");
+    }
+    // Probe the next reservation on an isolated guard, never reset or consume
+    // the live guard merely to decide whether a continuation can be offered.
+    const probe = Object.assign(Object.create(Object.getPrototypeOf(this)), this, {
+      messageProviderCalls: budget.messageProviderCalls,
+      messageReservedCostMicroUsd: budget.messageReservedCostMicroUsd,
+      messageActive: true,
+    });
+    probe.authorize(context);
+  }
+
+  resumeMessage(budget) {
+    if (this.messageActive) {
+      throw budgetError("pi_session_busy", "An active message cannot be continued concurrently.");
+    }
+    this.validateMessageContinuation(budget);
+    this.messageProviderCalls = budget.messageProviderCalls;
+    this.messageReservedCostMicroUsd = budget.messageReservedCostMicroUsd;
+    this.messageActive = true;
+  }
+
   authorize(context, options = {}) {
     if (!this.messageActive) {
       throw budgetError(
