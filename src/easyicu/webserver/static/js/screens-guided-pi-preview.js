@@ -988,6 +988,12 @@
     if (open(resource, projectId)) return openEvidence(button);
   }
   function close(options) {
+    const binding = options && options.onlySourceBinding;
+    if (binding && (!binding.projectId || !binding.studyContextId
+      || state.projectId !== binding.projectId || !state.resource
+      || state.resource.kind !== 'native_workspace' || state.resource.route !== 'extraction'
+      || state.resource.entry_mode !== 'source_binding'
+      || state.resource.study_context_id !== binding.studyContextId)) return false;
     if (csvDownloads) csvDownloads.reset();
     if (runtimeQa) runtimeQa.reset();
     state.qaRequest = null; state.qaError = '';

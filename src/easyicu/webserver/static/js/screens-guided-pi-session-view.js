@@ -177,10 +177,17 @@
         : '';
       // The model's follow-up suggestions are lifted out of the reply text;
       // only the latest reply offers them, as clickable questions.
+      const draftOwner = MODULES.optional('researchDraft');
+      const liftDraft = draftOwner && draftOwner.accepts(row) && !options?.hostFailedAttempt;
+      const streamingDraft = Boolean(draftOwner && draftOwner.isStreaming(row) && !options?.hostFailedAttempt);
+      const assistantPublicText = row.role === 'assistant'
+        ? liftDraft ? draftOwner.strip(publicAssistantText(row.text)) : publicAssistantText(row.text) : '';
+      const draftOnlyText = liftDraft && draftOwner.read(row.text) && !assistantPublicText
+        ? tr('This reply records a research discussion draft; it does not authorize analysis.', '本条回复整理了一份研究讨论草案；此草案不授权分析。') : '';
       const lifted = row.role === 'assistant' && FOLLOW_UPS && row.complete !== false && !options?.hostFailedAttempt
-        ? FOLLOW_UPS.split(publicAssistantText(row.text)) : null;
+        ? FOLLOW_UPS.split(assistantPublicText || draftOnlyText) : null;
       const publicRow = row.role === 'assistant'
-        ? { ...row, text: lifted ? lifted.text : publicAssistantText(row.text) } : row;
+        ? { ...row, text: lifted ? lifted.text : assistantPublicText || draftOnlyText } : row;
       const nextOwner = MODULES.require('nextActions');
       const nextStep = row.role === 'assistant' && row.complete !== false && !options?.hostFailedAttempt
         && !['auto_generate_plan', 'auto_revise_plan', 'generate_plan']
@@ -220,9 +227,11 @@
         mutationState: String(options && options.mutationState || ''),
         budgetState: String(options && options.budgetState || ''),
         hostFailedAttempt: Boolean(options && options.hostFailedAttempt),
+        liftedDraftSource: liftDraft ? String(row.text || '') : null,
+        liftedDraftRenderedText: liftDraft ? publicAssistantText(row.text) : null,
       });
       const contentHtml = messageActions.editorHtml
-        || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
+        || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources, { liftDraft: Boolean(liftDraft), streaming: streamingDraft }) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
       const streaming = row.role === 'assistant' && row.complete === false && !messageActions.editorHtml;
       const followUpsHtml = interactive && lifted && lifted.questions.length
         ? FOLLOW_UPS.render(lifted.questions, { tr, iconHtml, disabled: state.busy || sessionIsStale() }) : '';
@@ -372,12 +381,16 @@
       const renderSegment = (row, kind) => {
         const displayRow = projectRow(row);
         if (!displayRow || displayRow.childJobHandoff) return '';
-        const text = publicAssistantText(String(displayRow.text || ''));
+        const drafts = MODULES.optional('researchDraft');
+        const liftDraft = Boolean(drafts && drafts.accepts(displayRow));
+        const streamingDraft = Boolean(drafts && drafts.isStreaming(displayRow));
+        const publicText = publicAssistantText(String(displayRow.text || ''));
+        const text = liftDraft ? drafts.strip(publicText) : publicText;
         if (!text) return '';
         if (kind === 'intro') {
-          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text, displayRow.resources)}</div></div></article>`;
+          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text, displayRow.resources, { liftDraft, streaming: streamingDraft })}</div></div></article>`;
         }
-        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}>${assistantTextHtml(text, displayRow.resources)}</div>`;
+        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}"${entryAttr(displayRow)}>${assistantTextHtml(text, displayRow.resources, { liftDraft, streaming: streamingDraft })}</div>`;
       };
       const messages = ACTIVITY.renderTimeline(timeline, (row, trace) => {
         const displayRow = projectRow(row);
@@ -442,6 +455,7 @@
       const dataConsentHtml = dataConsentRequired
         ? DATA_CONSENT.render(session, {
           tr, esc, icon: iconHtml,
+          discussionDraft: MODULES.optional('researchDraft')?.current(state.messages),
           namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null,
           namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
         }) + (DATA_BINDING && DATA_BINDING.waitingAction()

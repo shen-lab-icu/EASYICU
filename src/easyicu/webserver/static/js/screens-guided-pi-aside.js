@@ -233,6 +233,10 @@
     }
 
     function syncProjectWorkflowAside() {
+      const draftOwner = window.EasyICU.guidedPi.optional('researchDraft');
+      const draft = !host.demoMode() && draftOwner && typeof host.messages === 'function'
+        ? draftOwner.current(host.messages()) : null;
+      const draftHtml = draft ? draftOwner.render(draft, { tr, esc }) : '';
       const demo = host.demoMode() && window.EasyICU.guidedPi.optional('demo');
       // The demo replay advances its stages chapter by chapter.
       const walkthrough = host.demoMode() && window.EasyICU.guidedPi.optional('demoWalkthrough');
@@ -254,7 +258,7 @@
       head.innerHTML = `<div class="at">${host.demoMode() ? tr('Workflow demo', '流程演示') : tr('Research workspace', '研究工作区')}</div>`;
       if (!host.demoMode() && host.taskScope && host.taskScope()) {
         const progress = `<p class="gpi-aside-empty">${tr('This conversation follows your current task. A complete clinical study has its own reviewed plan and progress.', '本对话按当前任务推进；完整临床研究另有经审阅的计划与进度。')}</p>`;
-        body.innerHTML = section('progress', tr('Current task', '当前任务'), progress)
+        body.innerHTML = section('progress', tr('Current task', '当前任务'), draftHtml + progress)
           + section('notes', tr('Project notes', '项目笔记'), notesPanel());
         body.oninput = event => {
           if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) handleNotesInput(event.target);
@@ -270,7 +274,7 @@
         const progress = notStarted
           ? `<div class="gd-pipeline-summary" data-gpi-project-workflow-not-started><div class="gd-pipeline-value">${tr('The research steps appear here once the first conversation starts.', '开始第一次对话后，研究步骤会列在这里。')}</div></div>`
           : `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite"><div class="gd-pipeline-value">${esc(error || tr('Loading project progress…', '正在读取项目进度…'))}</div></div>`;
-        body.innerHTML = section('progress', tr('Project progress', '项目进度'), progress)
+        body.innerHTML = section('progress', draft ? tr('Research discussion draft', '研究讨论草案') : tr('Project progress', '项目进度'), draftHtml + progress)
           + section('results', tr('Project results', '项目成果'), emptyResults)
           + section('notes', tr('Project notes', '项目笔记'), notesPanel())
           + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
@@ -442,7 +446,12 @@
       }).join('')}</ol>
       <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
       </div>`;
-      body.innerHTML = section('progress', `${tr('Project progress', '项目进度')}<small class="gpi-aside-count">${done}/${total}</small>`, progress)
+      // A discussion draft must not hide a live task or an actual plan review.
+      const formalVisible = Boolean(activeTask || pending || planExists || workflow.active_job?.present);
+      const draftProgress = draftHtml
+        ? draftHtml + `<details class="gpi-formal-progress"${formalVisible ? ' open' : ''}><summary>${tr('Formal research progress', '正式研究进度')} · ${done}/${total}</summary>${progress}</details>`
+        : progress;
+      body.innerHTML = section('progress', draft ? tr('Research discussion draft', '研究讨论草案') : `${tr('Project progress', '项目进度')}<small class="gpi-aside-count">${done}/${total}</small>`, draftProgress)
         + section('results', tr('Project results', '项目成果'), (results || emptyResults) + runHistoryHtml(workflow, runHistoryOpen(body, !results)))
         + section('notes', tr('Project notes', '项目笔记'), notesPanel())
         + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');

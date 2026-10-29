@@ -2814,6 +2814,20 @@ def test_new_pi_conversation_requires_a_project_binding(tmp_path: Path) -> None:
     assert missing.value.code == "pi_project_binding_required"
 
 
+@pytest.mark.parametrize(
+    ("message", "title"),
+    [
+        ("研究乳酸变化与院内死亡。现在还没有选择数据库，请先帮我讨论方案。", "研究乳酸变化与院内死亡"),
+        ("  MIMIC-IV v3.1 ICU study? Do not run the analysis.", "MIMIC-IV v3.1 ICU study"),
+        ("Cohort feasibility\nPlease list the missing definitions.", "Cohort feasibility"),
+    ],
+)
+def test_first_message_navigation_title_stays_with_the_question(
+    message: str, title: str
+) -> None:
+    assert service_module._first_message_session_title(message) == title
+
+
 def test_empty_task_can_be_renamed_and_removed(
     tmp_path: Path,
     study_state: dict[str, Any],

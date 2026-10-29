@@ -56,6 +56,20 @@ test('Host recovery kind selects an explicit bounded action and rejects stale ge
       recoveryKind: 'blocked', mutationState: 'unconfirmed', continuationReasonCode: 'pi_reply_continuation_tool_outcome_unknown' }).actionsHtml;
     assert.match(blocked, language === 'zh' ? /核对文件状态/ : /file state/);
     assert.doesNotMatch(blocked, /data-gpi-message-retry|data-gpi-message-continue/);
+    // The default unconfirmed state also appears when workspace recovery is
+    // inapplicable; it is not evidence that a file operation was attempted.
+    for (const [reason, expected] of [
+      ['pi_reply_continuation_workspace_only', language === 'zh' ? /模型回复已中断/ : /model response was interrupted/],
+      ['pi_reply_continuation_model_changed', language === 'zh' ? /当前模型与失败时不同/ : /current model differs/],
+      ['pi_reply_continuation_budget_unknown', language === 'zh' ? /剩余预算尚无法核对/ : /budget cannot be verified/],
+      ['pi_session_connection_changed', language === 'zh' ? /执行状态尚未核实/ : /operation state is unconfirmed/],
+    ]) {
+      const fallback = actions.render(rows[1], { ...options, canContinueReply: false, recoveryKind: 'blocked',
+        mutationState: 'unconfirmed', budgetState: 'unverified', continuationReasonCode: reason }).actionsHtml;
+      assert.match(fallback, expected);
+      assert.doesNotMatch(fallback, language === 'zh' ? /文件操作可能已经开始/ : /file operation may have started/);
+      assert.doesNotMatch(fallback, /data-gpi-message-retry|data-gpi-message-continue/);
+    }
     const budget = actions.render(rows[1], { ...options, canContinueReply: false, recoveryKind: 'blocked',
       budgetState: 'exhausted', continuationReasonCode: 'pi_shell_message_provider_call_budget_exhausted' }).actionsHtml;
     assert.match(budget, language === 'zh' ? /预算已用尽/ : /no remaining budget/);

@@ -52,6 +52,10 @@
   let exExpectedDatabase = ''; // path-free Copilot requirement; scan must match it
   let exDatabaseMismatch = null;
   let exHydratedStudyCoordinate = '';
+  let exHydratedStudyId = '';
+  let exStudyCohortFields = null;
+  let exStudyFormatSpecified = false;
+  let exStudyConfigurationEdited = false;
   let exCohortPreset = 'all_icu';
   let exAgeMin = 0;
   let exAgeMax = 100;
@@ -295,9 +299,13 @@
   // everything the conversation had collected. exPath is deliberately NOT
   // prefilled (see its declaration): the folder scan stays the authoritative
   // source binding.
+  function extractionTaskRunning() {
+    const continuity = window.EU_EXTRACTION_JOB_CONTINUITY;
+    return Boolean(continuity && continuity.isRunning && continuity.isRunning());
+  }
   function applyGuidedPrefill(handoff) {
     const cfg = handoff && handoff.config;
-    if (!cfg || typeof cfg !== 'object') return;
+    if (!cfg || typeof cfg !== 'object' || extractionTaskRunning()) return;
     if (cfg.cohort_preset && COHORT_PRESETS.some(p => p[0] === cfg.cohort_preset)) exCohortPreset = cfg.cohort_preset;
     if (Array.isArray(cfg.modules) && cfg.modules.length) {
       const want = new Set(cfg.modules);
@@ -311,13 +319,47 @@
 
   function applyStudySetup(setup) {
     if (!setup || typeof setup !== 'object') return null;
-    const coordinate = `${setup.study_context_id || ''}:${setup.revision || 0}:${setup.expected_database || ''}`;
+    // A server revision alone does not replace the currently displayed run.
+    // Local pending changes still differ even before the server allocates one.
+    const coordinate = setup.study_context_id ? JSON.stringify({ ...setup, revision: 0 }) : '';
     if (coordinate && coordinate === exHydratedStudyCoordinate) return setup;
+    const nextStudyId = String(setup.study_context_id || '');
+    const changingStudy = exHydratedStudyId && nextStudyId !== exHydratedStudyId;
+    // A job's form values and study association describe that exact run.
+    // Even a same-study revision (or the first study on a native run) must
+    // wait: replacing those values would relabel the old terminal result.
+    if (extractionTaskRunning()) return null;
+    if (changingStudy) {
+      abandonExtractionContinuity();
+      exView = 'home'; exReal = 'connect'; exPath = ''; exSource = null;
+      exScanResult = null; exScanError = null;
+      exportJobId = null; exportProg = null; exportResult = null; exportErr = null;
+      exportCancelled = null; exportCohortReport = null; exportResourcePlan = null;
+      convJobId = null; convProg = null; convResult = null; convErr = null;
+    } else if (exportJobId || exportResult || exportErr || exportCancelled) {
+      // A settled result describes its original configuration too. Keep the
+      // verified input folder, but require a new job for changed study setup.
+      abandonExtractionContinuity();
+      exView = 'home';
+      exportJobId = null; exportProg = null; exportResult = null; exportErr = null;
+      exportCancelled = null; exportCohortReport = null; exportResourcePlan = null;
+    }
     exHydratedStudyCoordinate = coordinate;
+    exHydratedStudyId = nextStudyId;
+    exportRunMode = 'custom'; exportRunModules = null;
     exExpectedDatabase = String(setup.expected_database || '').trim();
     exDatabaseMismatch = null;
 
     const cohort = setup.cohort && typeof setup.cohort === 'object' ? setup.cohort : {};
+    exStudyCohortFields = coordinate ? new Set(Object.keys(cohort)) : null;
+    exStudyFormatSpecified = !!EX_EXT[setup.export_format];
+    exStudyConfigurationEdited = false;
+    // Sparse/new studies must not inherit the previous study's form choices.
+    exCohortPreset = 'all_icu';
+    exAgeMin = 0; exAgeMax = 100; exMinLosHours = 0;
+    exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;
+    exExcludeReadmissions = false; exMaxPatients = 0;
+    exFormat = 'parquet';
     const includeDiagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses : [];
     const excludeDiagnoses = Array.isArray(cohort.exclude_diagnoses) ? cohort.exclude_diagnoses : [];
     const requestedPreset = (cohort.icd_enabled || includeDiagnoses.length || excludeDiagnoses.length)
@@ -329,7 +371,10 @@
     const windowHours = Number.isFinite(cohort.observation_window_hours)
       ? cohort.observation_window_hours
       : (setup.time_window && (setup.time_window.observation_hours ?? setup.time_window.hours));
-    if (Number.isFinite(windowHours)) exWindowHours = Math.max(1, Math.min(MAX_OBSERVATION_WINDOW_HOURS, windowHours));
+    if (Number.isFinite(windowHours)) {
+      exWindowHours = Math.max(1, Math.min(MAX_OBSERVATION_WINDOW_HOURS, windowHours));
+      if (exStudyCohortFields) exStudyCohortFields.add('observation_window_hours');
+    }
     if (typeof cohort.exclude_readmissions === 'boolean') exExcludeReadmissions = cohort.exclude_readmissions;
     if (Number.isFinite(cohort.max_patients)) exMaxPatients = Math.max(0, cohort.max_patients);
     if (window.EUIcd && typeof window.EUIcd.apply === 'function') window.EUIcd.apply(cohort);
@@ -357,6 +402,11 @@
     exCustomOpen = true;
     window.EU_STALE = true;
     return setup;
+  }
+  function noteStudyConfigurationEdit(...cohortFields) {
+    if (!exHydratedStudyCoordinate) return;
+    exStudyConfigurationEdited = true;
+    cohortFields.forEach(key => exStudyCohortFields.add(key));
   }
   function setExportDir(path) {
     exExportDir = path || null;
@@ -501,35 +551,14 @@
     ['Index & freeze', '建立索引并冻结'],
   ];
   function copilotPrefillSummary() {
-    if (!exHydratedStudyCoordinate) return '';
-    const cohort = cohortContract();
-    const database = window.EU_DATABASE_NAMES.release(exExpectedDatabase) || exExpectedDatabase.toUpperCase();
-    const diagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses.join(', ') : '';
-    const parts = [
-      database,
-      diagnoses ? `ICD ${diagnoses}` : t(cohortPresetMeta()[1], cohortPresetMeta()[2]),
-      t('age ', '年龄 ') + fmtAgeRange(),
-      fmtObservationWindow(exWindowHours),
-      selMods().map(moduleKey).join(', ') || t('modules not yet selected', '特征模块尚未选择'),
-      String(exFormat || '').toUpperCase(),
-    ].filter(Boolean);
-    return `
-      <div class="ex-connect-primary ex-copilot-prefill" role="note">
-        <div class="ex-connect-copy">
-          <div class="ex-connect-copy-ico">${icon('spark', 15)}</div>
-          <div>
-            <div class="ex-connect-copy-title">${t('Loaded from Copilot', '已从 Copilot 带入')}</div>
-            <div class="ex-connect-copy-desc">${escHtml(parts.join(' · '))}</div>
-          </div>
-        </div>
-      </div>`;
+    return window.EU_EXTRACTION_STUDY_CONTEXT.renderPrefill(window.EU_EXTRACTION_CONTEXT.snapshot(), {
+      t, icon, esc: escHtml, edited: exStudyConfigurationEdited,
+      cohortLabel: t(cohortPresetMeta()[1], cohortPresetMeta()[2]), adult: adultPreset(),
+      ageLabel: fmtAgeRange(), firstOnly: firstStayOnly(), windowLabel: fmtObservationWindow(exWindowHours),
+    });
   }
-  // The folder the study needs, named by its database when the study has one.
   function connectFolderHint() {
-    const name = window.EU_DATABASE_NAMES.release(exExpectedDatabase);
-    return name
-      ? hostedCopy('folderHintNamed', t(`Choose the ${name} data folder; EasyICU then identifies its layout automatically. No patient rows are uploaded or returned.`, `选择 ${name} 数据文件夹后，EasyICU 会自动判断目录结构。不上传，也不返回患者行。`), name)
-      : hostedCopy('folderHint', t('Choose the ICU data folder; EasyICU then identifies its database and layout automatically. No patient rows are uploaded or returned.', '选择 ICU 数据文件夹后，EasyICU 会自动判断数据库和目录结构。不上传，也不返回患者行。'));
+    return window.EU_EXTRACTION_STUDY_CONTEXT.folderHint(exExpectedDatabase, { t, hostedCopy });
   }
   function connectState() {
     const opt = (src, ico, tEn, tZh, dEn, dZh) => `
@@ -890,25 +919,16 @@
     return CONCEPT_DERIVED_COHORT_PRESETS.has(id);
   }
   function fmtHours(v) {
-    const n = Math.max(0, Number(v || 0));
-    if (!n) return t('Any', '不限');
-    if (n % 24 === 0) return n + 'h · ' + (n / 24) + 'd';
-    return n + 'h';
+    return window.EU_EXTRACTION_STUDY_CONTEXT.formatHours(v, t);
   }
   function fmtObservationWindow(v) {
-    const n = Math.max(1, Number(v || DEFAULT_OBSERVATION_WINDOW_HOURS));
-    if (n >= MAX_OBSERVATION_WINDOW_HOURS) return t('full available · 30d cap', '全可用 · 30天上限');
-    return t('first ', '前 ') + fmtHours(n);
+    return window.EU_EXTRACTION_STUDY_CONTEXT.formatObservationWindow(v, { t, defaultHours: DEFAULT_OBSERVATION_WINDOW_HOURS, maxHours: MAX_OBSERVATION_WINDOW_HOURS });
   }
   function adultPreset() { return ADULT_COHORT_PRESETS.has(exCohortPreset); }
   function effectiveAgeMin() { return adultPreset() ? Math.max(ADULT_AGE_FLOOR_YEARS, exAgeMin) : exAgeMin; }
   function firstStayOnly() { return exExcludeReadmissions || exCohortPreset === 'adult_first'; }
   function fmtAgeRange() {
-    const ageMin = effectiveAgeMin();
-    if (ageMin <= 0 && exAgeMax >= 100) return t('all ages', '全部年龄');
-    if (ageMin <= 0) return '≤ ' + exAgeMax;
-    if (exAgeMax >= 100) return '≥ ' + ageMin;
-    return ageMin + '–' + exAgeMax;
+    return window.EU_EXTRACTION_STUDY_CONTEXT.formatAgeRange(effectiveAgeMin(), exAgeMax, t);
   }
   function sepsisDefinitionRelevant() {
     const sepsis = window.EUExtractionSepsis;
@@ -953,24 +973,29 @@
     const active = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
     const resultPath = exportResult && exportResult.out_dir;
     const detectedDatabase = String(exScanResult && exScanResult.db_key || '').trim();
-    const sourcePath = resultPath || (active && active.path) || '';
-    const sourceLabel = (active && active.label) || (resultPath
+    const sourcePath = resultPath || (exReal === 'ready' ? exPath : '') || '';
+    const matchingActive = active && active.path === sourcePath ? active : null;
+    const sourceLabel = (matchingActive && matchingActive.label) || (resultPath
       ? 'EasyICU extraction'
       : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : 'Local EasyICU data'));
     const modules = (exportRunModules || runModuleKeys(recommended ? 'recommended' : 'custom')).slice();
     return {
-      data_source: {
-        source_id: String(active && active.id || ''),
+      data_source: sourcePath ? {
+        source_id: String(matchingActive && matchingActive.id || ''),
         path: sourcePath,
         label: sourceLabel,
         database: detectedDatabase || exExpectedDatabase || '',
-      },
-      cohort,
+      } : null,
+      cohort: { ...cohort, max_patients: exMaxPatients },
       modules,
       preset_label: preset[1],
       export_format: exFormat,
       observation_hours: cohort.observation_window_hours,
       expected_database: exExpectedDatabase,
+      study_context_id: exHydratedStudyId,
+      configuration_fields: exStudyCohortFields ? {
+        cohort: Array.from(exStudyCohortFields), export_format: exStudyFormatSpecified,
+      } : null,
       completed: !!(exportResult && resultPath),
     };
     },
@@ -1403,6 +1428,7 @@
   }
   function moveToSetupStep(next) {
     if (!EX_SETUP_STEPS.some(step => step[0] === next)) return;
+    if (exSetupStep === 'cohort' && next === 'export') noteStudyConfigurationEdit(...Object.keys(cohortContract()));
     exSetupStep = next;
     exExpandedMod = null;
     repaint();
@@ -1472,7 +1498,8 @@
     const support = cohortExportSupport();
     const exportReady = hostedServer() || !!currentExportDir();
     const extractDisabled = !selMods().length || !support.ok || !exportReady;
-    const runMode = recommendedSelectionActive() ? 'recommended' : 'custom';
+    // Recommended features do not authorize replacing the reviewed cohort.
+    const runMode = 'custom';
     const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? hostedCopy('dockLine', t('local-only · reproducible manifest', '仅本地 · 可复现清单')) : support.message);
     return `
     <div class="ex-action-dock">
@@ -1890,6 +1917,7 @@
       const adve = root.querySelector('[data-ex-adve]'); if (adve) adve.addEventListener('click', () => { exAdvExport = !exAdvExport; repaint(); });
       root.querySelectorAll('[data-ex-cohort-preset]').forEach(b => b.addEventListener('click', () => {
         exCohortPreset = b.dataset.exCohortPreset || 'adult_first';
+        noteStudyConfigurationEdit('preset', ...(exCohortPreset === 'icd' ? ['icd_enabled', 'include_diagnoses', 'exclude_diagnoses', 'icd_include', 'icd_exclude'] : []));
         window.EU_STALE = true;
         repaint();
       }));
@@ -1897,6 +1925,7 @@
         const applyRange = () => {
           const key = input.dataset.exRange;
           const val = Number(input.value || 0);
+          noteStudyConfigurationEdit(({ los_min: 'min_icu_los_hours', window: 'observation_window_hours' })[key] || key);
           if (key === 'age_min') {
             exAgeMin = Math.min(Math.max(0, val), exAgeMax);
             if (val > exAgeMax) input.value = String(exAgeMin);
@@ -1916,12 +1945,14 @@
       });
       root.querySelectorAll('[data-ex-switch="readmissions"]').forEach(s => s.addEventListener('click', () => {
         exExcludeReadmissions = !exExcludeReadmissions;
+        noteStudyConfigurationEdit('exclude_readmissions');
         window.EU_STALE = true;
         repaint();
       }));
       const capCtl = root.querySelector('[data-ex-cap]'); if (capCtl) capCtl.addEventListener('click', e => {
         const b = e.target.closest('[data-cap]'); if (!b) return;
         exMaxPatients = Math.max(0, Number(b.dataset.cap || 0));
+        noteStudyConfigurationEdit('max_patients');
         window.EU_STALE = true;
         repaint();
       });
@@ -1932,14 +1963,14 @@
       if (window.EUExtractionSepsis && window.EUExtractionSepsis.bind) {
         window.EUExtractionSepsis.bind(root, {
           database: (exScanResult && exScanResult.db_key) || 'miiv',
-          markStale: () => { window.EU_STALE = true; },
+          markStale: () => { noteStudyConfigurationEdit('sepsis_definition'); window.EU_STALE = true; },
           repaint,
         });
       }
       // reset to core
-      const core = root.querySelector('[data-ex-core]'); if (core) core.addEventListener('click', () => { resetToCore(); repaint(); });
-      const selectAll = root.querySelector('[data-ex-selectall]'); if (selectAll) selectAll.addEventListener('click', () => { setAllModules(true); repaint(); });
-      const clearMods = root.querySelector('[data-ex-clearmods]'); if (clearMods) clearMods.addEventListener('click', () => { setAllModules(false); repaint(); });
+      const core = root.querySelector('[data-ex-core]'); if (core) core.addEventListener('click', () => { resetToCore(); noteStudyConfigurationEdit(); repaint(); });
+      const selectAll = root.querySelector('[data-ex-selectall]'); if (selectAll) selectAll.addEventListener('click', () => { setAllModules(true); noteStudyConfigurationEdit(); repaint(); });
+      const clearMods = root.querySelector('[data-ex-clearmods]'); if (clearMods) clearMods.addEventListener('click', () => { setAllModules(false); noteStudyConfigurationEdit(); repaint(); });
       // module toggle
       const grid = root.querySelector('#exModGrid');
       if (grid) grid.addEventListener('click', e => {
@@ -1951,6 +1982,7 @@
           repaint();
           return;
         }
+        if (e.target.closest('[data-ex-concepts-all], [data-ex-concepts-clear], [data-ex-concept], [data-ex-mod]')) noteStudyConfigurationEdit();
         const allConcepts = e.target.closest('[data-ex-concepts-all]');
         if (allConcepts) {
           setAllConceptsInModule(MODS[+allConcepts.dataset.exConceptsAll], true);
@@ -1978,11 +2010,14 @@
         repaint();
       });
       // format
-      const fmt = root.querySelector('[data-ex-fmt]'); if (fmt) fmt.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exFormat = b.dataset.val; repaint(); });
+      const fmt = root.querySelector('[data-ex-fmt]'); if (fmt) fmt.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exFormat = b.dataset.val; exStudyFormatSpecified = true; noteStudyConfigurationEdit(); repaint(); });
       const merge = root.querySelector('[data-ex-merge]'); if (merge) merge.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exMerge = b.dataset.val; repaint(); });
       // Rule for this card: every control visible at configure/confirm time must
       // round-trip into the job payload — display-only switches were removed.
       // ICD disease-cohort filter (folded in from the former standalone screen)
+      root.querySelectorAll('#icdIncInput, #icdExcInput').forEach(input => input.addEventListener('input', () => {
+        noteStudyConfigurationEdit('icd_enabled', 'include_diagnoses', 'exclude_diagnoses', 'icd_include', 'icd_exclude');
+      }));
       if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root, icdSourceContext());
       if (window.__euExtractFocusICD) window.__euExtractFocusICD = false;
     },
@@ -1998,12 +2033,15 @@
     syncToCopilot: syncExtractionToCopilot,
     handoffReceipt: extractionHandoffReceipt,
     applyExtractionScope(scope) {
+      if (extractionTaskRunning()) return false;
       if (scope === 'all_supported') {
         setAllModules(true);
         exCustomOpen = true;
       }
+      return true;
     },
     beginSourceBinding() {
+      if (extractionTaskRunning()) return false;
       abandonExtractionContinuity();
       exView = 'home';
       exSetupStep = 'modules';
@@ -2013,6 +2051,7 @@
       exScanResult = null;
       exScanError = null;
       exDatabaseMismatch = null;
+      return true;
     },
   };
 })();

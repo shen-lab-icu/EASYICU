@@ -249,6 +249,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-host-jobs.js",
         "study-context.js",
         "screens-guided-pi.js",
+        "screens-guided-pi-preview.js",
     ],
     "guided_pi_run_answer_group_names.test.js": [],
     "guided_pi_provider_stop_copy.test.js": [],
@@ -372,6 +373,13 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     "guided_pi_audit_answer_shapes.test.js": [],
     "guided_pi_audit_review_copy.test.js": [],
+    "guided_pi_math_readability.test.js": [],
+    "guided_pi_research_draft.test.js": [],
+    "guided_pi_session_navigation.test.js": [],
+    "pi_attempt_recovery_ui.test.js": [],
+    "pi_csv_file_card.test.js": [],
+    "pi_first_artifact_entry.test.js": [],
+    "pi_turn_failure_copy.test.js": [],
 }
 
 

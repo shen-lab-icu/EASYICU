@@ -222,7 +222,11 @@ _AUTO_SESSION_TITLE_SUFFIXES = (
 def _first_message_session_title(message: str) -> str:
     """Create a short local conversation label from the researcher's first turn."""
 
-    compact = " ".join(str(message or "").split())
+    text = str(message or "").strip()
+    first_line = text.splitlines()[0] if text else ""
+    compact = " ".join(first_line.split())
+    first_sentence = re.split(r"[。！？!?]", compact, maxsplit=1)[0].strip()
+    compact = first_sentence or compact
     if len(compact) <= 52:
         return compact
     return compact[:51].rstrip() + "…"

@@ -13,6 +13,7 @@
     const unsafeRetryIds = new Set();
     const continuationTargets = new Map();
     const recoveryKinds = new Map();
+    const liftedDrafts = new Map();
 
     function action(kind, label, icon, disabled) {
       return `<button type="button" data-gpi-message-${kind} title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? 'disabled' : ''}>${iconHtml(icon, 14)}</button>`;
@@ -21,10 +22,15 @@
     function render(row, options) {
       const text = String(row && row.text || '');
       const role = row && row.role;
+      const id = String(row && row.id || '');
+      liftedDrafts.delete(id);
+      if (id && role === 'assistant' && options && typeof options.liftedDraftSource === 'string'
+        && typeof options.liftedDraftRenderedText === 'string') {
+        liftedDrafts.set(id, { source: options.liftedDraftSource, rendered: options.liftedDraftRenderedText });
+      }
       if (!text || row.complete === false || !['user', 'assistant'].includes(role)) {
         return { editorHtml: '', actionsHtml: '' };
       }
-      const id = String(row.id || '');
       const completedFailure = role === 'assistant' && Boolean(row.errorCode || row.error_code || options && options.hostFailedAttempt)
         && Boolean(options && (options.workspaceMode || options.hasCompletedAction || options.hasSideEffectAttempt || options.canContinueReply || options.continuationReasonCode));
       const pendingContinuation = Boolean(options && options.continuationPending);
@@ -68,16 +74,19 @@
       const blockedReason = /budget_exhausted/.test(blockedCode) || options && options.budgetState === 'exhausted'
         ? tr('This message has no remaining budget. Completed files and execution records are preserved; this turn cannot continue. Review the existing artifacts and records.', '本条消息的预算已用尽。已完成的文件和执行记录已保留，本轮无法继续。请查看现有产物和记录。')
         : blockedCode === 'pi_reply_continuation_tool_outcome_unknown'
-          || options && options.mutationState === 'unconfirmed' && blockedCode !== 'pi_reply_continuation_terminal_state_unconfirmed'
           ? tr('A file operation may have started but its outcome is unconfirmed. Review the execution record and file state before retrying.', '文件操作可能已经开始，但结果尚未确认。请先查看执行记录并核对文件状态，暂不重复执行。')
           : blockedCode === 'pi_reply_continuation_model_changed'
             ? tr('The current model differs from the failed attempt. Restore that model and refresh the conversation to check recovery.', '当前模型与失败时不同。请恢复原模型并刷新对话，重新核对恢复状态。')
             : blockedCode === 'pi_reply_continuation_terminal_state_unconfirmed'
               ? tr('The late model reply does not match the Host task outcome. Review the retained execution record; do not repeat the operation until that outcome is confirmed.', '模型的晚到回复与主机任务终态尚未核对一致。请先查看保留的执行记录，暂不重复执行。')
-            : blockedCode === 'pi_reply_continuation_budget_unknown' || options && options.budgetState === 'unverified'
+            : blockedCode === 'pi_reply_continuation_workspace_only'
+              ? tr('The model response was interrupted. Review the execution record and confirm the operation state before retrying.', '模型回复已中断。请先查看执行记录并确认执行状态，再决定是否重试。')
+            : blockedCode === 'pi_reply_continuation_budget_unknown'
               ? tr('The original budget cannot be verified. Refresh the conversation to check it again; automatic replay is unavailable.', '原消息的剩余预算尚无法核对。请刷新对话重新核对，暂不自动重放。')
               : blockedCode === 'pi_reply_continuation_no_completed_write'
                 ? tr('The Host has not confirmed a safe retry for this attempt. Refresh the conversation and review its execution record.', '本次尝试尚未确认可安全重试。请刷新对话并查看执行记录。')
+                : options && options.mutationState === 'unconfirmed'
+                  ? tr('The operation state is unconfirmed. Review the execution record and file state before retrying.', '执行状态尚未核实。请先查看执行记录并核对文件状态，暂不重复执行。')
                 : tr('Recovery is not available for this attempt. Refresh the conversation and review the retained execution record for its cause.', '本次尝试暂无可用的恢复操作。请刷新对话，并查看保留的执行记录了解原因。');
       const blockedNote = blockedCode
         ? `<small class="gpi-message-continuation-note">${esc(blockedReason)}</small>`
@@ -168,7 +177,14 @@
       const copy = event.target.closest('[data-gpi-message-copy]');
       if (copy) {
         const row = messageById(articleId(copy));
-        if (row) copyText(row.text).then(copied => { if (copied) markCopied(copy); });
+        if (row) {
+          const lifted = liftedDrafts.get(String(row.id || ''));
+          const drafts = window.EasyICU.guidedPi.optional('researchDraft');
+          const text = lifted && lifted.source === row.text && drafts && drafts.accepts(row)
+            && typeof drafts.stripCopied === 'function'
+            ? drafts.stripCopied(row.text, lifted.rendered) : row.text;
+          copyText(text).then(copied => { if (copied) markCopied(copy); });
+        }
         return true;
       }
       const edit = event.target.closest('[data-gpi-message-edit]');

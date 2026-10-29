@@ -633,6 +633,9 @@ export function hostPostToolFinalization(model, context, language) {
     return toolCallStream(model, "easyicu_update_study_context", choice);
   }
   const update = latestStudyContextUpdate(context);
+  // A host-validated reply hint returns advisory design discussion to the
+  // model. It changes neither scientific state nor any action authority.
+  if (update?.receipt?.details?.discussion_only === true) return null;
   const withheld = [withheldDesignText(update, language), unsavedFieldsText(update, language)]
     .filter(Boolean)
     .join("\n\n");

@@ -63,17 +63,17 @@ def test_composer_row_and_compact_rail_heading_never_overlap() -> None:
     assert ".gpi-activity.complete>summary .gpi-activity-meta," in desktop_css
 
 
-def test_entry_offers_fixed_examples_and_collapsed_rail_keeps_navigation() -> None:
+def test_entry_offers_searchable_examples_and_collapsed_rail_keeps_navigation() -> None:
     starters = _read("js/screens-guided-pi-starters.js")
     guided = _read("js/screens-guided.js")
     projects = _read("js/screens-guided-projects.js")
     desktop_css = _read("css/guided-pi-desktop.css")
     settings_css = _read("css/settings.css")
     workspace = _read("js/screens-guided-pi-study-workspace.js")
-    # The entry offers a few clinician questions; the catalogue search and
-    # shuffle retired with the 2026-10-21 home (test_pi_entry_plan_first_starters).
+    # The entry shows a few examples and filters the full local catalogue.
+    # Catalogue search is independent of the conversation composer.
     assert "function exampleQuestions(tr)" in starters
-    assert "function filter(" not in starters
+    assert "function filter(root, query)" in starters
     assert "SEARCH_LIMIT" not in starters
     # Manual collapse compacts the rail to the global nav; Projects restores it.
     assert ".gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail{display:flex;grid-column:1;grid-row:1;box-sizing:border-box;width:59px" in desktop_css
@@ -97,7 +97,7 @@ def test_home_reuses_empty_drafts_and_project_switcher_stays_a_switcher() -> Non
     workspace = _read("js/screens-guided-pi-study-workspace.js")
     guided = _read("js/screens-guided.js")
     desktop_css = _read("css/guided-pi-desktop.css")
-    start_entry = owner.split("async function startEntry()", 1)[1].split("async function stopMessage()", 1)[0]
+    start_entry = _read("js/screens-guided-pi-session-navigation.js").split("async function startEntry()", 1)[1].split("async function stopMessage()", 1)[0]
     # Home and 新会话 open an existing empty draft before creating another session.
     assert "const emptyDraft = state.sessions.find(row => STUDY_WORKSPACE.isEmptyConversation(row));" in start_entry
     assert "if (emptyDraft) { await openSession(emptyDraft.session_id); return; }" in start_entry
@@ -106,7 +106,7 @@ def test_home_reuses_empty_drafts_and_project_switcher_stays_a_switcher() -> Non
     # The nav Projects button toggles the in-rail switcher, whose list is capped.
     assert "    picker.open = !picker.open;\n" in _read("js/screens-guided-projects.js")
     assert ".gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{position:absolute;z-index:60;" in desktop_css
-    assert "max-height:min(60vh,560px)" in desktop_css
+    assert "max-height:min(70vh,680px)" in desktop_css
 
 
 def test_skill_detail_is_addressable_and_errors_read_as_sentences() -> None:
@@ -193,7 +193,7 @@ def test_streamed_reply_grows_in_place_instead_of_rebuilding_the_conversation() 
     index = _read("index.html")
     assert index.index("screens-guided-pi-host-jobs.js") < index.index("screens-guided-pi-live-stream.js")
     assert index.index("screens-guided-pi-live-stream.js") < index.index("js/screens-guided-pi.js?v=")
-    assert "text.innerHTML = assistantTextHtml(FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible);" in live_stream
+    assert "text.innerHTML = assistantTextHtml(FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible, row.resources, { liftDraft: false, streaming: true });" in live_stream
     assert "data-gpi-streaming-message" in session_view
     assert "row.complete === false && !messageActions.editorHtml" in session_view
     assert ".gpi-message.is-streaming .gpi-message-body>.gpi-text>:last-child::after{" in pi_css
@@ -831,7 +831,7 @@ def test_reference_controls_without_an_easyicu_owner_are_not_rendered() -> None:
         assert marker not in session_view and marker not in events
     for marker in ("data-gpi-like", "data-gpi-dislike", "thumbup", "thumbdown"):
         assert marker not in actions and marker not in events
-    assert "${copy}${edit}${retry}</div>" in actions
+    assert "${copy}${edit}${retry}${continueReply}</div>" in actions
     for selector in (".gpi-run-status", ".gpi-switch", ".is-liked", 'data-gpi-aside-section="compute"'):
         assert selector not in css
     assert ".gd-pipeline-checklist .si-s{" in _read("css/guided-pi-skin.css")
@@ -1012,7 +1012,7 @@ def test_reply_turn_reads_as_intro_traces_with_reasoning_and_answer() -> None:
         "runningRows": 3,
         "persistedThinking": [None, None],
         "persistedAfterSteps": [0, 1],
-        "persistedOrder": "submitted,thinking,tool,thinking,settled",
+        "persistedOrder": "thinking,tool,thinking",
         "persistedThinkingDurations": [6000, 6000],
     }
     shell = _read("js/screens-guided-pi.js")
@@ -1044,7 +1044,7 @@ def test_model_follow_up_questions_are_lifted_from_the_reply_and_offered_as_sugg
     assert "Follow-up questions rule:" in prompt and "'**可以继续问：**'" in prompt
     assert "Trace narration rule:" in prompt
     assert "nothing may follow the choices except the follow-up block described next" in prompt
-    assert "FOLLOW_UPS.split(publicAssistantText(row.text))" in view
+    assert "FOLLOW_UPS.split(assistantPublicText || draftOnlyText)" in view
     assert "${messageActions.actionsHtml}\n          ${followUpsHtml}" in view
     assert "const modelFollowUp = event.target.closest('[data-gpi-model-followup]');" in events
     # The model wrote the question, so the click drafts a model option for the

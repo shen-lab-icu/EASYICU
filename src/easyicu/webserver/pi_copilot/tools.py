@@ -2662,12 +2662,34 @@ def _explain_blocker(
 def _update_study_context(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    return update_study_context(
+    # This reply hint permits a design discussion before data selection. It is
+    # deliberately stripped at the adapter: the scientific owner, its Configure
+    # grant, source confirmation and execution gates receive no new authority.
+    discussion_only = params.get("discussion_only", False)
+    if "discussion_only" in params and type(discussion_only) is not bool:
+        return _result(
+            context, status="error", code="invalid_discussion_only",
+            summary="discussion_only must be a boolean reply hint.",
+            owner="easyicu.webserver.pi_copilot",
+        )
+    if discussion_only and (
+        params.get("bind_source_id") or params.get("bind_active_export")
+    ):
+        return _result(
+            context, status="blocked", code="discussion_source_binding_not_allowed",
+            summary="A discussion-only update cannot bind a data source.",
+            owner="easyicu.webserver.pi_copilot",
+        )
+    scientific_params = {key: value for key, value in params.items() if key != "discussion_only"}
+    result = update_study_context(
         context,
-        params,
+        scientific_params,
         load_context=_bound_context,
         project_workflow=_workflow_snapshot,
     )
+    if discussion_only and result.get("status") == "ok" and result.get("code") == "study_context_updated":
+        result = {**result, "details": {**result.get("details", {}), "discussion_only": True}}
+    return result
 
 
 def _state_target_trial(

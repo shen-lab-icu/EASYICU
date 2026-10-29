@@ -318,9 +318,9 @@
         ${capabilitySummaryTile('layers', dual('Skills', '技能'), settingOn('science_skills_enabled', true), dual('local workflow templates', '本地工作流模板'))}
         ${capabilitySummaryTile('db', dual('Connectors', '连接器'), pubmedOn || zoteroOn, pubmedOn ? dual('PubMed / OpenAlex enabled; consent required', 'PubMed / OpenAlex 已开启；仍需授权') : zoteroOn ? statusText(zotero) : dual('off', '关闭'))}
         ${capabilitySummaryTile('globe', dual('MCP tools', 'MCP 工具'), mcpOn, `${allowedTools}/${allowedTools + blockedTools || 0} ${dual('tools allowed', '工具允许')}`)}
-        <div class="settings-cap-tile"><div><b>${dual('Prompt contracts', '提示词契约')}</b><span>${dual('Built into this version', '随版本提供')}</span></div>${lockedCtl(dual('host-owned', '内置'))}</div>
+        <div class="settings-cap-tile"><span class="settings-cap-tile-icon">${icon('lock', 14)}</span><div><b>${dual('Prompt contracts', '提示词契约')}</b><span>${dual('Built into this version', '随版本提供')}</span></div>${lockedCtl(dual('host-owned', '内置'))}</div>
         ${capabilitySummaryTile('shield', dual('Audit', '审计'), settingOn('tool_audit_enabled', true), `${Number(audit.event_count || 0)} ${dual('events', '事件')}`)}
-        <div class="settings-cap-tile"><div><b>${dual('Compute', '计算')}</b><span>${dual('No remote adapter', '无远程适配器')}</span></div>${lockedCtl(dual('local only', '仅本地计算'))}</div>
+        <div class="settings-cap-tile"><span class="settings-cap-tile-icon">${icon('lock', 14)}</span><div><b>${dual('Compute', '计算')}</b><span>${dual('No remote adapter', '无远程适配器')}</span></div>${lockedCtl(dual('local only', '仅本地计算'))}</div>
       </div>
       <div class="settings-cap-actions">
         <button class="btn sm" data-settings-open="guided">${icon('agent', 12)} ${dual('Open conversation', '打开研究对话')}</button>

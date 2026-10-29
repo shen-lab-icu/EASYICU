@@ -132,6 +132,24 @@
 
   function render(session, ctx) {
     const current = authorization(session);
+    const hasDraft = Boolean(ctx.discussionDraft);
+    if (current.status !== 'pending' || (!hasDraft && (ctx.namedDemo || ctx.namedDatabase || current.source))) {
+      return renderSourceOptions(session, ctx);
+    }
+    const discussion = ctx.tr(
+      'Keep discussing the research draft without binding data. Explain the design choices, candidate data and open decisions; do not prepare data or run analysis.',
+      '先不绑定数据，继续完善研究讨论草案，说明设计选择、候选数据和待定事项；不准备数据、不执行分析。'
+    );
+    return `<section class="gpi-data-consent gpi-data-consent-discussion" aria-label="${ctx.tr('Discuss before selecting data', '先讨论，再选择数据')}"><div class="gpi-data-consent-body">
+      <strong>${ctx.tr('You can develop the research draft before choosing data', '可以先完善研究草案，再选择数据')}</strong>
+      <p>${ctx.tr('Discuss the question, compare candidate data and resolve design choices here. A validated data source is needed before governed preparation or analysis.', '先在这里梳理问题、比较候选数据和讨论设计。进入正式的数据准备或分析前，再核对并确认数据源。')}</p>
+      <button class="btn" type="button" data-gpi-next-choice="${ctx.esc(discussion)}">${ctx.tr('Continue the draft discussion', '继续讨论草案')}</button>
+      <details class="gpi-data-consent-later"><summary>${ctx.tr('Choose data for verification · can be done later', '选择用于核验的数据 · 可稍后')}</summary>${renderSourceOptions(session, ctx)}</details>
+    </div></section>`;
+  }
+
+  function renderSourceOptions(session, ctx) {
+    const current = authorization(session);
     if (current.status === 'pending' && current.reason === 'project_source_confirmation_required') {
       const label = sourceLabel(current);
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Confirm data source', '确认数据源')}">
@@ -215,7 +233,7 @@
     const demo = offer && offer.state === 'ready' ? offer.official_demo : null;
     if (database && demo && demo.id && hostedServer) {
       const demoOffer = demo.registered_offer || { state: 'ready', recommended: null, choices: [] };
-      return render(session, { ...ctx, namedDemo: { ...demo, offer: demoOffer,
+      return renderSourceOptions(session, { ...ctx, namedDemo: { ...demo, offer: demoOffer,
         prepared: Boolean(demoOffer.recommended || demoOffer.choices.length) } });
     }
     if (database && demo && demo.id && !hostedServer) {

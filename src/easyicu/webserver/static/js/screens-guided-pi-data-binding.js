@@ -24,6 +24,7 @@
     // A data-source click made while a turn is still running waits for that
     // turn instead of racing its session write, then runs once it ends.
     let waiting = null;
+    let authorizationRequest = 0;
 
     function waitingAction() {
       const session = host.session();
@@ -50,7 +51,10 @@
       const sourceId = String(options && options.sourceId || '').trim();
       const expectedSessionId = host.session().session_id;
       const expectedProjectId = projectId();
-      const isCurrent = () => host.session() && host.session().session_id === expectedSessionId
+      const expectedStudyContextId = String(host.session().binding?.study_context_id || '');
+      const request = ++authorizationRequest;
+      const isCurrent = () => request === authorizationRequest
+        && host.session() && host.session().session_id === expectedSessionId
         && projectId() === expectedProjectId;
       host.setError('');
       try {
@@ -95,6 +99,14 @@
         const preview = window.EasyICU.guidedPi.optional('preview');
         if (payload.resource && preview && preview.open) {
           preview.open(payload.resource, expectedProjectId);
+        } else if (action === 'cancel_local_selection' && payload.ok === true
+          && payload.session?.data_source_authorization?.status === 'pending'
+          && expectedStudyContextId && preview && typeof preview.close === 'function') {
+          // Only the Host can say that selection ended. The preview owner then
+          // checks that this is still this study's source-binding surface.
+          preview.close({ onlySourceBinding: {
+            projectId: expectedProjectId, studyContextId: expectedStudyContextId,
+          } });
         }
         render();
         if (payload.session && !payload.resource

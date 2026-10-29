@@ -230,7 +230,7 @@
       <button class="gd-rail-restore" type="button" data-project-rail-toggle aria-label="${t('Show research projects', '显示研究项目栏')}" title="${t('Show research projects', '显示研究项目栏')}">${icon('chevron', 14)}</button>
       <aside class="gd-rail" id="gdResearchProjectRail">
         <nav class="gpi-global-nav" aria-label="${t('EasyICU navigation', 'EasyICU 导航')}">
-          <button type="button" class="gpi-global-brand" data-open="entry" aria-label="${t('Home', '主页')}" title="${t('Home', '主页')}">${icon('spark', 19)}</button>
+          <button type="button" class="gpi-global-brand" data-open="entry" aria-label="${t('New conversation', '新建对话')}" title="${t('New conversation in this project', '在当前项目新建对话')}">${icon('spark', 19)}</button>
           <button type="button" class="gpi-global-item active" data-gpi-show-projects aria-current="page" title="${t('Research projects', '研究项目')}">${icon('folder', 19)}<span>${t('Projects', '项目')}</span></button>
           <button type="button" class="gpi-global-item" data-open="skills" title="${t('Research skills', '研究技能')}">${icon('layers', 19)}<span>${t('Skills', '技能')}</span></button>
           <button type="button" class="gpi-global-item" data-open="extraction" title="${t('Data workspace', '数据工作台')}">${icon('grid', 19)}<span>${t('Data', '数据')}</span></button>
@@ -249,7 +249,7 @@
         <section id="gdConversationRail" class="gpi-conversations" hidden></section>
         <div class="gd-rail-foot">
           <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
-            <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
+            <button class="gd-utilbtn" type="button" data-open="entry" title="${t('New conversation in this project', '在当前项目新建对话')}" aria-label="${t('New conversation', '新建对话')}">${icon('plus', 14)}</button>
             <button class="gd-utilbtn" type="button" data-open="settings" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}">${icon('gear', 14)}</button>
             <button class="gd-utilbtn lang" type="button" data-lang-toggle title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}">
               ${icon('globe', 14)} <span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span>
@@ -327,7 +327,7 @@
     // As a switcher it is a floating menu (closes on an outside press); with
     // no project chosen, or while managing projects, the list is the surface.
     const pickerDismissible = !!activeId && !projectManagementActive;
-    host.innerHTML = `<details class="gd-project-picker" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}${pickerDismissible ? ' data-popover-menu' : ''}>
+    host.innerHTML = `<details class="gd-project-picker${projectManagementActive ? ' is-managing' : ''}" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}${pickerDismissible ? ' data-popover-menu' : ''}>
       <summary title="${esc(t('Switch research project', '切换研究项目'))}"><small>${t('Project', '项目')}</small><span title="${esc(pickerTitle)}">${esc(pickerTitle)}</span><i aria-hidden="true">⌄</i></summary>
       <div class="gd-project-picker-list">
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><span class="gd-project-heading-actions"><button class="gd-manage-mini ${projectManagementActive ? 'active' : ''}" type="button" data-project-manage>${projectManagementActive ? t('Done', '完成') : t('Manage', '管理')}</button><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></span></div>

@@ -440,8 +440,8 @@
             const time = typeof ctx.time === 'function' ? ctx.time(row) : '';
             const stateClass = (railState(row) || { cls: '' }).cls;
             const title = ctx.title(row);
-            // One line per task: the dot carries the state, the tooltip and
-            // the screen-reader text carry its words.
+            // Titles use up to two lines; the dot carries the state, while
+            // the tooltip and screen-reader text carry its words.
             return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" title="${esc(`${title} · ${status}`)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><i class="gpi-conversation-dot" aria-hidden="true"></i><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small class="shell-sr-only">${esc(status)}</small></span>${typeof ctx.mark === 'function' ? ctx.mark(row.session_id) : ''}${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}"><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button><button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Delete conversation', '删除对话')}</button></div></details></div>`;
             });
             return groupTaskRows(ctx, rendered);

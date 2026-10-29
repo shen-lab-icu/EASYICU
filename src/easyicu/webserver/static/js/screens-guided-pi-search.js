@@ -25,7 +25,7 @@
   let dialog = null;
   let ctx = null;
   let timer = 0;
-  const state = { q: '', scope: '', hits: [], loading: false, error: '', hasMore: false, partial: false, revision: 0 };
+  const state = { q: '', scope: '', onlyProject: false, hits: [], loading: false, error: '', hasMore: false, partial: false, revision: 0 };
   let titles = new Map();
 
   function kindOf(hit) { return KINDS[hit && hit.kind] || KINDS.message; }
@@ -41,22 +41,159 @@
       .map(row => [Number(row && row.start), Number(row && row.end)])
       .filter(([start, end]) => Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length)
       .sort((left, right) => left[0] - right[0]) : [];
-    let html = '';
-    let at = 0;
-    marks.forEach(([start, end]) => {
-      if (start < at) return;
-      html += `${esc(text.slice(at, start))}<mark>${esc(text.slice(start, end))}</mark>`;
-      at = end;
-    });
-    return html + esc(text.slice(at));
+    // Remove presentation markers by their original offsets, so cleaning a
+    // Markdown snippet never moves the host's UTF-16 highlights onto other text.
+    const hidden = new Set();
+    const omit = (start, end) => { for (let i = start; i < end; i++) hidden.add(i); };
+    const code = new Set();
+    const codeRange = (start, end) => { for (let i = start; i < end; i++) code.add(i); };
+    const containsCode = (start, end) => { for (let i = start; i < end; i++) if (code.has(i)) return true; return false; };
+    for (const match of text.matchAll(/^[ \t]{0,3}(`{3,}|~{3,})[^\r\n]*\r?\n/gm)) {
+      if (code.has(match.index) || hidden.has(match.index)) continue;
+      const start = match.index + match[0].length;
+      const fence = match[1];
+      const closing = new RegExp(`^[ \\t]{0,3}${fence[0]}{${fence.length},}[ \\t]*(?:\\r?\\n|$)`, 'gm');
+      closing.lastIndex = start;
+      const close = closing.exec(text);
+      codeRange(start, close ? close.index : text.length);
+      omit(match.index, start);
+      if (close) omit(close.index, close.index + close[0].replace(/\r?\n$/, '').length);
+    }
+    for (const match of text.matchAll(/(`+)([^`\n]+?)\1/g)) {
+      const start = match.index, end = start + match[0].length;
+      if (text[start - 1] === '`' || text[end] === '`' || code.has(start) || hidden.has(start)) continue;
+      codeRange(start + match[1].length, end - match[1].length);
+      omit(start, start + match[1].length);
+      omit(end - match[1].length, end);
+    }
+    // Protect full math expressions from Markdown cleanup, even when TeX is
+    // unsupported. Translate only a complete, understood expression outside
+    // code and only if every highlighted original character survives verbatim.
+    const math = window.EasyICU.guidedPi.optional('markdown');
+    const protectedMath = new Set(), replacements = new Map();
+    const hasProtectedMath = (start, end) => {
+      for (let i = start; i < end; i++) if (protectedMath.has(i)) return true;
+      return false;
+    };
+    const patterns = /\\\[([\s\S]*?)\\\]|\\\(([\s\S]*?)\\\)|\$\$([\s\S]*?)\$\$/g;
+    for (const match of text.matchAll(patterns)) {
+      const start = match.index, end = start + match[0].length;
+      if (containsCode(start, end)) continue;
+      let precedingSlashes = 0;
+      for (let i = start - 1; i >= 0 && text[i] === '\\'; i--) precedingSlashes++;
+      if (precedingSlashes % 2) continue;
+      for (let i = start; i < end; i++) protectedMath.add(i);
+      const body = match[1] ?? match[2] ?? match[3];
+      const projected = math && typeof math.mathProjection === 'function' ? math.mathProjection(body) : null;
+      if (!projected || !Array.isArray(projected.sourceOffsets)
+        || projected.sourceOffsets.length !== projected.text.length) continue;
+      const bodyStart = start + 2;
+      const exact = new Set();
+      projected.sourceOffsets.forEach((offset, index) => {
+        if (Number.isInteger(offset) && body[offset] === projected.text[index]) exact.add(bodyStart + offset);
+      });
+      const canKeepMarks = marks.every(([left, right]) => {
+        for (let i = Math.max(left, start); i < Math.min(right, end); i++) if (!exact.has(i)) return false;
+        return true;
+      });
+      if (canKeepMarks) replacements.set(start, { end, bodyStart, projected });
+    }
+    // Search excerpts can end mid-formula. Keep such a remainder as source,
+    // including any Markdown-looking characters, instead of partly rewriting it.
+    for (const opening of text.matchAll(/\\\[|\\\(|\$\$/g)) {
+      const start = opening.index;
+      if (code.has(start) || protectedMath.has(start)) continue;
+      let precedingSlashes = 0;
+      for (let i = start - 1; i >= 0 && text[i] === '\\'; i--) precedingSlashes++;
+      if (precedingSlashes % 2) continue;
+      const close = opening[0] === '\\[' ? '\\]' : opening[0] === '\\(' ? '\\)' : '$$';
+      if (text.indexOf(close, start + 2) < 0) {
+        for (let i = start; i < text.length; i++) protectedMath.add(i);
+        break;
+      }
+    }
+    for (const match of text.matchAll(/^\s{0,3}#{1,6}\s+/gm)) {
+      if (!containsCode(match.index, match.index + match[0].length) && !hasProtectedMath(match.index, match.index + match[0].length)) omit(match.index, match.index + match[0].length);
+    }
+    for (const match of text.matchAll(/(^|[\s([{,.;:!?，。；：！？「『“‘])(\*\*|__|~~)(?=\S)([^\n]*?\S)\2(?=$|[\s)\]},.;:!?，。；：！？])/g)) {
+      const start = match.index + match[1].length, end = match.index + match[0].length;
+      if (containsCode(start, end) || hasProtectedMath(start, end)) continue;
+      omit(start, start + match[2].length);
+      omit(end - match[2].length, end);
+    }
+    for (const match of text.matchAll(/\[([^\]\n]+)\]\([^\)\n]+\)/g)) {
+      if (containsCode(match.index, match.index + match[0].length) || hasProtectedMath(match.index, match.index + match[0].length)) continue;
+      omit(match.index, match.index + 1);
+      omit(match.index + match[1].length + 1, match.index + match[0].length);
+    }
+    let html = '', marked = false, space = false;
+    function append(ch, sourceIndex) {
+      const whitespace = /\s/.test(ch);
+      if (whitespace && space) return;
+      const next = sourceIndex !== null && marks.some(([start, end]) => start <= sourceIndex && sourceIndex < end);
+      if (next !== marked) { html += next ? '<mark>' : '</mark>'; marked = next; }
+      html += esc(whitespace ? ' ' : ch);
+      space = whitespace;
+    }
+    for (let i = 0; i < text.length; i++) {
+      if (hidden.has(i)) continue;
+      const replacement = replacements.get(i);
+      if (replacement) {
+        const { projected, bodyStart } = replacement;
+        for (let j = 0; j < projected.text.length; j++) {
+          const offset = projected.sourceOffsets[j];
+          append(projected.text[j], offset == null ? null : bodyStart + offset);
+        }
+        i = replacement.end - 1;
+        continue;
+      }
+      append(text[i], i);
+    }
+    return html + (marked ? '</mark>' : '');
   }
 
-  function hitHtml(hit, index) {
+  function hitHtml(hit, index, options = {}) {
     const kind = kindOf(hit);
     const title = String(hit.title || '').trim();
     const project = hit.kind === 'project' ? '' : projectLabel(hit.project_id);
-    const snippet = String(hit.snippet || '').trim() ? `<span class="gpi-search-snippet">${snippetHtml(hit)}</span>` : '';
-    return `<button type="button" class="gpi-search-hit" data-gpi-search-hit="${index}"><span class="gpi-search-hit-icon" aria-hidden="true">${icon(kind[2], 15)}</span><span class="gpi-search-hit-copy">${title ? `<strong>${esc(title)}</strong>` : ''}${snippet}<small>${esc(tr(kind[0], kind[1]))}${project ? ` · ${esc(project)}` : ''}</small></span></button>`;
+    const snippet = String(hit.snippet || '').trim() && String(hit.snippet).trim() !== title
+      ? `<span class="gpi-search-snippet">${snippetHtml(hit)}</span>` : '';
+    const label = options.label || tr(kind[0], kind[1]);
+    return `<button type="button" class="gpi-search-hit" data-gpi-search-hit="${index}"><span class="gpi-search-hit-icon" aria-hidden="true">${icon(kind[2], 15)}</span><span class="gpi-search-hit-copy">${title ? `<strong>${esc(title)}</strong>` : ''}${snippet}<small>${esc(label)}${project ? ` · ${esc(project)}` : ''}</small></span></button>`;
+  }
+
+  function resultGroups() {
+    const groups = [], conversations = new Map();
+    state.hits.forEach((hit, index) => {
+      const target = hit.open || {};
+      const id = String(target.conversation_id || hit.conversation_id || '');
+      if (target.kind !== 'conversation' || !id) {
+        groups.push({ hit, index });
+        return;
+      }
+      const key = `${hit.project_id || target.project_id || ''}/${target.source || ''}/${id}`;
+      let group = conversations.get(key);
+      if (!group) {
+        group = { hit, index, messages: [] };
+        conversations.set(key, group);
+        groups.push(group);
+      }
+      if (hit.kind === 'conversation') group.title = hit.title;
+      if (hit.kind === 'message') group.messages.push({ hit, index });
+    });
+    return groups;
+  }
+
+  function groupHtml(group) {
+    if (!group.messages) return hitHtml(group.hit, group.index);
+    const first = group.messages[0] || group;
+    const title = group.title || group.hit.title || tr('Research conversation', '研究对话');
+    const label = group.messages.length
+      ? tr(`Conversation · ${group.messages.length} matching messages`, `对话 · ${group.messages.length} 条匹配消息`)
+      : tr('Conversation', '对话');
+    const main = hitHtml({ ...first.hit, kind: 'conversation', title }, first.index, { label });
+    if (group.messages.length < 2) return main;
+    return `<section class="gpi-search-group">${main}<details class="gpi-search-matches"><summary>${esc(tr('Show matching messages', '展开匹配消息'))}</summary>${group.messages.map(row => hitHtml({ ...row.hit, title: '' }, row.index)).join('')}</details></section>`;
   }
 
   function resultsHtml() {
@@ -65,11 +202,12 @@
     if (!state.hits.length) {
       return `<p class="gpi-search-state">${esc(state.loading ? tr('Searching…', '搜索中…') : tr(`Nothing matches “${state.q.trim()}”.`, `没有找到「${state.q.trim()}」。`))}</p>`;
     }
+    const groups = resultGroups();
     const notes = [
       state.hasMore ? tr(`Showing the first ${state.hits.length}. Add a word to narrow it.`, `只显示前 ${state.hits.length} 条，多加一个词可以缩小范围。`) : '',
       state.partial ? tr('Some records were too large to search.', '有些记录过大，没有纳入搜索。') : '',
     ].filter(Boolean);
-    return `${state.hits.map(hitHtml).join('')}${notes.length ? `<p class="gpi-search-note">${esc(notes.join(' '))}</p>` : ''}`;
+    return `<p class="gpi-search-count">${esc(tr(`${groups.length} results`, `${groups.length} 个结果`))}</p>${groups.map(groupHtml).join('')}${notes.length ? `<p class="gpi-search-note">${esc(notes.join(' '))}</p>` : ''}`;
   }
 
   function paintResults() {
@@ -81,6 +219,8 @@
     dialog.querySelectorAll('[data-gpi-search-scope]').forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.gpiSearchScope === state.scope));
     });
+    const current = dialog.querySelector('[data-gpi-search-project]');
+    if (current) current.checked = state.onlyProject;
   }
 
   async function run() {
@@ -94,7 +234,8 @@
     state.loading = true; state.error = '';
     paintResults();
     try {
-      const payload = await api().searchWorkspace({ q, scope: state.scope || undefined, limit: LIMIT });
+      const payload = await api().searchWorkspace({ q, scope: state.scope || undefined,
+        project: state.onlyProject && ctx ? ctx.projectId() || undefined : undefined, limit: LIMIT });
       if (revision !== state.revision) return;
       Object.assign(state, {
         hits: Array.isArray(payload && payload.hits) ? payload.hits : [],
@@ -190,7 +331,7 @@
     node.className = 'gpi-search';
     node.setAttribute('aria-label', tr('Search', '搜索'));
     node.innerHTML = `<div class="gpi-search-box"><span aria-hidden="true">${icon('search', 16)}</span><input type="search" data-gpi-search-input maxlength="200" autocomplete="off" placeholder="${esc(tr('Search conversations, files and projects', '搜索对话、文件和项目'))}"><button type="button" data-gpi-search-close aria-label="${esc(tr('Close', '关闭'))}">${icon('x', 15)}</button></div>`
-      + `<div class="gpi-search-scopes">${SCOPES.map(([scope, en, zh]) => `<button type="button" data-gpi-search-scope="${scope}" aria-pressed="false">${esc(tr(en, zh))}</button>`).join('')}</div>`
+      + `<div class="gpi-search-scopes">${SCOPES.map(([scope, en, zh]) => `<button type="button" data-gpi-search-scope="${scope}" aria-pressed="false">${esc(tr(en, zh))}</button>`).join('')}<label class="gpi-search-project"><input type="checkbox" data-gpi-search-project ${ctx && ctx.projectId() ? '' : 'disabled'}>${esc(tr('Only this project', '仅当前项目'))}</label></div>`
       + '<div class="gpi-search-results" data-gpi-search-results aria-live="polite"></div>';
     node.addEventListener('click', event => {
       if (event.target === node || event.target.closest('[data-gpi-search-close]')) { close(); return; }
@@ -206,6 +347,11 @@
       if (hit) void openHit(state.hits[Number(hit.dataset.gpiSearchHit)]);
     });
     node.addEventListener('input', event => {
+      if (event.target.matches('[data-gpi-search-project]')) {
+        state.onlyProject = Boolean(event.target.checked);
+        run();
+        return;
+      }
       if (!event.target.matches('[data-gpi-search-input]')) return;
       state.q = event.target.value;
       schedule();
@@ -213,7 +359,8 @@
     // Arrow keys move between the box and the hits; Enter opens the focused hit.
     node.addEventListener('keydown', event => {
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-      const stops = [node.querySelector('[data-gpi-search-input]'), ...node.querySelectorAll('[data-gpi-search-hit]')];
+      const stops = [node.querySelector('[data-gpi-search-input]'), ...Array.from(node.querySelectorAll('[data-gpi-search-hit]'))
+        .filter(button => !button.closest('details:not([open])'))];
       const at = stops.indexOf(document.activeElement);
       if (at < 0 || stops.length < 2) return;
       event.preventDefault();
@@ -230,7 +377,7 @@
     // Rebuilt on each open so the interface language is current.
     if (dialog) dialog.remove();
     dialog = build();
-    Object.assign(state, { error: '' });
+    Object.assign(state, { error: '', hits: [], hasMore: false, onlyProject: Boolean(state.onlyProject && ctx.projectId()) });
     const input = dialog.querySelector('[data-gpi-search-input]');
     input.value = state.q;
     paintScopes();

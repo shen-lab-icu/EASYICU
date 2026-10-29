@@ -157,7 +157,7 @@
         if (placeholder) placeholder.replaceWith(text); else body.prepend(text);
       }
       const visible = publicAssistantText(row.text);
-      text.innerHTML = assistantTextHtml(FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible, row.resources);
+      text.innerHTML = assistantTextHtml(FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible, row.resources, { liftDraft: false, streaming: true });
       const log = state.host.querySelector('[data-gpi-log]');
       if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
       return true;

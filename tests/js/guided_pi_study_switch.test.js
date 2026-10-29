@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const [modulesFile, bindingFile, hostJobsFile, storeFile, shellFile] = process.argv.slice(2).map(file => path.resolve(file));
+const [modulesFile, bindingFile, hostJobsFile, storeFile, shellFile, previewFile] = process.argv.slice(2).map(file => path.resolve(file));
 global.window = global;
 global.EU_HTML = { esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;') };
 const storage = new Map();
@@ -177,6 +177,97 @@ const notice = () => {
   store.hydrate = quietHydrate;
   assert.equal(store.active().id, studyB.id);
   assert.deepEqual(activations.slice(before), []);
+
+  // A successful Host cancellation closes only the source-binding preview
+  // belonging to that same project and study. Use the preview owner's real
+  // close implementation with its private state supplied at the seam.
+  const previewText = fs.readFileSync(previewFile || path.join(path.dirname(bindingFile), 'screens-guided-pi-preview.js'), 'utf8');
+  const closeStart = previewText.indexOf('  function close(options) {');
+  const closeSource = previewText.slice(closeStart, previewText.indexOf('  function clearProject(', closeStart));
+  let previewClosed = 0;
+  const previewState = { projectId: '', resource: null, host: null };
+  const closeContext = vm.createContext({ state: previewState, csvDownloads: null, runtimeQa: null,
+    downloadNonce: '', syncLocation: () => {}, setAsideOpen: () => { previewClosed += 1; } });
+  vm.runInContext(closeSource, closeContext);
+  const preview = { open(resource, project) { previewState.resource = resource; previewState.projectId = project; },
+    close: options => closeContext.close(options) };
+  modules.declare('preview', preview);
+  let currentProject = 'project-A';
+  const selectionSession = status => ({ ...conversation('session-A', studyA.id), data_source_authorization: { status } });
+  const sourcePreview = () => ({ kind: 'native_workspace', route: 'extraction', state: 'setup',
+    entry_mode: 'source_binding', study_context_id: studyA.id, study_revision: 1 });
+  const cancelOwner = authorize => modules.require('dataBinding').create({
+    api: () => ({ authorizePiCopilotDataSource: authorize }), render() {}, projectId: () => currentProject,
+    loadWorkflow: async () => {}, dataConsent: { authorization: row => row.data_source_authorization },
+    errorText: String, rememberSession() {}, continueAfterDataSourceConfirmation: async () => {},
+    session: () => session, busy: () => false, setError() {}, setSession: value => { session = value; },
+  });
+  session = selectionSession('selection_in_progress');
+  preview.open(sourcePreview(), currentProject);
+  let owner = cancelOwner(async () => ({ ok: true, session: selectionSession('pending'), resource: null }));
+  await owner.authorizeDataSource('cancel_local_selection');
+  assert.equal(session.data_source_authorization.status, 'pending');
+  assert.equal(previewState.resource, null, 'accepted cancellation closes its selection preview');
+  assert.equal(previewClosed, 1);
+
+  // Host refusals, including an in-progress data job, retain the selection.
+  for (const refusal of [
+    async () => ({ ok: true, session: selectionSession('selection_in_progress'), resource: null }),
+    async () => { throw new Error('pi_session_local_selection_job_active'); },
+    async () => ({ ok: true, resource: null }),
+  ]) {
+    session = selectionSession('selection_in_progress');
+    const original = sourcePreview(); preview.open(original, currentProject);
+    await cancelOwner(refusal).authorizeDataSource('cancel_local_selection');
+    assert.equal(previewState.resource, original);
+  }
+  assert.equal(previewClosed, 1);
+
+  // Even an accepted cancellation cannot close another file, another study,
+  // or another project's selection that the researcher opened meanwhile.
+  for (const [resource, project] of [
+    [{ kind: 'file', file: 'notes.md' }, 'project-A'],
+    [{ ...sourcePreview(), entry_mode: '' }, 'project-A'],
+    [{ ...sourcePreview(), study_context_id: studyB.id }, 'project-A'],
+    [sourcePreview(), 'project-B'],
+  ]) {
+    session = selectionSession('selection_in_progress'); preview.open(resource, project);
+    await cancelOwner(async () => ({ ok: true, session: selectionSession('pending'), resource: null }))
+      .authorizeDataSource('cancel_local_selection');
+    assert.equal(previewState.resource, resource);
+  }
+  assert.equal(previewClosed, 1);
+
+  // A response arriving after a project switch does not replace B's session
+  // or dismiss B's preview.
+  session = selectionSession('selection_in_progress');
+  let releaseCancel;
+  owner = cancelOwner(() => new Promise(resolve => { releaseCancel = resolve; }));
+  const late = owner.authorizeDataSource('cancel_local_selection');
+  currentProject = 'project-B'; session = conversation('session-B', studyB.id);
+  const currentB = session;
+  const resourceB = { ...sourcePreview(), study_context_id: studyB.id };
+  preview.open(resourceB, currentProject);
+  releaseCancel({ ok: true, session: selectionSession('pending'), resource: null });
+  await late;
+  assert.equal(session, currentB); assert.equal(previewState.resource, resourceB);
+  assert.equal(previewClosed, 1);
+
+  // A newer selection request on the same owner supersedes an older reply,
+  // including when both requests name the same project and study.
+  currentProject = 'project-A'; session = selectionSession('selection_in_progress');
+  let first = true;
+  owner = cancelOwner(() => first ? (first = false, new Promise(resolve => { releaseCancel = resolve; }))
+    : Promise.resolve({ ok: true, session: selectionSession('selection_in_progress'), resource: sourcePreview() }));
+  const older = owner.authorizeDataSource('cancel_local_selection');
+  await owner.authorizeDataSource('begin_local_selection');
+  const newerPreview = previewState.resource;
+  releaseCancel({ ok: true, session: selectionSession('pending'), resource: null });
+  await older;
+  assert.equal(session.data_source_authorization.status, 'selection_in_progress');
+  assert.equal(previewState.resource, newerPreview); assert.equal(previewClosed, 1);
+  // Ordinary preview close retains its existing behavior.
+  preview.close(); assert.equal(previewState.resource, null); assert.equal(previewClosed, 2);
 
   // The shell's continue message after a source confirmation waits on the
   // question carry. Opening conversation B meanwhile, or B and then A
