@@ -211,7 +211,7 @@ def test_an_unlisted_model_is_named_by_the_researcher_and_saved_with_its_key() -
     assert out["manualSave"] == {
         "provider": "zhipu", "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "api_transport": "openai-completions", "api_key": "sk-synthetic-zhipu",
-        "model": "glm-synthetic", "enable_ai": True,
+        "model": "glm-synthetic", "enable_ai": True, "remember_key": False,
     }
     assert out["editedAddress"]["api_key"] == "sk-typed-for-gateway"
     assert "credential_source" not in out["editedAddress"]

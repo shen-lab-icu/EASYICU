@@ -1,8 +1,8 @@
 """Desktop credentials belong to the native OS credential store, never a file.
 
-The index contains only connection coordinates. Server connection files lose
-legacy plaintext keys after loading them into process memory. Desktop legacy
-keys migrate to the OS credential store before their plaintext entry is removed.
+The desktop index contains only connection coordinates. Desktop legacy keys
+migrate to the OS credential store before their plaintext entry is removed.
+Hosted/server instances retain their administrator-provisioned connection file.
 """
 
 from __future__ import annotations
@@ -237,9 +237,11 @@ class ProviderCredentials:
                 for key, row in payload.items() if isinstance(row, dict)}
 
     def _metadata(self, values: Mapping[str, str]) -> None:
-        lines = ["# EasyICU connection coordinates; credentials live in the OS credential store."]
+        desktop = self.is_desktop()
+        lines = ["# EasyICU connection coordinates; credentials live in the OS credential store."
+                 if desktop else "# EasyICU administrator-provisioned model connection."]
         lines.extend(f"{key}={json.dumps(value, ensure_ascii=False)}"
-                     for key, value in values.items() if key != KEY)
+                     for key, value in values.items() if key != KEY or not desktop)
         self.write(self.path, "\n".join(lines) + "\n")
 
     def save(self, values: Mapping[str, str], *, remember: bool | None = None) -> None:
@@ -261,14 +263,10 @@ class ProviderCredentials:
 
     def resolve(self, values: Mapping[str, str]) -> dict[str, str]:
         result = dict(values)
+        if not self.is_desktop():
+            return result
         if self.session and self.identity(result) == self.identity(self.session):
             result[KEY] = self.session[KEY]
-            return result
-        if not self.is_desktop():
-            if result.get(KEY):
-                self._metadata(result)
-                self.session = dict(result)
-                self.remember = False
             return result
         if result.get(KEY):
             # Store first. On a native-store failure the original bytes stay intact.

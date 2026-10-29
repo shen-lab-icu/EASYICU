@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 
+import pandas as pd
 import pytest
 
+from easyicu.concept.export_metadata import ExportMetadataError, build_export_file_metadata_binding
+from easyicu.concept.metadata_projection import ConceptColumnRole
 from easyicu.concept.schema import ConceptDictionary
 from easyicu.resources import load_data_sources, load_dictionary
 
@@ -14,6 +17,30 @@ def test_concept_dictionary_contains_core_cross_database_concepts() -> None:
     assert len(list(dictionary.keys())) >= 140
     for concept_name in ["hr", "sofa2", "sep3_sofa2", "rrt"]:
         assert concept_name in dictionary
+
+
+@pytest.mark.parametrize("name", ["concept-dict", "concept-dict.json"])
+@pytest.mark.parametrize("include_sofa2", [False, True])
+def test_the_readmitted_stay_attribute_declares_its_logical_domain(name, include_sofa2) -> None:
+    dictionary = load_dictionary(name, include_sofa2=include_sofa2)
+    definition = dictionary.get("icu_stay_is_readmission")
+    assert definition is not None
+    assert definition.class_name == "lgl_cncpt"
+    assert definition.sources == {}  # The outcomes loader owns the stay sequence.
+    frame = pd.DataFrame({"stay_id": [1, 2, 3], "icu_stay_is_readmission": [0, 1, None]})
+    binding = build_export_file_metadata_binding(
+        relative_path="demographics.parquet", module="demographics", frame=frame,
+        concept_ids=("icu_stay_is_readmission",), database="miiv",
+        database_class_prefixes=(), dictionary=dictionary,
+    )
+    assert binding.columns["icu_stay_is_readmission"].metadata.role is ConceptColumnRole.EVENT_STATUS
+    frame.loc[0, "icu_stay_is_readmission"] = 65.0
+    with pytest.raises(ExportMetadataError, match="column_metadata_value_domain_invalid"):
+        build_export_file_metadata_binding(
+            relative_path="demographics.parquet", module="demographics", frame=frame,
+            concept_ids=("icu_stay_is_readmission",), database="miiv",
+            database_class_prefixes=(), dictionary=dictionary,
+        )
 
 
 @pytest.mark.clinical_conformance
@@ -79,6 +106,25 @@ def test_resource_overlay_uses_per_concept_patch_semantics(tmp_path) -> None:
     )
 
     _assert_source_patch_preserves_definition(dictionary)
+    assert set(dictionary.keys()) == {"crea"}
+
+
+def test_an_external_default_dictionary_keeps_its_explicit_membership(tmp_path) -> None:
+    (tmp_path / "concept-dict.json").write_text(json.dumps({"synthetic_marker": {"sources": {}}}))
+
+    assert set(load_dictionary(directories=[tmp_path]).keys()) == {"synthetic_marker"}
+
+
+def test_a_caller_overlay_can_refine_the_computed_stay_attribute(tmp_path) -> None:
+    (tmp_path / "override.json").write_text(json.dumps({
+        "icu_stay_is_readmission": {"description": "Explicit synthetic stay attribute"},
+    }))
+
+    definition = load_dictionary(directories=[tmp_path], extras=["override"])["icu_stay_is_readmission"]
+
+    assert definition.class_name == "lgl_cncpt"
+    assert definition.description == "Explicit synthetic stay attribute"
+    assert definition.sources == {}
 
 
 def test_multiple_json_uses_same_per_concept_patch_semantics(tmp_path) -> None:

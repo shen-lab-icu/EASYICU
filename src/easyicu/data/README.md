@@ -32,6 +32,15 @@ The web-side catalog may report a larger loadable total because it also exposes
 derived concepts and overlays that are computed by callbacks rather than stored
 as standalone entries in this file.
 
+### `derived-outcome-dict.json` — computed stay-attribute declarations
+
+The bundled default dictionary also loads these domain declarations for
+computed stay attributes. `icu_stay_is_readmission` is logical (0/1/missing)
+and is computed by the outcomes loader; it has no raw-source mappings. This
+keeps extraction clients and export metadata consistent without changing the
+sealed primary dictionary. Explicit custom dictionaries are loaded as supplied,
+and caller overlays retain precedence.
+
 ### `sofa2-dict.json` — SOFA-2 overlay (NOT a peer file)
 
 **This is not a second dictionary.** It is an **overlay** — a small set

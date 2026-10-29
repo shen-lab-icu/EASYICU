@@ -87,7 +87,7 @@ def test_delete_remembered_key_disables_reload(desktop):
 
 
 @pytest.mark.parametrize("deployment", ["hosted", "server"])
-def test_other_deployments_refuse_key_persistence(desktop, monkeypatch, deployment, tmp_path):
+def test_other_deployments_refuse_native_key_remembering(desktop, monkeypatch, deployment, tmp_path):
     backend, factory = desktop
     monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
     if deployment == "hosted":
@@ -233,21 +233,29 @@ def test_settings_credential_routes_list_and_delete_without_returning_key(deskto
 
 
 @pytest.mark.parametrize("deployment", ["hosted", "server"])
-def test_other_deployments_default_to_process_memory_only(desktop, monkeypatch, deployment, tmp_path):
+@pytest.mark.parametrize("remember", [None, False])
+def test_other_deployments_persist_the_administrators_connection(desktop, monkeypatch, deployment, remember, tmp_path):
     backend, factory = desktop
     monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
     if deployment == "hosted":
         monkeypatch.setenv("EASYICU_HOSTED", "1")
     current = factory()
-    current.verify_and_save(**CONNECTION, verifier=verified, environ={})
+    _, status = current.verify_and_save(**CONNECTION, remember_key=remember, verifier=verified, environ={})
     assert current.resolved_config(environ={}).api_key == SYNTHETIC_KEY
-    assert factory().resolved_config(environ={}) is None
+    loaded = factory()
+    assert loaded.resolved_config(environ={}).api_key == SYNTHETIC_KEY
+    assert loaded.public_status(environ={})["inference_verified"] is True
+    assert status["remember_key_supported"] is False
+    assert current.config_path.stat().st_mode & 0o777 == 0o600
+    assert not current.credentials.index_path.exists()
     assert backend.values == {}
-    assert all(SYNTHETIC_KEY not in path.read_text() for path in tmp_path.rglob("*") if path.is_file())
+    assert SYNTHETIC_KEY not in json.dumps(status)
+    assert all(SYNTHETIC_KEY not in path.read_text() for path in tmp_path.rglob("*")
+               if path.is_file() and path != current.config_path)
 
 
 @pytest.mark.parametrize("deployment", ["hosted", "server"])
-def test_legacy_plaintext_on_other_deployments_becomes_session_only(desktop, monkeypatch, deployment):
+def test_reading_an_administrators_connection_preserves_its_bytes(desktop, monkeypatch, deployment):
     backend, factory = desktop
     monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
     if deployment == "hosted":
@@ -256,8 +264,24 @@ def test_legacy_plaintext_on_other_deployments_becomes_session_only(desktop, mon
     values = current.make_config(**CONNECTION).as_environment()
     current.config_path.write_text("\n".join(f"{key}={json.dumps(value)}" for key, value in values.items()))
     current.config_path.chmod(0o600)
+    before = current.config_path.read_bytes()
     assert current.resolved_config(environ={}).api_key == SYNTHETIC_KEY
-    assert SYNTHETIC_KEY not in current.config_path.read_text()
+    assert current.config_path.read_bytes() == before
     assert current.resolved_config(environ={}).api_key == SYNTHETIC_KEY
-    assert factory().resolved_config(environ={}) is None
+    assert factory().resolved_config(environ={}).api_key == SYNTHETIC_KEY
+    assert backend.values == {}
+
+
+@pytest.mark.parametrize("deployment", ["hosted", "server"])
+def test_an_existing_server_store_reads_the_reprovisioned_key(desktop, monkeypatch, deployment):
+    backend, factory = desktop
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", deployment)
+    if deployment == "hosted":
+        monkeypatch.setenv("EASYICU_HOSTED", "1")
+    current = factory()
+    current.verify_and_save(**CONNECTION, verifier=verified, environ={})
+    replacement = "replacement-synthetic-value"
+    factory().verify_and_save(**{**CONNECTION, "api_key": replacement}, verifier=verified, environ={})
+    assert current.resolved_config(environ={}).api_key == replacement
+    assert current.public_status(environ={})["connection_verified"] is True
     assert backend.values == {}
