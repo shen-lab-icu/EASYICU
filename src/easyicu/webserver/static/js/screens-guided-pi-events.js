@@ -393,6 +393,11 @@
           return;
         }
         const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
+        if (event.target.closest('[data-gpi-new-workspace]')) {
+          if (state.creating || state.projectLoading || state.busy || state.session?.streaming) return;
+          void switchMode('workspace', { newSession: true, draft: String(state.draft || state.taskDraft || '') });
+          return;
+        }
         if (event.target.closest('[data-gpi-task-workspace]')) {
           const task = window.EasyICU.guidedPi.optional('taskScope')?.current(state);
           if (task && task.kind) switchMode('workspace', { newSession: true, draft: task.text });

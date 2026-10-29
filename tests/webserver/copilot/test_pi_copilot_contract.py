@@ -3105,7 +3105,7 @@ def test_conversation_prompt_uses_bounded_host_deadline(
 
     assert job is not None and job.status == "done"
     assert prompt_timeouts == [service_module.COPILOT_MESSAGE_TIMEOUT_SECONDS]
-    assert prompt_timeouts[0] < 2 * 60
+    assert prompt_timeouts[0] == service_module.DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 
 def test_orphaned_replay_execution_is_marked_interrupted(
@@ -5960,6 +5960,7 @@ def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
         "label": "index.html",
         "media_type": "text/html",
         "checked_sha256": checked["details"]["checked_sha256"],
+        "sha256": checked["details"]["checked_sha256"],
         "authority_class": "workspace_artifact",
         "scientific_evidence": False,
         "validation_status": "unvalidated",

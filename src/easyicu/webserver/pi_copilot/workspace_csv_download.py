@@ -69,18 +69,22 @@ async def read_csv_download_form(request: Request) -> dict[str, str]:
         raise HTTPException(422, detail={"error": "pi_workspace_csv_form_invalid"}) from exc
 
 
-def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, str]:
+def csv_preview_bridge(
+    nonce: str, *, generate_csv: bool = False, allow_downloads: bool = True,
+) -> tuple[str, str]:
     """Supply CSV bytes without Host capability; optionally invoke one page export.
 
-    ``generate_csv`` is for an explicit Host user action on an enabled preview.
-    It invokes only the page's own unambiguous export control, leaving the
-    existing nonce, snapshot checks, and Host save action in place.
+    A passive bridge accepts no CSV until a source-bound Host control message
+    supplies a fresh export epoch. Authorization never requires reloading the
+    artifact. ``generate_csv`` retains the older explicitly enabled URL path.
     """
 
     configuration = json.dumps(nonce)
     child = r"""<script>(function(){
       'use strict';
       const nonce=NONCE, generateCsv=GENERATE_CSV, limit=1048576, objects=new Map();
+      let enabled=ALLOW_DOWNLOADS, epoch='',selectionVersion=0;
+      const epochs=new Set();
       const create=URL.createObjectURL.bind(URL), revoke=URL.revokeObjectURL.bind(URL);
       const safeName=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.csv$/;
       let busy=false, count=0, last=0;
@@ -93,12 +97,14 @@ def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, 
       function deliver(anchor){
         const blob=objects.get(anchor.href), name=anchor.download;
         if(!blob || !safeName.test(name) || !name.endsWith('.csv')) return false;
+        if(!enabled) return true;
         if(busy || count>=5 || Date.now()-last<1000) return true;
+        const sourceEpoch=epoch,sourceSelection=selectionVersion;
         busy=true; count++; last=Date.now();
         blob.arrayBuffer().then(function(buffer){
           const csv=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(buffer);
-          if(csv.length && new TextEncoder().encode(csv).length<=limit && !csv.includes('\0'))
-            parent.postMessage({type:'easyicu:workspace-csv-child',nonce,filename:name,media_type:'text/csv',csv},'*');
+          if(enabled && epoch===sourceEpoch && selectionVersion===sourceSelection && csv.length && new TextEncoder().encode(csv).length<=limit && !csv.includes('\0'))
+            parent.postMessage({type:'easyicu:workspace-csv-child',nonce,epoch:sourceEpoch,selection_version:sourceSelection,filename:name,media_type:'text/csv',csv},'*');
         }).catch(function(){}).finally(function(){busy=false;});
         return true;
       }
@@ -108,7 +114,39 @@ def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, 
         const anchor=event.target.closest && event.target.closest('a[download]');
         if(anchor && deliver(anchor)){event.preventDefault();event.stopImmediatePropagation();}
       },true);
-      if(generateCsv){
+      function selectionChanged(){
+        selectionVersion++;
+        if(enabled) parent.postMessage({type:'easyicu:workspace-csv-child-changed',nonce,epoch,selection_version:selectionVersion},'*');
+      }
+      document.addEventListener('input',selectionChanged,true);
+      document.addEventListener('change',selectionChanged,true);
+      function filterState(){
+        try{
+          const controls=Array.from(document.querySelectorAll('input,select,textarea'));
+          if(controls.length>256) return null;
+          const values=[];
+          for(const control of controls){
+            const value=String(control.value||'');
+            if(value.length>1024 || (control.options && control.options.length>256)) return null;
+            values.push([value,Boolean(control.checked),control.multiple && control.options
+              ? Array.from(control.options,option=>Boolean(option.selected)) : null]);
+          }
+          return JSON.stringify(values);
+        }catch(_){return null;}
+      }
+      document.addEventListener('click',function(){
+        if(!enabled) return;
+        const before=filterState(),sourceEpoch=epoch,sourceSelection=selectionVersion;
+        function compare(){
+          // Reset buttons may assign .value without emitting input/change.
+          // No filter values leave this frame, only a changed notification.
+          if(enabled && epoch===sourceEpoch && selectionVersion===sourceSelection
+            && (before===null || before!==filterState())) selectionChanged();
+        }
+        Promise.resolve().then(compare);
+        requestAnimationFrame(()=>requestAnimationFrame(compare));
+      },true);
+      function startGeneration(commandEpoch, waitForChecks){
         let attempted=false,expired=false,waiting=false,waitTimer=0;
         function usable(element){
           const tag=String(element.tagName||'').toLowerCase();
@@ -149,6 +187,7 @@ def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, 
         }
         function generate(){
           if(attempted || expired) return;
+          if(!enabled || epoch!==commandEpoch){expired=true;return;}
           if(window.__easyicuRuntimeQaRunning===true){waitForQa();return;}
           attempted=true;
           let controls=declaredControls();
@@ -158,7 +197,9 @@ def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, 
               : Array.from(document.querySelectorAll('button,input[type="button"],input[type="submit"],a[download]'))
                 .filter(element=>usable(element) && csvAction(element));
           }
-          if(controls.length===1){try{controls[0].click();}catch(_){/* Manual export stays available. */}}
+          let status='manual';
+          if(controls.length===1){try{controls[0].click();status='generated';}catch(_){/* Manual export stays available. */}}
+          if(commandEpoch) acknowledge(status,commandEpoch);
         }
         function qaFinished(){
           if(expired) return;
@@ -168,6 +209,9 @@ def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, 
         }
         function waitForQa(){
           if(waiting || expired) return;
+          // A live user selection must never be replaced by a QA probe's
+          // temporary selection. Ask for a manual export after QA instead.
+          if(!waitForChecks){expired=true;acknowledge('qa_busy',commandEpoch);return;}
           waiting=true;
           document.addEventListener('easyicu:runtime-qa-finished',qaFinished,{once:true});
           waitTimer=setTimeout(function(){
@@ -182,19 +226,62 @@ def csv_preview_bridge(nonce: str, *, generate_csv: bool = False) -> tuple[str, 
         if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',schedule,{once:true});
         else schedule();
       }
+      function acknowledge(status,commandEpoch){
+        parent.postMessage({type:'easyicu:workspace-csv-child-ack',nonce,epoch:commandEpoch,status},'*');
+      }
+      if(typeof addEventListener==='function') addEventListener('message',function(event){
+        const data=event.data;
+        if(event.source!==parent || event.origin!=='null' || !data || data.type!=='easyicu:workspace-csv-control'
+          || data.nonce!==nonce) return;
+        if(data.action==='disable'){enabled=false;epoch='';return;}
+        if(data.action!=='generate' || typeof data.epoch!=='string' || !/^[a-f0-9]{64}$/.test(data.epoch)
+          || epochs.has(data.epoch) || epochs.size>=16) return;
+        epochs.add(data.epoch);epoch=data.epoch;enabled=true;startGeneration(epoch,false);
+      });
+      if(generateCsv && enabled) startGeneration('',true);
     })();</script>""".replace("NONCE", configuration).replace(
         "GENERATE_CSV", json.dumps(generate_csv is True)
-    )
+    ).replace("ALLOW_DOWNLOADS", json.dumps(allow_downloads is True))
     wrapper = r"""<script>(function(){
       'use strict';
-      const nonce=NONCE, frame=document.getElementById('easyicu-workspace-preview-content');
-      let count=0,last=0;
+      const nonce=NONCE, frame=document.getElementById('easyicu-workspace-preview-content'),passive=PASSIVE;
+      let enabled=ALLOW_DOWNLOADS,epoch='',count=0,last=0,acknowledged=false,selectionVersion=-1;
+      let ready=typeof frame.addEventListener!=='function';
+      const epochs=new Set();
+      function forwardGeneration(){
+        if(ready && enabled && epoch) frame.contentWindow.postMessage({type:'easyicu:workspace-csv-control',nonce,epoch,action:'generate'},'*');
+      }
+      if(!ready) frame.addEventListener('load',function(){ready=true;forwardGeneration();},{once:true});
       addEventListener('message',function(event){
         const data=event.data;
-        if(event.source!==frame.contentWindow || event.origin!=='null' || !data || data.type!=='easyicu:workspace-csv-child' || data.nonce!==nonce) return;
+        if(!data || data.nonce!==nonce) return;
+        if(event.source===parent && data.type==='easyicu:workspace-csv-control'){
+          if(data.action==='disable'){
+            enabled=false;epoch='';frame.contentWindow.postMessage({type:data.type,nonce,action:'disable'},'*');return;
+          }
+          if(data.action!=='generate' || typeof data.epoch!=='string' || !/^[a-f0-9]{64}$/.test(data.epoch)
+            || epochs.has(data.epoch) || epochs.size>=16) return;
+          epochs.add(data.epoch);epoch=data.epoch;enabled=true;acknowledged=false;selectionVersion=-1;
+          forwardGeneration();return;
+        }
+        if(event.source!==frame.contentWindow || event.origin!=='null' || !enabled || (data.epoch||'')!==epoch) return;
+        if(data.type==='easyicu:workspace-csv-child-ack'){
+          if(!epoch || acknowledged || !['generated','manual','qa_busy'].includes(data.status)) return;
+          acknowledged=true;parent.postMessage({type:'easyicu:workspace-csv-ack',nonce,epoch,status:data.status},'*');return;
+        }
+        if(epoch && (!Number.isSafeInteger(data.selection_version) || data.selection_version<0
+          || data.selection_version>1000000 || data.selection_version<selectionVersion)) return;
+        if(epoch) selectionVersion=data.selection_version;
+        if(data.type==='easyicu:workspace-csv-child-changed'){
+          parent.postMessage({type:'easyicu:workspace-csv-changed',nonce,epoch,selection_version:selectionVersion},'*');return;
+        }
+        if(data.type!=='easyicu:workspace-csv-child') return;
         if(count>=5 || Date.now()-last<1000 || data.media_type!=='text/csv' || typeof data.csv!=='string' || !data.csv.length || data.csv.length>1048576 || new TextEncoder().encode(data.csv).length>1048576 || data.csv.includes('\0') || typeof data.filename!=='string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,115}\.csv$/.test(data.filename) || !data.filename.endsWith('.csv')) return;
         count++;last=Date.now();
-        parent.postMessage({type:'easyicu:workspace-csv',nonce,filename:data.filename,media_type:'text/csv',csv:data.csv},'*');
+        parent.postMessage({type:'easyicu:workspace-csv',nonce,epoch,selection_version:selectionVersion,filename:data.filename,media_type:'text/csv',csv:data.csv},'*');
       });
-    })();</script>""".replace("NONCE", configuration)
+      if(passive) parent.postMessage({type:'easyicu:workspace-csv-ready-control',nonce},'*');
+    })();</script>""".replace("NONCE", configuration).replace(
+        "ALLOW_DOWNLOADS", json.dumps(allow_downloads is True)
+    ).replace("PASSIVE", json.dumps(allow_downloads is not True))
     return child, wrapper

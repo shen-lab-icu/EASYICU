@@ -25,6 +25,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
     resources = _read("js/screens-guided-pi-resources.js")
     digest = "c" * 64
     script = f"""
+      const assert = require('node:assert/strict');
       const calls = [];
       global.window = {{
         EU_LANG: 'en',
@@ -61,7 +62,9 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
         kind: 'webpage', file: 'prototype/index.html', media_type: 'text/html',
         checked_sha256: '{digest}',
       }}, 'project-demo');
-      console.log(String(calls.length));
+      assert.ok(calls.every(([project,file,sha]) => project==='project-demo'
+        && file==='prototype/index.html' && sha==='{digest}'));
+      console.log(String(calls.length > 0));
       console.log(String(host.innerHTML.includes('{digest}')));
     """
     completed = run_node(node, script, check=True)
@@ -72,7 +75,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
         "0",
         "false",
         "true",
-        "1",
+        "true",
         "true",
     ]
 
@@ -86,23 +89,37 @@ def test_checked_html_card_previews_and_download_consent_is_per_opened_hash() ->
     csv_downloads = _read("js/screens-guided-pi-csv-download.js")
     script = f"""
       const assert = require('node:assert/strict');
-      const calls = [], handlers = {{}};
+      const calls = [], handlers = {{}}, commands = [];
+      class Element {{
+        constructor() {{this.isConnected=true;this.children=[];this.hidden=false;}}
+        setAttribute(name,value) {{this[name]=value;}}
+        replaceChildren(...values) {{this.children=values;}}
+      }}
       global.window = {{ EU_LANG: 'en', crypto: require('node:crypto').webcrypto,
         addEventListener(name, handler) {{ handlers['window-' + name] = handler; }}, EU_API: {{
         piCopilotWorkspacePreviewUrl(project, file, digest, downloads, nonce) {{
           calls.push([project, file, digest, downloads, nonce]);
-          return '/preview?checked_sha256=' + digest + (downloads ? '&allow_downloads=true&download_nonce=' + nonce : '');
+          return '/preview?checked_sha256=' + digest + '&download_nonce=' + nonce;
         }},
         piCopilotWorkspaceDownloadUrl(project, file, digest) {{ return '/download?sha=' + digest; }},
         async loadPiCopilotWorkspaceFile(project, file) {{
           return {{artifact: {{file, text: '<p>source</p>', sha256: 'b'.repeat(64)}}}};
         }},
       }} }};
-      global.document = {{getElementById() {{return null;}}}};
+      global.document = {{getElementById() {{return null;}},createElement() {{return new Element();}}}};
       eval({_ESCAPE_OWNER!r}); eval({resources!r}); eval({csv_downloads!r}); eval({source!r});
-      const host = {{hidden: false, innerHTML: '',
+      let markup='', frame, slot, button, generateButton, rebuilds=0;
+      const host = {{hidden: false,
+        set innerHTML(value) {{
+          markup=value;rebuilds++;
+          if(frame) frame.isConnected=false;
+          frame=new Element();frame.filters={{sex:'all',unit:'all'}};
+          frame.contentWindow={{postMessage(data) {{commands.push(data);}}}};
+          slot=new Element();button=new Element();generateButton=new Element();
+        }},
+        get innerHTML() {{return markup;}},
         addEventListener(name, handler) {{handlers[name] = handler;}},
-        querySelector() {{return null;}}, querySelectorAll() {{return [];}},
+        querySelector(selector) {{return ({{'[data-gpi-workspace-frame]':frame,'[data-gpi-csv-download-slot]':slot,'[data-gpi-preview-generate-csv]':generateButton}})[selector]||null;}}, querySelectorAll() {{return [];}},
         replaceChildren() {{this.innerHTML = '';}}}};
       const preview = window.EU_GUIDED_PI_PREVIEW;
       preview.mount(host);
@@ -114,12 +131,23 @@ def test_checked_html_card_previews_and_download_consent_is_per_opened_hash() ->
       assert.ok(!host.innerHTML.includes('allow-downloads'));
       assert.ok(host.innerHTML.includes('/download?sha=' + 'a'.repeat(64)));
       assert.equal(calls.at(-1)[3], false);
-      assert.equal(calls.at(-1)[4], '');
-      handlers.click({{target: {{closest(selector) {{return selector === '[data-gpi-preview-downloads]' ? {{}} : null;}}}}}});
-      assert.equal(calls.at(-1)[3], true);
       assert.match(calls.at(-1)[4], /^[a-f0-9]{{64}}$/);
-      assert.ok(host.innerHTML.includes('sandbox="allow-scripts allow-downloads"'));
-      assert.ok(host.innerHTML.includes('&amp;allow_downloads=true'));
+      const before=frame,beforeRebuilds=rebuilds,beforeCalls=calls.length;
+      frame.filters={{sex:'F',unit:'SICU'}};
+      const click=(selector,element)=>handlers.click({{target:{{closest(value){{return value===selector?element:null;}}}}}});
+      click('[data-gpi-preview-downloads]',button);
+      assert.equal(frame,before);assert.equal(rebuilds,beforeRebuilds);assert.equal(calls.length,beforeCalls);
+      assert.deepEqual(frame.filters,{{sex:'F',unit:'SICU'}});
+      assert.equal(button['aria-pressed'],'true');assert.equal(generateButton.hidden,false);
+      assert.equal(commands.at(-1).action,'generate');assert.match(commands.at(-1).epoch,/^[a-f0-9]{{64}}$/);
+      const firstEpoch=commands.at(-1).epoch;
+      click('[data-gpi-preview-generate-csv]',generateButton);
+      assert.notEqual(commands.at(-1).epoch,firstEpoch);assert.equal(frame,before);
+      click('[data-gpi-preview-downloads]',button);
+      assert.equal(commands.at(-1).action,'disable');assert.equal(button['aria-pressed'],'false');
+      assert.equal(generateButton.hidden,true);assert.equal(frame,before);
+      assert.ok(host.innerHTML.includes('sandbox="allow-scripts"'));
+      assert.ok(!host.innerHTML.includes('allow_downloads=true'));
       for (const permission of ['allow-same-origin','allow-popups','allow-forms','allow-top-navigation']) assert.ok(!host.innerHTML.includes(permission));
       preview.open({{...resource, checked_sha256:'c'.repeat(64)}}, 'project-a');
       assert.equal(calls.at(-1)[2], 'c'.repeat(64));
@@ -144,7 +172,7 @@ def test_file_dom_transport_does_not_promote_an_unchecked_write_digest() -> None
       eval({_ESCAPE_OWNER!r}); eval({_read('js/screens-guided-pi-resources.js')!r});
       const owner = window.EasyICU.guidedPi.require('resources').create({{esc:window.EU_HTML.esc}});
       const dataset = {{gpiResourceKind:'file',gpiResourceFile:'demo.html',gpiResourceDigest:'a'.repeat(64)}};
-      assert.equal(owner.fromButton({{dataset}}).checked_sha256, '');
+      assert.equal(owner.fromButton({{dataset}}).checked_sha256, undefined);
       dataset.gpiResourceCheckedDigest = 'b'.repeat(64);
       assert.equal(owner.fromButton({{dataset}}).checked_sha256, 'b'.repeat(64));
       assert.ok(owner.button({{kind:'file', file:'demo.html', checked_sha256:'b'.repeat(64)}}).includes('data-gpi-resource-checked-digest="'+'b'.repeat(64)+'"'));

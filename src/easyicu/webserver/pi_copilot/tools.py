@@ -4714,14 +4714,9 @@ def _read_project_file(
         require_mentioned_file(context.session.project_id, context.session.last_mentions, payload)
     except ExtensionRegistryError as exc:
         raise PiCopilotError(exc.code, exc.code, status_code=409) from exc
-    ensure_safe_projection(payload)
-    return _workspace_result(
-        context,
-        status="ok",
-        code="pi_workspace_file_read",
-        summary=f"Read {payload['file']}.",
-        details={**payload, "resource": _workspace_resource(payload)},
-    )
+    from .workspace_read_projection import project_workspace_read_result
+
+    return project_workspace_read_result(context, payload, _workspace_resource(payload))
 
 
 def _write_project_file(
@@ -4765,6 +4760,9 @@ def _edit_project_file(
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
+    from .workspace_edit_batch import validate_edit_request
+
+    validate_edit_request(params)
     try:
         mutation = context.grant.reserve_workspace_mutation("edit")
     except WorkspaceMutationLimitError:
@@ -4777,19 +4775,24 @@ def _edit_project_file(
     payload = workspace.edit_file(
         context.session.project_id,
         params["file"],
-        old_text=params["old_text"],
-        new_text=params.get("new_text") or "",
         expected_sha256=params["expected_sha256"],
+        **{key: params[key] for key in ("old_text", "new_text", "edits", "check_after") if key in params},
     )
+    check = payload.get("static_check")
+    resource = _workspace_resource(payload) if not params.get("check_after") or (check or {}).get("valid") is True else None
+    summary = (f"Edited {payload['file']} with one exact replacement." if "edits" not in params
+               else f"Edited {payload['file']} with {payload['replacements']} exact replacements.")
+    if check:
+        summary += " Static check passed; runtime remains unverified." if check.get("valid") is True else " The write succeeded; static checking did not pass."
     return _workspace_result(
         context,
         status="ok",
         code="pi_workspace_file_edited",
-        summary=f"Edited {payload['file']} with one exact replacement.",
+        summary=summary,
         details={
             **payload,
             "mutation_receipt": mutation.model_dump(mode="json"),
-            "resource": _workspace_resource(payload),
+            **({"resource": resource} if resource else {}),
         },
     )
 
@@ -4801,7 +4804,16 @@ def _check_project_file(
     if blocked:
         return blocked
     assert workspace is not None and context.session.project_id
-    payload = workspace.check_file(context.session.project_id, params["file"])
+    try:
+        payload = workspace.check_file(context.session.project_id, params["file"])
+    except PiCopilotError as exc:
+        if exc.code != "pi_workspace_runtime_contract_invalid":
+            raise
+        # Transport exceptions intentionally omit arbitrary error details.
+        # Return the bounded schema diagnosis as a normal blocked tool receipt
+        # so the model can repair all paths rather than repeatedly poll.
+        return _workspace_result(context, status="blocked", code=exc.code,
+                                 summary=str(exc), details=exc.details)
     return _workspace_result(
         context,
         status="ok",
@@ -4852,17 +4864,24 @@ def _get_project_runtime_qa(
     payload = workspace.preview_file(
         context.session.project_id, params["file"], checked_sha256=params["checked_sha256"]
     )
+    from .workspace_runtime_qa import contract_preflight_receipt
+
     store = context.runtime_qa_store
-    receipt = store.read(context.session.project_id, payload["file"], params["checked_sha256"].lower()) if store else {
-        "status": "partial", "code": "browser_runtime_pending", "coverage": [],
-        "checks": [], "scientific_verified": False, "browser_download_verified": False,
-        "csv_export_ready": False,
-    }
+    observed = store.read(context.session.project_id, payload["file"], payload["checked_sha256"]) if store else None
+    receipt = contract_preflight_receipt(payload["text"], payload["checked_sha256"], observed=observed)
+    if receipt is None:
+        receipt = observed or {
+            "status": "partial", "code": "browser_runtime_pending", "coverage": [],
+            "checks": [], "scientific_verified": False, "browser_download_verified": False,
+            "csv_export_ready": False, "polling_allowed": False,
+            "next_action": "open_preview_once_then_report_browser_pending",
+        }
     return _workspace_result(
         context, status="ok", code="pi_workspace_runtime_qa_read",
-        summary=f"Current browser check status for {payload['file']}: {receipt['status']}.",
+        summary=f"Current browser check status for {payload['file']}: {receipt['status']}."
+                + (" Do not poll; follow next_action and report pending coverage honestly." if receipt.get("polling_allowed") is False else ""),
         details={"file": payload["file"], "checked_sha256": params["checked_sha256"].lower(),
-                 "runtime_qa": receipt, "verification_scope": "declared_ui_consistency_checks"},
+                 "runtime_qa": receipt, "verification_scope": receipt.get("scope", "declared_ui_consistency_checks")},
     )
 
 

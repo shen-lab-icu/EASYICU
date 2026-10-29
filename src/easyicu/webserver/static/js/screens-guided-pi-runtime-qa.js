@@ -1,6 +1,24 @@
 /* Owner: current-version browser QA receipts for isolated workspace pages. */
 (function () {
   'use strict';
+  function failureText(error) {
+    const zh = window.EU_LANG === 'zh';
+    const detail = error && error.details || {};
+    const diagnosis = detail.runtime_qa_contract || detail.contract_diagnostics || detail;
+    const issues = Array.isArray(diagnosis.issues) ? diagnosis.issues.filter(issue => issue && typeof issue === 'object').slice(0, 16) : [];
+    const rawCode = error && error.code || diagnosis.code || '';
+    const code = /^[a-z0-9_]{1,80}$/.test(rawCode) ? rawCode : '';
+    const lead = issues.length || ['runtime_qa_contract_invalid', 'pi_workspace_runtime_contract_invalid'].includes(code)
+      ? (zh ? '检查合同格式错误，浏览器检查尚未运行。' : 'The check contract is invalid; browser checks have not run.')
+      : (zh ? '浏览器检查未能启动；此页尚未验证。' : 'Browser checks could not start; this page is unverified.');
+    const paths = issues.slice(0, 3).map(issue => {
+      const path = typeof issue.path === 'string' ? issue.path.slice(0, 240) : '';
+      const expected = Array.isArray(issue.expected) ? issue.expected.join(', ') : String(issue.expected || '');
+      return `${path || '/'}: ${expected.slice(0, 180)}`;
+    });
+    const more = issues.length > 3 ? (zh ? `另有 ${issues.length - 3} 处合同错误。` : `${issues.length - 3} more contract errors.`) : '';
+    return [lead, code, ...paths, more].filter(Boolean).join(' ');
+  }
   function create(currentKey, options) {
     let key = '', nonce = '', frame = null, slot = null, source = null, report = null;
     let generation = 0;
@@ -24,7 +42,9 @@
       const zh = window.EU_LANG === 'zh';
       node.textContent = !report
         ? (zh ? '浏览器检查待完成' : 'Browser checks pending')
-        : report.status === 'failed'
+        : report.contract_diagnostics && report.contract_diagnostics.status === 'invalid'
+          ? (zh ? '检查合同格式错误，浏览器检查尚未运行' : 'Invalid check contract; browser checks have not run')
+          : report.status === 'failed'
           ? (zh ? '页面运行检查未通过' : 'Page runtime checks failed')
           : report.status === 'complete'
             ? (zh ? '声明的页面检查已通过' : 'Declared page checks passed')
@@ -51,11 +71,19 @@
         const incomplete = (report.checks || []).filter(check => check.status !== 'passed');
         const warnings = report.warnings || [];
         const missing = report.missing_check_ids || [];
-        if (incomplete.length || warnings.length || missing.length || report.runtime_errors || !report.coverage || !report.coverage.length) {
+        const diagnostic = report.contract_diagnostics;
+        const contractIssues = diagnostic && Array.isArray(diagnostic.issues) ? diagnostic.issues.filter(issue => issue && typeof issue === 'object').slice(0, 16) : [];
+        if (incomplete.length || warnings.length || missing.length || contractIssues.length || report.runtime_errors || !report.coverage || !report.coverage.length) {
           const details = document.createElement('details'), summary = document.createElement('summary');
           summary.textContent = zh ? '查看检查范围与问题' : 'Check coverage and issues';
           details.appendChild(summary);
           const list = document.createElement('ul');
+          for (const issue of contractIssues) {
+            const item = document.createElement('li');
+            const expected = Array.isArray(issue.expected) ? issue.expected.join(', ') : String(issue.expected || '');
+            item.textContent = `${String(issue.path || '/').slice(0, 240)}: ${expected.slice(0, 300)}`;
+            list.appendChild(item);
+          }
           for (const check of incomplete) {
             const item = document.createElement('li');
             item.textContent = `${check.id}: ${check.code}${meanings[check.code] ? ' — ' + meanings[check.code] : ''}`;
@@ -73,7 +101,9 @@
           }
           if (!report.coverage || !report.coverage.length) {
             const item = document.createElement('li');
-            item.textContent = zh ? '未声明可核对的检查合同；交互、图表和下载尚未验证。' : 'No declared check contract; interactions, charts, and downloads remain unverified.';
+            item.textContent = diagnostic && diagnostic.status === 'invalid'
+              ? (zh ? '先修复合同格式；不要轮询状态或修改数据来凑通过。' : 'Repair the contract first; do not poll or alter data to force a pass.')
+              : (zh ? '未声明可核对的检查合同；交互、图表和下载尚未验证。' : 'No declared check contract; interactions, charts, and downloads remain unverified.');
             list.appendChild(item);
           }
           details.appendChild(list); parts.push(details);
@@ -117,7 +147,7 @@
       }
     }
     window.addEventListener('message', receive);
-    return { prepare, bind, reset, snapshot: () => report ? { ...report } : null, noteCsvReady };
+    return { prepare, bind, reset, snapshot: () => report ? { ...report } : null, noteCsvReady, failureText };
   }
-  window.EasyICU.guidedPi.declare('runtimeQa', { create });
+  window.EasyICU.guidedPi.declare('runtimeQa', { create, failureText });
 })();

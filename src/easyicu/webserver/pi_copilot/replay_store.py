@@ -26,6 +26,7 @@ MAX_EVENTS_PER_TURN = 500
 MAX_CHILD_JOBS = 64
 DEFAULT_TURN_PAGE_SIZE = 48
 MAX_TURN_PAGE_SIZE = 100
+_NON_USER_TURN_KINDS = frozenset({"host_action", "reply_continuation", "workspace_retry"})
 
 
 class PiConversationReplayStore:
@@ -160,6 +161,7 @@ class PiConversationReplayStore:
         mentioned_objects: object = (),
         source_job_id: Optional[str] = None,
         source_error_entry_id: Optional[str] = None,
+        recovery_kind: Optional[str] = None,
     ) -> None:
         with self._lock:
             payload = self._read(session_id, project_id)
@@ -180,7 +182,8 @@ class PiConversationReplayStore:
                     "attached_skills": attachment_payload(attached_skills),
                     "mentioned_objects": resolved_payload(mentioned_objects),
                     "events": [],
-                    **({"kind": "reply_continuation", "source_job_id": str(source_job_id or "")[:160],
+                    **({"kind": "workspace_retry" if recovery_kind == "retry_unstarted" else "reply_continuation",
+                        "source_job_id": str(source_job_id or "")[:160],
                         "source_error_entry_id": str(source_error_entry_id)[:160]}
                        if source_error_entry_id else {}),
                 }
@@ -192,13 +195,13 @@ class PiConversationReplayStore:
         """Recover exact identities when regenerating an existing branch turn."""
         with self._lock:
             turns = [row for row in self._read(session_id, project_id)["turns"]
-                     if not row.get("superseded") and row.get("kind") != "host_action"]
+                     if not row.get("superseded") and row.get("kind") not in _NON_USER_TURN_KINDS]
             return attachment_payload(turns[turn_index].get("attached_skills", [])) if 0 <= turn_index < len(turns) else []
 
     def mentions_for_turn(self, *, session_id: str, project_id: str, turn_index: int) -> list[dict]:
         with self._lock:
             turns = [row for row in self._read(session_id, project_id)["turns"]
-                     if not row.get("superseded") and row.get("kind") != "host_action"]
+                     if not row.get("superseded") and row.get("kind") not in _NON_USER_TURN_KINDS]
             rows = resolved_payload(turns[turn_index].get("mentioned_objects", [])) if 0 <= turn_index < len(turns) else []
             return [row["reference"] for row in rows]
 
@@ -411,7 +414,7 @@ class PiConversationReplayStore:
                 if isinstance(row, dict) and not row.get("superseded")
             ]
             model_turns = [
-                row for row in active if row.get("kind") != "host_action"
+                row for row in active if row.get("kind") not in _NON_USER_TURN_KINDS
             ]
             if turn_index > len(model_turns):
                 raise PiCopilotError(
@@ -436,7 +439,7 @@ class PiConversationReplayStore:
             "user_turns": [
                 {"text": str(row.get("user_message") or ""),
                  "message_origin": row.get("message_origin") or "unknown"}
-                for row in active
+                for row in active if row.get("kind") not in _NON_USER_TURN_KINDS
             ],
             "previous_reply": str(active[-1].get("assistant_reply") or "") if active else "",
         }
@@ -551,6 +554,29 @@ class PiConversationReplayStore:
             "has_more": start > 0,
             "next_cursor": str(start) if start > 0 else None,
         }
+
+    def prior_failed_attempts(self, *, session_id: str, project_id: str) -> list[Dict[str, Any]]:
+        """Read replaced attempt diagnostics without reviving branch authority."""
+        with self._lock:
+            payload = self._read(session_id, project_id)
+        event_keys = {"type", "at", "tool_call_id", "tool_name", "status", "code", "error_code", "message_id", "stop_reason", "aborted"}
+        event_types = {"run_start", "run_end", "thinking_start", "thinking_end", "message_start", "message_end", "tool_start", "tool_end", "auto_retry_start", "auto_retry_end"}
+        return [
+            {
+                "job_id": str(turn.get("job_id") or ""),
+                "status": str(turn["status"]),
+                "started_at": turn.get("started_at"),
+                "ended_at": turn.get("ended_at"),
+                "events": [
+                    {key: value for key, value in event.items() if key in event_keys}
+                    for event in (turn.get("events") or [])[-MAX_EVENTS_PER_TURN:]
+                    if isinstance(event, Mapping) and event.get("type") in event_types
+                ],
+            }
+            for turn in payload["turns"]
+            if isinstance(turn, dict) and turn.get("superseded") and turn.get("kind") != "host_action"
+            and turn.get("status") in {"failed", "cancelled", "interrupted"}
+        ][-20:]
 
     def snapshot(
         self,

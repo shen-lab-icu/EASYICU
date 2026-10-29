@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional
 
 from .contracts import PiCopilotError
+from .workspace_edit_batch import MISSING_EDIT, apply_exact_edits, check_edited_html
 from .locking import exclusive_file_lock
 
 MAX_FILE_BYTES = 256 * 1024
@@ -604,10 +605,14 @@ class ProjectWorkspace:
         project_id: str,
         relative_file: Any,
         *,
-        old_text: Any,
-        new_text: Any,
+        old_text: Any = MISSING_EDIT,
+        new_text: Any = MISSING_EDIT,
         expected_sha256: Any = None,
+        edits: Any = MISSING_EDIT,
+        check_after: bool = False,
     ) -> Dict[str, Any]:
+        if type(check_after) is not bool:
+            raise PiCopilotError("pi_workspace_check_after_invalid", "check_after must be a boolean.")
         with self._project_lock(project_id), self._project_file_lock(project_id):
             candidate, relative, source, raw = self._read_complete_file(
                 project_id, relative_file
@@ -628,22 +633,8 @@ class ProjectWorkspace:
                     status_code=409,
                     details={"file": relative, "current_sha256": current_digest},
                 )
-            needle = str(old_text if old_text is not None else "")
-            if not needle:
-                raise PiCopilotError(
-                    "pi_workspace_edit_target_required",
-                    "An exact non-empty edit target is required.",
-                )
-            occurrences = source.count(needle)
-            if occurrences != 1:
-                raise PiCopilotError(
-                    "pi_workspace_edit_target_not_unique",
-                    "The exact edit target must occur once in the project file.",
-                    details={"file": relative, "occurrences": occurrences},
-                )
-            encoded = source.replace(
-                needle, str(new_text if new_text is not None else ""), 1
-            ).encode("utf-8")
+            updated, replacements = apply_exact_edits(source, relative, old_text=old_text, new_text=new_text, edits=edits)
+            encoded = updated.encode("utf-8")
             if len(encoded) > MAX_FILE_BYTES:
                 raise PiCopilotError(
                     "pi_workspace_file_too_large",
@@ -660,15 +651,18 @@ class ProjectWorkspace:
                     details={"max_bytes": MAX_PROJECT_BYTES},
                 )
             self._atomic_write(candidate, encoded)
-            return {
+            result = {
                 "file": relative,
                 "media_type": self._media_type(candidate),
                 "size": len(encoded),
                 "sha256": hashlib.sha256(encoded).hexdigest(),
                 "created": False,
-                "replacements": 1,
+                "replacements": replacements,
                 **_authority_metadata(),
             }
+        # check_file owns its own process/file lock. Recheck the saved SHA in
+        # the result before exposing a checked resource if another writer won.
+        return check_edited_html(self, project_id, result) if check_after else result
 
     def check_file(self, project_id: str, relative_file: Any) -> Dict[str, Any]:
         with self._project_lock(project_id), self._project_file_lock(project_id):
@@ -676,12 +670,24 @@ class ProjectWorkspace:
                 project_id, relative_file
             )
             suffix = Path(relative).suffix.lower()
+            runtime_contract = None
             try:
                 if suffix in {".html", ".htm"}:
                     parser = _HTMLCheck(convert_charrefs=True)
                     parser.feed(text)
                     parser.close()
                     checker = "html.parser"
+                    from .workspace_runtime_qa import contract_diagnostics
+
+                    runtime_contract = contract_diagnostics(text)
+                    if runtime_contract["status"] == "invalid":
+                        raise PiCopilotError(
+                            "pi_workspace_runtime_contract_invalid",
+                            "HTML syntax is readable, but its runtime-check contract is invalid. Fix the listed schema paths before preview; do not poll runtime status.",
+                            details={"file": relative, "sha256": hashlib.sha256(raw).hexdigest(),
+                                     "valid": False, "check_scope": "bounded_static_syntax_and_contract_schema",
+                                     "runtime_status": "blocked_contract", "runtime_qa_contract": runtime_contract},
+                        )
                 elif suffix == ".json":
                     json.loads(text)
                     checker = "json"
@@ -746,7 +752,8 @@ class ProjectWorkspace:
             "checker": checker,
             "valid": True,
             "checked_sha256": checked_sha256,
-            "check_scope": "bounded_static_syntax",
+            "check_scope": "bounded_static_syntax_and_contract_schema" if runtime_contract and runtime_contract["status"] == "valid" else "bounded_static_syntax",
+            **({"runtime_qa_contract": runtime_contract} if runtime_contract is not None else {}),
             **_authority_metadata(),
         }
 

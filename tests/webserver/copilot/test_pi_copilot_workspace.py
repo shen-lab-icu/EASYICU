@@ -44,6 +44,9 @@ def test_project_workspace_writes_reads_edits_checks_and_previews(tmp_path: Path
     )
     assert edited["replacements"] == 1
     checked = workspace.check_file("project-a", "demo/index.html")
+    runtime_contract = checked.pop("runtime_qa_contract")
+    assert runtime_contract["status"] == "not_declared"
+    assert runtime_contract["polling_allowed"] is False
     assert checked == {
         "file": "demo/index.html",
         "media_type": "text/html",
@@ -459,7 +462,7 @@ def test_hosted_workspace_permitted_text_is_projected(tmp_path, monkeypatch, suf
 
 @pytest.mark.parametrize("text,code", [
     ("stay_id=123456789", "pi_projection_blocked"),
-    ("x" * 2001, "pi_projection_too_large"),
+    ("x" * 2001 + "\nstay_id=123456789", "pi_projection_blocked"),
 ])
 @pytest.mark.parametrize("hosted", [False, True])
 def test_workspace_text_keeps_projection_refusal_cause(tmp_path, monkeypatch, text, code, hosted):

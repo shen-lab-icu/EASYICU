@@ -52,8 +52,33 @@
   }
 
   function create({ tr, staticPreview }) {
+    function boundedTurnFailureText(error) {
+      const candidates = typeof error === 'string' ? [error]
+        : error && typeof error === 'object' ? [error.code, error.message] : [];
+      for (const candidate of candidates) {
+        const match = typeof candidate === 'string' && candidate.trim().match(
+          /^(pi_shell_message_provider_call_budget_exhausted|pi_shell_message_cost_budget_exhausted|pi_gateway_timeout)(?:\s*:|\s*$)/
+        );
+        if (!match) continue;
+        if (match[1] === 'pi_gateway_timeout') return tr(
+          'This wait timed out. Completed files and execution records are preserved. Check the recovery guidance below the failed reply; do not repeat operations while their outcome is unconfirmed.',
+          '本次等待已超时。已完成的文件和执行记录已保留。请查看失败回复下的恢复提示；状态未确认时不要重复执行。'
+        );
+        return match[1] === 'pi_shell_message_provider_call_budget_exhausted' ? tr(
+          'This message has used its allowed model calls. Completed files and execution records are preserved; this turn cannot continue. Review the saved artifacts and execution record.',
+          '本条消息的模型调用额度已耗尽。已完成的文件和执行记录已保留，本轮无法继续。请先查看现有产物和执行记录。'
+        ) : tr(
+          'This message has used its allowed model cost budget. Completed files and execution records are preserved; this turn cannot continue. Review the saved artifacts and execution record.',
+          '本条消息的模型费用额度已耗尽。已完成的文件和执行记录已保留，本轮无法继续。请先查看现有产物和执行记录。'
+        );
+      }
+      return '';
+    }
+
     function errorText(error) {
       if (!error) return '';
+      const boundedFailure = boundedTurnFailureText(error);
+      if (boundedFailure) return boundedFailure;
       if (error.code === 'pi_regenerate_study_context_snapshot_missing') return tr('This older reply has no saved study snapshot, so it cannot be replaced safely. Send your question as a new message; the existing study and approvals stay saved.', '这条旧回复缺少保存的研究快照，无法安全替换。请把问题作为新消息发送；已有研究和批准会继续保留。');
       if (/^pi_credential_/.test(error.code || '')) return tr('EasyICU cannot access the saved model credential. Unlock the system credential store, or reconnect in Connection settings. Your question is saved.', 'EasyICU 无法读取已保存的模型凭据。请解锁系统凭据库，或在「连接设置」中重新连接；原问题已保留。');
       if (/^result_append_(source_changed|execution_failed|unavailable)$/.test(error.code || '')) return runFailureText(error.code);
@@ -302,6 +327,8 @@
     // A job's end event carries its failure as text, usually `code: detail`;
     // the code chooses the copy and the detail stays for the fallback.
     function jobErrorText(raw) {
+      const boundedFailure = boundedTurnFailureText(raw);
+      if (boundedFailure) return boundedFailure;
       const text = String(raw || '').trim();
       const match = text.match(/^([a-z][a-z0-9_]{2,79})(?:\s*:\s*|$)/);
       if (!match) return errorText({ message: text });
@@ -400,17 +427,13 @@
     }
 
     function modelErrorText(code, completedAction) {
+      const boundedFailure = boundedTurnFailureText(code);
+      if (boundedFailure) return boundedFailure;
       const value = String(code || '');
       if (completedAction) {
         return tr(
           'An EasyICU tool action completed, but the model service could not finish the explanation. Review the completed receipt above; do not repeat the action automatically.',
           'EasyICU 工具操作已完成，但模型服务未能生成最终说明。请以上方已完成的记录为准，不要自动重复执行该操作。'
-        );
-      }
-      if (value === 'pi_shell_message_provider_call_budget_exhausted' || value === 'pi_shell_message_cost_budget_exhausted') {
-        return tr(
-          'This reply reached its model budget before it finished. Send "continue" to carry on; completed EasyICU actions are kept.',
-          '本轮回复已用完单次模型预算，尚未说完。发送“继续”即可接着完成，已完成的 EasyICU 操作会保留。'
         );
       }
       if (value === 'pi_shell_token_budget_exhausted' || value === 'pi_shell_session_provider_call_budget_exhausted'

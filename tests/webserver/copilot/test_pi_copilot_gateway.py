@@ -1091,9 +1091,11 @@ def test_reconfigure_preserves_independent_shell_budget_settings(
     assert gateway.environ["EASYICU_PI_API_KEY"] == "new-private-key"
 
 
+@pytest.mark.parametrize("method", ["session.prompt", "session.regenerate", "session.continue_reply", "session.retry_failed_turn"])
 def test_prompt_timeout_aborts_and_refreshes_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    method: str,
 ) -> None:
     gateway = PiGatewayClient(app_dir=APP_DIR, session_dir=tmp_path)
     recovered: list[str] = []
@@ -1111,7 +1113,7 @@ def test_prompt_timeout_aborts_and_refreshes_session(
 
     with pytest.raises(PiCopilotError) as caught:
         gateway.request(
-            "session.prompt",
+            method,
             {"session_id": "pi-timeout", "message": "inspect"},
             timeout=0.1,
         )

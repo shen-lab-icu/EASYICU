@@ -11,7 +11,8 @@ assert.ok(start >= 0);
 const owner = shell.slice(start, shell.indexOf('  async function sendText(', start));
 
 function harness(snapshot) {
-  const state = { busy: true, regenerating: true, regeneration: { entry: 'old' }, source: null };
+  const state = { busy: true, messages: [], session: { session_id: 'session-A' }, sessionSelectionRevision: 1,
+    regenerating: true, regeneration: { activity: { steps: [] }, message: {} }, source: null };
   const finished = [];
   let rendered = 0;
   const context = vm.createContext({
@@ -22,6 +23,7 @@ function harness(snapshot) {
     },
     closeSource() { if (state.source) state.source.close(); state.source = null; },
     api: () => ({ loadJobSnapshot: snapshot }),
+    projectId: () => 'project-A',
     finishActivity: (...args) => finished.push(args),
     render: () => { rendered += 1; },
     tr: en => en,

@@ -159,7 +159,8 @@ def test_runtime_readback_tool_requires_current_checked_bytes(tmp_path):
     sha = checked["details"]["checked_sha256"]
     pending = execute_tool("easyicu_get_project_runtime_qa", {"file": "page.html", "checked_sha256": sha}, context)
     assert pending["details"]["runtime_qa"]["status"] == "partial"
-    assert pending["details"]["runtime_qa"]["code"] == "browser_runtime_pending"
+    assert pending["details"]["runtime_qa"]["code"] == "runtime_qa_contract_missing"
+    assert pending["details"]["runtime_qa"]["polling_allowed"] is False
     from easyicu.webserver.pi_copilot.contracts import PiCopilotError
     with pytest.raises(PiCopilotError) as stale:
         execute_tool("easyicu_get_project_runtime_qa", {"file": "page.html", "checked_sha256": OTHER}, context)

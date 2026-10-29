@@ -148,3 +148,25 @@ test('late publish and CSV readiness cannot upgrade a closed or switched preview
   assert.equal(ui.owner.snapshot(), null);
   ui.owner.noteCsvReady({ file: 'page.html', sha256: SHA }); assert.equal(refreshes, 0);
 });
+
+test('API contract failures display bounded paths and expectations without raw transport text', () => {
+  const ui = host({});
+  const text = ui.owner.failureText({ code: 'runtime_qa_contract_invalid', message: 'DO_NOT_ECHO_TRANSPORT',
+    details: { issues: [{ path: '/checks/0/expected', expected: 'finite JSON number' },
+      { path: '/checks/1/cases/0/checks/0/id', expected: 'unique id' }] } });
+  assert.match(text, /合同格式错误/);
+  assert.match(text, /浏览器检查尚未运行/);
+  assert.match(text, /\/checks\/0\/expected/);
+  assert.match(text, /\/checks\/1\/cases\/0\/checks\/0\/id/);
+  assert.doesNotMatch(text, /DO_NOT_ECHO_TRANSPORT/);
+});
+
+test('Host-normalized preflight failure shows schema issues rather than claiming runtime execution', async () => {
+  const ui = host({ publish: async () => ({ status: 'failed', source_sha256: SHA, coverage: [], checks: [],
+    contract_diagnostics: { status: 'invalid', issues: [{ path: '/checks/0/expected', expected: 'finite JSON number' }] } }) });
+  await ui.receive(ui.event());
+  assert.match(ui.slot.children[0].textContent, /浏览器检查尚未运行/);
+  const list = ui.slot.children[1].children[1];
+  assert.match(list.children[0].textContent, /\/checks\/0\/expected/);
+  assert.match(list.children[1].textContent, /不要轮询/);
+});

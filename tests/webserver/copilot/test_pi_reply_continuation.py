@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
-from easyicu.webserver.pi_copilot.reply_continuation import validation_context
+from easyicu.webserver.pi_copilot.reply_continuation import project_recovery_state, public_state, retry_unstarted_reply, validation_context
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeGateway, study_state as _study_state
 
@@ -46,8 +46,8 @@ class ContinuationGateway(FakeGateway):
         return state
 
 
-def setup_service(tmp_path):
-    gateway = ContinuationGateway()
+def setup_service(tmp_path, gateway_cls=ContinuationGateway):
+    gateway = gateway_cls()
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
     created = service.create_session(project_id="recovery-project", external_llm_opt_in=True, agent_mode="workspace")
     session_id = created["session"]["session_id"]
@@ -58,7 +58,7 @@ def setup_service(tmp_path):
     service._save_record(record)
     service.replay_store.start_turn(session_id=session_id, project_id="recovery-project", job_id="original-failed-job",
                                    user_message="保存并检查", allowed_actions=["workspace_write"])
-    service.replay_store.finish_turn(session_id=session_id, project_id="recovery-project", job_id="original-failed-job", status="failed")
+    service.replay_store.finish_turn(session_id=session_id, project_id="recovery-project", job_id="original-failed-job", status="failed", assistant_entry_id="failed-entry")
     return service, gateway, session_id
 
 
@@ -194,3 +194,96 @@ def test_continue_route_rejects_new_prompt_grants_or_browser_supplied_qa(monkeyp
     assert received == []
     assert client.post(url, json=base).status_code == 200
     assert received[0] == (("pi_test",), base)
+
+
+class RetryGateway(ContinuationGateway):
+    def request(self, method, params, **kwargs):
+        state = super().request(method, params, **kwargs)
+        if self.ready:
+            state["reply_continuation"].update(available=True, reason_code="pi_workspace_retry_available",
+                recovery_kind="retry_unstarted", mutation_state="not_started", budget_state="available")
+        if method == "session.retry_failed_turn":
+            context = kwargs["tool_context"]
+            assert context.allowed_actions == frozenset({"workspace_write"})
+            assert context.quick_answer_submit is None and context.propose_multi_database is None
+            assert set(params) == {"session_id", "source_error_entry_id"}
+            kwargs["event_sink"]({"type": "run_start", "at": "2026-10-29T04:00:00Z"})
+            kwargs["event_sink"]({"type": "message_end", "stop_reason": "stop", "at": "2026-10-29T04:00:01Z"})
+            state["transcript"].append({"role": "assistant", "content": [{"type": "text", "text": "Saved the original requested page."}], "stop_reason": "stop", "entry_id": "retried-entry"})
+            state["reply_continuation"] = {"available": False, "recovery_kind": "none", "reason_code": "pi_reply_continuation_no_failed_reply"}
+        return state
+
+
+def test_unstarted_retry_reuses_only_original_routine_workspace_permission_and_keeps_failed_attempt(tmp_path, study_state):
+    service, gateway, session_id = setup_service(tmp_path, RetryGateway)
+    record = service._get_record(session_id)
+    record.last_turn_allowed_actions = ["workspace_write", "provider_run", "run", "mcp_read", "configure"]
+    service._save_record(record)
+    submitted = retry_unstarted_reply(service, session_id, project_id="recovery-project", source_error_entry_id="failed-entry")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job.status != "running":
+            break
+        time.sleep(0.01)
+    assert job.status == "done", job.error
+    retry_call = next((params, context) for method, params, context in gateway.calls if method == "session.retry_failed_turn")
+    assert retry_call[1].allowed_actions == frozenset({"workspace_write"})
+    assert not any(method in {"session.prompt", "session.regenerate"} for method, _, _ in gateway.calls)
+    replay = service.replay_store.snapshot(session_id=session_id, project_id="recovery-project")
+    assert [(t.get("kind"), t["status"]) for t in replay["turns"]] == [(None, "failed"), ("workspace_retry", "done")]
+    assert replay["turns"][-1]["source_job_id"] == "original-failed-job"
+    assert service._get_record(session_id).last_turn_allowed_actions == ["workspace_write"]
+    assert gateway.calls[-1][0] == "session.retry_failed_turn"
+
+
+@pytest.mark.parametrize("drift", ["missing_source", "wrong_assistant", "connection", "cancelled"])
+def test_retry_requires_pinned_connection_exact_failed_assistant_and_original_host_attempt(tmp_path, study_state, monkeypatch, drift):
+    service, gateway, session_id = setup_service(tmp_path, RetryGateway)
+    record = service._get_record(session_id)
+    record.last_turn_allowed_actions = ["workspace_write"]
+    if drift == "missing_source":
+        record.last_message_job_id = "unrecorded-job"
+    elif drift == "wrong_assistant":
+        service.replay_store.finish_turn(session_id=session_id, project_id="recovery-project", job_id="original-failed-job", status="failed", assistant_entry_id="unrelated-assistant")
+    elif drift == "connection":
+        monkeypatch.setattr(service, "_conversation_connection_sha256", lambda _: "different-connection")
+    else:
+        record.last_turn_status = "cancelled"
+    service._save_record(record)
+    state = project_recovery_state(service, record, gateway.request("session.state", {"session_id": session_id}))
+    assert state["available"] is False and state["recovery_kind"] == "blocked"
+    with pytest.raises(PiCopilotError):
+        retry_unstarted_reply(service, session_id, project_id="recovery-project", source_error_entry_id="failed-entry")
+    assert not any(method == "session.retry_failed_turn" for method, _, _ in gateway.calls)
+    assert session_id not in service._busy_sessions
+
+
+def test_no_failed_sdk_reply_after_host_timeout_does_not_offer_a_new_operation(tmp_path, study_state):
+    service, gateway, session_id = setup_service(tmp_path)
+    record = service._get_record(session_id)
+    state = project_recovery_state(service, record, {"reply_continuation": {
+        "available": False, "recovery_kind": "none", "reason_code": "pi_reply_continuation_no_failed_reply"}})
+    assert state["reason_code"] == "pi_workspace_recovery_terminal_state_unconfirmed"
+    assert state["available"] is False
+
+
+@pytest.mark.parametrize("kind,mutation,budget", [
+    ("retry_unstarted", "completed", "available"),
+    ("retry_unstarted", "not_started", "unverified"),
+    ("continue_explanation", "unconfirmed", "available"),
+    ("continue_explanation", "completed", "exhausted"),
+])
+def test_inconsistent_recovery_capabilities_fail_closed(kind, mutation, budget):
+    state = public_state({"available": True, "recovery_kind": kind, "mutation_state": mutation, "budget_state": budget})
+    assert not state["available"] and state["recovery_kind"] == "blocked"
+
+
+def test_confirmed_read_failure_does_not_replace_completed_writes_or_spent_budget():
+    state = public_state({"available": False, "recovery_kind": "blocked", "mutation_state": "completed",
+        "budget_state": "exhausted", "reason_code": "pi_shell_message_provider_call_budget_exhausted", "read_error_count": 2})
+    assert state["mutation_state"] == "completed"
+    assert state["budget_state"] == "exhausted"
+    assert state["reason_code"] == "pi_shell_message_provider_call_budget_exhausted"
+    assert state["read_error_count"] == 2
+    assert not state["available"]

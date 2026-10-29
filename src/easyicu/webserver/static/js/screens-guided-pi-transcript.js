@@ -111,7 +111,8 @@
   }
 
   function markReplyContinuations(messages, turns, timeMs) {
-    (Array.isArray(turns) ? turns : []).filter(turn => turn && turn.kind === 'reply_continuation').forEach(turn => {
+    (Array.isArray(turns) ? turns : []).filter(turn => turn
+      && ['reply_continuation', 'workspace_retry'].includes(turn.kind)).forEach(turn => {
       const entryId = String(turn.assistant_entry_id || '');
       const events = Array.isArray(turn.events) ? turn.events : [];
       const start = timeMs((events[0] && events[0].at) || turn.started_at);
@@ -577,12 +578,20 @@
             };
             tools.set(id, toolStep);
           }
+          const failedReceipt = receipt.is_error === true || ['blocked', 'failed', 'error'].includes(receipt.status);
+          const suppliedResource = receipt.resource || null;
+          const previousResource = toolStep.resource;
+          const governedFallback = previousResource && !['file', 'webpage'].includes(previousResource.kind || 'file')
+            ? previousResource : null;
+          const answerResources = (Array.isArray(receipt.resources) ? receipt.resources : [])
+            .filter(resource => !failedReceipt || !['file', 'webpage'].includes(resource?.kind || 'file'));
           Object.assign(toolStep, {
-            status: receipt.is_error ? 'error' : 'complete', receipt: receipt.receipt || null,
+            status: failedReceipt ? 'error' : 'complete', receipt: receipt.receipt || null,
             code: receipt.code || '', owner: receipt.owner || '',
             requiredAction: receipt.required_action || '', grantable: receipt.grantable_by_turn === true,
-            resource: receipt.resource || toolStep.resource || null,
-            resources: Array.isArray(receipt.resources) ? receipt.resources : [],
+            resource: failedReceipt && ['file', 'webpage'].includes(suppliedResource?.kind || 'file')
+              ? null : suppliedResource || governedFallback,
+            resources: answerResources,
             endedAt: rowAt,
           });
           addTurnResources([toolStep.resource].concat(toolStep.resources || []));
@@ -634,6 +643,17 @@
       const lifecycleTurns = replayOwner && typeof replayOwner.lifecycleTurns === 'function'
         ? replayOwner.lifecycleTurns(session) : [];
       const replayTurns = lifecycleTurns.filter(turn => turn && turn.kind !== 'host_action');
+      if (session && session.agent_mode === 'workspace') {
+        const seenJobs = new Set(replayTurns.map(turn => String(turn.job_id || '')));
+        (Array.isArray(session.prior_failed_attempts) ? session.prior_failed_attempts : []).slice(0, 20).forEach(turn => {
+          if (!turn || !turn.job_id || seenJobs.has(String(turn.job_id))
+              || !['failed', 'cancelled', 'interrupted'].includes(turn.status)) return;
+          seenJobs.add(String(turn.job_id));
+          replayTurns.push({ ...turn, supersededAttempt: true });
+        });
+        replayTurns.sort((left, right) => timeMs(left.started_at || left.events?.[0]?.at)
+          - timeMs(right.started_at || right.events?.[0]?.at));
+      }
       const hostTurns = lifecycleTurns.filter(turn => turn && turn.kind === 'host_action');
       markReplyContinuations(messages, lifecycleTurns, timeMs);
       const historyActivities = messages.filter(row => row.role === 'activity' && !row.childJobId);
@@ -643,12 +663,19 @@
       // are matched by time rather than by position in the list.
       const REPLAY_MATCH_WINDOW_MS = 15000;
       const claimedActivities = new Set();
-      function historyActivityFor(replayStarted) {
+      function historyActivityFor(replayStarted, replayEnded, turn) {
         let best = null;
         let bestDistance = Number.POSITIVE_INFINITY;
         historyActivities.forEach(candidate => {
           if (claimedActivities.has(candidate)) return;
-          const distance = Math.abs(Number(candidate.startedAt || 0) - replayStarted);
+          const answer = assistantByActivity.get(candidate);
+          const exactEntry = turn.assistant_entry_id && answer
+            && String(answer.entryId || '') === String(turn.assistant_entry_id);
+          // Regeneration may retain the user's earlier timestamp. Its actual
+          // assistant phase, rather than that user row, identifies this job.
+          const anchor = Number(answer && answer.timelineAt || candidate.startedAt || 0);
+          const withinJob = anchor >= replayStarted && anchor <= replayEnded;
+          const distance = exactEntry ? -1 : withinJob ? 0 : answer ? Infinity : Math.abs(anchor - replayStarted);
           if (distance <= REPLAY_MATCH_WINDOW_MS && distance < bestDistance) { best = candidate; bestDistance = distance; }
         });
         if (best) claimedActivities.add(best);
@@ -660,11 +687,22 @@
         // Replay turn timestamps are receipt-level seconds, while lifecycle event
         // timestamps retain milliseconds. Use the event envelope for the visible
         // wall clock so the total reconciles with the exclusive phase durations.
-        const replayStarted = timeMs((replay[0] && replay[0].at) || (turn && turn.started_at));
-        const replayEnded = timeMs((replay[replay.length - 1] && replay[replay.length - 1].at) || (turn && turn.ended_at));
-        let replayActivity = historyActivityFor(replayStarted);
+        const firstEvent = timeMs(replay[0] && replay[0].at || turn.started_at);
+        const lastEvent = timeMs(replay[replay.length - 1] && replay[replay.length - 1].at || turn.ended_at);
+        const jobStarted = Date.parse(String(turn.started_at || ''));
+        const jobEnded = Date.parse(String(turn.ended_at || ''));
+        const replayStarted = Number.isFinite(jobStarted) ? Math.min(jobStarted, firstEvent) : firstEvent;
+        const replayEnded = Number.isFinite(jobEnded) ? Math.max(jobEnded, lastEvent) : lastEvent;
+        let replayActivity = historyActivityFor(replayStarted, replayEnded, turn);
         const isNewReplayActivity = !replayActivity;
         if (!replayActivity) replayActivity = { id: 'saved-activity-' + String((turn && turn.job_id) || replayStarted), role: 'activity', steps: [], expanded: false, timelineAt: replayStarted, timelineOrder: turnIndex * 10 + 1 };
+        // A replay is the lifecycle of exactly one Host job. SDK marker rows
+        // from another branch must not accumulate as extra phases or tools.
+        replayActivity.steps = [];
+        replayActivity.messageJobId = String(turn.job_id || '');
+        replayActivity.supersededAttempt = turn.supersededAttempt === true;
+        const associatedAnswer = assistantByActivity.get(replayActivity);
+        if (associatedAnswer) associatedAnswer.messageJobId = replayActivity.messageJobId;
         const turnStatus = String((turn && turn.status) || session.last_turn_status || 'done');
         const durablePlanState = typeof workflowActionCode === 'function'
           ? String(workflowActionCode() || '') : '';
@@ -678,10 +716,9 @@
           : turnStatus === 'running' ? 'running'
           : (['failed', 'interrupted'].includes(turnStatus) ? 'error'
             : (turnStatus === 'cancelled' ? 'cancelled' : 'complete'));
-        replayActivity.startedAt = replayActivity.startedAt
-          ? Math.min(Number(replayActivity.startedAt), replayStarted)
-          : replayStarted;
-        replayActivity.endedAt = replayEnded;
+        replayActivity.startedAt = replayStarted;
+        replayActivity.timelineAt = replayStarted;
+        replayActivity.endedAt = turnStatus === 'running' ? null : replayEnded;
         replayActivity.allowedActions = Array.isArray(turn && turn.allowed_actions) ? turn.allowed_actions.slice() : [];
         const submittedChildJob = replay.some(event => (
           event && event.type === 'tool_end' && event.job_id

@@ -213,12 +213,16 @@ def test_csv_bridge_stream_limit_stops_before_consuming_the_remainder():
     assert error.value.status_code == 413 and len(consumed) == 1
 
 
-def test_csv_bridge_is_injected_only_with_opt_in_and_valid_per_frame_nonce(workspace_client):
+def test_csv_bridge_is_passive_without_opt_in_and_requires_valid_per_frame_nonce(workspace_client):
     workspace, client = workspace_client
     written = workspace.write_file("project-a", "demo.html", "<!doctype html><script>void 0</script>")
     params = {"file": "demo.html", "checked_sha256": written["sha256"], "download_nonce": "b" * 64}
     base = "/api/copilot/pi/projects/project-a/workspace/preview"
-    assert "easyicu:workspace-csv" not in client.get(base, params=params).text
+    passive = client.get(base, params=params)
+    assert "easyicu:workspace-csv-control" in passive.text
+    assert "enabled=false" in passive.text
+    assert "allow-downloads" not in passive.headers["content-security-policy"]
+    assert "sandbox=\"allow-scripts\"" in passive.text
     response = client.get(base, params={**params, "allow_downloads": "true"})
     assert "easyicu:workspace-csv-child" in response.text
     assert "event.source!==frame.contentWindow" in response.text

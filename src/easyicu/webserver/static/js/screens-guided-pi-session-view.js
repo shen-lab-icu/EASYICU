@@ -84,6 +84,7 @@
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('Start research conversation', '开始研究对话')}
         </button>
+        <button class="btn" type="button" data-gpi-new-workspace ${state.creating || state.projectLoading || state.busy ? 'disabled' : ''}>${tr('New artifact task', '新建产物任务')}</button>
         <div class="gpi-consent">${iconHtml('shield', 13)}<span>${tr('Study progress is saved automatically. File access can be enabled later and remains limited to this project folder — never patient rows, credentials, or files outside the project.', '研究进度会自动保存；文件操作可稍后开启，且只能访问当前项目目录，不包括患者行级数据、凭据或项目以外的文件。')}</span></div>
         ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Copilot conversations in this project', '当前项目中的研究助手对话')}</div>${saved}</div>` : ''}
         <div class="gpi-secondary-actions">
@@ -176,12 +177,12 @@
         : '';
       // The model's follow-up suggestions are lifted out of the reply text;
       // only the latest reply offers them, as clickable questions.
-      const lifted = row.role === 'assistant' && FOLLOW_UPS && row.complete !== false
+      const lifted = row.role === 'assistant' && FOLLOW_UPS && row.complete !== false && !options?.hostFailedAttempt
         ? FOLLOW_UPS.split(publicAssistantText(row.text)) : null;
       const publicRow = row.role === 'assistant'
         ? { ...row, text: lifted ? lifted.text : publicAssistantText(row.text) } : row;
       const nextOwner = MODULES.require('nextActions');
-      const nextStep = row.role === 'assistant' && row.complete !== false
+      const nextStep = row.role === 'assistant' && row.complete !== false && !options?.hostFailedAttempt
         && !['auto_generate_plan', 'auto_revise_plan', 'generate_plan']
           .includes(String(row.hostActionCode || ''))
         && nextOwner && typeof nextOwner.project === 'function'
@@ -214,6 +215,11 @@
         canContinueReply: Boolean(options && options.canContinueReply),
         sourceErrorEntryId: String(options && options.sourceErrorEntryId || ''),
         continuationReasonCode: String(options && options.continuationReasonCode || ''),
+        workspaceMode: Boolean(options && options.workspaceMode),
+        recoveryKind: String(options && options.recoveryKind || ''),
+        mutationState: String(options && options.mutationState || ''),
+        budgetState: String(options && options.budgetState || ''),
+        hostFailedAttempt: Boolean(options && options.hostFailedAttempt),
       });
       const contentHtml = messageActions.editorHtml
         || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
@@ -375,6 +381,10 @@
       };
       const messages = ACTIVITY.renderTimeline(timeline, (row, trace) => {
         const displayRow = projectRow(row);
+        const recovery = state.session && state.session.reply_continuation;
+        const hostFailedAttempt = workspace && row === latestAssistant && recovery
+          && recovery.recovery_kind === 'blocked'
+          && ['failed', 'cancelled', 'interrupted'].includes(String(state.session.last_turn_status || ''));
         const historicalDataConsent = !historicalDataConsentProjected
           && row.role === 'assistant'
           && DATA_CONSENT && typeof DATA_CONSENT.matchesSourceSelection === 'function'
@@ -396,8 +406,13 @@
           sourceErrorEntryId: state.session && state.session.reply_continuation
             ? state.session.reply_continuation.source_error_entry_id : '',
           continuationReasonCode: state.session && state.session.reply_continuation
-            && String(row.entryId || '') === String(state.session.reply_continuation.source_error_entry_id || '')
+            && (hostFailedAttempt || String(row.entryId || '') === String(state.session.reply_continuation.source_error_entry_id || ''))
             ? state.session.reply_continuation.reason_code : '',
+          workspaceMode: workspace,
+          recoveryKind: state.session && state.session.reply_continuation && state.session.reply_continuation.recovery_kind,
+          mutationState: state.session && state.session.reply_continuation && state.session.reply_continuation.mutation_state,
+          budgetState: state.session && state.session.reply_continuation && state.session.reply_continuation.budget_state,
+          hostFailedAttempt,
           historicalDataConsent,
           historicalChoiceAnswered: row.role === 'assistant'
             && answeredAssistantIds.has(String(row.id || '')),

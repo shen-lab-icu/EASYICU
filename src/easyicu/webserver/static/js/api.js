@@ -725,6 +725,9 @@
   function continuePiCopilotReply(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/continue-reply', body || {});
   }
+  function retryPiCopilotWorkspaceReply(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/retry-unstarted', body || {});
+  }
   function authorizePiCopilotDataSource(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/data-source-authorization', body || {});
   }
@@ -762,7 +765,7 @@
       + '/workspace/preview?file=' + encodeURIComponent(file)
       + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '')
       + (allowDownloads === true ? '&allow_downloads=true' : '')
-      + (allowDownloads === true && /^[a-f0-9]{64}$/.test(downloadNonce) ? '&download_nonce=' + downloadNonce : '')
+      + (/^[a-f0-9]{64}$/.test(downloadNonce) ? '&download_nonce=' + downloadNonce : '')
       + (/^[a-f0-9]{64}$/.test(runtimeNonce) ? '&runtime_nonce=' + runtimeNonce : '')
       + (allowDownloads === true && generateCsv === true ? '&generate_csv=true' : '');
   }
@@ -1094,6 +1097,7 @@
   window.EU_API.acceptPiCopilotPopulationInclusion = acceptPiCopilotPopulationInclusion;
   window.EU_API.regeneratePiCopilotMessage = regeneratePiCopilotMessage;
   window.EU_API.continuePiCopilotReply = continuePiCopilotReply;
+  window.EU_API.retryPiCopilotWorkspaceReply = retryPiCopilotWorkspaceReply;
   window.EU_API.authorizePiCopilotDataSource = authorizePiCopilotDataSource;
   window.EU_API.loadPiCopilotRegisteredSourceOffer = loadPiCopilotRegisteredSourceOffer;
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
