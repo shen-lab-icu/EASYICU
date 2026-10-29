@@ -292,6 +292,7 @@
   function render(options) {
     const tr = options.tr;
     const disabled = options.disabled ? 'disabled' : '';
+    const examples = exampleQuestions(tr);
     return `<section class="gpi-research-start gpi-entry-home" aria-label="${esc(tr('Start a research conversation', '开始研究对话'))}">
       <header class="gpi-entry-intro">
         <div class="gpi-entry-title"><h2>${esc(tr('Start an ICU research task', '开始一项 ICU 研究'))}</h2></div>
@@ -299,10 +300,22 @@
       </header>
       ${options.composer || ''}
       ${options.focused ? '' : `${offersDemo() ? demoCard(disabled, tr) : ''}
-      <div class="gpi-capability-head"><strong>${esc(tr('Try one of these questions', '试试这些问题'))}</strong></div>
-      <div class="gpi-starter-actions gpi-starter-examples">${exampleQuestions(tr).map(row => exampleCard(row, disabled, tr)).join('')}</div>
+      <div class="gpi-capability-head"><strong>${esc(tr('Try one of these questions', '试试这些问题'))}</strong><div class="gpi-capability-tools"><label><span class="shell-sr-only">${esc(tr('Search example questions', '搜索示例问题'))}</span><input type="search" data-gpi-starter-search placeholder="${esc(tr('Database, question or method…', '搜索数据库、问题或方法…'))}" /></label></div></div>
+      <div class="gpi-starter-actions gpi-starter-examples">${examples.slice(0, 3).map(row => exampleCard(row, disabled, tr)).join('')}</div>
+      <details class="gpi-starter-more" data-gpi-more-examples><summary>${esc(tr(`View all ${examples.length} example questions`, `查看全部 ${examples.length} 个示例问题`))}</summary>
+        <div class="gpi-starter-actions gpi-starter-examples">${examples.slice(3).map(row => exampleCard(row, disabled, tr)).join('')}</div>
+      </details>
       <button class="gpi-starter-browse" type="button" data-gpi-starter-browse>${esc(tr('Browse all Skills and methods', '浏览全部技能与方法'))}</button>`}
     </section>`;
+  }
+
+  function filter(root, query) {
+    const needle = String(query || '').trim().toLowerCase();
+    root.querySelectorAll('[data-gpi-starter-example]').forEach(card => {
+      card.hidden = Boolean(needle) && !card.textContent.toLowerCase().includes(needle);
+    });
+    const more = root.querySelector('[data-gpi-more-examples]');
+    if (more) more.open = Boolean(needle);
   }
 
   function actionFromEvent(event, tr) {
@@ -322,5 +335,5 @@
   }
 
   function exampleQuestion(id, tr) { return exampleQuestions(tr).find(row => row.id === id) || null; }
-  window.EasyICU.guidedPi.declare('starters', { render, actionFromEvent, actionFromDiscoveryChoice, exampleQuestion });
+  window.EasyICU.guidedPi.declare('starters', { render, filter, actionFromEvent, actionFromDiscoveryChoice, exampleQuestion });
 })();

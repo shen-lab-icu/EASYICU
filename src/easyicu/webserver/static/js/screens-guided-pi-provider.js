@@ -236,8 +236,12 @@
     const auth = state.codexAuth || {};
     const label = codex
       ? [tr('ChatGPT / Codex account', 'ChatGPT / Codex 账户'), state.researchModel || tr('select a model', '请选择模型')].join(' · ')
-      : tr('Verified API connection', '已验证的 API 连接');
+      : tr('Saved API connection', '已保存的 API 连接');
     const ready = codex ? auth.authentication_verified === true && !!state.researchModel : options.apiResearchReady;
+    const configuration = state.runtime && state.runtime.configuration || {};
+    if (!codex && configuration.connection_error) {
+      return `<div class="gpi-provider-summary warn"><span class="gpi-dot"></span><div><strong>${tr('Saved connection needs attention', '已保存的连接需要处理')}</strong><small>${esc(configuration.connection_error_message || tr('Unlock the system credential store, then check the connection.', '请解锁系统凭据库后检查连接。'))}</small></div><button class="gpi-link" type="button" data-gpi-connect-open>${tr('Check connection', '检查连接')}</button></div>`;
+    }
     if (!options.connectionReady) {
       return `<div class="gpi-provider-summary warn"><span class="gpi-dot"></span><div><strong>${tr('No model connected', '未连接模型')}</strong><small>${tr('Needed for conversations and research runs', '对话和研究运行需要模型')}</small></div><button class="gpi-link" type="button" data-gpi-connect-open>${tr('Connect', '连接')}</button></div>`;
     }

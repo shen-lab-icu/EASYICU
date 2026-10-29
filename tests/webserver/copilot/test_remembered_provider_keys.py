@@ -62,6 +62,25 @@ def test_unchecked_key_lives_only_for_this_process(desktop, tmp_path):
     assert all(SYNTHETIC_KEY not in p.read_text() for p in tmp_path.rglob("*") if p.is_file())
 
 
+def test_locked_store_keeps_status_readable_but_execution_blocked(desktop, monkeypatch):
+    from easyicu.webserver.pi_copilot.provider_credentials import credential_error
+
+    _, factory = desktop
+    factory().verify_and_save(**CONNECTION, verifier=verified, environ={})
+    loaded = factory()
+    before = loaded.config_path.read_bytes()
+    def locked(*_args):
+        raise credential_error()
+    monkeypatch.setattr(loaded.credentials, "_call", locked)
+    status = loaded.public_status(environ={})
+    assert status["connection_error"] == "pi_credential_store_unavailable"
+    assert not status["connection_verified"] and not status["credential_present"]
+    assert SYNTHETIC_KEY not in json.dumps(status)
+    assert loaded.config_path.read_bytes() == before
+    with pytest.raises(PiCopilotError, match="系统凭据库"):
+        loaded.resolved_config(environ={})
+
+
 @pytest.mark.parametrize("damage", ["missing", "changed_connection"])
 def test_session_key_requires_matching_connection_coordinates(desktop, damage):
     _, factory = desktop

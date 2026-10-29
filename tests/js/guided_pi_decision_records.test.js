@@ -206,20 +206,20 @@ assert.match(typed, /gpi-past-decision/);
     [{ conversation_status: 'running' }, '进行中'],
     [{ conversation_status: 'needs_user', last_turn_status: 'done' }, '待确认'],
     // attempt 9: the reply finished, the research job that followed failed
-    [{ conversation_status: 'stopped', last_turn_status: 'done' }, '已停止'],
+    [{ conversation_status: 'stopped', last_turn_status: 'done' }, '需要处理'],
     [{ conversation_status: 'done', last_turn_status: 'done' }, '任务已结束'],
     [{ conversation_status: null, history_turn_count: 0 }, '未开始'],
     // a message turn this page started is running whatever the index said
     [{ conversation_status: 'stopped', active_message_job_id: 'job' }, '进行中'],
     // rows from before the host reported a state read their last reply
-    [{ last_turn_status: 'failed' }, '已停止'],
+    [{ last_turn_status: 'failed' }, '回复失败'],
     [{ last_turn_status: 'done' }, '已回复'],
   ];
   assert.deepEqual(table.map(([row]) => workspace.sessionStatusLabel(row)), table.map(([, label]) => label));
   language = 'en';
   assert.deepEqual(
     ['running', 'needs_user', 'stopped', 'done'].map(state => workspace.sessionStatusLabel({ conversation_status: state })),
-    ['Running', 'Needs you', 'Stopped', 'Task ended'],
+    ['Running', 'Needs you', 'Needs attention', 'Task ended'],
   );
   language = 'zh';
 

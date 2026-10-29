@@ -277,7 +277,12 @@ class ProviderCredentials:
             password = self._call("get", account)
             if password:
                 result[KEY] = password
+                self.session = dict(result)
         return result
+
+    def is_remembered(self, values: Mapping[str, str]) -> bool:
+        """Read storage metadata without unlocking every remembered account."""
+        return self.is_desktop() and self.identity(values) in self._index()
 
     def remembered(self) -> list[dict[str, str]]:
         if not self.is_desktop():

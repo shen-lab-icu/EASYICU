@@ -54,6 +54,8 @@
   function create({ tr, staticPreview }) {
     function errorText(error) {
       if (!error) return '';
+      if (error.code === 'pi_regenerate_study_context_snapshot_missing') return tr('This older reply has no saved study snapshot, so it cannot be replaced safely. Send your question as a new message; the existing study and approvals stay saved.', '这条旧回复缺少保存的研究快照，无法安全替换。请把问题作为新消息发送；已有研究和批准会继续保留。');
+      if (/^pi_credential_/.test(error.code || '')) return tr('EasyICU cannot access the saved model credential. Unlock the system credential store, or reconnect in Connection settings. Your question is saved.', 'EasyICU 无法读取已保存的模型凭据。请解锁系统凭据库，或在「连接设置」中重新连接；原问题已保留。');
       if (/^result_append_(source_changed|execution_failed|unavailable)$/.test(error.code || '')) return runFailureText(error.code);
       if (error.code === 'study_stated_variable_unrecorded') return runFailureText(error.code);
       if (error.code === 'job_interrupted_by_server_restart') return tr('The server restarted before this task finished. Review its saved state before continuing.', '服务器在任务完成前重启了，请核对保存的状态后再继续。');

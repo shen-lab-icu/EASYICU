@@ -584,3 +584,23 @@ def test_close_after_send_identity_check_still_pins_old_process(memory_gateway):
     assert sent == []
     assert new.methods == []
     assert gateway._pending == {}
+
+
+@pytest.mark.parametrize("code", ["pi_credential_store_unavailable", "pi_provider_other_error"])
+def test_shell_recovery_catches_only_credential_failure_and_keeps_no_authority(tmp_path, code):
+    def unavailable(**_kwargs):
+        raise PiCopilotError(code, "Synthetic unavailable credential")
+    store = SimpleNamespace(environment=unavailable)
+    arguments = dict(app_dir=tmp_path, session_dir=tmp_path / "sessions",
+                     provider_store=store, environ={"EASYICU_PI_API_KEY": "synthetic-key"})
+    if code == "pi_provider_other_error":
+        with pytest.raises(PiCopilotError) as error:
+            owner.PiGatewayClient(**arguments)
+        assert error.value.code == code
+    else:
+        gateway = owner.PiGatewayClient(**arguments)
+        try:
+            assert "EASYICU_PI_API_KEY" not in gateway.environ
+            assert gateway._process is None
+        finally:
+            gateway.close()

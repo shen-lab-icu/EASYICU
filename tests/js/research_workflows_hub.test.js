@@ -39,7 +39,8 @@ test('workflow list and detail render the fixture graph and metadata', () => {
   assert.equal((html.match(/data-wf-edge=/g) || []).length, 1);
   assert.match(html, /data-wf-select="synthetic"/);
   assert.match(html, /data-wf-start="synthetic"/);
-  assert.match(html, /tabindex="0"[^>]*title="[^"]*mortality_meaning_differs/);
+  assert.match(html, /tabindex="0"[^>]*title="[^"]*死亡结局定义存在差异/);
+  assert.match(html, /<details><summary>技术详情<\/summary>[\s\S]*mortality_meaning_differs/);
   assert.match(html, /可选/);
   assert.match(html, /role="tooltip"/);
 });

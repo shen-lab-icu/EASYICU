@@ -82,6 +82,7 @@ from .provider_config import (
     PiProviderConfigStore,
     declaration_error,
     discover_provider_models,
+    is_conversation_model,
 )
 from .resource_lifecycle import WebMemoryAdmission
 from .registered_source_offer import bind_offered_registered_source, registered_source_offer
@@ -877,7 +878,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             model="catalog-discovery",
             api_transport=api_transport,
         )
-        models = discover_provider_models(config)
+        models = [model for model in discover_provider_models(config) if is_conversation_model(model)]
         default_model = PROVIDER_DEFAULT_MODELS.get(config.provider)
         recommended = (
             stored.model
@@ -902,7 +903,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         needs the catalog up front.
         """
 
-        models = self.provider_store.discover_models()
+        models = [model for model in self.provider_store.discover_models() if is_conversation_model(model)]
         return {
             "schema_version": "easyicu.provider-model-catalog/1",
             "provider": "openai",
@@ -1668,9 +1669,9 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             from easyicu.webserver import codex_account_sessions
 
             try:
-                return codex_account_sessions.discovered_models_for_binding(
+                return [model for model in codex_account_sessions.discovered_models_for_binding(
                     str(record.research_provider.account_session_sha256),
-                )
+                ) if is_conversation_model(model)]
             except codex_account_sessions.CodexAccountSessionError as exc:
                 raise PiCopilotError(exc.code, "The saved account's models are unavailable.", status_code=409) from exc
         fingerprint = record.conversation_connection_sha256
@@ -1681,7 +1682,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         config = self.provider_store.conversation_config(
             record.conversation_provider.model, connection_sha256=fingerprint,
         )
-        return discover_provider_models(config)
+        return [model for model in discover_provider_models(config) if is_conversation_model(model)]
 
     def conversation_models(self, session_id: str, *, project_id: str) -> Dict[str, Any]:
         with self._lock:

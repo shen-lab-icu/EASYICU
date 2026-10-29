@@ -393,6 +393,11 @@
           return;
         }
         const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
+        if (event.target.closest('[data-gpi-task-workspace]')) {
+          const task = window.EasyICU.guidedPi.optional('taskScope')?.current(state);
+          if (task && task.kind) switchMode('workspace', { newSession: true, draft: task.text });
+          return;
+        }
         if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
         const accessMode = event.target.closest('[data-gpi-access-mode]');
         if (accessMode) {
@@ -560,6 +565,9 @@
         return /(^|\s)@$/.test(text) ? '@' : '';
       }
       state.host.addEventListener('input', event => {
+        if (event.target.matches('[data-gpi-starter-search]') && STARTERS.filter) {
+          STARTERS.filter(state.host, event.target.value); return;
+        }
         if (event.target.matches('[data-gpi-input]')) {
           state.draft = event.target.value;
           if (!String(state.draft || '').trim()) state.followUpDraft = null;

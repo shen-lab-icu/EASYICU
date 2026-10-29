@@ -671,7 +671,8 @@ function userPromptStudySnapshot(value) {
   const markerAt = text.lastIndexOf(OWNER_CONTEXT_MARKER);
   if (markerAt < 0) return undefined;
   const payloadStart = markerAt + OWNER_CONTEXT_MARKER.length;
-  const ends = [HOST_TRANSITION_MARKER, ATTACHED_SKILL_MARKER, MENTION_MARKER]
+  const ends = [HOST_TRANSITION_MARKER, "\n\n[EASYICU_RESEARCH_ENTRY_V1]\n",
+    "\n\n[EASYICU_IDEA_SOURCE_V1]\n", ATTACHED_SKILL_MARKER, MENTION_MARKER]
     .map((marker) => text.indexOf(marker, payloadStart)).filter((index) => index >= 0);
   const payload = text.slice(
     payloadStart,

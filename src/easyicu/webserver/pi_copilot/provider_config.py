@@ -53,6 +53,20 @@ PROVIDER_DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-6",
     "google": "gemini-3.5-flash",
 }
+
+
+def is_conversation_model(model: str) -> bool:
+    """Exclude known non-chat routes; preserve unfamiliar provider model IDs."""
+    import re
+
+    return not re.search(
+        r"(?:^|[/_.-])(?:image|dall-e|embeddings?|whisper|tts|transcription|"
+        r"moderation|rerank|audio|realtime)(?:[/_.-]|$)|(?:^|/)codex-auto-review$",
+        model,
+        re.IGNORECASE,
+    )
+
+
 SUPPORTED_API_TRANSPORTS = frozenset(
     {
         "anthropic-messages",
@@ -717,21 +731,38 @@ class PiProviderConfigStore:
         """Return setup state and safe editable defaults, never a credential."""
 
         _file_values, file_status = self._read_config_file()
-        values = self.environment(
-            environ=environ,
-            include_file=include_file,
-        )
-        config = self.resolved_config(
-            environ=environ,
-            include_file=include_file,
-        )
+        try:
+            values = self.environment(environ=environ, include_file=include_file)
+            config = self.resolved_config(environ=environ, include_file=include_file)
+            remembered = bool(config and self.credentials.is_remembered(config.as_environment()))
+        except PiCopilotError as exc:
+            if not exc.code.startswith("pi_credential_"):
+                raise
+            # A status request must remain usable when the native store is
+            # locked. Execution still resolves the credential and fails closed.
+            source = os.environ if environ is None else environ
+            values = {**(_file_values if include_file else {}),
+                      **{key: str(value) for key, value in source.items() if key in _CONFIG_KEYS}}
+            return {
+                "provider": values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER,
+                "base_url": values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL,
+                "model": values.get("EASYICU_PI_MODEL") or DEFAULT_MODEL,
+                "api_transport": values.get("EASYICU_PI_API") or DEFAULT_API_TRANSPORT,
+                "credential_present": False, "connection_verified": False,
+                "model_available": False, "inference_verified": False,
+                "verified_at": None, "config_file_status": file_status,
+                "credential_storage": "unavailable", "credential_remembered": False,
+                "remember_key_supported": self.credentials.supported(),
+                "remember_key_unavailable_reason": exc.message,
+                "connection_error": exc.code, "connection_error_message": exc.message,
+                "data_handling": "unspecified", "inference_location": "unspecified",
+                "data_handling_notice_key": PROVIDER_POLICY_NOTICE_KEY,
+                "secrets_returned": False,
+            }
         receipt = self._read_receipt()
         verified = bool(
             config and receipt and receipt.get("fingerprint") == config.fingerprint()
         )
-        remembered = bool(config and self.credentials.identity(config.as_environment()) in {
-            row["id"] for row in self.credentials.remembered()
-        })
         return {
             "provider": str(values.get("EASYICU_PI_PROVIDER") or DEFAULT_PROVIDER),
             "base_url": str(values.get("EASYICU_PI_BASE_URL") or DEFAULT_BASE_URL),

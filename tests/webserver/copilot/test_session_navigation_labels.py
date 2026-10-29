@@ -49,20 +49,20 @@ process.stdout.write(JSON.stringify({statuses, times}));
     payload = json.loads(result.stdout)
     assert payload["statuses"] == (
         [
-            "进行中", "已停止", "已回复", "4 轮", "已有对话", "未开始",
-            "进行中", "待确认", "已停止", "任务已结束", "4 轮",
+            "进行中", "已中断", "已回复", "4 轮", "已有对话", "未开始",
+            "进行中", "待确认", "需要处理", "任务已结束", "4 轮",
         ]
         if language == "zh"
         else [
             "Running",
-            "Stopped",
+            "Interrupted",
             "Replied",
             "4 turns",
             "Has conversation",
             "Not started",
             "Running",
             "Needs you",
-            "Stopped",
+            "Needs attention",
             "Task ended",
             "4 turns",
         ]

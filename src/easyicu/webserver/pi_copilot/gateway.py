@@ -193,14 +193,23 @@ class PiGatewayClient:
         self.account_binding_sha256 = str(account_binding_sha256 or "").strip()
         self._provider_file_enabled = environ is None
         source_environment = os.environ if environ is None else environ
-        provider_environment = self.provider_store.environment(
-            environ=source_environment,
-            include_file=self._provider_file_enabled,
-        )
-        if not self.account_binding_sha256:
-            config = self.provider_store.resolved_config(
+        try:
+            provider_environment = self.provider_store.environment(
                 environ=source_environment, include_file=self._provider_file_enabled,
             )
+            config = None if self.account_binding_sha256 else self.provider_store.resolved_config(
+                environ=source_environment, include_file=self._provider_file_enabled,
+            )
+        except PiCopilotError as exc:
+            if not exc.code.startswith("pi_credential_"):
+                raise
+            # Keep local navigation and connection repair available. With no
+            # credential in the gateway, model execution remains unavailable.
+            provider_environment, config = {}, None
+            source_environment = {key: value for key, value in source_environment.items()
+                                  if key not in {"EASYICU_PI_API_KEY", "EASYICU_PI_CODEX_AUTH_FILE",
+                                                 "EASYICU_PI_CODEX_SESSION_SHA256"}}
+        if not self.account_binding_sha256:
             if config is not None:
                 for key in ("EASYICU_PI_DATA_HANDLING", "EASYICU_PI_INFERENCE_LOCATION"):
                     value = config.as_environment()[key]

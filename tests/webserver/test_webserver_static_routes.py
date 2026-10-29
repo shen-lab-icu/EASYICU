@@ -728,7 +728,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
     # Reader vocabulary (review findings, column and table names) is read by
     # the renderer at call time, so it must be defined before it.
-    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261028-gm1")
+    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261028-ux1")
     assert fixtures_pos < vocab_pos < render_pos
     assert "js/screens-agent-report-reader.js?v=20261026-dbnames1" in index_html
     assert "js/screens-agent-render.js?v=20261026-run-files1" in index_html
@@ -785,7 +785,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and control_pos != -1 and main_pos != -1
     assert provider_pos < control_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20261027-dcl1-cfg1"
+        "js/screens-guided-pi-provider.js?v=20261028-ux1"
         in index_html
     )
 

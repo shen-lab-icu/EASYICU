@@ -252,6 +252,16 @@
       };
       const emptyResults = `<p class="gpi-aside-empty">${tr('Results will appear here when available.', '生成的成果将在这里集中展示。')}</p>`;
       head.innerHTML = `<div class="at">${host.demoMode() ? tr('Workflow demo', '流程演示') : tr('Research workspace', '研究工作区')}</div>`;
+      if (!host.demoMode() && host.taskScope && host.taskScope()) {
+        const progress = `<p class="gpi-aside-empty">${tr('This conversation follows your current task. A complete clinical study has its own reviewed plan and progress.', '本对话按当前任务推进；完整临床研究另有经审阅的计划与进度。')}</p>`;
+        body.innerHTML = section('progress', tr('Current task', '当前任务'), progress)
+          + section('notes', tr('Project notes', '项目笔记'), notesPanel());
+        body.oninput = event => {
+          if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) handleNotesInput(event.target);
+        };
+        body.onclick = null; body.onchange = null;
+        return;
+      }
       if (!workflow) {
         const error = host.workflowError && host.workflowError();
         // A project is initialized by its first conversation; until then the

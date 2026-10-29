@@ -7,6 +7,7 @@
 .eusk-workflow-list strong{font-size:13px}.eusk-workflow-list span{margin-top:5px;color:var(--sk-muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .eusk-workflow-detail{min-width:0;border-left:1px solid var(--sk-line);padding-left:28px}
 .eusk-workflow-detail header h2{margin:0;font-size:24px;line-height:1.3}.eusk-workflow-detail header p{font-size:14px;line-height:1.6;color:var(--sk-ink-2)}
+.eusk-workflow-detail header summary{min-height:32px;padding-block:4px;cursor:pointer}
 .eusk-workflow-detail header small{color:var(--sk-muted);overflow-wrap:anywhere}
 .eusk-workflow-detail section{margin-top:24px}.eusk-workflow-detail section h2{font-size:14px;margin:0 0 12px}
 .eusk-workflow-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:20px 0}

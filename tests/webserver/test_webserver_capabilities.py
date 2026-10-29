@@ -40,6 +40,18 @@ def test_capability_status_reflects_settings_and_tool_policy(monkeypatch) -> Non
     assert body["capabilities"]["remote_compute"]["status"] == "disabled"
 
 
+def test_desktop_skill_catalog_never_unlocks_model_credentials(monkeypatch) -> None:
+    from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
+
+    monkeypatch.delenv("EASYICU_HOSTED", raising=False)
+    def forbidden(_self):
+        raise AssertionError("A local skill catalog must not access model credentials")
+    monkeypatch.setattr(PiProviderConfigStore, "public_status", forbidden)
+    response = TestClient(app).get("/api/capabilities")
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["method_skills"]["items"]
+
+
 def test_publication_skill_capabilities_default_on_and_respect_each_switch(
     monkeypatch,
 ) -> None:
