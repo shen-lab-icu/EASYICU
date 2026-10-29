@@ -278,6 +278,7 @@ def test_sepsis_without_required_components_is_not_evaluable(concept, callback):
     assert receipt["reason_code"] == "required_component_missing"
 
 
+@pytest.mark.filterwarnings("error:Mismatched null-like values:FutureWarning")
 @pytest.mark.parametrize("wide_column_batch_size", [2, 8])
 def test_populated_source_keeps_antibiotic_owned_infection_times(tmp_path, monkeypatch, wide_column_batch_size):
     import easyicu.api as api
