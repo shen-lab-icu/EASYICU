@@ -89,12 +89,12 @@ def test_unexposed_group_and_cohort_have_no_fabricated_time_estimate():
     from easyicu.research_agent.skill_packages import public_demo, summarize_treatment_patterns
 
     frame, arguments = public_demo()
-    frame.loc[frame.group.eq("A"), ["exposed", "first_exposure_hours"]] = [0, None]
+    frame.loc[frame.group.eq("A"), ["exposed", "first_exposure_hours"]] = [0, float("nan")]
     result = summarize_treatment_patterns(frame, **arguments)
     assert result["cumulative_incidence"]["A"]["reason_code"] == "treatment.no_exposures"
     timing = next(row for row in result["timing"] if row["group"] == "A")
     assert timing["exposed_n"] == 0 and timing["median"] is None
-    frame.loc[:, ["exposed", "first_exposure_hours"]] = [0, None]
+    frame.loc[:, ["exposed", "first_exposure_hours"]] = [0, float("nan")]
     result = summarize_treatment_patterns(frame, **arguments)
     assert result["timing"] == []
     assert result["timing_status"] == "treatment.no_exposures"

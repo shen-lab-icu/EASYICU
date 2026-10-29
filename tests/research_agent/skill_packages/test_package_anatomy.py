@@ -155,7 +155,7 @@ def test_database_copy_changes_when_owner_facts_change(monkeypatch):
 
 
 def test_substitution_names_the_new_definition_and_unassessed_inputs_stay_visible(monkeypatch):
-    row = WORKFLOWS[0].to_dict(enabled=True)
+    row = next(item for item in WORKFLOWS if item.skill_id == "adjusted-exposure-outcome-study").to_dict(enabled=True)
     english = skills._package_skill_markdown("research_workflow", row)
     chinese = skills._package_skill_markdown("research_workflow", row, language=1)
     assert "death before hospital discharge → death before ICU discharge" in english

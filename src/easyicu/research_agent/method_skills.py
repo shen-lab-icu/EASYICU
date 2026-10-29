@@ -515,7 +515,7 @@ METHOD_SKILLS: Tuple[MethodSkillSpec | OwnerSkillSpec, ...] = (
         "Prediction",
         "预测模型",
         "Develop and internally validate a binary risk model, with optional frozen-model external validation in other ICU databases; report discrimination, calibration, decision curves and case mix.",
-        "开发并内部验证二分类风险模型；可选在其他 ICU 数据库中验证冻结模型，报告区分度、校准、决策曲线和病例构成差异。",
+        "开发并内部验证二分类风险模型；可选把开发好的模型原样带到其他 ICU 数据库中验证，报告区分度、校准、决策曲线和病例构成差异。",
         "prediction_risk_model_v1",
         ("prediction.discrimination_calibration", "prediction.calibration_metrics", "prediction.decision_curve", "prediction.internal_validation", "prediction.external_validation"),
         "deterministic_host",
@@ -694,7 +694,7 @@ _COMPONENT_ZH = {
     "prediction.feature_attribution": ("特征归因", "使用 SHAP、置换重要性或模型系数解释预测贡献。"),
     "prediction.subgroup_fairness": ("亚组与公平性性能", "比较人口学亚组中的区分度与校准表现。"),
     "prediction.internal_validation": ("内部验证", "用 bootstrap 或交叉验证评估并校正开发集乐观偏倚。"),
-    "prediction.external_validation": ("跨数据库外部验证", "在其他 ICU 数据库应用冻结模型，报告区分度、校准和病例构成差异；单独报告再校准。"),
+    "prediction.external_validation": ("跨数据库外部验证", "在其他 ICU 数据库原样应用开发好的模型，报告区分度、校准和病例构成差异；单独报告再校准。"),
     "prediction.conformal_intervals": ("保形预测集", "生成具有边际或分层覆盖保证的预测集合。"),
     "prediction.dynamic_prediction": ("动态 Landmark 预测", "用每个预测时点之前的测量更新未来风险。"),
     "prediction.reclassification": ("NRI 与 IDI 重分类分析", "比较基线模型与更新模型在相同病例上的风险重分类。"),
@@ -1089,8 +1089,8 @@ _TRIPOD = (
 
 METHOD_NOTES = {
     "repeated-measure-trajectory": MethodNotes(
-        ("A reviewed host owner constructs the long panel and calls statsmodels; artifacts contain aggregate results only.",
-         "经审阅的主机执行组件构建长表并调用 statsmodels，产物只包含汇总结果。"),
+        ("EasyICU builds the long panel itself and fits the model with statsmodels; outputs hold aggregate results only and stay analysis only.",
+         "EasyICU 自行构建长表并用 statsmodels 拟合模型；产物只含汇总结果，结果保持仅分析级。"),
         (("LMM: correlated random intercept and optional time slope, fixed-effect CIs and covariance; ICC refers to time zero when slopes vary.",
           "LMM：相关随机截距及可选时间斜率，报告固定效应区间和协方差；斜率随机时 ICC 指零时点。"),
          ("GEE: binary/continuous outcome with robust SE and prespecified exchangeable, AR1 or independent working correlation; QIC when available.",
@@ -1100,7 +1100,8 @@ METHOD_NOTES = {
          ("Growth curves have no latent classes. LCGA/GBTM remains planned until the runner has a validated package and BIC, APPA, entropy and group-size diagnostics.",
           "增长曲线不生成潜在类别。LCGA/GBTM 须待运行镜像提供已验证软件包及 BIC、APPA、熵和组大小诊断后开放。")),
         ("Laird NM, Ware JH. Random-effects models for longitudinal data. Biometrics. 1982;38:963–974.",
-         "Liang KY, Zeger SL. Longitudinal data analysis using generalized linear models. Biometrika. 1986;73:13–22."),
+         "Liang KY, Zeger SL. Longitudinal data analysis using generalized linear models. Biometrika. 1986;73:13–22.",
+         "Fitzmaurice GM, Laird NM, Ware JH. Applied Longitudinal Analysis. 2nd ed. Hoboken: Wiley; 2011."),
     ),
     "adjusted-exposure-outcome-study": MethodNotes(
         ("EasyICU computes the primary model itself; the AI does not write analysis code for it.",
