@@ -116,7 +116,9 @@ def test_the_home_offers_one_question_per_method_across_the_six_databases():
     assert "在 SICdb 中，入 ICU 24 小时内的最高乳酸与院内死亡之间" in html
     # A card fills the composer; it neither sends nor names a method template.
     assert html.count('data-gpi-starter-method=""') == len(cards) + len(replication) + 1
-    assert "data-gpi-starter-search" not in html and "data-gpi-starter-shuffle" not in html
+    assert 'data-gpi-starter-search' in html and 'data-gpi-more-examples' in html
+    assert html.split('data-gpi-more-examples', 1)[0].count('data-gpi-starter-example=') == 3
+    assert 'data-gpi-starter-shuffle' not in html
     # No before-you-start block: per-database status lives on the Data map.
     assert "gpi-entry-notes" not in html and "使用前须知" not in html
     assert "尚未验收" not in html and "口径不同" not in html

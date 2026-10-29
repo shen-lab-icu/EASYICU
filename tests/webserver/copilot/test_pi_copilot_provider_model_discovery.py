@@ -410,3 +410,14 @@ global.fetch = async (url, options) => {
     )
     result = run_node(node, program, timeout=15)
     assert result.returncode == 0, result.stderr
+
+
+def test_discovery_excludes_non_chat_routes_without_selecting_a_model(discovery, monkeypatch):
+    client, store, _ = discovery
+    monkeypatch.setattr(provider_config, "_default_verification_transport", lambda *_: (
+        200, {"data": [{"id": model} for model in ["alpha-model", "gpt-image-1",
+              "text-embedding-3-small", "codex-auto-review", "new-chat-model"]]},
+    ))
+    payload = client.post(ENDPOINT, json=_body()).json()
+    assert payload["models"] == ["alpha-model", "new-chat-model"]
+    assert not store.config_path.exists()

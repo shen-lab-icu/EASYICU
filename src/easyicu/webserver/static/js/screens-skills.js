@@ -7,7 +7,7 @@
   const ui = { catalogMode: workflows() ? 'workflows' : 'skills', source: 'all', category: 'all', query: '', hideDisabled: false,
     selected: '', tab: 'overview', install: false, editing: '', draft: '', stages: ['conversation'],
     installEnabled: true, detail: null, loadingDetail: false, packageDetail: null,
-    packageFile: 'SKILL.md', loadingPackage: false, busy: false, error: '', notice: '',
+    packageFile: 'SKILL.md', loadingPackage: false, busy: false, error: '', notice: '', catalogWarning: '',
     upload: null, uploadName: '', referenceFiles: {} };
   const tr = (en, zh) => window.t(en, zh);
   const api = () => window.EU_API || {};
@@ -307,6 +307,7 @@
   }
   function renderContent() {
     const content = `
+      ${ui.catalogWarning ? `<div class="eusk-message error" role="alert">${esc(ui.catalogWarning)} <button type="button" data-sk-retry>${tr('Retry', '重试')}</button></div>` : ''}
       ${ui.error ? `<div class="eusk-message error" role="alert">${esc(ui.error)}</div>` : ''}
       ${ui.notice ? `<div class="eusk-message" role="status">${esc(ui.notice)}</div>` : ''}
       ${ui.install ? installer() : ui.selected ? detail() : catalog()}
@@ -318,13 +319,14 @@
     return `<div class="eusk-shell">${rail()}<main class="eusk-main"><div class="eusk-main-inner">${content}</div></main></div>`;
   }
   async function hydrate() {
+    ui.catalogWarning = '';
     const requests = [];
     if (api().loadCapabilities) requests.push(api().loadCapabilities());
     if (api().loadExtensions) requests.push(api().loadExtensions());
     if (workflows()) requests.push(workflows().load());
     const settled = await Promise.allSettled(requests);
     const failed = settled.find(result => result.status === 'rejected');
-    if (failed) ui.error = String(failed.reason && failed.reason.message || failed.reason);
+    if (failed) ui.catalogWarning = tr('Some skill information could not be checked. You can browse the available catalog; execution is checked again before a run.', '部分技能信息暂时无法核对。可浏览已读取的目录；运行前会再次检查可用性。');
     rerender();
     syncSelectionFromHash();
   }
@@ -444,6 +446,7 @@
     hub.addEventListener('click', event => {
       const target = event.target.closest('button');
       if (!target) return;
+      if (target.dataset.skRetry !== undefined) { void hydrate(); return; }
       if (workflows() && workflows().handle(target, allSkills())) { rerender(); return; }
       if (target.dataset.skRoute) { location.hash = '#' + target.dataset.skRoute; return; }
       if (target.dataset.skMode) {

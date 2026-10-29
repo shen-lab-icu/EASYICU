@@ -578,7 +578,9 @@ def audit_events(limit: int = 20) -> Dict[str, Any]:
 def capability_status() -> Dict[str, Any]:
     from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 
-    provider_status = PiProviderConfigStore().public_status()
+    # Local capability metadata does not depend on unlocking model credentials.
+    # Only a hosted instance needs this provisioning flag for its entry screen.
+    provider_status = PiProviderConfigStore().public_status() if is_hosted() else {}
     settings = capability_settings()
     skills_master_enabled = bool(settings["science_skills_enabled"])
     publication_skills = [

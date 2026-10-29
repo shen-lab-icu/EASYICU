@@ -8,7 +8,9 @@
   let catalog = null, failed = false, selected = '', pending = null, loadedAt = 0;
   const rows = () => (catalog && catalog.items) || [];
   const find = id => rows().find(row => row.id === id);
-  const label = id => window.AGENT_READER_VOCAB?.tableTitle(id) || id;
+  const label = id => window.AGENT_READER_VOCAB?.tableTitle(id)
+    || (/^table:/.test(id) ? tr('Analysis table', '分析结果表')
+      : /^figure:/.test(id) ? tr('Analysis figure', '分析图') : id);
   const bulletList = values => `<ul>${values.filter(Boolean).map(value => `<li>${esc(value)}</li>`).join('')}</ul>`;
   const roles = () => ({ analysis_unit: tr('Study unit', '分析单位'), time_zero: tr('Time origin', '时间起点'),
     event_time: tr('Event time', '事件时间'), censor_time: tr('End of follow-up', '随访终点'),
@@ -170,10 +172,17 @@
     }).join('');
     return `<div class="eusk-workflow-graph" tabindex="0" role="region" aria-label="${tr('Workflow graph', '流程图')}"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(pick(row, 'title'))}"><defs><marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"/></marker></defs>${edgePaths(model)}${boxes}</svg></div>`;
   }
-  function databaseReason(row) {
+  function databaseReasonCodes(row) {
     const decision = row.decision || {};
     return [...(decision.substitutions || []).map(item => item.reason_code),
-      ...(decision.missing || []).map(item => item.code), ...(decision.unassessed_concepts || [])].join(' · ');
+      ...(decision.missing || []).map(item => item.code), ...(decision.unassessed_concepts || [])].filter(Boolean);
+  }
+  function databaseReason(row) {
+    const codes = databaseReasonCodes(row);
+    if (codes.includes('numeric_threshold_aligned_to_band')) return tr('Values are recorded in bands; thresholds must align with those bands.', '数值按区间记录，纳入阈值需与区间边界对齐。');
+    if (codes.includes('mortality_meaning_differs')) return tr('Mortality definitions differ; confirm the outcome and follow-up in the study plan.', '死亡结局定义存在差异，需在研究计划中确认结局与随访。');
+    if (codes.length) return tr('Some required fields or definitions need review in the study plan.', '部分所需字段或定义需要在研究计划中核对。');
+    return '';
   }
   function sections(row) {
     if (!row) return '';
@@ -196,7 +205,7 @@
     const nav = `<nav class="eusk-workflow-list" aria-label="${tr('Research workflows', '研究流程')}">${custom ? custom.navItem(customActive) : ''}${items.map(item => `<button type="button" data-wf-select="${esc(item.id)}" aria-pressed="${!customActive && item.id === row.id}"><strong>${esc(pick(item, 'title'))}</strong><span>${esc(pick(item, 'description'))}</span></button>`).join('')}</nav>`;
     if (customActive) return `<div class="eusk-workflows">${nav}${custom.render(skills, graph)}</div>`;
     return `<div class="eusk-workflows">${nav}
-      <article class="eusk-workflow-detail"><header><h2>${esc(pick(row, 'title'))}</h2><p>${esc(pick(row, 'description'))}</p><small>${esc(row.version)}</small></header>
+      <article class="eusk-workflow-detail"><header><h2>${esc(pick(row, 'title'))}</h2><p>${esc(pick(row, 'description'))}</p><details><summary>${tr('Technical details', '技术详情')}</summary><small>${esc(row.version)}</small>${bulletList((row.databases || []).map(db => { const codes = databaseReasonCodes(db); return codes.length ? `${db.label}: ${codes.join(', ')}` : ''; }))}</details></header>
       <div class="eusk-workflow-actions"><button type="button" class="eusk-use" data-wf-start="${esc(row.id)}" ${row.enabled ? '' : 'disabled'}>${tr('Start with this workflow', '用此流程开始')}</button><button type="button" data-sk-open="builtin:${esc(row.id)}">${tr('Docs', '文档')}</button></div>${sections(row)}</article></div>`;
   }
   async function load() {

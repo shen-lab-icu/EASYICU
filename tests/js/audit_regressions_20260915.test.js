@@ -27,6 +27,7 @@ test('P0-2 composer marks only undecorated user text as typed', async () => {
     const sent = [];
     const c = context({ state: { session: { session_id: 's' }, messages: [], draft: 'Describe platelet counts in adults.' },
       sessionIsStale: () => false, projectId: () => 'p', IDEA_SOURCE: null,
+      agentMode: () => 'research', MODULES: { optional: () => null },
       STUDY_WORKSPACE: { hasReference: () => decoration === 'artifact',
         decorateSkillMessage: text => decoration === 'skill' ? text + '\nHost skill instructions' : text,
         decorateMessage: text => decoration === 'artifact' ? text + '\nHost artifact JSON' : text },

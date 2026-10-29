@@ -354,6 +354,10 @@
 .gpi-capability-tools>button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .gpi-capability-tools>button:disabled{cursor:default;opacity:.35}
 .gpi-entry-home .gpi-starter-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}
+.gpi-starter-card[hidden]{display:none}
+.gpi-starter-more{margin-top:16px}
+.gpi-starter-more>summary{cursor:pointer;padding:10px 0;color:var(--ink-2)}
+.gpi-starter-more[open]>.gpi-starter-actions{margin-top:10px}
 /* The official-demo question sits alone above the workflow cards. */
 .gpi-entry-home .gpi-starter-demo{display:grid;margin:22px 0 0}
 .gpi-entry-home .gpi-starter-demo .gpi-starter-card{min-height:0}

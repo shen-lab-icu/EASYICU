@@ -315,10 +315,12 @@
       const separateModels = !connection || (model.id && model.id !== connection.model);
       const stale = sessionIsStale();
       const workspace = agentMode() === 'workspace';
+      const taskScope = MODULES.optional('taskScope');
+      const lightweight = !workspace && taskScope && taskScope.current(state).kind;
       const freshTask = !state.messages.length;
       const ideaExplorationTurn = !workspace
         && TRANSCRIPT.latestTurnCompletedIdeaExploration(state.messages);
-      const showProjectContinuationCards = !workspace && !freshTask && !ideaExplorationTurn;
+      const showProjectContinuationCards = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
       const dataConsentRequired = showProjectContinuationCards
         && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
       const fullTimeline = freshTask ? [] : withQuickAnswers(withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts))));
@@ -391,7 +393,7 @@
         return html;
       }, renderSegment);
       const outcome = showProjectContinuationCards ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
-      const emptyResearch = !workspace && !messages && !outcome;
+      const emptyResearch = !workspace && !lightweight && !messages && !outcome;
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       // Workflow completion may arrive before the separate run-file catalog.
       // Use its authoritative stop until that run has a stop in the timeline.
@@ -402,7 +404,8 @@
             saved.run_id === run.run_id && RUN_STOP.stopped(saved)
           )))
         )) : null;
-      const conversation = messages + (pendingStop ? RUN_STOP.render({ savedRuns: [pendingStop] }) : '');
+      const conversation = messages + (pendingStop ? RUN_STOP.render({ savedRuns: [pendingStop] }) : '')
+        + (lightweight ? taskScope.render(state, { tr, esc, disabled: interactionLocked }) : '');
       const dataConsentHtml = dataConsentRequired
         ? DATA_CONSENT.render(session, {
           tr, esc, icon: iconHtml,
@@ -479,14 +482,14 @@
         <div class="gpi-panel${emptyResearch ? ' gpi-empty-session' : ''}${resultsView ? ' gpi-results-session' : ''}">
           ${HEADER.render(headerOptions)}
           <div class="gpi-context-strip">
-          ${state.workflowError ? `<div class="gpi-stale" role="alert">${esc(state.workflowError)}<button type="button" data-gpi-refresh-status>${tr('Retry', '重试')}</button></div>` : workflowHtml()}
-          ${!workspace && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
+          ${state.workflowError && !workspace && !lightweight ? `<div class="gpi-stale" role="alert">${esc(state.workflowError)}<button type="button" data-gpi-refresh-status>${tr('Retry', '重试')}</button></div>` : workspace || lightweight ? '' : workflowHtml()}
+          ${!workspace && !lightweight && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
             ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
           </div>
           ${stale && !interactionLocked && !studyJobRunning ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
           <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
             ${RUN_FILES.notice()}
-            ${freshTask && !chosenStart ? projectContinuityHtml() : ''}
+            ${freshTask && !chosenStart && !workspace && !lightweight ? projectContinuityHtml() : ''}
             ${conversation || (resultsView ? '' : workspace
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
                 : emptyResearchHtml)}

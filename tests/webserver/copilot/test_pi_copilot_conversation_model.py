@@ -211,6 +211,19 @@ def test_catalog_is_scoped_to_the_saved_connection(model_session, monkeypatch):
     assert switch(model_session).status_code == 409
 
 
+def test_conversation_catalog_and_switch_exclude_non_chat_routes(model_session, monkeypatch):
+    from easyicu.webserver.pi_copilot import service as service_module
+
+    client, _, gateway, _, session, _ = model_session
+    monkeypatch.setattr(service_module, "discover_provider_models", lambda _: [
+        "model-a", "gpt-image-2.5", "text-embedding-3-small", "codex-auto-review", "new-provider-chat",
+    ])
+    sid = session["session_id"]
+    assert client.get(f"/api/copilot/pi/sessions/{sid}/models", params={"project_id": "project-model"}).json()["models"] == ["model-a", "new-provider-chat"]
+    assert switch(model_session, model="gpt-image-2.5").status_code == 422
+    assert gateway.models[sid] == "model-a"
+
+
 def test_reopen_after_sidecar_restart_uses_saved_model(model_session):
     _, service, gateway, store, session, _ = model_session
     sid = session["session_id"]

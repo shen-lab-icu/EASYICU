@@ -263,6 +263,8 @@
   });
   const ASIDE = MODULES.require('aside').create({
     tr, esc, iconHtml, api,
+    taskScope: () => agentMode() === 'workspace' ? 'workspace'
+      : MODULES.optional('taskScope')?.current(state).kind || '',
     projectId: () => projectId(),
     displayProjectTitle: (...args) => displayProjectTitle(...args),
     demoMode: () => state.demoMode,
@@ -571,6 +573,7 @@
       && (CONNECT.pageRequired() || state.projectIssue === 'pi_project_study_context_missing');
     const emptySessionFocused = !restoring && !setupFocused && state.shell !== 'legacy'
       && !state.demoMode && Boolean(state.session) && agentMode() !== 'workspace'
+      && !state.taskDraft
       && state.messages.length === 0 && state.workflowReceipts.length === 0;
     const main = state.host.closest('.gd-main');
     if (main) {
@@ -815,6 +818,7 @@
     // conversation. Its open source picker still belongs to it; close the
     // preview only when the researcher actually selects another conversation.
     const sameSession = state.session && state.session.session_id === sessionId;
+    if (!sameSession) state.taskDraft = '';
     if (!sameSession && preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });
     const expectedSelectionRevision = selectionRevision == null
       ? ++state.sessionSelectionRevision : selectionRevision;
@@ -915,9 +919,16 @@
         && toolName && !/^easyicu_(inspect|list)_/.test(toolName);
     }));
   }
-  async function switchMode(mode) {
+  async function switchMode(mode, options = {}) {
     const next = mode === 'research' ? 'research' : 'workspace';
-    if (state.busy || next === agentMode()) return;
+    if (state.busy || (next === agentMode() && !options.newSession)) return;
+    if (options.draft !== undefined) state.draft = String(options.draft);
+    state.taskDraft = '';
+    if (options.newSession) {
+      state.pendingEntryIntent = '';
+      state.followUpDraft = null;
+      if (IDEA_SOURCE) IDEA_SOURCE.reset();
+    }
     closeSource();
     closeChildSource();
     closeSourceView();
@@ -928,10 +939,10 @@
       preview.close();
     }
     const replayOwner = MODULES.require('replay');
-    let existingSessionId = replayOwner && typeof replayOwner.preferredSessionId === 'function'
+    let existingSessionId = options.newSession ? '' : replayOwner && typeof replayOwner.preferredSessionId === 'function'
       ? replayOwner.preferredSessionId(state.sessions, '', next, uiLanguage())
       : String(state.sessions.find(row => (row.agent_mode || 'research') === next && sessionMatchesUiLanguage(row))?.session_id || '');
-    if (!existingSessionId && projectId()) {
+    if (!options.newSession && !existingSessionId && projectId()) {
       const expectedProjectId = projectId();
       const selectionRevision = state.sessionSelectionRevision;
       try {
@@ -1227,6 +1238,7 @@
     state.sessions = [];
     state.messages = [];
     state.draft = '';
+    state.taskDraft = '';
     state.followUpDraft = null;
     if (IDEA_SOURCE) IDEA_SOURCE.reset();
     state.pendingEntryIntent = '';
@@ -1524,6 +1536,12 @@
       return;
     }
     const referencing = STUDY_WORKSPACE.hasReference(projectId(), state.session.session_id);
+    const taskScope = MODULES.optional('taskScope');
+    if (agentMode() !== 'workspace' && !referencing && taskScope && taskScope.kind(text)) {
+      state.taskDraft = text; state.draft = text;
+      render(); return;
+    }
+    state.taskDraft = '';
     if (!referencing && await PLAN_ACTIONS.continueUserRequestedSystemProgression(text)) return;
     const intent = referencing ? undefined : state.pendingEntryIntent
       || (IDEA_SOURCE && IDEA_SOURCE.suggestsIdeaMining(text) ? 'idea_mining_entry' : undefined);
@@ -1646,6 +1664,7 @@
     await sendText(prompt, ['configure'], undefined, true, 'host_prompt');
   }
   async function startEntry() {
+    state.taskDraft = '';
     setShell('pi');
     const preview = MODULES.optional('preview');
     if (preview && preview.close) preview.close();

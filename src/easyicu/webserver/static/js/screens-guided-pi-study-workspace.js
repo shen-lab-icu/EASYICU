@@ -24,7 +24,7 @@
     const RAIL_STATES = {
       running: { label: () => tr('Running', '进行中'), cls: ' is-running' },
       needs_user: { label: () => tr('Needs you', '待确认'), cls: ' needs-user' },
-      stopped: { label: () => tr('Stopped', '已停止'), cls: ' needs-attention' },
+      stopped: { label: () => tr('Needs attention', '需要处理'), cls: ' needs-attention' },
       replied: { label: () => tr('Replied', '已回复'), cls: ' is-complete' },
       // Saved task completion has no phase receipt (it can be preparation).
       done: { label: () => tr('Task ended', '任务已结束'), cls: ' is-complete' },
@@ -39,6 +39,14 @@
     }
     function sessionStatusLabel(row) {
       const state = railState(row);
+      if (state === RAIL_STATES.stopped) {
+        const failure = {
+          failed: tr('Reply failed', '回复失败'),
+          cancelled: tr('Cancelled', '已取消'),
+          interrupted: tr('Interrupted', '已中断'),
+        }[row.last_turn_status];
+        if (failure) return failure;
+      }
       if (state) return state.label();
       const count = Number(row && row.history_turn_count || 0);
       if (count > 0) return tr(`${count} turns`, `${count} 轮`);

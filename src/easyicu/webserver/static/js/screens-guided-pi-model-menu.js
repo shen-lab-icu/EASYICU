@@ -61,8 +61,10 @@
   }
 
   function rowsHtml() {
-    const status = state.loading ? tr('Reading models…', '正在读取模型…') : state.error;
-    const message = status ? `<p class="gpi-model-note${state.error ? ' is-error' : ''}" role="status">${esc(status)}</p>` : '';
+    const missing = !state.loading && !state.error && state.current && !state.models.includes(state.current);
+    const status = state.loading ? tr('Reading models…', '正在读取模型…') : state.error || (missing
+      ? tr(`The saved model (${state.current}) is not listed by this connection. Choose an available model or check the connection.`, `当前模型（${state.current}）未出现在此连接的列表中。请选择可用模型，或检查连接。`) : '');
+    const message = status ? `<p class="gpi-model-note${state.error ? ' is-error' : ''}" role="status">${esc(status)}</p>${state.error ? `<button type="button" data-gpi-refresh-status>${tr('Refresh conversation', '刷新对话')}</button>` : ''}` : '';
     if (!state.models.length) return message || `<p class="gpi-model-note">${esc(tr('No models available.', '暂无可用模型。'))}</p>`;
     return message + state.models.map(model => `<button type="button" data-gpi-pick-model="${esc(model)}" role="menuitemradio" aria-checked="${model === state.current}" ${state.switching ? 'disabled' : ''}><span>${esc(model)}</span><span aria-hidden="true">${model === state.current ? '✓' : ''}</span></button>`).join('');
   }
@@ -187,5 +189,5 @@
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') { document.addEventListener('toggle', onToggle, true); document.addEventListener('click', onClick); }
   }
   mount();
-  window.EasyICU.guidedPi.declare('modelMenu', { bind, bindingKey, load, newestFirst, select, state });
+  window.EasyICU.guidedPi.declare('modelMenu', { bind, bindingKey, load, newestFirst, rowsHtml, select, state });
 })();

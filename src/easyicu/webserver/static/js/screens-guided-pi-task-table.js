@@ -11,7 +11,7 @@
     ['all', 'All states', '全部状态'],
     ['needs_user', 'Needs you', '待确认'],
     ['running', 'Running', '进行中'],
-    ['stopped', 'Stopped', '已停止'],
+    ['stopped', 'Needs attention', '需要处理'],
     ['done', 'Finished', '已结束'],
     ['idle', 'Not started', '未开始'],
   ];

@@ -35,7 +35,7 @@ for (const language of ['zh', 'en']) {
       assert.equal(owner.sessionStatusLabel(row), pick('已回复', 'Replied'));
     }
     assert.equal(owner.sessionStatusLabel({ conversation_status: 'done' }), pick('任务已结束', 'Task ended'));
-    for (const [state, label] of [['needs_user', pick('待确认', 'Needs you')], ['stopped', pick('已停止', 'Stopped')]]) {
+    for (const [state, label] of [['needs_user', pick('待确认', 'Needs you')], ['stopped', pick('需要处理', 'Needs attention')]]) {
       assert.equal(owner.sessionStatusLabel({ conversation_status: state, last_turn_status: 'done' }), label);
       assert.equal(owner.sessionStatusLabel({ conversation_status: state, active_message_job_id: 'reply' }), pick('进行中', 'Running'));
     }
