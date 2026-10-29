@@ -6682,7 +6682,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261029-uxcomplete2" in index
+    assert "screens-guided-pi-transcript.js?v=20261029-uxcomplete3" in index
     assert "screens-guided-pi.js?v=20261029-uxcomplete2" in index
 
 

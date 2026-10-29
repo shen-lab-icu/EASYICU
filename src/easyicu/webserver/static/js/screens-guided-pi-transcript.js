@@ -613,15 +613,19 @@
             closeHistoryActivity(rowAt);
           }
         } else if (row.role === 'assistant' && row.error_code) {
-          messages.push({
+          const failedMessage = {
             id: 'history-' + index, role: 'assistant',
             text: modelErrorText(row.error_code, activityHasCompletedAction(activity)),
             complete: true, errorCode: row.error_code,
             entryId: String(row.entry_id || ''),
             hasCompletedAction: activityHasCompletedAction(activity),
             hasSideEffectAttempt: activityHasSideEffectAttempt(activity),
+            resources: turnResources.slice(0, 24),
+            afterSteps: toolsBeforeRow,
             timelineAt: rowAt, timelineOrder: index * 10 + 2,
-          });
+          };
+          messages.push(failedMessage);
+          if (activity) assistantByActivity.set(activity, failedMessage);
           closeHistoryActivity(rowAt);
         }
       });

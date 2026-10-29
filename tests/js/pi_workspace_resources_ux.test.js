@@ -217,6 +217,7 @@ test('persisted transcript aggregation replaces the early read with its later ch
   const activity = { focusLatest: rows => rows };
   const owner = context.window.EasyICU.guidedPi.require('transcript').create({
     activity, tr: en => en, timeMs: value => Date.parse(value),
+    modelErrorText: () => 'The provider did not finish the explanation.',
     resourceKey: resources.key, mergeResources: resources.merge,
     upsertActivityStep: (row, step) => {
       const index = row.steps.findIndex(item => item.id === step.id);
@@ -236,6 +237,14 @@ test('persisted transcript aggregation replaces the early read with its later ch
   const answer = rows.find(row => row.role === 'assistant');
   assert.equal(answer.resources.length, 1);
   assert.equal(answer.resources[0].checked_sha256, A);
+  const failedRows = owner.transcriptMessages({ transcript: transcript.slice(0, -1).concat({
+    role: 'assistant', entry_id: 'failed-entry', timestamp: '2026-10-29T03:00:05Z',
+    content: [], error_code: 'pi_model_provider_unavailable',
+  }) });
+  const failedAnswer = failedRows.find(row => row.role === 'assistant');
+  assert.equal(failedAnswer.errorCode, 'pi_model_provider_unavailable');
+  assert.equal(failedAnswer.resources.length, 1);
+  assert.equal(failedAnswer.resources[0].checked_sha256, A);
 });
 
 test('activity detail combines the initial resource with checked resource snapshots', () => {
