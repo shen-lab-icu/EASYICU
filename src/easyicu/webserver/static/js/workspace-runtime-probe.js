@@ -1,4 +1,5 @@
 /* Injected only into the opaque workspace document. No Host or network API. */
+'use strict';
 (function (config) {
   'use strict';
   if (!config) return;

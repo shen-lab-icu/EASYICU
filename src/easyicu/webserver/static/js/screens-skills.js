@@ -201,7 +201,7 @@
     return `<div class="eusk-mode-tabs" role="tablist" aria-label="${tr('Catalog level', '目录层级')}">${[
       ['workflows', tr('Research workflows', '研究流程'), studies], ['skills', tr('Skills', '技能'), skills],
       ['methods', tr('Modules', '模块'), methods],
-    ].map(([mode, title, count]) => `<button type="button" role="tab" aria-selected="${ui.catalogMode === mode}" data-sk-mode="${mode}">${title} <span>${count}</span></button>`).join('')}</div>`;
+    ].map(([mode, title, count]) => `<button type="button" role="tab" aria-selected="${ui.catalogMode === mode}" data-sk-mode="${mode}">${title} <span>${count}</span></button>`).join('')}</div><p class="eusk-catalog-summary">${tr('Workflows show the structure of a whole study; skills are callable capabilities for whole studies or individual tasks; modules are method components. Start with your research question if you are unsure.', '研究流程展示整项研究结构，技能是可调用的完整研究或单项能力，模块是方法组件。不确定从哪里开始时，先描述研究问题。')}</p>`;
   }
   function detail() {
     const skill = selectedSkill();

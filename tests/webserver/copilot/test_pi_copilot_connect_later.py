@@ -145,7 +145,7 @@ def test_the_screen_routes_model_steps_through_the_connection_gate() -> None:
     events = _read("js/screens-guided-pi-events.js")
     provider = _read("js/screens-guided-pi-provider.js")
 
-    create_session = owner.split("async function createSession()", 1)[1].split("state.creating = true", 1)[0]
+    create_session = _read("js/screens-guided-pi-session-navigation.js").split("async function createSession()", 1)[1].split("state.creating = true", 1)[0]
     assert "CONNECT.ask('start_conversation', createSession)" in create_session
     assert "state.showSetup = true" not in create_session
     send_text = owner.split("async function sendText(", 1)[1].split("text = String(text || '').trim();", 1)[0]

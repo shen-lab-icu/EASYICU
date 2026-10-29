@@ -147,6 +147,14 @@
   function paint() {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!host || !host.isConnected || !owner) return;
+    if (options.hydrationRejected) {
+      host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
+        <div class="note info" role="status"><div class="ico">${icon('activity', 14)}</div><div class="body"><div class="t">${t('The current data task is still attached', '当前数据任务仍在跟踪')}</div><div class="d">${t('The new study setup has not been applied. Finish or stop the current task, then reopen data preparation for the selected study.', '新研究配置尚未应用。请先完成或停止当前任务，再重新打开所选研究的数据准备。')}</div></div></div>
+        <div class="gpi-extraction-native">${owner.render()}</div>
+      </div>`;
+      owner.bind(host);
+      return;
+    }
     const previousScroller = host.querySelector('[data-gpi-extraction-embed]');
     const previousScrollTop = previousScroller ? previousScroller.scrollTop : 0;
     const sourceId = String(options.sourceId || '').trim();
@@ -286,7 +294,12 @@
       host = nextHost;
       options = Object.assign({}, nextOptions || {});
       const owner = window.EU_EXTRACTION_NATIVE_OWNER;
-      hydrateStudyContext();
+      const hydrated = hydrateStudyContext();
+      if (hydrated === null && window.EU_EXTRACTION_STUDY_CONTEXT) {
+        options.hydrationRejected = true;
+        paint();
+        return false;
+      }
       if (isSourceBinding() && owner && typeof owner.beginSourceBinding === 'function') {
         const coordinate = bindingCoordinate();
         // Registering a prepared export refreshes the whole shell.  That
@@ -294,7 +307,11 @@
         // confirm it; reset only when a genuinely different study/source
         // binding flow is mounted.
         if (coordinate !== sourceBindingCoordinate) {
-          owner.beginSourceBinding();
+          if (owner.beginSourceBinding() === false) {
+            options.hydrationRejected = true;
+            paint();
+            return false;
+          }
           sourceBindingCoordinate = coordinate;
         }
       } else {
@@ -308,10 +325,15 @@
       ].join(':');
       if (scope && scopeCoordinate !== extractionScopeCoordinate
           && owner && typeof owner.applyExtractionScope === 'function') {
-        owner.applyExtractionScope(scope);
+        if (owner.applyExtractionScope(scope) === false) {
+          options.hydrationRejected = true;
+          paint();
+          return false;
+        }
         extractionScopeCoordinate = scopeCoordinate;
       }
       paint();
+      return true;
     },
     unmount(nextHost) {
       if (!nextHost || nextHost === host) { host = null; options = {}; }

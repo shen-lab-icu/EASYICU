@@ -1,0 +1,19 @@
+/* Owner: assistant-authored discussion draft, separate from governed progress. */
+.gpi-research-draft { min-width: 0; padding: 16px 12px; }
+.gpi-research-draft-status { color: var(--muted); font-size: 12px; }
+.gpi-research-draft h3 { margin: 8px 0; font-size: 17px; line-height: 1.45; overflow-wrap: anywhere; }
+.gpi-research-draft-boundary { margin: 8px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.gpi-research-draft dl { margin: 12px 0; }
+.gpi-research-draft dl > div { margin: 10px 0; }
+.gpi-research-draft dt, .gpi-research-draft h4 { margin: 0 0 4px; font-size: 12px; font-weight: 650; }
+.gpi-research-draft dd { margin: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.gpi-research-draft section { margin: 14px 0; }
+.gpi-research-draft ul { padding-left: 18px; margin: 4px 0; font-size: 13px; line-height: 1.65; }
+.gpi-research-draft li, .gpi-research-draft-history p { overflow-wrap: anywhere; }
+.gpi-research-draft-history { border-top: 1px solid var(--line); padding-top: 12px; }
+.gpi-research-draft-history summary, .gpi-formal-progress > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.gpi-research-draft-history article { padding-top: 12px; }
+.gpi-research-draft-history p { margin: 0; font-size: 12px; }
+.gpi-formal-progress { padding: 10px 12px; border-top: 1px solid var(--line); }
+.gpi-data-consent-discussion { margin-bottom: 8px; }
+.gpi-data-consent-later > summary { cursor: pointer; font-size: 13px; padding: 8px 0; color: var(--muted); }

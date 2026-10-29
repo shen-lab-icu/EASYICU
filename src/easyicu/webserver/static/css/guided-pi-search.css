@@ -1,5 +1,5 @@
 /* Owner: js/screens-guided-pi-search.js — the search dialog opened from the conversation rail. */
-.gpi-search{box-sizing:border-box;width:min(640px,calc(100vw - 32px));max-height:min(620px,calc(100vh - 96px));margin:72px auto auto;padding:0;border:1px solid var(--skin-border);border-radius:8px;background:var(--skin-paper);color:var(--skin-ink);box-shadow:var(--skin-shadow);font:14px/20px var(--skin-font);overflow:hidden}
+.gpi-search{box-sizing:border-box;width:min(780px,calc(100vw - 32px));max-height:min(720px,calc(100vh - 96px));margin:72px auto auto;padding:0;border:1px solid var(--skin-border);border-radius:8px;background:var(--skin-paper);color:var(--skin-ink);box-shadow:var(--skin-shadow);font:14px/20px var(--skin-font);overflow:hidden}
 .gpi-search[open]{display:flex;flex-direction:column}
 .gpi-search::backdrop{background:rgba(42,38,34,.28)}
 .gpi-search-box{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--skin-line)}
@@ -11,6 +11,13 @@
 .gpi-search-scopes{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;border-bottom:1px solid var(--skin-line)}
 .gpi-search-scopes button{padding:3px 10px;border:1px solid var(--skin-line);border-radius:999px;background:var(--skin-paper);color:var(--skin-muted);font:500 12px/18px var(--skin-font);cursor:pointer}
 .gpi-search-scopes button[aria-pressed=true]{border-color:var(--skin-ink);background:var(--skin-primary-soft);color:var(--skin-ink)}
+.gpi-search-project{display:inline-flex;align-items:center;gap:5px;margin-left:auto;color:var(--skin-muted);font-size:12px;cursor:pointer}
+.gpi-search-project input{accent-color:var(--skin-ink)}
+.gpi-search-count{margin:0;padding:6px 14px 2px;color:var(--skin-muted);font-size:12px}
+.gpi-search-group+.gpi-search-group{border-top:1px solid var(--skin-line)}
+.gpi-search-matches{margin:0 14px 8px 38px}
+.gpi-search-matches>summary{padding:3px 0;color:var(--skin-muted);font-size:12px;cursor:pointer}
+.gpi-search-matches .gpi-search-hit{padding:8px;border-left:2px solid var(--skin-line)}
 .gpi-search-results{flex:1;min-height:0;overflow:auto;padding:4px 0}
 .gpi-search-results:empty{display:none}
 .gpi-search-hit{display:flex;align-items:flex-start;gap:10px;width:100%;padding:9px 14px;border:0;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}

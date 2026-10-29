@@ -87,10 +87,14 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-source-view.css?v=20261022-winfont1" in index
     assert "css/guided-pi-literature.css?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
+    assert "css/guided-pi-research-draft.css?v=20261029-journey1" in index
+    assert "js/screens-guided-pi-research-draft.js?v=20261029-opt2" in index
+    assert index.index("js/screens-guided-pi-modules.js?") < index.index("js/screens-guided-pi-research-draft.js?") < index.index("js/screens-guided-pi-aside.js?") < index.index("js/screens-guided-pi.js?")
+
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
-    assert "js/screens-guided-pi-markdown.js?v=20261029-uxcomplete2" in index
+    assert "js/screens-guided-pi-markdown.js?v=20261029-opt1" in index
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
-    assert "js/screens-guided-pi-message-actions.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-message-actions.js?v=20261029-opt2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-starters.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261026-mention1" in index
@@ -99,7 +103,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
     assert "css/guided-pi-workspace.css?v=20261028-ux1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert index.index("css/guided-pi-skin.css?") < index.index("css/guided-pi-task-list.css?v=20261028-task1")
+    assert index.index("css/guided-pi-skin.css?") < index.index("css/guided-pi-task-list.css?v=20261029-journey4")
     assert index.index("js/screens-guided-pi-task-table.js?v=20261028-ux1") < index.index("js/screens-guided-pi.js?")
     assert "js/screens-guided-pi-demo.js?v=20261026-fig2" in index
     assert "js/screens-guided-pi-demo-trace.js?v=20261026-demo3" in index
@@ -116,7 +120,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261022-prose1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261029-freshfix7" in index
+    assert "js/screens-guided-pi-preview.js?v=20261029-journey3" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
@@ -132,12 +136,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
-    assert "js/screens-guided-pi-study-workspace.js?v=20261028-ux1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20261029-journey4" in index
     assert "js/screens-guided-pi-events.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261026-six6" in index
-    assert "js/screens-guided-pi-data-binding.js?v=20261028-wait1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261029-journey1" in index
+    assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261029-opt2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -160,8 +164,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     # "@" mentions: databases, variables and project files resolved by the host (mt1).
     assert "js/screens-guided-pi-mentions.js?v=20261027-chip1" in index
     assert index.index("js/screens-guided-pi-mentions.js") < index.index("js/screens-guided-pi-study-workspace.js")
-    assert "js/screens-guided-pi-search.js?v=20261026-projects1" in index
-    assert "css/guided-pi-search.css?v=20261026-search2" in index
+    assert "js/screens-guided-pi-search.js?v=20261029-opt1" in index
+    assert "css/guided-pi-search.css?v=20261029-journey1" in index
     assert "js/screens-guided-pi-usage.js?v=20261026-trust1" in index
     assert "js/screens-guided-pi-attention.js?v=20261026-projects1" in index
     assert "css/guided-pi-attention.css?v=20261026-attention1" in index
@@ -172,7 +176,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261029-freshfix7" in index
-    assert "js/screens-guided-pi.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi.js?v=20261029-journey2" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -533,8 +537,10 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
     assert "data-gpi-data-demo" not in owner
     assert "data-gpi-data-planning" not in owner
     assert '<section class="gpi-data-consent"' in owner
-    pending_picker = owner.split('function render(session, ctx)', 1)[1]
-    assert "<summary>" not in pending_picker
+    pending_picker = owner.split('function render(session, ctx)', 1)[1].split('function renderSourceOptions', 1)[0]
+    assert 'data-gpi-next-choice=' in pending_picker
+    assert '<details class="gpi-data-consent-later">' in pending_picker
+    assert '${renderSourceOptions(session, ctx)}' in pending_picker
     assert "authorizePiCopilotDataSource" in data_binding_owner
     assert "confirm_selected_source" in data_binding_owner
     assert "data-source-authorization" in api
@@ -1964,14 +1970,15 @@ def test_extraction_result_refreshes_study_context_before_cas_handoff() -> None:
 
 def test_new_session_selection_cannot_be_overwritten_by_a_stale_restore() -> None:
     owner = _read("js/screens-guided-pi.js")
+    navigation = _read("js/screens-guided-pi-session-navigation.js")
     events = _read("js/screens-guided-pi-events.js")
-    create = owner.split("async function createSession()", 1)[1].split(
+    create = navigation.split("async function createSession()", 1)[1].split(
         "async function openSession", 1
     )[0]
     open_session = owner.split("async function openSession", 1)[1].split(
         "function assistantRow", 1
     )[0]
-    restore = owner.split("async function loadProjectSessions(", 1)[1].split(
+    restore = navigation.split("async function loadProjectSessions(", 1)[1].split(
         "async function loadWorkflow", 1
     )[0]
 
@@ -2008,9 +2015,10 @@ def test_extraction_handoff_preserves_the_registered_source_identity() -> None:
         "/* Minimal closure adapter", 1
     )[0]
 
-    assert "const sourcePath = resultPath || (active && active.path) || '';" in snapshot
-    assert "source_id: String(active && active.id || '')" in snapshot
-    assert "const sourceLabel = (active && active.label)" in snapshot
+    assert "const sourcePath = resultPath || (exReal === 'ready' ? exPath : '') || '';" in snapshot
+    assert "const matchingActive = active && active.path === sourcePath ? active : null;" in snapshot
+    assert "source_id: String(matchingActive && matchingActive.id || '')" in snapshot
+    assert "const sourceLabel = (matchingActive && matchingActive.label)" in snapshot
 
 
 def test_conversational_data_workbench_assets_are_route_owned() -> None:
@@ -2143,11 +2151,12 @@ def test_model_guidance_keeps_locked_clinical_implementation_off_the_user() -> N
 
 def test_activation_initializes_first_use_projects_and_surfaces_failures() -> None:
     owner = _read("js/screens-guided-pi.js")
+    navigation = _read("js/screens-guided-pi-session-navigation.js")
     project_owner = _read("js/screens-guided-pi-project.js")
     panel = owner.split("function activatePanel()", 1)[1].split(
         "function projectRequiredPanel()", 1
     )[0]
-    create = owner.split("async function createSession()", 1)[1].split(
+    create = navigation.split("async function createSession()", 1)[1].split(
         "async function openSession", 1
     )[0]
     load_status = owner.split("async function loadStatus()", 1)[1].split(
@@ -2421,7 +2430,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "tool arguments, credentials, and patient rows are never displayed" in activity_owner
     assert "assistantTextHtml" in pi_owner
     assert (
-        "row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources) : esc(visibleText)"
+        "row.role === 'assistant' ? assistantTextHtml(visibleText, row.resources, { liftDraft: Boolean(liftDraft), streaming: streamingDraft }) : esc(visibleText)"
         in pi_owner
     )
     live_stream_owner = _read("js/screens-guided-pi-live-stream.js")
@@ -4070,7 +4079,8 @@ def test_empty_research_session_prioritizes_the_conversation_entry() -> None:
     assert "!RUN_OUTCOME.resultsAvailable(state.latestRun, state.workflow)" not in owner.split(
         "const emptySessionFocused =", 1
     )[1].split("const main =", 1)[0]
-    start_entry = owner.split("async function startEntry()", 1)[1].split(
+    navigation = _read("js/screens-guided-pi-session-navigation.js")
+    start_entry = navigation.split("async function startEntry()", 1)[1].split(
         "async function stopMessage()", 1
     )[0]
     assert "if (preview && preview.close) preview.close();" in start_entry
@@ -6682,8 +6692,8 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261029-freshfix6" in index
-    assert "screens-guided-pi.js?v=20261029-freshfix6" in index
+    assert "screens-guided-pi-transcript.js?v=20261029-journey1" in index
+    assert "screens-guided-pi.js?v=20261029-journey2" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -130,7 +130,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "saveSetting('data_mode'" not in i18n_js
     assert "js/i18n.js?v=20261027-nodemo1" in index_html
-    assert "js/api.js?v=20261029-csv2" in index_html
+    assert "js/api.js?v=20261029-freshfix6" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -192,7 +192,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261028-readm1" in index_html
+    assert "js/screens-extraction.js?v=20261029-journey1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -243,7 +243,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" not in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20261028-upd1-cfg1" in index_html
+        "js/screens-guided-projects.js?v=20261029-journey1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -287,7 +287,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261029-csv2" in index_html
+    assert "js/api.js?v=20261029-freshfix6" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -443,9 +443,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261027-old1" in index_html
     assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261029-csv2" in index_html
+    assert "js/api.js?v=20261029-freshfix6" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20261028-upd1-cfg1" in index_html
+        "js/screens-guided-projects.js?v=20261029-journey1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -774,7 +774,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert "No EasyICU account or registration is required" not in provider_js
     assert "Conversation model API" not in provider_js
     assert "Analysis model" not in provider_js
-    assert "research_provider: state.researchProvider" in guided_js
+    assert "research_provider: state.researchProvider" in _static_js("screens-guided-pi-session-navigation.js")
     assert "startPiCopilotCodexLogin" in provider_control_js
     assert "startPiCopilotCodexLogin" not in guided_js
     assert "screens-agent-provider.js" not in index_html
@@ -986,9 +986,9 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "连接测试" in settings_js
     assert 'body[data-reduce-motion="true"]' in tweaks_css
     assert "css/tweaks.css?v=20260625-stage96" in index_html
-    assert "css/settings.css?v=20261026-personal1-cfg1" in index_html
+    assert "css/settings.css?v=20261029-journey1" in index_html
     assert "js/screens-settings-extensions.js?v=20261028-set1" in index_html
-    assert "js/screens-settings.js?v=20261028-cfg1" in index_html
+    assert "js/screens-settings.js?v=20261029-journey1" in index_html
     assert "js/screens-settings-personalization.js?v=20261026-personal1" in index_html
     assert index_html.index("js/screens-settings-personalization.js") < index_html.index("js/screens-settings.js")
     assert ".settings-cap-panel" in settings_css
@@ -1037,8 +1037,10 @@ def test_the_folder_hint_names_the_database_the_study_needs() -> None:
     extraction_js = _static_js("screens-extraction.js")
     assert "Choose the MIMIC folder" not in extraction_js
     assert "选择 MIMIC 数据文件夹" not in extraction_js
-    hint = extraction_js.split("function connectFolderHint() {", 1)[1].split("\n  }\n", 1)[0]
-    assert "window.EU_DATABASE_NAMES.release(exExpectedDatabase)" in hint
+    setup_js = _static_js("screens-extraction-study-context.js")
+    hint = setup_js.split("function folderHint(expectedDatabase, { t, hostedCopy }) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "window.EU_DATABASE_NAMES.release(expectedDatabase)" in hint
+    assert "folderHint(exExpectedDatabase, { t, hostedCopy })" in extraction_js
     assert "选择 ${name} 数据文件夹后" in hint
     assert "选择 ICU 数据文件夹后" in hint
     assert '<div class="ex-connect-copy-desc">${connectFolderHint()}</div>' in extraction_js
@@ -1059,7 +1061,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
-    assert "Loaded from Copilot" in extraction_js
+    assert "Loaded from Copilot" in _static_js("screens-extraction-study-context.js")
     assert "Select the ICU data folder" in extraction_js
     assert "function pathNeedsFolderChoice(path)" in extraction_js
     assert "if (pathNeedsFolderChoice(exPath))" in extraction_js
@@ -1440,7 +1442,7 @@ def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -
     assert "let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;" in extraction_js
     assert "observation_window_hours: DEFAULT_OBSERVATION_WINDOW_HOURS" in extraction_js
     assert "MAX_OBSERVATION_WINDOW_HOURS" in extraction_js
-    assert "full available · 30d cap" in extraction_js
+    assert "full available · 30d cap" in _static_js("screens-extraction-study-context.js")
     assert "first 24 hours" not in extraction_js
     assert "first 24h" not in extraction_js
     assert "let exMaxPatients = 0;" in extraction_js
@@ -2023,7 +2025,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261028-readm1" in index_html
-    assert "api.js?v=20261029-csv2" in index_html
+    assert "api.js?v=20261029-freshfix6" in index_html
     assert "screens-dict.js?v=20261028-readm1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2265,7 +2267,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "isProjectRailCollapsed" in projects_js
     assert "gd-project-rail-collapsed" in guided_js
     assert 'data-open="entry"' in projects_js
-    assert "t('Home', '主页')" in projects_js
+    assert "t('New conversation', '新建对话')" in projects_js
     assert "${t('Exit', '退出')}" not in guided_js
     assert 'class="gd-rail-utils"' in projects_js
     assert 'data-open="settings"' in projects_js
@@ -2319,8 +2321,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261029-csv2" in index_html
-    assert "screens-guided-projects.js?v=20261028-upd1-cfg1" in index_html
+    assert "api.js?v=20261029-freshfix6" in index_html
+    assert "screens-guided-projects.js?v=20261029-journey1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
@@ -3044,7 +3046,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20261027-nodemo2" in index_html
+    assert "js/screens-extraction-embedded.js?v=20261029-journey1" in index_html
     assert "js/screens-guided-pi-starters.js?" in index_html
     assert "js/screens-guided-pi-header.js?" in index_html
     assert "js/screens-guided-pi.js?" in index_html

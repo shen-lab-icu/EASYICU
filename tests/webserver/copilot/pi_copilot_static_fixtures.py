@@ -37,7 +37,8 @@ def _read(relative: str) -> str:
         view = (STATIC / "js/screens-guided-pi-session-view.js").read_text(
             encoding="utf-8"
         )
-        return f"{view}\n{source}"
+        navigation = (STATIC / "js/screens-guided-pi-session-navigation.js").read_text(encoding="utf-8")
+        return f"{view}\n{navigation}\n{source}"
     return source
 
 

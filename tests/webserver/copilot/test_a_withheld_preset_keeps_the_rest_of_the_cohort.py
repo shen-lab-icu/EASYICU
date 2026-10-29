@@ -341,7 +341,8 @@ def test_the_reply_folds_the_withheld_modules_into_their_slot(monkeypatch):
 # The receipt projects every field the tool accepts --------------------------
 
 _MAIN = APP_DIR / "src" / "main.mjs"
-_ACTIONS = {"bind_active_export", "bind_source_id"}
+# Adapter-only reply hint is not a persisted scientific field.
+_ACTIONS = {"bind_active_export", "bind_source_id", "discussion_only"}
 #: Statements the host checks and stores under another field.
 _CHECKED_AS = {"question_family": "question_family_check"}
 

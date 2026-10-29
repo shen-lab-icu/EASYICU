@@ -606,6 +606,7 @@
           const message = {
             id: 'history-' + index, role: row.role || 'assistant', text, complete: true,
             entryId: String(row.entry_id || ''),
+            stopReason: row.stop_reason || '',
             errorCode: row.error_code || '',
             hasCompletedAction: Boolean(row.error_code && activityHasCompletedAction(activity)),
             hasSideEffectAttempt: Boolean(row.error_code && activityHasSideEffectAttempt(activity)),

@@ -58,7 +58,7 @@ test('a new project with no session has a visible explicit artifact entry in bot
 });
 
 test('the first artifact action creates one workspace session in the current project, preserving its draft without sending', async () => {
-  const ctx = context(['events']), calls = [], sent = [], pending = [];
+  const ctx = context(['events', 'session-navigation']), calls = [], sent = [], pending = [];
   const modules = ctx.window.EasyICU.guidedPi;
   modules.declare('replay', {});
   modules.declare('project', { syncLocation: (...args) => calls.push(['location', ...args]) });
@@ -83,7 +83,8 @@ test('the first artifact action creates one workspace session in the current pro
       sendPiCopilotMessage() { sent.push('api-send'); throw new Error('Entry must not send a message'); },
     }),
   });
-  vm.runInContext(section('  async function createSession()', '  async function renameSession('), ctx);
+  const navigation = modules.require('sessionNavigation').create(ctx);
+  ctx.createSession = navigation.createSession;
   vm.runInContext(section('  async function switchMode(', '  const LIVE_STREAM ='), ctx);
   const click = wire(ctx, state, (...args) => { const work = ctx.switchMode(...args); pending.push(work); return work; }, sent);
   click(); click();
