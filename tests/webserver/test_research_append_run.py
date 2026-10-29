@@ -65,8 +65,10 @@ def test_append_kind_runs_from_sealed_source_to_result(tmp_path, kind, monkeypat
     body["execution_contract_sha256"] = canonical_sha256({k: v for k, v in body.items() if k != "execution_contract_sha256"})
     with pytest.raises(ValueError, match="typed owner"):
         type(child.authority).model_validate_json(json.dumps(body))
-    with pytest.raises(ValueError, match="roster drifted"):
+    with pytest.raises(ValueError, match="roster drifted") as refused:
         baseline.validate_plan(child.plan)
+    assert refused.value.reason_code == "baseline_association_step_roster_mismatch"
+    assert refused.value.mismatch_fields == ("step_roster",)
     from easyicu.webserver.agent_runs import read_run_record
     pending = read_run_record(str(child.wrapper))
     assert pending.ok, pending

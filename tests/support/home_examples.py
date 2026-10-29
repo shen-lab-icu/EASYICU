@@ -22,6 +22,7 @@ EXAMPLE_REQUIREMENTS = {
                                                                   "treatment_concepts": ("norepi_rate",)}),
     "example-first-day-phenotypes": ("aumc", "trajectory_clustering", {"outcome": "icu_death",
                                                                        "concepts": ("map", "hr", "lact", "crea", "glu", "plt")}),
+    "example-repeated-measure-change": ("miiv", "repeated_measures", {"concepts": ("lact",)}),
     "example-pressure-trajectories": ("eicu", "trajectory_clustering", {"outcome": "hospital_death", "concepts": ("map",)}),
     "example-vasopressor-use": ("aumc", "descriptive_epidemiology", {"concepts": ("vaso_ind",)}),
 }

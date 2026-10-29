@@ -95,6 +95,9 @@ def load_dictionary(
 ) -> ConceptDictionary:
     """Load the concept dictionary with optional overlays.
 
+    The bundled default also declares computed outcome domains separately
+    from its sealed raw-source mappings. Custom dictionaries remain explicit.
+
     Args:
         name: Base dictionary resource name (default ``concept-dict``).
         directories: Optional custom search directories (checked before bundled data).
@@ -110,6 +113,12 @@ def load_dictionary(
     dictionary = ConceptDictionary.from_payload(
         _load_json_payload(name, directories)
     )
+    # Computed outputs have no raw-source mapping in the sealed dictionary.
+    # Declare their domains before applying caller-supplied overlays.
+    if name.removesuffix(".json") == "concept-dict" and resolve_resource(name, directories) is None:
+        derived = ConceptDictionary.from_payload(_load_package_json("derived-outcome-dict.json"))
+        derived.update(dictionary)
+        dictionary = derived
 
     extra_names: list[str] = list(extras or [])
     if include_sofa2 and "sofa2-dict" not in extra_names:

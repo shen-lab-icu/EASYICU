@@ -115,12 +115,19 @@ def _models_ok(
 
 def test_verified_provider_config_is_private_and_never_returns_secret(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeCredentialBackend
+
+    monkeypatch.delenv("EASYICU_HOSTED", raising=False)
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    backend = FakeCredentialBackend()
     config_path = tmp_path / "pi-provider.env"
     receipt_path = tmp_path / "pi-provider-verification.json"
     store = PiProviderConfigStore(
         config_path=config_path,
         receipt_path=receipt_path,
+        credential_backend=backend,
     )
 
     config, public = store.verify_and_save(
@@ -144,7 +151,8 @@ def test_verified_provider_config_is_private_and_never_returns_secret(
     assert "test-private-key" not in config_path.read_text(encoding="utf-8")
     assert "test-private-key" not in receipt_path.read_text(encoding="utf-8")
 
-    restored = store.public_status()
+    restored = PiProviderConfigStore(config_path=config_path, receipt_path=receipt_path,
+                                     credential_backend=backend).public_status(environ={})
     assert restored["connection_verified"] is True
     assert restored["credential_present"] is True
     assert "test-private-key" not in json.dumps(restored)

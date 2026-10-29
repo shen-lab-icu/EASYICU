@@ -1,0 +1,9 @@
+{
+  "icu_stay_is_readmission": {
+    "class": "lgl_cncpt",
+    "category": "demographics",
+    "unit": "boolean",
+    "description": "This ICU stay follows an earlier ICU stay in the same hospitalisation; computed by the outcomes loader.",
+    "sources": {}
+  }
+}

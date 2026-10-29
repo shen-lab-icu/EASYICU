@@ -288,6 +288,10 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         return primary
 
     def validate_plan(self, plan: AnalysisPlan):
+        # Append runs inherit results, not this authority's baseline step roster.
+        if tuple(step.step_id for step in plan.steps[:5]) != BASELINE_STEPS[:5]:
+            raise _refusal("baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
+                           mismatch_fields=("step_roster",), step_id="plan")
         primary = self.governed_primary_step(plan)
         required_steps = BASELINE_STEPS
         if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
