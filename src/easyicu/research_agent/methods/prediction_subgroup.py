@@ -225,4 +225,3 @@ def bind_subgroup_membership(
             raise PredictionSubgroupError("prediction_subgroup_axis_collision", "the score artifact already contains a declared membership column")
         result[axis.column] = selected[axis.column].to_numpy()
     return result
-
