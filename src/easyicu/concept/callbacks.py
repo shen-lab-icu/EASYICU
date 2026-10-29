@@ -2679,6 +2679,8 @@ def _callback_norepi_equiv(
 
 def _callback_sofa_component(
     func: Callable[..., pd.Series],
+    *,
+    value_dtype: str = "float64",
 ) -> CallbackFn:
     def wrapper(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
         # Some SOFA components (cardio variants) rely on auxiliary concepts such as
@@ -2738,7 +2740,12 @@ def _callback_sofa_component(
                         f"{ctx.concept_name}_available",
                     ]
                 )
-            frame = pd.DataFrame(columns=cols)
+            # Empty scores still declare a numeric value type; otherwise
+            # merged all-missing components become object/None in pandas 3.
+            frame = pd.DataFrame(columns=cols).astype({
+                name: value_dtype if name == ctx.concept_name else "int8"
+                for name in cols if name not in id_columns and name != index_column
+            })
             return _as_icutbl(
                 frame,
                 id_columns=id_columns,
@@ -3241,7 +3248,7 @@ def _callback_sofa_score(
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["sofa"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sofa")
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({"sofa": "float64"}), id_columns=id_columns, index_column=index_column, value_column="sofa")
 
     # Get parameters from context
     win_length = ctx.kwargs.get('win_length', hours(24))
@@ -3267,7 +3274,7 @@ def _callback_sofa_score(
 
     # Ensure all components exist with proper missing data handling
     for name in required:
-        data[name] = data.get(name)
+        data[name] = data.get(name, np.nan)
     
     # Fill gaps using data's inherent interval (matches R ricu fill_gaps(dat))
     # R infers interval from data; we infer from median time diff in merged data
@@ -3405,7 +3412,10 @@ def _callback_sofa2_score(
             cols += required + observed_columns + available_columns
         cols += aggregate_columns
         return _as_icutbl(
-            pd.DataFrame(columns=cols),
+            pd.DataFrame(columns=cols).astype({
+                name: "float64"
+                for name in cols if name not in id_columns and name != index_column
+            }),
             id_columns=id_columns,
             index_column=index_column,
             value_column="sofa2",
@@ -3628,7 +3638,7 @@ def _callback_mews(
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["mews"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="mews")
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({"mews": "float64"}), id_columns=id_columns, index_column=index_column, value_column="mews")
 
     # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
     # R ricu: cnc <- c("hr", "avpu", "temp", "sbp", "resp")
@@ -3665,7 +3675,7 @@ def _callback_news(
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["news"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="news")
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({"news": "float64"}), id_columns=id_columns, index_column=index_column, value_column="news")
 
     # R ricu: res <- res[is.na(get("supp_o2")), c("supp_o2") := FALSE]
     # Fill NA supp_o2 with FALSE BEFORE LOCF (so TRUE values propagate, but NA → FALSE stays FALSE)
@@ -3805,7 +3815,7 @@ def _apply_locf_24h(
         
         # Mask values that are outside the time window
         outside_window = (data["_time_hours_"] - data["_last_valid_time_"]) > win_length_hours
-        data.loc[outside_window, col] = np.nan
+        data[col] = data[col].mask(outside_window)
     
     data = data.drop(columns=["_time_hours_", "_last_valid_time_"], errors="ignore")
     
@@ -3820,7 +3830,7 @@ def _callback_qsofa(
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["qsofa"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="qsofa")
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({"qsofa": "float64"}), id_columns=id_columns, index_column=index_column, value_column="qsofa")
 
     # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
     value_cols = ["sbp", "resp", "gcs"]
@@ -3842,7 +3852,7 @@ def _callback_sirs(
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["sirs"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sirs")
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({"sirs": "float64"}), id_columns=id_columns, index_column=index_column, value_column="sirs")
 
     # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
     value_cols = ["temp", "hr", "resp", "wbc", "pco2", "bnd"]
@@ -6896,7 +6906,7 @@ def _callback_gcs(
     ignore_tgcs = ds_name.lower() in {"miiv", "mimiciv"}
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["gcs"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="gcs")
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({"gcs": "float64"}), id_columns=id_columns, index_column=index_column, value_column="gcs")
 
     # Get parameters from context (matching R ricu defaults)
     sed_impute = ctx.kwargs.get("sed_impute", "max")
@@ -7581,7 +7591,7 @@ def _callback_sum_components(
     
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + [output_col]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column=output_col)
+        return _as_icutbl(pd.DataFrame(columns=cols).astype({output_col: "float64"}), id_columns=id_columns, index_column=index_column, value_column=output_col)
     
     # Sum all component columns
     component_cols = [tbl.value_column or name for name, tbl in tables.items()]
@@ -8912,9 +8922,9 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "sofa2_cns": _callback_sofa_component(sofa2_cns),
     "sofa2_cns_proxy_sensitivity": _callback_sofa_component(sofa2_cns_proxy_sensitivity),
     "sofa2_cns_delirium_tx_ascertainment": _callback_sofa_component(
-        sofa2_cns_delirium_tx_ascertainment
+        sofa2_cns_delirium_tx_ascertainment, value_dtype="string",
     ),
-    "sofa2_cns_ascertainment": _callback_sofa_component(sofa2_cns_ascertainment),
+    "sofa2_cns_ascertainment": _callback_sofa_component(sofa2_cns_ascertainment, value_dtype="string"),
     "sofa2_renal": _callback_sofa_component(sofa2_renal),  # SOFA-2 version with RRT criteria
     "sofa2_score": _callback_sofa2_score,  # SOFA-2 总分计算（使用 sofa2_* 组件）
     "delirium_tx_alias": _callback_delirium_tx_alias,
