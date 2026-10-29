@@ -325,12 +325,44 @@ def _missingness_reason(context: StepExecutorContext) -> str:
 
 def _build_registry() -> StepExecutorRegistry:
     from .prediction_validation_executor import external_validation_executor
+    from .prediction_subgroup_executor import prediction_subgroup_executor
+    from .covariate_balance_executor import (
+        covariate_balance_executor_code, covariate_balance_executor_owns_step,
+        covariate_balance_executor_verdict,
+    )
+    from .cluster_sizes_executor import (
+        cluster_sizes_consumed_input_keys, cluster_sizes_executor_code,
+        cluster_sizes_executor_owns_step, cluster_sizes_executor_verdict,
+    )
     from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
     from .baseline_association_executor import baseline_executor_owns_step, baseline_executor_code
     from .association_effect_modification import effect_modification_parent, effect_modification_executor_code
 
     registry = StepExecutorRegistry()
     routes = (
+        StepExecutor(
+            key="covariate_balance", analysis_kind="covariate_balance",
+            applicable=lambda c: c.step.scientific_action_id == "causal_emulation.covariate_balance",
+            owns=lambda c: covariate_balance_executor_owns_step(c.step),
+            declaration_verdict=lambda c: covariate_balance_executor_verdict(c.step),
+            render=lambda c: covariate_balance_executor_code(c.step, plausibility_scope=c.plausibility_scope),
+            selection_reason="reviewed_covariate_balance_contract",
+            progress_message="Computing declared before/after covariate balance and effective sample sizes",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
+            host_sealed_renderer=True,
+        ),
+        StepExecutor(
+            key="cluster_sizes", analysis_kind="cluster_sizes",
+            applicable=lambda c: c.step.scientific_action_id == "phenotyping.cluster_sizes",
+            owns=lambda c: cluster_sizes_executor_owns_step(c.step),
+            declaration_verdict=lambda c: cluster_sizes_executor_verdict(c.step),
+            render=lambda c: cluster_sizes_executor_code(c.step, plausibility_scope=c.plausibility_scope),
+            selection_reason="reviewed_frozen_cluster_size_contract",
+            progress_message="Counting frozen cluster assignments against the declared cohort roster",
+            consumed_input_keys=lambda c: cluster_sizes_consumed_input_keys(c.step),
+            host_sealed_renderer=True,
+        ),
+        prediction_subgroup_executor(),
         StepExecutor(
             key="repeated_measures", applicable=lambda c: c.step.scientific_action_id in REPEATED_ACTIONS,
             owns=lambda c: repeated_measure_step_matches(c.step), render=lambda c: repeated_measure_executor_code(c.step),

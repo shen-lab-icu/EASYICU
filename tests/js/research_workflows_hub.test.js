@@ -33,7 +33,7 @@ test('workflow list and detail render the fixture graph and metadata', () => {
   assert.match(html, /流程用途/);
   assert.match(html, /v1/);
   assert.match(html, /所需输入/);
-  assert.match(html, /生成的输出/);
+  assert.match(html, /示例输出/);
   assert.match(html, /用此流程开始/);
   assert.equal((html.match(/data-wf-node=/g) || []).length, 2);
   assert.equal((html.match(/data-wf-edge=/g) || []).length, 1);
@@ -59,7 +59,9 @@ test('start writes the workflow request and queues the existing typed attachment
   const { owner, storage, location } = setup();
   owner.start({ name: 'synthetic', title: '合成流程', kind: 'method', skillLayer: 'research_workflow' }, fixture);
   assert.equal(location.hash, '#guided');
-  assert.equal(storage.get('easyicu.skillHub.question'), '请用「合成流程」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标，确认配置后再生成研究计划。');
+  assert.match(storage.get('easyicu.skillHub.question'), /请以「合成流程」流程为研究起点/);
+  assert.match(storage.get('easyicu.skillHub.question'), /只补问会影响设计的缺失信息/);
+  assert.match(storage.get('easyicu.skillHub.question'), /一份完整计划供我审阅，审阅前不运行分析/);
   assert.deepEqual(JSON.parse(storage.get('easyicu.skillHub.method')), {
     id: 'synthetic', title: '合成流程', kind: 'method', layer: 'research_workflow',
     capability_id: '', action_ids: [], included_module_ids: [], method_family: '', method_key: '',
@@ -86,7 +88,7 @@ test('a workflow start asks for the study inputs instead of copying an example o
   const { owner, storage } = setup();
   owner.start({ name: 'synthetic', skillLayer: 'research_workflow', prompt: 'Long instructions.' }, { example: 'example' });
   const request = storage.get('easyicu.skillHub.question');
-  assert.match(request, /^请用「synthetic」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标/);
+  assert.match(request, /^请以「synthetic」流程为研究起点，根据我的问题和数据判断是否适用/);
   assert.doesNotMatch(request, /合成问题|Long instructions/);
 });
 test('list selection and the start button use the selected host row', async () => {
@@ -98,7 +100,7 @@ test('list selection and the start button use the selected host row', async () =
   assert.equal(storage.size, 0);
   assert.equal(owner.handle({ dataset: { wfStart: 'synthetic' } }, [{ name: 'synthetic', kind: 'method' }]), true);
   assert.equal(JSON.parse(storage.get('easyicu.skillHub.method')).id, 'synthetic');
-  assert.equal(storage.get('easyicu.skillHub.question'), '请用「合成流程」流程帮我开展一项研究：按流程指南先问我研究问题、数据来源和分析目标，确认配置后再生成研究计划。');
+  assert.match(storage.get('easyicu.skillHub.question'), /^请以「合成流程」流程为研究起点/);
 });
 test('workflow start reaches the removable typed Skill chip without consuming the question', async () => {
   const { owner, window, context, storage } = setup();
@@ -115,7 +117,7 @@ test('workflow start reaches the removable typed Skill chip without consuming th
   const workspace = modules.studyWorkspace.create({ tr: window.t, esc: window.EU_HTML.esc, iconHtml: () => '' });
   const session = { session_id: 's1', draft_attached_skills: [] };
   workspace.applyHubIntent('p1', session);
-  assert.match(storage.get('easyicu.skillHub.question'), /^请用「合成流程」流程帮我开展一项研究/);
+  assert.match(storage.get('easyicu.skillHub.question'), /^请以「合成流程」流程为研究起点/);
   const intent = workspace.takeHubAttachment('p1', session);
   assert.equal(intent.source, 'builtin');
   await modules.skillAttach.toggle('p1', session, intent.source, intent.id);
@@ -132,7 +134,7 @@ test('six database chips expose reasons; inputs list roles, not one example\'s v
     databases: Array.from({ length: 6 }, (_, i) => ({ ...fixture.databases[0], id: `synthetic_${i}` })),
   });
   assert.match(html, /<li>结局 · 二分类<\/li>/);
-  assert.equal((html.match(/调整变量 · 由研究问题决定/g) || []).length, 1);
+  assert.equal((html.match(/研究变量 · 由问题与数据决定/g) || []).length, 1);
   assert.doesNotMatch(html, /示例结局|示例甲|示例乙/);
   assert.equal((html.match(/class="eusk-workflow-database /g) || []).length, 6);
   assert.equal((html.match(/role="tooltip"/g) || []).length, 6);
@@ -145,6 +147,85 @@ test('a disabled workflow cannot queue a start intent', async () => {
   assert.match(owner.render({ items: [disabled] }), /data-wf-start="synthetic" disabled/);
   owner.handle({ dataset: { wfStart: 'synthetic' } }, [{ name: 'synthetic' }]);
   assert.equal(storage.size, 0);
+});
+test('question-first entry removes only the pending method and preserves unrelated draft state', () => {
+  const { owner, storage, location } = setup();
+  storage.set('easyicu.skillHub.method', JSON.stringify({ id: 'old-method' }));
+  storage.set('saved-composer-draft', 'Keep this unsent question');
+  assert.match(owner.render(null), /data-wf-question/);
+  assert.equal(owner.handle({ dataset: {}, hasAttribute: name => name === 'data-wf-question' }, []), true);
+  assert.equal(storage.get('easyicu.skillHub.method'), undefined);
+  assert.equal(storage.get('saved-composer-draft'), 'Keep this unsent question');
+  assert.match(storage.get('easyicu.skillHub.question'), /推荐合适的研究设计/);
+  assert.match(storage.get('easyicu.skillHub.question'), /完整计划供我审阅，审阅前不运行分析/);
+  assert.equal(location.hash, '#guided');
+});
+test('example output grouping preserves different risk sets and product formats', () => {
+  const { owner, window } = setup();
+  window.AGENT_READER_VOCAB = { tableTitle: id => ({
+    'manifest:cohort_flow': '队列流程', 'table:landmark_rmst_summary': 'RMST',
+    'table:external_validation': '外部验证', 'log:landmark_survival_receipt': '生存分析记录',
+    'table:external_calibration': '外部校准', 'figure:external_calibration': '外部校准',
+    'artifact:cluster_assignments': '聚类归属', 'table:cluster_assignments': '聚类归属',
+  }[id] || '') };
+  const html = owner.sections({ ...fixture, id: 'survival-time-to-event',
+    outputs: [
+      { id: 'table:table_one' }, { id: 'table:table_one' },
+      { id: 'table:landmark_table_one' }, { id: 'table:cohort_flow' },
+      { id: 'figure:cohort_flow' }, { id: 'manifest:cohort_flow' },
+      { id: 'table:landmark_rmst_summary' },
+      { id: 'table:external_validation', producer: 'validation' },
+      { id: 'log:landmark_survival_receipt' },
+      { id: 'table:external_calibration' }, { id: 'figure:external_calibration' },
+      { id: 'artifact:cluster_assignments' }, { id: 'table:cluster_assignments' },
+    ], steps: [{ id: 'validation', optional: true, kind: 'model' }],
+  });
+  assert.equal((html.match(/基线特征表（研究队列）/g) || []).length, 1);
+  assert.equal((html.match(/基线特征表（Landmark 风险集）/g) || []).length, 1);
+  assert.match(html, /队列纳排明细表/);
+  assert.match(html, /队列纳排流程图/);
+  assert.match(html, /队列流程（清单）/);
+  assert.match(html, /外部校准（表）/);
+  assert.match(html, /外部校准（图）/);
+  assert.match(html, /聚类归属（数据文件）/);
+  assert.match(html, /聚类归属（表）/);
+  const main = html.slice(html.indexOf('示例主要产物'), html.indexOf('设计相关与敏感性结果'));
+  assert.doesNotMatch(main, /外部验证|RMST|生存分析记录/);
+  assert.match(html, /设计相关与敏感性结果[\s\S]*外部验证/);
+  assert.match(html, /核查与运行记录[\s\S]*生存分析记录/);
+  assert.match(html, /当前展示固定 Landmark 生存研究示例/);
+});
+test('example-only input requirements stay separate from family roles', () => {
+  const { owner } = setup();
+  const html = owner.sections({ ...fixture, inputs: [
+    { role: 'analysis_unit', scope: 'family' },
+    { role: 'outcome', scope: 'canonical_example', kind: 'time_to_event' },
+    { role: 'concept', scope: 'canonical_example' },
+  ] });
+  assert.match(html, /<li>分析单位<\/li>/);
+  assert.match(html, /<summary>此示例的补充条件<\/summary>[\s\S]*结局 · 时间到事件/);
+  assert.doesNotMatch(html, /调整变量/);
+});
+test('database field support never promotes absent or unknown acceptance into verified research', () => {
+  const { owner } = setup();
+  const html = owner.sections({ ...fixture, databases: [
+    { ...fixture.databases[0], status: 'supported', real_data_acceptance: 'not_verified' },
+    { ...fixture.databases[0], id: 'unknown', real_data_acceptance: 'verified' },
+    { ...fixture.databases[0], id: 'missing' },
+  ] });
+  assert.match(html, /字段条件支持/);
+  assert.equal((html.match(/真实研究未验收/g) || []).length, 1);
+  assert.equal((html.match(/真实验收记录待核对/g) || []).length, 2);
+  assert.doesNotMatch(html, /真实研究已验收|已通过真实研究/);
+});
+test('conditional graph edges remain conditional and no execution dependency is invented', () => {
+  const { owner } = setup();
+  const row = { ...fixture, edges: [{ source: 'cohort', target: 'model', products: [], optional: true }] };
+  const html = owner.sections(row);
+  assert.equal((html.match(/data-wf-edge=/g) || []).length, 1);
+  assert.match(html, /data-wf-edge="cohort:model"[^>]*class="is-optional"/);
+  assert.match(html, /虚线分支按研究计划选择/);
+  assert.match(html, /连线概括示例中的前置条件与产物依赖/);
 });
 test('starter examples are read through the existing starters owner', () => {
   const { window, context } = setup();
@@ -216,13 +297,28 @@ test('a custom workflow composes modules in order and starts a conversation requ
   assert.equal(owner.handle(button({ wfcMove: '1:-1' }), skills), true);
   const html = owner.render({ items: [fixture] }, '__custom', skills);
   assert.doesNotMatch(html, /未启用/);
-  // Cohort first, the two modules in the chosen order, report last.
+  // Input review, the two proposed modules, then the report; real dependencies
+  // are reviewed in the complete plan rather than granted by this graph.
   assert.equal((html.match(/data-wf-node=/g) || []).length, 4);
   assert.equal((html.match(/data-wf-edge=/g) || []).length, 3);
   assert.ok(html.indexOf('<span>Cox 模型</span>') < html.indexOf('<span>比例风险检验</span>'));
+  storage.set('easyicu.skillHub.method', JSON.stringify({ id: 'old-pending-method' }));
   assert.equal(custom.handle(button({ start: '' }), skills), true);
+  assert.equal(storage.get('easyicu.skillHub.method'), undefined);
   assert.equal(location.hash, '#guided');
-  assert.match(storage.get('easyicu.skillHub.question'), /先定义队列，然后依次做 1\. Cox 模型；2\. 比例风险检验，最后写报告/);
+  assert.match(storage.get('easyicu.skillHub.question'), /自定义组合准备研究方案：1\. Cox 模型；2\. 比例风险检验/);
+  assert.match(storage.get('easyicu.skillHub.question'), /完整计划供我审阅，审阅前不运行分析/);
+  assert.doesNotMatch(html, /先定义队列/);
+});
+test('a stored custom combination cannot start when all selected modules become unavailable', () => {
+  const { storage, location, window, context } = setup();
+  vm.runInContext(fs.readFileSync(path.join(JS, 'screens-skills-custom-workflow.js'), 'utf8'), context);
+  const button = attrs => ({ dataset: attrs, hasAttribute: name => name === 'data-wfc-start' && attrs.start === '' });
+  window.EU_SKILL_CUSTOM_WORKFLOW.handle(button({ wfcAdd: 'tte.cox' }), []);
+  const unavailable = [{ name: 'tte.cox', kind: 'method_component', enabled: false, title: 'Cox' }];
+  window.EU_SKILL_CUSTOM_WORKFLOW.handle(button({ start: '' }), unavailable);
+  assert.equal(location.hash, '#skills');
+  assert.equal(storage.get('easyicu.skillHub.question'), undefined);
 });
 test('a custom workflow cannot start without a module', () => {
   const { owner, storage, location, window, context } = setup();

@@ -17,6 +17,7 @@ global.EU_CAPABILITIES = { capabilities: {
       description_zh: '运行契约绑定的 Cox 分析。', version: 'easyicu.method-skills/1', enabled: true,
       capability_id: 'survival_time_to_event_v1', action_ids: ['time_to_event.cox_hr', 'time_to_event.ph_check'],
       layer: 'research_workflow', included_module_ids: ['cohort-characterization-table-one'],
+      not_for: [{ situation_en: 'Exposure changes during follow-up', situation_zh: '暴露在随访期间变化' }],
       execution_mode: 'deterministic_host', claim_ceiling: 'reportable', scope: 'Cox estimand',
       inputs: ['time origin', 'event and censoring'], outputs: ['primary CSV'], diagnostics: ['PH diagnostic'],
       prompt: 'Use survival.', prompt_zh: '请使用生存分析（时间到事件）方法。' },
@@ -42,7 +43,12 @@ global.EU_CAPABILITIES = { capabilities: {
       implementation: 'llm_coded', execution_mode: 'agent_coded_with_host_gates', claim_ceiling: 'analysis_only',
       outputs: ['decision_curve.csv'], reporting_items: ['TRIPOD+AI 19'], kernel_modules: ['decision_curve'],
       prompt: 'Use decision curve.', prompt_zh: '请使用决策曲线与净获益方法组件。' },
-  ], workflow_count: 2, analysis_module_count: 1, available_method_count: 1, planned_method_count: 0 },
+    { id: 'cross_database.meta_analysis', title: 'Per-database meta-analysis', title_zh: '跨数据库效应合并',
+      category: 'Evidence synthesis', category_zh: '证据合成', description: 'Pool compatible effects.',
+      description_zh: '合并估计目标一致的数据库效应。', enabled: true, method_family: 'cross_database',
+      method_key: 'meta_analysis', tier: 'standard_supporting', implementation: 'deterministic',
+      execution_mode: 'deterministic_host', claim_ceiling: 'analysis_only', outputs: ['forest.svg'] },
+  ], workflow_count: 2, analysis_module_count: 1, available_method_count: 2, planned_method_count: 0 },
 } };
 const pending = new Map();
 global.sessionStorage = { setItem: (key, value) => pending.set(key, value), getItem: key => pending.get(key) || null };
@@ -62,8 +68,8 @@ assert.match(html, /单项分析 <small>1<\/small>/);
 assert.match(html, /队列描述与 Table 1/);
 assert.doesNotMatch(html, /决策曲线与净获益/);
 assert.match(html, /data-sk-mode="skills"[^>]*>技能 <span>3<\/span>/);
-assert.match(html, /data-sk-mode="methods"[^>]*>模块 <span>1<\/span>/);
-assert.match(html, /<span>可写入报告<\/span>/);
+assert.match(html, /data-sk-mode="methods"[^>]*>模块 <span>2<\/span>/);
+assert.match(html, /<span>审查后可用于报告<\/span>/);
 assert.match(html, /<span>仅分析级<\/span>/);
 assert.doesNotMatch(html, /eusk-catalog-summary|EasyICU 已验证|<small>[^<]*<\/small><\/button>/);
 
@@ -73,10 +79,13 @@ screen.afterRender({ querySelector: selector => selector === '.eusk-shell' ? hub
 const click = dataset => handlers.click({ target: { closest: selector => selector === 'button' ? { dataset } : null } });
 click({ skMode: 'methods' });
 html = screen.render();
-assert.match(html, /全部 <span>1<\/span>/);
-assert.match(html, /EasyICU <span>1<\/span>/);
+assert.match(html, /全部 <span>2<\/span>/);
+assert.match(html, /EasyICU <span>2<\/span>/);
 assert.match(html, /预测模型 <small>1<\/small>/);
 assert.match(html, /决策曲线与净获益/);
+assert.match(html, /证据合成 <small>1<\/small>/);
+assert.match(html, /跨数据库效应合并/);
+assert.equal((html.match(/class="eusk-card /g) || []).length, 2);
 assert.match(html, /<span>配套方法<\/span>/);
 assert.doesNotMatch(html, /生存分析（时间到事件）/);
 assert.doesNotMatch(html, /eusk-catalog-summary/);
@@ -85,7 +94,11 @@ html = screen.render();
 assert.match(html, /生存分析 · 完整研究/);
 assert.match(html, /<span>能力<\/span><code>survival_time_to_event_v1<\/code>/);
 assert.match(html, /由 EasyICU 直接计算/);
-assert.match(html, /<span>结果用途<\/span><strong>可写入报告<\/strong>/);
+assert.match(html, /<span>结果用途<\/span><strong>审查后可用于报告<\/strong>/);
+assert.match(html, /<h2>输入<\/h2><ul><li>time origin<\/li><li>event and censoring<\/li>/);
+assert.match(html, /<h2>何时不适用<\/h2><ul><li>暴露在随访期间变化<\/li>/);
+assert.match(html, /以实际运行证据为准/);
+assert.doesNotMatch(html, /EasyICU 已验证/);
 assert.match(html, /<h2>包含的单项分析<\/h2><ul><li>队列描述与 Table 1<\/li>/);
 assert.match(html, /启动工作流/);
 assert.doesNotMatch(html, /data-sk-toggle="builtin:survival-time-to-event"/);
@@ -126,4 +139,13 @@ assert.deepEqual(JSON.parse(pending.get('easyicu.skillHub.method')), {
   included_module_ids: [],
   claim_ceiling: 'analysis_only',
 });
+// Publication skills have an internal source, without a research acceptance claim.
+global.EU_CAPABILITIES.capabilities.publication_skills.items.push({
+  id: 'nature-writing', stage: 'Writing', enabled: true, version: 'test',
+});
+click({ skOpen: 'builtin:nature-writing' });
+html = screen.render();
+assert.match(html, /写作 · EasyICU 内置/);
+assert.match(html, /以实际运行证据为准/);
+assert.doesNotMatch(html, /EasyICU 已验证/);
 process.stdout.write('Method Skill catalogue, contract and task handoff passed.\n');

@@ -300,7 +300,8 @@ CONTRACTS: dict[str, list[str]] = {
     "research_workflows_hub.test.js": [],
     "prediction_external_reader_labels.test.js": [],
     "skill_copy_hub.test.js": ["screens-skills.js"],
-    "method_skill_package_view.test.js": ["screens-skills.js"],
+    "method_skill_package_view.test.js": ["screens-skills-implementation.js", "screens-skills.js"],
+    "skills_implementation.test.js": ["screens-skills-implementation.js", "screens-skills.js"],
     "report_progress_refresh.test.js": ["screens-guided-pi-childjob.js"],
     "patient_browse_owners.test.js": [
         "screens-viz-patient-navigation.js",

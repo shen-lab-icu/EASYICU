@@ -29,10 +29,12 @@ def _all_actions():
     return actions
 
 
-def test_catalog_has_20_unique_case_neutral_analysis_only_adapters() -> None:
-    assert len(HIGH_FREQUENCY_METHOD_ADAPTERS) == 20
-    assert len({item.adapter_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == 20
-    assert len({item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == 20
+def test_catalog_has_unique_case_neutral_analysis_only_adapters() -> None:
+    count = len(HIGH_FREQUENCY_METHOD_ADAPTERS)
+    assert count > 0
+    assert len({item.adapter_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == count
+    assert len({item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == count
+    assert {"causal_emulation.covariate_balance", "phenotyping.cluster_sizes", "prediction.subgroup_fairness"} <= {item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}
     assert {item.claim_ceiling for item in HIGH_FREQUENCY_METHOD_ADAPTERS} == {
         "analysis_only"
     }
@@ -47,7 +49,6 @@ def test_catalog_has_20_unique_case_neutral_analysis_only_adapters() -> None:
         "association.ordinal_trend",
         "time_to_event.km_logrank",
         "time_to_event.ph_check",
-        "phenotyping.cluster_sizes",
         "phenotyping.outcome_by_cluster",
     }
 
@@ -105,10 +106,8 @@ def test_adapter_contracts_project_into_the_planner_action_surface() -> None:
         "association.evalue",
         # The signed baseline family owns this supporting interaction analysis.
         "association.effect_modification",
-        "prediction.subgroup_fairness",
         # Computed by the prediction executor, with no method adapter of its own.
         "prediction.benchmark_comparison",
-        "causal_emulation.covariate_balance",
         "causal_emulation.evalue",
     }
     causal_guide = planner_scientific_action_guide(
@@ -130,7 +129,7 @@ def test_adapter_catalog_receipt_is_stable_and_complete() -> None:
     second = method_adapter_catalog_receipt()
     assert first == second
     assert first["schema_version"] == "easyicu.method_adapter_catalog/1"
-    assert first["adapter_count"] == 20
+    assert first["adapter_count"] == len(HIGH_FREQUENCY_METHOD_ADAPTERS)
     assert first["claim_ceiling"] == "analysis_only"
     assert re.fullmatch(r"[0-9a-f]{64}", str(first["catalog_sha256"]))
     assert first["action_ids"] == [

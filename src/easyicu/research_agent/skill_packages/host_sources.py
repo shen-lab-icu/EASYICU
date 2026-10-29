@@ -11,7 +11,8 @@ from __future__ import annotations
 import ast
 import hashlib
 from pathlib import Path
-from typing import Literal, NamedTuple, Protocol, Sequence, TypedDict
+import textwrap
+from typing import Any, Literal, NamedTuple, Protocol, Sequence, TypedDict
 
 from ..planning.analysis_method_suite import METHOD_SUITE_REGISTRY
 from ..planning.capability_registry import CAPABILITY_REGISTRY
@@ -58,6 +59,12 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 _PREFIX = "easyicu.research_agent."
 _SELECTION = _PREFIX + "execution.runners.selection"
 _DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_SUPPORT_FUNCTIONS = frozenset({
+    SourceDefinition(_PREFIX + "methods.cluster_proportion", "require_wald_group_variation"),
+    SourceDefinition(_PREFIX + "methods.descriptive_inputs", "measurement_provenance_receipt"),
+    SourceDefinition(_PREFIX + "methods.source_status", "reconcile_binary_event_presence"),
+    SourceDefinition(_PREFIX + "methods.source_status", "reconcile_conditional_event_time"),
+})
 
 # These skills' action contracts are narrower than their broad family owner.
 _ACTION_ONLY = frozenset({
@@ -86,6 +93,9 @@ _SKILL_ROOTS: dict[str, tuple[SourceDefinition, ...]] = {
 # Runtime roots supplement the registry's script-rendering callable. Local
 # helper definitions are followed by AST name references, without imports.
 _RUNTIME_ROOTS: dict[str, tuple[str, ...]] = {
+    "execution.runners.covariate_balance_executor": ("run_covariate_balance",),
+    "execution.runners.cluster_sizes_executor": ("run_cluster_sizes",),
+    "execution.runners.prediction_subgroup_executor": ("run_prediction_subgroup_step",),
     "execution.runners.prediction_validation_executor": ("run_external_validation_step",),
     "execution.runners.adjusted_association_executor": ("run_adjusted_association_from_env",),
     "execution.runners.landmark_categorical_association_executor": (
@@ -107,6 +117,9 @@ _RUNTIME_ROOTS: dict[str, tuple[str, ...]] = {
     "execution.runners.target_trial_executor": ("run_target_trial_suite",),
 }
 _ESTIMATOR_ROOTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "execution.runners.covariate_balance_executor": (("methods.covariate_balance", "compute_covariate_balance"),),
+    "execution.runners.cluster_sizes_executor": (("methods.cluster_sizes", "compute_cluster_sizes"),),
+    "execution.runners.prediction_subgroup_executor": (("methods.prediction_subgroup", "evaluate_prediction_subgroups"), ("methods.prediction_validation", "evaluate_binary_predictions")),
     "execution.runners.trajectory_scientific_representation_executor": (("methods.mixed_effects", "fit_mixed_effects"), ("methods.gee", "fit_gee")),
     "execution.runners.adjusted_association_executor": (("robustness.estimators", "fit_estimator"),),
     "execution.runners.landmark_categorical_association_executor": (
@@ -288,13 +301,19 @@ def method_skill_implementation_files(
     """Read current source bytes and add digest-bound, decorated excerpts."""
     mapping = method_skill_source_map(specs, skill_ids=(skill_id,), package_root=package_root)
     sources = _Sources(package_root)
+    return _implementation_files(mapping[skill_id], sources)
+
+
+def _implementation_files(
+    definitions: Sequence[SourceDefinition], sources: _Sources,
+) -> list[HostImplementationFile]:
     grouped: dict[str, list[SourceDefinition]] = {}
-    for source in mapping[skill_id]:
+    for source in definitions:
         grouped.setdefault(source.module, []).append(source)
     files: list[HostImplementationFile] = []
     for module, definitions in grouped.items():
         path, raw, _ = sources.read(module)
-        source_path = "src/easyicu/" + path.relative_to(package_root).as_posix()
+        source_path = "src/easyicu/" + path.relative_to(sources.root).as_posix()
         source_sha256 = hashlib.sha256(raw).hexdigest()
         lines = raw.decode("utf-8").splitlines(keepends=True)
         locations: list[DefinitionLocation] = []
@@ -318,3 +337,92 @@ def method_skill_implementation_files(
             "source_sha256": source_sha256, "definitions": locations,
         })
     return files
+
+
+def _definition_signature(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> str:
+    """Display syntax only: annotations and defaults are never evaluated."""
+    if isinstance(node, ast.ClassDef):
+        arguments = [*(ast.unparse(base) for base in node.bases),
+                     *(ast.unparse(keyword) for keyword in node.keywords)]
+        return "class " + node.name + ("(" + ", ".join(arguments) + ")" if arguments else "")
+    prefix = "async def " if isinstance(node, ast.AsyncFunctionDef) else "def "
+    returns = " -> " + ast.unparse(node.returns) if node.returns is not None else ""
+    return prefix + node.name + "(" + ast.unparse(node.args) + ")" + returns
+
+
+def implementation_metadata(
+    *, mode: str, summary_en: str, summary_zh: str,
+    bindings: dict[SourceDefinition, str], files: Sequence[HostImplementationFile],
+) -> dict[str, Any]:
+    """Describe the same byte excerpts shipped in the package, without imports.
+
+    Original-source and excerpt coordinates are distinct. Parsing the shipped
+    excerpt also keeps signatures/docstrings consistent with its hash if a
+    source file changes during a later request.
+    """
+    entrypoints = []
+    for file in files:
+        module = "easyicu." + file["path"].removeprefix("implementation/").removesuffix(".py")
+        lines = file["content"].splitlines(keepends=True)
+        cursor = 0
+        for location in file["definitions"]:
+            count = location["line_end"] - location["line_start"] + 1
+            # Each segment has a provenance comment, then verbatim source;
+            # two joining newlines follow the preceding source segment.
+            while cursor < len(lines) and not lines[cursor].startswith("# " + file["source_path"] + ":"):
+                cursor += 1
+            first = cursor + 1
+            source = SourceDefinition(module, location["qualname"])
+            role = bindings.get(source)
+            if role is not None:
+                excerpt = "".join(lines[first:first + count])
+                # A selected method can be indented in its original class.
+                tree = ast.parse(textwrap.dedent(excerpt))
+                node = next(child for child in tree.body if isinstance(child, _DEFINITIONS))
+                entrypoints.append({
+                    "name": node.name, "module": module, "qualname": source.qualname,
+                    "signature": _definition_signature(node),
+                    "source_path": file["source_path"], "source_sha256": file["source_sha256"],
+                    "line_start": location["line_start"], "line_end": location["line_end"],
+                    "file_path": file["path"], "excerpt_line_start": first + 1,
+                    "excerpt_line_end": first + count, "role": role,
+                    "docstring": ast.get_docstring(node) or "",
+                })
+            cursor = first + count
+    return {"mode": mode, "summary_en": summary_en, "summary_zh": summary_zh,
+            "entrypoints": entrypoints, "examples": []}
+
+
+def method_skill_implementation_metadata(
+    spec: SkillSourceSpec, files: Sequence[HostImplementationFile],
+    specs: Sequence[SkillSourceSpec],
+) -> dict[str, Any]:
+    """Expose curated roots; local helper closure stays in the source files."""
+    roots = _source_roots(specs, _Sources(_PACKAGE_ROOT))
+    selected = list(roots[spec.skill_id])
+    for module_id in spec.included_module_ids:
+        selected.extend(roots[module_id])
+    mode = ("owner_projection" if getattr(spec, "layer", "") == "data_definition" else
+            "generated_code" if getattr(spec, "execution_mode", "") == "agent_coded_with_host_gates" else
+            "fixed_host")
+    summaries = {
+        "owner_projection": (
+            "Read-only metadata projection from the existing data/definition owner. These functions do not run a study.",
+            "从既有数据与定义模块读取元数据。所列函数不执行研究。"),
+        "generated_code": (
+            "The model writes study-specific code from the reviewed plan. Listed host functions are helpers, code-origin gates or controlled built-in branches; shared runners are not an independent implementation of this whole method.",
+            "模型按已审阅的方案编写本次研究代码。所列宿主函数是辅助函数、代码来源检查或受控内置分支；共享运行器不代表整个方法已有独立的固定算法。"),
+        "fixed_host": (
+            "Existing host functions implement the declared workflow or module. Shared entrypoints dispatch reviewed subcontracts; the source excerpts include supporting helpers, not a separate algorithm for every named method.",
+            "既有宿主函数实现所声明的工作流或模块。共享入口按已审阅的具体合同分派；源码片段包含辅助函数，并不表示每个方法名称都有独立算法。"),
+    }
+    bindings = {}
+    for source in selected:
+        gate = source.module.endswith(("execution.initial_code_policy", "execution.step_execution"))
+        support = source.qualname.endswith(("_code", "_scaffold", "_sha256")) or source in _SUPPORT_FUNCTIONS
+        bindings[source] = ("gate" if gate else "helper" if mode == "generated_code" else
+                            "helper" if support else
+                            "kernel" if ".methods." in source.module or ".robustness." in source.module else
+                            "helper" if ".contracts." in source.module else "entrypoint")
+    return implementation_metadata(mode=mode, summary_en=summaries[mode][0], summary_zh=summaries[mode][1],
+                                   bindings=bindings, files=files)
