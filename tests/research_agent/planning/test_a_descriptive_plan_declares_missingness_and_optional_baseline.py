@@ -109,6 +109,7 @@ def test_declared_counts_plan_omits_baseline_and_reports_each_denominator_withou
     plan = _plan()
     assert [s.step_id for s in plan.steps] == [
         'cohort_accounting', 'exposure_outcome_distribution', 'measurement_audit',
+        'family_cohort_flow_figure',
     ]
     assert not any(s.table_one_spec is not None for s in plan.steps)
     spec = plan.steps[1].exposure_outcome_distribution_spec

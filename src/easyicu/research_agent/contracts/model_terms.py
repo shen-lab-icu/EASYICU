@@ -423,13 +423,11 @@ class BaselineMissingHandling(BaseModel):
 class PlannedModelRequirement(BaseModel):
     """Planner-owned obligation for a supported adjusted-association model.
 
-    The planner chooses these scientific commitments.  Execution validators
-    only reconcile the emitted model contracts against this typed roster; they
-    must not infer required models from step prose or benchmark vocabulary.
-    Ordered, free-day and count endpoints carry explicit estimands and their
-    outcome definitions; repeated units use the declared dependence contract.
-    This roster does not represent survival or causal estimands; those use
-    separate family-primary-result contracts.
+    The Planner chooses scientific commitments; validators reconcile emitted contracts
+    against this roster, never infer required models from step prose or benchmark vocabulary.
+    Ordered, free-day and count endpoints carry estimands and outcome definitions; repeated units
+    use the declared dependence contract. This schema does not represent survival, prediction,
+    mixed-effects, or clustering contracts.
     """
 
     model_config = ConfigDict(extra="forbid")

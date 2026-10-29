@@ -141,7 +141,7 @@ __all__ = [
 
 def transport_definition_name(name: str) -> str:
     # These names are read by downstream transport projections.
-    if name in {"AnalysisStep", "KnowHowDecision", "CohortDefinition"}:
+    if name in {"AnalysisStep", "KnowHowDecision", "CohortDefinition", "LiteratureDesignBinding"}:
         return name
     return hashlib.sha256(name.encode("utf-8")).hexdigest()[:4]
 

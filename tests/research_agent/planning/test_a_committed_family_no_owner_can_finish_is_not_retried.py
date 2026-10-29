@@ -9,8 +9,8 @@ outline passed its other checks. A causal outline rejected for an unrelated
 violation was retried first, and the retries kept the committed family: the
 H2 web rerun spent four outline requests before the same stop. The stop is now
 read from the first outline that parses. An outline that commits an executable
-family, a design canary and a sealed survival suite are validated and retried
-as before.
+family and a design canary retain outline retries; a sealed survival suite
+validates and retries the family spec its signed template accepts.
 
 Synthetic contexts only.
 """
@@ -26,13 +26,13 @@ from easyicu.research_agent.agents.progressive_planner import (
     FAMILY_SPEC_STRATEGY,
     ProgressivePlannerAgent,
 )
-from easyicu.research_agent.planning.family_spec.request import (
-    SEALED_SURVIVAL_SUITE_MARKER,
-)
+from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from tests.support.survival_proposal import ALLOWED, survival_spec
+from tests.support.survival_sealed import sealed_request, sealed_survival
 from tests.research_agent.planning.progressive_planner_fixtures import (
     _context,
     _cox_outline_payload,
@@ -53,18 +53,6 @@ PRIMARY_ACTIONS = {
     "causal_inference": "causal_emulation.iptw_or",
     "survival": "time_to_event.cox_hr",
 }
-SEALED_SURVIVAL = SEALED_SURVIVAL_SUITE_MARKER + "\n" + json.dumps(
-    {
-        "sealed_primary_owner": "signed_landmark_survival_suite",
-        "exposure_status_column": "exposure_flag",
-        "exposure_onset_column": "exposure_flag_first_time",
-        "event_column": "outcome_flag",
-        "followup_time_column": "followup_days_28d",
-        "landmark_hours": 24,
-        "endpoint_horizon_days": 28,
-        "plan_outputs": ["table:survival_primary"],
-    }
-)
 
 
 def _outline_for(family: str) -> dict:
@@ -158,15 +146,29 @@ def test_a_design_canary_still_validates_and_retries_its_outline():
     assert len(llm.calls) == 2
 
 
-def test_a_sealed_survival_suite_still_validates_and_retries_its_outline():
-    llm, result = _plan(
-        "survival",
-        _with_unregistered_citation(_outline_for("survival")),
-        planning_contract_context=SEALED_SURVIVAL,
+def test_a_sealed_survival_suite_still_validates_and_retries_its_outline(tmp_path):
+    """The signed template writes its outline from the validated, retried family spec."""
+    context, authority = sealed_survival(tmp_path)
+    authorities = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)
+    request = sealed_request(context, authorities)
+    accepted = survival_spec(request, [])
+    rejected = {**accepted, "comparator_applications": [{
+        "citation_key": "unregistered_key_2026",
+        "application": "Compare the population and time zero with the signed survival design.",
+    }]}
+    llm = ScriptedMockLLMClient([json.dumps(rejected), json.dumps(accepted)])
+    result = ProgressivePlannerAgent(llm).run_attempt(
+        context, planner_strategy=FAMILY_SPEC_STRATEGY,
+        allowed_literature_citation_keys=ALLOWED,
+        planning_contract_context=authorities.planning_contract_context(),
+        required_primary_cohort_selection_mode="all_input_rows",
     )
 
-    assert getattr(result, "reason_code", None) != UNWRITABLE
-    assert len(llm.calls) > 2
+    assert len(llm.calls) == 2
+    assert "family_spec_citation_unavailable" in llm.calls[1][0][-1].content
+    assert result.output.analysis_type == "survival"
+    primary = next(step for step in result.output.steps if step.planned_analysis_role == "primary")
+    assert primary.method == "signed_landmark_survival_suite"
 
 
 def test_an_outline_that_does_not_parse_is_retried_before_the_stop():

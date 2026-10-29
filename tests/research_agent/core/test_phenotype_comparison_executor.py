@@ -5,6 +5,7 @@ import json
 
 import pandas as pd
 import pytest
+from tests.support.schema_names import authority_schema_json
 
 from easyicu.research_agent.execution.runners.phenotype_comparison_executor import (
     phenotype_comparison_executor_code,
@@ -30,7 +31,6 @@ from easyicu.research_agent.schema import (
     TableOneVariableSpec,
     VariableRole,
 )
-from tests.support.schema_names import authority_schema_json
 
 from .test_cross_sectional_phenotyping_executor import _binding, _context, _primary_step
 from .test_phenotyping_feature_roles import _skeleton
