@@ -9,13 +9,17 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.concept import ConceptResolver
 from easyicu.concept.callbacks import (
+    CALLBACK_REGISTRY,
     ConceptCallbackContext,
     _callback_sep3,
     _callback_sep3_sofa2,
     _callback_supp_o2,
     _callback_susp_inf,
 )
+from easyicu.concept.schema import ConceptDictionary
+from easyicu.resources import load_dictionary
 from easyicu.table import ICUTable
 from easyicu.webserver import dataio
 from easyicu.webserver.demo_source_contracts import SOURCES
@@ -25,6 +29,82 @@ from tests.support.windows_laptop_demo import isolated_demo_paths, synthetic_dem
 class Job:
     def emit(self, _payload):
         pass
+
+
+@pytest.mark.parametrize("concept", [
+    "sofa_resp", "sofa_coag", "sofa_liver", "sofa_cardio", "sofa_cns", "sofa_renal",
+    "sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal",
+    "sofa2_cns_proxy_sensitivity",
+    "sofa", "sofa2", "mews", "news", "qsofa", "sirs", "gcs", "sum_components",
+])
+def test_empty_score_producers_preserve_numeric_columns_through_merge_and_parquet(tmp_path, concept):
+    if concept == "sum_components":
+        callback = CALLBACK_REGISTRY[concept]
+        components = ["eye", "motor", "verbal"]
+    else:
+        definition = load_dictionary(include_sofa2=True).get(concept)
+        callback = CALLBACK_REGISTRY[definition.callback]
+        components = definition.sub_concepts
+    observed = pd.DataFrame({"stay_id": [7, 8], "charttime": [1.0, 1.0], "hr": [80.0, 90.0]})
+    tables = {}
+    for component in components:
+        frame = observed.iloc[:0][["stay_id", "charttime"]].copy()
+        frame[component] = pd.Series(dtype="float64")
+        tables[component] = ICUTable(frame, ["stay_id"], "charttime", component)
+    context = ConceptCallbackContext(
+        concept, None, pd.Timedelta(hours=1), None,
+        SimpleNamespace(config=SimpleNamespace(name="unit")), None, {"keep_components": True},
+    )
+    result = callback(tables, context)
+    assert result.data.empty
+    value_columns = [column for column in result.data if column not in {"stay_id", "charttime"}]
+    assert concept in value_columns
+    for column in value_columns:
+        assert pd.api.types.is_numeric_dtype(result.data[column]), column
+    merged = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        {"hr": ICUTable(observed, ["stay_id"], "charttime", "hr"), concept: result},
+        ["hr", concept],
+    )
+    assert merged[concept].isna().all()
+    assert pd.api.types.is_numeric_dtype(merged[concept])
+    output = tmp_path / "score.parquet"
+    merged.to_parquet(output, index=False)
+    pd.testing.assert_frame_equal(pd.read_parquet(output), merged)
+
+
+@pytest.mark.parametrize("concept", ["sofa2_cns_ascertainment", "sofa2_cns_delirium_tx_ascertainment"])
+def test_empty_sofa_text_receipts_retain_string_types(concept):
+    frame = pd.DataFrame({column: pd.Series(dtype="float64") for column in ("stay_id", "charttime", "gcs")})
+    context = ConceptCallbackContext(concept, None, None, None, None, None)
+    result = CALLBACK_REGISTRY[concept](
+        {"gcs": ICUTable(frame, ["stay_id"], "charttime", "gcs")}, context,
+    ).data
+    assert result.empty
+    assert isinstance(result[concept].dtype, pd.StringDtype)
+    placeholder = result[concept].reindex(pd.RangeIndex(2))
+    assert isinstance(placeholder.dtype, pd.StringDtype)
+    assert placeholder.isna().all()
+
+
+@pytest.mark.parametrize("missing_component", ["absent", "empty"])
+@pytest.mark.parametrize("time_indexed", [False, True])
+def test_sofa_total_keeps_missing_components_numeric(missing_component, time_indexed):
+    frame = pd.DataFrame({"stay_id": [7, 8], "charttime": [1.0, 1.0], "sofa_resp": [2.0, 3.0]})
+    index_column = "charttime" if time_indexed else None
+    if not time_indexed:
+        frame = frame.drop(columns=["charttime"])
+    tables = {"sofa_resp": ICUTable(frame, ["stay_id"], index_column, "sofa_resp")}
+    if missing_component == "empty":
+        empty = frame.iloc[:0].rename(columns={"sofa_resp": "sofa_coag"})
+        tables["sofa_coag"] = ICUTable(empty, ["stay_id"], index_column, "sofa_coag")
+    context = ConceptCallbackContext(
+        "sofa", None, pd.Timedelta(hours=1), None, None, None, {"keep_components": True},
+    )
+    result = CALLBACK_REGISTRY["sofa_score"](tables, context).data
+    assert result["sofa"].tolist() == [2.0, 3.0]
+    for component in ("sofa_coag", "sofa_liver", "sofa_cardio", "sofa_cns", "sofa_renal"):
+        assert result[component].isna().all()
+        assert pd.api.types.is_float_dtype(result[component]), component
 
 
 def _converted_source(tmp_path, database, *, populated=False, medication="vancomycin"):
@@ -220,6 +300,16 @@ def test_populated_source_keeps_antibiotic_owned_infection_times(tmp_path, monke
         assert frame[["patientunitstayid", "charttime"]].to_dict("list") == {
             "patientunitstayid": [101, 102], "charttime": [1.0, 1.0],
         }, module
+    vitals = pd.read_parquet(paths.export / entries["vitals"]["file"])
+    for concept in ("pulse_pressure", "shock_index", "modified_shock_index", "diastolic_shock_index"):
+        assert pd.api.types.is_numeric_dtype(vitals[concept]), concept
+    for module in ("sofa1_score", "sofa2_score"):
+        scores = pd.read_parquet(paths.export / entries[module]["file"])
+        for concept in scores.columns.difference(["patientunitstayid", "charttime"]):
+            if concept in {"sofa2_cns_ascertainment", "sofa2_cns_delirium_tx_ascertainment"}:
+                assert isinstance(scores[concept].dtype, pd.StringDtype), (module, concept)
+            else:
+                assert pd.api.types.is_numeric_dtype(scores[concept]), (module, concept)
     # Match the populated loader output without availability collection. Compare
     # physical order as well as values/dtypes; sorting columns hides regressions.
     with api.keep_cache(database="eicu", data_path=str(paths.raw)):

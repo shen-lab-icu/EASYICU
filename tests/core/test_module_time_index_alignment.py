@@ -10,6 +10,7 @@ import easyicu
 from easyicu.api import extraction as api
 from easyicu.api.concepts import clear_global_loader
 from easyicu import synthetic_source_tables
+from easyicu.concept.callbacks import _apply_locf_24h
 from easyicu.synthetic_sources import generate_source
 
 
@@ -109,3 +110,30 @@ def test_raw_unaggregated_concepts_do_not_claim_a_resampled_grid(aumc_source):
     )
     assert tables["hr"].time_basis is None
     assert tables["hr"].interval is None
+
+
+@pytest.mark.filterwarnings("error:Setting an item of incompatible dtype:FutureWarning")
+@pytest.mark.parametrize("dtype", ["bool", "int64"])
+def test_locf_keeps_observed_values_in_their_original_dtype(dtype):
+    # NEWS supplies a non-nullable boolean supp_o2 channel. Even an empty
+    # expiry mask must not assign a float NaN into that boolean column.
+    frame = pd.DataFrame({
+        "stay_id": [1, 1], "charttime": [0.0, 49.0],
+        "observed": pd.Series([True, False], dtype=dtype),
+    })
+    result = _apply_locf_24h(frame, ["stay_id"], "charttime", ["observed"])
+    pd.testing.assert_frame_equal(result, frame)
+
+
+@pytest.mark.parametrize("dtype,first,last", [
+    ("boolean", True, False), ("Int64", 1, 2), ("float64", 1.0, 2.0),
+    ("string", "A", "V"),
+])
+def test_locf_masks_expired_values_without_extending_the_original_window(dtype, first, last):
+    frame = pd.DataFrame({
+        "stay_id": [1] * 6, "charttime": [0.0, 24.0, 25.0, 26.0, 50.0, 51.0],
+        "observed": pd.Series([first, None, None, last, None, None], dtype=dtype),
+    })
+    result = _apply_locf_24h(frame, ["stay_id"], "charttime", ["observed"])
+    expected = pd.Series([first, first, None, last, last, None], dtype=dtype, name="observed")
+    pd.testing.assert_series_equal(result["observed"], expected)

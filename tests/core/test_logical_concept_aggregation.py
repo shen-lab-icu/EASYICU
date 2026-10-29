@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 
 import pandas as pd
+import pytest
 
 from easyicu.base import BaseICULoader
 from easyicu.config import DataSourceConfig
@@ -16,6 +17,42 @@ from easyicu.table import ICUTable, WinTbl
 from easyicu.table.duration import UNIT_HOURS, get_dur_var_unit
 from easyicu.io.ts_utils import change_interval
 from easyicu.utils import compat
+
+
+@pytest.mark.parametrize("consume_sources", [False, True])
+@pytest.mark.parametrize("dtype", ["float64", "Float64", "Int64", "boolean", "string"])
+def test_r_style_merge_preserves_empty_producer_value_types(tmp_path, consume_sources, dtype):
+    observed = pd.DataFrame({"stay_id": [1, 2], "charttime": [0.0, 1.0], "hr": [80.0, 90.0]})
+    empty = observed.iloc[:0][["stay_id", "charttime"]].copy()
+    empty["derived"] = pd.Series(dtype=dtype)
+    tables = {
+        "hr": ICUTable(observed, ["stay_id"], "charttime", "hr"),
+        "derived": ICUTable(empty, ["stay_id"], "charttime", "derived"),
+    }
+    resolver = ConceptResolver(ConceptDictionary({}))
+    result = resolver._to_r_format_merged_enhanced(
+        tables, ["hr", "derived"], consume_sources=consume_sources,
+    )
+    assert result["derived"].isna().all()
+    assert result["derived"].dtype == ("float32" if dtype == "float64" else dtype)
+    assert result[["stay_id", "charttime"]].equals(observed[["stay_id", "charttime"]])
+    assert bool(tables) is not consume_sources
+    path = tmp_path / "typed.parquet"
+    result.to_parquet(path, index=False)
+    pd.testing.assert_frame_equal(pd.read_parquet(path), result)
+
+
+def test_r_style_merge_can_defer_empty_typed_columns_to_the_arrow_writer():
+    observed = pd.DataFrame({"stay_id": [1], "charttime": [0.0], "hr": [80.0]})
+    empty = observed.iloc[:0].rename(columns={"hr": "derived"})
+    tables = {
+        "hr": ICUTable(observed, ["stay_id"], "charttime", "hr"),
+        "derived": ICUTable(empty, ["stay_id"], "charttime", "derived"),
+    }
+    result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
+        tables, ["hr", "derived"], materialize_missing_concepts=False,
+    )
+    assert list(result) == ["stay_id", "charttime", "hr"]
 
 
 def test_auto_aggregator_for_bool_uses_any_semantics() -> None:

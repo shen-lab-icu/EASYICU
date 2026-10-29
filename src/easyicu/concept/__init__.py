@@ -840,6 +840,7 @@ class ConceptResolver:
         concept_names: Iterable[str],
         *,
         materialize_missing: bool = True,
+        value_dtypes: Optional[Mapping[str, object]] = None,
     ) -> pd.DataFrame:
         """Keep merged API schemas stable when a requested concept has no rows.
 
@@ -856,7 +857,10 @@ class ConceptResolver:
             return df
         out = df.copy()
         for name in missing:
-            out[name] = pd.NA
+            if value_dtypes is not None and name in value_dtypes:
+                out[name] = pd.Series(dtype=value_dtypes[name]).reindex(out.index)
+            else:
+                out[name] = pd.NA
         return out
 
     def get_raw_concept(
@@ -1879,6 +1883,10 @@ class ConceptResolver:
                         results[name] = concept_table
 
             tables = {name: results[name] for name in names if name in results}
+            value_dtypes = {
+                name: table.data[name].dtype
+                for name, table in tables.items() if name in table.data.columns
+            }
 
             def _materialize_covered_wide_tables_for_fallback() -> None:
                 """Recreate sparse tables only if the direct wide merge cannot finish."""
@@ -1967,6 +1975,7 @@ class ConceptResolver:
                         wide_table_merged_df,
                         names,
                         materialize_missing=not defer_empty_columns_to_arrow,
+                        value_dtypes=value_dtypes,
                     )
                 )
 
@@ -2046,6 +2055,7 @@ class ConceptResolver:
                                     merged_partial,
                                     names,
                                     materialize_missing=not defer_empty_columns_to_arrow,
+                                    value_dtypes=value_dtypes,
                                 )
                             )
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
@@ -2062,6 +2072,7 @@ class ConceptResolver:
                                 wide_table_merged_df.reset_index(drop=True),
                                 names,
                                 materialize_missing=not defer_empty_columns_to_arrow,
+                                value_dtypes=value_dtypes,
                             )
                         )
                 _materialize_covered_wide_tables_for_fallback()
@@ -2078,6 +2089,7 @@ class ConceptResolver:
                 self._merge_tables(tables),
                 names,
                 materialize_missing=not defer_empty_columns_to_arrow,
+                value_dtypes=value_dtypes,
             )
             return merged
         finally:
@@ -9687,6 +9699,12 @@ class ConceptResolver:
         if not concept_data:
             return pd.DataFrame(columns=list(concept_names))
 
+        # Empty producers still own their value type. Save it before the
+        # consuming merge releases frames and omits their empty columns.
+        value_dtypes = {
+            name: frame[name].dtype
+            for name, frame in concept_data.items() if name in frame.columns
+        }
         if consume_sources:
             # All source reads and recursive callbacks have completed before
             # this merge starts.  Retaining resolver/data-source caches and
@@ -9811,6 +9829,7 @@ class ConceptResolver:
             result,
             concept_names,
             materialize_missing=materialize_missing_concepts,
+            value_dtypes=value_dtypes,
         )
         
         # 确保概念列按请求的顺序排列
