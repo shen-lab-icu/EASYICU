@@ -19,6 +19,82 @@ from easyicu.io.ts_utils import change_interval
 from easyicu.utils import compat
 
 
+@pytest.mark.parametrize("r_compatible", [False, True])
+@pytest.mark.parametrize("defer_empty", [False, True])
+@pytest.mark.parametrize("values,dtype", [
+    ([], "bool"),
+    ([True, False], "bool"),
+    ([True, pd.NA], "boolean"),
+    ([True, None], "object"),
+])
+def test_merged_boolean_nulls_survive_parquet(
+    tmp_path, monkeypatch, r_compatible, defer_empty, values, dtype,
+):
+    class DataSource:
+        config = DataSourceConfig(name="unit", tables={})
+
+        def clear_cache(self):
+            pass
+
+    observed = pd.DataFrame({"stay_id": [1] * 4, "charttime": [0., 1., 2., 3.], "anchor": [1.] * 4})
+    flag = pd.DataFrame({
+        "stay_id": pd.Series([1] * len(values), dtype="int64"),
+        "charttime": pd.Series([0., 2.][:len(values)], dtype="float64"),
+        "derived_flag": pd.Series(values, dtype=dtype),
+    })
+    original = flag.copy(deep=True)
+    tables = {
+        "anchor": ICUTable(observed, ["stay_id"], "charttime", "anchor"),
+        "derived_flag": ICUTable(flag, ["stay_id"], "charttime", "derived_flag"),
+    }
+    resolver = ConceptResolver(ConceptDictionary({
+        name: ConceptDefinition(name=name, sources={}) for name in tables
+    }))
+    monkeypatch.setattr(resolver, "_ensure_concept_loaded", lambda name, *args, **kwargs: tables[name])
+    result = resolver.load_concepts(
+        list(tables), DataSource(), r_compatible=r_compatible,
+        concept_workers=1, verbose=False, _defer_empty_columns_to_arrow=defer_empty,
+    )
+    if defer_empty and r_compatible and not values:
+        assert "derived_flag" not in result
+    else:
+        expected = pd.Series([pd.NA] * 4, name="derived_flag", dtype="boolean")
+        if values:
+            expected.iloc[0] = True
+            if values[1] is False:
+                expected.iloc[2] = False
+        pd.testing.assert_series_equal(result["derived_flag"], expected)
+        assert all(value is pd.NA for value in result["derived_flag"][result["derived_flag"].isna()])
+        path = tmp_path / "flag.parquet"
+        result.to_parquet(path, index=False)
+        pd.testing.assert_frame_equal(pd.read_parquet(path), result)
+    pd.testing.assert_frame_equal(flag, original)
+
+
+@pytest.mark.parametrize("values", [
+    [1, None, 2], ["True", None, "False"], [True, None, "unknown"],
+    [True] * 101 + ["unknown", None], [None, None, None],
+])
+def test_boolean_normalization_keeps_non_boolean_columns(values):
+    frame = pd.DataFrame({"derived": pd.Series(values, dtype="object")}, index=range(len(values)))
+    original = frame.copy(deep=True)
+    result = ConceptResolver._ensure_requested_concept_columns(frame, ["derived"])
+    pd.testing.assert_frame_equal(result, original)
+    assert result is frame
+
+
+def test_boolean_normalization_preserves_the_input_frame_and_index():
+    frame = pd.DataFrame({"derived": pd.Series([True, None, False], dtype="object")})
+    frame.index = pd.Index([9, 2, 9], name="row")
+    frame.attrs["owner"] = "synthetic"
+    original = frame.copy(deep=True)
+    result = ConceptResolver._ensure_requested_concept_columns(frame, iter(["derived"]))
+    expected = frame.astype({"derived": "boolean"})
+    pd.testing.assert_frame_equal(result, expected)
+    pd.testing.assert_frame_equal(frame, original)
+    assert result.attrs == original.attrs
+
+
 @pytest.mark.parametrize("consume_sources", [False, True])
 @pytest.mark.parametrize("dtype", ["float64", "Float64", "Int64", "boolean", "string"])
 def test_r_style_merge_preserves_empty_producer_value_types(tmp_path, consume_sources, dtype):

@@ -842,25 +842,45 @@ class ConceptResolver:
         materialize_missing: bool = True,
         value_dtypes: Optional[Mapping[str, object]] = None,
     ) -> pd.DataFrame:
-        """Keep merged API schemas stable when a requested concept has no rows.
+        """Keep merged value types and missing values stable through Parquet.
 
         Extraction can defer structural all-null columns to its Arrow writer.
         That avoids allocating one dense pandas block per unavailable concept
         across millions of rows while preserving the public API default.
+        Sparse numpy booleans become object columns after alignment; use the
+        nullable boolean type so Parquet cannot change their NaN to None.
         """
         if not isinstance(df, pd.DataFrame):
             return df
         if df.empty:
             return df
-        missing = [name for name in concept_names if name not in df.columns]
-        if not missing or not materialize_missing:
-            return df
-        out = df.copy()
-        for name in missing:
-            if value_dtypes is not None and name in value_dtypes:
-                out[name] = pd.Series(dtype=value_dtypes[name]).reindex(out.index)
+        out = df
+        for name in concept_names:
+            if name in df.columns:
+                values = df[name]
+                if values.dtype != object:
+                    continue
+                boolean_producer = (
+                    value_dtypes is not None
+                    and pd.api.types.is_bool_dtype(value_dtypes.get(name))
+                )
+                if not (
+                    boolean_producer or pd.api.types.infer_dtype(values, skipna=True) == "boolean"
+                ):
+                    continue
+                values = values.astype("boolean")
+            elif not materialize_missing:
+                continue
+            elif value_dtypes is not None and name in value_dtypes:
+                dtype = value_dtypes[name]
+                if pd.api.types.is_bool_dtype(dtype):
+                    dtype = "boolean"
+                values = pd.Series(dtype=dtype).reindex(df.index)
             else:
-                out[name] = pd.NA
+                values = pd.Series(pd.NA, index=df.index, dtype="object")
+            if out is df:
+                out = df.copy(deep=False)
+            out[name] = values
         return out
 
     def get_raw_concept(
