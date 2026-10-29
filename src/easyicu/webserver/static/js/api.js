@@ -754,11 +754,12 @@
   function loadPiCopilotWorkspaceFile(projectId, file) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId) + '/workspace/file?file=' + encodeURIComponent(file));
   }
-  function piCopilotWorkspacePreviewUrl(projectId, file, checkedSha256, allowDownloads = false) {
+  function piCopilotWorkspacePreviewUrl(projectId, file, checkedSha256, allowDownloads = false, downloadNonce = '') {
     return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/workspace/preview?file=' + encodeURIComponent(file)
       + '&checked_sha256=' + encodeURIComponent(checkedSha256 || '')
-      + (allowDownloads === true ? '&allow_downloads=true' : '');
+      + (allowDownloads === true ? '&allow_downloads=true' : '')
+      + (allowDownloads === true && /^[a-f0-9]{64}$/.test(downloadNonce) ? '&download_nonce=' + downloadNonce : '');
   }
   function piCopilotWorkspaceDownloadUrl(projectId, file, expectedSha256) {
     return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)

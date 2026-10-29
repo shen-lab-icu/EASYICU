@@ -421,9 +421,9 @@
         );
       }
       if (value === 'pi_model_context_limit') return tr('The model context limit was reached. Start a new conversation or shorten the request.', '模型上下文已达到上限，请新建会话或缩短请求。');
-      if (value === 'pi_model_rate_limited') return tr('The model service is temporarily rate-limited. No EasyICU action was executed; retry shortly.', '模型服务暂时限流。本轮没有执行 EasyICU 操作，请稍后重试。');
-      if (value === 'pi_model_provider_unavailable') return tr('The model service connection was interrupted. No EasyICU action was executed; retry after connectivity recovers.', '模型服务连接中断。本轮没有执行 EasyICU 操作，连接恢复后可直接重试。');
-      return tr('The model service could not complete this turn. No EasyICU action should be assumed.', '模型服务未能完成本轮，不能据此认为任何 EasyICU 操作已经执行。');
+      if (value === 'pi_model_rate_limited') return tr('The model service is temporarily rate-limited. Review this turn\'s completed records before continuing once the service recovers.', '模型服务暂时限流。请先核对本轮已完成的记录，服务恢复后再继续。');
+      if (value === 'pi_model_provider_unavailable') return tr('The model service connection was interrupted. Review this turn\'s completed records before continuing once connectivity recovers.', '模型服务连接中断。请先核对本轮已完成的记录，连接恢复后再继续。');
+      return tr('The model service could not complete this turn. Review the execution records to see which actions completed.', '模型服务未能完成本轮，请从执行记录核对哪些操作已完成。');
     }
 
     /* A failed Research Agent run reaches the conversation as a gate/error

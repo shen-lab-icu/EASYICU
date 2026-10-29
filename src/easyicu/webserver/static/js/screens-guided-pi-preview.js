@@ -8,6 +8,14 @@
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
+  let csvDownloads = null;
+  let downloadNonce = '';
+  function csvDownloadOwner() {
+    const owner = window.EasyICU.guidedPi.optional('csvDownloads');
+    if (!csvDownloads && owner) csvDownloads = owner.create(() =>
+      previewDownloadsAllowed() && state.mode === 'web' ? workspacePreviewKey() : '');
+    return csvDownloads;
+  }
 
   const state = {
     host: null,
@@ -384,7 +392,7 @@
     const toggle = isCheckedWorkspaceHtml()
       ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow this page to download', '允许此页下载')}</button>` : '';
     if (!url && !toggle) return '';
-    return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}</div>`;
+    return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}<span data-gpi-csv-download-slot></span></div>`;
   }
   function previewUrl() {
     const api = window.EU_API || {};
@@ -410,6 +418,7 @@
           state.resource.file,
           checkedSha256,
           previewDownloadsAllowed(),
+          downloadNonce,
         )
       : '';
   }
@@ -524,6 +533,10 @@
   }
   function render() {
     if (!state.host || !state.resource) return;
+    const csvOwner = csvDownloadOwner();
+    downloadNonce = csvOwner ? csvOwner.prepare(
+      previewDownloadsAllowed() && state.mode === 'web' ? workspacePreviewKey() : '',
+    ) : '';
     setAsideOpen(true);
     const selectedEvidence = activeEvidenceTab();
     const tabs = isLiteratureSource() ? '' : isStructuredArtifact() ? `
@@ -566,7 +579,7 @@
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();
       body = url
-        ? `<iframe class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts${previewDownloadsAllowed() ? ' allow-downloads' : ''}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        ? `<iframe data-gpi-workspace-frame class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts${previewDownloadsAllowed() ? ' allow-downloads' : ''}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
     } else if (state.mode === 'native' && isNativeWorkspace()) {
       body = `<div data-gpi-native-workspace-mount></div>`;
@@ -663,6 +676,11 @@
         ${tabs}
       </details>
       <div class="gpi-preview-body">${body}</div>`;
+    if (csvOwner && downloadNonce) csvOwner.bind(
+      state.host.querySelector('[data-gpi-workspace-frame]'),
+      state.host.querySelector('[data-gpi-csv-download-slot]'),
+      { projectId: state.projectId, file: state.resource.file, sha256: state.resource.checked_sha256 },
+    );
     if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot()) && !state.loading && !state.error) {
       const owner = isDataWorkbenchSnapshot()
         ? window.EasyICU.guidedPi.require('dataPreview')
@@ -903,6 +921,8 @@
     if (open(resource, projectId)) return openEvidence(button);
   }
   function close(options) {
+    if (csvDownloads) csvDownloads.reset();
+    downloadNonce = '';
     const preserveLocation = Boolean(options && options.preserveLocation);
     state.request += 1;
     state.focused = false;

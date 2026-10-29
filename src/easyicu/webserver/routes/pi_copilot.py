@@ -32,6 +32,7 @@ from easyicu.webserver.pi_copilot.provider_config import (
 )
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver.pi_copilot import openrouter_login
+from easyicu.webserver.pi_copilot.workspace_csv_download import csv_preview_bridge, read_csv_download_form
 from .research_append import router as append_router
 from .personal_preferences import router as preferences_router
 from .pi_run_scientific_review import router as scientific_review_router
@@ -525,11 +526,16 @@ def _raise_codex_http(error: codex_account_sessions.CodexAccountSessionError) ->
 
 
 def _workspace_preview_document(
-    *, file_name: str, artifact_html: str, allow_downloads: bool = False
+    *, file_name: str, artifact_html: str, allow_downloads: bool = False,
+    download_nonce: str = "",
 ) -> str:
     """Keep Host provenance outside the sandboxed model-authored document."""
 
     safe_file = html_escape(file_name, quote=True)
+    bridge = ""
+    if allow_downloads and download_nonce:
+        child, bridge = csv_preview_bridge(download_nonce)
+        artifact_html = "<!doctype html>" + child + artifact_html
     safe_srcdoc = html_escape(artifact_html, quote=True)
     sandbox = "allow-scripts allow-downloads" if allow_downloads else "allow-scripts"
     return f"""<!doctype html>
@@ -554,6 +560,7 @@ def _workspace_preview_document(
     <span>Not scientific evidence; unsupported for clinical or manuscript claims. / 不是科学证据；不支持临床或论文结论。</span>
   </header>
   <iframe id="easyicu-workspace-preview-content" sandbox="{sandbox}" referrerpolicy="no-referrer" title="Unvalidated workspace artifact: {safe_file}" srcdoc="{safe_srcdoc}"></iframe>
+  {bridge}
 </body>
 </html>"""
 
@@ -920,6 +927,7 @@ def get_pi_copilot_workspace_preview(
     file: WorkspaceFileText,
     checked_sha256: Sha256Text,
     allow_downloads: bool = False,
+    download_nonce: Annotated[str, Query(pattern=r"^(?:[a-f0-9]{64})?$")] = "",
 ) -> HTMLResponse:
     try:
         payload = get_pi_copilot_service().get_workspace_preview(
@@ -935,6 +943,7 @@ def get_pi_copilot_workspace_preview(
             file_name=str(artifact["file"]),
             artifact_html=str(artifact["text"]),
             allow_downloads=allow_downloads,
+            download_nonce=download_nonce,
         ),
         headers={
             "Content-Security-Policy": (
@@ -948,6 +957,29 @@ def get_pi_copilot_workspace_preview(
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+@router.post("/api/copilot/pi/projects/{project_id}/workspace/download-csv")
+async def post_pi_copilot_workspace_csv_download(project_id: ShortText, request: Request) -> Response:
+    fields = await read_csv_download_form(request)
+    try:
+        # Reuse the checked HTML boundary; submitted text cannot read a path or
+        # create a workspace file, and a changed source invalidates delivery.
+        payload = get_pi_copilot_service().get_workspace_preview(
+            project_id=project_id, relative_file=fields["file"],
+            checked_sha256=fields["expected_sha256"],
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    return Response(
+        content=fields["csv"].encode("utf-8"), media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(fields['filename'], safe='')}",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "X-EasyICU-Source-SHA256": payload["artifact"]["checked_sha256"],
         },
     )
 

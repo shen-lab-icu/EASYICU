@@ -1,9 +1,14 @@
 """Exact workspace attachments and explicit, isolated preview downloads."""
 
+import asyncio
+import base64
 import hashlib
+from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from starlette.requests import Request
 
 from easyicu.webserver.app import app
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
@@ -11,6 +16,7 @@ from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.projections import _project_replay_resource
 from easyicu.webserver.pi_copilot.tools import _workspace_resource
 from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
+from easyicu.webserver.pi_copilot.workspace_csv_download import MAX_CSV_BYTES, MAX_FORM_BYTES, read_csv_download_form
 from easyicu.webserver.routes import pi_copilot as routes
 
 
@@ -123,4 +129,90 @@ def test_preview_download_opt_in_keeps_network_and_origin_isolation(workspace_cl
                         expected_sha256=written["sha256"])
     stale = client.get("/api/copilot/pi/projects/project-a/workspace/preview", params=params)
     assert stale.status_code == 409
+
+
+def _csv_form(digest, **overrides):
+    fields = {"file": "demo.html", "expected_sha256": digest,
+              "filename": "synthetic.csv", "media_type": "text/csv",
+              "csv_base64": base64.b64encode("id,标记\nSYN-001,演示\n".encode()).decode()}
+    return {**fields, **overrides}
+
+
+def test_csv_bridge_attachment_preserves_exact_utf8_and_reads_no_requested_csv_file(workspace_client):
+    workspace, client = workspace_client
+    written = workspace.write_file("project-a", "demo.html", "<!doctype html><p>synthetic</p>")
+    before = workspace.list_files("project-a")
+    response = client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
+                           data=_csv_form(written["sha256"]), headers={"Origin": "http://testserver"})
+    assert response.status_code == 200
+    assert response.content == "id,标记\nSYN-001,演示\n".encode()
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"].endswith("synthetic.csv")
+    assert response.headers["content-security-policy"] == "sandbox; default-src 'none'"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-easyicu-source-sha256"] == written["sha256"]
+    assert workspace.list_files("project-a") == before
+    workspace.edit_file("project-a", "demo.html", old_text="synthetic", new_text="changed", expected_sha256=written["sha256"])
+    assert client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
+                       data=_csv_form(written["sha256"]), headers={"Origin": "http://testserver"}).status_code == 409
+
+
+@pytest.mark.parametrize("origin", [None, "null", "http://evil.example", "http://testserver:8181", "http://testserver/path"])
+def test_csv_bridge_rejects_missing_null_and_wrong_origins(workspace_client, origin):
+    _, client = workspace_client
+    headers = {"Origin": origin} if origin is not None else {}
+    assert client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
+                       data=_csv_form("a" * 64), headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize("overrides", [
+    {"filename": "../private.csv"}, {"filename": "a\\b.csv"}, {"filename": "a:b.csv"},
+    {"filename": "a\u202eb.csv"}, {"filename": "x.html"}, {"media_type": "text/html"},
+    {"csv_base64": "!invalid"}, {"csv_base64": base64.b64encode(b"\xff").decode()},
+    {"csv_base64": base64.b64encode(b"x\0y").decode()}, {"unexpected": "value"},
+    {"expected_sha256": "not-hash"},
+])
+def test_csv_bridge_rejects_unsafe_form_fields(workspace_client, overrides):
+    _, client = workspace_client
+    assert client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
+                       data=_csv_form("a" * 64, **overrides), headers={"Origin": "http://testserver"}).status_code == 422
+
+
+def test_csv_bridge_rejects_duplicate_fields_and_utf8_byte_overflow(workspace_client):
+    _, client = workspace_client
+    body = urlencode(_csv_form("a" * 64)) + "&filename=another.csv"
+    headers = {"Origin": "http://testserver", "Content-Type": "application/x-www-form-urlencoded"}
+    assert client.post("/api/copilot/pi/projects/project-a/workspace/download-csv", content=body, headers=headers).status_code == 422
+    too_big = base64.b64encode(("中" * (MAX_CSV_BYTES // 3 + 1)).encode()).decode()
+    assert client.post("/api/copilot/pi/projects/project-a/workspace/download-csv",
+                       content=urlencode(_csv_form("a" * 64, csv_base64=too_big)), headers=headers).status_code == 413
+
+
+def test_csv_bridge_stream_limit_stops_before_consuming_the_remainder():
+    consumed = []
+
+    async def receive():
+        consumed.append(1)
+        return {"type": "http.request", "body": b"x" * (MAX_FORM_BYTES + 1), "more_body": True}
+
+    request = Request({"type": "http", "method": "POST", "scheme": "http", "path": "/", "query_string": b"",
+                       "server": ("testserver", 80), "headers": [(b"host", b"testserver"), (b"origin", b"http://testserver"),
+                       (b"content-type", b"application/x-www-form-urlencoded")]}, receive)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(read_csv_download_form(request))
+    assert error.value.status_code == 413 and len(consumed) == 1
+
+
+def test_csv_bridge_is_injected_only_with_opt_in_and_valid_per_frame_nonce(workspace_client):
+    workspace, client = workspace_client
+    written = workspace.write_file("project-a", "demo.html", "<!doctype html><script>void 0</script>")
+    params = {"file": "demo.html", "checked_sha256": written["sha256"], "download_nonce": "b" * 64}
+    base = "/api/copilot/pi/projects/project-a/workspace/preview"
+    assert "easyicu:workspace-csv" not in client.get(base, params=params).text
+    response = client.get(base, params={**params, "allow_downloads": "true"})
+    assert "easyicu:workspace-csv-child" in response.text
+    assert "event.source!==frame.contentWindow" in response.text
+    assert "connect-src 'none'" in response.headers["content-security-policy"]
+    assert client.get(base, params={**params, "download_nonce": "<script>"}).status_code == 422
 

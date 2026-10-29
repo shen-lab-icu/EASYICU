@@ -83,13 +83,15 @@ def test_checked_html_card_previews_and_download_consent_is_per_opened_hash() ->
         pytest.skip("Node is not installed")
     source = _read("js/screens-guided-pi-preview.js")
     resources = _read("js/screens-guided-pi-resources.js")
+    csv_downloads = _read("js/screens-guided-pi-csv-download.js")
     script = f"""
       const assert = require('node:assert/strict');
       const calls = [], handlers = {{}};
-      global.window = {{ EU_LANG: 'en', EU_API: {{
-        piCopilotWorkspacePreviewUrl(project, file, digest, downloads) {{
-          calls.push([project, file, digest, downloads]);
-          return '/preview?checked_sha256=' + digest + (downloads ? '&allow_downloads=true' : '');
+      global.window = {{ EU_LANG: 'en', crypto: require('node:crypto').webcrypto,
+        addEventListener(name, handler) {{ handlers['window-' + name] = handler; }}, EU_API: {{
+        piCopilotWorkspacePreviewUrl(project, file, digest, downloads, nonce) {{
+          calls.push([project, file, digest, downloads, nonce]);
+          return '/preview?checked_sha256=' + digest + (downloads ? '&allow_downloads=true&download_nonce=' + nonce : '');
         }},
         piCopilotWorkspaceDownloadUrl(project, file, digest) {{ return '/download?sha=' + digest; }},
         async loadPiCopilotWorkspaceFile(project, file) {{
@@ -97,7 +99,7 @@ def test_checked_html_card_previews_and_download_consent_is_per_opened_hash() ->
         }},
       }} }};
       global.document = {{getElementById() {{return null;}}}};
-      eval({_ESCAPE_OWNER!r}); eval({resources!r}); eval({source!r});
+      eval({_ESCAPE_OWNER!r}); eval({resources!r}); eval({csv_downloads!r}); eval({source!r});
       const host = {{hidden: false, innerHTML: '',
         addEventListener(name, handler) {{handlers[name] = handler;}},
         querySelector() {{return null;}}, querySelectorAll() {{return [];}},
@@ -112,8 +114,10 @@ def test_checked_html_card_previews_and_download_consent_is_per_opened_hash() ->
       assert.ok(!host.innerHTML.includes('allow-downloads'));
       assert.ok(host.innerHTML.includes('/download?sha=' + 'a'.repeat(64)));
       assert.equal(calls.at(-1)[3], false);
+      assert.equal(calls.at(-1)[4], '');
       handlers.click({{target: {{closest(selector) {{return selector === '[data-gpi-preview-downloads]' ? {{}} : null;}}}}}});
       assert.equal(calls.at(-1)[3], true);
+      assert.match(calls.at(-1)[4], /^[a-f0-9]{{64}}$/);
       assert.ok(host.innerHTML.includes('sandbox="allow-scripts allow-downloads"'));
       assert.ok(host.innerHTML.includes('&amp;allow_downloads=true'));
       for (const permission of ['allow-same-origin','allow-popups','allow-forms','allow-top-navigation']) assert.ok(!host.innerHTML.includes(permission));
