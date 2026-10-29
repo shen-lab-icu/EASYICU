@@ -501,6 +501,7 @@ class ToolExecutionContext:
         authority_validator: Optional[AuthorityValidator] = None,
         workspace_root: Optional[Path] = None,
         workspace: Optional["ProjectWorkspace"] = None,
+        runtime_qa_store: Optional[Any] = None,
         extension_registry: Optional["ExtensionRegistry"] = None,
         data_handling: str = "unspecified",
         note_credentialed_history: Optional[Callable[[], None]] = None,
@@ -539,6 +540,7 @@ class ToolExecutionContext:
             Path(workspace_root).expanduser().absolute() if workspace_root else None
         )
         self.workspace = workspace
+        self.runtime_qa_store = runtime_qa_store
         self.extension_registry = extension_registry
         self._authority_invalidated_reason: Optional[str] = None
         self._lock = threading.Lock()

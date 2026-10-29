@@ -32,15 +32,16 @@
     openingQuestion: null, followUpDraft: null,
     startupPromise: null, projectPreparePromise: null, projectPrepareId: '',
   };
+  const autoPreviewedWorkspaceVersions = new Set();
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
   const { publicAssistantText } = MODULES.require('assistantText').create({ tr });
-  function assistantTextHtml(value) {
+  function assistantTextHtml(value, resources) {
     const renderer = MODULES.require('markdown');
-    // A filename in prose has no resource identity. Attached message resources
-    // already provide buttons with their own run/file coordinates and digest.
+    // Only attached message resources can turn a filename into a controlled
+    // preview action with the Host's file coordinates and checked digest.
     return renderer && typeof renderer.render === 'function'
-      ? renderer.render(value)
+      ? renderer.render(value, { resources })
       : esc(value).replace(/\n/g, '<br>');
   }
   function api() { return window.EU_API || {}; }
@@ -213,6 +214,8 @@
   });
   const ACTIVITY = MODULES.require('activity').create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton, runFailureText,
+    mergeResources: RESOURCE_OWNER.merge,
+    agentMode,
     publicText: publicAssistantText,
   });
   const CONFIRMATION = MODULES.require('confirmation').create({
@@ -236,7 +239,8 @@
   const { timeMs } = ACTIVITY;
   const TRANSCRIPT = MODULES.require('transcript').create({
     tr, activity: ACTIVITY, upsertActivityStep, timeMs, resourceKey, modelErrorText, runFailureText,
-    activityHasCompletedAction,
+    mergeResources: RESOURCE_OWNER.merge,
+    activityHasCompletedAction, activityHasSideEffectAttempt,
     workflowActionCode: () => String((state.workflow && state.workflow.next_action_code) || ''),
   });
   const transcriptMessages = TRANSCRIPT.transcriptMessages;
@@ -395,6 +399,7 @@
     renderHost: render,
     sendText,
     regenerate: regenerateMessage,
+    continueReply: continueReplyExplanation,
     resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated,
     host: () => state.host,
   });
@@ -895,16 +900,26 @@
     return row;
   }
   function addAssistantResources(resources) {
-    const existing = state.currentTurnResources;
-    (Array.isArray(resources) ? resources : []).forEach(resource => {
-      const key = resourceKey(resource);
-      if (key && !existing.some(item => resourceKey(item) === key)) existing.push(resource);
-    });
-    state.currentTurnResources = existing.slice(0, 24);
+    state.currentTurnResources = RESOURCE_OWNER.merge(state.currentTurnResources, resources).slice(0, 24);
     const row = state.regenerating && state.regeneration
       ? state.regeneration.message
       : state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
     if (row) row.resources = state.currentTurnResources.slice();
+    // Only newly arriving, Host-checked workspace HTML opens automatically.
+    // A history refresh or a repeated tool snapshot cannot reopen a closed tab.
+    if (agentMode() !== 'workspace') return;
+    const incoming = new Set((Array.isArray(resources) ? resources : []).filter(Boolean).map(item => item.file));
+    const checked = state.currentTurnResources.slice().reverse().find(item =>
+      incoming.has(item.file) && ['file', 'webpage'].includes(item.kind)
+      && /\.html?$/i.test(item.file || '') && /^[a-f0-9]{64}$/.test(item.checked_sha256 || ''));
+    if (!checked) return;
+    const key = JSON.stringify([projectId(), checked.file, checked.checked_sha256]);
+    if (autoPreviewedWorkspaceVersions.has(key)) return;
+    const preview = MODULES.optional('preview');
+    if (!preview || typeof preview.open !== 'function') return;
+    autoPreviewedWorkspaceVersions.add(key);
+    if (autoPreviewedWorkspaceVersions.size > 128) autoPreviewedWorkspaceVersions.delete(autoPreviewedWorkspaceVersions.values().next().value);
+    preview.open(checked, projectId(), previewWorkflowContext());
   }
   function completeLatestAssistant(stopReason) {
     const row = state.regenerating && state.regeneration
@@ -918,6 +933,11 @@
       return step && step.kind === 'tool' && step.status === 'complete'
         && toolName && !/^easyicu_(inspect|list)_/.test(toolName);
     }));
+  }
+  function activityHasSideEffectAttempt(activity) {
+    return Boolean(activity && Array.isArray(activity.steps) && activity.steps.some(step => (
+      step && step.kind === 'tool' && /^(?:easyicu_(?:write|edit)_project_file|easyicu_(?:update_study_context|run|start_extraction|prepare_demo_source|repair_report|request_replan|cancel|accept_idea_handoff|mine_ideas))$/.test(String(step.toolName || ''))
+    )));
   }
   async function switchMode(mode, options = {}) {
     const next = mode === 'research' ? 'research' : 'workspace';
@@ -977,7 +997,7 @@
   const LIVE_STREAM = MODULES.require('liveStream').create({
     state, timeMs, ensureActivity, upsertActivityStep, finishActivity,
     assistantRow, addAssistantResources, completeLatestAssistant,
-    activityHasCompletedAction, modelErrorText, activity: ACTIVITY,
+    activityHasCompletedAction, activityHasSideEffectAttempt, modelErrorText, activity: ACTIVITY,
     modules: MODULES, projectId: () => projectId(),
     loadWorkflow: (...args) => loadWorkflow(...args), render: () => render(),
     watchChildJob: (...args) => watchChildJob(...args), hostJobs: HOST_JOBS,
@@ -1006,6 +1026,16 @@
         : payload.session;
       if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
       state.session = refreshed;
+      const replyContinuation = refreshed.reply_continuation;
+      if (preserveTimeline && replyContinuation && replyContinuation.source_error_entry_id) {
+        const savedFailure = (refreshed.transcript || []).find(row => row.entry_id === replyContinuation.source_error_entry_id);
+        const liveFailure = state.messages.slice().reverse().find(row => row.role === 'assistant');
+        if (savedFailure && liveFailure && liveFailure.errorCode === savedFailure.error_code
+            && !liveFailure.entryId) {
+          liveFailure.entryId = replyContinuation.source_error_entry_id;
+          liveFailure.hasCompletedAction = true;
+        }
+      }
       state.sessions = [state.session].concat(
         state.sessions.filter(row => row.session_id !== state.session.session_id)
       );
@@ -1305,7 +1335,7 @@
       let row = null; try { row = JSON.parse(event.data); } catch (e) { return; }
       if (row.type === 'pi_event') handlePiEvent(row.event);
       if (row.type === 'end') {
-        closeSource(); state.busy = false;
+        closeSource(); state.busy = false; state.continuingReplyEntryId = '';
         const replacedBranch = state.regenerating;
         const completedAction = activityHasCompletedAction(activeActivity());
         const wrapupTimedOut = row.status === 'failed'
@@ -1423,6 +1453,34 @@
       if (!isCurrent()) return;
       state.busy = false; finishActivity('error', null, 'failed');
       state.error = errorText(error);
+      render();
+    }
+  }
+  async function continueReplyExplanation(sourceErrorEntryId) {
+    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    const recovery = state.session.reply_continuation;
+    if (!recovery || !recovery.available || recovery.source_error_entry_id !== sourceErrorEntryId) return;
+    const sessionId = state.session.session_id;
+    const expectedProjectId = projectId();
+    const revision = state.sessionSelectionRevision;
+    const isCurrent = () => state.session && state.session.session_id === sessionId
+      && projectId() === expectedProjectId && state.sessionSelectionRevision === revision;
+    state.busy = true; state.error = ''; state.currentTurnResources = [];
+    state.continuingReplyEntryId = sourceErrorEntryId;
+    render();
+    try {
+      const payload = await api().continuePiCopilotReply(sessionId, {
+        project_id: expectedProjectId, source_error_entry_id: sourceErrorEntryId,
+      });
+      if (!isCurrent()) return;
+      state.jobId = payload.job_id;
+      watchJob(payload.job_id);
+    } catch (error) {
+      if (!isCurrent()) return;
+      state.busy = false;
+      state.continuingReplyEntryId = '';
+      state.error = errorText(error);
+      await refreshSession(false);
       render();
     }
   }

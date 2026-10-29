@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -206,6 +207,7 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
         "examples/public_demo.md",
         "examples/public_demo.zh.md",
         "references/composition.md",
+        "references/implementation.json",
         "references/methods.md",
         "references/reference_scripts.md",
         "references/validation_framework.md",
@@ -225,6 +227,8 @@ def test_builtin_method_skill_package_exposes_reviewed_documentation(
         assert f"## {heading}" in skill_markdown
     assert "survival_time_to_event_v1" not in skill_markdown
     assert package["overview_paths"]["zh"] == "SKILL.zh.md"
+    assert package["implementation"]["mode"] == "fixed_host"
+    assert json.loads(files["references/implementation.json"]["content"]) == package["implementation"]
     assert package["not_for"][0]["sibling_skill_id"] == "time-varying-exposure-survival-study"
     assert len(skill_markdown.encode("utf-8")) > 2500
     # Its reference scripts run on their own (host_reference_scripts_executable).
@@ -256,7 +260,19 @@ def test_builtin_method_component_package_and_unknown_id(monkeypatch) -> None:
         "SKILL.zh.md",
         "references/method_contract.md",
         "references/validation_framework.md",
+        "references/implementation.json",
+        "implementation/research_agent.methods.decision_curve.py",
+        "implementation/research_agent.execution.runners.prediction_model_executor.py",
     }
+    assert payload["implementation"]["mode"] == "fixed_host"
+    assert any(row["qualname"] == "run_prediction_score_analysis" and row["role"] == "entrypoint"
+               for row in payload["implementation"]["entrypoints"])
+    assert any(row["qualname"] == "net_benefit_curve" and row["role"] == "helper"
+               for row in payload["implementation"]["entrypoints"])
+    for entry in payload["implementation"]["entrypoints"]:
+        source = next(row for row in payload["files"] if row["path"] == entry["file_path"])
+        assert source["source_path"] == entry["source_path"]
+        assert source["source_sha256"] == entry["source_sha256"]
     markdown = next(row for row in payload["files"] if row["path"] == "SKILL.md")
     assert "## When to use" in markdown["content"]
     assert "## Steps and their checks" in markdown["content"]
@@ -319,6 +335,7 @@ def test_composed_association_workflow_package_exposes_ordered_project_phases(
         "examples/public_demo.md",
         "examples/public_demo.zh.md",
         "references/composition.md",
+        "references/implementation.json",
         "references/validation_framework.md",
         "references/workflow_contract.md",
     }

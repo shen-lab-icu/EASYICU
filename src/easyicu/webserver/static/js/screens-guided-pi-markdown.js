@@ -64,7 +64,7 @@
 
   /* Inline formatting plus the one safe link form. Kept separate from the
      block pass so a link inside a list item or heading still renders. */
-  function inlineWithLinks(value) {
+  function inlineWithLinks(value, resources) {
     const source = String(value == null ? '' : value);
     const linkPattern = /\[([^\]\n]{1,240})\]\(([^)\s]+)\)/g;
     let cursor = 0;
@@ -73,9 +73,13 @@
     while ((match = linkPattern.exec(source)) !== null) {
       output += inlineHtml(source.slice(cursor, match.index));
       const url = safeUrl(match[2]);
+      const owner = !url && window.EasyICU.guidedPi.optional('resources');
+      const resourceOwner = owner && owner.create({ esc });
+      const attached = resourceOwner && typeof resourceOwner.relativeLink === 'function'
+        ? resourceOwner.relativeLink(resources, match[2], match[1]) : '';
       output += url
         ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(match[1])}<span aria-hidden="true">↗</span></a>`
-        : inlineHtml(match[0]);
+        : attached || inlineHtml(match[0]);
       cursor = match.index + match[0].length;
     }
     return output + inlineHtml(source.slice(cursor));
@@ -87,9 +91,11 @@
      buttons and every older turn kept its raw markers. Every heading level
      renders at one restrained size: a reply is a chat message, not a document,
      and an h1-sized "下一步" would out-shout the answer above it. */
-  function render(value) {
+  function render(value, options) {
     const source = String(value == null ? '' : value);
     if (!source.trim()) return '';
+    const resources = options && Array.isArray(options.resources) ? options.resources : [];
+    const inline = text => inlineWithLinks(text, resources);
     const lines = source.split(/\r?\n/);
     const out = [];
     let listTag = '';
@@ -97,7 +103,7 @@
 
     function flushParagraph() {
       if (!paragraph.length) return;
-      out.push(`<p>${inlineWithLinks(paragraph.join('\n'))}</p>`);
+      out.push(`<p>${inline(paragraph.join('\n'))}</p>`);
       paragraph = [];
     }
     function flushList() {
@@ -118,7 +124,7 @@
     const TABLE_ROW = /^\s*\|.*\|\s*$/;
     const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
     const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '')
-      .split(/(?<!\\)\|/).map(cell => inlineWithLinks(cell.replace(/\\\|/g, '|').trim()));
+      .split(/(?<!\\)\|/).map(cell => inline(cell.replace(/\\\|/g, '|').trim()));
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       if (TABLE_ROW.test(line) && index + 1 < lines.length && TABLE_RULE.test(lines[index + 1])) {
@@ -139,10 +145,10 @@
         flushList();
         const ideaBlock = ideaMiningBlock(heading[2]);
         if (ideaBlock) {
-          out.push(`<h3 class="gpi-md-heading gpi-idea-heading">${inlineWithLinks(ideaBlock.leadIn)}</h3>`);
-          if (ideaBlock.body) out.push(`<p>${inlineWithLinks(ideaBlock.body)}</p>`);
+          out.push(`<h3 class="gpi-md-heading gpi-idea-heading">${inline(ideaBlock.leadIn)}</h3>`);
+          if (ideaBlock.body) out.push(`<p>${inline(ideaBlock.body)}</p>`);
         } else {
-          out.push(`<p class="gpi-md-heading">${inlineWithLinks(heading[2])}</p>`);
+          out.push(`<p class="gpi-md-heading">${inline(heading[2])}</p>`);
         }
         continue;
       }
@@ -150,22 +156,22 @@
       if (ideaBlock) {
         flushParagraph();
         flushList();
-        out.push(`<h3 class="gpi-md-heading gpi-idea-heading">${inlineWithLinks(ideaBlock.leadIn)}</h3>`);
-        if (ideaBlock.body) out.push(`<p>${inlineWithLinks(ideaBlock.body)}</p>`);
+        out.push(`<h3 class="gpi-md-heading gpi-idea-heading">${inline(ideaBlock.leadIn)}</h3>`);
+        if (ideaBlock.body) out.push(`<p>${inline(ideaBlock.body)}</p>`);
         continue;
       }
       const bullet = line.match(BULLET);
       if (bullet) {
         flushParagraph();
         openList('ul');
-        out.push(`<li>${inlineWithLinks(bullet[1])}</li>`);
+        out.push(`<li>${inline(bullet[1])}</li>`);
         continue;
       }
       const ordered = line.match(ORDERED);
       if (ordered) {
         flushParagraph();
         openList('ol', Number(ordered[1]));
-        out.push(`<li>${inlineWithLinks(ordered[2])}</li>`);
+        out.push(`<li>${inline(ordered[2])}</li>`);
         continue;
       }
       if (!line.trim()) {

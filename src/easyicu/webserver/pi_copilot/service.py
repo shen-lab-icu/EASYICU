@@ -72,6 +72,7 @@ from .conversation_status import (
 from .decision_records import conversation_job_ids, project_decision_records
 from .gateway import PiGatewayClient
 from .followup_queue import FollowupQueue
+from .reply_continuation import public_state as public_reply_continuation
 from .message_input import prepare_user_message
 from .project_authority import (
     ProjectAuthorityStore,
@@ -327,6 +328,9 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         )
         self.workspace_root = workspace_base.expanduser().absolute()
         self.workspace = ProjectWorkspace(self.workspace_root)
+        from .workspace_runtime_qa import RuntimeQaStore
+
+        self.runtime_qa = RuntimeQaStore()
 
     def _admit_new_work(
         self,
@@ -2522,6 +2526,13 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             if submitted_job is not None:
                 self._schedule_followups(session_id, submitted_job)
 
+    def continue_reply(
+        self, session_id: str, *, project_id: str, source_error_entry_id: str,
+    ) -> Dict[str, Any]:
+        from .reply_continuation import continue_reply
+
+        return continue_reply(self, session_id, project_id=project_id, source_error_entry_id=source_error_entry_id)
+
     def send_message(
         self,
         session_id: str,
@@ -2654,14 +2665,15 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             exclude_session_id=record.session_id,
         )
         opened_state = self._ensure_open(record)
-        if not regenerate_user_entry_id and not message_intent:
+        if record.agent_mode == "research" and not regenerate_user_entry_id and not message_intent:
             workflow = build_project_workflow_projection(
                 study_context_id=record.binding.study_context_id,
             )
             if workflow.workflow.current_stage == "idea":
                 message_intent = infer_idea_mining_followup_intent(provider_text)
         if (
-            not regenerate_user_entry_id
+            record.agent_mode == "research"
+            and not regenerate_user_entry_id
             and not message_intent
             and int(opened_state.get("message_count") or 0) == 0
         ):
@@ -3056,6 +3068,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     project_id=record.project_id,
                 ),
                 workspace=self.workspace,
+                runtime_qa_store=self.runtime_qa,
                 extension_registry=self.extension_registry,
             )
         except Exception as exc:
@@ -4533,6 +4546,47 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             ),
         }
 
+    def begin_workspace_runtime_qa(
+        self, *, project_id: str, relative_file: str, checked_sha256: str,
+    ) -> Dict[str, Any]:
+        from .workspace_runtime_qa import contract_from_html
+
+        artifact = self.get_workspace_preview(
+            project_id=project_id, relative_file=relative_file,
+            checked_sha256=checked_sha256,
+        )["artifact"]
+        return self.runtime_qa.begin(
+            project_id, artifact["file"], artifact["checked_sha256"],
+            contract_from_html(artifact["text"]),
+        )
+
+    def get_workspace_runtime_qa(
+        self, *, project_id: str, relative_file: str, checked_sha256: str,
+    ) -> Dict[str, Any]:
+        artifact = self.get_workspace_preview(
+            project_id=project_id, relative_file=relative_file,
+            checked_sha256=checked_sha256,
+        )["artifact"]
+        return self.runtime_qa.read(project_id, artifact["file"], artifact["checked_sha256"])
+
+    def record_workspace_runtime_qa(
+        self, *, project_id: str, relative_file: str, checked_sha256: str,
+        nonce: str, report: Any,
+    ) -> Dict[str, Any]:
+        artifact = self.get_workspace_preview(
+            project_id=project_id, relative_file=relative_file,
+            checked_sha256=checked_sha256,
+        )["artifact"]
+        result = self.runtime_qa.record(
+            project_id, artifact["file"], artifact["checked_sha256"], nonce, report,
+        )
+        # A concurrent edit invalidates the read-back as well as future reads.
+        self.get_workspace_preview(
+            project_id=project_id, relative_file=relative_file,
+            checked_sha256=checked_sha256,
+        )
+        return result
+
     def get_data_package_review(
         self,
         *,
@@ -5423,6 +5477,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             # browser, and therefore never reach the next-step buttons the
             # front end parses out of this same text.
             "transcript": project_transcript(state.get("transcript")),
+            "reply_continuation": public_reply_continuation(state.get("reply_continuation")),
             "quick_answers": self._quick_attachments(record, replay_turns) if include_replay else [],
             "transcript_page": (
                 dict(state.get("transcript_page") or {})

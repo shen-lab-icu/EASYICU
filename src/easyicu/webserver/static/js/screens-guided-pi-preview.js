@@ -10,6 +10,45 @@
   const { esc } = window.EU_HTML;
   let csvDownloads = null;
   let downloadNonce = '';
+  let runtimeQa = null;
+  let qaBeginQueue = Promise.resolve();
+  function runtimeQaOwner() {
+    const owner = window.EasyICU.guidedPi.optional('runtimeQa');
+    if (!runtimeQa && owner) runtimeQa = owner.create(() =>
+      isCheckedWorkspaceHtml() && state.mode === 'web' ? workspacePreviewKey() : '', {
+      publish: value => window.EU_API.recordPiCopilotWorkspaceRuntimeQa(value.projectId, {
+        file: value.file, checked_sha256: value.sha256, nonce: value.nonce, report: value.report,
+      }),
+      refresh: value => window.EU_API.loadPiCopilotWorkspaceRuntimeQa(value.projectId, value.file, value.sha256),
+    });
+    return runtimeQa;
+  }
+  async function beginRuntimeQa() {
+    if (!isCheckedWorkspaceHtml() || state.mode !== 'web') return;
+    const owner = runtimeQaOwner(), api = window.EU_API || {};
+    if (!owner || !api.beginPiCopilotWorkspaceRuntimeQa) { render(); return; }
+    const key = workspacePreviewKey(), ticket = state.request, serial = ++state.qaSerial;
+    state.qaRequest = null;
+    state.qaError = '';
+    try {
+      const coordinates = { projectId: state.projectId, file: state.resource.file, sha256: state.resource.checked_sha256 };
+      // Serialize renewals: an older HTTP request must not arrive after and
+      // revoke the nonce returned to a newer preview of the same bytes.
+      qaBeginQueue = qaBeginQueue.catch(() => null).then(() => {
+        if (ticket !== state.request || serial !== state.qaSerial) return null;
+        return api.beginPiCopilotWorkspaceRuntimeQa(coordinates.projectId, coordinates.file, coordinates.sha256);
+      });
+      const request = await qaBeginQueue;
+      if (ticket !== state.request || serial !== state.qaSerial || key !== workspacePreviewKey()) return;
+      if (!request) return;
+      state.qaRequest = request;
+      owner.prepare(key, request);
+    } catch (_) {
+      if (ticket !== state.request || serial !== state.qaSerial || key !== workspacePreviewKey()) return;
+      state.qaError = tr('Browser checks could not start; this page is unverified.', '浏览器检查未能启动；此页尚未验证。');
+    }
+    render();
+  }
   function csvDownloadOwner() {
     const owner = window.EasyICU.guidedPi.optional('csvDownloads');
     if (!csvDownloads && owner) csvDownloads = owner.create(() =>
@@ -45,6 +84,11 @@
     referenceResource: null,
     previousAsideCollapsed: null,
     downloadsKey: '',
+    qaRequest: null,
+    qaError: '',
+    generateCsv: false,
+    qaSerial: 0,
+    csvReadyListener: false,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -390,9 +434,9 @@
       ? api.piCopilotWorkspaceDownloadUrl(state.projectId, state.resource.file, digest) : '';
     const allowed = previewDownloadsAllowed();
     const toggle = isCheckedWorkspaceHtml()
-      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow this page to download', '允许此页下载')}</button>` : '';
+      ? `<button type="button" data-gpi-preview-downloads aria-pressed="${allowed}" title="${tr('Only this checked version; network and application data remain blocked.', '仅当前已检查版本；仍禁止联网和访问应用数据。')}">${allowed ? tr('Disable page downloads', '关闭此页下载') : tr('Allow and generate CSV', '允许并生成 CSV')}</button>` : '';
     if (!url && !toggle) return '';
-    return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}<span data-gpi-csv-download-slot></span></div>`;
+    return `<div class="gpi-preview-file-actions">${url ? `<a href="${esc(url)}" download="${esc(state.resource.file.split('/').pop())}">${tr('Download file', '下载文件')}</a>` : ''}${toggle}<span data-gpi-csv-download-slot></span><span data-gpi-runtime-qa-slot>${esc(state.qaError)}</span></div>`;
   }
   function previewUrl() {
     const api = window.EU_API || {};
@@ -419,6 +463,8 @@
           checkedSha256,
           previewDownloadsAllowed(),
           downloadNonce,
+          state.qaRequest && state.qaRequest.nonce || '',
+          state.generateCsv,
         )
       : '';
   }
@@ -681,6 +727,13 @@
       state.host.querySelector('[data-gpi-csv-download-slot]'),
       { projectId: state.projectId, file: state.resource.file, sha256: state.resource.checked_sha256 },
     );
+    state.generateCsv = false;
+    const qaOwner = runtimeQaOwner();
+    if (qaOwner && state.qaRequest && state.mode === 'web') qaOwner.bind(
+      state.host.querySelector('[data-gpi-workspace-frame]'),
+      state.host.querySelector('[data-gpi-runtime-qa-slot]'),
+      { projectId: state.projectId, file: state.resource.file, sha256: state.resource.checked_sha256 },
+    );
     if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot()) && !state.loading && !state.error) {
       const owner = isDataWorkbenchSnapshot()
         ? window.EasyICU.guidedPi.require('dataPreview')
@@ -893,6 +946,8 @@
     // An open workbench tab survives opening a file: the session owner closes
     // the workbench only when the conversation itself changes.
     state.request += 1;
+    if (runtimeQa) runtimeQa.reset();
+    state.qaRequest = null; state.qaError = '';
     state.loading = false;
     if (!state.resource || state.projectId !== project) state.focused = false;
     if (state.projectId !== project) state.recentResources = [];
@@ -900,6 +955,7 @@
       resourceKey(row) === resourceKey(safe) && row.sha256 === safe.sha256);
     state.resource = catalogResource ? { ...safe, label: catalogResource.label } : safe;
     state.downloadsKey = '';
+    state.generateCsv = false;
     state.projectId = project;
     state.workflowContext = safeWorkflowContext(workflowContext);
     rememberResource(state.resource);
@@ -914,6 +970,7 @@
     state.activeClaimId = '';
     if (typeof syncLocation === 'function') syncLocation(state.resource);
     render();
+    if (state.mode === 'web') beginRuntimeQa();
     if (state.mode !== 'web' && state.mode !== 'document') loadResource();
     return true;
   }
@@ -922,11 +979,14 @@
   }
   function close(options) {
     if (csvDownloads) csvDownloads.reset();
+    if (runtimeQa) runtimeQa.reset();
+    state.qaRequest = null; state.qaError = '';
     downloadNonce = '';
     const preserveLocation = Boolean(options && options.preserveLocation);
     state.request += 1;
     state.focused = false;
     state.downloadsKey = '';
+    state.generateCsv = false;
     state.resource = null; state.artifact = null; state.payload = null; state.studyContext = null; state.governance = null; state.error = ''; state.loading = false;
     state.evidenceTabs = []; state.activeEvidenceId = '';
     state.activeClaimId = '';
@@ -938,10 +998,20 @@
   function mount(host) {
     if (!host) return;
     state.host = host;
+    if (!state.csvReadyListener && runtimeQaOwner()) {
+      state.csvReadyListener = true;
+      document.addEventListener('easyicu:workspace-csv-ready', event => {
+        if (runtimeQa) runtimeQa.noteCsvReady(event.detail);
+      });
+    }
     host.addEventListener('click', event => {
       if (event.target.closest('[data-gpi-preview-downloads]') && isCheckedWorkspaceHtml()) {
         state.downloadsKey = previewDownloadsAllowed() ? '' : workspacePreviewKey();
-        render();
+        state.generateCsv = previewDownloadsAllowed();
+        state.mode = 'web';
+        // Obtain a fresh QA nonce before rebuilding the frame once. Runtime
+        // filter checks restore the selection before the CSV bridge exports.
+        beginRuntimeQa();
         return;
       }
       if (event.target.closest('[data-gpi-preview-close]')) {
@@ -1096,6 +1166,7 @@
       if (mode === state.mode) return;
       state.mode = mode;
       render();
+      if (mode === 'web') beginRuntimeQa();
       if (mode !== 'web' && !state.artifact && !state.loading) loadResource();
     });
     if (!state.resource) setAsideOpen(false);

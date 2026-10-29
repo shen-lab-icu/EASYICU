@@ -158,6 +158,8 @@ class PiConversationReplayStore:
         message_origin: str = "unknown",
         attached_skills: object = (),
         mentioned_objects: object = (),
+        source_job_id: Optional[str] = None,
+        source_error_entry_id: Optional[str] = None,
     ) -> None:
         with self._lock:
             payload = self._read(session_id, project_id)
@@ -178,6 +180,9 @@ class PiConversationReplayStore:
                     "attached_skills": attachment_payload(attached_skills),
                     "mentioned_objects": resolved_payload(mentioned_objects),
                     "events": [],
+                    **({"kind": "reply_continuation", "source_job_id": str(source_job_id or "")[:160],
+                        "source_error_entry_id": str(source_error_entry_id)[:160]}
+                       if source_error_entry_id else {}),
                 }
             )
             payload["turns"] = turns
@@ -371,6 +376,7 @@ class PiConversationReplayStore:
         job_id: str,
         status: str,
         assistant_reply: Optional[str] = None,
+        assistant_entry_id: Optional[str] = None,
     ) -> None:
         if status not in {"done", "failed", "cancelled", "interrupted"}:
             raise ValueError(f"invalid Pi replay status: {status}")
@@ -382,6 +388,8 @@ class PiConversationReplayStore:
                     turn["ended_at"] = utc_now()
                     if assistant_reply is not None:
                         turn["assistant_reply"] = str(assistant_reply)[:8192]
+                    if assistant_entry_id:
+                        turn["assistant_entry_id"] = str(assistant_entry_id)[:160]
                     self._write(payload)
                     return
 

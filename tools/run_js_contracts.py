@@ -37,6 +37,9 @@ CONTRACTS: dict[str, list[str]] = {
     "figure_format_downloads.test.js": [],
     "guided_pi_conversation_model.test.js": [],
     "guided_pi_ux_recovery.test.js": [],
+    "reply_continuation.test.js": [],
+    "workspace_runtime_qa.test.js": [],
+    "pi_workspace_resources_ux.test.js": [],
     "guided_pi_audit_model_binding.test.js": [
         "screens-guided-pi-model-menu.js",
         "screens-guided-pi-header.js",

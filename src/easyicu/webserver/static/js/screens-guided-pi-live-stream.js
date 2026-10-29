@@ -55,6 +55,7 @@
         if (submittedJobId) return;
         const delta = String(event.delta || '');
         const streamingRow = assistantRow();
+        if (state.continuingReplyEntryId) streamingRow.replyContinuation = true;
         // Remember how many tool calls preceded this text segment: the turn
         // layout places interim narration between the trace rows it follows.
         if (streamingRow.afterSteps == null) {
@@ -69,6 +70,10 @@
         if (event.error_code && !submittedJobId) {
           row = row || assistantRow();
           row.errorCode = String(event.error_code);
+          row.hasCompletedAction = activityHasCompletedAction(activity);
+          row.hasSideEffectAttempt = typeof host.activityHasSideEffectAttempt === 'function'
+            && host.activityHasSideEffectAttempt(activity);
+          if (state.continuingReplyEntryId) row.replyContinuation = true;
           if (!row.text) row.text = modelErrorText(
             row.errorCode, activityHasCompletedAction(activity),
           );
@@ -148,7 +153,7 @@
         if (placeholder) placeholder.replaceWith(text); else body.prepend(text);
       }
       const visible = publicAssistantText(row.text);
-      text.innerHTML = assistantTextHtml(FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible);
+      text.innerHTML = assistantTextHtml(FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible, row.resources);
       const log = state.host.querySelector('[data-gpi-log]');
       if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
       return true;

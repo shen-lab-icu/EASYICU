@@ -144,6 +144,9 @@
       return '';
     }
     function toolLabel(name, resource) {
+      if (name === 'easyicu_inspect_workflow' && typeof host.agentMode === 'function' && host.agentMode() === 'workspace') {
+        return tr('Check task workflow', '检查任务工作流程');
+      }
       const labels = {
         easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
         easyicu_list_data_sources: tr('Check the EasyICU data-source catalog', '检查 EasyICU 数据源目录'),
@@ -190,6 +193,9 @@
       return file ? `${label} · ${file}` : label;
     }
     function completedToolLabel(name, resource) {
+      if (name === 'easyicu_inspect_workflow' && typeof host.agentMode === 'function' && host.agentMode() === 'workspace') {
+        return tr('Checked task workflow', '已检查任务工作流程');
+      }
       const labels = {
         easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
         easyicu_list_data_sources: tr('Checked the EasyICU data-source catalog', '已检查 EasyICU 数据源目录'),
@@ -1037,8 +1043,9 @@
     }
     function stepResources(step) {
       const seen = new Set();
-      const resources = [step.resource].concat(Array.isArray(step.resources) ? step.resources : [])
-        .filter(resource => {
+      const snapshots = [step.resource].concat(Array.isArray(step.resources) ? step.resources : []);
+      const resources = typeof host.mergeResources === 'function'
+        ? host.mergeResources([], snapshots) : snapshots.filter(resource => {
           const key = resourceKey(resource);
           if (!key || seen.has(key)) return false;
           seen.add(key);
@@ -1055,6 +1062,22 @@
       if (step.step === 'action') return actionDetail(step);
       if (step.kind === 'tool') {
         const receipt = step.receipt;
+        if (['error', 'failed', 'cancelled'].includes(step.status)) {
+          // The transport intentionally removes summary/text. Render typed
+          // error codes through local copy, never raw tool prose or arguments.
+          const rawCode = String(step.code || '').trim();
+          const code = /^(?:pi_|easyicu_|workspace_|research_)[a-zA-Z0-9_.-]{1,150}$/.test(rawCode) ? rawCode : '';
+          const workspaceErrors = {
+            pi_workspace_write_authorization_required: tr('This message did not authorize writing project files.', '本条消息没有获得写入项目文件的授权。'),
+            pi_workspace_mutation_limit_reached: tr('This message reached its file-change limit.', '本条消息的文件修改次数已达上限。'),
+            pi_workspace_mode_required: tr('This operation requires a workspace conversation.', '这项操作需要在工作区对话中进行。'),
+            pi_workspace_unavailable: tr('The project workspace is unavailable.', '项目工作区暂不可用。'),
+          };
+          const explanation = workspaceErrors[code]
+            || (code && typeof host.runFailureText === 'function' ? String(host.runFailureText(code) || '') : '');
+          return tr(`Not completed: ${explanation || code || 'No displayable error reason was provided.'}`,
+            `未完成：${explanation || code || '工具没有提供可显示的错误原因。'}`);
+        }
         if (step.status === 'complete' && step.toolName === 'easyicu_update_study_context'
           && receipt && receipt.study_family === 'descriptive_epidemiology') {
           const words = (Array.isArray(receipt.question_evidence) ? receipt.question_evidence : []).slice(0, 4).join(' / ');
