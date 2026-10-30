@@ -19,6 +19,7 @@ class DraftSkillsRequest(BaseModel):
 class DefaultSkillsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     attached_skills: AttachedSkills
+    expected_attached_skills: AttachedSkills | None = None
 
 
 def _call(method: str, *args, **kwargs):
@@ -45,4 +46,7 @@ def get_default_skills(project_id: str):
 
 @router.put("/projects/{project_id}/default-skills")
 def put_default_skills(project_id: str, body: DefaultSkillsRequest):
-    return _call("project_default_skills", project_id=project_id, attached_skills=body.attached_skills)
+    kwargs = {"project_id": project_id, "attached_skills": body.attached_skills}
+    if body.expected_attached_skills is not None:
+        kwargs["expected_attached_skills"] = body.expected_attached_skills
+    return _call("project_default_skills", **kwargs)

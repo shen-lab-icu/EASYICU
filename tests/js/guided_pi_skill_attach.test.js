@@ -35,8 +35,8 @@ function owner(handlers = {}) {
         if (handlers.draft) return handlers.draft(body);
         return { attached_skills: body.attached_skills };
       },
-      loadProjectDefaultSkills: async projectId => { calls.push(['defaults', projectId]); return { attached_skills: handlers.defaults || [] }; },
-      setProjectDefaultSkills: async (projectId, body) => { calls.push(['save-defaults', projectId, body]); return { attached_skills: body.attached_skills }; },
+      loadProjectDefaultSkills: async projectId => { calls.push(['defaults', projectId]); return handlers.loadDefaults ? handlers.loadDefaults(projectId) : { attached_skills: handlers.defaults || [] }; },
+      setProjectDefaultSkills: async (projectId, body) => { calls.push(['save-defaults', projectId, body]); if (handlers.saveDefaults) return handlers.saveDefaults(body); return { attached_skills: body.attached_skills }; },
     },
   };
   const context = vm.createContext({ window });
@@ -118,4 +118,63 @@ test('project defaults are offered from the current picks and saved only on requ
   // A new conversation that starts with the defaults can drop them for the project.
   const fresh = { session_id: 's2', draft_attached_skills: [] };
   assert.match(attach.defaultsControl('p1', fresh), /本项目新对话不再默认带技能/);
+});
+
+test('a revised Skill is not presented as the same project default', async () => {
+  const original = { source: 'user', id: 'my-notes', digest: 'e'.repeat(64) };
+  const { attach } = owner({ defaults: [original] });
+  const session = { session_id: 's1', draft_attached_skills: [{ ...original, digest: 'd'.repeat(64) }] };
+  await attach.loadDefaults('p1');
+  assert.match(attach.defaultsControl('p1', session), /设为本项目新对话的默认技能/);
+});
+
+test('stale defaults are removed only by an explicit, version-checked action', async () => {
+  const stale = { source: 'user', id: 'my-notes', digest: 'e'.repeat(64) };
+  const { attach, calls } = owner({ defaults: [stale] });
+  assert.equal(await attach.noteDefaultFailure('p1', { code: 'skill_attachment_stale' }), true);
+  assert.match(attach.defaultRecoveryControl('p1'), /my-notes/);
+  assert.equal(calls.some(row => row[0] === 'save-defaults'), false);
+  assert.equal(await attach.clearFailedDefaults('p1'), true);
+  assert.deepEqual(plain(calls.find(row => row[0] === 'save-defaults').slice(1)), ['p1', {
+    attached_skills: [], expected_attached_skills: [stale],
+  }]);
+  assert.equal(attach.defaultRecoveryControl('p1'), '');
+});
+
+test('a conflicting default edit is shown and never silently replaced', async () => {
+  const stale = { source: 'user', id: 'my-notes', digest: 'e'.repeat(64) };
+  const { attach } = owner({ defaults: [stale], saveDefaults: () => { throw Object.assign(new Error('changed'), { code: 'skill_defaults_changed' }); } });
+  await attach.noteDefaultFailure('p1', { code: 'skill_attachment_stale' });
+  assert.equal(attach.defaultRecoveryControl('p2'), '');
+  assert.equal(await attach.noteDefaultFailure('p2', { code: 'unrelated' }), false);
+  assert.equal(await attach.clearFailedDefaults('p1'), false);
+  assert.equal(attach.defaultRecoveryControl('p1'), '');
+  assert.match(attach.chips({ session_id: 's1' }), /项目默认技能已变化/);
+});
+
+
+test('late default lookup for an old project cannot overwrite the current project recovery', async () => {
+  let finishA;
+  const pendingA = new Promise(resolve => { finishA = resolve; });
+  const { attach } = owner({ loadDefaults: project => project === 'a' ? pendingA : { attached_skills: [{ source: 'user', id: 'skill-b', digest: 'b'.repeat(64) }] } });
+  let current = 'a';
+  const old = attach.noteDefaultFailure('a', { code: 'skill_attachment_stale' }, () => current === 'a');
+  current = 'b';
+  assert.equal(await attach.noteDefaultFailure('b', { code: 'skill_attachment_stale' }, () => current === 'b'), true);
+  finishA({ attached_skills: [{ source: 'user', id: 'skill-a', digest: 'a'.repeat(64) }] });
+  assert.equal(await old, false);
+  assert.match(attach.defaultRecoveryControl('b'), /skill-b/);
+  assert.equal(attach.defaultRecoveryControl('a'), '');
+});
+
+test('a pending lookup is discarded after selection changes even without a newer lookup', async () => {
+  let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const { attach } = owner({ loadDefaults: () => pending });
+  let current = true;
+  const old = attach.noteDefaultFailure('a', { code: 'skill_attachment_stale' }, () => current);
+  current = false;
+  finish({ attached_skills: [{ source: 'user', id: 'skill-a', digest: 'a'.repeat(64) }] });
+  assert.equal(await old, false);
+  assert.equal(attach.defaultRecoveryControl('a'), '');
 });

@@ -2868,17 +2868,34 @@ def _mine_ideas(
             owner="easyicu.webserver.ideas.mining",
         )
     source_seed = dict(context.idea_source or {})
+    source_type = str(source_seed.get("source_type") or "manual")
+    # An article's absent excerpt must stay absent: neither the user's research
+    # question nor model-proposed prose is evidence from the linked article.
+    excerpt = (
+        source_seed.get("excerpt") or ""
+        if source_type == "url"
+        else source_seed.get("excerpt") or params.get("excerpt") or topic
+    )
+    def source_field(name: str) -> Any:
+        if source_type == "url":
+            return source_seed.get(name)
+        return source_seed.get(name) or params.get(name)
+
     body = {
-        "source_type": str(source_seed.get("source_type") or "manual"),
+        "source_type": source_type,
         "metadata_only": True,
         "topic": topic,
         "research_question": topic,
-        "title": str(source_seed.get("title") or params.get("title") or topic)[:220],
-        "excerpt": str(source_seed.get("excerpt") or params.get("excerpt") or topic)[:1200],
-        "journal": source_seed.get("journal") or params.get("journal"),
-        "year": source_seed.get("year") or params.get("year"),
-        "doi": source_seed.get("doi") or params.get("doi"),
-        "pmid": source_seed.get("pmid") or params.get("pmid"),
+        "title": str(source_field("title") or (topic if source_type != "url" else ""))[:220],
+        "excerpt": str(excerpt)[:1200],
+        "claimed_excerpt_origin": source_seed.get("excerpt_origin"),
+        "user_supplied_title": source_seed.get("user_supplied_title"),
+        "user_supplied_journal": source_seed.get("user_supplied_journal"),
+        "user_supplied_year": source_seed.get("user_supplied_year"),
+        "journal": source_field("journal"),
+        "year": source_field("year"),
+        "doi": source_field("doi"),
+        "pmid": source_field("pmid"),
         "url": source_seed.get("url"),
         "source_file_name": source_seed.get("source_file_name"),
         "source_file_sha256": source_seed.get("source_file_sha256"),

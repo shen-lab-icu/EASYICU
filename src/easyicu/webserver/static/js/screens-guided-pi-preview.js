@@ -359,6 +359,7 @@
       evidenceKind: params.get('pi_view_evidence_kind') || 'artifact',
       evidenceLabel: evidenceId,
       evidencePointer: params.get('pi_view_evidence_pointer') || '',
+      evidenceRestored: 'true',
     }, closest: () => null });
     return true;
   }
@@ -788,8 +789,16 @@
       pointer: String(button.dataset.evidencePointer || '').slice(0, 500),
       value: String(button.dataset.evidenceSourceValue || '').slice(0, 500),
       display: button.dataset.gpiClaim ? String(button.textContent || '').trim().slice(0, 120) : '',
+      restored: button.dataset.evidenceRestored === 'true',
     };
     let item = state.evidenceTabs.find(row => row.evidenceId === evidenceId);
+    if (item && item.sha256 !== sha256) {
+      // An evidence ID is run-scoped, but an inconsistent projection can ask
+      // for another digest. Never let a cached response bypass the backend's
+      // digest check, or let an older in-flight request update this tab.
+      state.evidenceTabs = state.evidenceTabs.filter(row => row !== item);
+      item = null;
+    }
     if (!item) {
       item = {
         evidenceId, sha256, label, kind,
@@ -804,6 +813,7 @@
     }
     state.activeEvidenceId = evidenceId;
     state.mode = 'evidence';
+    if (locator.restored && state.payload) restoreEvidenceValues();
     if (typeof syncLocation === 'function') syncLocation(state.resource, {
       evidenceId, sha256, kind, pointer: locator.pointer,
     });
@@ -815,19 +825,41 @@
       const response = await api.loadPiCopilotResearchEvidence(
         state.projectId, state.resource.run_id, evidenceId, sha256,
       );
-      if (ticket !== state.request) return;
+      if (ticket !== state.request || !state.evidenceTabs.includes(item)) return;
       item.payload = response && response.payload ? response.payload : {};
       if (response && response.governance) state.governance = response.governance;
       item.kindLabel = renderer && typeof renderer.kindLabel === 'function'
         ? renderer.kindLabel(item.payload) : kind;
       item.error = '';
     } catch (error) {
-      if (ticket !== state.request) return;
+      if (ticket !== state.request || !state.evidenceTabs.includes(item)) return;
       item.error = String(error && (error.message || error.code) || error);
     } finally {
       item.loading = false;
-      if (ticket === state.request && state.activeEvidenceId === evidenceId) render();
+      if (ticket === state.request && state.evidenceTabs.includes(item) && state.activeEvidenceId === evidenceId) render();
     }
+  }
+  function restoreEvidenceValues() {
+    const payload = state.payload || {};
+    const provenance = payload.manuscript_provenance || payload.reader || payload;
+    if (provenance.schema_version !== 'easyicu.manuscript-provenance/1' || !Array.isArray(provenance.claims)) return;
+    state.evidenceTabs.forEach(item => {
+      if (!item.locator.restored || !item.locator.pointer) return;
+      const values = new Set();
+      provenance.claims.forEach(row => {
+        const evidence = row && row.evidence;
+        if (!row || (row.status && row.status !== 'current') || !evidence
+          || (evidence.status && evidence.status !== 'current')
+          || evidence.evidence_id !== item.evidenceId
+          || String(evidence.sha256 || '').toLowerCase() !== item.sha256
+          || row.source_json_pointer !== item.locator.pointer) return;
+        const raw = row.canonical_value == null ? row.source_value : row.canonical_value;
+        if ((typeof raw === 'number' || typeof raw === 'string')
+          && String(raw).trim() !== '' && Number.isFinite(Number(raw))) values.add(String(raw));
+      });
+      // Reopen only from an unambiguous parent claim, never a URL-supplied value.
+      if (values.size === 1) item.locator.value = [...values][0];
+    });
   }
   async function loadResource() {
     if (!state.resource || isDocument() || isWorkspaceCsvAttachment() || (!state.projectId && !isDemoArtifact() && !isLiteratureSource())) return;
@@ -948,6 +980,7 @@
       state.artifact = payload && payload.artifact ? payload.artifact : null;
       state.payload = isNativeWorkspace() ? payload : (isStructuredArtifact() && payload ? (payload.payload || {}) : null);
       state.governance = isStructuredArtifact() && payload ? (payload.governance || null) : null;
+      restoreEvidenceValues();
     } catch (error) {
       if (ticket !== state.request) return;
       if (isLiteratureSource()) {

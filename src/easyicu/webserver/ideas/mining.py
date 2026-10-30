@@ -460,13 +460,42 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
         "source_origin": source.get("source_origin"),
         "source_origin_label": source.get("source_origin_label"),
     }
+    if source_type == "url":
+        # A research question is not a quotation from its linked article.
+        supplied_excerpt = _clean(
+            body.get("excerpt") or body.get("source_quote") or body.get("abstract") or "",
+            _MAX_SOURCE_QUOTE,
+        )
+        suggestion["excerpt"] = supplied_excerpt
+        suggestion["excerpt_origin"] = "user_supplied_unverified" if supplied_excerpt else None
+        source["evidence_quote"] = supplied_excerpt or None
+        source["source_text_sha256"] = _sha256(supplied_excerpt) if supplied_excerpt else None
+        source["source_text_char_count"] = len(supplied_excerpt)
+        source["source_text_basis"] = suggestion["excerpt_origin"]
     if source_type == "url" and source.get("url") and not allow_network:
         adapter["status"] = "blocked_network_opt_in_required"
         adapter["reason"] = (
             "URL fetch is disabled until the user explicitly enables network resolution for this source."
         )
     elif source_type == "url" and source.get("url") and allow_network:
-        fetched = _fetch_url_metadata(str(source["url"]))
+        url = str(source["url"])
+        pubmed_id = _canonical_pubmed_url_id(url)
+        if pubmed_id and source.get("pmid") and str(source["pmid"]) != pubmed_id:
+            fetched = {"status": "metadata_identity_mismatch", "network_calls": 0}
+        elif pubmed_id and source.get("doi") and not _canonical_pubmed_doi(body.get("doi")):
+            fetched = {"status": "metadata_identity_unverified", "network_calls": 0,
+                       "reason": "The supplied DOI could not be compared reliably."}
+        else:
+            fetched = _fetch_url_metadata(url)
+        if pubmed_id and source.get("doi") and fetched.get("status") == "metadata_fetched":
+            supplied_doi = _canonical_pubmed_doi(body.get("doi"))
+            fetched_doi = _canonical_pubmed_doi(fetched.get("doi"))
+            if not fetched_doi or supplied_doi != fetched_doi:
+                fetched = {
+                    "status": "metadata_identity_mismatch" if fetched_doi else "metadata_identity_unverified",
+                    "network_calls": fetched.get("network_calls", 0),
+                    "reason": "The supplied DOI did not match a verified DOI in the PubMed record.",
+                }
         adapter.update(
             {
                 "status": fetched.get("status"),
@@ -476,23 +505,53 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": fetched.get("reason"),
             }
         )
+        if pubmed_id and fetched.get("title"):
+            resolved_title = _clean(fetched["title"], 220)
+            if supplied_title and supplied_title != resolved_title:
+                suggestion["user_supplied_title"] = supplied_title
+                source["user_supplied_title"] = supplied_title
+            suggestion["title"] = resolved_title
+            source["title"] = resolved_title
+            # Submitted fields are notes, not metadata attested by PubMed.
+            for field in ("journal", "year"):
+                supplied = source.get(field)
+                resolved = (_clean(fetched.get(field), 120) or None) if field == "journal" else _year(fetched.get(field))
+                if supplied and supplied != resolved:
+                    suggestion[f"user_supplied_{field}"] = supplied
+                    source[f"user_supplied_{field}"] = supplied
+                suggestion[field] = resolved
+                source[field] = resolved
+            suggestion["doi"] = fetched.get("doi") or None
+            source["doi"] = suggestion["doi"]
         if fetched.get("title") and not suggestion.get("title"):
-            suggestion["title"] = fetched["title"]
-            source["title"] = fetched["title"]
+            suggestion["title"] = _clean(fetched["title"], 220)
+            source["title"] = suggestion["title"]
         if fetched.get("title") and not suggestion.get("topic"):
             suggestion["topic"] = fetched["title"]
         if fetched.get("journal") and not suggestion.get("journal"):
-            suggestion["journal"] = fetched["journal"]
-            source["journal"] = fetched["journal"]
+            suggestion["journal"] = _clean(fetched["journal"], 120)
+            source["journal"] = suggestion["journal"]
         if fetched.get("year") and not suggestion.get("year"):
             suggestion["year"] = fetched["year"]
             source["year"] = fetched["year"]
         if fetched.get("description") and not suggestion.get("excerpt"):
-            suggestion["excerpt"] = fetched["description"]
-            source["evidence_quote"] = fetched["description"]
+            excerpt = _clean(fetched["description"], _MAX_SOURCE_QUOTE)
+            origin = {
+                "pubmed": "pubmed_abstract_excerpt",
+                "crossref": "crossref_abstract_excerpt",
+            }.get(fetched.get("metadata_source"), "web_metadata_description")
+            suggestion["excerpt"] = excerpt
+            suggestion["excerpt_origin"] = origin
+            source["evidence_quote"] = excerpt
+            source["source_text_sha256"] = _sha256(excerpt)
+            source["source_text_char_count"] = len(excerpt)
+            source["source_text_basis"] = origin
         if fetched.get("doi") and not suggestion.get("doi"):
             suggestion["doi"] = fetched["doi"]
             source["doi"] = fetched["doi"]
+        if fetched.get("pmid") and not suggestion.get("pmid"):
+            suggestion["pmid"] = fetched["pmid"]
+            source["pmid"] = fetched["pmid"]
     elif source_type == "pdf" and body.get("source_file_sha256"):
         adapter["status"] = "local_pdf_hash_claim_received"
         adapter["reason"] = (
@@ -516,6 +575,17 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
         adapter["reason"] = (
             "The topic is ready for an opt-in prior-art/literature search stage."
         )
+    if source_type == "url" and adapter["status"] == "metadata_fetched":
+        # _source_record derives the ID from metadata, so refresh that ID after
+        # retrieval rather than leaving a digest of the pre-fetch placeholder.
+        resolved_identity = _source_record({
+            key: source.get(key)
+            for key in ("source_type", "title", "journal", "year", "doi", "pmid", "url")
+        })
+        source["source_id"] = resolved_identity["source_id"]
+        if not body.get("citation_key"):
+            source["citation_key"] = resolved_identity["citation_key"]
+            suggestion["citation_key"] = resolved_identity["citation_key"]
     payload = {
         "ok": True,
         "resolved_source": source,
@@ -2070,13 +2140,13 @@ def _source_record(
     verified_origin: Optional[Tuple[str, str]] = None,
 ) -> Dict[str, Any]:
     topic = _clean(body.get("topic") or body.get("research_question") or "", 180)
-    title = _clean(body.get("title") or topic or "Untitled source", 220)
+    source_type = _clean(body.get("source_type") or "manual", 40)
+    title = _clean(body.get("title") or (topic if source_type != "url" else "") or "Untitled source", 220)
     journal = _clean(body.get("journal") or "", 120)
     year = _year(body.get("year"))
     url = _clean(body.get("url") or "", 500)
     doi = _clean(body.get("doi") or "", 180)
     pmid = _clean(body.get("pmid") or "", 80)
-    source_type = _clean(body.get("source_type") or "manual", 40)
     if source_type not in _SOURCE_ORIGIN_DEFAULTS:
         raise IdeaMiningWebError(
             {
@@ -2094,7 +2164,8 @@ def _source_record(
         body.get("excerpt") or body.get("source_quote") or "", _MAX_SOURCE_QUOTE
     )
     source_text = _clean(
-        body.get("excerpt") or body.get("abstract") or body.get("notes") or topic, 4000
+        body.get("excerpt") or body.get("source_quote") or body.get("abstract")
+        or body.get("notes") or (topic if source_type != "url" else ""), 4000
     )
     citation_key = _slug(
         "|".join([title, str(year or ""), journal, doi, pmid]) or topic or "source"
@@ -2127,6 +2198,16 @@ def _source_record(
         record["claimed_source_origin"] = claimed_source_origin
     if claimed_source_origin_label:
         record["claimed_source_origin_label"] = claimed_source_origin_label
+    if source_type == "url" and body.get("claimed_excerpt_origin"):
+        # A client may carry the resolver's label forward, but this field is a
+        # claim, not host verification of the submitted excerpt.
+        record["claimed_excerpt_origin"] = _clean(body["claimed_excerpt_origin"], 80)
+    if source_type == "url" and body.get("user_supplied_title"):
+        record["user_supplied_title"] = _clean(body["user_supplied_title"], 220)
+    if source_type == "url" and body.get("user_supplied_journal"):
+        record["user_supplied_journal"] = _clean(body["user_supplied_journal"], 120)
+    if source_type == "url" and body.get("user_supplied_year"):
+        record["user_supplied_year"] = _year(body["user_supplied_year"])
     if body.get("source_file_name"):
         record["source_file_name"] = _clean(body.get("source_file_name"), 240)
     if body.get("source_file_sha256"):
@@ -5524,7 +5605,61 @@ def _open_public_url(
     raise UnsafeURL("Too many URL redirects.")
 
 
+def _canonical_pubmed_url_id(url: str) -> Optional[str]:
+    """Recognize only a direct HTTPS PubMed article URL, without fetching it."""
+    try:
+        parsed = parse.urlsplit(url)
+        if (
+            parsed.scheme.lower() != "https"
+            or parsed.hostname != "pubmed.ncbi.nlm.nih.gov"
+            or parsed.port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+    except ValueError:
+        return None
+    match = re.fullmatch(r"/([0-9]{1,12})/?", parsed.path)
+    return match.group(1) if match else None
+
+
+def _canonical_pubmed_doi(value: Any) -> Optional[str]:
+    doi = str(value or "").strip()
+    # DOI suffixes are not restricted to a small ASCII punctuation set.
+    # Avoid truncation, control characters, or Unicode case-folding that could
+    # silently make two distinct identifiers compare equal.
+    if (len(doi) > 180 or any(char.isspace() for char in doi)
+            or not re.fullmatch(r"10\.[0-9]{4,9}/[^\x00-\x1f\x7f]+", doi)):
+        return None
+    return re.sub(r"[A-Z]", lambda match: match.group(0).lower(), doi)
+
+
+def _fetch_pubmed_url_metadata(pmid: str) -> Dict[str, Any]:
+    """Resolve a validated PMID through the existing fixed NCBI EFetch client."""
+    try:
+        records = _pubmed_article_records([pmid])
+    except Exception:
+        return {"status": "fetch_failed", "network_calls": 1,
+                "reason": "PubMed metadata could not be retrieved."}
+    matching = [row for row in records if str(row.get("pmid") or "") == pmid]
+    if len(matching) != 1 or not matching[0].get("title"):
+        return {"status": "metadata_fetch_empty", "network_calls": 1,
+                "reason": "PubMed returned no matching article metadata."}
+    row = matching[0]
+    return {
+        "status": "metadata_fetched", "metadata_source": "pubmed",
+        "network_calls": 1, "pmid": pmid, "title": row.get("title"),
+        "journal": row.get("journal"), "year": row.get("year"),
+        "doi": row.get("doi") if _canonical_pubmed_doi(row.get("doi")) else None,
+        "description": row.get("abstract_excerpt"),
+        "reason": "Resolved bounded PubMed metadata; full text was not fetched or stored.",
+    }
+
+
 def _fetch_url_metadata(url: str) -> Dict[str, Any]:
+    pubmed_id = _canonical_pubmed_url_id(url)
+    if pubmed_id:
+        return _fetch_pubmed_url_metadata(pubmed_id)
     try:
         target = _resolve_public_http_target(url)
     except UnsafeURL as exc:
