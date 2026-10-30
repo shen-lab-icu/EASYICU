@@ -277,6 +277,21 @@ def test_each_terminal_code_from_the_owners_has_an_explicit_disposition() -> Non
 
 
 @pytest.mark.parametrize("code", [
+    "case_duration_plan_approval_required",
+    "study_primary_outcome_confirmation_required",
+])
+def test_pending_researcher_decisions_do_not_offer_plan_replacement(code):
+    assert owner.STOP_POLICIES[code] == "none"
+    assert owner.next_actions_for_stop(code) == []
+
+
+def test_changed_time_origin_requires_a_new_reviewed_plan():
+    actions = owner.next_actions_for_stop("candidate_plan_time_origin_binding_invalid")
+    assert [action.kind for action in actions] == ["edit_plan"]
+    assert actions[0].params.requires_plan_approval is True
+
+
+@pytest.mark.parametrize("code", [
     "research_pipeline_hospital_first_stay_restriction_unverified",
     *WINDOWED_SUMMARY_STOP_MESSAGES,
 ])
