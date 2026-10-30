@@ -80,6 +80,19 @@ def recover_preparation_before_consumption(*, job_id: str, job: Any, timeout: fl
     Missing/unsafe prior lifecycle proof, changed inputs or a consumed nonce
     refuse. Repeated callers still contend for the same exclusive host lease.
     """
+    return _recover_preparation(job_id=job_id, job=job, timeout=timeout, sealed_recovery=False)
+
+
+def recover_preparation_with_sealed_snapshot(*, job_id: str, job: Any, timeout: float) -> Path:
+    """Continue an exact intent; consumed decisions require a sealed snapshot.
+
+    This entry point is not wired to product dispatch. The guarded worker must
+    verify the seal and never read the original source on a consumed retry.
+    """
+    return _recover_preparation(job_id=job_id, job=job, timeout=timeout, sealed_recovery=True)
+
+
+def _recover_preparation(*, job_id: str, job: Any, timeout: float, sealed_recovery: bool) -> Path:
     if not _JOB.fullmatch(job_id) or not job or getattr(job, 'id', None) != job_id:
         raise ValueError('preparation_intent_job_mismatch')
     if job.is_cancel_requested():
@@ -101,7 +114,18 @@ def recover_preparation_before_consumption(*, job_id: str, job: Any, timeout: fl
     scope = value.get('scope')
     if not isinstance(scope, dict):
         raise ValueError('preparation_intent_invalid')
-    receipt, root = _review(checkpoint=checkpoint, binding=binding, scope=scope, job_id=job_id)
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        consumed = not directory.is_absent(binding.nonce + '.used')
+        directory.assert_still_selected()
+    if consumed and sealed_recovery:
+        # No raw source resolver runs on a consumed retry. The signed intent,
+        # original host decision and current conversation owner remain binding.
+        from easyicu.webserver.preparation_recovery_authority import verify_recovery_authority
+        receipt = dict(verify_recovery_authority(checkpoint=checkpoint, binding=binding,
+                                                 scope=scope, job_id=job_id))
+        root = _owner(binding, receipt, job_id)
+    else:
+        receipt, root = _review(checkpoint=checkpoint, binding=binding, scope=scope, job_id=job_id)
     if (str(root) != value.get('root') or receipt.get('decision_key') != value.get('decision_key')
             or receipt.get('scientific_configuration_sha256') != value.get('scientific_configuration_sha256')):
         raise ValueError('preparation_intent_binding_changed')
@@ -119,6 +143,8 @@ def recover_preparation_before_consumption(*, job_id: str, job: Any, timeout: fl
     # window stays blocked instead of treating a missing receipt as proof.
     first = False
     with AnchoredDirectory.open(_private_directory()) as directory:
+        if consumed and sealed_recovery and directory.is_absent(job_id + '.preparation-started'):
+            raise ValueError('preparation_intent_consumed_start_missing')
         try:
             _publish_once(directory, job_id + '.preparation-started', canonical_json({
                 'job_id': job_id, 'intent_sha256': canonical_sha256(value),
@@ -139,9 +165,11 @@ def recover_preparation_before_consumption(*, job_id: str, job: Any, timeout: fl
         from easyicu.runtime.host_execution_lease import request_host_execution_stop
         unregister.append(job.register_cancel_callback(lambda: request_host_execution_stop(lease_dir, nonce)))
     try:
-        return guarded_multitable_projection(lease_dir=lease_dir, checkpoint=checkpoint,
-                                            binding=binding, scope=scope, host_work_root=root, timeout=timeout,
-                                            on_prepared=prepared)
+        arguments = dict(lease_dir=lease_dir, checkpoint=checkpoint, binding=binding, scope=scope,
+                         host_work_root=root, timeout=timeout, on_prepared=prepared)
+        if sealed_recovery:
+            arguments['job_id'] = job_id
+        return guarded_multitable_projection(**arguments)
     finally:
         for remove in unregister:
             remove()

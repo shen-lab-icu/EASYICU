@@ -25,9 +25,11 @@ _MAX_MESSAGE = 2 * 1024 * 1024
 
 
 def identity() -> str:
-    from easyicu.webserver import reviewed_multitable_projection
     h = hashlib.sha256()
-    for path in (Path(__file__), Path(reviewed_multitable_projection.__file__)):
+    root = Path(__file__).parent
+    for path in (Path(__file__), root / 'reviewed_multitable_projection.py',
+                 root / 'recoverable_multitable_projection.py', root / 'preparation_recovery_snapshot.py',
+                 root / 'preparation_recovery_authority.py'):
         h.update(path.read_bytes())
         h.update(b'\0')
     return h.hexdigest()
@@ -42,15 +44,22 @@ def _worker(lease_dir: Path, nonce: str, expected: str) -> int:
         if len(raw) > _MAX_MESSAGE:
             raise ValueError('preparation_request_too_large')
         request = json.loads(raw)
-        if set(request) != {'checkpoint', 'binding', 'scope', 'host_work_root'}:
+        if set(request) not in ({'checkpoint', 'binding', 'scope', 'host_work_root'},
+                                {'checkpoint', 'binding', 'scope', 'host_work_root', 'job_id'}):
             raise ValueError('preparation_request_invalid')
         from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
         from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding
         from easyicu.webserver.reviewed_multitable_projection import run_reviewed_multitable_projection
-        result = run_reviewed_multitable_projection(
-            checkpoint=RawPreparationCheckpoint.model_validate(request['checkpoint']),
-            binding=RawPreparationHostBinding.model_validate(request['binding']),
-            scope=request['scope'], host_work_root=Path(request['host_work_root']))
+        checkpoint = RawPreparationCheckpoint.model_validate(request['checkpoint'])
+        binding = RawPreparationHostBinding.model_validate(request['binding'])
+        if 'job_id' in request:
+            from easyicu.webserver.recoverable_multitable_projection import run_recoverable_multitable_projection
+            result = run_recoverable_multitable_projection(job_id=request['job_id'], checkpoint=checkpoint,
+                binding=binding, scope=request['scope'], host_work_root=Path(request['host_work_root']),
+                lease_dir=lease_dir, lease_nonce=nonce)
+        else:
+            result = run_reviewed_multitable_projection(checkpoint=checkpoint, binding=binding,
+                scope=request['scope'], host_work_root=Path(request['host_work_root']))
         payload = {'ok': True, 'output_name': result.parent.name}
         status = 0
     except BaseException:
@@ -120,12 +129,15 @@ def _supervise(lease_dir: Path, nonce: str, expected: str, timeout: float) -> in
 
 def guarded_multitable_projection(*, lease_dir: Path, checkpoint: Any, binding: Any,
                                   scope: Mapping[str, Any], host_work_root: Path, timeout: float,
-                                  on_prepared: Callable[[str], None] | None = None) -> Path:
-    """Execute once under the original decision; never replay consumed authority."""
+                                  on_prepared: Callable[[str], None] | None = None,
+                                  job_id: str | None = None) -> Path:
+    """Run a guarded one-shot projection or an explicitly identified durable job."""
     if getattr(sys, 'frozen', False):
         raise RuntimeError('guarded_preparation_frozen_unsupported')
     request = {'checkpoint': checkpoint.model_dump(mode='json'), 'binding': binding.model_dump(mode='json'),
                'scope': dict(scope), 'host_work_root': str(host_work_root)}
+    if job_id is not None:
+        request['job_id'] = job_id
     encoded = json.dumps(request, allow_nan=False, separators=(',', ':')).encode()
     if len(encoded) > _MAX_MESSAGE:
         raise ValueError('preparation_request_too_large')

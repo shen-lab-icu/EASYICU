@@ -8,10 +8,11 @@ The caller must have recorded an actual host approval of the exact scope.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -30,10 +31,11 @@ class _ParquetProjectionImplementation:
     pass
 
 
-def _validated_scope(scope: Mapping[str, Any]) -> tuple[dict, Path]:
+def _scope_shape(scope: Mapping[str, Any]) -> dict:
+    """Validate a scope without looking up or reading the original source."""
     checked = json.loads(canonical_json(dict(scope)))
     if (set(checked) != {"adapter_id", "source_identity", "inputs", "purpose", "plan_sha256", "dependencies_sha256"}
-            or checked["adapter_id"] != "registered-parquet-projections/1"
+            or checked["adapter_id"] not in {"registered-parquet-projections/1", "registered-parquet-projections/2"}
             or checked["purpose"] != "prepare_multiple_tables_only"
             or any(not isinstance(checked[name], str) or not re.fullmatch(r"[0-9a-f]{64}", checked[name])
                    for name in ("plan_sha256", "dependencies_sha256"))):
@@ -60,6 +62,16 @@ def _validated_scope(scope: Mapping[str, Any]) -> tuple[dict, Path]:
                 or any(not isinstance(col, str) or not col or len(col) > 256 for col in columns)
                 or len(columns) != len(set(columns))):
             raise ValueError("multitable_projection_columns_invalid")
+    return checked
+
+
+def _validated_scope(scope: Mapping[str, Any]) -> tuple[dict, Path]:
+    checked = _scope_shape(scope)
+    if checked["adapter_id"] == "registered-parquet-projections/2":
+        from easyicu.webserver.reviewed_multitable_source import resolve_source_bound_multitable_scope
+        source, _ = resolve_source_bound_multitable_scope(checked)
+        return checked, source
+    identity = SourceIdentity.from_record(checked["source_identity"])
     matches = [Path(row["path"]) for row in sources.load_registry().get("sources", [])
                if row.get("ok") and row.get("path")
                and sources.registered_source_identity(str(row["path"])) == identity]
@@ -92,6 +104,15 @@ def run_reviewed_multitable_projection(*, checkpoint: RawPreparationCheckpoint,
     snapshot = stage_reviewed_source_files(source_root=source, staging_root=root / "snapshot",
         relative_files=(entry["path"] for entry in checked["inputs"]),
         source_identity_sha256=canonical_sha256(checked["source_identity"]))
+    return _project_staged(root=root, snapshot=snapshot, checked=checked, checkpoint=checkpoint,
+                           binding=binding, implementation=implementation)
+
+
+def _project_staged(*, root: Path, snapshot: Any, checked: dict, checkpoint: RawPreparationCheckpoint,
+                    binding: RawPreparationHostBinding, implementation: Mapping[str, str],
+                    before_publish: Callable[[], None] | None = None) -> Path:
+    """Project only pre-staged bytes, then sync and attest the output."""
+    output = root / "output"
     staged = {item.relative_path: item for item in snapshot.files}
     lineage = []
     for index, entry in enumerate(checked["inputs"]):
@@ -129,6 +150,14 @@ def run_reviewed_multitable_projection(*, checkpoint: RawPreparationCheckpoint,
     verify_staged_source_files(root / "snapshot", snapshot)
     if implementation_identity(_ParquetProjectionImplementation(), Path(__file__)) != implementation:
         raise ValueError("multitable_projection_implementation_changed")
+    if before_publish is not None:
+        before_publish()
+    with AnchoredDirectory.open(output) as directory:
+        for name in sorted(os.listdir(output)):
+            with directory.open_regular(name) as stream:
+                os.fsync(stream.fileno())
+        directory._directory.fsync()
+        directory.assert_still_selected()
     publish_attestation(root=root, snapshot=snapshot, scope=checked, checkpoint_sha256=checkpoint.checkpoint_sha256,
         binding=binding, implementation=implementation,
         host_consumption={"method": "host_parquet_column_projection", "inputs": lineage,
@@ -141,6 +170,6 @@ def run_reviewed_multitable_projection(*, checkpoint: RawPreparationCheckpoint,
 
 def verify_reviewed_multitable_projection(*, root: Path, checkpoint_sha256: str,
                                          binding: RawPreparationHostBinding, scope: Mapping[str, Any]) -> dict:
-    checked, _ = _validated_scope(scope)
+    checked = _scope_shape(scope)
     return verify_attestation(root=root, scope=checked, checkpoint_sha256=checkpoint_sha256,
         binding=binding, adapter=_ParquetProjectionImplementation(), worker=Path(__file__))

@@ -86,3 +86,36 @@ def test_started_without_lease_fails_closed(intent, monkeypatch):
     assert not (intent.work / '.preparation-execution-job').exists()
     with pytest.raises(HostExecutionLeaseError, match='host_execution_receipt_missing'):
         durable.recover_preparation_before_consumption(job_id='job', job=intent.job, timeout=5)
+
+
+def test_sealed_dispatch_reuses_original_job_without_reresolving_source(intent, monkeypatch):
+    from easyicu.webserver import preparation_recovery_authority
+
+    calls = []
+    monkeypatch.setattr(durable, 'assert_host_execution_quiescent',
+                        lambda path, **kwargs: calls.append(kwargs['allow_missing']))
+    monkeypatch.setattr(durable, 'guarded_multitable_projection',
+                        lambda **kwargs: (calls.append(kwargs['job_id']) or kwargs['host_work_root'] / 'output'))
+    durable.recover_preparation_with_sealed_snapshot(job_id='job', job=intent.job, timeout=5)
+    (intent.private / (intent.binding.nonce + '.used')).write_text('{}')
+    monkeypatch.setattr(durable, '_review', lambda **kwargs: pytest.fail('reopened source on retry'))
+    monkeypatch.setattr(preparation_recovery_authority, 'verify_recovery_authority',
+                        lambda **kwargs: {'job_id': 'job', 'decision_key': 'decision',
+                                          'scientific_configuration_sha256': 'a' * 64})
+    monkeypatch.setattr(durable, '_owner', lambda *args: intent.work)
+    durable.recover_preparation_with_sealed_snapshot(job_id='job', job=intent.job, timeout=5)
+    assert calls == [True, 'job', False, 'job']
+
+
+def test_consumed_decision_without_started_receipt_cannot_claim_first_launch(intent, monkeypatch):
+    from easyicu.webserver import preparation_recovery_authority
+
+    (intent.private / (intent.binding.nonce + '.used')).write_text('{}')
+    monkeypatch.setattr(preparation_recovery_authority, 'verify_recovery_authority',
+                        lambda **kwargs: {'job_id': 'job', 'decision_key': 'decision',
+                                          'scientific_configuration_sha256': 'a' * 64})
+    monkeypatch.setattr(durable, '_owner', lambda *args: intent.work)
+    monkeypatch.setattr(durable, 'guarded_multitable_projection',
+                        lambda **kwargs: pytest.fail('worker launched without prior lifecycle'))
+    with pytest.raises(ValueError, match='consumed_start_missing'):
+        durable.recover_preparation_with_sealed_snapshot(job_id='job', job=intent.job, timeout=5)
