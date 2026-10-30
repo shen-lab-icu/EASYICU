@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from easyicu.research_agent.authority.provider_hard_stop import (
     consume_active_provider_hard_stop_attempt, record_active_provider_retry_wait,
-    record_active_provider_transport_failure,
+    record_active_provider_transport_failure, record_active_metadata_capacity_rejection,
 )
 from easyicu.research_agent.providers.transport_retry import TransportRetrySchedule
 from easyicu.webserver import metadata_provider_concurrency as slots
@@ -116,9 +116,15 @@ class MetadataProviderClient:
             from easyicu.research_agent.providers.metadata_request_binding import current_metadata_request_sha256
 
             guard = Path(self._task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
-            slots.reserve(attempt_id=attempt_id, account=self._account, task_id=self._task.task_id,
-                          ledger_path=self._task.ledger.path, guard_path=guard, worker_sha256=identity(),
-                          request_sha256=current_metadata_request_sha256())
+            try:
+                slots.reserve(attempt_id=attempt_id, account=self._account, task_id=self._task.task_id,
+                              ledger_path=self._task.ledger.path, guard_path=guard, worker_sha256=identity(),
+                              request_sha256=current_metadata_request_sha256())
+            except slots.MetadataProviderCapacityExhausted:
+                # This branch is owned by the local slot admission itself and
+                # runs before the supervised worker can receive a request.
+                record_active_metadata_capacity_rejection()
+                raise
             value = guarded_call(
                 guard, request, timeout=max(0.001, min(self._timeout, remaining)),
                 on_prepared=lambda nonce: slots.bind_guard(attempt_id, nonce),

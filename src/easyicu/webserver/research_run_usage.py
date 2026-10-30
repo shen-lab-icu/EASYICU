@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from easyicu.model_request_metadata import project_request
 from easyicu.research_agent.authority.provider_hard_stop import (
     ProviderHardStopLedgerError,
+    is_pre_transport_capacity_rejection,
     load_provider_hard_stop_ledger,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
@@ -69,6 +70,7 @@ def _number(value: Any, *, integer: bool = False) -> int | float:
 
 def _summarize(calls: list[Mapping[str, Any]], *, group_states: bool = True) -> dict[str, Any]:
     reported = [call for call in calls if call.get("reported_total_tokens") is not None]
+    unsent = [call for call in calls if is_pre_transport_capacity_rejection(call)]
     durations = []
     for call in calls:
         if call.get("started_at") and call.get("finished_at"):
@@ -97,7 +99,8 @@ def _summarize(calls: list[Mapping[str, Any]], *, group_states: bool = True) -> 
             )
             for key in ("reported_prompt_tokens", "reported_completion_tokens")
         },
-        "usage_unknown_calls": len(calls) - len(reported),
+        "usage_unknown_calls": len(calls) - len(reported) - len(unsent),
+        "pre_transport_capacity_rejections": len(unsent),
         "failed_calls": sum(
             _call_state(c) == "failed" for c in calls
         ),

@@ -377,6 +377,15 @@ def test_capacity_stop_does_not_send_or_release_existing_request(tmp_path, monke
         HardStopClient(client, role="planner", task=task).complete([LLMMessage(role="user", content="synthetic")])
     assert sent == []
     assert slots.get("old") is not None
+    call = book.snapshot()["tasks"][0]["calls"][0]
+    assert call["state"] == "failed_pre_transport_capacity"
+    assert call["error_type"] == "MetadataProviderCapacityExhausted"
+    assert call.get("reported_total_tokens") is None
+    assert call["accounted_tokens"] > 0  # reservation remains conservative
+    accounting = task.accounting_summary()
+    assert accounting["pre_transport_capacity_rejections"] == 1
+    assert accounting["usage_unknown"]["n_calls"] == 0
+    assert accounting["conservative_upper_bound"]["total_tokens"] == call["accounted_tokens"]
     code = agent_pipeline_runs._pipeline_failure_code(caught.value)
     assert code == "research_pipeline_metadata_provider_capacity_unavailable"
     assert next_actions_for_stop(code) == []
