@@ -49,13 +49,30 @@ def _owner(binding: RawPreparationHostBinding, receipt: Mapping[str, Any], job_i
     return root
 
 
+def _scope_matches(checkpoint: RawPreparationCheckpoint, scope: Mapping[str, Any]) -> bool:
+    scope_key = ('first_observed_icu_preparation_scope'
+                 if scope.get('adapter_id') == 'eicu-demo-first-observed-single-hospital-adult/1'
+                 else 'raw_preparation_scope')
+    return canonical_sha256(checkpoint.request.payload.get(scope_key)) == canonical_sha256(dict(scope))
+
+
+def _validate_current_scope(*, root: Path, checkpoint: RawPreparationCheckpoint, scope: Mapping[str, Any]) -> None:
+    if scope.get('adapter_id') == 'eicu-demo-first-observed-single-hospital-adult/1':
+        from easyicu.webserver.first_observed_preparation import _host_inputs
+        expected, _ = _host_inputs(run_dir=root, request=checkpoint.request)
+        if expected != dict(scope):
+            raise ValueError('preparation_intent_scope_mismatch')
+    else:
+        require_reviewable_multitable_scope(scope)
+
+
 def _review(*, checkpoint: RawPreparationCheckpoint, binding: RawPreparationHostBinding,
             scope: Mapping[str, Any], job_id: str) -> tuple[dict, Path]:
-    if canonical_sha256(checkpoint.request.payload.get('raw_preparation_scope')) != canonical_sha256(dict(scope)):
+    if not _scope_matches(checkpoint, scope):
         raise ValueError('preparation_intent_scope_mismatch')
     receipt = dict(verify_host_review(checkpoint=checkpoint, scope=scope, **binding.model_dump(mode='python')))
     root = _owner(binding, receipt, job_id)
-    require_reviewable_multitable_scope(scope)
+    _validate_current_scope(root=root, checkpoint=checkpoint, scope=scope)
     return receipt, root
 
 
@@ -159,14 +176,14 @@ def verify_unstarted_preparation_handoff(*, job_id: str, job: Any, store_path: P
     lease_dir = saved_root / ('.preparation-execution-' + job_id)
     if lease_dir.exists() or lease_dir.is_symlink():
         raise ValueError('preparation_handoff_lifecycle_present')
-    if canonical_sha256(checkpoint.request.payload.get('raw_preparation_scope')) != canonical_sha256(scope):
+    if not _scope_matches(checkpoint, scope):
         raise ValueError('preparation_handoff_binding_invalid')
     receipt = dict(verify_host_review(checkpoint=checkpoint, scope=scope, **binding.model_dump(mode='python')))
     root = _owner(binding, receipt, job_id)
     if (str(root) != intent.get('root') or receipt.get('decision_key') != intent.get('decision_key')
             or receipt.get('scientific_configuration_sha256') != intent.get('scientific_configuration_sha256')):
         raise ValueError('preparation_handoff_owner_changed')
-    require_reviewable_multitable_scope(scope)
+    _validate_current_scope(root=root, checkpoint=checkpoint, scope=scope)
     return {'schema_version': 'easyicu.durable-preparation/3', 'study_context_id': binding.study_context_id,
             'timeout_seconds': timeout, 'handoff_sha256': canonical_sha256(handoff)}
 
@@ -237,7 +254,12 @@ def _recover_preparation(*, job_id: str, job: Any, timeout: float, sealed_recove
     with AnchoredDirectory.open(_private_directory()) as directory:
         consumed = not directory.is_absent(binding.nonce + '.used')
         directory.assert_still_selected()
-    if consumed and sealed_recovery:
+    first_observed = scope.get('adapter_id') == 'eicu-demo-first-observed-single-hospital-adult/1'
+    if consumed and sealed_recovery and first_observed:
+        from easyicu.webserver.raw_preparation_decisions import verify_consumed_host_review
+        receipt = dict(verify_consumed_host_review(checkpoint=checkpoint, binding=binding, scope=scope))
+        root = _owner(binding, receipt, job_id)
+    elif consumed and sealed_recovery:
         # No raw source resolver runs on a consumed retry. The signed intent,
         # original host decision and current conversation owner remain binding.
         from easyicu.webserver.preparation_recovery_authority import verify_recovery_authority
@@ -280,6 +302,12 @@ def _recover_preparation(*, job_id: str, job: Any, timeout: float, sealed_recove
     assert_host_execution_quiescent(lease_dir, allow_missing=first, wait_timeout=2)
     if job.is_cancel_requested():
         raise ValueError('preparation_intent_cancelled')
+    if consumed and sealed_recovery and first_observed:
+        # Never replay the raw read after consumption. Only a complete,
+        # signed coordinate can survive this interruption window.
+        from easyicu.webserver.first_observed_preparation import resolve_prepared_first_observed_coordinate
+        return resolve_prepared_first_observed_coordinate(
+            run_dir=root, checkpoint=checkpoint, binding=binding, scope=scope).path
     unregister = []
     def prepared(nonce: str) -> None:
         from easyicu.runtime.host_execution_lease import request_host_execution_stop

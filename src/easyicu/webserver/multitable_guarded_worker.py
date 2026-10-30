@@ -29,7 +29,8 @@ def identity() -> str:
     root = Path(__file__).parent
     for path in (Path(__file__), root / 'reviewed_multitable_projection.py',
                  root / 'recoverable_multitable_projection.py', root / 'preparation_recovery_snapshot.py',
-                 root / 'preparation_recovery_authority.py'):
+                 root / 'preparation_recovery_authority.py', root / 'first_observed_preparation.py',
+                 root / 'eicu_first_observed_source.py'):
         h.update(path.read_bytes())
         h.update(b'\0')
     return h.hexdigest()
@@ -52,15 +53,21 @@ def _worker(lease_dir: Path, nonce: str, expected: str) -> int:
         from easyicu.webserver.reviewed_multitable_projection import run_reviewed_multitable_projection
         checkpoint = RawPreparationCheckpoint.model_validate(request['checkpoint'])
         binding = RawPreparationHostBinding.model_validate(request['binding'])
-        if 'job_id' in request:
+        if request['scope'].get('adapter_id') == 'eicu-demo-first-observed-single-hospital-adult/1':
+            from easyicu.webserver.first_observed_preparation import prepare_first_observed_coordinate
+            prepare_first_observed_coordinate(run_dir=Path(request['host_work_root']), checkpoint=checkpoint,
+                                              binding=binding, scope=request['scope'])
+            payload = {'ok': True, 'output_name': 'private-first-observed'}
+        elif 'job_id' in request:
             from easyicu.webserver.recoverable_multitable_projection import run_recoverable_multitable_projection
             result = run_recoverable_multitable_projection(job_id=request['job_id'], checkpoint=checkpoint,
                 binding=binding, scope=request['scope'], host_work_root=Path(request['host_work_root']),
                 lease_dir=lease_dir, lease_nonce=nonce)
+            payload = {'ok': True, 'output_name': result.parent.name}
         else:
             result = run_reviewed_multitable_projection(checkpoint=checkpoint, binding=binding,
                 scope=request['scope'], host_work_root=Path(request['host_work_root']))
-        payload = {'ok': True, 'output_name': result.parent.name}
+            payload = {'ok': True, 'output_name': result.parent.name}
         status = 0
     except BaseException:
         payload = {'ok': False, 'error': 'guarded_preparation_failed'}
@@ -169,6 +176,12 @@ def guarded_multitable_projection(*, lease_dir: Path, checkpoint: Any, binding: 
             raise ValueError('preparation_response_too_large')
         value = json.loads(output)
         name = value.get('output_name') if isinstance(value, dict) and value.get('ok') is True else None
+        if scope.get('adapter_id') == 'eicu-demo-first-observed-single-hospital-adult/1':
+            if name != 'private-first-observed':
+                raise ValueError('guarded_preparation_failed')
+            from easyicu.webserver.first_observed_preparation import resolve_prepared_first_observed_coordinate
+            return resolve_prepared_first_observed_coordinate(
+                run_dir=Path(host_work_root), checkpoint=checkpoint, binding=binding, scope=scope).path
         if not isinstance(name, str) or not name.startswith('reviewed-multitable-projection-') or Path(name).name != name:
             raise ValueError('guarded_preparation_failed')
         root = Path(host_work_root) / name
