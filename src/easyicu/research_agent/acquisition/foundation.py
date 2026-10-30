@@ -25,6 +25,7 @@ plain plan/JSON call, so there is no per-model integration.
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
@@ -35,6 +36,7 @@ from .catalog import (
     assess_coverage,
     build_available_catalog,
 )
+from .first_observed_icu_coordinate import FirstObservedIcuCoordinate
 from .first_icu_stay import FirstIcuStayBinding
 from .first_icu_stay import FirstIcuStayPerHospitalizationBinding
 from .patient_grouping import PatientGroupingBinding
@@ -364,6 +366,7 @@ def acquire_universe_for_question(
     host_derivations: Sequence[str] = (),
     first_icu_stay: Optional[FirstIcuStayBinding] = None,
     first_icu_stay_per_hospitalization: Optional[FirstIcuStayPerHospitalizationBinding] = None,
+    first_observed_icu_coordinate: Optional[FirstObservedIcuCoordinate] = None,
     event_onset_windows: Optional[Mapping[str, Tuple[float, float]]] = None,
     source_time_axis=None,
 ) -> AcquisitionResult:
@@ -379,6 +382,17 @@ def acquire_universe_for_question(
     """
     from ..cohort.materializer import materialize_to_parquet
     from ..contracts.host_derivations import host_derivation, host_derivation_producing
+
+    if first_observed_icu_coordinate is not None and (
+        not isinstance(first_observed_icu_coordinate, FirstObservedIcuCoordinate)
+        or concept_selection_authority != "host_exact"
+        or first_icu_stay is not None
+        or first_icu_stay_per_hospitalization is not None
+        or patient_grouping is not None
+    ):
+        raise MaterializedMetadataError(
+            "first observed ICU requires exact host concept selection and an unconflicted stay identity"
+        )
 
     # A declared cross-concept reading can arrive in any concept slot: to the
     # design it IS a variable, so the planner names it like one.  It is not
@@ -603,41 +617,54 @@ def acquire_universe_for_question(
     effective_trajectory_window = (
         cohort_window if trajectory_window is None else trajectory_window
     )
-    paths = materialize_to_parquet(
-        output_dir=output_dir,
-        stem=stem,
-        feature_concepts=feature_concepts,
-        database=database,
-        data_path=str(export_dir),
-        outcome_concepts=list(outcome_concepts),
-        static_concepts=effective_static_concepts,
-        positive_only_event_concepts=positive_only_event_concepts,
-        cohort_window=cohort_window,
-        # no cohort_definition => wide universe; agent does 纳排 in-sandbox
-        # Also emit the long-format trajectory for the analysis concepts so the
-        # agent can build threshold-crossing onsets / incident-after-exposure
-        # endpoints / landmark designs the wide summary cannot express. Written
-        # as <stem>_trajectory.parquet next to the universe; the runner
-        # auto-discovers it and exposes TRAJECTORY_PARQUET.
-        emit_trajectory=emit_trajectory,
-        trajectory_concepts=[*feature_concepts, *outcome_concepts],
-        trajectory_window=effective_trajectory_window,
-        # Fresh concept extraction applies dictionary bounds before
-        # aggregation. Legacy export packages predate typed sidecars, so the
-        # formal pipeline applies the same canonical bounds here and records
-        # every excluded source value in materialization provenance.
-        bounds_violation_policy="exclude_with_receipt",
-        # Declared cross-concept readings the plan asked for.  They are named,
-        # not inferred: a column whose value depends on several concepts at
-        # once must be requested by the design that will use it.
-        host_derivations=list(dict.fromkeys(requested_derivations)),
-        # A design that times an event past the cohort window (a treatment
-        # start inside a grace period) names the window its onset is read over.
-        event_onset_windows=event_onset_windows,
-        **({"source_time_axis": source_time_axis} if source_time_axis is not None else {}),
-        **({"last_value_concepts": [target_outcome]} if target_outcome_aggregation == "last" else {}),
-        **identity_kwargs,
-    )
+    # This coordinate is only an input to materialization; it is not an
+    # approval. The Web host must verify the consumed preparation grant and
+    # separately authorize the complete research execution before calling us.
+    with ExitStack() as stack:
+        first_observed_kwargs: dict[str, Any] = {}
+        if first_observed_icu_coordinate is not None:
+            from ..intake.export_package import open_export_package
+            package = stack.enter_context(open_export_package(export_dir))
+            first_observed_kwargs = {
+                "source_package": package,
+                "first_observed_icu_coordinate": first_observed_icu_coordinate,
+            }
+        paths = materialize_to_parquet(
+            output_dir=output_dir,
+            stem=stem,
+            feature_concepts=feature_concepts,
+            database=database,
+            data_path=str(export_dir),
+            outcome_concepts=list(outcome_concepts),
+            static_concepts=effective_static_concepts,
+            positive_only_event_concepts=positive_only_event_concepts,
+            cohort_window=cohort_window,
+            # no cohort_definition => wide universe; agent does 纳排 in-sandbox
+            # Also emit the long-format trajectory for the analysis concepts so the
+            # agent can build threshold-crossing onsets / incident-after-exposure
+            # endpoints / landmark designs the wide summary cannot express. Written
+            # as <stem>_trajectory.parquet next to the universe; the runner
+            # auto-discovers it and exposes TRAJECTORY_PARQUET.
+            emit_trajectory=emit_trajectory,
+            trajectory_concepts=[*feature_concepts, *outcome_concepts],
+            trajectory_window=effective_trajectory_window,
+            # Fresh concept extraction applies dictionary bounds before
+            # aggregation. Legacy export packages predate typed sidecars, so the
+            # formal pipeline applies the same canonical bounds here and records
+            # every excluded source value in materialization provenance.
+            bounds_violation_policy="exclude_with_receipt",
+            # Declared cross-concept readings the plan asked for.  They are named,
+            # not inferred: a column whose value depends on several concepts at
+            # once must be requested by the design that will use it.
+            host_derivations=list(dict.fromkeys(requested_derivations)),
+            # A design that times an event past the cohort window (a treatment
+            # start inside a grace period) names the window its onset is read over.
+            event_onset_windows=event_onset_windows,
+            **({"source_time_axis": source_time_axis} if source_time_axis is not None else {}),
+            **({"last_value_concepts": [target_outcome]} if target_outcome_aggregation == "last" else {}),
+            **identity_kwargs,
+            **first_observed_kwargs,
+        )
     try:
         materialized_provenance = json.loads(
             Path(paths["provenance"]).read_text(encoding="utf-8")
