@@ -85,6 +85,7 @@ class LockedStepExecutionRequest:
     resolved_inputs_path: Optional[Path]
     output_dir: Path
     code_origin: CodeOrigin = CodeOrigin.MODEL_GENERATED
+    wave_authority: Optional[Any] = None
 
 
 class StepExecutor:
@@ -121,12 +122,25 @@ class StepExecutor:
         host had already deleted.
         """
 
+        wave_kwargs = {}
+        if request.wave_authority is not None:
+            from .runner import (
+                _code_requests_robustness_authority_snapshot,
+                require_wave_artifact_authority,
+            )
+
+            if _code_requests_robustness_authority_snapshot(request.code):
+                if not getattr(runner, "supports_wave_artifact_authority", False):
+                    raise ValueError("runner cannot receive the required wave artifact authority")
+                require_wave_artifact_authority(request.wave_authority)
+                wave_kwargs["wave_authority"] = request.wave_authority
         if not bool(getattr(runner, "manages_output_cleanup", False)):
             self._clear_output_dir(request.output_dir)
         provenance = (
             {"code_origin": request.code_origin}
             if getattr(runner, "requires_code_origin", False) else {}
         )
+        provenance.update(wave_kwargs)
         return runner.run(
             step_id=request.step_id,
             code=request.code,

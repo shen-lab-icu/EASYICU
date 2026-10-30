@@ -115,11 +115,15 @@ def test_pipeline_captures_one_evidence_view_before_parallel_dispatch(
 
     real_parallel = phase.RunCoordinator.run_parallel
     real_execute = phase._execute_step
+    real_step_execute = phase.StepExecutor.execute
     observed = []
+    requested_waves = []
     observed_lock = Lock()
 
     def after_capture_before_dispatch(self, **kwargs):
         partial = kwargs["execute_step"]
+        wave_authority = partial.keywords["batch_artifact_authority"]
+        assert wave_authority.payload and not wave_authority.error
         resolver = partial.keywords["batch_binding_resolver"]
         store = resolver.unpublished_evidence_store
         record = store.register_text(
@@ -143,11 +147,20 @@ def test_pipeline_captures_one_evidence_view_before_parallel_dispatch(
             ))
         return real_execute(step, **kwargs)
 
+    def inspect_execution_request(self, *, runner, request):
+        with observed_lock:
+            requested_waves.append(request.wave_authority)
+        return real_step_execute(self, runner=runner, request=request)
+
     monkeypatch.setattr(phase.RunCoordinator, "run_parallel", after_capture_before_dispatch)
     monkeypatch.setattr(phase, "_execute_step", inspect_worker)
+    monkeypatch.setattr(phase.StepExecutor, "execute", inspect_execution_request)
     test_pipeline_passes_frozen_state_to_parallel_workers(
         ra, synthetic_cohort, tmp_path, monkeypatch,
     )
     assert len(observed) >= 2
     assert len({id(resolver) for resolver, _, _ in observed}) == 1
     assert all(record is None and claims == [] for _, record, claims in observed)
+    assert len(requested_waves) >= 2
+    assert len({id(wave) for wave in requested_waves}) == 1
+    assert requested_waves[0].payload and not requested_waves[0].error
