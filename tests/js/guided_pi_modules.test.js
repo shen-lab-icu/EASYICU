@@ -434,13 +434,19 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
 
   // Fallback branch: a server sentence in the reader's language stays as it
   // is; a code, a transport string or a bare word becomes a plain sentence
-  // with the original in brackets for the administrator.
+  // with the original in brackets for troubleshooting.
   assert.equal(live({ message: 'The selected folder is empty.' }), 'The selected folder is empty.');
   assert.equal(live({ message: 'Failed to fetch' }), 'EasyICU could not reach its server. Check the network, then try again.');
-  assert.equal(live({ message: 'boom' }), 'This step did not complete (boom). If it keeps happening, contact the administrator.');
-  assert.equal(live({ code: 'custom_code' }), 'This step did not complete (custom_code). If it keeps happening, contact the administrator.');
-  assert.equal(live('raw-oops'), 'This step did not complete (raw-oops). If it keeps happening, contact the administrator.');
-  assert.equal(live({ message: '/api/x -> HTTP 503', status: 503 }), 'The EasyICU server hit an error on this step (HTTP 503). Try again shortly; if it keeps happening, contact the administrator.');
+  assert.equal(live({ message: 'boom' }), 'This step did not complete (boom). If it keeps happening, keep this error message for troubleshooting.');
+  assert.equal(live({ code: 'custom_code' }), 'This step did not complete (custom_code). If it keeps happening, keep this error message for troubleshooting.');
+  assert.equal(live('raw-oops'), 'This step did not complete (raw-oops). If it keeps happening, keep this error message for troubleshooting.');
+  assert.equal(live({ message: '/api/x -> HTTP 503', status: 503 }), 'The EasyICU server hit an error on this step (HTTP 503). Try again shortly; if it keeps happening, keep this error message for troubleshooting.');
+  const zhLive = guided.require('errorText').create({ tr: (_en, zh) => zh, staticPreview: () => false }).errorText;
+  assert.match(zhLive({ status: 500 }), /请保留错误信息以便排查/);
+  assert.doesNotMatch(zhLive({ status: 500 }), /管理员/);
+  guided.declare('hosted', { active: () => true, supportContact: () => 'Help desk' });
+  assert.match(live({ status: 500 }), /contact the administrator \(Help desk\)/);
+  assert.match(zhLive({ status: 500 }), /请联系管理员（Help desk）/);
 
   // Harness keeps the legacy alias for the same owner.
   let harnessPath = path.join(dir, '..', '..', '..', 'tests', 'js', 'guided_pi_module_harness.cjs');
