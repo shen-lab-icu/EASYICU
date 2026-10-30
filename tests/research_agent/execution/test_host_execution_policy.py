@@ -220,6 +220,7 @@ def test_robustness_cannot_replay_non_host_primary(monkeypatch, tmp_path, origin
 def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
     monkeypatch, tmp_path, desktop, frozen
 ):
+    import hashlib
     import sys
 
     import pandas as pd
@@ -252,6 +253,8 @@ def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
                 else "model_generated"
             },
             "script_path": script,
+            "source_root": tmp_path,
+            "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
         },
         variant_cohort=pd.DataFrame({"measurement": [1.0, 2.0]}),
         out_dir=tmp_path,
@@ -264,14 +267,12 @@ def test_robustness_replay_keeps_desktop_cache_and_docker_policy(
         tmp_path / ("run-font-cache" if desktop else "replay/matplotlib")
     )
     if frozen:
-        import hashlib
-
         assert captured[0][0] == [
-            sys.executable, "--easyicu-host-worker", "replay", "--script", str(script),
+            sys.executable, "--easyicu-host-worker", "replay", "--script", str(tmp_path / "replay" / "primary_analysis.py"),
             "--sha256", hashlib.sha256(script.read_bytes()).hexdigest(),
         ]
     else:
-        assert captured[0][0] == [sys.executable, str(script)]
+        assert captured[0][0] == [sys.executable, str(tmp_path / "replay" / "primary_analysis.py")]
 
 
 def test_desktop_write_skips_every_manuscript_service(tmp_path):

@@ -21,7 +21,11 @@ these.
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import re
 import shutil
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,6 +37,61 @@ from ...authority.step_capsule import (
 )
 from ...contracts.cohort_product_keys import is_closed_cohort_product_key
 from ...robustness.panel import PRIMARY_SPEC_ID, RobustnessSpec
+from easyicu.runtime.platform_compat import SecureDirectory
+
+
+def snapshot_replay_script(
+    *, source_root: Path, source_path: Path, expected_sha256: str, replay_root: Path,
+) -> Path:
+    """Copy only the approved script bytes into this replay's private directory.
+
+    This closes the source-script check/use gap; the replay is not a complete
+    filesystem sandbox and must not be used as permission to run a wave.
+    """
+
+    digest = str(expected_sha256 or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("primary script digest is invalid")
+    root = Path(source_root).resolve(strict=True)
+    source = Path(source_path)
+    try:
+        relative = source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("primary script is outside its approved root") from exc
+    if not relative.parts or any(part in {".", ".."} for part in relative.parts):
+        raise ValueError("primary script has an unsafe relative path")
+    try:
+        with SecureDirectory(root / relative.parent) as directory:
+            descriptor = directory.open(relative.name, os.O_RDONLY)
+            with os.fdopen(descriptor, "rb") as handle:
+                before = os.fstat(handle.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                    raise ValueError("primary script must be an unlinked regular file")
+                payload = handle.read()
+                after = os.fstat(handle.fileno())
+                if (
+                    (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                ):
+                    raise ValueError("primary script changed during capture")
+            directory.assert_still_selected()
+    except OSError as exc:
+        raise ValueError("primary script path is missing, linked, or unreadable") from exc
+    if hashlib.sha256(payload).hexdigest() != digest:
+        raise ValueError("primary script digest mismatch")
+
+    destination = Path(replay_root) / "primary_analysis.py"
+    try:
+        with SecureDirectory(replay_root) as directory:
+            descriptor = directory.open(destination.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            directory.assert_still_selected()
+    except OSError as exc:
+        raise ValueError("primary script snapshot could not be created safely") from exc
+    return destination
 
 #: The name this step gives the primary coefficients it copies into its own
 #: outputs.  One spelling, used by the copy and by the matrix row that points

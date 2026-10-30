@@ -78,6 +78,7 @@ from .primary_model_contracts import (
     copy_structured_primary_contract_artifacts,
     matrix_model_trace,
     registered_raw_input_contracts,
+    snapshot_replay_script,
     variant_typed_manifest_path,
 )
 
@@ -1589,6 +1590,7 @@ def _find_structured_primary_model_source(
                 run_root=run_root,
             ),
             "script_path": script_path,
+            "source_root": run_root,
             "script_sha256": script_sha256,
             "code_evidence_id": code_evidence_id,
             "summary_evidence_id": summary_evidence_id,
@@ -1960,6 +1962,17 @@ def _replay_primary_model_on_frame(
     replay_outputs = replay_root / "outputs"
     replay_outputs.mkdir(parents=True, exist_ok=True)
     try:
+        if not source.get("source_root") or not source.get("script_path"):
+            raise ValueError("primary script approved root or path is missing")
+        replay_script = snapshot_replay_script(
+            source_root=Path(source["source_root"]),
+            source_path=Path(source["script_path"]),
+            expected_sha256=str(source.get("script_sha256") or ""),
+            replay_root=replay_root,
+        )
+    except (OSError, ValueError) as exc:
+        return _blocked_structured_replay(spec=spec, error=str(exc))
+    try:
         cohort_path = replay_root / "cohort.parquet"
         variant_cohort.to_parquet(cohort_path, index=False)
         input_cohort_sha256 = _sha256_file(cohort_path)
@@ -2003,7 +2016,7 @@ def _replay_primary_model_on_frame(
         env["EASYICU_RESOLVED_INPUTS_JSON"] = str(replay_manifest_path)
     try:
         completed = subprocess.run(
-            replay_command(source["script_path"]),
+            replay_command(replay_script),
             cwd=str(source["script_path"].parent),
             env=env,
             capture_output=True,
