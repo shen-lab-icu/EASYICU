@@ -254,18 +254,21 @@ class RunCoordinator:
         on_worker_error: Callable[[AnalysisStep, BaseException], None],
     ) -> None:
         step_list = list(steps)
-        hard_stopped = Event()
+        stopped = Event()
 
         def guarded_execute(step: AnalysisStep) -> Any:
-            if hard_stopped.is_set():
+            if stopped.is_set():
                 return None
             try:
                 return execute_step(step)
-            except ProviderHardStopError:
-                hard_stopped.set()
+            except BaseException:
+                # A raised step has violated the execution contract.  Match
+                # the sequential fail-closed boundary: do not start queued
+                # work after it, while allowing in-flight workers to settle.
+                stopped.set()
                 raise
 
-        stop_error: Optional[ProviderHardStopError] = None
+        stop_error: Optional[BaseException] = None
         with ThreadPoolExecutor(
             max_workers=min(int(max_workers), len(step_list)),
             thread_name_prefix="ra_step",
@@ -277,10 +280,10 @@ class RunCoordinator:
                 error = future.exception()
                 if error is not None:
                     on_worker_error(futures[future], error)
-                    if isinstance(error, ProviderHardStopError):
-                        stop_error = error
-                        for pending in futures:
-                            pending.cancel()
+                    if isinstance(error, (ProviderHardStopError, KeyboardInterrupt, SystemExit)):
+                        stop_error = stop_error or error
+                    for pending in futures:
+                        pending.cancel()
         if stop_error is not None:
             raise stop_error
 
