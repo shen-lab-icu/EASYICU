@@ -1407,6 +1407,35 @@ def _literature_outcome_name(context: ResearchContext) -> Optional[str]:
     return " ".join(label.split())[:500] if isinstance(label, str) and label.strip() else None
 
 
+def _candidate_outcome_background_clause(context: ResearchContext) -> str:
+    """Offer a broad stay-duration *retrieval* stratum for an unbound label.
+
+    This is deliberately not a translation or an identity mapping.  In
+    particular, an episode that includes intermediate care or ward time must
+    not become an ICU length-of-stay endpoint or a direct comparator because
+    a search used these broader English words.  Screening continues to match
+    the user's original label and retained source text.
+    """
+    if context.target_outcome:
+        return ""
+    label = _literature_outcome_name(context) or ""
+    if not label or re.search(
+        r"[?？]|(?:不是|并非|不要|不采用|不选择|尚未|待定|未定|是否|能否|或者|还是|或是|"
+        r"\b(?:not|without|exclude|whether|undecided|unknown|or)\b)", label, re.I,
+    ):
+        return ""
+    chinese = bool(
+        re.search(r"(?:住院|入院|出院|病房|病例|监护|icu)", label, re.I)
+        and re.search(r"(?:时长|天数|持续时间|停留时间|住院时间)", label)
+    )
+    english = bool(re.search(r"\b(?:stay|stays|hospitali[sz]ation)\b", label, re.I)
+                   and re.search(r"\b(?:duration|length|days)\b", label, re.I))
+    if not (chinese or english):
+        return ""
+    return ('("length of stay"[Title/Abstract] OR "hospital stay"[Title/Abstract] '
+            'OR "duration of stay"[Title/Abstract])')
+
+
 def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     if not name:
         return ""
@@ -2891,7 +2920,7 @@ def build_review_query_families(context: ResearchContext) -> Dict[str, List[str]
     population = _ICU_FILTER
     if _adult_population_required(context):
         population += ' AND (adult[Title/Abstract] OR adults[Title/Abstract] OR "Adult"[MeSH Terms])'
-    return role_query_families(
+    families = role_query_families(
         topic_queries=build_pubmed_protocol_queries_for_context(context),
         exposure=axis(context.primary_exposure)
         or _question_topic_clause(context.research_question),
@@ -2899,6 +2928,15 @@ def build_review_query_families(context: ResearchContext) -> Dict[str, List[str]
         population=population, database=_database_retrieval_clause(context),
         question=context.research_question,
     )
+    background_outcome = _candidate_outcome_background_clause(context)
+    exposure = axis(context.primary_exposure) or _question_topic_clause(context.research_question)
+    if background_outcome and exposure:
+        # This is an additional background/methods stratum. Query membership
+        # is not an inclusion decision or evidence of endpoint equivalence.
+        families["analysis_method"].append(
+            " AND ".join((exposure, background_outcome, population))
+        )
+    return families
 
 
 _SKIP_TITLE_WORDS = {
