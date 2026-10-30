@@ -272,8 +272,19 @@ def analysis_answerability_findings(
     context: ResearchContext,
 ) -> list[ValidationFinding]:
     """Return every proven pre-Planner exposure/outcome infeasibility."""
-
+    unresolved_origin = any(
+        item.relation == "first_window" and item.anchor_event == "unresolved"
+        for item in context.temporal_constraints
+    )
+    has_icu_window = any(window.anchor == "icu_admission" for window in context.time_windows)
+    timing_findings = ([ValidationFinding(
+        validator="data_answerability", severity="error",
+        message=("The requested multiple care-unit time origin is unresolved; "
+                 "an ICU-admission materialization cannot be assumed equivalent."),
+        detail={"kind": "unresolved_clinical_origin_vs_icu_materialization"},
+    )] if unresolved_origin and has_icu_window else [])
     return [
+        *timing_findings,
         *requested_data_answerability_findings(context),
         *primary_exposure_answerability_findings(context),
         *target_outcome_answerability_findings(context),
