@@ -16,6 +16,7 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.filesystem import AnchoredDirectory
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
+from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
 from easyicu.research_agent.canonical_json import canonical_json, canonical_sha256
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.research_agent.research_context.typed import parse_research_context_json
@@ -34,6 +35,35 @@ def _plan_authority(pending: Any) -> PlanReviewAuthority:
     if not candidates or any(value != candidates[0] for value in candidates[1:]):
         raise ValueError("raw_preparation_plan_authority_unavailable")
     return candidates[0]
+
+
+def _single_table_pending(plan: PlanReviewAuthority, dependencies: dict, identity: SourceIdentity):
+    """Offer a partial step only when the sole blocker is the unknown cohort."""
+    digest = dependencies.get("declaration_sha256")
+    body = {key: value for key, value in dependencies.items() if key != "declaration_sha256"}
+    declaration = body.get("declaration", {})
+    files = body.get("files", [])
+    if (digest != canonical_sha256(body) or body.get("blocker_codes") != ["dependency_cohort_inputs_unknown"]
+            or declaration.get("plan_sha256") != plan.plan_sha256
+            or declaration.get("source_identity_sha256") != canonical_sha256(identity.to_dict())
+            or len(files) != 1 or files[0].get("format") != "csv"):
+        return None
+    scope = {"adapter_id": "registered-csv-projection/1", "purpose": "prepare_single_table_only",
+             "source_identity": identity.to_dict(), "relative_file": files[0]["path"],
+             "columns": files[0]["columns"], "plan_sha256": plan.plan_sha256,
+             "dependencies_sha256": digest}
+    from easyicu.webserver.reviewed_csv_projection import require_reviewable_csv_scope
+    require_reviewable_csv_scope(scope)
+    payload = {"plan_review_authority": plan.model_dump(mode="json"), "raw_preparation_scope": scope}
+    summary = (f"读取登记来源 {identity.database}/{identity.registration_id} 中的 "
+               f"{scope['relative_file']} 全部行和全部字段；仅输出字段：{', '.join(scope['columns'])}。"
+               "队列依赖尚未解决，此步骤不构成完整队列或研究分析。 "
+               "This reads the entire file and outputs only the listed columns; cohort and analysis remain incomplete.")
+    if len(summary) > 1000:
+        return None
+    request = HumanReviewRequest.create(kind="scientific_stop", summary=summary, payload=payload,
+                                        authority_sha256=canonical_sha256(payload))
+    return RawPreparationCheckpoint.pending(plan_sha256=plan.plan_sha256, request=request)
 
 
 def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
@@ -67,6 +97,8 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
         context=context, plan=plan, evidence=EvidenceStore(run_dir)), plan_authority=authority,
         run_dir=run_dir, source_root=source_root, snapshot=snapshot, source_config=config)
     if result["pending"] is None:
+        result["pending"] = _single_table_pending(authority, result["dependencies"], identity)
+    if result["pending"] is None:
         return {"status": "blocked", "blocker_codes": result["dependencies"]["blocker_codes"]}
     checkpoint = result["pending"]
     with AnchoredDirectory.open(run_dir) as directory:
@@ -80,8 +112,12 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
                 raise ValueError("raw_preparation_pending_conflict")
             checkpoint = existing
         directory.assert_still_selected()
+    partial = checkpoint.request.payload.get("raw_preparation_scope", {}).get("adapter_id") == "registered-csv-projection/1"
+    # The current shared UI does not yet render this scope's complete
+    # authorization details. A candidate can be previewed, but cannot be
+    # approved until the review surface has been updated and verified.
     return {"status": "pending", "checkpoint_sha256": checkpoint.checkpoint_sha256,
-            "approvable": False, "reason_code": "producer_consumption_closure_unverified"}
+            "approvable": False, "reason_code": "single_table_review_surface_unavailable" if partial else "producer_consumption_closure_unverified"}
 
 
 def available_host_review(*, run_id: str, study_context_id: str):
@@ -101,7 +137,10 @@ def available_host_review(*, run_id: str, study_context_id: str):
         raise ValueError("raw_preparation_pending_expired")
     scope = json.loads(canonical_json(checkpoint.request.payload.get("raw_preparation_scope") or {}))
     # The adapter is in-tree host code. Unknown or inconsistent scope refuses.
-    reviewed_snapshot_producer.require_reviewable_scope(scope)
+    if scope.get("adapter_id") == "registered-csv-projection/1":
+        raise ValueError("raw_preparation_partial_review_surface_unavailable")
+    else:
+        reviewed_snapshot_producer.require_reviewable_scope(scope)
     current_study = study_contexts.get_context(study_context_id)
     old_digest = study_contexts.scientific_configuration_sha256(study)
     if not current_study or study_contexts.scientific_configuration_sha256(current_study) != old_digest:

@@ -577,7 +577,7 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
             or not study_id or decision not in {"approved", "rejected"}):
         raise HTTPException(status_code=400, detail={"error": "raw_preparation_review_request_invalid"})
     try:
-        current, checkpoint, _, run_dir = available_host_review(
+        current, checkpoint, preparation_scope, run_dir = available_host_review(
             run_id=action.decision.run_id, study_context_id=study_id)
         if current != action.decision:
             raise ValueError("raw_preparation_pending_stale")
@@ -604,13 +604,118 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
                 raise ValueError("raw_preparation_review_not_recorded")
             jobs.MANAGER.run_reserved(job_id, failed)
             raise
-        jobs.MANAGER.run_reserved(job_id, lambda _job: {"decision": decision, "analysis_authorized": False})
-        return {**receipt, "decision": decision, "analysis_authorized": False}
+        result = {**receipt, "decision": decision, "analysis_authorized": False}
+        if decision == "approved" and preparation_scope.get("adapter_id") == "registered-csv-projection/1":
+            import threading
+            from easyicu.webserver import study_contexts
+            from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding
+            from easyicu.webserver.reviewed_csv_projection import run_reviewed_csv_projection
+
+            binding = RawPreparationHostBinding(project_id=action.project_id, session_id=action.session_id,
+                study_context_id=study_id, run_id=current.run_id, nonce=current.nonce)
+
+            def prepare(_job):
+                study = study_contexts.get_context(study_id)
+                if not study or study_contexts.scientific_configuration_sha256(study) != current.scientific_configuration_sha256:
+                    raise ValueError("raw_preparation_scientific_context_changed")
+                output = run_reviewed_csv_projection(checkpoint=decided, binding=binding,
+                    scope=preparation_scope, host_work_root=run_dir)
+                deliverable = (output / "projection.csv").stat().st_size <= 64 * 1024 * 1024
+                return {"preparation_status": "single_table_complete", "artifact_name": "projection.csv",
+                        "artifact_delivery": "api_only" if deliverable else "size_limit_exceeded",
+                        "delivery_max_bytes": 64 * 1024 * 1024,
+                        "cohort_complete": False, "analysis_authorized": False}
+
+            threading.Thread(target=jobs.MANAGER.run_reserved, args=(job_id, prepare), daemon=True).start()
+            result.update(preparation_job_id=job_id,
+                          preparation_status="single_table_preparing", cohort_complete=False)
+        else:
+            jobs.MANAGER.run_reserved(job_id, lambda _job: {"decision": decision, "analysis_authorized": False})
+        return result
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         reason = str(exc)
         if not reason.startswith("raw_preparation_") or len(reason) > 120:
             reason = "raw_preparation_review_unavailable"
         raise HTTPException(status_code=409, detail={"error": reason}) from exc
+
+
+@control_router.post("/api/jobs/raw-preparation-projection-download")
+def raw_preparation_projection_download(body: Dict[str, Any], request: Request) -> Response:
+    """Deliver one completed host-approved single-table projection, read-only."""
+    import os
+    import re
+    from urllib.parse import urlsplit
+    from easyicu.research_agent.authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
+    from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
+    from easyicu.webserver import host_security, study_contexts
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+    from easyicu.webserver.pi_copilot.service import get_pi_copilot_service
+    from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding, verify_consumed_host_review
+    from easyicu.webserver.reviewed_csv_projection import read_verified_projection
+
+    try:
+        origin = urlsplit(request.headers.get("origin", ""))
+        target = host_security.public_origin() or urlsplit(str(request.base_url))
+        if (origin.scheme not in {"http", "https"} or origin.username or origin.password or origin.path
+                or origin.query or origin.fragment
+                or (origin.scheme, origin.hostname, origin.port or (443 if origin.scheme == "https" else 80))
+                != (target.scheme, target.hostname, target.port or (443 if target.scheme == "https" else 80))):
+            raise HTTPException(status_code=403, detail={"error": "raw_preparation_origin_blocked"})
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail={"error": "raw_preparation_origin_blocked"}) from exc
+    keys = {"project_id", "session_id", "study_context_id", "run_id", "job_id"}
+    if set(body) != keys or any(not isinstance(body[key], str) or not body[key].strip() or len(body[key]) > 160 for key in keys):
+        raise HTTPException(status_code=400, detail={"error": "raw_preparation_coordinates_invalid"})
+    project, session, study_id, run_id, job_id = (body[key].strip() for key in ("project_id", "session_id", "study_context_id", "run_id", "job_id"))
+    try:
+        owner = get_pi_copilot_service()
+        owner.host_action_session(session, project_id=project, study_context_id=study_id)
+        pending, _ = agent_pipeline_runs.raw_preparation_review_owner(run_id, study_id)
+        root = Path(pending.run_dir)
+        if not root.is_absolute() or ".." in root.parts:
+            raise ValueError("raw_preparation_delivery_root_invalid")
+        with AnchoredDirectory.open(root) as directory:
+            checkpoint = RawPreparationCheckpoint.model_validate_json(directory.read_bytes("raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+            names = os.listdir(root)
+            if len(names) > 10000:
+                raise ValueError("raw_preparation_delivery_roster_too_large")
+            directory.assert_still_selected()
+        scope = checkpoint.request.payload.get("raw_preparation_scope")
+        if not isinstance(scope, dict) or scope.get("adapter_id") != "registered-csv-projection/1":
+            raise ValueError("raw_preparation_delivery_scope_invalid")
+        candidates = []
+        for name in names:
+            if not re.fullmatch(r"reviewed-csv-projection-[a-z0-9_]{8}", name):
+                continue
+            candidate = root / name
+            try:
+                with AnchoredDirectory.open(candidate) as directory:
+                    binding = RawPreparationHostBinding.model_validate_json(directory.read_bytes("delivery-binding.json", max_bytes=8192))
+                    directory.assert_still_selected()
+                if (binding.project_id, binding.session_id, binding.study_context_id, binding.run_id) != (project, session, study_id, run_id):
+                    continue
+                receipt = verify_consumed_host_review(checkpoint=checkpoint, binding=binding, scope=scope)
+                if receipt.get("job_id") != job_id:
+                    continue
+                action = owner.host_action_child_job(session, project_id=project, action_key=receipt["decision_key"])
+                if not action or action.get("child_job_id") != job_id:
+                    continue
+                study = study_contexts.get_context(study_id)
+                if not study or study_contexts.scientific_configuration_sha256(study) != receipt.get("scientific_configuration_sha256"):
+                    continue
+                data = read_verified_projection(root=candidate, checkpoint_sha256=checkpoint.checkpoint_sha256,
+                                                binding=binding, scope=scope)
+                candidates.append(data)
+            except (AuthorityFilesystemError, OSError, ValueError, TypeError, KeyError, ValidationError):
+                continue
+        if len(candidates) != 1:
+            raise ValueError("raw_preparation_delivery_unavailable")
+    except (PiCopilotError, AuthorityFilesystemError, OSError, ValueError, TypeError, KeyError, ValidationError) as exc:
+        raise HTTPException(status_code=404, detail={"error": "raw_preparation_delivery_unavailable"}) from exc
+    return Response(content=candidates[0], media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="single-table-projection.csv"',
+        "Cache-Control": "private, no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff",
+        "X-EasyICU-Artifact-Scope": "single-table-preparation; cohort-incomplete; analysis-not-authorized"})
 
 
 @control_router.post("/api/jobs/agent-run-review")

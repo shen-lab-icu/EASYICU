@@ -205,6 +205,49 @@ def verify_host_review(*, checkpoint: RawPreparationCheckpoint, project_id: str,
     return receipt
 
 
+def verify_consumed_host_review(*, checkpoint: RawPreparationCheckpoint, binding: RawPreparationHostBinding,
+                                scope: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Recheck a consumed decision for result access; never grants new work.
+
+    The expiry limited preparation, not access to its already completed result.
+    This read-only path does not create the key, receipt, marker, or directory.
+    """
+    root = state_paths.state_root() / "private-preparation-decisions"
+    try:
+        with AnchoredDirectory.open(root) as directory:
+            info = root.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+                raise ValueError("raw_preparation_host_directory_invalid")
+            with directory.open_regular("host.key") as stream:
+                info = os.fstat(stream.fileno())
+                if info.st_mode & 0o077 or info.st_uid != os.getuid():
+                    raise ValueError("raw_preparation_host_key_invalid")
+                key = stream.read(33)
+            if len(key) != 32:
+                raise ValueError("raw_preparation_host_key_invalid")
+            receipt = json.loads(directory.read_bytes(binding.nonce + ".json", max_bytes=64 * 1024))
+            marker = json.loads(directory.read_bytes(binding.nonce + ".used", max_bytes=64 * 1024))
+            directory.assert_still_selected()
+        if not isinstance(receipt, dict) or not isinstance(marker, dict):
+            raise ValueError("raw_preparation_host_receipt_invalid")
+        signature = receipt.pop("signature")
+        expected_signature = hmac.new(key, canonical_json(receipt).encode(), hashlib.sha256).hexdigest()
+        if not isinstance(signature, str) or not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("raw_preparation_host_receipt_invalid")
+        expected = {"schema_version": "easyicu.raw-preparation-host-decision/1", "actor": "host_user",
+                    "decision": "approved", **binding.model_dump(mode="python"),
+                    "scope_sha256": canonical_sha256(dict(scope)),
+                    "decided_checkpoint_sha256": checkpoint.checkpoint_sha256,
+                    "request_authority_sha256": checkpoint.request.authority_sha256}
+        if checkpoint.state != "approved" or any(receipt.get(k) != v for k, v in expected.items()):
+            raise ValueError("raw_preparation_host_binding_mismatch")
+        if marker != {"decision_sha256": canonical_sha256(receipt), "nonce": binding.nonce}:
+            raise ValueError("raw_preparation_host_consumption_invalid")
+    except (AuthorityFilesystemError, OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("raw_preparation_host_receipt_invalid") from exc
+    return receipt
+
+
 def consume_host_review(*, checkpoint: RawPreparationCheckpoint, project_id: str, session_id: str,
                         study_context_id: str, run_id: str, nonce: str,
                         scope: Mapping[str, Any], now: datetime | None = None) -> None:
