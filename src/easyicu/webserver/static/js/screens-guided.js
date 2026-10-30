@@ -3788,8 +3788,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const contextAsideToggle = e.target.closest('[data-context-aside-toggle]');
         const panelOwner = window.EU_GUIDED_PANELS;
         if (contextAsideToggle && panelOwner && panelOwner.setContextAsideCollapsed) {
-          const collapsed = !(panelOwner.isContextAsideCollapsed && panelOwner.isContextAsideCollapsed());
-          panelOwner.setContextAsideCollapsed(collapsed, document.querySelector('.gd-main'));
+          const main = document.querySelector('.gd-main');
+          if (panelOwner.toggleContextAside) panelOwner.toggleContextAside(main);
+          else panelOwner.setContextAsideCollapsed(!(panelOwner.isContextAsideCollapsed && panelOwner.isContextAsideCollapsed()), main);
           return;
         }
         const manageProjects = e.target.closest('[data-project-manage]');

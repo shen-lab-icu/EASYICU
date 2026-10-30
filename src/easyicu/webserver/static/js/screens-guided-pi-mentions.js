@@ -106,16 +106,19 @@
   const rowDetail = row => (row.kind === 'concept' ? row.id
     : row.kind === 'database' && row.source === 'registered_source' ? tr('Registered on this computer', '本机已登记') : '');
   function listHtml(projectId, session, kind) {
+    const explanation = kind === 'database'
+      ? `<p class="gpi-material-empty">${esc(tr('A mention describes your question; it does not select or authorize a data source for research.', '引用仅用于描述问题，不会选择或授权研究数据来源。'))}</p>`
+      : '';
     const prefix = JSON.stringify([projectId, session && session.session_id, kind]).slice(0, -1);
     if (!results.key.startsWith(prefix) || (results.loading && !results.items.length)) {
-      return `<p class="gpi-material-empty" role="status">${esc(tr('Searching…', '正在查找…'))}</p>`;
+      return explanation + `<p class="gpi-material-empty" role="status">${esc(tr('Searching…', '正在查找…'))}</p>`;
     }
     if (results.failed) {
-      return `<p class="gpi-material-empty" role="alert">${esc(tr('Could not search right now.', '暂时无法查找。'))} <button type="button" data-gpi-mention-retry>${esc(tr('Try again', '重试'))}</button></p>`;
+      return explanation + `<p class="gpi-material-empty" role="alert">${esc(tr('Could not search right now.', '暂时无法查找。'))} <button type="button" data-gpi-mention-retry>${esc(tr('Try again', '重试'))}</button></p>`;
     }
-    if (!results.items.length) return `<p class="gpi-material-empty" role="status">${esc(tr('Nothing matches.', '没有匹配的项。'))}</p>`;
+    if (!results.items.length) return explanation + `<p class="gpi-material-empty" role="status">${esc(tr('Nothing matches.', '没有匹配的项。'))}</p>`;
     const taken = new Set(all(session).map(keyOf));
-    return results.items.map((row, index) => {
+    return explanation + results.items.map((row, index) => {
       const used = taken.has(keyOf(row));
       const detail = rowDetail(row);
       return `<button type="button" class="gpi-composer-drawer-row" data-gpi-mention-add="${index}"${used ? ' aria-pressed="true" disabled' : ''}><strong>${esc(rowTitle(row))}</strong>${detail ? `<span>${esc(detail)}</span>` : ''}</button>`;
@@ -178,7 +181,7 @@
       const key = keyOf(ref);
       // The study reading assigns each variable's role; the chip only names it.
       const kind = ref.kind === 'concept' ? tr('Variable', '变量') : ref.kind === 'file' ? tr('File', '文件')
-        : ref.source === 'registered_source' ? tr('Local data', '本机数据') : tr('Database', '数据库');
+        : ref.source === 'registered_source' ? tr('Local data mention', '本机数据引用') : tr('Database mention', '数据库引用');
       return `<div class="gpi-composer-skill gpi-mention-chip"><span>${esc(kind)}</span><strong>${esc(label(ref) || '…')}</strong><button type="button" data-gpi-mention-remove="${esc(key)}" aria-label="${esc(tr('Remove mention', '移除引用'))}"${busy ? ' disabled' : ''}>×</button></div>`;
     }).join('') + (error ? `<div class="gpi-attached-skill-error" role="alert">${esc(error)}</div>` : '');
   }

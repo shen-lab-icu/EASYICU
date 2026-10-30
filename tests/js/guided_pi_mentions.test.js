@@ -93,13 +93,13 @@ test('a local dataset and a file are named after one lookup; removing keeps the 
     { kind: 'database', id: 'miiv', source: 'database', digest: 'd'.repeat(64) },
   ] };
   let chips = mentions.chips('p1', session);
-  assert.match(chips, /<span>本机数据<\/span><strong>…<\/strong>/);
-  assert.match(chips, /<span>数据库<\/span><strong>MIMIC-IV<\/strong>/);
+  assert.match(chips, /<span>本机数据引用<\/span><strong>…<\/strong>/);
+  assert.match(chips, /<span>数据库引用<\/span><strong>MIMIC-IV<\/strong>/);
   await settle();
   assert.equal(calls.filter(row => row[0] === 'resolve').length, 2);
   assert.equal(changes(), 2);
   chips = mentions.chips('p1', session);
-  assert.match(chips, /<span>本机数据<\/span><strong>eICU-CRD<\/strong>/);
+  assert.match(chips, /<span>本机数据引用<\/span><strong>eICU-CRD<\/strong>/);
   assert.match(chips, /<span>文件<\/span><strong>notes\/protocol\.md<\/strong>/);
   mentions.chips('p1', session);
   await settle();
@@ -118,7 +118,9 @@ test('a host refusal reads as words and the draft stays as it was', async () => 
   const before = [{ kind: 'database', id: 'miiv', source: 'database', digest: 'd'.repeat(64) }];
   const session = { session_id: 's1', draft_mentions: before };
   mentions.search('p1', session, 'database', '');
+  assert.match(mentions.listHtml('p1', session, 'database'), /引用仅用于描述问题，不会选择或授权研究数据来源/);
   await settle();
+  assert.match(mentions.listHtml('p1', session, 'database'), /引用仅用于描述问题，不会选择或授权研究数据来源/);
   assert.equal(await mentions.add('p1', session, 0), false);
   assert.equal(session.draft_mentions, before);
   assert.match(mentions.chips('p1', session), /一条消息只能引用一个数据库/);

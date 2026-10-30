@@ -382,6 +382,17 @@ const runFilesApi = {
     hostJobs: stub(), followUps: null, effortMenu: null,
     workflowConfirmation: () => confirmation, runFailureText, ...overrides,
   }).sessionPanel();
+  for (const mode of ['research', 'workspace']) {
+    const state = { session: { session_id: 'session-1', binding: {}, agent_mode: mode },
+      sessions: [], messages: [], workflowReceipts: [], busy: false, projectLoading: false,
+      draft: '', composerErrorSessionId: 'session-1', regenerating: false, planStarting: null };
+    const withHint = conversation([], { state, agentMode: () => mode, starters: { render: ({ composer }) => composer } });
+    assert.match(withHint, /role="alert" data-gpi-composer-error>请先输入问题/);
+    assert.match(withHint, /aria-invalid="true" aria-describedby="gpi-composer-error"/);
+    assert.ok(withHint.indexOf('data-gpi-input') < withHint.indexOf('data-gpi-composer-error'));
+    state.composerErrorSessionId = 'other-session';
+    assert.doesNotMatch(conversation([], { state, agentMode: () => mode, starters: { render: ({ composer }) => composer } }), /data-gpi-composer-error/);
+  }
   const stoppedPanel = conversation([{ id: 'q', role: 'user', text: '问题', complete: true }, { id: 'saved', role: 'saved_run', savedRuns: [savedRun] }]);
   assert.equal(count(stoppedPanel, 'class="gpi-run-stop"'), 1);
   assert.doesNotMatch(stoppedPanel, /这次运行没有完成，文件作为历史保留在下方/);

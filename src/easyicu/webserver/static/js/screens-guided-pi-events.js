@@ -637,6 +637,13 @@
         }
         if (event.target.matches('[data-gpi-input]')) {
           state.draft = event.target.value;
+          if (state.composerErrorSessionId && String(state.draft || '').trim()) {
+            state.composerErrorSessionId = '';
+            const hint = state.host.querySelector('[data-gpi-composer-error]');
+            if (hint) hint.remove();
+            event.target.removeAttribute('aria-invalid');
+            event.target.removeAttribute('aria-describedby');
+          }
           if (!String(state.draft || '').trim()) state.followUpDraft = null;
           // "@" opens the project-resource drawer. Inline /query belongs to
           // screens-guided-pi-slash-menu.js and stays until a Skill is attached.

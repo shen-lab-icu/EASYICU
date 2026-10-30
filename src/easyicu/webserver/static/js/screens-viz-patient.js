@@ -437,7 +437,7 @@
       <div class="note ${patientReady ? 'ok' : 'warn'} mt-12" data-patient-source-ready="${patientReady ? 'true' : 'false'}">
         <div class="ico">${icon(patientReady ? 'check' : 'alert', 14)}</div>
         <div class="body">
-          <div class="t">${patientReady ? t('Ready to load', '数据已就绪，可以加载') : t('This data needs review before loading', '这份数据需要检查后才能加载')}</div>
+          <div class="t">${patientReady ? t('Ready to load; selected for data pages', '已选择数据源，尚需加载') : t('This data needs review before loading', '这份数据需要检查后才能加载')}</div>
           <div class="d"><b>${esc(active.label || active.database || t('Prepared data', '已准备的数据'))}</b> · ${esc(readyLine)}</div>
         </div>
       </div>`;

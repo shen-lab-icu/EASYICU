@@ -16,6 +16,7 @@ const classes = new Set();
 const main = {
   classList: {
     toggle(name, active) { if (active) classes.add(name); else classes.delete(name); },
+    contains(name) { return classes.has(name); },
   },
 };
 const ctx = { t: en => en, icon: () => '' };
@@ -32,5 +33,12 @@ assert.equal(classes.has('gd-context-aside-collapsed'), true);
 owner.setContextAsideCollapsed(false, main);
 assert.equal(owner.isContextAsideCollapsed(), false);
 assert.equal(classes.has('gd-context-aside-collapsed'), false);
+classes.add('gpi-empty-session-focus');
+owner.toggleContextAside(main);
+assert.equal(classes.has('gpi-empty-aside-open'), true);
+assert.equal(owner.isContextAsideCollapsed(), false);
+owner.toggleContextAside(main);
+assert.equal(classes.has('gpi-empty-aside-open'), false);
+assert.equal(owner.isContextAsideCollapsed(), true);
 
 process.stdout.write('{"bilateralCollapse":true,"previewCanExpand":true}');

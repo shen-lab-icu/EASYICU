@@ -25,12 +25,22 @@
     return contextAsideCollapsed;
   }
 
+  function toggleContextAside(main) {
+    if (main && main.classList && main.classList.contains('gpi-empty-session-focus')) {
+      const open = !main.classList.contains('gpi-empty-aside-open');
+      main.classList.toggle('gpi-empty-aside-open', open);
+      setContextAsideCollapsed(!open, main);
+      return;
+    }
+    setContextAsideCollapsed(!isContextAsideCollapsed(), main);
+  }
+
   function contextAsideClass() {
     return contextAsideCollapsed ? 'gd-context-aside-collapsed' : '';
   }
 
   function renderContextAsideRestore(ctx) {
-    return `<button class="gd-aside-restore" type="button" data-context-aside-toggle aria-label="${ctx.t('Show research progress', '显示研究进度栏')}" title="${ctx.t('Show research progress', '显示研究进度栏')}">${ctx.icon('chevron', 14)}</button>`;
+    return `<button class="gd-aside-restore" type="button" data-context-aside-toggle aria-controls="gdContextAside" aria-label="${ctx.t('Show research progress', '显示研究进度栏')}" title="${ctx.t('Show research progress', '显示研究进度栏')}">${ctx.icon('chevron', 14)}</button>`;
   }
 
   function renderContextAsideCollapse(ctx) {
@@ -39,6 +49,7 @@
 
   window.EU_GUIDED_PANELS = {
     setContextAsideCollapsed,
+    toggleContextAside,
     isContextAsideCollapsed,
     contextAsideClass,
     renderContextAsideRestore,
