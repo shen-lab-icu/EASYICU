@@ -99,6 +99,10 @@ class CohortDataError(KeyError):
     """Raised when materialised data cannot satisfy a CTAS definition."""
 
 
+class CohortMissingPolicyStop(CohortDataError):
+    """A reviewed criterion requires stopping on an undecidable row."""
+
+
 class CohortAuthorityError(RuntimeError):
     """Raised when a locked cohort definition cannot be enforced on the data.
 
@@ -1532,6 +1536,14 @@ def materialize_locked_analysis_cohort(
             whole_stay_columns=whole_stay_event_columns(context),
             event_time_origin=event_time_origin,
         )
+    except CohortMissingPolicyStop as exc:
+        if typed_parent is not None:
+            raise MaterializedMetadataError(
+                "The selected missing-data policy requires stopping when a "
+                "cohort criterion cannot be decided for every remaining row."
+            ) from exc
+        result.update(status="error", error=f"{type(exc).__name__}: {exc}")
+        return result
     except Exception as exc:
         if typed_parent is not None:
             raise MaterializedMetadataError(
@@ -1864,6 +1876,12 @@ def _build_cohort_with_flow(
         *(("inclusion", predicate) for predicate in definition.inclusion),
         *(("exclusion", predicate) for predicate in definition.exclusion),
     ]
+    # Preserve old flow artifacts byte-for-byte when no new policy is declared.
+    # A declared policy needs a count of unknowns retained as well as excluded;
+    # retained unknowns must never be described as observed normal values.
+    report_unknowns = any(predicate.missing_policy is not None for _, predicate in ordered)
+    if report_unknowns:
+        flow[0]["n_retained_missing"] = 0
     for order, (kind, predicate) in enumerate(ordered, start=1):
         before = int(mask.sum())
         column = _resolve_predicate_column(
@@ -1885,6 +1903,19 @@ def _build_cohort_with_flow(
             event_time_origin=event_time_origin,
         )
         keep = predicate_mask if kind == "inclusion" else ~predicate_mask
+        if predicate.missing_policy is not None:
+            if predicate.missing_policy == "stop" and bool((mask & unrecorded).any()):
+                raise CohortMissingPolicyStop(
+                    f"cohort criterion {predicate.concept_id!r} cannot be decided "
+                    "for every remaining row; the selected missing policy requires stopping"
+                )
+            # Boolean extension dtypes can preserve pd.NA through comparisons.
+            # Override that only under the explicit reviewed policy.
+            keep = keep.fillna(False).astype(bool)
+            if predicate.missing_policy == "exclude":
+                keep = keep & ~unrecorded
+            elif predicate.missing_policy == "retain":
+                keep = keep | unrecorded
         excluded = mask & ~keep
         mask &= keep
         remaining = int(mask.sum())
@@ -1911,6 +1942,8 @@ def _build_cohort_with_flow(
                 **_event_time_flow_fields(event_time_window),
             }
         )
+        if report_unknowns:
+            flow[-1]["n_retained_missing"] = int((mask & unrecorded).sum())
     return data.loc[mask].copy(), flow
 
 
@@ -2659,6 +2692,7 @@ __all__ = [
     "CohortAuthorityError",
     "CohortDefinition",
     "CohortDataError",
+    "CohortMissingPolicyStop",
     "CohortEventWindowUnreadableError",
     "CohortPredicateColumnWithoutValuesError",
     "CohortSchemaError",

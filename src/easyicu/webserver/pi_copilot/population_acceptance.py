@@ -87,10 +87,17 @@ def population_acceptance_proposal(
     if len(selected) != 1:
         return None
     request = selected[0]
+    record = sealed_population(request, reason=NOT_APPLIED_STOP)
+    if record is None or any(
+        row["disposition"] == "not_applied" and row["criterion"]["role"] == "exclude"
+        for row in record["criteria"]
+    ):
+        # The existing acceptance flow only describes omitted inclusions.
+        # Never present it as a way to waive an omitted exclusion.
+        return None
     rows = unapplied_inclusions(request)
     if not rows:
         return None
-    record = sealed_population(request, reason=NOT_APPLIED_STOP)
     basis = {
         "study_id": study["id"],
         "study_revision": study["revision"],

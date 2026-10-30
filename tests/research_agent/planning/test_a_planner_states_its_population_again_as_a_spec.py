@@ -60,8 +60,9 @@ _ONE_OF_EACH: dict[str, dict[str, Any]] = {
     "age_years": {"min_years": 18, "max_years": None},
     "first_icu_stay": {},
     "first_icu_stay_per_hospitalization": {},
+    "first_observed_icu_single_hospital_adult": {},
     "icu_stay_hours": {"min_hours": 24, "max_hours": None},
-    "condition_present": {"concepts_all_of": ["marker_flag"], "window": _WINDOW},
+    "condition_present": {"concepts_all_of": ["marker_flag"], "window": _WINDOW, "missing_policy": None},
     "diagnosis_codes": {"system": "icd10", "codes": ["X12"]},
     "measurement": {
         "concept": "level_value",
@@ -70,9 +71,10 @@ _ONE_OF_EACH: dict[str, dict[str, Any]] = {
         "op": ">=",
         "value": 2,
         "unit": None,
+        "missing_policy": None,
     },
     "alive_at": {"hours": 24},
-    "event_absent": {"concept": "marker_flag", "window": None},
+    "event_absent": {"concept": "marker_flag", "window": None, "missing_policy": None},
     "not_typed": {"why": "no kind states a referral the stay received"},
 }
 
@@ -226,6 +228,7 @@ def test_with_no_allowed_concept_the_kinds_that_name_one_are_not_offered() -> No
         "AgeYears",
         "FirstIcuStay",
         "FirstIcuStayPerHospitalization",
+        "FirstObservedIcuSingleHospitalAdult",
         "IcuStayHours",
         "DiagnosisCodes",
         "AliveAt",

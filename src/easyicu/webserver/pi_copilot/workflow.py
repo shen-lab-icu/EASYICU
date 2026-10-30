@@ -758,6 +758,8 @@ def build_research_workflow_snapshot(
             **({"coordinate_readings": coordinate_readings} if coordinate_readings is not None else {}),
             **({"population_preparation": population_preparation} if population_preparation is not None else {}),
             **({"population_acceptance": population_acceptance} if population_acceptance is not None else {}),
+            **({"reviewed_population_spec": review_authority["reviewed_population_spec"]}
+               if isinstance(review_authority.get("reviewed_population_spec"), Mapping) else {}),
             # How the selected database changes the study (db capability review).
             **({"source_adjustments": source_adjustments} if source_adjustments is not None else {}),
         }

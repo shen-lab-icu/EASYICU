@@ -37,6 +37,7 @@ from ..planning.population_shadow import (
     superseded_predicates_finding,
     write_population_audit,
 )
+from ..planning.population_spec import ConditionPresent, EventAbsent, Measurement
 from ..planning.approval_stops import PLAN_APPROVAL_STOPS
 from ..planning.capability_gap import check_capability_gap
 from ..planning.family_spec.request import sealed_trajectory_suite_coordinates
@@ -250,7 +251,7 @@ def _criterion_row(item: CompiledCriterion) -> dict[str, Any]:
 def population_approval_findings(
     population: CompiledPopulation,
 ) -> list[ValidationFinding]:
-    """Why the plan cannot be approved: the inclusions its cohort does not apply.
+    """Why the plan cannot be approved: criteria its cohort does not apply.
 
     They do not stop planning (population spec design 3.3 and 3.5).  The plan
     lists them as unapplied and the researcher reviews it with these typed
@@ -271,11 +272,10 @@ def population_approval_findings(
                 validator="population_compile",
                 severity="error",
                 message=(
-                    "This plan cannot be approved: the study includes only the "
-                    "stays that meet "
-                    + ("a criterion " if len(blocking) == 1 else "criteria ")
+                    "This plan cannot be approved: the cohort does not apply "
+                    + ("a stated criterion " if len(blocking) == 1 else "stated criteria ")
                     + f"{_POPULATION_STOP_CAUSES[disposition]}, so the plan would "
-                    "analyse a broader population than the study states. "
+                    "analyse a different population than the study states. "
                     + " ".join(
                         f"{item.criterion.id} {item.criterion.quote!r}: {item.detail}"
                         for item in blocking
@@ -296,6 +296,55 @@ def population_approval_findings(
             )
         )
     return findings
+
+
+def population_criterion_decision_finding(
+    population: CompiledPopulation, context: Any,
+) -> ValidationFinding | None:
+    """Ask for unmade decisions on dynamic cohort conditions in a new plan.
+
+    A threshold by itself neither chooses an input unit nor says what happens
+    when the input cannot be evaluated. Only new candidate planning calls this
+    owner; existing sealed review records and approvals are never rewritten.
+    """
+    unresolved = []
+    variables = tuple(getattr(context, "variables", ()) or ())
+    for item in population.criteria:
+        criterion = item.criterion
+        if not isinstance(criterion, (Measurement, ConditionPresent, EventAbsent)):
+            continue
+        missing = []
+        if criterion.missing_policy is None:
+            missing.append("missing_value_policy")
+        if isinstance(criterion, Measurement) and criterion.unit is None:
+            matching = [
+                v for v in variables
+                if getattr(v, "name", None) == criterion.concept
+                or getattr(v, "source_concept", None) == criterion.concept
+            ]
+            # Only a positively identified dimensionless input can omit the
+            # threshold unit. An absent unit is unknown, not dimensionless.
+            if not matching or any(str(getattr(v, "unit", "") or "").strip() != "1"
+                                   for v in matching):
+                missing.append("threshold_unit")
+        if missing:
+            unresolved.append({"id": criterion.id, "quote": criterion.quote, "decisions": missing})
+    if not unresolved:
+        return None
+    return ValidationFinding(
+        validator="population_decision_review", severity="error",
+        message=(
+            "This plan cannot be approved until it explicitly states "
+            "the missing-value handling and any required measurement unit for "
+            "its dynamic population criteria: "
+            + "; ".join(f"{row['id']} {row['quote']!r} ({', '.join(row['decisions'])})"
+                        for row in unresolved)
+        ),
+        evidence_ids=["analysis_plan"],
+        detail={"reason": "population_criterion_decision_unconfirmed",
+                "human_review_required": True, "approval_allowed": False,
+                "criteria": unresolved},
+    )
 
 
 def population_proposals_finding(
@@ -656,6 +705,9 @@ def run_progressive_planner(
         facts.skeleton.cohort, context=context, plan=generated
     )
     if population is not None:
+        decision = population_criterion_decision_finding(population, context)
+        if decision is not None:
+            finding_sink(registered_stop(decision))
         for finding in population_approval_findings(population):
             finding_sink(registered_stop(finding))
         proposals = population_proposals_finding(population)

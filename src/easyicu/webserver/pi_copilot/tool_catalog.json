@@ -223,6 +223,55 @@
                     },
                     {
                       "additionalProperties": false,
+                      "description": "Adult first observed ICU in one visible source hospitalization.\n\nPatients with more than one visible hospitalization, missing identity or\nunprovable ICU order are excluded. This is a restricted source-visible\ncohort, not the patient's lifetime first ICU or first ICU per hospital.",
+                      "properties": {
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "first_observed_icu_single_hospital_adult",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind"
+                      ],
+                      "title": "FirstObservedIcuSingleHospitalAdult",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
                       "description": "An ICU length of stay within ``[min_hours, max_hours]``.",
                       "properties": {
                         "id": {
@@ -320,6 +369,23 @@
                           "const": "condition_present",
                           "title": "Kind",
                           "type": "string"
+                        },
+                        "missing_policy": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "exclude",
+                                "retain",
+                                "stop"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Missing Policy"
                         },
                         "quote": {
                           "maxLength": 160,
@@ -477,6 +543,23 @@
                           "const": "measurement",
                           "title": "Kind",
                           "type": "string"
+                        },
+                        "missing_policy": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "exclude",
+                                "retain",
+                                "stop"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Missing Policy"
                         },
                         "op": {
                           "enum": [
@@ -658,6 +741,23 @@
                           "const": "event_absent",
                           "title": "Kind",
                           "type": "string"
+                        },
+                        "missing_policy": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "exclude",
+                                "retain",
+                                "stop"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Missing Policy"
                         },
                         "quote": {
                           "maxLength": 160,
@@ -1338,6 +1438,23 @@
                     "type": "null"
                   }
                 ]
+              },
+              "missing_policy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "exclude",
+                      "retain",
+                      "stop"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Missing Policy"
               }
             },
             "required": [
@@ -1474,6 +1591,23 @@
                     "type": "null"
                   }
                 ]
+              },
+              "missing_policy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "exclude",
+                      "retain",
+                      "stop"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Missing Policy"
               }
             },
             "required": [
@@ -1584,6 +1718,55 @@
               "kind"
             ],
             "title": "FirstIcuStayPerHospitalization",
+            "type": "object"
+          },
+          "FirstObservedIcuSingleHospitalAdult": {
+            "additionalProperties": false,
+            "description": "Adult first observed ICU in one visible source hospitalization.\n\nPatients with more than one visible hospitalization, missing identity or\nunprovable ICU order are excluded. This is a restricted source-visible\ncohort, not the patient's lifetime first ICU or first ICU per hospital.",
+            "properties": {
+              "id": {
+                "pattern": "^c[1-9][0-9]?$",
+                "title": "Id",
+                "type": "string"
+              },
+              "quote": {
+                "maxLength": 160,
+                "minLength": 2,
+                "title": "Quote",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "question",
+                  "study_wording",
+                  "outline",
+                  "preset"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "include",
+                  "exclude"
+                ],
+                "title": "Role",
+                "type": "string"
+              },
+              "kind": {
+                "const": "first_observed_icu_single_hospital_adult",
+                "title": "Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "quote",
+              "source",
+              "role",
+              "kind"
+            ],
+            "title": "FirstObservedIcuSingleHospitalAdult",
             "type": "object"
           },
           "IcuStayHours": {
@@ -1823,6 +2006,23 @@
                 ],
                 "default": null,
                 "title": "Unit"
+              },
+              "missing_policy": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "exclude",
+                      "retain",
+                      "stop"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Missing Policy"
               }
             },
             "required": [
@@ -1911,6 +2111,7 @@
                       "event_absent": "#/$defs/EventAbsent",
                       "first_icu_stay": "#/$defs/FirstIcuStay",
                       "first_icu_stay_per_hospitalization": "#/$defs/FirstIcuStayPerHospitalization",
+                      "first_observed_icu_single_hospital_adult": "#/$defs/FirstObservedIcuSingleHospitalAdult",
                       "icu_stay_hours": "#/$defs/IcuStayHours",
                       "measurement": "#/$defs/Measurement",
                       "not_typed": "#/$defs/NotTyped"
@@ -1926,6 +2127,9 @@
                     },
                     {
                       "$ref": "#/$defs/FirstIcuStayPerHospitalization"
+                    },
+                    {
+                      "$ref": "#/$defs/FirstObservedIcuSingleHospitalAdult"
                     },
                     {
                       "$ref": "#/$defs/IcuStayHours"

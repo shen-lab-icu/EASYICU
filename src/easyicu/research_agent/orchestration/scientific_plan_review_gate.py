@@ -325,7 +325,7 @@ def persist_or_validate_scientific_plan_review(
             current_review
         ) or any(
             existing_review.facts.get(key) != current_review.facts.get(key)
-            for key in ("database_capability_review", "database_time_origin_review", "database_case_duration_review")
+            for key in ("database_capability_review", "database_time_origin_review", "database_case_duration_review", "requested_descriptive_uncertainty")
         ):
             raise ScientificPlanReviewArtifactError(
                 code="scientific_plan_review_binding_drift",
@@ -420,6 +420,7 @@ def prepare_scientific_plan_review_gate(
     time_origin_attestor: Any = None,
     case_duration_attestor: Any = None,
     case_duration_metadata_attestor: Any = None,
+    bound_plan_revision_contract: str = "",
 ) -> ScientificPlanReviewGate:
     """Build, bind, and project the exact review offered to a human.
 
@@ -437,6 +438,7 @@ def prepare_scientific_plan_review_gate(
         require_reportable_capability=require_reportable_capability,
         runtime_authority=runtime_authority,
         model_retention=model_retention,
+        bound_plan_revision_contract=bound_plan_revision_contract,
     )
     from easyicu.databases.research_approval import bind_database_capability_review
 

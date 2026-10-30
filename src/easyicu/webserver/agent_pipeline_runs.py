@@ -557,6 +557,71 @@ def _load_pending_scientific_review(
             return {}
     except (FileNotFoundError, OSError, ValueError):
         return {}
+    # Reviews from the current schema may predate the explicit CI-coverage
+    # check. Keep them readable, but do not let their old approval flag skip
+    # the researcher's exact question or a digest-bound amendment.
+    try:
+        from easyicu.research_agent.canonical_json import canonical_sha256
+        from easyicu.research_agent.planning.descriptive_question_uncertainty import (
+            amendment_user_messages, primary_distribution_gaps, requested_uncertainty,
+        )
+
+        plan = _pending_plan_authority(pending)
+        if not plan:
+            return {}
+        contract = ""
+        root = Path(run_dir)
+        if root.parent.name == "pipeline":
+            wrapper = root.parent.parent
+            from easyicu.research_agent.orchestration.config import PipelineConfig
+            from easyicu.research_agent.orchestration.human_review_checkpoint import (
+                HumanReviewCheckpointError, load_checkpoint,
+            )
+
+            try:
+                checkpoint = load_checkpoint(root / "human_review_checkpoint.json", require_pending=False)
+            except HumanReviewCheckpointError:
+                return {}
+            if checkpoint.run_id != pending.run_id:
+                return {}
+            authority = load_recovery_seed(wrapper)
+            if authority is None:
+                # The global durable record contains the same digest-bound
+                # configuration; the local seed can disappear independently.
+                authority = get_review_recovery_record(str(pending.run_id))
+            if authority is not None:
+                if (Path(authority.wrapper_dir).resolve() != wrapper.resolve()
+                        or authority.pipeline_config_sha256 != checkpoint.pipeline_config_sha256
+                        or getattr(authority, "run_id", pending.run_id) != pending.run_id):
+                    return {}
+                config = PipelineConfig.from_recovery_payload(
+                    authority.pipeline_config, expected_digest=authority.pipeline_config_sha256,
+                )
+            else:
+                # A live same-process pause can prove its original config even
+                # when both local and global recovery copies are unavailable.
+                live = _PENDING_REVIEWS.get(str(pending.run_id))
+                if (live is None or live.pending != pending
+                        or Path(live.wrapper_dir).resolve() != wrapper.resolve()):
+                    return {}
+                config = getattr(live.pipeline, "_config", None)
+                if not isinstance(config, PipelineConfig) or config.canonical_digest() != checkpoint.pipeline_config_sha256:
+                    return {}
+            if Path(config.workdir).resolve() != root.parent.resolve():
+                return {}
+            contract = config.bound_plan_revision_contract or ""
+        requirement = requested_uncertainty(
+            str(plan.get("research_question") or ""), *amendment_user_messages(contract),
+        )
+        coverage = primary_distribution_gaps(plan, requirement)
+        if coverage is not None:
+            if canonical_sha256(plan) != review.plan_sha256:
+                return {}
+            steps, missing = coverage
+            if not steps or missing:
+                return {}
+    except (OSError, TypeError, ValueError, WebReviewRecoveryError):
+        return {}
     return review.model_dump(mode="json")
 
 
@@ -5230,6 +5295,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     run_dir = Path(pending.run_dir)
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
     from easyicu.webserver.pi_copilot.population_acceptance import current_review_study, population_acceptance_proposal
+    from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
 
     proposal_study = current_review_study(study) if pending is not None else None
     population_acceptance = population_acceptance_proposal(study=proposal_study, pending=pending) if proposal_study is not None else None
@@ -5304,6 +5370,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             study=proposal_study, run_id=pending.run_id, requests=pending.requests,
         ) if proposal_study is not None else None,
         "population_acceptance": population_acceptance,
+        "reviewed_population_spec": reviewed_population_spec(run_dir=run_dir, pending=pending),
         "planning_coordinate_readings": planning_coordinate_readings.load_planning_coordinate_readings(
             wrapper_dir,
             context_columns=planning_coordinate_readings.planned_context_columns(run_dir),

@@ -18,6 +18,7 @@ from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 from easyicu.research_agent.planning.population_review import sealed_population
 from easyicu.research_agent.planning.population_spec import (
     AgeYears,
+    FirstObservedIcuSingleHospitalAdult,
     FirstIcuStay,
     FirstIcuStayPerHospitalization,
     IcuStayHours,
@@ -63,6 +64,8 @@ def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None
     if criterion.role != "include":
         return "population_preparation_kind_unsupported"
     current = primary_cohort.normalize_execution_cohort(cohort)
+    if isinstance(criterion, FirstObservedIcuSingleHospitalAdult):
+        return "population_preparation_eicu_demo_first_observed_unavailable"
     if isinstance(criterion, FirstIcuStay):
         if current["first_icu_stay_per_hospitalization"]:
             return "population_preparation_first_stay_scope_conflict"
@@ -153,8 +156,8 @@ def population_preparation_proposal(
         ):
             return None
         if not any(
-            row["disposition"] == "requires_extraction" and criterion.role == "include"
-            for row, criterion in zip(rows, spec.criteria)
+            row["disposition"] == "requires_extraction"
+            for row in rows
         ):
             return None
         cohort = dict(study.get("cohort") or {})
@@ -173,7 +176,7 @@ def population_preparation_proposal(
             refusal = None
             if disposition == "requires_extraction":
                 refusal = _admission_patch(criterion, cohort, time_zero)
-            elif disposition == "not_applied" and criterion.role == "include":
+            elif disposition == "not_applied":
                 refusal = "population_inclusion_not_applied"
             if refusal:
                 blockers.append(refusal)

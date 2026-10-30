@@ -117,8 +117,10 @@ _KIND_FIELDS: dict[str, dict[str, Any]] = {
     "age_years": {"min_years": _BOUND, "max_years": _BOUND},
     "first_icu_stay": {},
     "first_icu_stay_per_hospitalization": {},
+    "first_observed_icu_single_hospital_adult": {},
     "icu_stay_hours": {"min_hours": _BOUND, "max_hours": _BOUND},
-    "condition_present": {"concepts_all_of": [_CONCEPT], "window": _WINDOW},
+    "condition_present": {"concepts_all_of": [_CONCEPT], "window": _WINDOW,
+                          "missing_policy": "<exclude|retain|stop|null>"},
     "diagnosis_codes": {"system": "<icd9|icd10>", "codes": ["<code or code prefix>"]},
     "measurement": {
         "concept": _CONCEPT,
@@ -127,9 +129,11 @@ _KIND_FIELDS: dict[str, dict[str, Any]] = {
         "op": "<>|>=|<|<=|==|!=>",
         "value": "<number>",
         "unit": "<the stated unit or null>",
+        "missing_policy": "<exclude|retain|stop|null>",
     },
     "alive_at": {"hours": "<number>"},
-    "event_absent": {"concept": _CONCEPT, "window": _WINDOW},
+    "event_absent": {"concept": _CONCEPT, "window": _WINDOW,
+                     "missing_policy": "<exclude|retain|stop|null>"},
     "not_typed": {"why": "<8-240 characters: why no kind expresses it>"},
 }
 #: A status stated as a condition, with every field a criterion holds.
@@ -141,6 +145,7 @@ _STATUS_EXAMPLE: dict[str, Any] = {
     "kind": "condition_present",
     "concepts_all_of": [_CONCEPT],
     "window": _WINDOW,
+    "missing_policy": None,
 }
 
 
@@ -195,6 +200,10 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
         "a condition_present or event_absent window may be null, meaning the "
         "whole stay. Age and stay-length bounds are inclusive: give at least "
         "one, and null for an open end. "
+        "For measurement, condition_present and event_absent missing_policy, "
+        "use exclude, retain, or stop only "
+        "when explicitly stated by the study; otherwise use null and leave the "
+        "missing-data decision for review. Do not infer it from a threshold. "
         "first_icu_stay means each patient's first ICU stay; "
         "first_icu_stay_per_hospitalization means the first ICU stay within "
         "each hospitalization and can keep multiple hospitalizations of one "
@@ -202,6 +211,14 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
         "state the source-verified selection rule and its exclusion of missing "
         "or ambiguous hospitalization/unit-type/visit-order records, and non-ICU "
         "units, in the complete plan. "
+        "first_observed_icu_single_hospital_adult means the adult "
+        "first observed ICU in the only visible hospitalization of a "
+        "patient; it excludes patients with multiple visible hospitalizations "
+        "or unprovable order and does not mean lifetime first ICU. Use it only "
+        "when the study explicitly accepts that narrower population, and state "
+        "the exclusions and source scope; never infer the change from a request "
+        "for every patient's first ICU. The kind alone does not prove an input "
+        "was filtered. "
         + ", ".join(sorted(KEPT_KINDS & set(kinds)))
         + " state the stays kept, so their role is include; an excluding "
         "condition_present names one concept. A condition is present or "

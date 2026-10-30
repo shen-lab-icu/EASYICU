@@ -147,18 +147,28 @@ class ConceptPredicate:
     aggregation: Aggregation
     op: PredicateOp
     value: Any = None
+    # Optional to preserve the exact serialized identity of historical plans.
+    # This is a decision about the final cohort, independent of whether the
+    # comparison occurs on the inclusion or exclusion side.
+    missing_policy: Annotated[
+        Optional[Literal["exclude", "retain", "stop"]],
+        Field(exclude_if=lambda value: value is None),
+    ] = None
 
     def __post_init__(self) -> None:
         validate_concept_predicate(self)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "concept_id": self.concept_id,
             "time_window": self.time_window.to_dict(),
             "aggregation": self.aggregation,
             "op": self.op,
             "value": self.value,
         }
+        if self.missing_policy is not None:
+            data["missing_policy"] = self.missing_policy
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ConceptPredicate":
@@ -176,6 +186,7 @@ class ConceptPredicate:
             aggregation=str(data["aggregation"]),  # type: ignore[arg-type]
             op=str(data["op"]),  # type: ignore[arg-type]
             value=data.get("value"),
+            missing_policy=data.get("missing_policy"),
         )
 
 
@@ -431,6 +442,13 @@ def validate_concept_predicate(predicate: ConceptPredicate) -> None:
         raise CohortSchemaError("time_window is required")
     if not predicate.aggregation:
         raise CohortSchemaError("aggregation is required")
+    if predicate.missing_policy is not None and (
+        not isinstance(predicate.missing_policy, str)
+        or predicate.missing_policy not in {"exclude", "retain", "stop"}
+    ):
+        raise CohortSchemaError("missing_policy must be exclude, retain, or stop")
+    if predicate.missing_policy is not None and predicate.op in {"missing", "not_missing"}:
+        raise CohortSchemaError("missing_policy cannot override a missingness predicate")
     if (
         predicate.aggregation in {"any", "all"}
         and predicate.op not in _ANY_ALL_ALLOWED_OPS

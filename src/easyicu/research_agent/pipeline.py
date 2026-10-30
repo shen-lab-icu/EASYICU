@@ -3059,6 +3059,7 @@ class ResearchAgentPipeline:
                 figure_strategy=article_figure_strategy,
                 run_dir=run_dir,
                 evidence=evidence,
+                bound_plan_revision_contract=self._bound_plan_revision_contract,
                 require_reportable_capability=(
                     self._config.require_reportable_scientific_capability
                 ),

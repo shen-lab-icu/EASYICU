@@ -27,7 +27,7 @@ NOT_APPLIED = POPULATION_APPROVAL_STOPS["not_applied"]
 REQUIRES_EXTRACTION = POPULATION_APPROVAL_STOPS["requires_extraction"]
 
 
-def _card(code: str, *, run_id: str = "run_population_1", preparation=None, acceptance=None, language="zh") -> dict:
+def _card(code: str, *, run_id: str = "run_population_1", preparation=None, acceptance=None, language="zh", reviewed_population=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -50,7 +50,7 @@ const owner = declared.create({
   sessionIsStale: () => false,
   busy: () => false,
   session: () => ({ binding: { run_id: runId } }),
-  workflow: () => ({ next_action_code: code, plan_review_summary: { run_id: runId, population_preparation: preparation, population_acceptance: acceptance } }),
+  workflow: () => ({ next_action_code: code, plan_review_summary: { run_id: runId, population_preparation: preparation, population_acceptance: acceptance, reviewed_population_spec: JSON.parse(process.argv[7]) } }),
 });
 const confirmation = owner.workflowConfirmation();
 const html = owner.workflowConfirmationHtml();
@@ -67,7 +67,7 @@ process.stdout.write(JSON.stringify({
 }));
 """
     owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
-    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), json.dumps(acceptance), language, check=False)
+    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), json.dumps(acceptance), language, json.dumps(reviewed_population), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
 
@@ -76,7 +76,7 @@ def test_a_criterion_nothing_applies_offers_a_fresh_candidate_plan() -> None:
     card = _card(NOT_APPLIED)
 
     assert card["code"] == NOT_APPLIED
-    assert card["title"] == "研究写明的纳入条件按原文无法施加"
+    assert card["title"] == "研究写明的人群条件按原文无法施加"
     assert (card["nonApprovable"], card["execute"], card["edit"]) == (False, True, True)
     assert card["grants"] == ["provider_run", "literature"]
     assert card["resources"] == ["agent_plan.json", "scientific_plan_review.json"]
@@ -86,7 +86,7 @@ def test_a_criterion_an_extraction_applies_offers_no_plan_action() -> None:
     card = _card(REQUIRES_EXTRACTION)
 
     assert card["code"] == REQUIRES_EXTRACTION
-    assert card["title"] == "研究写明的纳入条件需要按本研究人群重新提取数据"
+    assert card["title"] == "研究写明的人群条件需要按本研究人群重新提取数据"
     assert (card["nonApprovable"], card["execute"], card["grants"]) == (True, False, [])
     assert card["resources"] == ["agent_plan.json", "scientific_plan_review.json"]
 
@@ -124,6 +124,36 @@ def test_patient_first_and_hospital_first_mismatch_is_explained_without_approval
     assert card["execute"] is False
     assert "每次住院首次 ICU 不是同一人群" in card["html"]
     assert "核实患者入住顺序" in card["html"]
+
+
+def test_missing_cohort_decisions_are_visible_and_cannot_be_approved():
+    card = _card("population_criterion_decision_unconfirmed")
+    assert card["execute"] is False
+    assert "请明确人群条件的判定方式" == card["title"]
+    assert "数值缺失或无法判定" in card["html"]
+    assert "阈值注明单位" in card["html"]
+
+
+def test_reviewed_population_displays_the_exact_proposed_threshold_and_handling():
+    proposal = {"schema_version": "easyicu.reviewed_population_spec_projection/1", "criteria": [{
+        "criterion": {"kind": "measurement", "role": "include", "quote": "首日肌酐 ≤ 4 mg/dL",
+                      "concept": "creat", "op": "<=", "value": 4.0, "unit": "mg/dL",
+                      "summary": "first", "window": {"start_hours": 0, "end_hours": 24},
+                      "missing_policy": "exclude"}, "disposition": "applied_by_plan"}]}
+    card = _card("population_criterion_decision_unconfirmed", reviewed_population=proposal)
+    assert card["execute"] is False
+    for text in ("首日肌酐 ≤ 4 mg/dL", "creat", "&lt;= 4 mg/dL", "first", "[0, 24)", "排除无法判定的患者"):
+        assert text in card["html"]
+
+
+def test_reviewed_population_displays_every_diagnosis_code_condition():
+    criteria = [{"criterion": {"kind": "diagnosis_codes", "role": "exclude",
+                 "quote": f"诊断条件 {i}", "system": "icd10", "codes": ["K92.2"]},
+                 "disposition": "not_applied"} for i in range(9)]
+    proposal = {"schema_version": "easyicu.reviewed_population_spec_projection/1", "criteria": criteria}
+    card = _card("population_criterion_decision_unconfirmed", reviewed_population=proposal)
+    assert "诊断编码前缀 (ICD10): K92.2" in card["html"]
+    assert "诊断条件 8" in card["html"]
 
 
 @pytest.mark.parametrize("kind,code", [("preparation", REQUIRES_EXTRACTION), ("acceptance", NOT_APPLIED)])
