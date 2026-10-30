@@ -20,6 +20,12 @@ from easyicu.webserver.durable_research_store import (
 _SERVICE: DurableResearchService | None = None
 _LOG = logging.getLogger(__name__)
 
+_PREPARATION_SCHEMA = "easyicu.durable-preparation/1"
+
+
+def _command_kind(payload: dict[str, Any]) -> str:
+    return "raw-preparation-review" if payload.get("schema_version") == _PREPARATION_SCHEMA else "agent-run"
+
 
 class DurableResearchService:
     def __init__(self, root: Path, *, manager: jobs.JobManager, dispatcher_factory=None,
@@ -49,7 +55,7 @@ class DurableResearchService:
                 continue
             if self.store.get(identity)["payload"].get("_cancel_requested"):
                 if prior.snapshot().get("interrupted") and not prior.is_cancel_requested():
-                    prior = self.manager.reserve("agent-run", job_id=identity, resume_interrupted=True)
+                    prior = self.manager.reserve(_command_kind(self.store.get(identity)["payload"]), job_id=identity, resume_interrupted=True)
                 prior.request_cancel("durable_cancel_receipt")
                 prior.complete_from_runner()
                 self.store.finish(identity, "cancelled")
@@ -63,7 +69,7 @@ class DurableResearchService:
                 self._clear_binding(identity)
                 continue
             if prior is not None and prior.snapshot().get("interrupted") and not prior.is_cancel_requested():
-                self.manager.reserve("agent-run", job_id=identity, resume_interrupted=True)
+                self.manager.reserve(_command_kind(self.store.get(identity)["payload"]), job_id=identity, resume_interrupted=True)
             self.manager.get(identity).register_cancel_callback(lambda identity=identity: self.store.request_cancel(identity))
         self.dispatcher.launch()
         # Transactional outbox: a crash between activation and DBOS submission
@@ -80,6 +86,35 @@ class DurableResearchService:
             job.fail_from_runner("research_command_persistence_failed")
             raise
         return job
+
+    def activate_preparation(self, job_id: str, *, checkpoint: Any, binding: Any, scope: dict[str, Any],
+                             timeout: float) -> None:
+        """Register a host-approved preparation with the existing DBOS owner.
+
+        Admission must be called after the conversation host action and
+        decided checkpoint exist. The private intent is never an approval.
+        A crash before command activation remains unstarted, not auto-approved.
+        """
+        from easyicu.webserver.raw_preparation_durable import (
+            admit_preparation_intent, recover_preparation_before_consumption,
+        )
+        job = self.manager.get(job_id)
+        import math
+        if (job is None or job.kind != "raw-preparation-review" or job.is_cancel_requested()
+                or not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+                or not math.isfinite(timeout) or timeout <= 0 or timeout > 86400):
+            raise DurableResearchError("preparation_command_job_invalid")
+        admit_preparation_intent(job_id=job_id, checkpoint=checkpoint, binding=binding, scope=scope)
+        payload = {"schema_version": _PREPARATION_SCHEMA, "study_context_id": binding.study_context_id,
+                   "timeout_seconds": timeout}
+        self.store.prepare(job_id, payload)
+
+        def run(bound_job: jobs.Job) -> dict[str, Any]:
+            recover_preparation_before_consumption(job_id=job_id, job=bound_job, timeout=timeout)
+            return {"preparation_status": "multi_table_projection_complete",
+                    "cohort_complete": False, "analysis_authorized": False}
+
+        self.activate(job_id, run)
 
     def activate(self, job_id: str, runner: Callable) -> None:
         with self._lock:
@@ -135,6 +170,8 @@ class DurableResearchService:
         job = self.manager.get(job_id)
         if command is None or job is None or job.snapshot()["status"] == "running":
             return
+        if _command_kind(command["payload"]) != "agent-run":
+            return
         state = job.snapshot()
         stage = ("agent_cancelled" if state["status"] == "cancelled" else
                  "agent_failed" if state["status"] == "failed" else
@@ -184,7 +221,7 @@ class DurableResearchService:
 
         with self._lock:
             initial_runner = self._live.pop(job_id, None)
-        job = self.manager.reserve("agent-run", job_id=job_id,
+        job = self.manager.reserve(_command_kind(command["payload"]), job_id=job_id,
                                    resume_interrupted=bool(snapshot.get("interrupted")))
         payload = command["payload"]
 
@@ -198,6 +235,15 @@ class DurableResearchService:
                     return initial_runner(bound_job)
                 if command["code_sha256"] != runtime_digest():
                     raise DurableResearchError("research_auto_resume_runtime_changed")
+                if _command_kind(payload) == "raw-preparation-review":
+                    from easyicu.webserver.raw_preparation_durable import recover_preparation_before_consumption
+                    try:
+                        recover_preparation_before_consumption(
+                            job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
+                    except Exception as exc:
+                        raise DurableResearchError("preparation_auto_resume_refused") from exc
+                    return {"preparation_status": "multi_table_projection_complete",
+                            "cohort_complete": False, "analysis_authorized": False}
                 runner = self.recover_runner(payload, bound_job)
                 result = runner(bound_job)
                 terminal_stage = ("agent_cancelled" if bound_job.is_cancel_requested()
@@ -208,7 +254,7 @@ class DurableResearchService:
                 # The initial submission runner already performs this handoff.
                 # Recovery must release the same study binding even if a guard
                 # refuses it; it never clears another job's active binding.
-                if initial_runner is None:
+                if initial_runner is None and _command_kind(payload) == "agent-run":
                     try:
                         study_contexts.clear_active_job_if(
                             payload["study_context_id"], job_id,
