@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import json
 import sys
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from easyicu.research_agent.authority.provider_hard_stop import (
 )
 from easyicu.research_agent.providers.transport_retry import TransportRetrySchedule
 from easyicu.webserver import metadata_provider_concurrency as slots
-from easyicu.webserver.metadata_provider_worker import guarded_call, identity
+from easyicu.webserver.metadata_provider_worker import encode_guarded_request, guarded_call, identity
 
 
 class MetadataProviderError(RuntimeError):
@@ -103,6 +104,10 @@ class MetadataProviderClient:
             "structured_output": ({"name": structured_output.name, "schema_json": structured_output.schema_json,
                                    "strict": structured_output.strict} if structured_output is not None else None),
         }
+        # Freeze a JSON-only payload before reserving either budget or capacity.
+        # Serialization failures, oversized input and unsupported frozen workers
+        # cannot have sent anything and must not leave an unknown remote slot.
+        request = json.loads(encode_guarded_request(request))
         schedule = TransportRetrySchedule(delays_seconds=(20.0, 180.0), jitter_fraction=0.2, window_seconds=300.0)
         start = time.monotonic()
         for attempt in range(3):

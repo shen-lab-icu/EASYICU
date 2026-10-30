@@ -188,14 +188,20 @@ def _supervise(lease_dir: Path, nonce: str, expected: str, timeout: float) -> in
         lease.release()
 
 
-def guarded_call(lease_dir: Path, request: Mapping[str, Any], *, timeout: float,
-                 on_prepared: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Run one already-reserved request with a verifiable local child lifecycle."""
+def encode_guarded_request(request: Mapping[str, Any]) -> bytes:
+    """Validate the exact IPC payload before reserving Provider capacity."""
     if getattr(sys, "frozen", False):
         raise RuntimeError("metadata_provider_frozen_worker_unsupported")
     encoded = json.dumps(dict(request), allow_nan=False, separators=(",", ":")).encode()
     if len(encoded) > _MAX_MESSAGE:
         raise ValueError("provider_request_too_large")
+    return encoded
+
+
+def guarded_call(lease_dir: Path, request: Mapping[str, Any], *, timeout: float,
+                 on_prepared: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Run one already-reserved request with a verifiable local child lifecycle."""
+    encoded = encode_guarded_request(request)
     lease = prepare_host_execution(lease_dir, script_sha256=identity())
     spawned = False
     process = None
