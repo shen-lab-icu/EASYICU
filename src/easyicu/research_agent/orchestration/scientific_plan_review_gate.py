@@ -32,6 +32,7 @@ from ..planning.literature_design_authority import (
     validate_selected_design_against_literature,
 )
 from ..planning.literature_retrieval_contract import contract_for_plan_finalization
+from ..planning.literature_source_integrity import inspect_plan_literature_sources
 from ..planning.preplan_literature import load_registered_preplan_literature
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from ..providers.llm import resolve_role_client
@@ -142,6 +143,26 @@ def append_required_literature_findings(
     """After sealing, only the plan's tier can defer article evidence gates."""
     if first_result(plan):
         return
+    source_issues = inspect_plan_literature_sources(plan, literature)
+    for severity in ("error", "warning"):
+        group = [issue for issue in source_issues if issue.severity == severity]
+        if group:
+            findings.append(ValidationFinding(
+                validator="literature_source_integrity",
+                severity=severity,
+                message=(
+                    "A cited literature source has an evidence integrity or "
+                    "applicability limitation; review its original record and "
+                    "support before relying on this binding."
+                ),
+                evidence_ids=["analysis_plan", "preplan_literature_bundle"] if literature else ["analysis_plan"],
+                detail={
+                    "reason": "literature_source_integrity_incomplete",
+                    "sources": [{"citation_key": issue.citation_key, "reason": issue.reason} for issue in group],
+                    "human_review_required": True,
+                    "excerpt_match_does_not_prove_applicability": True,
+                },
+            ))
     if config.require_literature_design_authority:
         append_literature_design_authority_finding(findings, plan, literature)
     if config.require_literature_retrieval_evidence:

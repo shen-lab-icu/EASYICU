@@ -210,7 +210,7 @@ class PlanScientificFinding(BaseModel):
     )
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/19"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/20"
 
 
 class PlanScientificReview(BaseModel):
@@ -218,8 +218,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /19
-    # execution review, which also requires the repeated-measure dropout design.
+    # Archived reviews remain readable, but cannot substitute for a /20
+    # execution review, which checks the integrity of cited source evidence.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
@@ -230,6 +230,7 @@ class PlanScientificReview(BaseModel):
         "easyicu.plan_scientific_review/17",
         "easyicu.plan_scientific_review/18",
         "easyicu.plan_scientific_review/19",
+        "easyicu.plan_scientific_review/20",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -3526,6 +3527,24 @@ def build_plan_scientific_review(
     require_g_method_plan(context, plan)
 
     findings: list[PlanScientificFinding] = []
+    from .literature_source_integrity import inspect_plan_literature_sources
+
+    for source_issue in inspect_plan_literature_sources(
+        plan, literature, database=context.cohort.database,
+    ):
+        findings.append(PlanScientificFinding(
+            code="LITERATURE_SOURCE_INTEGRITY_INVALID" if source_issue.severity == "error"
+                 else "LITERATURE_SOURCE_EVIDENCE_UNVERIFIED",
+            severity="blocker" if source_issue.severity == "error" else "major",
+            dimension="literature_to_plan",
+            message=(f"Source {source_issue.citation_key!r} cannot establish the claimed "
+                     f"literature binding ({source_issue.reason})."),
+            evidence_refs=["analysis_plan.json", "preplan_literature_bundle.json"],
+            remediation=("Check the original source and its screening record; rebuild the "
+                         "evidence card or remove the unsupported binding. An excerpt "
+                         "match alone does not establish applicability."),
+            remediation_route="external_evidence",
+        ))
     unobserved = context_columns_without_data(
         context, (*requested_context_data_columns(context), *plan_value_columns(plan)),
     )
