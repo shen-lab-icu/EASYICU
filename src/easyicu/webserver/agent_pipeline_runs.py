@@ -2825,6 +2825,18 @@ def _research_user_preferences(
 
     constraints: Dict[str, Any] = skill_planning_constraints(study)
     constraints.update(mention_planning_constraints(study))
+    candidate_outcome = _clean_text(study.get("outcome"), 500)
+    executable = study.get("execution_concepts")
+    executable_outcome = executable.get("outcome") if isinstance(executable, Mapping) else None
+    if candidate_outcome and not executable_outcome:
+        # A user-facing research label remains useful for searching prior art
+        # when no source-backed executable outcome column exists. This is not
+        # a concept mapping, endpoint binding, or permission to analyze data.
+        constraints["candidate_outcome_for_literature"] = {
+            "label": candidate_outcome,
+            "origin": "study_context.outcome",
+            "source_binding": "unverified",
+        }
     if source_identity is not None:
         constraints["source_identity"] = dict(source_identity)
     for field in ("stated_adjustments", "stated_subgroups"):

@@ -905,7 +905,7 @@ class PubMedLiteratureClient:
             retmax=max(int(retmax) * 3, 12),
             excerpt_terms=(
                 *_variable_focus_terms(context, context.primary_exposure),
-                *_variable_focus_terms(context, context.target_outcome),
+                *_variable_focus_terms(context, _literature_outcome_name(context)),
                 "intensive care",
                 "critical care",
                 "ICU",
@@ -972,7 +972,7 @@ class PubMedLiteratureClient:
             selected_ids,
             excerpt_terms=(
                 *_variable_focus_terms(context, context.primary_exposure),
-                *_variable_focus_terms(context, context.target_outcome),
+                *_variable_focus_terms(context, _literature_outcome_name(context)),
                 _question_topic_term(context.research_question),
                 *_study_intent_focus_terms(context.research_question),
                 "intensive care",
@@ -1036,7 +1036,7 @@ class PubMedLiteratureClient:
         result = search_pubmed_review(
             self, families=families, policy=policy,
             excerpt_terms=(*_variable_focus_terms(context, context.primary_exposure),
-                           *_variable_focus_terms(context, context.target_outcome),
+                           *_variable_focus_terms(context, _literature_outcome_name(context)),
                            "intensive care", "critical care", "ICU"),
         )
         return result.model_copy(update={"query_roles": families})
@@ -1391,6 +1391,22 @@ def _variable_focus_terms(
     return tuple(dict.fromkeys(term for term in terms if term.strip()))
 
 
+def _literature_outcome_name(context: ResearchContext) -> Optional[str]:
+    """Return a search label, never an executable/source-bound endpoint."""
+    if context.target_outcome:
+        return context.target_outcome
+    raw = getattr(context.user_preferences, "data_constraints", None)
+    try:
+        constraints = json.loads(raw) if isinstance(raw, str) else {}
+    except (TypeError, ValueError):
+        return None
+    candidate = constraints.get("candidate_outcome_for_literature") if isinstance(constraints, dict) else None
+    if not isinstance(candidate, dict) or candidate.get("origin") != "study_context.outcome" or candidate.get("source_binding") != "unverified":
+        return None
+    label = candidate.get("label")
+    return " ".join(label.split())[:500] if isinstance(label, str) and label.strip() else None
+
+
 def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     if not name:
         return ""
@@ -1500,7 +1516,7 @@ def _screening_decision_for_record(
         )
 
     exposure = _protocol_search_term(context, context.primary_exposure)
-    outcome = _protocol_search_term(context, context.target_outcome)
+    outcome = _protocol_search_term(context, _literature_outcome_name(context))
     exposure_identity = _variable_literature_identity(context, context.primary_exposure)
     return screen_source_backed_direct_comparator(
         exposure=(
@@ -1584,10 +1600,10 @@ def _screen_source_backed_design_analogue(
         and design_excerpt
         and publication_type_eligible
     )
-    outcome = _protocol_search_term(context, context.target_outcome)
-    outcome_match = bool(
-        outcome and _clinical_axis_matches(outcome, blob, axis="outcome")
-    )
+    outcome = _protocol_search_term(context, _literature_outcome_name(context))
+    outcome_match = bool(outcome and _clinical_axis_matches(
+        outcome, " ".join((record.title, source_excerpt)) if not outcome.isascii() else blob, axis="outcome"
+    ))
     return LiteratureScreeningDecision(
         citation_key=record.key,
         source=source,
@@ -1645,7 +1661,9 @@ def screen_source_backed_direct_comparator(
         source_excerpt=source_excerpt,
         required_terms=exposure_required_terms,
     )
-    outcome_match = _clinical_axis_matches(outcome, blob, axis="outcome")
+    outcome_match = _clinical_axis_matches(
+        outcome, " ".join((record.title, source_excerpt)) if not outcome.isascii() else blob, axis="outcome"
+    )
     icu_match = _icu_population_matches(record.title, source_excerpt)
     adult_match = (not adult_required) or _adult_study_population_matches(record)
     population_match = icu_match and adult_match
@@ -2285,6 +2303,14 @@ def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
     they do not turn a different endpoint or exposure into a match.
     """
 
+    if re.search(r"[^\x00-\x7f]", str(term or "")):
+        # ASCII-only normalization would turn e.g. a Chinese outcome naming
+        # ICU into the generic token "icu", falsely matching every ICU paper.
+        # Require the complete Unicode label in the retained source instead.
+        def compact(value: str) -> str:
+            return "".join(ch for ch in str(value).casefold() if ch.isalnum())
+        expected = compact(term)
+        return bool(expected and expected in compact(blob))
     normalized = _normalise_clinical_text(term)
     if not normalized:
         return False
@@ -2660,7 +2686,7 @@ def build_pubmed_protocol_query_for_context(context: ResearchContext) -> str:
 
     terms: List[str] = []
 
-    for name in (context.primary_exposure, context.target_outcome):
+    for name in (context.primary_exposure, _literature_outcome_name(context)):
         clause = _pubmed_identity_clause(context, name)
         if clause and clause.casefold() not in {item.casefold() for item in terms}:
             terms.append(clause)
@@ -2699,7 +2725,7 @@ def build_pubmed_protocol_queries_for_context(
     if not exposure_or_topic:
         exposure_or_topic = _question_topic_clause(context.research_question)
     queries = [strict]
-    outcome_clause = _pubmed_identity_clause(context, context.target_outcome)
+    outcome_clause = _pubmed_identity_clause(context, _literature_outcome_name(context))
     if context.primary_exposure and exposure_or_topic and outcome_clause:
         # A small title-focused stratum protects exact P/E/O studies from
         # being displaced by newer disease-subgroup papers in a bounded
@@ -2747,12 +2773,12 @@ def build_pubmed_protocol_queries_for_context(
     ):
         exposure = _protocol_search_term(context, context.primary_exposure)
         outcome_identity = _variable_literature_identity(
-            context, context.target_outcome
+            context, _literature_outcome_name(context)
         )
         outcome = (
             outcome_identity.canonical_phrase
             if outcome_identity is not None
-            else _protocol_search_term(context, context.target_outcome)
+            else _protocol_search_term(context, _literature_outcome_name(context))
         )
         broad_outcome = ""
         if "mortality" in outcome.casefold() or "death" in outcome.casefold():
@@ -2787,7 +2813,7 @@ def _rank_protocol_search_results(
         if exposure_identity is not None
         else _protocol_search_term(context, context.primary_exposure)
     ).casefold()
-    outcome = _protocol_search_term(context, context.target_outcome).casefold()
+    outcome = _protocol_search_term(context, _literature_outcome_name(context)).casefold()
     topic = _question_topic_term(context.research_question).casefold()
     intent_terms = _study_intent_focus_terms(context.research_question)
     adult_required = _adult_population_required(context)
@@ -2804,7 +2830,7 @@ def _rank_protocol_search_results(
         value = 0
         if exposure and _clinical_axis_matches(exposure, title, axis="exposure"):
             value += 6
-        if outcome and _clinical_axis_matches(outcome, title, axis="outcome"):
+        if outcome and _clinical_axis_matches(outcome, record.title if not outcome.isascii() else title, axis="outcome"):
             value += 9
         if topic and topic in title:
             value += 4
@@ -2869,7 +2895,7 @@ def build_review_query_families(context: ResearchContext) -> Dict[str, List[str]
         topic_queries=build_pubmed_protocol_queries_for_context(context),
         exposure=axis(context.primary_exposure)
         or _question_topic_clause(context.research_question),
-        outcome=axis(context.target_outcome),
+        outcome=axis(_literature_outcome_name(context)),
         population=population, database=_database_retrieval_clause(context),
         question=context.research_question,
     )
@@ -3517,7 +3543,7 @@ class LiteratureAgent:
                 result = client.search_review(
                     families=build_review_query_families(context), policy=self.review_policy,
                     excerpt_terms=(*_variable_focus_terms(context, context.primary_exposure),
-                                   *_variable_focus_terms(context, context.target_outcome),
+                                   *_variable_focus_terms(context, _literature_outcome_name(context)),
                                    "intensive care", "adult"),
                 )
                 search_queries["openalex"] = result.search_queries

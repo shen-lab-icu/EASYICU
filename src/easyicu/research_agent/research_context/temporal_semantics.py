@@ -974,6 +974,15 @@ class TimeWindowSemanticParser:
                         continue  # Before admission is not its first-N-hours window.
                     if re.search(r"(?:住院|入医院)(?:后)?\s*$", prefix):
                         anchor = "hospital_admission"
+                    # A choice of multiple care-unit origins is not proof
+                    # that an ICU-admission materialization uses the same
+                    # time zero. Preserve the uncertainty for the gate.
+                    nearby = text[max(0, match.start() - 100):min(len(text), match.end() + 60)]
+                    if re.search(
+                        r"(?:icu|intensive\s+care)\s*(?:或|或者|/|or)\s*(?:中间监护|中间护理|intermediate\s+care|step[- ]down)",
+                        nearby, re.I,
+                    ):
+                        anchor = "unresolved"
                 hours = (
                     24.0 if groups.get("day") or groups.get("zh_day")
                     else float(groups["hours"]) if groups.get("hours") else None
