@@ -29,6 +29,7 @@ CONTRACTS: dict[str, list[str]] = {
     "cohort_clinical_semantics.test.js": [],
     "custom_cohort_grouping.test.js": [],
     "settings_control_truth.test.js": [],
+    "scientific_readiness_reader.test.js": [],
     "skill_package_import.test.js": [],
     "skill_import_activation.test.js": [],
     "guided_pi_idea_source_network.test.js": [],
