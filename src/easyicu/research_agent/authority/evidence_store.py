@@ -1051,16 +1051,26 @@ class EvidenceReadView:
 
     def __init__(
         self, *, root: Path, records: Sequence[EvidenceRecord], aliases: Mapping[str, str],
+        numeric_claims: Sequence[NumericClaim],
     ) -> None:
         self.root = root
         self._records = copy.deepcopy(records)
         self._aliases = dict(aliases)
+        self._numeric_claims = copy.deepcopy(numeric_claims)
 
     def records(self) -> List[EvidenceRecord]:
         return copy.deepcopy(self._records)
 
     def aliases(self) -> Dict[str, str]:
         return dict(self._aliases)
+
+    def numeric_claims(self) -> List[NumericClaim]:
+        return copy.deepcopy(self._numeric_claims)
+
+    def authoritative_numeric_claims(
+        self, per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    ) -> List[NumericClaim]:
+        return EvidenceStore.authoritative_numeric_claims(self, per_step_records)
 
     def get(self, name: str) -> Optional[EvidenceRecord]:
         return copy.deepcopy(_lookup_evidence_record(self._records, self._aliases, name))
@@ -3035,6 +3045,7 @@ class EvidenceStore:
         with self._lock:
             return EvidenceReadView(
                 root=self.root, records=self._records, aliases=self._aliases,
+                numeric_claims=self._numeric_claims,
             )
 
     def verified_records(self) -> List[EvidenceRecord]:
