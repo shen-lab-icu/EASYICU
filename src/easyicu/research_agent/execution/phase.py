@@ -4001,6 +4001,16 @@ def _execute_step(
     universe_path: Any,
     usage_auditor: Any,
 ) -> Tuple[Any, Dict[str, Any]]:
+    # Freeze the current successful claim view before a worker runs. This is a
+    # partial isolation boundary, not permission to run workers concurrently:
+    # a parallel scheduler must capture one view before dispatching the wave.
+    with shared_lock:
+        prior_claim_records = copy.deepcopy(per_step_records)
+    prior_numeric_claims = [
+        copy.deepcopy(claim)
+        for claim in evidence.authoritative_numeric_claims(prior_claim_records)
+        if claim.step_id != step.step_id
+    ]
     attempt_bootstrap = prepare_step_attempt_bootstrap(
         resume_state=plan_result.resume_state,
         per_step_records=per_step_records,
@@ -4556,6 +4566,7 @@ def _execute_step(
         local_runtime_state=local_runtime_state,
         pending_success_aliases=pending_success_aliases,
         per_step_records=per_step_records,
+        prior_numeric_claims=prior_numeric_claims,
         pipeline=pipeline,
         plan=plan,
         plan_result=plan_result,
@@ -5295,6 +5306,7 @@ def _step_finalize_step(
     local_runtime_state: Any,
     pending_success_aliases: Any,
     per_step_records: Any,
+    prior_numeric_claims: Any,
     pipeline: Any,
     plan: Any,
     plan_result: Any,
@@ -5342,6 +5354,7 @@ def _step_finalize_step(
         evidence=evidence,
         findings=findings,
         pipeline=pipeline,
+        prior_numeric_claims=prior_numeric_claims,
     )
     if standard_executor_terminal_block:
         terminal_summary = (

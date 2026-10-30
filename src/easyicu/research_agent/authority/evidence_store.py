@@ -2608,6 +2608,9 @@ class EvidenceStore:
         self,
         *,
         sources: Dict[str, Tuple[str, str]],
+        source_claims: Optional[Sequence[NumericClaim]] = None,
+        current_step_id: Optional[str] = None,
+        current_evidence_id: Optional[str] = None,
     ) -> Tuple[Dict[str, float], List[Tuple[str, str]]]:
         """Look up canonical floats for the sources a formula names.
 
@@ -2632,8 +2635,49 @@ class EvidenceStore:
                         f"valid Python identifier (or starts with underscore)"
                     )
                 match: Optional[NumericClaim] = None
-                for claim in reversed(self._numeric_claims):
+                candidates = self._numeric_claims
+                if source_claims is not None:
+                    # Prior claims are frozen when the step starts. Only this
+                    # attempt's own summary can add claims during execution.
+                    candidates = list(source_claims) + [
+                        claim for claim in self._numeric_claims
+                        if claim.step_id == current_step_id
+                        and claim.evidence_id == current_evidence_id
+                    ]
+                for claim in reversed(candidates):
                     if claim.step_id == src_step and claim.source_field == src_field:
+                        if source_claims is not None:
+                            from .runtime_artifacts import (
+                                run_level_evidence_matches_claim_owner,
+                                verified_run_evidence_path,
+                            )
+
+                            record = self.get(claim.evidence_id)
+                            run_level_contracts = {
+                                "research_context": ("log", "pipeline"),
+                                "robustness_panel": ("statistic", "pipeline"),
+                            }
+                            run_level_contract = run_level_contracts.get(claim.step_id)
+                            valid_owner = record is not None and (
+                                record.produced_by_step == claim.step_id
+                                or (
+                                    not record.produced_by_step
+                                    and run_level_contract is not None
+                                    and (record.kind, record.producer) == run_level_contract
+                                    and run_level_evidence_matches_claim_owner(
+                                        claim_step_id=claim.step_id,
+                                        evidence_id=claim.evidence_id,
+                                    )
+                                )
+                            )
+                            if (
+                                record is None
+                                or not valid_owner
+                                or verified_run_evidence_path(self.root, record) is None
+                            ):
+                                # Do not fall back to an older matching value
+                                # when the selected current source is corrupt.
+                                break
                         match = claim
                         break
                 if match is None:
@@ -2656,6 +2700,7 @@ class EvidenceStore:
         evidence_id: str,
         step_id: str,
         tolerance: float = 1e-3,
+        source_claims: Optional[Sequence[NumericClaim]] = None,
     ) -> NumericClaim:
         """Evaluate ``formula`` in the restricted sandbox and register it.
 
@@ -2686,7 +2731,12 @@ class EvidenceStore:
                 "derived-claim explanation must be a non-empty string "
                 "(this surfaces in audit findings and the writer digest)"
             )
-        source_values, provenance = self._resolve_derived_sources(sources=sources)
+        source_values, provenance = self._resolve_derived_sources(
+            sources=sources,
+            source_claims=source_claims,
+            current_step_id=step_id,
+            current_evidence_id=evidence_id,
+        )
         result = _evaluate_derived_formula(formula, sources=source_values)
         # Use the same value/canonical pair shape as register_numeric_claim
         # so downstream tooling does not need to special-case derived.
@@ -2733,6 +2783,7 @@ class EvidenceStore:
         evidence_id: str,
         summary: Any,
         tolerance: float = 1e-3,
+        source_claims: Optional[Sequence[NumericClaim]] = None,
     ) -> Tuple[List[NumericClaim], List[Dict[str, Any]]]:
         """Bulk-register all ``derived_claims`` entries from a step_summary.
 
@@ -2815,6 +2866,7 @@ class EvidenceStore:
                     evidence_id=evidence_id,
                     step_id=step_id,
                     tolerance=tolerance,
+                    source_claims=source_claims,
                 )
                 registered.append(claim)
             except DerivedFormulaError as exc:
@@ -2835,6 +2887,7 @@ class EvidenceStore:
         evidence_id: str,
         summary: Any,
         tolerance: float = 1e-3,
+        source_claims: Optional[Sequence[NumericClaim]] = None,
     ) -> Tuple[List[NumericClaim], List[Dict[str, Any]]]:
         """Register one summary's valid derived claims in one generation."""
 
@@ -2844,6 +2897,7 @@ class EvidenceStore:
                 evidence_id=evidence_id,
                 summary=summary,
                 tolerance=tolerance,
+                source_claims=source_claims,
             )
 
     def numeric_claims(self) -> List[NumericClaim]:

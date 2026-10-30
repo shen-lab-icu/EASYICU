@@ -812,6 +812,7 @@ def _step_register_current_step_numeric_claims(
     evidence: Any,
     findings: List[ValidationFinding],
     pipeline: Any,
+    prior_numeric_claims: Any,
 ) -> None:
     """Stage numeric authority before exposing current result aliases."""
 
@@ -832,6 +833,7 @@ def _step_register_current_step_numeric_claims(
         step_id=step.step_id,
         evidence_id=step_summary_record_id,
         summary=step_summary,
+        source_claims=prior_numeric_claims,
     )
     for err in derived_errors:
         findings.append(
