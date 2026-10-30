@@ -16,7 +16,7 @@ import pytest
 
 from easyicu.research_agent.execution import candidate_loop, phase as execution_phase
 from easyicu.research_agent.authority import typed_binding
-from easyicu.research_agent.schema import AnalysisPlan, EvidenceRef
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, EvidenceRef
 
 _PHASE_TYPED_BINDING_NAMES = {
     "TypedBindingResolver",
@@ -175,7 +175,7 @@ def test_execute_loop_uses_one_typed_resolver_without_nested_implementation() ->
             any(keyword.arg == "consumer_step" for keyword in call.keywords)
             for call in resolver_calls
         )
-        == 1
+        == 2
     )
 
 
@@ -267,42 +267,82 @@ def test_resolver_uses_the_current_plan_on_every_call(
 
 
 def test_resolver_allows_only_exact_unpublished_evidence_ids(tmp_path) -> None:
-    record = SimpleNamespace(
-        evidence_id="evidence-1",
-        kind="table",
-        description="pending table",
-        relative_path="evidence/evidence-1__table.csv",
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    store = EvidenceStore(tmp_path)
+    record = store.register_text(
+        kind="table", description="pending table", text="a,b\n1,2\n",
+        filename="own.csv", evidence_id="evidence-1", produced_by_step="own",
+        aliases=["pending_alias"],
+    )
+    peer = store.register_text(
+        kind="table", description="peer table", text="a,b\n3,4\n",
+        filename="peer.csv", evidence_id="peer-evidence", produced_by_step="peer",
+        aliases=["peer_current"],
+    )
+    old = store.register_text(
+        kind="table", description="old attempt", text="a,b\n5,6\n",
+        filename="old.csv", evidence_id="old-evidence", produced_by_step="own",
+        publish_aliases=False,
     )
 
-    class Store:
-        def get(self, name: str) -> object | None:
-            return record if name in {"evidence-1", "pending_alias"} else None
-
-        def current_verified_records(self, _records: object) -> list[object]:
-            return []
-
     resolver = typed_binding.TypedBindingResolver(
-        evidence_store=Store(),
+        evidence_store=store,
         per_step_records=[],
         records_lock=threading.Lock(),
         run_dir=tmp_path,
         authoritative_cohort_path=tmp_path / "cohort.parquet",
     )
     plan = AnalysisPlan(research_question="Review pending evidence.", steps=[])
+    step = AnalysisStep(step_id="own", intent="Review this step.")
 
     exact_refs, _, _ = resolver.resolve_names(
         ["evidence-1"],
         plan=plan,
+        consumer_step=step,
         allow_unpublished_direct_ids=True,
+        unpublished_evidence_ids=[record.evidence_id],
     )
     alias_refs, _, _ = resolver.resolve_names(
         ["pending_alias"],
         plan=plan,
+        consumer_step=step,
         allow_unpublished_direct_ids=True,
+        unpublished_evidence_ids=[record.evidence_id],
+    )
+    peer_refs, _, _ = resolver.resolve_names(
+        [peer.evidence_id],
+        plan=plan,
+        consumer_step=step,
+        allow_unpublished_direct_ids=True,
+        unpublished_evidence_ids=[record.evidence_id],
+    )
+    old_refs, _, _ = resolver.resolve_names(
+        [old.evidence_id], plan=plan, consumer_step=step,
+        allow_unpublished_direct_ids=True, unpublished_evidence_ids=[record.evidence_id],
     )
 
     assert [ref.evidence_id for ref in exact_refs] == ["evidence-1"]
     assert alias_refs == []
+    assert peer_refs == []
+    assert old_refs == []
+    resolver.per_step_records.extend([
+        {"step_id": "peer", "status": "ok", "evidence_ids": [peer.evidence_id]},
+        {"step_id": "own", "status": "ok", "evidence_ids": [old.evidence_id]},
+    ])
+    current_refs, _, _ = resolver.resolve_names(
+        ["peer_current", old.evidence_id], plan=plan, consumer_step=step,
+        allow_unpublished_direct_ids=True, unpublished_evidence_ids=[record.evidence_id],
+    )
+    assert [ref.evidence_id for ref in current_refs] == [peer.evidence_id]
+    (tmp_path / record.relative_path).write_text("tampered")
+    damaged_refs, _, _ = resolver.resolve_names(
+        [record.evidence_id], plan=plan, consumer_step=step,
+        allow_unpublished_direct_ids=True, unpublished_evidence_ids=[record.evidence_id],
+    )
+    assert damaged_refs == []
+    with pytest.raises(ValueError, match="requires its current step owner"):
+        resolver.resolve_names([record.evidence_id], plan=plan, allow_unpublished_direct_ids=True)
 
 
 def test_resolver_aggregates_all_typed_failures(

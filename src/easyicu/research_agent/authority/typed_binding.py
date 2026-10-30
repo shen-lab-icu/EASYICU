@@ -2187,9 +2187,16 @@ class TypedBindingResolver:
         plan: AnalysisPlan,
         consumer_step: Optional[AnalysisStep] = None,
         allow_unpublished_direct_ids: bool = False,
+        unpublished_evidence_ids: Optional[Sequence[str]] = None,
     ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
         """Return exact evidence refs, typed ids, and host-owned bindings."""
 
+        if allow_unpublished_direct_ids and (
+            consumer_step is None or unpublished_evidence_ids is None
+            or isinstance(unpublished_evidence_ids, (str, bytes))
+        ):
+            raise ValueError("unpublished evidence requires its current step owner and attempt evidence IDs")
+        attempt_ids = set(unpublished_evidence_ids or ())
         refs: List[EvidenceRef] = []
         typed_evidence_ids: List[str] = []
         typed_bindings: Dict[str, Dict[str, Any]] = {}
@@ -2273,13 +2280,19 @@ class TypedBindingResolver:
             if (
                 allow_unpublished_direct_ids
                 and direct_record is not None
-                and direct_record.evidence_id == value
+                and str(_evidence_record_field(direct_record, "produced_by_step") or "")
+                == consumer_step.step_id
             ):
-                # The Critic reviews evidence registered by the in-flight
-                # attempt before that attempt can be promoted to ``ok``.
-                # Permit only its exact evidence IDs here; aliases remain
-                # subject to current-success authority below.
-                record = direct_record
+                # Critique can inspect only exact output IDs from its own
+                # in-flight step, and only while their registered bytes still
+                # match. An exact ID is not authority to inspect another
+                # worker's unpublished or superseded result.
+                record = direct_record if (
+                    direct_record is not None
+                    and _evidence_record_field(direct_record, "evidence_id") == value
+                    and value in attempt_ids
+                    and verified_run_evidence_path(self.run_dir, direct_record) is not None
+                ) else None
             else:
                 record = _current_verified_evidence_record(
                     self.evidence_store,

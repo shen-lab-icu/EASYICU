@@ -5471,7 +5471,9 @@ def _step_finalize_step(
     evidence_refs_for_step, _, _ = typed_binding_resolver.resolve_names(
         evidence_ids_for_step,
         plan=plan,
+        consumer_step=step,
         allow_unpublished_direct_ids=True,
+        unpublished_evidence_ids=evidence_ids_for_step,
     )
     validator_messages = _validator_messages(
         usage_findings,
