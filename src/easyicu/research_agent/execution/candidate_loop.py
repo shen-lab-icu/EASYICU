@@ -165,6 +165,7 @@ class _CandidateLoopHost:
     step_summary_integrity_validator: Any
     total_steps: int
     universe_path: Path
+    wave_authority: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -972,6 +973,7 @@ def _candidate_execute_transition(
                 resolved_inputs_path=attempt.resolved_inputs_path,
                 output_dir=(host.run_dir / "steps" / attempt.step.step_id / "outputs"),
                 code_origin=state.execution_code_origin(),
+                wave_authority=host.wave_authority,
             ),
         )
 

@@ -39,6 +39,29 @@ def test_host_runner_executes_only_explicit_host_code(cohort, tmp_path):
     assert result.runtime_provenance["runtime"] == "host"
 
 
+def test_host_runner_refuses_invalid_wave_before_reserving_execution(
+    cohort, tmp_path, monkeypatch,
+):
+    from easyicu.research_agent.execution import host_runner
+    from easyicu.research_agent.execution.runner import WaveArtifactAuthority
+    from easyicu.research_agent.execution.step_execution import CodeOrigin
+
+    runner = host_runner.HostRunner(workdir=tmp_path, cohort_parquet=cohort)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("invalid authority must not reserve or start execution")
+
+    monkeypatch.setattr(host_runner, "prepare_host_execution", forbidden)
+    with pytest.raises(ValueError, match="Wave authority receipt"):
+        runner.run(
+            step_id="typed", code_origin=CodeOrigin.HOST_RENDERED_EXECUTOR,
+            wave_authority=WaveArtifactAuthority(error="missing"),
+            code=("from easyicu.research_agent.execution.runners.deterministic_robustness "
+                  "import _run_robustness_preflight_from_env\n"),
+        )
+    assert not (tmp_path / "steps").exists()
+
+
 def test_host_uses_app_interpreter_windows_environment_and_run_font_cache(
     cohort, tmp_path, monkeypatch
 ):

@@ -1886,6 +1886,7 @@ def run_execute_phase(
     def _execute_one_step(
         step: AnalysisStep, *, batch_base: Any = None,
         batch_binding_resolver: Any = None, batch_numeric_claims: Any = None,
+        batch_artifact_authority: Any = None,
     ) -> Dict[str, Any]:
         nonlocal runtime_state
         step_runtime, step_record = _execute_step(
@@ -1923,6 +1924,7 @@ def run_execute_phase(
             pattern_auditor=pattern_auditor,
             per_step_records=per_step_records,
             batch_numeric_claims=batch_numeric_claims,
+            batch_artifact_authority=batch_artifact_authority,
             pipeline=pipeline,
             plan=plan,
             plan_result=plan_result,
@@ -2159,9 +2161,17 @@ def run_execute_phase(
         # index, checkpoint ledger and numeric source claims to the same wave.
         # Other evidence reads, writes and run-root files are still shared;
         # this snapshot does not authorize the currently disabled path.
+        from .runner import capture_wave_artifact_authority
+
         with shared_lock:
+            _flush_partial_manifest()
             batch_step_records = copy.deepcopy(per_step_records)
         batch_evidence = evidence.read_view()
+        batch_artifact_authority = capture_wave_artifact_authority(
+            workdir=run_dir, run_id=run_id, step_records=batch_step_records,
+            evidence_records=batch_evidence.records(),
+            resumed=plan_result.resume_state is not None,
+        )
         batch_numeric_claims = batch_evidence.authoritative_numeric_claims(
             batch_step_records
         )
@@ -2178,6 +2188,7 @@ def run_execute_phase(
                 _execute_one_step, batch_base=batch_base,
                 batch_binding_resolver=batch_binding_resolver,
                 batch_numeric_claims=batch_numeric_claims,
+                batch_artifact_authority=batch_artifact_authority,
             ),
             submit_step=_submit_in_current_context,
             on_worker_error=functools.partial(_record_step_exception, parallel=True),
@@ -3998,6 +4009,7 @@ def _execute_step(
     pattern_auditor: Any,
     per_step_records: Any,
     batch_numeric_claims: Any,
+    batch_artifact_authority: Any,
     pipeline: Any,
     plan: Any,
     plan_result: Any,
@@ -4405,6 +4417,7 @@ def _execute_step(
             step_summary_integrity_validator=step_summary_integrity_validator,
             total_steps=total_steps,
             universe_path=universe_path,
+            wave_authority=batch_artifact_authority,
         ),
         attempt=_CandidateLoopAttempt(
             _authorized_deterministic_concept_repair=(

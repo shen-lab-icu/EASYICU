@@ -42,8 +42,10 @@ from .method_capabilities import set_runtime_capability_snapshot_provider
 from .code_hygiene import reorder_forward_references
 from .runner import (
     CodeRunner,
+    _code_requests_robustness_authority_snapshot,
     _run_capturing_with_descendant_reaping,
     _safe_path_component,
+    require_wave_artifact_authority,
 )
 from .step_execution import CodeOrigin, HostCodeRefused
 
@@ -306,20 +308,23 @@ class HostRunner(CodeRunner):
         code: str,
         resolved_inputs_path=None,
         code_origin: CodeOrigin = CodeOrigin.MODEL_GENERATED,
+        wave_authority=None,
     ) -> RunResult:
+        if wave_authority is not None and _code_requests_robustness_authority_snapshot(code):
+            require_wave_artifact_authority(wave_authority)
         if not self._host_run_lock.acquire(blocking=False):
             raise HostExecutionLeaseError("host_execution_active")
         try:
             return self._run_host(
                 step_id=step_id, code=code, resolved_inputs_path=resolved_inputs_path,
-                code_origin=code_origin,
+                code_origin=code_origin, wave_authority=wave_authority,
             )
         finally:
             self._host_run_lock.release()
 
     def _run_host(
         self, *, step_id: str, code: str, resolved_inputs_path,
-        code_origin: CodeOrigin,
+        code_origin: CodeOrigin, wave_authority,
     ) -> RunResult:
         step_id = _safe_path_component(step_id, label="step_id")
         step_dir = self.workdir / "steps" / step_id
@@ -355,7 +360,8 @@ class HostRunner(CodeRunner):
             elif out_dir.exists():
                 shutil.rmtree(out_dir)
             result = super().run(
-                step_id=step_id, code=code, resolved_inputs_path=resolved_inputs_path
+                step_id=step_id, code=code, resolved_inputs_path=resolved_inputs_path,
+                wave_authority=wave_authority,
             )
             result.runtime_provenance = bundle["provenance"]
             return result

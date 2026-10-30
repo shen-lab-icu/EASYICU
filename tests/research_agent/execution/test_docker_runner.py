@@ -473,6 +473,71 @@ def test_build_command_maps_digest_bound_authority_snapshot_into_container(
     }
 
 
+def test_docker_run_uses_preselected_wave_receipt(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from easyicu.research_agent.execution.runner import capture_wave_artifact_authority
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    _install_fake_subprocess(monkeypatch)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort, image="img:0")
+    manifest = run_dir / "manifest_partial.json"
+    manifest.write_text(json.dumps({
+        "run_id": "wave", "checkpoint_sequence": 3,
+        "per_step_records": [], "evidence": [],
+    }), encoding="utf-8")
+    receipt = capture_wave_artifact_authority(
+        workdir=run_dir, run_id="wave", step_records=[], evidence_records=[], resumed=False,
+    )
+    assert not receipt.error
+    manifest.write_text(json.dumps({
+        "run_id": "wave", "checkpoint_sequence": 4,
+        "per_step_records": [{"step_id": "peer", "status": "ok"}], "evidence": [],
+    }), encoding="utf-8")
+    captured = {}
+    original = runner.build_command
+
+    def capture_command(**kwargs):
+        result = original(**kwargs)
+        captured.update(_read_env_file(kwargs["env_file_path"]))
+        return result
+
+    monkeypatch.setattr(runner, "build_command", capture_command)
+    result = runner.run(step_id="consume", wave_authority=receipt, code=(
+        "from easyicu.research_agent.execution.runners.deterministic_robustness "
+        "import _run_robustness_preflight_from_env\n"
+    ))
+    assert result.succeeded
+    snapshot = json.loads((result.cwd / ".run_artifact_authority_snapshot.json").read_text())
+    assert snapshot["checkpoint_sequence"] == 3
+    assert snapshot["authority"]["per_step_records"] == []
+    assert captured["EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256"] == receipt.sha256
+
+
+def test_docker_run_refuses_bad_wave_before_cleanup_or_launch(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from easyicu.research_agent.execution.runner import WaveArtifactAuthority
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort, image="img:0")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("invalid authority must not prepare or launch the container")
+
+    monkeypatch.setattr(runner, "_retry_stale_container_cleanup", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    with pytest.raises(ValueError, match="Wave authority receipt"):
+        runner.run(step_id="consume", wave_authority=WaveArtifactAuthority(error="missing"), code=(
+            "from easyicu.research_agent.execution.runners.deterministic_robustness "
+            "import _run_robustness_preflight_from_env\n"
+        ))
+    assert not (runner.workdir / "steps").exists()
+
+
 def test_build_command_passes_through_advanced_flags(
     ra,
     tmp_path: Path,
