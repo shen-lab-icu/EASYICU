@@ -463,6 +463,16 @@
         );
         return;
       }
+        const preparationStatusRefresh = event.target.closest('[data-gpi-preparation-status-refresh]');
+        if (preparationStatusRefresh) {
+          const expectedProject = projectId();
+          const expectedSession = String((state.session || {}).session_id || '');
+          if (loadWorkflow) void Promise.resolve().then(() => loadWorkflow()).catch(() => {
+            if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession)
+              state.error = tr('Could not refresh preparation status.', '无法刷新准备状态。');
+          }).then(() => { if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession) render(); });
+          return;
+        }
         const preparationReview = event.target.closest('[data-gpi-preparation-review]');
         if (preparationReview) {
           const decision = String(preparationReview.dataset.gpiPreparationReview || '');

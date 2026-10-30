@@ -640,7 +640,20 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
             jobs.MANAGER.run_reserved(job_id, failed)
             raise
         result = {**receipt, "decision": decision, "analysis_authorized": False}
-        if decision == "approved" and preparation_scope.get("adapter_id") == "registered-csv-projection/1":
+        if decision == "approved" and preparation_scope.get("adapter_id") == "eicu-demo-first-observed-single-hospital-adult/1":
+            from easyicu.webserver.durable_research import current_service
+
+            service = current_service()
+            if service is None:
+                raise ValueError("raw_preparation_durable_service_unavailable")
+            binding = RawPreparationHostBinding(project_id=action.project_id, session_id=action.session_id,
+                study_context_id=study_id, run_id=current.run_id, nonce=current.nonce)
+            # A failure after the signed decision is recorded is recoverable
+            # through the same review action; it is never a new approval.
+            service.activate_preparation_handoff(job_id, checkpoint=decided, binding=binding,
+                                                 scope=dict(preparation_scope), timeout=300.0)
+            result.update(preparation_job_id=job_id, preparation_status="preparing", cohort_complete=False)
+        elif decision == "approved" and preparation_scope.get("adapter_id") == "registered-csv-projection/1":
             import threading
             from easyicu.webserver import study_contexts
             from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding

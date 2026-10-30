@@ -563,7 +563,12 @@
           && Array.isArray(workflow.plan_review_summary.automatic_revision_blockers)
           && workflow.plan_review_summary.automatic_revision_blockers.length
         ),
-        message: tr(
+        message: workflow.raw_preparation && workflow.raw_preparation.scope
+          && workflow.raw_preparation.scope.adapter_id === 'eicu-demo-first-observed-single-hospital-adult/1'
+          && workflow.host_decisions && workflow.host_decisions.raw_preparation_review ? tr(
+          'Keep the candidate as immutable review evidence and address the review findings before analysis. The separately reviewed first-ICU preparation only creates a private coordinate.',
+          '保留当前候选计划作为不可变审阅证据，在分析前处理审阅项。单独审阅的首次 ICU 准备仅生成私有坐标。',
+        ) : tr(
           'Keep the current candidate plan as immutable review evidence. Let EasyICU apply the Planner-owned review findings and generate a revised candidate plan before any extraction or analysis.',
           '保留当前候选计划作为不可变审阅证据。请由 EasyICU 处理 Planner 负责的审阅项，并在任何数据提取或分析前生成修订版候选计划。',
         ),
@@ -754,6 +759,15 @@
       const preparationOffer = ((host.workflow() || {}).host_decisions || {}).raw_preparation_review;
       const preparationReviewBusy = Boolean((host.workflow() || {}).raw_preparation_review_loading);
       const preparationScope = preparation && preparation.scope || {};
+      const firstObservedStatusText = preparation && ({
+        first_observed_preparing: tr('Preparing the private first-ICU coordinate. Research analysis has not started.', '正在准备私有首次 ICU 坐标，科研分析尚未开始。'),
+        first_observed_complete: tr('The private first-ICU coordinate is ready. Research-data binding is not yet available; analysis has not started.', '私有首次 ICU 坐标已准备完成。科研数据绑定尚未接通，分析尚未开始。'),
+        first_observed_stopped: tr('First-ICU coordinate preparation stopped; inspect the original task before retrying.', '首次 ICU 坐标准备已停止，请先检查原任务。'),
+        first_observed_unavailable: tr('The original preparation status cannot be verified. Do not start a second task until it is resolved.', '无法核验原准备任务的状态；问题解决前请勿启动第二个任务。'),
+      })[preparation.status];
+      const firstObservedCanResume = Boolean(preparation && preparation.status === 'first_observed_unavailable'
+        && preparation.recovery_session_id && preparationOffer
+        && String((host.session() || {}).session_id || '') === String(preparation.recovery_session_id));
       const partialCsv = preparationScope.adapter_id === 'registered-csv-projection/1'
         && preparationScope.purpose === 'prepare_single_table_only'
         && preparationScope.source_identity && typeof preparationScope.source_identity.database === 'string'
@@ -764,7 +778,14 @@
         && Array.isArray(preparation.scope.dependencies.files) ? preparation.scope.dependencies.files : [];
       const preparationRows = preparationFiles.map(file => `<li>${esc(String(file.table || ''))} · ${esc(String(file.path || ''))} · ${esc((Array.isArray(file.columns) ? file.columns : []).join(', '))} · ${esc(String(file.window || ''))}</li>`).join('');
       const partialCsvDetails = partialCsv ? `<p>${esc(tr('Registered source', '登记来源'))}: ${esc(preparationScope.source_identity.database)} / ${esc(preparationScope.source_identity.registration_id)}</p><p>${esc(tr('File', '文件'))}: ${esc(preparationScope.relative_file)}</p><p>${esc(tr('Output columns', '输出字段'))}: ${esc(preparationScope.columns.join(', '))}</p><p>${esc(tr('Preparation reads every row and every field of this file; only the listed columns are output. This is a single-table step, not a cohort or analysis.', '准备时会读取此文件的全部行和全部字段，仅输出上述字段。这只是单表步骤，不构成队列或研究分析。'))}</p>` : '';
-      const preparationCanReview = Boolean(preparationOffer && (partialCsv || preparationRows));
+      const firstObservedScope = preparationScope.adapter_id === 'eicu-demo-first-observed-single-hospital-adult/1'
+        && preparationScope.purpose === 'prepare_only' && preparationScope.analysis_authorized === false
+        && preparationScope.not_lifetime_first_icu === true && preparationScope.read_outcome_columns === false
+        && preparationScope.population_definition === 'adult_first_observed_icu_in_single_visible_hospitalization'
+        && Array.isArray(preparationScope.source_columns)
+        && JSON.stringify(preparationScope.source_columns) === JSON.stringify(['patientunitstayid', 'uniquepid', 'patienthealthsystemstayid', 'unitvisitnumber', 'unittype', 'age']);
+      const firstObservedDetails = firstObservedScope ? `<p>${esc(tr('The first verifiable ICU stay is retained only for adults with one visible hospitalization. Other hospitalizations and unverifiable identity, order, or age are excluded. This does not establish lifetime first ICU.', '仅保留一次可见住院且首次 ICU 可核实的成年患者；多次可见住院或身份、顺序、年龄无法核实的患者将被排除。这不能证明是终生首次 ICU。'))}</p><p>${esc(tr('Patient-table source fields', '患者表读取字段'))}: ${esc(preparationScope.source_columns.join(', '))}</p><p>${esc(tr('This prepares a private identity coordinate only. It does not read outcomes or run analysis. The subsequent research-data binding is not yet available.', '此步骤仅准备私有身份坐标，不读取结局，也不执行分析；后续科研数据绑定尚未接通。'))}</p>` : '';
+      const preparationCanReview = Boolean(preparationOffer && (partialCsv || preparationRows || firstObservedScope));
       const preparationRun = String((host.workflow() || {}).raw_preparation_candidate_run_id || '');
       const preparationAttempt = (host.workflow() || {}).raw_preparation_candidate_result;
       const firstObserved = preparationAttempt && preparationAttempt.first_observed_preparation_preview;
@@ -817,8 +838,13 @@
             : tr('The complete source files or their dependencies could not be verified yet. Preparation remains unavailable.', '尚无法核验完整来源文件或读取依赖，暂时不能开始准备。');
       // A candidate check is independent of the host's in-flight job. Do not
       // show its stale blocked preview as the result of that starting job.
-      const pendingPreparation = confirmation.code === 'starting' && firstObservedPreview ? '' : preparation && preparation.status === 'awaiting_consumption_closure'
-        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? partialCsv ? tr(
+      const pendingPreparation = firstObservedStatusText
+        ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('First-ICU preparation', '首次 ICU 数据准备'))}</strong><small>${esc(firstObservedCanResume ? tr('The original approved preparation can be resumed. This reuses the same decision and task; it does not approve analysis.', '可继续原来已批准的准备任务，将沿用原决定和任务，不会批准科研分析。') : firstObservedStatusText)}</small>${firstObservedCanResume ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Resume original preparation', '继续原准备任务'))}</button>` : ''}<button type="button" class="btn sm" data-gpi-preparation-status-refresh>${esc(tr('Refresh preparation status', '刷新准备状态'))}</button></div>`
+        : confirmation.code === 'starting' && firstObservedPreview ? '' : preparation && preparation.status === 'awaiting_consumption_closure'
+        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${firstObservedDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? firstObservedScope ? tr(
+          'Approval starts only this private coordinate preparation; research execution requires a separate reviewed plan and is not available from this step.',
+          '批准后仅开始此私有坐标准备；科研执行需要另行审阅完整计划，当前不能从此步骤直接执行。',
+        ) : partialCsv ? tr(
           'Approval starts this single-table preparation. Research analysis still requires separate approval.',
           '批准后将开始这项单表数据准备，研究分析仍需另行批准。',
         ) : tr(

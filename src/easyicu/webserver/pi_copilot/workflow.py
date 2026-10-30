@@ -1826,15 +1826,28 @@ def build_project_workflow_projection(
         latest_run=latest_run,
         plan_review_authority=plan_review_authority,
     )
+    preparation_recovery_session = None
     if preparation_pending is not None:
-        from easyicu.webserver.raw_preparation_candidate import available_host_review
+        from easyicu.webserver.raw_preparation_candidate import available_host_review, recoverable_first_observed_review
         try:
             choice, _, _, _ = available_host_review(
                 run_id=str(preparation_pending.run_id), study_context_id=clean_study_id,
             )
             host_decisions = host_decisions.model_copy(update={"raw_preparation_review": choice})
         except (OSError, ValueError, TypeError, RuntimeError):
-            pass  # No provably closed producer means no approval offer.
+            try:
+                choice, preparation_recovery_session = recoverable_first_observed_review(
+                    run_id=str(preparation_pending.run_id), study_context_id=clean_study_id,
+                )
+                host_decisions = host_decisions.model_copy(update={"raw_preparation_review": choice})
+            except (OSError, KeyError, ValueError, TypeError, RuntimeError):
+                pass  # No proven original decision means no action.
+    preparation_projection = pending_preparation_projection(
+        {"run_id": preparation_pending.run_id, "project_dir": preparation_pending.run_dir}
+        if preparation_pending else None, study_context_id=clean_study_id,
+    )
+    if preparation_recovery_session and preparation_projection:
+        preparation_projection = {**preparation_projection, "recovery_session_id": preparation_recovery_session}
     starting = (
         host_action_starting.starting_for(clean_study_id)
         if include_starting and clean_study_id
@@ -1865,10 +1878,7 @@ def build_project_workflow_projection(
             else None
         ),
         target_trial_card=target_trial_card(study, trial_compile),
-        raw_preparation=pending_preparation_projection(
-            {"run_id": preparation_pending.run_id, "project_dir": preparation_pending.run_dir}
-            if preparation_pending else None
-        ),
+        raw_preparation=preparation_projection,
         raw_preparation_candidate_run_id=(
             str(plan_review_authority.get("run_id") or "")
             if isinstance(plan_review_authority, Mapping)
