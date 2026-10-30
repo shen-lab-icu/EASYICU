@@ -64,6 +64,8 @@
       if (!row || row.role !== 'activity' || !Array.isArray(row.steps)) return;
       row.steps.forEach(step => {
         const action = String(step && step.requiredAction || '');
+        if (step && step.kind === 'tool' && step.code === 'external_llm_opt_in_required'
+          && !actions.includes('provider_plan')) actions.push('provider_plan');
         if (step && step.kind === 'tool' && step.code === BLOCKED_CODE && step.grantable === true
           && actionLabel(action) && !actions.includes(action)) actions.push(action);
       });
@@ -73,21 +75,75 @@
 
   function render(actions, options) {
     if (!actions.length) return '';
+    const ordinary = actions.filter(action => action !== 'provider_plan');
+    const provider = actions.includes('provider_plan');
     const disabled = options.disabled ? ' disabled' : '';
-    const list = actions.map(actionLabel).join(tr(', ', '、'));
+    const list = ordinary.map(actionLabel).join(tr(', ', '、'));
     const routine = grants('assist', options.agentMode);
-    const autoAllows = normalize(options.mode) === 'ask' && actions.every(action => routine.includes(action));
+    const autoAllows = ordinary.length && normalize(options.mode) === 'ask' && ordinary.every(action => routine.includes(action));
     return `<div class="gpi-action-ask" role="group" aria-label="${esc(tr('Needs your go-ahead', '需要你同意'))}">
-      <p>${esc(tr(`The assistant wants to ${list}.`, `助手要${list}。`))}</p>
+      ${ordinary.length ? `<p>${esc(tr(`The assistant wants to ${list}.`, `助手要${list}。`))}</p>` : ''}
+      ${provider ? `<p>${esc(tr('Review the current study configuration before authorizing one candidate plan. The plan still requires review.', '请先核对当前研究配置，再授权生成一次候选方案。方案仍需审阅。'))}</p>` : ''}
       <div class="gpi-action-ask-buttons">
-        <button type="button" class="btn sm primary" data-gpi-action-ask-allow="${esc(actions.join(' '))}"${disabled}>${esc(tr('Allow this once', '允许这一次'))}</button>
-        ${autoAllows ? `<button type="button" class="btn sm" data-gpi-action-ask-routine="${esc(actions.join(' '))}"${disabled}>${esc(tr('Confirm routine actions automatically', '常规操作自动确认'))}</button>` : ''}
+        ${provider ? `<button type="button" class="btn sm primary" data-gpi-review-plan-authorization${disabled}>${esc(tr('Review and authorize one candidate plan', '核对并授权一次候选方案生成'))}</button>` : ''}
+        ${ordinary.length ? `<button type="button" class="btn sm primary" data-gpi-action-ask-allow="${esc(ordinary.join(' '))}"${disabled}>${esc(tr('Allow this once', '允许这一次'))}</button>` : ''}
+        ${autoAllows ? `<button type="button" class="btn sm" data-gpi-action-ask-routine="${esc(ordinary.join(' '))}"${disabled}>${esc(tr('Confirm routine actions automatically', '常规操作自动确认'))}</button>` : ''}
       </div>
     </div>`;
   }
 
+  async function authorizePlan(callbacks) {
+    const before = callbacks.planContext();
+    const decision = before && before.decision;
+    const supported = ['provider_ready_to_generate_plan', 'failed_pipeline_requires_fresh_plan'];
+    if (!before || !before.projectId || !before.sessionId || !before.studyId || !decision
+      || !supported.includes(before.code) || decision.next_action_code !== before.code) {
+      callbacks.planError(tr('Complete the study configuration before authorizing a candidate plan.', '请先完成研究配置，再授权生成候选方案。'));
+      return;
+    }
+    const frozen = JSON.stringify(decision);
+    try {
+      const response = await callbacks.loadStudy(before.studyId);
+      const study = response && (response.context || response.study || response);
+      const after = callbacks.planContext();
+      if (!after || after.projectId !== before.projectId || after.sessionId !== before.sessionId
+        || after.studyId !== before.studyId || after.userMessage !== before.userMessage
+        || JSON.stringify(after.decision) !== frozen) {
+        callbacks.planError(tr('The study configuration changed. Review it again.', '研究配置已变化，请重新核对。'));
+        return;
+      }
+      const normalize = text => String(text || '').trim().replace(/\s+/g, ' ');
+      const question = normalize(study && study.question);
+      if (!question || question !== normalize(before.userMessage)) {
+        callbacks.planError(tr('The current study question does not exactly match your latest request. Update the study configuration first.', '当前研究问题与本次请求不完全一致，请先更新研究配置。'));
+        return;
+      }
+      const database = String((study.data_source || {}).database || (study.data_source || {}).db || '');
+      if (!callbacks.confirmPlan(tr(
+        `Authorize one candidate plan using the configured question below? The model may receive the study metadata and search literature. The plan still requires review; this does not approve analysis.\n\n${question}\n\nDatabase: ${database}`,
+        `授权根据以下已配置问题生成一次候选方案？模型可能接收研究元数据并检索文献；方案仍需审阅，此操作不批准分析。\n\n${question}\n\n数据库：${database}`,
+      ))) return;
+      const current = callbacks.planContext();
+      if (!current || current.projectId !== before.projectId || current.sessionId !== before.sessionId
+        || current.studyId !== before.studyId || current.userMessage !== before.userMessage
+        || JSON.stringify(current.decision) !== frozen) {
+        callbacks.planError(tr('The study configuration changed. Review it again.', '研究配置已变化，请重新核对。'));
+        return;
+      }
+      await callbacks.startPlan(before.code, { requireConfirmedDecision: true, confirmedDecision: frozen });
+    } catch (_) {
+      callbacks.planError(tr('Could not verify the study configuration. No plan was started.', '无法核对研究配置，未启动方案生成。'));
+    }
+  }
+
   // Delegated click: returns true when the event belonged to this owner.
   function handleClick(event, callbacks) {
+    const plan = event.target.closest && event.target.closest('[data-gpi-review-plan-authorization]');
+    if (plan) {
+      event.preventDefault();
+      if (!callbacks.busy()) void authorizePlan(callbacks);
+      return true;
+    }
     const allow = event.target.closest && event.target.closest('[data-gpi-action-ask-allow], [data-gpi-action-ask-routine]');
     if (!allow) return false;
     event.preventDefault();
@@ -103,6 +159,6 @@
   }
 
   window.EasyICU.guidedPi.declare('access', {
-    MODES, normalize, grants, label, description, preferred, remember, actionLabel, pending, render, handleClick,
+    MODES, normalize, grants, label, description, preferred, remember, actionLabel, pending, render, authorizePlan, handleClick,
   });
 })();

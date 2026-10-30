@@ -764,7 +764,11 @@
           : (['failed', 'interrupted'].includes(turnStatus) ? 'error'
             : (turnStatus === 'cancelled' ? 'cancelled' : 'complete'));
         replayActivity.startedAt = replayStarted;
-        replayActivity.timelineAt = replayStarted;
+        // A replay's start can be rounded to whole seconds, before the
+        // transcript's own user message timestamp. Preserve the matched
+        // activity's transcript position so it remains in its user's turn;
+        // startedAt still reflects the actual lifecycle for duration display.
+        if (isNewReplayActivity) replayActivity.timelineAt = replayStarted;
         replayActivity.endedAt = turnStatus === 'running' ? null : replayEnded;
         replayActivity.allowedActions = Array.isArray(turn && turn.allowed_actions) ? turn.allowed_actions.slice() : [];
         const submittedChildJob = replay.some(event => (

@@ -393,6 +393,24 @@
     },
   });
   const confirmWorkflowAction = () => PLAN_ACTIONS.confirmWorkflow(workflowConfirmation());
+  const authorizeCandidatePlan = {
+    planContext: () => {
+      const session = state.session || {};
+      const workflow = state.workflow || {};
+      const user = state.messages.slice().reverse().find(row => row && row.role === 'user');
+      return {
+        projectId: projectId(), sessionId: String(session.session_id || ''),
+        studyId: String((session.binding || {}).study_context_id || ''),
+        code: String(workflow.next_action_code || ''),
+        decision: (workflow.host_decisions || {}).plan_transition || null,
+        userMessage: String((user && user.text) || ''),
+      };
+    },
+    loadStudy: id => api().loadStudyContext(id),
+    confirmPlan: message => window.confirm(message),
+    startPlan: (code, options) => PLAN_ACTIONS.startFormalPlanGeneration(code, options),
+    planError: message => { state.error = String(message || ''); render(); },
+  };
   const rejectWorkflowAction = () => PLAN_ACTIONS.rejectWorkflow(workflowConfirmation());
   const confirmPlanDecision = PLAN_ACTIONS.confirmDecision;
   const retryFailedExecution = PLAN_ACTIONS.retryFailedExecution;
@@ -432,7 +450,7 @@
     openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
     openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
     loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
-    setShell, openStudySetupInConversation, createSession, startEntry,
+    setShell, openStudySetupInConversation, createSession, startEntry, loadWorkflow,
     previewApprovedPlanDataPackage, confirmWorkflowAction,
     retryFailedExecution,
     rejectWorkflowAction, editWorkflow, confirmCohortEligibility,
@@ -441,7 +459,7 @@
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
     HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
-    ACCESS, turnGrants,
+    ACCESS, turnGrants, authorizeCandidatePlan,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
@@ -1034,7 +1052,7 @@
         // The project's run record and the host's decision coordinates travel
         // beside the snapshot; owners read them from the same workflow object.
         if (state.workflow) state.workflow.runs = Array.isArray(payload && payload.runs) ? payload.runs : [];
-        if (state.workflow) Object.assign(state.workflow, { host_decisions: (payload && payload.host_decisions) || {}, starting: (payload && payload.starting) || null, target_trial_card: (payload && payload.target_trial_card) || null });
+        if (state.workflow) Object.assign(state.workflow, { host_decisions: (payload && payload.host_decisions) || {}, starting: (payload && payload.starting) || null, target_trial_card: (payload && payload.target_trial_card) || null, raw_preparation: (payload && payload.raw_preparation) || null, raw_preparation_candidate_run_id: (payload && payload.raw_preparation_candidate_run_id) || null });
         reconcileDurableWrapupActivity();
         hydrateProjectedJob(payload && payload.active_job);
         const activeJob = payload && payload.active_job;
