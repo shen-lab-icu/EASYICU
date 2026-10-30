@@ -188,6 +188,7 @@ HOST_ACTION_JOB_KINDS = {
     "generate_plan": frozenset({"agent-run"}),
     "auto_revise_plan": frozenset({"agent-run"}),
     "prepare_analysis_data": frozenset({"agent-run"}),
+    "review_raw_preparation": frozenset({"raw-preparation-review"}),
     "execute_plan": frozenset({"agent-run"}),
     "retry_analysis": frozenset({"agent-run"}),
 }

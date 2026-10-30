@@ -533,6 +533,86 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     )
 
 
+@control_router.post("/api/jobs/raw-preparation-candidate")
+def raw_preparation_candidate(body: Dict[str, Any]) -> dict:
+    """Review-only source dependency preview; never starts a producer."""
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+    from easyicu.webserver.pi_copilot.service import get_pi_copilot_service
+    from easyicu.webserver.raw_preparation_candidate import create_candidate_for_review
+
+    run_id = str(body.get("run_id") or "").strip()
+    study_id = str(body.get("study_context_id") or "").strip()
+    session_id = str(body.get("session_id") or "").strip()
+    project_id = str(body.get("project_id") or "").strip()
+    if not all((run_id, study_id, session_id, project_id)):
+        raise HTTPException(status_code=400, detail={"error": "raw_preparation_coordinates_required"})
+    try:
+        get_pi_copilot_service().host_action_session(session_id, project_id=project_id, study_context_id=study_id)
+        return create_candidate_for_review(run_id=run_id, study_context_id=study_id)
+    except PiCopilotError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except (OSError, ValueError, TypeError) as exc:
+        # Paths and review payloads are not exposed to the browser.
+        reason = str(exc)
+        if not reason.startswith(("raw_preparation_", "dependency_")) or len(reason) > 120:
+            reason = "raw_preparation_review_unavailable"
+        return {"status": "blocked", "blocker_codes": [reason]}
+
+
+@control_router.post("/api/jobs/raw-preparation-review")
+def raw_preparation_review(body: Dict[str, Any]) -> dict:
+    """Record one host-reviewed preparation scope; never start analysis."""
+    from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+    from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
+    from easyicu.webserver import jobs
+    from easyicu.webserver.host_action_contracts import RawPreparationReviewDecision
+    from easyicu.webserver.raw_preparation_candidate import available_host_review
+    from easyicu.webserver.raw_preparation_decisions import record_host_review
+
+    action = _host_action(body)
+    study_id = str(body.get("study_context_id") or "").strip()
+    decision = str(body.get("decision") or "").strip().lower()
+    if (action is None or action.action_code != "review_raw_preparation"
+            or not isinstance(action.decision, RawPreparationReviewDecision)
+            or not study_id or decision not in {"approved", "rejected"}):
+        raise HTTPException(status_code=400, detail={"error": "raw_preparation_review_request_invalid"})
+    try:
+        current, checkpoint, _, run_dir = available_host_review(
+            run_id=action.decision.run_id, study_context_id=study_id)
+        if current != action.decision:
+            raise ValueError("raw_preparation_pending_stale")
+        receipt = _submit_host_decision(action, body,
+            lambda: {"job_id": jobs.MANAGER.reserve("raw-preparation-review").id}, review_decision=decision)
+        if receipt.get("reused"):
+            return receipt
+        job_id = str(receipt.get("job_id") or "")
+        try:
+            if not (receipt.get("host_action") or {}).get("recorded"):
+                raise ValueError("raw_preparation_host_action_unrecorded")
+            decided = record_host_review(host_action=action, pending=checkpoint, decision=decision,
+                study_context_id=study_id, job_id=job_id, run_id=current.run_id,
+                scientific_configuration_sha256=current.scientific_configuration_sha256)
+            with AnchoredDirectory.open(run_dir) as directory:
+                latest = RawPreparationCheckpoint.model_validate_json(directory.read_bytes(
+                    "raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+                if latest.checkpoint_sha256 != checkpoint.checkpoint_sha256:
+                    raise ValueError("raw_preparation_pending_stale")
+                directory.replace_bytes("raw_preparation_checkpoint.json", decided.model_dump_json().encode())
+                directory.assert_still_selected()
+        except Exception:
+            def failed(_job):
+                raise ValueError("raw_preparation_review_not_recorded")
+            jobs.MANAGER.run_reserved(job_id, failed)
+            raise
+        jobs.MANAGER.run_reserved(job_id, lambda _job: {"decision": decision, "analysis_authorized": False})
+        return {**receipt, "decision": decision, "analysis_authorized": False}
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        reason = str(exc)
+        if not reason.startswith("raw_preparation_") or len(reason) > 120:
+            reason = "raw_preparation_review_unavailable"
+        raise HTTPException(status_code=409, detail={"error": reason}) from exc
+
+
 @control_router.post("/api/jobs/agent-run-review")
 def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
     """HTTP adapter that resolves only this browser's account authority."""

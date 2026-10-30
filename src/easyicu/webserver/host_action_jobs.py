@@ -124,7 +124,7 @@ def check_agent_run_request(
     engine = str(body.get("engine") or "").strip().lower()
     resume = str(body.get("execution_resume_source_run_id") or "").strip()
     decision = host_action.decision
-    if engine != "research_agent_pipeline" or family == "plan_review":
+    if engine != "research_agent_pipeline" or family not in {"plan_transition", "execution_retry"}:
         raise _refuse("host_action_request_mismatch", status_code=400, field="engine")
     if family == "execution_retry" and resume != getattr(
         decision, "source_run_id", None

@@ -40,6 +40,7 @@ HostActionCode = Literal[
     "generate_plan",
     "auto_revise_plan",
     "prepare_analysis_data",
+    "review_raw_preparation",
     "execute_plan",
     "retry_analysis",
 ]
@@ -82,8 +83,22 @@ class ExecutionRetryDecision(BaseModel):
     scientific_configuration_sha256: str = Field(pattern=_SHA256)
 
 
+class RawPreparationReviewDecision(BaseModel):
+    """A user decision about one exact source preparation, never execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    family: Literal["raw_preparation_review"] = "raw_preparation_review"
+    run_id: str = Field(pattern=_IDENTIFIER)
+    scientific_configuration_sha256: str = Field(pattern=_SHA256)
+    checkpoint_sha256: str = Field(pattern=_SHA256)
+    scope_sha256: str = Field(pattern=_SHA256)
+    review_authority_sha256: str = Field(pattern=_SHA256)
+    nonce: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 HostActionDecision = Annotated[
-    Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision],
+    Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision, RawPreparationReviewDecision],
     Field(discriminator="family"),
 ]
 
@@ -94,6 +109,7 @@ ACTION_DECISION_FAMILIES: Mapping[str, str] = MappingProxyType(
         "generate_plan": "plan_transition",
         "auto_revise_plan": "plan_transition",
         "prepare_analysis_data": "plan_transition",
+        "review_raw_preparation": "raw_preparation_review",
         "execute_plan": "plan_review",
         "retry_analysis": "execution_retry",
     }
@@ -112,11 +128,12 @@ class HostDecisionOffers(BaseModel):
     plan_review: Optional[PlanReviewDecision] = None
     plan_transition: Optional[PlanTransitionDecision] = None
     execution_retry: Optional[ExecutionRetryDecision] = None
+    raw_preparation_review: Optional[RawPreparationReviewDecision] = None
 
     def for_family(
         self, family: str
     ) -> Optional[
-        Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision]
+        Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision, RawPreparationReviewDecision]
     ]:
         if family == "plan_review":
             return self.plan_review
@@ -124,6 +141,8 @@ class HostDecisionOffers(BaseModel):
             return self.plan_transition
         if family == "execution_retry":
             return self.execution_retry
+        if family == "raw_preparation_review":
+            return self.raw_preparation_review
         return None
 
 
@@ -211,7 +230,7 @@ def retry_options_sha256(
 
 
 def decision_key(
-    decision: Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision],
+    decision: Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision, RawPreparationReviewDecision],
     *,
     review_decision: str = "",
     retry_options: str = "",
@@ -222,6 +241,13 @@ def decision_key(
     study's decisions apart and stays readable in logs and replay rows.
     """
 
+    if isinstance(decision, RawPreparationReviewDecision):
+        if review_decision not in ("approved", "rejected"):
+            raise ValueError("host_action_review_decision_required")
+        # Unlike legacy display keys, the security-sensitive preparation key
+        # retains every bit of the exact reviewed decision and its unique nonce.
+        return ":".join(("raw-prep", decision.run_id, review_decision,
+                         _sha256_json(decision.model_dump(mode="json")), decision.nonce))
     if isinstance(decision, PlanReviewDecision):
         if review_decision not in ("approved", "rejected"):
             raise ValueError("host_action_review_decision_required")
@@ -260,7 +286,7 @@ class DecisionKeyFacts(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    family: Literal["plan_review", "plan_transition", "execution_retry"]
+    family: Literal["plan_review", "plan_transition", "execution_retry", "raw_preparation_review"]
     #: The reviewed run, the plan's source run ("" before the first run), or
     #: the retried run.
     run_id: str = ""
@@ -278,6 +304,9 @@ _PLAN_KEY = re.compile(
     rf"plan:{_DIGEST_PREFIX}:(?P<run>-|{_KEY_IDENTIFIER}):(?P<code>{_CODE[1:-1]})"
 )
 _RETRY_KEY = re.compile(rf"retry:(?P<run>{_KEY_IDENTIFIER}):{_DIGEST_PREFIX}:.+")
+_RAW_PREP_KEY = re.compile(
+    rf"raw-prep:(?P<run>{_KEY_IDENTIFIER}):(?P<decision>approved|rejected):[0-9a-f]{{64}}:[0-9a-f]{{64}}"
+)
 
 
 def decision_key_facts(action_key: Any) -> Optional[DecisionKeyFacts]:
@@ -290,6 +319,10 @@ def decision_key_facts(action_key: Any) -> Optional[DecisionKeyFacts]:
     """
 
     key = str(action_key or "")
+    raw_preparation = _RAW_PREP_KEY.fullmatch(key)
+    if raw_preparation is not None:
+        return DecisionKeyFacts(family="raw_preparation_review", run_id=raw_preparation["run"],
+                                review_decision=raw_preparation["decision"])
     review = _REVIEW_KEY.fullmatch(key)
     if review is not None:
         return DecisionKeyFacts(
@@ -322,9 +355,9 @@ def host_action_id(session_id: str, action_code: str, action_key: str) -> str:
 
 
 def mismatched_fields(
-    echoed: Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision],
+    echoed: Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision, RawPreparationReviewDecision],
     offered: Optional[
-        Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision]
+        Union[PlanReviewDecision, PlanTransitionDecision, ExecutionRetryDecision, RawPreparationReviewDecision]
     ],
 ) -> Tuple[str, ...]:
     """The fields in which an echoed decision differs from the one offered now.
@@ -343,6 +376,7 @@ __all__ = [
     "ACTION_DECISION_FAMILIES",
     "DecisionKeyFacts",
     "ExecutionRetryDecision",
+    "RawPreparationReviewDecision",
     "HostActionCode",
     "HostActionDecision",
     "HostActionRequest",

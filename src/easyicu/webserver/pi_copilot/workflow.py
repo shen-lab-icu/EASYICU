@@ -180,6 +180,10 @@ class ProjectWorkflowProjection(BaseModel):
     # The approval card of a causal study's target trial, as its owner
     # computes it (``target_trial_card``); for the browser only.
     target_trial_card: Optional[Mapping[str, Any]] = None
+    # A pending preparation request is informational until the actual producer
+    # and its complete read set can be proved. It is never an offered decision.
+    raw_preparation: Optional[Mapping[str, Any]] = None
+    raw_preparation_candidate_run_id: Optional[str] = None
 
 
 RUN_HISTORY_LIMIT = 10
@@ -1683,6 +1687,7 @@ def build_project_workflow_projection(
     """
 
     clean_study_id = str(study_context_id or "").strip()
+    from easyicu.webserver.raw_preparation_projection import pending_preparation_projection
     exact_bound_study_id = clean_study_id if study_override is None else ""
     if study_override is not None:
         study: Mapping[str, Any] = dict(study_override)
@@ -1711,6 +1716,14 @@ def build_project_workflow_projection(
         if latest_run
         else None
     )
+    preparation_pending = None
+    if latest_run and plan_review_authority and clean_study_id:
+        try:
+            preparation_pending, _ = agent_pipeline_runs.raw_preparation_review_owner(
+                str(latest_run.get("run_id") or ""), clean_study_id,
+            )
+        except ValueError:
+            pass
 
     review = (
         agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
@@ -1797,6 +1810,15 @@ def build_project_workflow_projection(
         latest_run=latest_run,
         plan_review_authority=plan_review_authority,
     )
+    if preparation_pending is not None:
+        from easyicu.webserver.raw_preparation_candidate import available_host_review
+        try:
+            choice, _, _, _ = available_host_review(
+                run_id=str(preparation_pending.run_id), study_context_id=clean_study_id,
+            )
+            host_decisions = host_decisions.model_copy(update={"raw_preparation_review": choice})
+        except (OSError, ValueError, TypeError, RuntimeError):
+            pass  # No provably closed producer means no approval offer.
     starting = (
         host_action_starting.starting_for(clean_study_id)
         if include_starting and clean_study_id
@@ -1827,6 +1849,17 @@ def build_project_workflow_projection(
             else None
         ),
         target_trial_card=target_trial_card(study, trial_compile),
+        raw_preparation=pending_preparation_projection(
+            {"run_id": preparation_pending.run_id, "project_dir": preparation_pending.run_dir}
+            if preparation_pending else None
+        ),
+        raw_preparation_candidate_run_id=(
+            str(plan_review_authority.get("run_id") or "")
+            if isinstance(plan_review_authority, Mapping)
+            and str(plan_review_authority.get("study_id") or "") == clean_study_id
+            and str(plan_review_authority.get("run_id") or "") == str((latest_run or {}).get("run_id") or "")
+            else None
+        ),
     )
 
 

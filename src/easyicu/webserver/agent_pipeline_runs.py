@@ -5159,6 +5159,26 @@ def _write_terminal_projection(*, job: Any, provider_task: Any, **kwargs: Any) -
     return _write_projection(**kwargs)
 
 
+def raw_preparation_review_owner(run_id: Any, study_context_id: str) -> tuple[Any, Mapping[str, Any]]:
+    """Return the host's exact paused review and study, without deciding it."""
+    key = _clean_text(run_id, 160)
+    entry = _PENDING_REVIEWS.get(key)
+    if entry is not None:
+        pending, study = entry.pending, entry.study
+    else:
+        try:
+            record = get_review_recovery_record(key)
+            if record is None:
+                raise ValueError("raw_preparation_review_unavailable")
+            pending, study = pending_from_record(record), record.study
+        except WebReviewRecoveryError as exc:
+            raise ValueError("raw_preparation_review_unavailable") from exc
+    if (not isinstance(study, Mapping) or _clean_text(study.get("id"), 160) != study_context_id
+            or str(pending.run_id) != key):
+        raise ValueError("raw_preparation_review_study_mismatch")
+    return pending, study
+
+
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     from easyicu.webserver.research_append_run import pending_append_review
     from easyicu.webserver.pi_copilot.population_preparation import population_preparation_proposal
