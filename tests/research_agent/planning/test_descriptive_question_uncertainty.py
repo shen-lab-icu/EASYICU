@@ -131,6 +131,22 @@ def test_explicit_addition_keeps_the_previous_level(amendment):
     assert value.confidence_levels == (0.9, 0.95)
 
 
+def test_withdrawing_one_level_does_not_remove_another():
+    value = requested_uncertainty(
+        "报告 90% 置信区间和 95% 置信区间", "不再报告 90% 置信区间",
+    )
+    assert value.requested
+    assert value.confidence_levels == (0.95,)
+
+
+def test_replacement_after_a_withdrawal_does_not_restore_old_levels():
+    value = requested_uncertainty(
+        "报告 90% 置信区间和 95% 置信区间",
+        "不再报告 90% 置信区间，改为 99% 置信区间",
+    )
+    assert value.confidence_levels == (0.99,)
+
+
 @pytest.mark.parametrize("question", [
     "请报告 90% 和 95% 置信区间",
     "Report 90% and 95% confidence intervals",
