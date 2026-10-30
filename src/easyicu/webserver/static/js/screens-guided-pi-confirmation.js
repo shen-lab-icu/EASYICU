@@ -784,6 +784,41 @@
         && preparationScope.population_definition === 'adult_first_observed_icu_in_single_visible_hospitalization'
         && Array.isArray(preparationScope.source_columns)
         && JSON.stringify(preparationScope.source_columns) === JSON.stringify(['patientunitstayid', 'uniquepid', 'patienthealthsystemstayid', 'unitvisitnumber', 'unittype', 'age']);
+      const planScope = preparation && preparation.candidate_preparation_preview;
+      const planScopeValid = firstObservedScope && planScope
+        && planScope.schema_version === 'easyicu.candidate-preparation-preview/1'
+        && planScope.complete === false && planScope.preparation_authorized === false
+        && planScope.analysis_authorized === false && Array.isArray(planScope.step_inputs)
+        && Array.isArray(planScope.population_needs) && Array.isArray(planScope.context_windows);
+      const planInputRows = planScopeValid ? planScope.step_inputs.map(item =>
+        `<li>${esc(item.step_id)} · ${esc(item.input_name)}${item.source_concept ? ` → ${esc(item.source_concept)}` : ` · ${esc(tr('source not verified', '来源未核实'))}`}${item.context_window ? ` · ${esc(item.context_window)}` : ''}</li>`).join('') : '';
+      const planPopulationKinds = {
+        first_observed_icu_single_hospital_adult: tr('First observable ICU in one hospitalization, adults', '一次可见住院中的成年患者首次可核实 ICU'),
+        first_icu_stay: tr('First ICU stay per patient', '每位患者首次 ICU 入住'),
+        first_icu_stay_per_hospitalization: tr('First ICU stay per hospitalization', '每次住院首次 ICU 入住'),
+        age_years: tr('Age', '年龄'), icu_stay_hours: tr('ICU stay duration', 'ICU 住院时长'),
+        measurement: tr('Measurement threshold', '测量值阈值'),
+        diagnosis_codes: tr('Diagnosis codes', '诊断编码'),
+        condition_present: tr('Condition present', '存在指定状态'),
+        event_absent: tr('Event absent', '未发生指定事件'),
+        alive_at: tr('Alive at the specified time', '指定时间仍存活'),
+        not_typed: tr('Condition needs clarification', '条件尚待明确'),
+      };
+      const planPopulationRoles = { include: tr('Include', '纳入'), exclude: tr('Exclude', '排除') };
+      const planPopulationRows = planScopeValid ? planScope.population_needs.map(item =>
+        `<li>${esc(item.criterion_id)} · ${esc(planPopulationRoles[item.role] || item.role)} · ${esc(planPopulationKinds[item.kind] || item.kind)}${item.concepts && item.concepts.length ? ` · ${esc(item.concepts.join(', '))}` : ''}${item.measurement_summary ? ` · ${esc(item.measurement_summary)} ${esc(item.operator)} ${esc(item.value)} ${esc(item.unit || '')}` : ''}${item.diagnosis_system ? ` · ${esc(item.diagnosis_system)}: ${esc((item.diagnosis_codes || []).join(', '))}` : ''}${item.min_years != null ? ` · ${esc(tr('minimum age', '最小年龄'))} ${esc(item.min_years)}` : ''}${item.max_years != null ? ` · ${esc(tr('maximum age', '最大年龄'))} ${esc(item.max_years)}` : ''}${item.min_hours != null ? ` · ${esc(tr('minimum hours', '最短小时数'))} ${esc(item.min_hours)}` : ''}${item.max_hours != null ? ` · ${esc(tr('maximum hours', '最长小时数'))} ${esc(item.max_hours)}` : ''}${item.hours != null ? ` · ${esc(item.hours)} h` : ''}${item.window ? ` · ${esc(item.window.anchor)} [${esc(item.window.start_hours)}, ${esc(item.window.end_hours)}) h` : ''}${item.missing_policy ? ` · ${esc(tr('missing:', '缺失:'))} ${esc(item.missing_policy)}` : ''}</li>`).join('') : '';
+      const planWindowRows = planScopeValid ? planScope.context_windows.map(item =>
+        `<li>${esc(item.name)} · ${esc(item.anchor)} [${esc(item.start_hours)}, ${esc(item.end_hours)}) h</li>`).join('') : '';
+      const planScopeBlockers = {
+        candidate_dependency_closure_unverified: tr('All plan dependencies have not been established.', '尚未完整确认计划的全部依赖。'),
+        candidate_source_read_closure_unverified: tr('The complete source tables and fields have not been verified.', '尚未核实全部来源表和读取字段。'),
+        candidate_extraction_window_unverified: tr('The extraction windows have not been verified.', '尚未核实提取时间窗。'),
+        candidate_coordinate_export_binding_unavailable: tr('The first-ICU coordinate is not yet bound to the new data package.', '首次 ICU 坐标尚未绑定到新数据包。'),
+        candidate_step_input_binding_unverified: tr('At least one step input lacks a verified source binding.', '至少一个步骤输入尚未核实来源绑定。'),
+      };
+      const planBlockerRows = planScopeValid && Array.isArray(planScope.blockers) ? planScope.blockers.map(code =>
+        `<li>${esc(planScopeBlockers[code] || tr('Another dependency remains unverified.', '还有依赖尚未核实。'))}</li>`).join('') : '';
+      const planScopeDetails = planScopeValid ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Candidate research inputs and windows', '候选研究计划的输入与时间窗'))}</summary><p>${esc(tr('These coordinates come from the reviewed plan and context. Source verification hashes the raw table without decoding patient rows. This preview cannot authorize research data preparation or analysis.', '以下坐标来自已核验的候选计划和研究上下文。核验来源时会计算原始表摘要，但不解析患者记录。此预览不能授权科研数据准备或分析。'))}</p><p>${esc(tr('Plan step inputs', '计划步骤输入'))}</p><ul>${planInputRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Population requirements', '人群条件'))}</p><ul>${planPopulationRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Context windows', '上下文时间窗'))}</p><ul>${planWindowRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Still unverified', '尚未核实'))}</p><ul>${planBlockerRows}</ul></details>` : '';
       const firstObservedDetails = firstObservedScope ? `<p>${esc(tr('The first verifiable ICU stay is retained only for adults with one visible hospitalization. Other hospitalizations and unverifiable identity, order, or age are excluded. This does not establish lifetime first ICU.', '仅保留一次可见住院且首次 ICU 可核实的成年患者；多次可见住院或身份、顺序、年龄无法核实的患者将被排除。这不能证明是终生首次 ICU。'))}</p><p>${esc(tr('Patient-table source fields', '患者表读取字段'))}: ${esc(preparationScope.source_columns.join(', '))}</p><p>${esc(tr('This prepares a private identity coordinate only. It does not read outcomes or run analysis. The subsequent research-data binding is not yet available.', '此步骤仅准备私有身份坐标，不读取结局，也不执行分析；后续科研数据绑定尚未接通。'))}</p>` : '';
       const preparationCanReview = Boolean(preparationOffer && (partialCsv || preparationRows || firstObservedScope));
       const preparationRun = String((host.workflow() || {}).raw_preparation_candidate_run_id || '');
@@ -841,7 +876,7 @@
       const pendingPreparation = firstObservedStatusText
         ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('First-ICU preparation', '首次 ICU 数据准备'))}</strong><small>${esc(firstObservedCanResume ? tr('The original approved preparation can be resumed. This reuses the same decision and task; it does not approve analysis.', '可继续原来已批准的准备任务，将沿用原决定和任务，不会批准科研分析。') : firstObservedStatusText)}</small>${firstObservedCanResume ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Resume original preparation', '继续原准备任务'))}</button>` : ''}<button type="button" class="btn sm" data-gpi-preparation-status-refresh>${esc(tr('Refresh preparation status', '刷新准备状态'))}</button></div>`
         : confirmation.code === 'starting' && firstObservedPreview ? '' : preparation && preparation.status === 'awaiting_consumption_closure'
-        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${firstObservedDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? firstObservedScope ? tr(
+        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${firstObservedDetails}${planScopeDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? firstObservedScope ? tr(
           'Approval starts only this private coordinate preparation; research execution requires a separate reviewed plan and is not available from this step.',
           '批准后仅开始此私有坐标准备；科研执行需要另行审阅完整计划，当前不能从此步骤直接执行。',
         ) : partialCsv ? tr(
@@ -853,10 +888,13 @@
         ) : partialCsv ? tr(
           'This single-table preparation is unavailable until interruption recovery and delivery are connected. Viewing the scope does not read data.',
           '单表准备的中断恢复和结果交付尚未接通，暂不能开始；查看范围不会读取数据。',
+        ) : firstObservedScope ? tr(
+          'This preparation is not available yet. Source verification hashes the raw table without decoding patient rows.',
+          '这项准备目前不可用。核验来源会计算原始表摘要，但不解析患者记录。',
         ) : tr(
           'This proposal still needs its actual data reads verified. Preparation is not available yet; no data is read by viewing this proposal.',
           '这份提议还需要核验实际读取的数据范围，暂时不能开始准备；查看提议不会读取数据。',
-        ))}</small>${preparationCanReview ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
+        ))}</small>${preparationCanReview ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(firstObservedScope ? tr('Approve private coordinate preparation', '批准私有坐标准备') : tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(firstObservedScope ? tr('Reject private coordinate preparation', '拒绝私有坐标准备') : tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
         : preparationRun ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('Data preparation', '数据准备'))}</strong><small>${esc(preparationAttempt && ['blocked', 'error'].includes(preparationAttempt.status)
           ? preparationBlockedText
           : tr('Check proposed source files and fields without extracting patient records; source identity verification may hash files.', '检查拟用的来源文件和字段，不提取患者记录；核验来源时可能计算文件摘要。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}${firstObservedPreview}${candidatePreview}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
