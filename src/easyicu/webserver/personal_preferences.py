@@ -51,7 +51,10 @@ class PreferencesError(ValueError):
 
 class PersonalPreferencesStore:
     def __init__(self, path: Path | None = None):
-        self.path = Path(path) if path is not None else state_paths.state_root() / "personal_preferences.json"
+        # The configured home can sit beneath a platform alias (for example
+        # macOS /tmp). Resolve that trusted root before checking the owned
+        # .easyicu directory and preference file for symlinks.
+        self.path = Path(path) if path is not None else state_paths.user_home().resolve() / ".easyicu" / "personal_preferences.json"
 
     def _check_path(self) -> None:
         require_instance_path(self.path)

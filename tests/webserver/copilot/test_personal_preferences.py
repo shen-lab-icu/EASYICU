@@ -109,6 +109,22 @@ def test_bad_preference_storage_does_not_reset_to_defaults(tmp_path, corruption)
         store.read()
 
 
+def test_default_preferences_allow_home_alias_but_reject_state_symlink(tmp_path, monkeypatch):
+    from easyicu.webserver.personal_preferences import PersonalPreferencesStore, PreferencesError
+
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    alias = tmp_path / "home-alias"
+    alias.symlink_to(real_home, target_is_directory=True)
+    monkeypatch.setenv("EASYICU_HOME", str(alias))
+    assert PersonalPreferencesStore().read().interface_language == "en"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (real_home / ".easyicu").symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(PreferencesError, match="preferences_store_invalid"):
+        PersonalPreferencesStore().read()
+
+
 def test_options_are_supported_by_existing_figure_export_owner(tmp_path):
     from typing import get_args
     from easyicu.research_agent.figures.publication import ExportFormat

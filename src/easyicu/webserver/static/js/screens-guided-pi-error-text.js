@@ -335,11 +335,14 @@
       return errorText({ code: match[1], message: text.slice(match[0].length) || match[1] });
     }
 
-    // Whom a clinician asks: the administrator a hosted instance names.
+    // Hosted installations have an administrator; local installations do not.
     function askAdministrator() {
       const registry = window.EasyICU && window.EasyICU.guidedPi;
       const hosted = registry && typeof registry.optional === 'function' ? registry.optional('hosted') : null;
-      const contact = hosted && hosted.active() ? hosted.supportContact() : '';
+      if (!hosted || !hosted.active()) {
+        return { en: 'keep this error message for troubleshooting', zh: '请保留错误信息以便排查' };
+      }
+      const contact = hosted.supportContact();
       return contact
         ? { en: `contact the administrator (${contact})`, zh: `请联系管理员（${contact}）` }
         : { en: 'contact the administrator', zh: '请联系管理员' };
