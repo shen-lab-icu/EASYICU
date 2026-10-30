@@ -5095,7 +5095,14 @@ def _step_emit_execution_preflight(
             dropped_step_ids=dropped,
             planned_step_count=len(plan.steps),
         )
-    has_typed_input_dependencies = any(
+    # Use the same graph as plan validation. It also includes the implicit
+    # parent edge of legacy figure children, which may have no typed input.
+    # Looking only for typed input strings would launch such a child before
+    # its parent's evidence exists.
+    from ..planning.plan_graph import _typed_plan_dependency_graph
+
+    dependencies, _ = _typed_plan_dependency_graph(plan.steps)
+    has_typed_input_dependencies = any(dependencies.values()) or any(
         _typed_input_product(input_name) is not None
         for step in steps_to_run
         for input_name in (step.inputs or [])
@@ -5137,7 +5144,7 @@ def _step_emit_execution_preflight(
                 validator="typed_artifact_evidence_lineage",
                 severity="info",
                 message=(
-                    "Typed product dependencies are present, so step execution "
+                    "Plan product or figure-parent dependencies are present, so step execution "
                     "was forced to plan order before resolving producer evidence."
                 ),
             )
