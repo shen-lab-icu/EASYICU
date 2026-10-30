@@ -1216,6 +1216,15 @@
       const failureExplained = Boolean(options && options.failureExplained);
       const causes = failureExplained ? new Map() : failureCauses(visibleSteps, row);
       if (running) {
+        const runningPlanSteps = new Set(allSteps
+          .filter(step => step && step.kind === 'pipeline' && step.step === 'plan_step'
+            && step.status === 'running' && step.stepId)
+          .map(step => `${step.runId || ''}:${step.stepId}`));
+        const concurrent = runningPlanSteps.size > 1
+          ? `<span class="gpi-activity-parallel">${esc(tr(
+            `${runningPlanSteps.size} steps running concurrently`,
+            `${runningPlanSteps.size} 个步骤并行运行`,
+          ))}</span>` : '';
         const title = latest && latest.step === 'provider_transport_retry' && latest.status === 'running'
           ? stepLabel(latest) : row.runningTitle || (latest
           ? latest.status === 'complete'
@@ -1232,6 +1241,7 @@
             <span class="gpi-running-spinner" aria-hidden="true"></span>
             <span class="gpi-activity-kicker">${esc(tr('In progress', '正在进行'))}</span>
             <span class="gpi-activity-title"><strong>${esc(title)}</strong></span>
+            ${concurrent}
             <span class="gpi-activity-elapsed" data-gpi-live-elapsed="${Number(row.startedAt || Date.now())}">${esc(durationText(row.startedAt))}</span>
           </div>
           ${list ? `<div class="gpi-activity-body gpi-trace-live${bodyClass}"${keyAttr}><div class="gpi-trace-window">${list}</div>${longTrace ? expandButton(expanded) : ''}</div>` : ''}

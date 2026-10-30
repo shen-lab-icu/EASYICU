@@ -123,6 +123,9 @@ const stepPayloads = {
     ];
     for (const replay of [false, true]) {
       const parallel = { status: 'running', steps: [] };
+      parallelEvents.slice(0, 4).forEach(row => activity.notePipelineEvent(parallel, row));
+      assert.match(activity.render(parallel), language === 'zh' ? /2 个步骤并行运行/ : /2 steps running concurrently/);
+      parallel.steps = [];
       parallelEvents.forEach(row => activity.notePipelineEvent(parallel, row));
       const a = parallel.steps.find(row => row.action === 'repair' && row.stepId === 'worker_a');
       const b = parallel.steps.find(row => row.action === 'repair' && row.stepId === 'worker_b');
@@ -133,6 +136,7 @@ const stepPayloads = {
       assert.match(activity.stepLabel(a), /worker_a$/);
       assert.match(activity.stepLabel(b), /worker_b$/);
       assert.equal(parallel.steps.find(row => row.stepId === 'worker_b' && row.step === 'plan_step').status, 'running');
+      assert.doesNotMatch(activity.render(parallel), /2 个步骤并行运行|2 steps running concurrently/);
       activity.notePipelineEvent(parallel, event(6, 'coder', '', {
         action: 'repair_failed', step_id: 'worker_b', status: 'error', attempt: 1,
       }));
