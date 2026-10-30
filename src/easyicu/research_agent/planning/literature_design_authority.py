@@ -8,17 +8,21 @@ an exact seven-dimension decision for the selected candidate design.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 from hashlib import sha256
 import re
 from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from easyicu.databases.profiles import normalize_database_key
+
 from .literature_contract import (
     REVIEW_ROLES, ReviewRole, RecordReview, ReviewCoverage, ReviewPolicy, ReviewShortfall,
 )
 from ..bibliographic_metadata import CitationRecord, LiteratureScreeningDecision
 from .literature_contract import analysis_terms
+from .official_database_resources import match_official_source_identity
 
 
 LiteratureDesignDimension = Literal[
@@ -373,6 +377,34 @@ _ROLE_MARKERS = {
     "reporting_guideline": ("reporting guideline", "reporting standard", "reporting checklist", "reporting recommendation"),
 }
 
+# These are evidence identities, not the broader aliases used for retrieval.
+# In particular, an article mentioning MIMIC-III does not establish that it
+# used MIMIC-IV. An unknown source remains a search shortfall until resolved.
+_SOURCE_EVIDENCE_IDENTITIES = {
+    "sic": ("sicdb", "sic db", "salzburg intensive care database"),
+    "miiv": ("mimic iv", "mimiciv", "mimic 4", "medical information mart for intensive care iv"),
+    "mimic": ("mimic iii", "mimiciii", "mimic 3", "medical information mart for intensive care iii"),
+    "eicu": ("eicu", "eicu collaborative research database"),
+    "aumc": ("amsterdamumcdb", "amsterdam umcdb", "amsterdam university medical centers database"),
+    "hirid": ("hirid", "hi rid", "high time resolution icu dataset"),
+}
+_METHOD_ACTION = re.compile(
+    r"\b(?:propos\w*|develop\w*|introduc\w*|present\w*|describ\w*|"
+    r"compar\w*|evaluat\w*|assess\w*|discuss\w*|illustrat\w*|"
+    r"demonstrat\w*|extend\w*|apply|applied|applies)\b"
+)
+_SOURCE_DESCRIPTION_ACTION = re.compile(
+    r"\b(?:compris\w*|consist\w*|contain\w*|includ\w*|"
+    r"describ\w*|introduc\w*|present\w*|develop\w*|establish\w*)\b"
+)
+_SOURCE_RESOURCE_TITLE = re.compile(
+    r"\b(?:openly available|publicly available|freely accessible|"
+    r"data descriptor|database description|dataset description|"
+    r"database profile|dataset profile|data resource|database resource|"
+    r"database of|dataset of|introduction to)\b"
+)
+_NON_ARTICLE_SOURCE_TYPES = frozenset({"software", "repository"})
+
 
 def _text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
@@ -386,17 +418,96 @@ def _source_excerpt(record: CitationRecord) -> str:
     return ""
 
 
+@lru_cache(maxsize=64)
+def _source_evidence_names(database: str) -> tuple[str, ...]:
+    """Resolve registry aliases, then choose version-specific evidence names."""
+
+    if database == "miiv_demo":
+        key = "miiv"
+    else:
+        try:
+            key = normalize_database_key(database)
+        except KeyError:
+            return ()
+        if key.endswith("_demo"):
+            key = key.removesuffix("_demo")
+    return _SOURCE_EVIDENCE_IDENTITIES.get(key, ())
+
+
+def _selected_source_fact(
+    sentences: Sequence[str], database: str | None, *, title: str = "",
+    resource_identified: bool = False,
+) -> str:
+    """Return a candidate resource-description sentence for the bound source.
+
+    An ordinary research article using a database is evidence of its use, not
+    authority for that database's provenance or definitions.  Even a matching
+    description here is only a candidate for review, not a verified original
+    resource or proof that its details match the registered source version.
+    """
+
+    aliases = _source_evidence_names(str(database or "").strip().casefold())
+    title_words = f" {_text(title)} "
+    title_names_source = any(f" {_text(alias)} " in title_words for alias in aliases)
+    if not title_names_source or (not resource_identified and not _SOURCE_RESOURCE_TITLE.search(title_words)):
+        return ""
+    for sentence in sentences:
+        words = f" {_text(sentence)} "
+        if len(sentence) >= 12 and not re.search(
+            r"\b(?:not|without|neither|excluded|excluding|except)\b", words
+        ) and any(f" {_text(alias)} " in words for alias in aliases) and _SOURCE_DESCRIPTION_ACTION.search(words):
+            return sentence
+    return ""
+
+
+def _guideline_scope_is_established(title: str, question: str) -> bool:
+    """An unnamed specialty extension is not automatically a general guideline.
+
+    The general statement is an appropriate candidate for an observational
+    study, but an extension may add assumptions specific to its own field.
+    Explicitly naming the extension in the question retains it as a candidate;
+    otherwise human review is needed before crediting its reporting role.
+    """
+
+    if not re.search(r"\b(?:extension|extended|extends)\b", _text(title)):
+        return True
+    normalized_question = f" {_text(question)} "
+    for abbreviation in re.findall(r"\(([^()]*)\)", title):
+        name = _text(abbreviation)
+        if len(name) >= 4 and f" {name} " in normalized_question:
+            return True
+    return False
+
+
 def assess_record(
     record: CitationRecord, decision: LiteratureScreeningDecision, *,
-    policy: ReviewPolicy, question: str, year: int,
+    policy: ReviewPolicy, question: str, year: int, database: str | None = None,
 ) -> tuple[CitationRecord, LiteratureScreeningDecision, LiteratureDesignEvidenceCard | None]:
     """Supplementary roles never confer P/E/O comparator authority.
 
     Clinical methods/adjustment require a P/E/O-qualified record. General
     methodology and reporting guidance must explicitly address the analysis
-    family. A database precedent needs an eligible ICU source population;
+    family. A database resource candidate needs an eligible ICU population,
+    a resource-description title naming the bound source, and a non-negated
+    excerpt describing that source. A paper merely using the database is not
+    source-definition authority;
     a definition needs that population and the studied exposure or endpoint.
     """
+    # A prior review may have promoted a source only for a supplementary
+    # database, definition, or method role.  Rechecking it in a new context
+    # must not confuse that promotion with the direct P/E/O screening result.
+    # Recompute the supplementary roles from the current question and source.
+    if decision.disposition == "include" and decision.evidence_role not in {
+        "direct_comparator", "design_analogue",
+    }:
+        rationale = decision.rationale
+        marker = "; P/E/O direct-comparator eligibility remains unmet. "
+        if rationale.startswith("Included only for source-backed ") and marker in rationale:
+            rationale = rationale.split(marker, 1)[1]
+        decision = decision.model_copy(update={
+            "disposition": "exclude", "evidence_role": "related_context",
+            "rationale": rationale,
+        })
     excerpt = _source_excerpt(record)
     sentences = re.split(r"(?<=[.!?])\s+", excerpt) if excerpt else []
     facts = {
@@ -404,10 +515,23 @@ def assess_record(
                     if any(marker in _text(sentence) for marker in markers)), "")
         for role, markers in _ROLE_MARKERS.items()
     }
+    # A general database mention can describe another institution entirely.
+    # The data_source role is reserved for an excerpt naming the bound source.
+    resource_identity = match_official_source_identity(database, record)
+    # A plausible resource description is only a retrieval clue until its
+    # exact identity matches the versioned registry for this database.
+    facts["data_source"] = (
+        _selected_source_fact(sentences, database, title=record.title, resource_identified=True)
+        if resource_identity is not None else ""
+    )
+    non_article_source = any(
+        _text(value) in _NON_ARTICLE_SOURCE_TYPES
+        for value in record.publication_types
+    )
     forbidden = any(
         marker in _text(" ".join([record.title, *record.bibliographic_notices, *record.publication_types]))
         for marker in ("retract", "expression of concern", "editorial", "comment", "preprint")
-    )
+    ) or non_article_source
     roles = []
     if excerpt and not forbidden:
         if decision.disposition == "include":
@@ -419,19 +543,26 @@ def assess_record(
             methodology_title = any(term in title for term in (
                 "statistical method", "methodology", "estimator", "regression method", "validation method",
             ))
-            if decision.publication_type_eligible and methodology_title and family_match and facts["analysis_method"]:
+            # A book's subject index or a list of unrelated discipline topics
+            # mentioning "regression" does not establish a method application.
+            method_fact = next((sentence for sentence in sentences
+                                if any(marker in _text(sentence) for marker in _ROLE_MARKERS["analysis_method"])
+                                and _METHOD_ACTION.search(_text(sentence))), "")
+            if decision.publication_type_eligible and methodology_title and family_match and method_fact:
+                facts["analysis_method"] = method_fact
                 roles.append("analysis_method")
-            if decision.population_match and decision.publication_type_eligible:
-                if facts["data_source"]:
+            if decision.publication_type_eligible:
+                if (decision.population_match or resource_identity is not None) and facts["data_source"]:
                     roles.append("data_source")
-                if (decision.exposure_match or decision.outcome_match) and facts["definition"]:
+                if decision.population_match and (decision.exposure_match or decision.outcome_match) and facts["definition"]:
                     roles.append("definition")
             guidance_type = any("guideline" in _text(value) for value in [record.title, *record.publication_types])
             guidance_scope = family_match or (
                 "prediction" not in analysis_terms(question)
                 and any(term in _text(excerpt) for term in ("observational studies", "cohort studies"))
             )
-            if guidance_type and guidance_scope and facts["reporting_guideline"]:
+            if (guidance_type and guidance_scope and facts["reporting_guideline"]
+                    and _guideline_scope_is_established(record.title, question)):
                 roles.append("reporting_guideline")
         if roles and decision.disposition != "include":
             primary_role = ("method" if any(role in roles for role in ("analysis_method", "reporting_guideline"))
@@ -467,6 +598,7 @@ def assess_record(
         "impact": impact, "review": RecordReview(
             roles=roles, recency=recency, age_years=age,
             recency_years=policy.recency_years, assessed_year=year,
+            source_resource_identity=resource_identity,
         ),
     })
     if decision.disposition != "include" or not roles or not excerpt:
@@ -519,7 +651,7 @@ def impact_rank(record: CitationRecord, year: int) -> tuple[int, float, float, i
 
 def assess_review(
     records: Sequence[CitationRecord], decisions: Sequence[LiteratureScreeningDecision], *,
-    policy: ReviewPolicy, question: str, screened: int,
+    policy: ReviewPolicy, question: str, screened: int, database: str | None = None,
     bound_cards: Sequence[LiteratureDesignEvidenceCard] = (),
 ) -> tuple[list[CitationRecord], list[LiteratureScreeningDecision], list[LiteratureDesignEvidenceCard], ReviewCoverage]:
     year = datetime.now(timezone.utc).year
@@ -532,11 +664,24 @@ def assess_review(
         if decision is not None:
             if record.key in conflicting:
                 decision = decision.model_copy(update={"disposition": "exclude"})
-            record, decision, card = assess_record(record, decision, policy=policy, question=question, year=year)
+            record, decision, card = assess_record(
+                record, decision, policy=policy, question=question, year=year,
+                database=database,
+            )
             if record.key in conflicting:
                 decision = decision.model_copy(update={"disposition": "exclude"})
                 record = record.model_copy(update={"review": record.review.model_copy(update={"roles": []})})
             by_key[record.key] = decision
+            previous = cards.get(record.key)
+            if previous is not None and (
+                previous.access_mode == "abstract"
+                or (previous.evidence_role == "database"
+                    and "data_source" not in record.review.roles)
+            ):
+                # Abstract cards belong to the current screening result, not a
+                # prior context. A database card cannot carry source authority
+                # after its selected-source predicate has stopped holding.
+                cards.pop(record.key, None)
             if decision.disposition != "include":
                 cards.pop(record.key, None)
             elif card is not None and record.key not in cards:

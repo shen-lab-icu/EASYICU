@@ -84,6 +84,21 @@ class ImpactProxies(BaseModel):
     ]] = Field(default_factory=list)
 
 
+class SourceResourceIdentity(BaseModel):
+    """Match to an explicitly curated official resource identity, not its content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    database: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    kind: Literal["source_publication", "dataset_release"]
+    pmid: str | None = None
+    doi: str
+    dataset_version: str | None = None
+    registry_reference: str
+    registry_version: Literal["easyicu.official_source_identity/1", "easyicu.official_source_identity/2"] = "easyicu.official_source_identity/2"
+    content_status: Literal["not_verified"] = "not_verified"
+    registered_dataset_version_status: Literal["not_assessed"] = "not_assessed"
+
+
 class RecordReview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     roles: List[ReviewRole] = Field(default_factory=list)
@@ -91,6 +106,9 @@ class RecordReview(BaseModel):
     age_years: int | None = Field(default=None, ge=0)
     recency_years: int = Field(ge=1)
     assessed_year: int
+    source_resource_identity: SourceResourceIdentity | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
 
 class ReviewShortfall(BaseModel):

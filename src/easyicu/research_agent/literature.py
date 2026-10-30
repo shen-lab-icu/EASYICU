@@ -1705,6 +1705,8 @@ _NON_COMPARATOR_PUBLICATION_TYPES = frozenset(
         "editorial",
         "comment",
         "letter",
+        "software",
+        "repository",
     }
 )
 
@@ -3613,6 +3615,7 @@ class LiteratureAgent:
         merged, screening_decisions, design_cards, coverage = assess_review(
             merged, screening_decisions, policy=self.review_policy,
             question=context.research_question, screened=max(0, identified - duplicates),
+            database=context.cohort.database,
             bound_cards=self.bound_seed.design_evidence_cards if self.bound_seed else (),
         )
         baseline_keys = {record.key for record in baseline}

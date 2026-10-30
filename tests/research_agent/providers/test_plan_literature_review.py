@@ -84,7 +84,7 @@ def test_coverage_excludes_seeds_old_topic_evidence_and_unknown_dates():
     policy = ReviewPolicy(screening_target=6, role_targets={"topic_gap": 3, "analysis_method": 5})
     bundle = owner.LiteratureAgent(enable_pubmed=True, pubmed_client=FakePubMed(rows), review_policy=policy).run(context())
     assert bundle.review.role_counts["topic_gap"] == 1
-    assert bundle.review.role_counts["data_source"] == 1
+    assert bundle.review.role_counts["data_source"] == 0
     assert bundle.review.role_counts["analysis_method"] == 3
     assert {(s.role, s.target, s.actual, s.missing) for s in bundle.review.shortfalls} == {
         ("screening", 6, 4, 2), ("topic_gap", 3, 1, 2), ("analysis_method", 5, 3, 2),
@@ -204,7 +204,8 @@ def test_abstracts_reach_the_planner_prompt_without_triggering_fulltext_requirem
     for role in ("topic_gap", "analysis_method", "definition", "adjustment", "data_source"):
         assert role in prompt
     assert "source excerpts" in prompt and "no full-text review" in prompt
-    assert "literature_shortfalls: reporting_guideline 0/1" in prompt
+    assert "reporting_guideline 0/1" in prompt
+    assert "data_source 0/3" in prompt
     assert len(prompt) < 10000
 
 
@@ -240,7 +241,7 @@ def test_recency_boundary_and_default_role_targets_are_explicit_shortfalls():
     shortfalls = {s.role: s for s in bundle.review.shortfalls}
     assert shortfalls["topic_gap"].target == 8 and shortfalls["topic_gap"].actual == 1
     assert shortfalls["analysis_method"].target == 5 and shortfalls["analysis_method"].actual == 2
-    assert shortfalls["data_source"].target == 3 and shortfalls["data_source"].actual == 1
+    assert shortfalls["data_source"].target == 3 and shortfalls["data_source"].actual == 0
     assert shortfalls["reporting_guideline"].target == 1
 
 
@@ -250,3 +251,291 @@ def test_guidance_for_a_different_design_does_not_satisfy_a_role():
     bundle = owner.LiteratureAgent(enable_pubmed=True, pubmed_client=FakePubMed([unrelated])).run(context("lab"))
     assert bundle.prisma["included"] == 0
     assert bundle.review.role_counts["reporting_guideline"] == 0
+
+
+def test_database_role_names_the_bound_database_and_retains_only_its_source_sentence():
+    source = record(
+        1, title="MIMIC-IV",
+        pmid=None, doi="10.13026/kpb9-mt58",
+        relevance=("Study-design excerpt: The MIMIC-IV database contains adult ICU patients. "
+                   "The patients were critically ill."),
+    )
+    different = record(
+        2, title="Adult ICU patients in a SICdb cohort",
+        relevance="Study-design excerpt: This adult ICU study used the SICdb database.",
+    )
+    negated = record(
+        3, title="Adult ICU patients in a database cohort",
+        relevance="Study-design excerpt: This adult ICU study did not use the MIMIC-IV database.",
+    )
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([source, different, negated]),
+    ).run(context("drug"))
+    assert bundle.review.role_counts["data_source"] == 1
+    cards = {card.citation_key: card for card in bundle.design_evidence_cards}
+    assert source.key in cards and different.key not in cards and negated.key not in cards
+    assert "MIMIC-IV" in cards[source.key].evidence[0].source_backed_summary
+
+
+def test_database_reference_distinguishes_use_from_incidental_mention():
+    use = record(
+        1, title="Adult ICU patients in an international cohort",
+        relevance=("Study-design excerpt: This adult ICU study utilized five international "
+                   "critical care databases including the Salzburg Intensive Care database (SICdb)."),
+    )
+    incidental = record(
+        2, title="Adult ICU patients in another database",
+        relevance=("Study-design excerpt: This adult ICU cohort used MIMIC-IV. "
+                   "The authors discussed prior audits of renal definitions in SICdb."),
+    )
+    ctx = context("drug").model_copy(update={
+        "cohort": context("drug").cohort.model_copy(update={"database": "sic"}),
+    })
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([use, incidental]),
+    ).run(ctx)
+    assert bundle.review.role_counts["data_source"] == 0
+    assert not any(item.review_role == "data_source" for card in bundle.design_evidence_cards for item in card.evidence)
+    assert {use.key, incidental.key} <= {row.key for row in bundle.citations}
+
+
+def test_reassessing_a_supplementary_source_never_promotes_it_to_direct_topic():
+    from easyicu.research_agent.planning.literature_design_authority import assess_review
+
+    source = record(
+        1, title="The Salzburg Intensive Care database (SICdb): an openly available critical care dataset",
+        pmid="37052626", doi="10.1007/s00134-023-07046-3",
+        relevance="Study-design excerpt: The SICdb database contains adult ICU patients.",
+    )
+    ctx = context("drug").model_copy(update={
+        "cohort": context("drug").cohort.model_copy(update={"database": "sic"}),
+    })
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([source]),
+    ).run(ctx)
+    prior = next(d for d in bundle.screening_decisions if d.citation_key == source.key)
+    assert prior.evidence_role == "database" and prior.disposition == "include"
+    candidate = next(r for r in bundle.citations if r.key == source.key)
+    previous_card = next(c for c in bundle.design_evidence_cards if c.citation_key == source.key)
+    policy = bundle.search_provenance.review_policy
+
+    rows, decisions, cards, coverage = assess_review(
+        [candidate], [prior], policy=policy, question=ctx.research_question,
+        database="sic", screened=1, bound_cards=[previous_card],
+    )
+    assert decisions[0].evidence_role == "database"
+    assert rows[0].review.roles == ["data_source"]
+    assert coverage.role_counts["topic_gap"] == 0
+    assert cards[0].evidence_role == "database"
+
+    rows, decisions, cards, coverage = assess_review(
+        rows, decisions, policy=policy, question=ctx.research_question,
+        database="miiv", screened=1, bound_cards=cards,
+    )
+    assert decisions[0].disposition == "exclude"
+    assert rows[0].review.roles == []
+    assert not cards
+    assert coverage.role_counts["topic_gap"] == coverage.role_counts["data_source"] == 0
+
+
+def test_reassessing_a_direct_comparator_retains_its_topic_authority():
+    from easyicu.research_agent.planning.literature_design_authority import assess_review
+
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([record()]),
+    ).run(context())
+    prior = next(d for d in bundle.screening_decisions if d.citation_key == record().key)
+    assert prior.evidence_role == "direct_comparator"
+    candidate = next(r for r in bundle.citations if r.key == record().key)
+    _, decisions, cards, coverage = assess_review(
+        [candidate], [prior], policy=bundle.search_provenance.review_policy,
+        question=context().research_question, database="miiv", screened=1,
+    )
+    assert decisions[0].evidence_role == "direct_comparator"
+    assert cards[0].evidence_role == "direct_comparator"
+    assert coverage.role_counts["topic_gap"] == 1
+
+
+def test_database_introduction_paper_can_describe_a_source_without_using_it_as_a_cohort():
+    introduction = record(
+        1, title="The Salzburg Intensive Care database (SICdb): an openly available critical care dataset",
+        pmid="37052626", doi="10.1007/s00134-023-07046-3",
+        relevance=("Study-design excerpt: SICdb comprises adult ICU patients admitted "
+                   "to intensive care at a university hospital."),
+    )
+    ctx = context("drug").model_copy(update={
+        "cohort": context("drug").cohort.model_copy(update={"database": "sic"}),
+    })
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([introduction]),
+    ).run(ctx)
+    assert bundle.review.role_counts["data_source"] == 1
+    card = next(card for card in bundle.design_evidence_cards if card.citation_key == introduction.key)
+    assert "SICdb comprises" in card.evidence[0].source_backed_summary
+
+
+def test_software_repository_stays_retrieved_but_not_a_research_evidence_card():
+    software = record(
+        1, title="Reproducible analysis code for adult ICU patients",
+        publication_types=["software"],
+        relevance="Study-design excerpt: This adult ICU study used the SICdb database.",
+    )
+    ctx = context("drug").model_copy(update={
+        "cohort": context("drug").cohort.model_copy(update={"database": "sic"}),
+    })
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([software]),
+    ).run(ctx)
+    assert software.key in {row.key for row in bundle.citations}
+    assert bundle.review.role_counts["data_source"] == 0
+    assert software.key not in {card.citation_key for card in bundle.design_evidence_cards}
+    decision = next(item for item in bundle.screening_decisions if item.citation_key == software.key)
+    assert decision.disposition == "exclude" and not decision.publication_type_eligible
+
+
+def test_method_role_needs_a_method_fact_not_a_subject_list():
+    book = record(
+        1, title="Statistical Methods in Soil and Land Resource Survey",
+        relevance=("Study-design excerpt: Quantitative description of variable material "
+                   "sampling and estimation, covariance and correlation regression relations."),
+    )
+    method = record(
+        2, title="A Robust Regression Methodology via M-estimation",
+        relevance="Study-design excerpt: A robust regression methodology is proposed via M-estimation.",
+    )
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([book, method]),
+    ).run(context("drug"))
+    assert bundle.review.role_counts["analysis_method"] == 1
+    assert {card.citation_key for card in bundle.design_evidence_cards} == {method.key}
+
+
+def test_specialty_guideline_extension_does_not_stand_in_for_general_reporting():
+    general = record(
+        1, title="Reporting guidelines for observational studies", publication_types=["Guideline"],
+        relevance="Study-design excerpt: These reporting guidelines describe observational studies and reporting standards.",
+    )
+    extension = record(
+        2, title="Nutritional epidemiology (STROBE-nut): An Extension of the STROBE Statement",
+        publication_types=["Guideline"],
+        relevance=("Study-design excerpt: Reporting guidelines such as STROBE can improve "
+                   "quality of reporting in observational studies."),
+    )
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([general, extension]),
+    ).run(context("drug"))
+    assert bundle.review.role_counts["reporting_guideline"] == 1
+    assert {card.citation_key for card in bundle.design_evidence_cards} == {general.key}
+
+
+@pytest.mark.parametrize("database,source", [
+    ("sic", "SICdb"), ("SIC-db", "Salzburg Intensive Care database"),
+    ("miiv", "MIMIC-IV"), ("mimic-iv-3.1", "MIMIC IV"),
+    ("mimiciii", "MIMIC-III"), ("mimic_demo", "MIMIC III"),
+    ("eicu-crd", "eICU Collaborative Research Database"),
+    ("hi-rid", "HiRID"), ("amsterdam", "AmsterdamUMCdb"),
+])
+def test_source_names_follow_registered_database_aliases(database, source):
+    from easyicu.research_agent.planning.literature_design_authority import _selected_source_fact
+
+    sentence = f"The {source} database contains adult ICU patients."
+    title = f"{source}: an openly available database"
+    assert _selected_source_fact([sentence], database, title=title) == sentence
+    assert not _selected_source_fact([sentence], "unregistered_source", title=title)
+    assert not _selected_source_fact([f"This study used the {source} database."], database, title="Clinical prediction study")
+
+
+def test_bound_abstract_card_is_rebuilt_when_selected_source_changes():
+    source = record(1, title="MIMIC-IV",
+        pmid=None, doi="10.13026/kpb9-mt58",
+                    relevance="Study-design excerpt: MIMIC-IV contains adult ICU patients.")
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([record(), source]),
+    ).run(context())
+    original = next(card for card in bundle.design_evidence_cards if card.citation_key == source.key)
+    assert "data_source" in {item.review_role for item in original.evidence}
+    changed = context().model_copy(update={
+        "cohort": context().cohort.model_copy(update={"database": "sic"}),
+    })
+    rebuilt = owner.LiteratureAgent(bound_seed=bundle).run(changed)
+    assert source.key not in {card.citation_key for card in rebuilt.design_evidence_cards}
+    assert "data_source" in {item.review_role for item in original.evidence}
+
+
+def test_fresh_preplan_rescreens_bound_literature_but_exact_replay_preserves_it(tmp_path):
+    from easyicu.research_agent.planning.preplan_literature import prepare_preplan_literature
+
+    class Evidence:
+        def __init__(self):
+            self.records = {}
+
+        def get(self, key):
+            return self.records.get(key)
+
+        def register_file(self, **kwargs):
+            self.records[kwargs["evidence_id"]] = kwargs
+
+    source = record(1, title="MIMIC-IV",
+        pmid=None, doi="10.13026/kpb9-mt58",
+                    relevance="Study-design excerpt: MIMIC-IV contains adult ICU patients.")
+    seed = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([record(), source]),
+    ).run(context())
+    original = seed.model_dump_json()
+    seed_card = next(card for card in seed.design_evidence_cards if card.citation_key == source.key)
+    assert "data_source" in {item.review_role for item in seed_card.evidence}
+    changed = context().model_copy(update={
+        "cohort": context().cohort.model_copy(update={"database": "sic"}),
+    })
+    fresh_dir = tmp_path / "fresh"
+    exact_dir = tmp_path / "exact"
+    fresh_dir.mkdir()
+    exact_dir.mkdir()
+    shared = dict(
+        context=changed, enable_pubmed=False, pubmed_email=None, pubmed_api_key=None,
+        enable_tavily=False, tavily_api_key=None, tavily_retmax=5,
+        tavily_include_domains=(), bound_seed=seed,
+    )
+    fresh = prepare_preplan_literature(run_dir=fresh_dir, evidence=Evidence(), **shared)
+    exact = prepare_preplan_literature(
+        run_dir=exact_dir, evidence=Evidence(), reuse_bound_seed_exact=True,
+        **{**shared, "context": context()},
+    )
+    assert source.key not in {card.citation_key for card in fresh.design_evidence_cards}
+    assert fresh != seed and exact == seed
+    assert owner.LiteratureBundle.model_validate_json(
+        (fresh_dir / "preplan_literature_bundle.json").read_text()
+    ) == fresh
+    assert seed.model_dump_json() == original
+
+
+def test_bound_database_card_does_not_survive_a_changed_source_role():
+    from easyicu.research_agent.planning.literature_design_authority import LiteratureDesignEvidenceCard
+
+    source = record(
+        1, title="MIMIC-IV",
+        pmid=None, doi="10.13026/kpb9-mt58",
+        relevance="Study-design excerpt: The MIMIC-IV database contains adult ICU patients.",
+    )
+    bundle = owner.LiteratureAgent(
+        enable_pubmed=True, pubmed_client=FakePubMed([source]),
+    ).run(context("drug"))
+    original = bundle.design_evidence_cards[0]
+    assert original.evidence_role == "database"
+    reviewed = LiteratureDesignEvidenceCard.model_validate({
+        **original.model_dump(mode="json"), "access_mode": "user_supplied_fulltext",
+        "full_text_locator": "local-reviewed-source", "full_text_sha256": "f" * 64,
+    })
+    bundle.design_evidence_cards = [reviewed]
+    bundle.citations = [row.model_copy(update={
+        "title": "Robust regression methodology for adult ICU patients",
+        "relevance": "Study-design excerpt: We propose a regression methodology in ICU patients.",
+    }) if row.key == source.key else row for row in bundle.citations]
+    changed = context("drug").model_copy(update={
+        "cohort": context("drug").cohort.model_copy(update={"database": "sic"}),
+    })
+    rebuilt = owner.LiteratureAgent(bound_seed=bundle).run(changed)
+    current = next(card for card in rebuilt.design_evidence_cards if card.citation_key == source.key)
+    assert current.evidence_role == "method"
+    assert current.access_mode == "abstract"
+    assert bundle.design_evidence_cards[0].evidence_role == "database"
