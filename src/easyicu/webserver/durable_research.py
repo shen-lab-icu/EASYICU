@@ -228,16 +228,18 @@ class DurableResearchService:
         already hold the original signed host decision; it never creates a
         new job or resets a command's attempt ledger.
         """
-        from easyicu.webserver.raw_preparation_durable import recover_approved_unstarted_handoff
+        from easyicu.webserver.raw_preparation_durable import (
+            inspect_admitted_first_observed, recover_approved_unstarted_handoff)
         self._require_handoff_deployment_lease()
         if self.manager._journal is None or not self.dispatcher._launched:
             raise DurableResearchError('preparation_handoff_service_unavailable')
         with self._admission_lock:
             job = self.manager.get(job_id)
-            if self.store.get(job_id) is not None:
-                # The existing outbox owns every later transition. Do not reset
-                # or dispatch it again through this admission path.
-                raise DurableResearchError('preparation_handoff_already_admitted')
+            command = self.store.get(job_id)
+            if command is not None:
+                return inspect_admitted_first_observed(job_id=job_id, job=job, checkpoint=checkpoint,
+                    binding=binding, scope=scope, command=command, store_path=self.store.path.absolute(),
+                    journal_path=self.manager._journal.path.absolute())
             payload = recover_approved_unstarted_handoff(job_id=job_id, job=job, checkpoint=checkpoint,
                 binding=binding, scope=scope, timeout=timeout, store_path=self.store.path.absolute(),
                 journal_path=self.manager._journal.path.absolute())

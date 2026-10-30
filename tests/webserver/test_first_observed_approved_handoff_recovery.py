@@ -57,12 +57,9 @@ jobs.MANAGER.enable_persistence(root/'jobs.sqlite3')
 service=durable_research.DurableResearchService(root/'durable',manager=jobs.MANAGER); service.launch()
 accepted=service.recover_approved_preparation_handoff('job',checkpoint=checkpoint,binding=binding,scope=scope,timeout=30)
 assert accepted=={'job_id':'job','preparation_status':'preparing','analysis_authorized':False}
-try:
-    service.recover_approved_preparation_handoff('job',checkpoint=checkpoint,binding=binding,scope=scope,timeout=30)
-except durable_research.DurableResearchError as exc:
-    assert str(exc)=='preparation_handoff_already_admitted'
-else:
-    raise AssertionError('existing outbox was admitted again')
+again=service.recover_approved_preparation_handoff('job',checkpoint=checkpoint,binding=binding,scope=scope,timeout=30)
+assert again['job_id']=='job' and again['job_status'] in {'running','done'}
+assert not again['analysis_authorized']
 deadline=time.monotonic()+50
 while time.monotonic()<deadline:
     job=jobs.MANAGER.get('job'); command=service.store.get('job')
