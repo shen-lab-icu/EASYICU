@@ -34,6 +34,13 @@ def _command_kind(payload: dict[str, Any]) -> str:
     } else "agent-run"
 
 
+def _preparation_result(path: Path) -> dict[str, Any]:
+    """Project completion without exposing the private coordinate or a grant."""
+    status = ("first_observed_coordinate_complete" if Path(path).parent.name == "private-first-observed"
+              else "multi_table_projection_complete")
+    return {"preparation_status": status, "cohort_complete": False, "analysis_authorized": False}
+
+
 class DurableResearchService:
     def __init__(self, root: Path, *, manager: jobs.JobManager, dispatcher_factory=None,
                  recover_runner=None) -> None:
@@ -122,9 +129,8 @@ class DurableResearchService:
 
         def run(bound_job: jobs.Job) -> dict[str, Any]:
             recover = recover_preparation_with_sealed_snapshot if sealed_recovery else recover_preparation_before_consumption
-            recover(job_id=job_id, job=bound_job, timeout=timeout)
-            return {"preparation_status": "multi_table_projection_complete",
-                    "cohort_complete": False, "analysis_authorized": False}
+            output = recover(job_id=job_id, job=bound_job, timeout=timeout)
+            return _preparation_result(output)
 
         self.activate(job_id, run)
 
@@ -346,11 +352,10 @@ class DurableResearchService:
                         recover = (recover_preparation_with_sealed_snapshot
                                    if payload.get("schema_version") in {_SEALED_PREPARATION_SCHEMA, _HANDOFF_PREPARATION_SCHEMA}
                                    else recover_preparation_before_consumption)
-                        recover(job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
+                        output = recover(job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
                     except Exception as exc:
                         raise DurableResearchError("preparation_auto_resume_refused") from exc
-                    return {"preparation_status": "multi_table_projection_complete",
-                            "cohort_complete": False, "analysis_authorized": False}
+                    return _preparation_result(output)
                 runner = self.recover_runner(payload, bound_job)
                 result = runner(bound_job)
                 terminal_stage = ("agent_cancelled" if bound_job.is_cancel_requested()
