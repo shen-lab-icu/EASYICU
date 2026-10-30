@@ -507,8 +507,9 @@
       const actionRow = noteActionEvent(activity, event);
       if (actionRow !== undefined) return actionRow;
       const facts = planStepFacts(event);
-      if (!facts && notePlanSubStep(activity.steps, planSubStepFacts(event))) {
-        closeRunningRows(activity, pipelineTime(event.timestamp), '', true);
+      const subStep = !facts && planSubStepFacts(event);
+      if (subStep && notePlanSubStep(activity.steps, subStep)) {
+        closeRunningRows(activity, pipelineTime(event.timestamp), '', true, subStep.stepId);
         return null;
       }
       const at = pipelineTime(event.timestamp);
@@ -529,7 +530,7 @@
           : event.status === 'complete' || (system && step !== 'provider_recovery_wait' && !transportRetry) ? 'complete' : 'running',
       };
       const previous = activity.steps.find(row => row.id === next.id);
-      if (!transportRetry) closeRunningRows(activity, at, next.id, false);
+      if (!transportRetry) closeRunningRows(activity, at, next.id, false, facts && facts.stepId);
       const started = previous && previous.durationKnown !== false && previous.startedAt != null
         ? previous.startedAt : start != null ? start : next.status === 'running' ? at : null;
       Object.assign(next, { startedAt: started, durationKnown: started != null && at != null });
@@ -538,12 +539,13 @@
       if (previous) Object.assign(previous, next); else activity.steps.push(next);
       return previous || next;
     }
-    // A running span ends when the next event of the run arrives. Coder and
-    // runner events inside a plan step end only typed action rows.
-    function closeRunningRows(activity, at, exceptId, actionsOnly) {
+    // Unscoped spans advance with the run. A step's repair span can only end
+    // on an event for that step: independent workers may run concurrently.
+    function closeRunningRows(activity, at, exceptId, actionsOnly, stepId) {
       activity.steps.forEach(row => {
         if (row.kind !== 'pipeline' || row.step === 'plan_step' || row.id === exceptId || row.status !== 'running') return;
         if (actionsOnly && row.step !== 'action') return;
+        if (row.step === 'action' && row.stepId && row.stepId !== stepId) return;
         row.status = 'complete';
         if (at != null) row.endedAt = at;
       });
@@ -612,7 +614,7 @@
         || ['repair_failed', 'step_error'].includes(action)
         || (action === 'plan_validation' && event.retry_phase === 'rejected');
       const previous = activity.steps.find(row => row.id === id);
-      closeRunningRows(activity, at, id, false);
+      closeRunningRows(activity, at, id, false, String(event.step_id || ''));
       const row = previous || { id, kind: 'pipeline', step: 'action', action, stage: ACTION_STAGES[action], icon: ACTION_ICONS[action] };
       Object.assign(row, actionFieldsOf(event), { at, status: failed ? 'error' : span ? 'running' : 'complete' });
       if (action === 'literature_build') {
@@ -674,7 +676,11 @@
       if (row.action === 'plan_validation') {
         return pipelineEventLabel({ step: 'planning', planning_unit: row.planningUnit, retry_phase: row.retryPhase, current: row.current, total: row.total });
       }
-      return labels[row.action] || tr('Research-task status updated', '研究任务状态已更新');
+      const label = labels[row.action] || tr('Research-task status updated', '研究任务状态已更新');
+      if (!row.stepId) return label;
+      const name = planStepName(row.stepId);
+      const scopedName = name === tr('Analysis step', '分析步骤') ? row.stepId : name;
+      return `${label} · ${scopedName}`;
     }
     function actionDetail(row) {
       if (row.action === 'literature_build' && row.queryCount != null) {

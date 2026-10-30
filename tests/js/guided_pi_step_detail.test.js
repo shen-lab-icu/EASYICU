@@ -110,6 +110,36 @@ const stepPayloads = {
       resourceButton: () => '', runFailureText: () => '',
     });
 
+    // Two independent workers can repair at the same time. Events from one
+    // must never make the other worker's repair look complete, including when
+    // the same server events are replayed after the page is reloaded.
+    const parallelEvents = [
+      event(0, 'step', 'Step 1/2 started: worker_a.', { step_id: 'worker_a', current_step: 1, total_steps: 2 }),
+      event(1, 'step', 'Step 2/2 started: worker_b.', { step_id: 'worker_b', current_step: 2, total_steps: 2 }),
+      event(2, 'coder', '', { action: 'repair', step_id: 'worker_a', attempt: 1 }),
+      event(3, 'coder', '', { action: 'repair', step_id: 'worker_b', attempt: 1 }),
+      event(4, 'coder', '', { action: 'code_generation', step_id: 'worker_a' }),
+      event(5, 'step', 'Step 1/2 complete: worker_a.', { step_id: 'worker_a', current_step: 1, total_steps: 2, status: 'complete' }),
+    ];
+    for (const replay of [false, true]) {
+      const parallel = { status: 'running', steps: [] };
+      parallelEvents.forEach(row => activity.notePipelineEvent(parallel, row));
+      const a = parallel.steps.find(row => row.action === 'repair' && row.stepId === 'worker_a');
+      const b = parallel.steps.find(row => row.action === 'repair' && row.stepId === 'worker_b');
+      assert.equal(a.status, 'complete', `worker A completed its repair (replay=${replay})`);
+      assert.equal(a.endedAt, Date.parse(at(4)));
+      assert.equal(b.status, 'running', `worker B still runs (replay=${replay})`);
+      assert.equal(b.endedAt, undefined);
+      assert.match(activity.stepLabel(a), /worker_a$/);
+      assert.match(activity.stepLabel(b), /worker_b$/);
+      assert.equal(parallel.steps.find(row => row.stepId === 'worker_b' && row.step === 'plan_step').status, 'running');
+      activity.notePipelineEvent(parallel, event(6, 'coder', '', {
+        action: 'repair_failed', step_id: 'worker_b', status: 'error', attempt: 1,
+      }));
+      assert.equal(b.status, 'complete', 'worker B repair ends only on its own event');
+      assert.equal(parallel.steps.find(row => row.action === 'repair_failed' && row.stepId === 'worker_b').status, 'error');
+    }
+
     // (1) Rows are the run's actions, in order, with their own times.
     const turn = { status: 'running', steps: [] };
     events.forEach(row => activity.notePipelineEvent(turn, row));
