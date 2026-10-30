@@ -23,6 +23,7 @@ from easyicu.research_agent.planning.literature_contract import (
 LITERATURE_EVIDENCE_SCHEMA_VERSION = "easyicu.web-literature-evidence/5"
 _MAX_CITATIONS = 400
 _MAX_STEPS = 80
+_MAX_EVIDENCE_CARDS = 40
 _GOVERNED_SCIENTIFIC_ROLES = {"primary", "secondary", "sensitivity"}
 
 
@@ -158,6 +159,84 @@ def _citation_projection(
             if screening
             else None
         ),
+    }
+
+
+def project_literature_evidence_cards(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    """Project registered literature cards for review without raw bundle data.
+
+    This is a bounded view of recorded candidate evidence, not a fresh screen
+    or verification of a plan's individual claims. The caller must first bind
+    and verify the run-owned source bytes and perform the disclosure scan.
+    """
+
+    raw_citations = bundle.get("citations")
+    raw_decisions = bundle.get("screening_decisions")
+    raw_cards = bundle.get("design_evidence_cards")
+    citations = raw_citations if isinstance(raw_citations, list) else []
+    decisions = raw_decisions if isinstance(raw_decisions, list) else []
+    source_cards = raw_cards if isinstance(raw_cards, list) else []
+    citations_by_key: dict[str, list[Mapping[str, Any]]] = {}
+    decisions_by_key: dict[str, list[Mapping[str, Any]]] = {}
+    cards_by_key: dict[str, list[Mapping[str, Any]]] = {}
+    for rows, index, field in (
+        (citations, citations_by_key, "key"),
+        (decisions, decisions_by_key, "citation_key"),
+        (source_cards, cards_by_key, "citation_key"),
+    ):
+        for row in rows:
+            if isinstance(row, Mapping):
+                key = _text(row.get(field), 120)
+                if key:
+                    index.setdefault(key, []).append(row)
+
+    projected = []
+    suppressed = 0
+    for key, matches in cards_by_key.items():
+        cited = citations_by_key.get(key, [])
+        screened = decisions_by_key.get(key, [])
+        if len(matches) != 1 or len(cited) != 1 or len(screened) != 1:
+            suppressed += len(matches)
+            continue
+        card, citation, decision = matches[0], cited[0], screened[0]
+        role = _text(card.get("evidence_role"), 80)
+        if decision.get("disposition") != "include" or role != decision.get("evidence_role"):
+            suppressed += 1
+            continue
+        evidence = card.get("evidence")
+        evidence = evidence if isinstance(evidence, list) else []
+        facts = [
+            {
+                "dimension": _text(item.get("dimension"), 80),
+                "review_role": _text(item.get("review_role"), 80) or None,
+                "source_backed_summary": _text(item.get("source_backed_summary"), 500),
+                "locator": _text(item.get("locator"), 160) or None,
+            }
+            for item in evidence[:14]
+            if isinstance(item, Mapping)
+        ]
+        projected.append({
+            "citation_key": key,
+            "title": _text(citation.get("title"), 500),
+            "year": _text(citation.get("year"), 16) or None,
+            "source_url": _source_url(citation),
+            "evidence_role": role,
+            "access_mode": _text(card.get("access_mode"), 80),
+            "supplement_status": _text(card.get("supplement_status"), 80),
+            "evidence": facts,
+        })
+    provenance = bundle.get("search_provenance")
+    provenance = provenance if isinstance(provenance, Mapping) else {}
+    return {
+        "schema_version": "easyicu.web-literature-cards/1",
+        "searched_at": _text(provenance.get("searched_at"), 80) or None,
+        "review": _typed_review(bundle.get("review"), ReviewCoverage),
+        "cards": projected[:_MAX_EVIDENCE_CARDS],
+        "card_count": len(projected),
+        "cards_truncated": len(projected) > _MAX_EVIDENCE_CARDS,
+        "suppressed_ambiguous_cards": suppressed,
+        "mapping_status": "not_assessed",
+        "boundary": "Recorded candidate evidence; source relevance and claim support require review.",
     }
 
 

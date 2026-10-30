@@ -38,7 +38,7 @@
    fold the toggle labels or slide the model name under them: each control
    keeps one line and the model/send group wraps beneath instead. */
 .gpi-action-leading .gpi-access-menu>summary{white-space:nowrap}
-.gpi-action-trailing{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;margin-left:auto}
+.gpi-action-trailing{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;min-width:0;max-width:100%;margin-left:auto}
 .gpi-model-binding{max-width:180px;border-color:transparent;background:transparent;font-family:var(--font);font-size:12px;padding:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gpi-model-binding span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gpi-actions .btn{border-radius:8px;padding:7px 12px;min-height:32px;white-space:nowrap}

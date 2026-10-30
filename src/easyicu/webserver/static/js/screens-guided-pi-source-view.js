@@ -182,7 +182,7 @@
       // A step that says what it did needs no generic sentence; a failed
       // step shows its cause in the error box instead.
       : operation.detail || (failed && operation.cause) ? ''
-      : `<div class="gpi-operation-empty">${icon(failed ? 'alert' : 'check', 17)}<div><span>${esc(tr('This step updated the run record and produced no file.', '这一步没有生成文件，只更新了运行记录。'))}</span></div></div>`;
+      : `<div class="gpi-operation-empty">${icon(failed ? 'alert' : 'check', 17)}<div><span>${esc(tr('No files are available in this step view. Check the run record for other files.', '此步骤视图暂无可展示的文件；其他文件可在运行记录中查看。'))}</span></div></div>`;
     const errorBox = failed && operation.cause ? `<div class="gpi-step-error" role="alert"><p class="gpi-step-note is-error">${esc(operation.cause)}</p></div>` : '';
     return `<div class="gpi-source-document gpi-operation-document">
       <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${operation.icon ? icon(operation.icon, 18) : ''}</span><div><h2>${esc(operation.title)}</h2><p><span>${esc(category)}</span><b class="gpi-status-chip status-${esc(operation.status)}">${esc(status)}</b>${operation.duration ? `<span>${icon('clock', 12)}${esc(operation.duration)}</span>` : ''}</p></div></header>

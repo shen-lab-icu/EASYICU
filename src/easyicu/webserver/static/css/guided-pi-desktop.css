@@ -103,9 +103,9 @@
  .gpi-compose textarea{min-height:48px;font-size:14.5px}
  .gpi-actions{margin-top:6px}
  .gpi-actions .btn{min-height:30px;padding:6px 10px;font-size:12.5px}
- .gpi-actions [data-gpi-send]{display:grid;place-items:center;width:34px;min-width:34px;height:34px;min-height:34px;padding:0;border:1px solid #1e585b;border-radius:50%;background:#246366;color:#ffffff}
- .gpi-actions [data-gpi-send]:hover,.gpi-actions [data-gpi-send]:focus-visible{background:#1a4d50;color:#ffffff}
- .gpi-actions [data-gpi-send] svg{transform:rotate(-45deg)}
+ .gpi-actions [data-gpi-send]:not([data-gpi-queue-send]){display:grid;place-items:center;width:34px;min-width:34px;height:34px;min-height:34px;padding:0;border:1px solid #1e585b;border-radius:50%;background:#246366;color:#ffffff}
+ .gpi-actions [data-gpi-send]:not([data-gpi-queue-send]):hover,.gpi-actions [data-gpi-send]:not([data-gpi-queue-send]):focus-visible{background:#1a4d50;color:#ffffff}
+ .gpi-actions [data-gpi-send]:not([data-gpi-queue-send]) svg{transform:rotate(-45deg)}
  .gpi-model-binding{font-size:12.5px}
 
  .gd-main.gpi-workspace .gd-aside{background:var(--paper)}

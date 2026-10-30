@@ -524,9 +524,9 @@
     function capabilityGapCopy(cause, list) {
       const why = {
         levels_from_thresholds_unavailable: tr('it groups a variable by thresholds, and EasyICU cannot yet build those groups from this data. Ask about the variable as a continuous measure, or use a variable the data already groups.', '规划发现这个问题需要按阈值分组，而 EasyICU 目前无法从这份数据构建这些分组，已停止规划且未运行分析；可以改问连续变量，或使用已有分组的变量。'),
-        longitudinal_representation_unavailable: tr('it needs repeated measurements over time for each stay, and this study\'s data has no such time series. Extract the time series it needs, or ask about a summary over a fixed window.', '规划发现这个问题需要每次入住随时间的重复测量，但本研究的数据里没有这样的时间序列，已停止规划且未运行分析；请提取所需时间序列，或改问固定时间窗的汇总值。'),
+        longitudinal_representation_unavailable: tr('The proposed plan needs a time-based representation that EasyICU could not confirm for this study. Planning stopped and no analysis was run. Review the exposure window, time alignment and available data before choosing a design.', '候选方案提出需要时间相关的数据表示，但 EasyICU 尚无法确认本研究是否具备所需条件；规划已停止，未运行分析。请先审阅暴露时间窗、时间对齐及可用数据，再确定研究设计。'),
         multiple_sources_required: tr('it needs more than one database, and this study uses one. Ask the question within one database, or run it as a separate study in each database.', '规划发现这个问题需要多个数据库，而本研究只使用一个，已停止规划且未运行分析；请在单个数据库内提问，或在每个数据库各开一项研究。'),
-        estimand_unsupported: tr('it asks for an estimate no executable EasyICU method produces. Ask for an estimate EasyICU supports instead, for example an association, a prediction or a descriptive summary.', '规划发现这个问题需要当前方法无法给出的估计量，已停止规划且未运行分析；可以改问支持的估计，例如关联、预测或描述性汇总。'),
+        estimand_unsupported: tr('The planner could not confirm an executable path for the proposed estimate or its time design. Planning stopped and no analysis was run. Review the source time origin, outcome definition and proposed design; the original research question has not been changed.', '规划器未能确认所提估计量或时间设计有可执行路径；规划已停止，没有运行分析。请核对数据来源的时间起点、结局定义和候选设计，原研究问题保持不变。'),
         design_element_unsupported: list
           ? tr(`it needs a design element involving ${list} that no executable EasyICU method provides yet. Ask the question without it, or with a design EasyICU supports.`, `规划发现这个问题需要一项涉及 ${list} 的设计要素，EasyICU 目前没有可执行方法提供，已停止规划且未运行分析。`)
           : tr('it needs a design element no executable EasyICU method provides yet. Ask the question without it, or with a design EasyICU supports.', '规划发现这个问题需要一项 EasyICU 目前没有可执行方法提供的设计要素，已停止规划且未运行分析。'),
@@ -534,6 +534,7 @@
       if (!Object.prototype.hasOwnProperty.call(why, cause)) {
         return tr('Planning found that the question needs something no executable EasyICU method can yet provide, so it stopped before the analysis steps were drafted. No analysis was run.', '规划发现这个问题需要 EasyICU 目前没有可执行方法提供的能力，因此在起草分析步骤之前已停止，没有运行任何分析。');
       }
+      if (cause === 'longitudinal_representation_unavailable' || cause === 'estimand_unsupported') return why[cause];
       return tr('Planning found that the question needs something no executable EasyICU method can yet provide, so it stopped and no analysis was run: ', '') + why[cause];
     }
 
@@ -922,7 +923,7 @@
       };
       const database = nameOf(value.database);
       const reasons = adjustments && Array.isArray(value.missing_capabilities)
-        ? [...new Set(value.missing_capabilities.slice(0, 20).map(adjustments.missingText).filter(Boolean))].slice(0, 4) : [];
+        ? [...new Set(value.missing_capabilities.slice(0, 20).map(item => adjustments.missingText(item, value.database)).filter(Boolean))].slice(0, 4) : [];
       // A demo is named only when its full database is not.
       const offeredKeys = Array.isArray(value.supported_databases) ? value.supported_databases.slice(0, 12) : null;
       const offered = offeredKeys && offeredKeys
@@ -933,7 +934,11 @@
         : offeredKeys && !offeredKeys.length ? tr('No database supports it in this version. ', '本版本还没有能做这类研究的数据库。') : '';
       return {
         refusal: database
-          ? tr(`${database} lacks data that ${family[0]} needs`, `${database} 缺少${family[1]}所需的数据`)
+          ? (String(value.database || '').toLowerCase() === 'sic'
+            && Array.isArray(value.missing_capabilities)
+            && value.missing_capabilities.some(item => item && item.code === 'icu_los_unavailable')
+            ? tr(`${database} cannot confirm the data that ${family[0]} needs`, `${database} 尚无法确认${family[1]}所需的数据`)
+            : tr(`${database} lacks data that ${family[0]} needs`, `${database} 缺少${family[1]}所需的数据`))
           : tr(`This database lacks data that ${family[0]} needs`, `这个数据库缺少${family[1]}所需的数据`),
         instead: `${reasons.length ? tr(`Specifically, ${reasons.join('; ')}. `, `具体是：${reasons.join('；')}。`) : ''}${where}${tr(
           'You can also ask with another study design.', '也可以换一种研究设计再问。')}`,

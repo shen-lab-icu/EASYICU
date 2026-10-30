@@ -219,7 +219,7 @@ for (language of ['zh', 'en']) {
   for (const fact of ['eICU-CRD demo (eicu)', '1841', '4', tr('Step 3 of 8', '第 3/8 步')]) assert.ok(rendered.includes(`<dd>${fact}</dd>`), fact);
   const factsAt = rendered.indexOf('<dl class="gpi-operation-facts gpi-step-facts">');
   assert.ok(factsAt >= 0 && factsAt < rendered.indexOf('gpi-source-code'), 'facts above the code');
-  assert.ok(rendered.includes(tr('This step updated the run record and produced no file.', '这一步没有生成文件，只更新了运行记录。')));
+  assert.ok(rendered.includes(tr('No files are available in this step view. Check the run record for other files.', '此步骤视图暂无可展示的文件；其他文件可在运行记录中查看。')));
   // A failed step: the red box carries the cause.
   const failedDetail = { ...detail, state: 'failed' };
   const failedHtml = stepDetail.render({ operation: { ...operation, status: 'error', cause: '分析步骤失败。' }, stepDetail: failedDetail }, helpers);

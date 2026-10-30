@@ -188,7 +188,7 @@
     const impl = metadata(pkg);
     const mode = impl && impl.mode || 'unavailable';
     const text = impl && tr(impl.summary_en || impl.summary_zh || '', impl.summary_zh || impl.summary_en || '');
-    return `<div class="eusk-implementation-summary" data-sk-implementation-mode="${esc(mode)}"><span class="eusk-implementation-mode">${esc(modeLabel(mode))}</span>${text ? `<p>${esc(text)}</p>` : `<p>${tr('No function metadata is available for this package. The complete guide is in Files.', '此技能包暂未提供函数元数据，完整说明仍可在文件中查看。')}</p>`}${mode === 'generated_code' ? `<p>${tr('The functions below support or check generated code. The study-specific analysis code is created with the task.', '下列函数用于辅助或检查生成代码；本次研究的分析代码会随任务生成。')}</p>` : ''}</div>`;
+    return `<div class="eusk-implementation-summary" data-sk-implementation-mode="${esc(mode)}"><span class="eusk-implementation-mode">${esc(modeLabel(mode))}</span>${text ? `<p>${esc(text)}</p>` : `<p>${tr('No function metadata is available for this package. The complete guide is in Files.', '此技能包暂未提供函数元数据，完整说明仍可在文件中查看。')}</p>`}${mode === 'generated_code' ? `<p>${tr('The implementation functions support or check generated code. The study-specific analysis code is created with the task.', '实现函数用于辅助或检查生成代码；本次研究的分析代码会随任务生成。')}</p>` : ''}</div>`;
   }
   function primaryIndices(pkg) {
     const rows = entries(pkg);
@@ -206,7 +206,7 @@
   function preview(pkg) {
     const rows = entries(pkg);
     const helpers = metadata(pkg)?.mode === 'generated_code' && !rows.some(row => ['entrypoint', 'kernel'].includes(row.role));
-    return `<section class="eusk-implementation-preview"><h2>${helpers ? tr('Reusable helper functions', '可复用辅助函数') : tr('Implementation / functions', '实现 / 函数')}</h2>${summary(pkg)}<div class="eusk-function-preview-list">${primaryIndices(pkg).slice(0, 3).map(index => entryButton(rows[index], index)).join('')}</div><button type="button" class="eusk-open-implementation" data-sk-tab="implementation">${tr('Inspect implementation and source', '查看实现与源码')} →</button></section>`;
+    return `<section class="eusk-implementation-preview"><h2>${helpers ? tr('Reusable helper functions', '可复用辅助函数') : tr('Implementation / functions', '实现 / 函数')}</h2>${summary(pkg)}<button type="button" class="eusk-open-implementation" data-sk-tab="implementation">${tr('Inspect implementation and source', '查看实现与源码')} →</button></section>`;
   }
   // A host file contains separate excerpts, each bound to its original lines.
   // Their marker lines are display metadata and never receive invented line numbers.

@@ -28,6 +28,52 @@
     'auto_revise_plan',
     'generate_plan',
   ]);
+  // A host-issued fresh-plan key names the failed wrapper it follows. Use the
+  // explicit link, never chronology alone, to label an earlier live trace.
+  function markSupersededPlanAttempts(rows, session) {
+    const turns = session && session.conversation_replay && session.conversation_replay.turns;
+    if (!Array.isArray(rows) || !Array.isArray(turns) || !Array.isArray(session.archived_child_jobs)) return;
+    const jobs = session.archived_child_jobs;
+    const keyPattern = /^plan:([0-9a-f]{16}):(run_[A-Za-z0-9][A-Za-z0-9_-]{0,79}|-):([a-z0-9_]+)$/;
+    const validHost = turn => turn && turn.kind === 'host_action'
+      && /^host_[0-9a-f]{24}$/.test(String(turn.job_id || ''))
+      && PLAN_HOST_ACTION_CODES.has(String(turn.action_code || ''));
+    const byJob = new Map();
+    turns.filter(validHost).forEach(turn => {
+      const id = String(turn.child_job_id || '');
+      if (!id) return;
+      const entries = byJob.get(id) || [];
+      entries.push(turn);
+      byJob.set(id, entries);
+    });
+    turns.filter(validHost).forEach(next => {
+      if (next.action_code !== 'generate_plan') return;
+      const key = keyPattern.exec(String(next.action_key || ''));
+      if (!key || key[3] !== 'failed_pipeline_requires_fresh_plan' || key[2] === '-') return;
+      const oldId = key[2].slice(4);
+      const nextId = String(next.child_job_id || '');
+      if (!nextId || oldId === nextId || (byJob.get(nextId) || []).length !== 1) return;
+      const prior = byJob.get(oldId) || [];
+      if (prior.length !== 1 || prior[0].status !== 'failed') return;
+      const oldKey = keyPattern.exec(String(prior[0].action_key || ''));
+      if (!oldKey || oldKey[1] !== key[1]) return;
+      const oldEnd = Date.parse(prior[0].ended_at || '');
+      const nextStart = Date.parse(next.started_at || '');
+      if (!Number.isFinite(oldEnd) || !Number.isFinite(nextStart) || oldEnd > nextStart) return;
+      const priorJobs = jobs.filter(job => job && String(job.job_id || '') === oldId);
+      if (priorJobs.length !== 1 || priorJobs[0].kind !== 'agent-run' || priorJobs[0].status !== 'failed') return;
+      const nextJobs = jobs.filter(job => job && String(job.job_id || '') === nextId);
+      if (nextJobs.length !== 1 || nextJobs[0].kind !== 'agent-run'
+          || !['running', 'done', 'failed', 'cancelled'].includes(String(nextJobs[0].status || ''))) return;
+      rows.forEach(row => {
+        if (row && row.role === 'activity' && String(row.childJobId || '') === oldId
+            && ['error', 'failed'].includes(row.status)) {
+          row.supersededAttempt = true;
+          row.supersededByPlanAttempt = true;
+        }
+      });
+    });
+  }
   // Host receipts prove that EasyICU ran a plan task; they are not authored
   // conversation turns. A manual click is already shown immediately by the
   // UI, while replay must never manufacture an editable user quotation.
@@ -886,7 +932,7 @@
       )));
     }
 
-    return { transcriptMessages, latestTurnCompletedIdeaExploration };
+    return { transcriptMessages, latestTurnCompletedIdeaExploration, markSupersededPlanAttempts };
   }
 
   window.EasyICU.guidedPi.declare('transcript', {

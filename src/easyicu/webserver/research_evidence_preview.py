@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, Mapping
 
 SCHEMA_VERSION = "easyicu.web-evidence-preview/2"
 MAX_PREVIEW_BYTES = 512 * 1024
+MAX_LITERATURE_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_TABLE_ROWS = 100
 MAX_TABLE_COLUMNS = 24
 
@@ -798,6 +799,43 @@ def _json_preview(base: Mapping[str, Any], raw: bytes) -> Dict[str, Any]:
     return {**base, "renderer": "json", "previewable": True, "value": value}
 
 
+def _checked_literature_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Scan the whole projection, including the metadata-only fallback."""
+
+    from .run_artifact_disclosure import scan_artifact_payloads, scan_browser_projection
+
+    if not scan_artifact_payloads({"evidence_preview": result})["passed"] or not (
+        scan_browser_projection({"evidence_preview": result})["passed"]
+    ):
+        raise EvidencePreviewError(
+            "evidence_preview_privacy_scan_failed",
+            "The literature projection did not pass the privacy boundary.",
+        )
+    return result
+
+
+def _literature_cards_preview(base: Mapping[str, Any], raw: bytes) -> Dict[str, Any]:
+    """Expose a bounded, scanned projection of verified literature bytes."""
+
+    from pydantic import ValidationError
+    from easyicu.research_agent.literature import LiteratureBundle
+    from .literature_projection import project_literature_evidence_cards
+
+    try:
+        bundle = LiteratureBundle.model_validate_json(raw)
+    except (ValueError, ValidationError) as exc:
+        raise EvidencePreviewError(
+            "evidence_preview_json_invalid", "The registered literature is not valid."
+        ) from exc
+    value = project_literature_evidence_cards(bundle.model_dump(mode="json"))
+    result = {**base, "renderer": "literature_cards", "previewable": True, "value": value}
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_PREVIEW_BYTES:
+        return _checked_literature_result(
+            _metadata_only(base, reason="preview_size_limit", size=len(raw))
+        )
+    return _checked_literature_result(result)
+
+
 def _csv_preview(base: Mapping[str, Any], path: Path, raw: bytes) -> Dict[str, Any]:
     text = _decode_text(raw)
     try:
@@ -863,6 +901,29 @@ def build_evidence_preview(
     size = path.stat().st_size
     suffix = path.suffix.lower()
     kind = str(record.get("kind") or "").lower()
+    if (
+        clean_id == "preplan_literature_bundle"
+        and kind == "log"
+        and suffix == ".json"
+        and record.get("producer") == "hypothesis_blueprint"
+        and record.get("generation_mode") == "deterministic_skill"
+    ):
+        if size > MAX_LITERATURE_SOURCE_BYTES:
+            if _sha256_file(path) != registered_sha:
+                raise EvidencePreviewError(
+                    "evidence_preview_digest_mismatch",
+                    "The evidence file digest no longer matches its registry record.",
+                )
+            return _checked_literature_result(
+                _metadata_only(base, reason="preview_size_limit", size=size)
+            )
+        raw = _read_regular_file(path, max_bytes=MAX_LITERATURE_SOURCE_BYTES)
+        if hashlib.sha256(raw).hexdigest() != registered_sha:
+            raise EvidencePreviewError(
+                "evidence_preview_digest_mismatch",
+                "The evidence file digest no longer matches its registry record.",
+            )
+        return _literature_cards_preview(base, raw)
     if suffix in _RAW_TABLE_SUFFIXES or size > MAX_PREVIEW_BYTES:
         if _sha256_file(path) != registered_sha:
             raise EvidencePreviewError(

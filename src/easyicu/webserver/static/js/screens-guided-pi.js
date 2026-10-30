@@ -782,6 +782,7 @@
       }
       reconcileSettledSession();
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
+      TRANSCRIPT.markSupersededPlanAttempts(state.messages, state.session);
       HOST_JOBS.sync();
       rememberSession(sessionId); setShell('pi');
       const projectOwner = MODULES.require('project');
@@ -961,6 +962,7 @@
       );
       if (!preserveTimeline) state.messages = transcriptMessages(state.session);
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
+      TRANSCRIPT.markSupersededPlanAttempts(state.messages, state.session);
       reconcileSettledSession();
       HOST_JOBS.sync();
     } catch (error) {

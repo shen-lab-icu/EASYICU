@@ -91,8 +91,7 @@ const click = dataset => handlers.click({ target: { closest: selector => selecto
   assert.match(html, /每位研究对象的随访时长、事件或删失状态/);
   assert.match(html, /survival_effect_estimates\.csv/);
   assert.match(html, /固定内置实现/);
-  assert.match(html, /data-sk-function="0"/);
-  assert.match(html, /def fit_cox\(data: DataFrame, spec: CoxSpec\) -> CoxResult/);
+  assert.doesNotMatch(html, /data-sk-function="0"|def fit_cox\(data: DataFrame/);
   assert.doesNotMatch(html, /完整的比例风险诊断说明/);
   assert.doesNotMatch(html, /machine metadata/);
   assert.doesNotMatch(html, /只读内置技能包/);
@@ -113,11 +112,12 @@ const click = dataset => handlers.click({ target: { closest: selector => selecto
   assert.match(html, /implementation 保存只读源码摘录/);
   assert.match(html, /完整的比例风险诊断说明/);
 
-  // A function link opens its exact excerpt, not the helper at the top of its file.
+  // The implementation tab opens the exact excerpt, not the helper at the top of its file.
   click({ skTab: 'overview' });
-  click({ skFunction: '0' });
+  click({ skTab: 'implementation' });
   html = screen.render();
   assert.match(html, /data-sk-tab="implementation"/);
+  assert.match(html, /def fit_cox\(data: DataFrame, spec: CoxSpec\) -> CoxResult/);
   assert.match(html, /data-source-line="120"/);
   assert.match(html, /data-source-line="121"/);
   assert.doesNotMatch(html, /internal_helper/);

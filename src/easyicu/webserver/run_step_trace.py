@@ -81,6 +81,7 @@ TRACE_FACT_KEYS = (
     "query_count",
     "record_count",
     "queries",
+    "literature_record_registered",
     "source_label",
     "source_database",
     "group_variable_label",
@@ -400,8 +401,16 @@ def _read_json(path: Optional[Path], limit: int) -> Any:
 
 
 def _literature_facts(run_dir: Path) -> Dict[str, Any]:
-    bundle = _read_json(_child(run_dir, "preplan_literature_bundle.json"), MAX_INDEX_BYTES)
-    if not isinstance(bundle, Mapping):
+    # A root-level file alone is not evidence that this run registered it.
+    # Compare the immutable copy and current run file to the same registry
+    # digest before describing it as a literature record.
+    records = [row for row in _evidence_records(run_dir)
+               if row.get("evidence_id") == "preplan_literature_bundle"]
+    bundle = _verified_receipt(
+        run_dir, records, "preplan_literature_bundle.json",
+        max_bytes=MAX_INDEX_BYTES,
+    )
+    if not bundle:
         return {}
     provenance = bundle.get("search_provenance")
     provenance = provenance if isinstance(provenance, Mapping) else {}
@@ -415,7 +424,9 @@ def _literature_facts(run_dir: Path) -> Dict[str, Any]:
         if str(query or "").strip()
     ]
     citations = bundle.get("citations")
-    facts: Dict[str, Any] = {"query_count": len(queries)}
+    facts: Dict[str, Any] = {
+        "query_count": len(queries), "literature_record_registered": True,
+    }
     if isinstance(citations, list):
         facts["record_count"] = len(citations)
     shown = [
@@ -426,6 +437,132 @@ def _literature_facts(run_dir: Path) -> Dict[str, Any]:
     if shown:
         facts["queries"] = shown
     return facts
+
+
+def _failed_literature_binding(
+    wrapper: Path, *, wrapper_run_id: str, study_id: str,
+    pipeline_run_id: str = "", event_timestamp: str = "",
+) -> Optional[Tuple[Path, Dict[str, Any], Optional[Dict[str, str]]]]:
+    """Bind a failed wrapper to its unique audit and registered literature.
+
+    This is a host-only path. The caller must first resolve the wrapper through
+    project authority; no client-supplied path reaches this owner.
+    """
+    root = Path(wrapper)
+    if not _RUN_ID.fullmatch(wrapper_run_id) or (pipeline_run_id and not _RUN_ID.fullmatch(pipeline_run_id)):
+        return None
+    if not study_id or root.name != wrapper_run_id:
+        return None
+    try:
+        if root.is_symlink() or root.resolve(strict=True) != root:
+            return None
+    except OSError:
+        return None
+    context = _read_json(_child(root, "run_context.json"), MAX_SUMMARY_BYTES)
+    manifest = _read_json(_child(root, "source_run_manifest.json"), MAX_SUMMARY_BYTES)
+    if not isinstance(context, Mapping) or not isinstance(manifest, Mapping):
+        return None
+    if (context.get("run_id") != wrapper_run_id or context.get("study_id") != study_id
+            or context.get("engine") != "easyicu.research_agent.pipeline"
+            or manifest.get("run_id") != wrapper_run_id or manifest.get("status") != "failed"
+            or manifest.get("engine") != "easyicu.research_agent.pipeline"):
+        return None
+    pipeline = _child(root, "pipeline")
+    if pipeline is None or not pipeline.is_dir():
+        return None
+    candidates = []
+    try:
+        with os.scandir(pipeline) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 32:
+                    return None
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_symlink():
+                    return None
+                if entry.is_dir(follow_symlinks=False):
+                    candidates.append(entry.name)
+                    if len(candidates) > 1:
+                        return None
+    except OSError:
+        return None
+    if len(candidates) != 1 or (pipeline_run_id and candidates[0] != pipeline_run_id):
+        return None
+    target = _child(pipeline, candidates[0])
+    if target is None:
+        return None
+    requested_at = None
+    if event_timestamp:
+        try:
+            requested_at = datetime.fromisoformat(event_timestamp)
+            if requested_at.tzinfo is None:
+                return None
+        except (TypeError, ValueError):
+            return None
+    audit_path = _child(target, "audit_log.jsonl")
+    raw = _read_bounded(audit_path, MAX_AUDIT_BYTES) if audit_path else None
+    if raw is None:
+        return None
+    matches = 0
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+            if not isinstance(event, Mapping) or (event.get("phase"), event.get("event")) != (
+                "hypothesis", "Building pre-plan literature and hypothesis blueprint."
+            ):
+                continue
+            at = datetime.fromisoformat(str(event.get("timestamp") or ""))
+            if at.tzinfo is not None and (requested_at is None or abs((at - requested_at).total_seconds()) <= 2):
+                matches += 1
+        except (TypeError, ValueError):
+            continue
+    if matches != 1:
+        return None
+    facts = _literature_facts(target)
+    records = [row for row in _evidence_records(target)
+               if row.get("evidence_id") == "preplan_literature_bundle"]
+    if len(records) != 1 or not facts.get("literature_record_registered"):
+        return None
+    record = records[0]
+    identity = _registered(record)
+    reference = (
+        {"evidence_id": identity[0], "sha256": identity[1], "run_id": wrapper_run_id}
+        if identity is not None and record.get("kind") == "log"
+        and record.get("producer") == "hypothesis_blueprint"
+        and record.get("generation_mode") == "deterministic_skill"
+        else None
+    )
+    return target, facts, reference
+
+
+def failed_literature_preview_binding(
+    wrapper: Path, *, wrapper_run_id: str, study_id: str,
+) -> Optional[Tuple[Path, Dict[str, str]]]:
+    """Resolve the authorized failed run's immutable literature preview input."""
+
+    bound = _failed_literature_binding(wrapper, wrapper_run_id=wrapper_run_id, study_id=study_id)
+    return (bound[0], bound[2]) if bound and bound[2] else None
+
+
+def failed_replay_literature_facts(
+    wrapper: Path, *, wrapper_run_id: str, study_id: str,
+    pipeline_run_id: str, event_timestamp: str,
+) -> Dict[str, Any]:
+    """Publish same-run evidence coordinates only after the replay is bound."""
+
+    if not pipeline_run_id or not event_timestamp:
+        return {}
+    bound = _failed_literature_binding(
+        wrapper, wrapper_run_id=wrapper_run_id, study_id=study_id,
+        pipeline_run_id=pipeline_run_id, event_timestamp=event_timestamp,
+    )
+    if bound is None:
+        return {}
+    _, facts, reference = bound
+    return {
+        **{key: facts[key] for key in ("literature_record_registered", "query_count", "record_count") if key in facts},
+        **({"literature_evidence": reference} if reference else {}),
+    }
 
 
 def _source_facts(source: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -980,8 +1117,21 @@ def _receipt_name(value: Any) -> Optional[str]:
     return text if text and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,159}", text) else None
 
 
+def _receipt_item_id(value: Any) -> Optional[str]:
+    """Project dictionary item IDs without dropping integer-coded selectors.
+
+    The source sidecar may record IDs as either JSON strings or integers.
+    Preserve those exact values for display; reject booleans and floating-point
+    values rather than coercing them into another identifier.
+    """
+    if type(value) is int:
+        value = str(value)
+    return _receipt_text(value)
+
+
 def _verified_receipt(
     root: Path, records: List[Mapping[str, Any]], name: str, step: Optional[str] = None,
+    *, max_bytes: int = MAX_SUMMARY_BYTES,
 ) -> Mapping[str, Any]:
     """Only a unique, current registered receipt, never an arbitrary JSON file."""
     matches = [r for r in records if _record_name(r) == name
@@ -990,9 +1140,9 @@ def _verified_receipt(
     if len(matches) != 1 or not (identity := _registered(matches[0])):
         return {}
     path = _record_file(root, matches[0])
-    raw = _read_bounded(path, MAX_SUMMARY_BYTES) if path else None
+    raw = _read_bounded(path, max_bytes) if path else None
     original = _child(root, "steps", step, "outputs", name) if step else _child(root, name)
-    current = _read_bounded(original, MAX_SUMMARY_BYTES) if original else None
+    current = _read_bounded(original, max_bytes) if original else None
     if raw is None or raw != current or hashlib.sha256(raw).hexdigest() != identity[1]:
         return {}
     try:
@@ -1048,7 +1198,7 @@ def _receipt_concepts(sidecar: Mapping[str, Any]) -> Tuple[List[Dict[str, Any]],
                     "table": _receipt_name(lineage.get("table")),
                     "selector": _receipt_name(lineage.get("selector_variable")),
                     "items": [text for item in _list(lineage.get("item_ids"))[:16]
-                              if (text := _receipt_text(item))],
+                              if (text := _receipt_item_id(item))],
                     "selector_regex": _receipt_text(lineage.get("selector_regex")),
                     "value_column": _receipt_name(lineage.get("value_variable")),
                     "time_column": _receipt_name(lineage.get("time_variable")),

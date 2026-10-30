@@ -96,13 +96,23 @@ def test_partial_derivation_is_not_invented_as_an_available_substitute():
     assert cell["substitute"] is None
 
 
-@pytest.mark.parametrize("database", ["hirid", "sic"])
 @pytest.mark.parametrize("concept", ["age", "weight"])
-def test_data_map_discloses_five_unit_bands_and_age_top_coding(database, concept):
-    cell, = build(database=database, concept=concept)["databases"][0]["concepts"]
+def test_data_map_discloses_hirid_five_unit_bands_and_age_top_coding(concept):
+    cell, = build(database="hirid", concept=concept)["databases"][0]["concepts"]
     assert cell["status"] == "substituted"
     assert cell["substitute"]["kind"] == "binned"
     assert cell["substitute"]["bin_width"] == 5
+    assert cell["substitute"]["top_code"] == (90 if concept == "age" else None)
+
+
+@pytest.mark.parametrize("concept", ["age", "weight"])
+def test_data_map_discloses_sic_approximation_without_inventing_band_edges(concept):
+    cell, = build(database="sic", concept=concept)["databases"][0]["concepts"]
+    assert cell["status"] == "substituted"
+    assert cell["substitute"]["kind"] == "approximate"
+    assert cell["substitute"]["bin_width"] is None
+    assert cell["substitute"]["bin_edges"] == []
+    assert cell["substitute"]["bin_values"] == []
     assert cell["substitute"]["top_code"] == (90 if concept == "age" else None)
 
 
@@ -139,7 +149,7 @@ def test_study_families_retain_the_owners_decision_and_requirements():
 
 @pytest.mark.parametrize("database,status", [
     ("mimic", "exact"), ("miiv", "exact"), ("eicu", "substitution"),
-    ("hirid", "refused"), ("aumc", "substitution"), ("sic", "substitution"),
+    ("hirid", "refused"), ("aumc", "substitution"), ("sic", "refused"),
 ])
 def test_survival_map_agrees_with_default_death_question_and_plan(database, status):
     from easyicu.databases.research_plan_requirements import plan_capability_decision
@@ -165,6 +175,11 @@ def test_survival_map_agrees_with_default_death_question_and_plan(database, stat
     assert (gap is not None) == (status == "refused")
     if gap is not None:
         assert gap["missing_capabilities"] == cell["decision"]["missing"]
+    if database == "sic":
+        assert decision.substitutions == ()
+        assert ("time_zero", "time_zero_unavailable") in {
+            (item.capability, item.code) for item in decision.missing
+        }
 
 
 def test_filters_aliases_pagination_and_empty_tail():
@@ -271,3 +286,19 @@ def test_the_dictionary_names_each_variable_a_database_holds_only_as_a_substitut
     coverage = build_catalog()["conceptCoverage"]
     assert coverage["age"]["substitutes"] == substitutes["age"]
     assert "substitutes" not in coverage["hr"]
+
+
+def test_dictionary_projects_sic_icu_length_as_case_closure_proxy(monkeypatch):
+    from easyicu.webserver.catalog import build_catalog
+    from easyicu.webserver.data_map import concept_source_semantics
+
+    semantic = concept_source_semantics()["los_icu"]
+    assert set(semantic) == {"sic"}
+    assert semantic["sic"]["kind"] == "care_unit_to_case_closure_proxy"
+    assert semantic["sic"]["exact_icu_los"] is False
+    assert semantic["sic"]["start"]["column"] == "ICUOffset"
+    assert semantic["sic"]["end"]["column"] == "TimeOfStay"
+    monkeypatch.setattr(sources, "load_registry", lambda *args, **kwargs: {"sources": []})
+    coverage = build_catalog()["conceptCoverage"]
+    assert coverage["los_icu"]["source_semantics"] == semantic
+    assert "source_semantics" not in coverage["hr"]

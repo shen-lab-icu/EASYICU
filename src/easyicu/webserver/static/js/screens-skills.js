@@ -178,7 +178,7 @@
         </article>`).join('')}</div></section>`;
     }).join('');
     return `${top}
-      <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" placeholder="${ui.catalogMode === 'methods' ? tr('Search modules…', '搜索模块…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
+      <label class="eusk-search">${icon('search', 17)}<input data-sk-search type="search" aria-label="${ui.catalogMode === 'methods' ? tr('Search modules', '搜索模块') : tr('Search research skills', '搜索研究技能')}" placeholder="${ui.catalogMode === 'methods' ? tr('Search modules…', '搜索模块…') : tr('Search research skills…', '搜索研究技能…')}" value="${esc(ui.query)}" autocomplete="off"></label>
       <div class="eusk-filters"><span class="eusk-filter-label">${tr('SOURCE', '来源')}</span>
       ${[['all', tr('All', '全部')], ['user', tr('Mine', '我的')], ['builtin', tr('EasyICU', 'EasyICU')]].map(([key, label]) =>
         `<button type="button" class="eusk-pill ${ui.source === key ? 'active' : ''}" data-sk-source="${key}" aria-pressed="${ui.source === key}">${label} <span>${counts[key]}</span></button>`).join('')}

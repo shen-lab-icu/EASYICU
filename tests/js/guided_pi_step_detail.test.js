@@ -37,7 +37,7 @@ const events = [
   event(0, 'runtime', '', { action: 'runtime_validated', status: 'complete' }),
   event(1, 'context', '', { action: 'context_built', status: 'complete', source_label: 'MIMIC-IV demo', source_database: 'miiv' }),
   event(2, 'context', '', { action: 'exposure_groups_staged', group_variable_count: 1 }),
-  event(3, 'hypothesis', '', { action: 'literature_build', query_count: 2, record_count: 3, queries: ['sepsis glucose mortality'] }),
+  event(3, 'hypothesis', '', { action: 'literature_build', query_count: 2, record_count: 3, literature_record_registered: true, queries: ['sepsis glucose mortality'] }),
   plan(10, 'started', 1), plan(14, 'rejected', 1), plan(15, 'started', 2), plan(19, 'accepted', 2),
   event(20, 'plan', '', { action: 'plan_ready', plan_step_count: 4, status: 'complete' }),
   event(21, 'step', 'Skipped step already completed by pre-execution: cohort_accounting.', { step_id: 'cohort_accounting', status: 'complete' }),
@@ -114,6 +114,21 @@ const stepPayloads = {
     const turn = { status: 'running', steps: [] };
     events.forEach(row => activity.notePipelineEvent(turn, row));
     const rows = turn.steps;
+    const failedLiterature = { status: 'failed', steps: [] };
+    activity.notePipelineEvent(failedLiterature, event(3, 'hypothesis', '', {
+      action: 'literature_build', literature_record_registered: true,
+      literature_evidence: { run_id: 'run_wrapper', evidence_id: 'preplan_literature_bundle', sha256: 'a'.repeat(64) },
+    }));
+    assert.deepEqual(failedLiterature.steps[0].resources.map(row => [row.kind, row.run_id, row.evidence_id, row.evidence_sha256]), [
+      ['research_evidence', 'run_wrapper', 'preplan_literature_bundle', 'a'.repeat(64)],
+    ]);
+    assert.equal(failedLiterature.steps[0].resources[0].artifact, undefined);
+    const untrustedLiterature = { status: 'failed', steps: [] };
+    activity.notePipelineEvent(untrustedLiterature, event(3, 'hypothesis', '', {
+      action: 'literature_build', literature_record_registered: true,
+      literature_evidence: { run_id: 'run_wrapper', evidence_id: 'quality_gate', sha256: 'a'.repeat(64) },
+    }));
+    assert.deepEqual(untrustedLiterature.steps[0].resources, []);
     const firstResult = { status: 'running', steps: [] };
     activity.notePipelineEvent(firstResult, event(1, 'hypothesis', '', {
       action: 'literature_deferred', status: 'skipped',
@@ -198,6 +213,7 @@ const stepPayloads = {
     assert.deepEqual(contextOp.facts, [{ label: tr('Data source', '数据源'), value: 'MIMIC-IV demo (miiv)' }]);
     const literatureOp = ops.find(op => op.title === tr('Search the literature and build the hypotheses', '检索文献并构建研究假设'));
     assert.deepEqual(literatureOp.facts.map(fact => fact.value), ['2', '3', 'sepsis glucose mortality']);
+    assert.ok(literatureOp.detail.includes(tr('A screening record is registered; its contents and citations still need review.', '已登记文献筛选记录，内容与引用仍需审阅。')));
     // A finished run's audit rows carry the same typed facts without a label.
     const hydrated = { status: 'complete', steps: [] };
     events.map(row => (row.step === 'step' ? row : { ...row, label: undefined })).forEach(row => activity.notePipelineEvent(hydrated, row));
@@ -274,6 +290,15 @@ const stepPayloads = {
       steps: [{ ...extraction.steps[1], unit: '__proto__' }],
     } });
     assert.ok(detailOwner.renderExtraction(unknownUnit, true).includes(tr('Not recorded', '未记录')));
+    const sourceCase = detailOwner.validDetail({ ...stepPayloads.baseline_table, extraction_record: {
+      ...extraction, analysis_unit: 'icu_stay', concepts: [{ ...extraction.concepts[0], window: {
+        origin: 'first_intensive_or_intermediate_care_transfer', start_hours: 0, end_hours: 24,
+      } }],
+    } });
+    const sourceCaseHtml = detailOwner.renderExtraction(sourceCase, true);
+    assert.ok(sourceCaseHtml.includes(tr('First intensive or intermediate care transfer', '首次转入 ICU 或中间监护病区')));
+    assert.ok(sourceCaseHtml.includes(tr('source cases', '个来源病例')));
+    assert.ok(!sourceCaseHtml.includes(tr('ICU stays', '次 ICU 入住')));
     // A host action shows its typed inputs.
     sourceView.openOperation(button(literatureOp), 'project_1', '', () => {});
     assert.ok(html.includes(tr('Records found', '检索到的记录')) && html.includes('sepsis glucose mortality'));

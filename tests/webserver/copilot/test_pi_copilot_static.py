@@ -87,8 +87,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-source-view.css?v=20261022-winfont1" in index
     assert "css/guided-pi-literature.css?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
-    assert "css/guided-pi-research-draft.css?v=20261029-journey1" in index
-    assert "js/screens-guided-pi-research-draft.js?v=20261029-opt2" in index
+    assert "css/guided-pi-research-draft.css?v=20261029-followup1" in index
+    assert "js/screens-guided-pi-research-draft.js?v=20261029-followup1" in index
     assert index.index("js/screens-guided-pi-modules.js?") < index.index("js/screens-guided-pi-research-draft.js?") < index.index("js/screens-guided-pi-aside.js?") < index.index("js/screens-guided-pi.js?")
 
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
@@ -101,7 +101,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-header.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-model-menu.js?v=20261028-ux1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261028-ux1" in index
+    assert "css/guided-pi-workspace.css?v=20261029-followup1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert index.index("css/guided-pi-skin.css?") < index.index("css/guided-pi-task-list.css?v=20261029-journey4")
     assert index.index("js/screens-guided-pi-task-table.js?v=20261028-ux1") < index.index("js/screens-guided-pi.js?")
@@ -139,9 +139,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261029-journey4" in index
     assert "js/screens-guided-pi-events.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261029-journey1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261029-followup1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261029-opt2" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261029-followup1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -399,7 +399,7 @@ def test_execution_rows_open_the_public_operation_workbench() -> None:
     assert "data-gpi-trace-expand" in activity
     assert "data-gpi-trace-expand" in events
     assert "gpi-operation-title-icon" in source
-    assert "This step updated the run record and produced no file." in source
+    assert "No files are available in this step view. Check the run record for other files." in source
 
 
 def test_follow_up_questions_support_current_task_new_task_and_dismiss() -> None:

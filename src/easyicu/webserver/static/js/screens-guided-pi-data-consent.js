@@ -136,6 +136,14 @@
     if (current.status !== 'pending' || (!hasDraft && (ctx.namedDemo || ctx.namedDatabase || current.source))) {
       return renderSourceOptions(session, ctx);
     }
+    // Once a draft is visible, the existing next-step choices and composer
+    // already support continuing the discussion. Keep data selection available
+    // without repeating that action after every reply.
+    if (hasDraft) {
+      return `<section class="gpi-data-consent gpi-data-consent-discussion" aria-label="${ctx.tr('Discuss before selecting data', '先讨论，再选择数据')}"><div class="gpi-data-consent-body">
+        <details class="gpi-data-consent-later"><summary>${ctx.tr('Choose data for verification · can be done later', '选择用于核验的数据 · 可稍后')}</summary>${renderSourceOptions(session, ctx)}</details>
+      </div></section>`;
+    }
     const discussion = ctx.tr(
       'Keep discussing the research draft without binding data. Explain the design choices, candidate data and open decisions; do not prepare data or run analysis.',
       '先不绑定数据，继续完善研究讨论草案，说明设计选择、候选数据和待定事项；不准备数据、不执行分析。'

@@ -100,6 +100,19 @@ test('values are escaped and English reads naturally', () => {
   assert.match(html, /Approving the plan accepts these changes\./);
 });
 
+test('SICdb ICU length wording distinguishes an unverified endpoint from a missing record', () => {
+  const decision = { status: 'refusal', database: 'sic', substitutions: [],
+    missing: [{ capability: 'icu_los', code: 'icu_los_unavailable' }] };
+  const zh = owner('zh').render(review(decision));
+  assert.match(zh, /尚无法确认连续的纯 ICU 住院时长/);
+  assert.match(zh, /病例关闭的时长仅可作为待讨论的替代/);
+  assert.doesNotMatch(zh, /没有 ICU 住院时长/);
+  const en = owner('en').render(review(decision));
+  assert.match(en, /ICU-only length of stay cannot be confirmed/);
+  assert.match(en, /alternative for discussion/);
+  assert.match(owner('zh').render(review({ ...decision, database: 'hirid' })), /没有 ICU 住院时长/);
+});
+
 test('ICU discharge and last observation proxies are named before plan approval in both languages', () => {
   for (const [substitute, en, zh, table, column] of [
     ['icu_discharge_proxy', 'ICU discharge time used as a proxy for death time', '以 ICU 出科时间近似死亡时间', 'stays', 'exit_time'],
@@ -182,4 +195,37 @@ test('hospital death censored at hospital discharge says why follow-up continues
     assert.ok(html.includes(language === 'zh' ? '<strong>医院出院</strong>' : '<strong>Hospital discharge</strong>'));
     assert.doesNotMatch(html, /Follow-up ends at ICU discharge|在 ICU 出科时结束随访/);
   }
+});
+
+test('a verified candidate remains unselected and explicitly cannot execute', () => {
+  const input = {decision: {status: 'refusal', database: 'sic', missing: [], substitutions: []},
+    time_origin_candidate: {field: 'cases.ICUOffset'}};
+  for (const language of ['zh', 'en']) {
+    const html = owner(language).render(input);
+    assert.ok(html.includes('cases.ICUOffset'));
+    assert.ok(html.includes(language === 'zh' ? '待讨论的候选' : 'candidate for discussion'));
+    assert.ok(html.includes(language === 'zh' ? '执行能力尚未具备' : 'execution contract is not yet available'));
+  }
+});
+
+test('time-origin substitution names ICU and intermediate care distinctly', () => {
+  const input = {decision: {status: 'substitution', database: 'sic', missing: [], substitutions: [{
+    capability: 'time_zero', original: 'icu_admission',
+    substitute: 'first_intensive_or_intermediate_care_transfer', source_field: field('cases', 'ICUOffset'),
+  }]}, unapplied_substitutions: ['time_zero']};
+  const html = owner('zh').render(input);
+  assert.ok(html.includes('纯 ICU 入科'));
+  assert.ok(html.includes('首次转入重症或中间护理病区'));
+  assert.ok(html.includes('暂不能批准'));
+});
+
+test('case duration is visibly a different endpoint from ICU stay', () => {
+  const input = {decision: {status: 'substitution', database: 'sic', missing: [], substitutions: [{
+    capability: 'outcome_meaning', original: 'los_icu', substitute: 'care_unit_to_case_closure_days',
+    source_field: field('cases', 'TimeOfStay'),
+  }]}, unapplied_substitutions: []};
+  const html = owner('zh').render(input);
+  assert.ok(html.includes('纯 ICU 住院时长'));
+  assert.ok(html.includes('重症或中间护理病区入科到病例关闭的时长'));
+  assert.ok(html.includes('这是结局口径变化，必须明确审阅'));
 });

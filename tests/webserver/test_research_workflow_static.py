@@ -22,8 +22,8 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
                  "screens-guided-pi-session-view.js", "screens-guided-pi.js",
                  "screens-guided-pi-skill-attach.js"]:
         assert re.search(rf'js/{re.escape(file)}\?v=[^"\s]+"', html)
-    assert 'js/screens-skills-implementation.js?v=20261029-fn5"' in html
-    assert 'js/screens-skills.js?v=20261029-fn5"' in html
+    assert 'js/screens-skills-implementation.js?v=20261029-followup1"' in html
+    assert 'js/screens-skills.js?v=20261029-followup1"' in html
     assert 'css/skills-implementation.css?v=20261029-fn5"' in html
     assert html.index('css/skills-hub.css?') < html.index('css/skills-implementation.css?')
     assert 'css/skills-workflows.css?v=20261029-flow1"' in html
@@ -50,7 +50,8 @@ def test_the_request_survives_until_the_composer_consumes_it():
     assert "removeItem('easyicu.skillHub.question')" not in study
     assert "source: 'builtin', id: String(methodIntent.id)" in study
     composer = (STATIC / "js/screens-guided-pi.js").read_text()
-    assert "await attachOwner.ensure(expectedProjectId, session, hubAttachment.source, hubAttachment.id)" in composer
+    navigation = (STATIC / "js/screens-guided-pi-session-navigation.js").read_text()
+    assert "await attachOwner.ensure(expectedProjectId, session, hubAttachment.source, hubAttachment.id)" in navigation
     assert "state.draft = suggestion" in composer
     attach = (STATIC / "js/screens-guided-pi-skill-attach.js").read_text()
     assert "attached_skills: rows" in attach

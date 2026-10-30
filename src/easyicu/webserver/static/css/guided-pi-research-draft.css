@@ -14,6 +14,16 @@
 .gpi-research-draft-history summary, .gpi-formal-progress > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .gpi-research-draft-history article { padding-top: 12px; }
 .gpi-research-draft-history p { margin: 0; font-size: 12px; }
+.gpi-draft-comparison { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.gpi-draft-comparison > summary { color: inherit; font-weight: 650; overflow-wrap: anywhere; }
+.gpi-draft-comparison > p { margin: 8px 0; color: var(--muted); line-height: 1.5; }
+.gpi-draft-comparison section { margin: 12px 0; }
+.gpi-draft-comparison h5 { margin: 0 0 5px; font-size: 12px; }
+.gpi-draft-compare-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.gpi-draft-compare-values > div { min-width: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.gpi-draft-compare-values strong { color: var(--muted); font-size: 11px; }
+.gpi-draft-compare-values ul { margin-top: 2px; padding-left: 16px; font-size: inherit; }
+.gpi-draft-empty { display: block; color: var(--muted); }
 .gpi-formal-progress { padding: 10px 12px; border-top: 1px solid var(--line); }
 .gpi-data-consent-discussion { margin-bottom: 8px; }
 .gpi-data-consent-later > summary { cursor: pointer; font-size: 13px; padding: 8px 0; color: var(--muted); }

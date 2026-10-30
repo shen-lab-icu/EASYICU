@@ -185,6 +185,95 @@ test('replayed resend steps and a long terminal wait are isolated from the origi
   assert.deepEqual(Array.from(old.allowedActions), []);
 });
 
+test('superseded terminal traces stay historical while the current attempt runs or fails', () => {
+  for (const language of ['zh', 'en']) {
+    const ctx = context(['activity']);
+    const activity = ctx.window.EasyICU.guidedPi.require('activity').create({
+      tr: (en, zh) => language === 'zh' ? zh : en,
+      esc, iconHtml: () => '', resourceName: () => '', resourceKey: () => '', resourceButton: () => '',
+      runFailureText: code => `diagnostic: ${code}`,
+    });
+    const old = { id: 'old', status: 'error', supersededAttempt: true, steps: [],
+      startedAt: ms(0), endedAt: ms(2), failureCode: 'provider_timeout' };
+    const current = { id: 'current', status: 'running', steps: [], startedAt: ms(5) };
+    const earlier = language === 'zh' ? /较早的尝试已停止/ : /Earlier attempt stopped/;
+    const needsAttention = language === 'zh' ? /执行过程需要处理/ : /Execution needs attention/;
+    const oldHtml = activity.render(old);
+    assert.match(oldHtml, earlier);
+    assert.match(oldHtml, /diagnostic: provider_timeout/);
+    assert.doesNotMatch(oldHtml, needsAttention);
+    assert.doesNotMatch(oldHtml, /自动修复完成|automatically repaired/i);
+    assert.match(activity.render({ ...old, status: 'cancelled' }), earlier);
+    const runningHtml = activity.render(current);
+    assert.match(runningHtml, /aria-busy="true"/);
+    assert.doesNotMatch(runningHtml, earlier);
+    const failedHtml = activity.render({ ...old, id: 'current-failed', supersededAttempt: false });
+    assert.match(failedHtml, needsAttention);
+    assert.match(failedHtml, /diagnostic: provider_timeout/);
+    assert.doesNotMatch(failedHtml, earlier);
+  }
+});
+
+test('a host-issued fresh-plan key identifies only its earlier failed child trace', () => {
+  const ctx = context(['activity', 'transcript']);
+  const activity = ctx.window.EasyICU.guidedPi.require('activity').create({ tr: (_en, zh) => zh,
+    esc, iconHtml: () => '', resourceName: () => '', resourceKey: () => '', resourceButton: () => '',
+    runFailureText: code => `diagnostic: ${code}` });
+  const transcript = ctx.window.EasyICU.guidedPi.require('transcript').create({ activity });
+  const oldTurn = { kind: 'host_action', job_id: 'host_24254f31cf767d7a25a9c70a', action_code: 'generate_plan',
+    action_key: 'plan:c5d0d5bcc6989ed5:run_de3aa930629e:failed_pipeline_requires_fresh_plan',
+    child_job_id: '3db356aef5ae', status: 'failed', started_at: at(0), ended_at: at(10) };
+  const nextTurn = { kind: 'host_action', job_id: 'host_4634c1cdd88d709dc45569dd', action_code: 'generate_plan',
+    action_key: 'plan:c5d0d5bcc6989ed5:run_3db356aef5ae:failed_pipeline_requires_fresh_plan',
+    child_job_id: 'b2d50b1d0583', status: 'failed', started_at: at(20), ended_at: at(30) };
+  const oldJob = { job_id: '3db356aef5ae', kind: 'agent-run', status: 'failed' };
+  const nextJob = { job_id: 'b2d50b1d0583', kind: 'agent-run', status: 'failed' };
+  const session = (old = oldTurn, next = nextTurn, jobs = [oldJob, nextJob]) => ({
+    conversation_replay: { turns: [old, next] }, archived_child_jobs: jobs,
+  });
+  const makeRows = () => [
+    { id: 'old', role: 'activity', childJobId: oldJob.job_id, status: 'error',
+      startedAt: ms(0), endedAt: ms(10), steps: [], failureCode: 'old_failure' },
+    { id: 'current', role: 'activity', childJobId: nextJob.job_id, status: 'error',
+      startedAt: ms(20), endedAt: ms(30), steps: [], failureCode: 'current_failure' },
+  ];
+  const rows = makeRows();
+  transcript.markSupersededPlanAttempts(rows, session());
+  assert.equal(rows[0].supersededAttempt, true);
+  assert.equal(rows[0].supersededByPlanAttempt, true);
+  assert.equal(rows[1].supersededAttempt, undefined);
+  assert.match(activity.render(rows[0]), /较早的尝试已停止/);
+  assert.match(activity.render(rows[0]), /已有后续计划尝试/);
+  assert.match(activity.render(rows[0]), /diagnostic: old_failure/);
+  assert.match(activity.render(rows[1]), /执行过程需要处理/);
+  assert.match(activity.render(rows[1]), /diagnostic: current_failure/);
+  assert.doesNotMatch(activity.render(rows[0]), /自动修复完成|已被重发替代/);
+
+  const invalid = [
+    session(oldTurn, { ...nextTurn, action_key: nextTurn.action_key.replace('run_3db356aef5ae', 'run_independent') }),
+    session(oldTurn, { ...nextTurn, action_key: nextTurn.action_key.replace('c5d0d5bcc6989ed5', 'aaaaaaaaaaaaaaaa') }),
+    session(oldTurn, { ...nextTurn, started_at: at(5) }), // overlapping jobs
+    session({ ...oldTurn, status: 'running' }),
+    session(oldTurn, nextTurn, [nextJob]),
+    session(oldTurn, nextTurn, [oldJob, oldJob, nextJob]),
+    session(oldTurn, { ...nextTurn, child_job_id: '' }),
+    session(oldTurn, { ...nextTurn, job_id: 'browser-constructed-row' }),
+  ];
+  invalid.forEach(candidate => {
+    const untouched = makeRows();
+    transcript.markSupersededPlanAttempts(untouched, candidate);
+    assert.equal(untouched[0].supersededAttempt, undefined);
+    assert.equal(untouched[1].supersededAttempt, undefined);
+  });
+  assert.match(section('async function refreshSession(', 'function adoptPersistedEntryIds('),
+    /TRANSCRIPT\.markSupersededPlanAttempts\(state\.messages, state\.session\)/);
+  const initialLoad = section('async function openSession(', 'function assistantRow(');
+  assert.match(initialLoad, /TRANSCRIPT\.markSupersededPlanAttempts\(state\.messages, state\.session\)/);
+  assert.ok(initialLoad.indexOf('hydrateProjectedJob(state.workflow && state.workflow.active_job)')
+    < initialLoad.indexOf('TRANSCRIPT.markSupersededPlanAttempts(state.messages, state.session)'),
+  'reloaded archived activities are marked after they are hydrated');
+});
+
 test('a completed workspace retry remains protected from generic regeneration after reload', () => {
   const ctx = context(['activity', 'transcript', 'message-actions']);
   ctx.window.EasyICU.guidedPi.declare('replay', { lifecycleTurns: session => session.conversation_replay.turns });

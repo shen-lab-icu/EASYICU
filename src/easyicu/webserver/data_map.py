@@ -86,6 +86,21 @@ def concept_substitutes() -> dict[str, dict[str, dict]]:
     return found
 
 
+def concept_source_semantics() -> dict[str, dict[str, dict]]:
+    """Project source-owned definition differences, not data completeness."""
+    found: dict[str, dict[str, dict]] = {}
+    for profile in iter_database_profiles(public_only=True):
+        facts = research_capability_profile(profile.key)
+        if facts.care_unit_admission_proxy and facts.case_close_proxy and facts.icu_admission is None:
+            found.setdefault("los_icu", {})[profile.key] = {
+                "kind": "care_unit_to_case_closure_proxy",
+                "start": facts.care_unit_admission_proxy.model_dump(mode="json"),
+                "end": facts.case_close_proxy.model_dump(mode="json"),
+                "exact_icu_los": False,
+            }
+    return found
+
+
 def _concept_cell(profile: ResearchCapabilityProfile, name: str, definitions: dict) -> ConceptCell:
     fact = profile.concept(name)
     substitute = _substitute(profile, name, fact)

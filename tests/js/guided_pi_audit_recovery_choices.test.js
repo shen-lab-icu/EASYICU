@@ -176,6 +176,22 @@ test('recovery submits the reviewed candidate and the original host decision', a
   }
 });
 
+test('a fresh plan after a failed planning run does not resume its checkpoint', async () => {
+  const f = fixture('failed_pipeline_requires_fresh_plan');
+  await modules.require('planActions').create(f.host).confirmWorkflow(f.card.workflowConfirmation());
+  assert.equal(f.calls[0].planner_start_mode, 'fresh');
+  assert.equal(f.calls[0].plan_revision_source_run_id, '');
+  assert.equal(f.calls[0].execution_resume_source_run_id, undefined);
+});
+
+test('replanning a failed approved execution retains its reviewed source', async () => {
+  const f = fixture('failed_pipeline_execution_retry_futile');
+  await modules.require('planActions').create(f.host).startFormalPlanGeneration('failed_pipeline_requires_fresh_plan');
+  assert.equal(f.calls[0].planner_start_mode, 'auto');
+  assert.equal(f.calls[0].plan_revision_source_run_id, 'candidate-a');
+  assert.equal(f.calls[0].execution_resume_source_run_id, undefined);
+});
+
 test('stale, busy and passive pages never start recovery or prepare data automatically', async () => {
   for (const blocker of ['busy', 'sessionIsStale']) {
     const f = fixture('planner_checkpoint_resume_available');

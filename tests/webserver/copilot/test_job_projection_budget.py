@@ -190,6 +190,27 @@ def test_already_measured_endpoints_survive_both_live_and_audit_receipts(audit):
     assert row["timestamp"] == _at(5)
 
 
+def test_registered_literature_flag_survives_projection_only_for_its_action():
+    assert projections._trace_facts({
+        "action": "literature_build", "literature_record_registered": True,
+    })["literature_record_registered"] is True
+    for value in (False, 1, "true", None):
+        assert "literature_record_registered" not in projections._trace_facts({
+            "action": "literature_build", "literature_record_registered": value,
+        })
+    assert "literature_record_registered" not in projections._trace_facts({
+        "action": "context_built", "literature_record_registered": True,
+    })
+
+
+def test_untrusted_trace_event_cannot_create_a_literature_evidence_link():
+    result = projections._trace_facts({
+        "action": "literature_build", "literature_record_registered": True,
+        "literature_evidence": {"run_id": "run_forged", "evidence_id": "preplan_literature_bundle", "sha256": "a" * 64},
+    })
+    assert "literature_evidence" not in result
+
+
 @pytest.mark.parametrize("unsafe", [{"rows": [1]}, "/private/synthetic.csv"])
 def test_oversized_progress_still_fails_closed_for_forbidden_fields(unsafe):
     snapshot = _snapshot(300)

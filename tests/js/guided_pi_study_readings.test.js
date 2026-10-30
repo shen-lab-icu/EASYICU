@@ -100,6 +100,11 @@ for (const language of ['zh', 'en']) {
   assert.ok(scope.includes(language === 'zh' ? '亚型或轨迹聚类' : 'subtype or trajectory clustering'));
   assert.ok(scope.includes(language === 'zh' ? '观测记录没有时间' : 'its measurements carry no times'));
   assert.ok(errors.errorText({ code: 'study_family_database_out_of_scope' }).includes(language === 'zh' ? '这类研究' : 'this kind of study'));
+  const sicScope = scopeOf({ family: 'association_study', database: 'sic', supported_databases: [],
+    missing_capabilities: [{ capability: 'icu_los', code: 'icu_los_unavailable' }] });
+  assert.ok(sicScope.includes(language === 'zh' ? '尚无法确认连续的纯 ICU 住院时长' : 'ICU-only length of stay cannot be confirmed'));
+  assert.ok(sicScope.includes(language === 'zh' ? '待讨论的替代' : 'alternative for discussion'));
+  assert.ok(!sicScope.includes(language === 'zh' ? '没有 ICU 住院时长' : 'it has no ICU length of stay'));
   // The public demo is named, and the offered database is stated, not prescribed.
   const demoScope = scopeOf({ family: 'survival', database: 'eicu_demo', supported_databases: ['miiv', 'miiv_demo', 'aumc'] });
   assert.ok(demoScope.includes('eICU-CRD Demo') && !demoScope.includes(language === 'zh' ? '这个数据库' : 'this database'));

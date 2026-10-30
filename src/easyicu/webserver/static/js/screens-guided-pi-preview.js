@@ -169,6 +169,15 @@
         media_type: 'application/json',
       };
     }
+    if (value.kind === 'research_evidence') {
+      const runId = String(value.run_id || '').trim();
+      const evidenceId = String(value.evidence_id || '').trim();
+      const digest = String(value.evidence_sha256 || '').trim().toLowerCase();
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)
+        || evidenceId !== 'preplan_literature_bundle' || !/^[a-f0-9]{64}$/.test(digest)) return null;
+      return { kind: 'research_evidence', run_id: runId, evidence_id: evidenceId, evidence_sha256: digest,
+        label: String(value.label || tr('Literature candidates', '文献候选')).slice(0, 160), media_type: 'application/json' };
+    }
     if (value.kind === 'research_artifact') {
       const runId = String(value.run_id || '').trim();
       const artifact = String(value.artifact || '').trim();
@@ -397,7 +406,7 @@
     if (state.resource.artifact === 'article_report.json') return window.EasyICU.guidedPi.require('articleReport');
     return window.EasyICU.guidedPi.require('technicalReport');
   }
-  function isEvidenceBoundResource() { return isResearchArtifact() || isResearchReport(); }
+  function isEvidenceBoundResource() { return isResearchArtifact() || isResearchReport() || (state.resource && state.resource.kind === 'research_evidence'); }
   function isResearchDocument() { return !!state.resource && (state.resource.kind === 'research_document' || state.resource.kind === 'system_validation_document'); }
   function isDemoDocument() { return !!state.resource && state.resource.kind === 'demo_document'; }
   function isDocument() { return isResearchDocument() || isDemoDocument(); }
@@ -767,6 +776,9 @@
     const evidenceId = String(button.dataset.evidenceId || '').trim();
     const sha256 = String(button.dataset.evidenceSha256 || '').trim().toLowerCase();
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return;
+    if (state.resource.kind === 'research_evidence'
+      && (state.resource.evidence_id !== evidenceId || state.resource.evidence_sha256 !== sha256)) return;
+    const ticket = state.request;
     const renderer = window.EasyICU.guidedPi.require('evidencePreview');
     const claimPanel = typeof button.closest === 'function' ? button.closest('[data-gpi-claim-panel]') : null;
     state.activeClaimId = String(button.dataset.gpiClaim || (claimPanel && claimPanel.dataset.gpiClaimPanel) || state.activeClaimId || '').trim();
@@ -803,15 +815,18 @@
       const response = await api.loadPiCopilotResearchEvidence(
         state.projectId, state.resource.run_id, evidenceId, sha256,
       );
+      if (ticket !== state.request) return;
       item.payload = response && response.payload ? response.payload : {};
+      if (response && response.governance) state.governance = response.governance;
       item.kindLabel = renderer && typeof renderer.kindLabel === 'function'
         ? renderer.kindLabel(item.payload) : kind;
       item.error = '';
     } catch (error) {
+      if (ticket !== state.request) return;
       item.error = String(error && (error.message || error.code) || error);
     } finally {
       item.loading = false;
-      if (state.activeEvidenceId === evidenceId) render();
+      if (ticket === state.request && state.activeEvidenceId === evidenceId) render();
     }
   }
   async function loadResource() {
@@ -976,12 +991,12 @@
     state.evidenceTabs = [];
     state.activeEvidenceId = '';
     state.error = '';
-    state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'research_report' || safe.kind === 'idea_plan' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' || isCheckedWorkspaceHtml() ? 'web' : 'code'))));
+    state.mode = safe.kind === 'research_evidence' ? 'evidence' : safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'research_report' || safe.kind === 'idea_plan' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' || isCheckedWorkspaceHtml() ? 'web' : 'code'))));
     state.activeClaimId = '';
     if (typeof syncLocation === 'function') syncLocation(state.resource);
     render();
     if (state.mode === 'web') beginRuntimeQa();
-    if (state.mode !== 'web' && state.mode !== 'document') loadResource();
+    if (state.mode !== 'web' && state.mode !== 'document' && safe.kind !== 'research_evidence') loadResource();
     return true;
   }
   function openRunEvidence(resource, projectId, button) {
