@@ -24,6 +24,8 @@ Commit 2 (Phase-1 widening, May 2026). Pins:
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+import copy
 
 import pytest
 
@@ -36,11 +38,95 @@ from easyicu.research_agent.authority.evidence_store import (
 from easyicu.research_agent.authority.evidence_snapshot import (
     load_current_evidence_snapshot,
 )
+from easyicu.research_agent.execution.phase_support import (
+    _step_register_current_step_numeric_claims,
+)
 
 
 # ---------------------------------------------------------------------
 # 1. Sandbox accepts allowed
 # ---------------------------------------------------------------------
+
+
+def test_step_derived_claims_use_frozen_current_sources(tmp_path: Path) -> None:
+    store = EvidenceStore(root=tmp_path)
+
+    def register(step_id: str, evidence_id: str, value: float) -> None:
+        store.register_text(
+            kind="statistic", description="summary", text=f"{value}",
+            filename=f"{evidence_id}.json", evidence_id=evidence_id,
+            produced_by_step=step_id,
+        )
+        store.register_step_summary_numerics(
+            step_id=step_id, evidence_id=evidence_id, summary={"estimate": value},
+        )
+
+    register("parent", "parent_old", 1.0)
+    register("parent", "parent_current", 2.0)
+    register("worker", "worker_old", 30.0)
+    store.register_text(
+        kind="log", producer="pipeline", evidence_id="research_context",
+        description="run context", filename="context.json", text="4",
+    )
+    store.register_numeric_claim(
+        value="4", canonical=4, evidence_id="research_context",
+        step_id="research_context", source_field="estimate",
+    )
+    records = [
+        {"step_id": "parent", "status": "ok", "evidence_ids": ["parent_current"]},
+        {"step_id": "worker", "status": "ok", "evidence_ids": ["worker_old"]},
+    ]
+    frozen = [copy.deepcopy(claim) for claim in store.authoritative_numeric_claims(records)
+              if claim.step_id != "worker"]
+    # A peer registers a later claim after this worker's view was captured.
+    register("parent", "parent_later", 99.0)
+    register("peer", "peer_result", 40.0)
+    register("worker", "worker_current", 3.0)
+    summary = {
+        "estimate": 3.0,
+        "derived_claims": [
+            {"name": "parent_plus_own", "formula": "a + b", "explanation": "sum",
+             "sources": {"a": {"step_id": "parent", "field": "estimate"},
+                         "b": "estimate"}},
+            {"name": "peer_value", "formula": "a", "explanation": "peer",
+             "sources": {"a": {"step_id": "peer", "field": "estimate"}}},
+            {"name": "context_value", "formula": "a", "explanation": "context",
+             "sources": {"a": {"step_id": "research_context", "field": "estimate"}}},
+            {"name": "old_worker_value", "formula": "a", "explanation": "old",
+             "sources": {"a": "old_only"}},
+        ],
+    }
+    store.register_numeric_claim(value="77", canonical=77, evidence_id="worker_old",
+                                 step_id="worker", source_field="old_only")
+    findings = []
+    _step_register_current_step_numeric_claims(
+        step=SimpleNamespace(step_id="worker"), step_summary=summary,
+        step_summary_record_id="worker_current", standard_executor_terminal_block=False,
+        evidence=store, findings=findings,
+        pipeline=SimpleNamespace(_max_numeric_claims_per_step=0),
+        prior_numeric_claims=frozen,
+    )
+    derived = [claim for claim in store.numeric_claims() if claim.is_derived]
+    assert [(claim.source_field, claim.canonical) for claim in derived] == [
+        ("parent_plus_own", 5.0),
+        ("context_value", 4.0),
+    ]
+    assert {finding.detail["claim_name"] for finding in findings} == {
+        "peer_value", "old_worker_value",
+    }
+    parent = store.get("parent_current")
+    assert parent is not None
+    (tmp_path / parent.relative_path).write_text("tampered", encoding="utf-8")
+    older_parent = next(
+        copy.deepcopy(claim) for claim in store.numeric_claims()
+        if claim.evidence_id == "parent_old"
+    )
+    with pytest.raises(DerivedFormulaError, match="not found in registry"):
+        store.register_derived_claim(
+            name="tampered", formula="a", explanation="invalid source",
+            sources={"a": ("parent", "estimate")}, evidence_id="worker_current",
+            step_id="worker", source_claims=[older_parent, *frozen],
+        )
 
 
 def test_evaluator_arithmetic_and_math_whitelist() -> None:
