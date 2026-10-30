@@ -21,7 +21,7 @@ async function reader(rows) {
   vm.runInNewContext(source, { window });
   let text = '';
   const controller = owner.create({
-    tr: en => en, session: () => ({ session_id: 'synthetic' }),
+    tr: en => en, session: () => ({ session_id: 'synthetic' }), busy: () => false,
     dataConsent: { requiresConfirmation: () => true },
     api: () => ({ loadOfficialDemoSources: async () => ({ sources: rows }) }),
     messages: () => [{ role: 'user', text }], render() {},

@@ -90,7 +90,7 @@ function click(attributes) {
     dataset: attributes.dataset,
     hasAttribute: name => Boolean(attributes.routine) && name === 'data-gpi-action-ask-routine',
   };
-  return { target: { closest: () => button }, preventDefault() {} };
+  return { target: { closest: selector => selector.includes('[data-gpi-action-ask-allow]') ? button : null }, preventDefault() {} };
 }
 
 test('allowing sends one follow-up with exactly those grants added to the mode', () => {
