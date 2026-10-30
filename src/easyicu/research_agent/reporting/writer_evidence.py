@@ -208,10 +208,16 @@ def _preferred_writer_evidence_names(
         if per_step_records is not None
         else None
     )
+    allowed_names = (
+        set(evidence.current_resolvable_names(per_step_records))
+        if per_step_records is not None else None
+    )
 
     def is_citable(name: str) -> bool:
         record = evidence.get(name)
         if record is None:
+            return False
+        if allowed_names is not None and name not in allowed_names:
             return False
         if allowed_ids is not None and record.evidence_id not in allowed_ids:
             return False
@@ -242,6 +248,31 @@ def _preferred_writer_evidence_names(
         for claim in evidence.authoritative_numeric_claims(per_step_records):
             name = str(claim.evidence_id)
             if name not in out and is_citable(name):
+                out.append(name)
+        # A conflicted alias is not a valid writer citation. Offer both
+        # successful result owners by exact id so the writer can still cite
+        # the right result without relying on parallel completion order.
+        from ..authority.evidence_record_resolution import current_conflicted_evidence_aliases
+
+        conflicts = current_conflicted_evidence_aliases(
+            per_step_records, current_evidence_ids=allowed_ids or set(), aliases=aliases,
+        )
+        candidates = {aliases[name] for name in conflicts if name in aliases}
+        for row in current_step_records(per_step_records):
+            retained = row.get("retained_cross_step_aliases")
+            if (
+                str(row.get("status") or "").strip().lower() == "ok"
+                and isinstance(retained, Mapping)
+                and conflicts.intersection(retained)
+            ):
+                candidates.update(str(value) for value in row.get("evidence_ids") or ())
+        for name in sorted(candidates):
+            record = evidence.get(name)
+            if (
+                record is not None and record.evidence_id == name
+                and record.kind in {"table", "statistic", "figure"}
+                and name not in out and is_citable(name)
+            ):
                 out.append(name)
     if out:
         return out

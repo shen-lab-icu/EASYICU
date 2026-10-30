@@ -13,6 +13,7 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceStore,
 )
 from easyicu.research_agent.authority.registration import StepEvidenceCommit
+from easyicu.research_agent.reporting.writer_evidence import _preferred_writer_evidence_names
 
 
 def _publish(store, step, alias, *, same_basename=False):
@@ -71,6 +72,20 @@ def test_implicit_same_basename_conflict_is_recorded_and_blocks_reference(tmp_pa
     )
 
 
+def test_writer_receives_exact_owners_not_the_ambiguous_preferred_alias(tmp_path):
+    store = EvidenceStore(tmp_path)
+    first, first_row = _publish(store, "a", "primary_association")
+    second, second_row = _publish(store, "b", "primary_association")
+    rows = [first_row, second_row]
+    names = store.current_resolvable_names(rows)
+    preferred = _preferred_writer_evidence_names(store, rows)
+    assert "primary_association" not in names
+    assert "primary_association" not in preferred
+    for record in (first, second):
+        assert record.evidence_id in names
+        assert record.evidence_id in preferred
+
+
 def test_concurrent_publication_records_conflict_before_report_binding(tmp_path):
     store = EvidenceStore(tmp_path, enforcement_mode="strict")
     start = Barrier(2, timeout=5)
@@ -92,6 +107,43 @@ def test_concurrent_publication_records_conflict_before_report_binding(tmp_path)
         )
 
 
+def test_conflict_survives_original_owner_retry_with_new_evidence_id(tmp_path):
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    old_owner, first_row = _publish(store, "a", "primary_association")
+    other, other_row = _publish(store, "b", "primary_association")
+    replacement = store.register_text(
+        kind="statistic", description="a retry", text="new a",
+        filename="new_a.json", evidence_id="result_a_retry",
+        produced_by_step="a", publish_aliases=False,
+    )
+    StepEvidenceCommit(store).commit_validated_step(
+        step_id="a", pending_aliases={replacement.evidence_id: ["primary_association"]},
+        allowed_evidence_ids=[replacement.evidence_id], register_numeric_claims=lambda: None,
+    )
+    rows = [first_row, other_row, {"step_id": "a", "status": "ok",
+                                   "evidence_ids": [replacement.evidence_id]}]
+    assert store.aliases()["primary_association"] == replacement.evidence_id
+    assert other_row["retained_cross_step_aliases"] == {"primary_association": old_owner.evidence_id}
+    assert _current_verified_evidence_record(store, "primary_association", rows) is None
+    assert "primary_association" not in store.current_resolvable_names(rows)
+    preferred = _preferred_writer_evidence_names(store, rows)
+    assert "primary_association" not in preferred
+    assert {replacement.evidence_id, other.evidence_id} <= set(preferred)
+    with pytest.raises(EvidenceEnforcementError) as error:
+        store.bind_manuscript("See {evidence:primary_association}.", per_step_records=rows)
+    assert error.value.detail["ambiguous_evidence_aliases"] == ["primary_association"]
+
+
+def test_competing_step_cannot_hide_conflict_by_listing_winner_id(tmp_path):
+    store = EvidenceStore(tmp_path)
+    winner, winner_row = _publish(store, "a", "shared_result")
+    _, claimant_row = _publish(store, "b", "shared_result")
+    claimant_row["evidence_ids"].append(winner.evidence_id)
+    rows = [winner_row, claimant_row]
+    assert "shared_result" not in store.current_resolvable_names(rows)
+    assert _current_verified_evidence_record(store, "shared_result", rows) is None
+
+
 @pytest.mark.parametrize("new_status", ["failed", "ok"])
 def test_superseded_conflict_does_not_poison_current_success(tmp_path, new_status):
     store = EvidenceStore(tmp_path)
@@ -99,5 +151,6 @@ def test_superseded_conflict_does_not_poison_current_success(tmp_path, new_statu
     _, old_row = _publish(store, "b", "result")
     newer = {"step_id": "b", "status": new_status, "evidence_ids": []}
     rows = [first_row, old_row, newer]
+    assert "result" in store.current_resolvable_names(rows)
     assert _current_verified_evidence_record(store, "result", rows).evidence_id == first.evidence_id
     assert first.relative_path in store.bind_manuscript("See {evidence:result}.", per_step_records=rows)

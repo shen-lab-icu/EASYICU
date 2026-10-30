@@ -3031,12 +3031,16 @@ class EvidenceStore:
             record.evidence_id
             for record in self.current_verified_records(per_step_records)
         }
-        with self._lock:
-            current_aliases = {
-                alias
-                for alias, evidence_id in self._aliases.items()
-                if evidence_id in current_ids
-            }
+        from .evidence_record_resolution import current_conflicted_evidence_aliases
+
+        aliases = self.aliases()
+        conflicts = current_conflicted_evidence_aliases(
+            per_step_records, current_evidence_ids=current_ids, aliases=aliases,
+        )
+        current_aliases = {
+            alias for alias, evidence_id in aliases.items()
+            if evidence_id in current_ids and alias not in conflicts
+        }
         return sorted(current_ids | current_aliases)
 
     def authoritative_numeric_claims(
