@@ -121,8 +121,10 @@
     const afterUser = lastUser < 0 ? [] : later.slice(lastUser + 1);
     const lastAssistant = afterUser.filter(row => row && row.role === 'assistant').at(-1);
     const reason = String(lastAssistant?.stopReason || lastAssistant?.stop_reason || '');
+    const failed = Boolean(lastAssistant && (lastAssistant.errorCode || lastAssistant.hostFailedAttempt
+      || ['error', 'aborted', 'cancelled', 'interrupted'].includes(reason)));
     const updateFailed = lastUser >= 0 && requestsDraftUpdate(later[lastUser].text)
-      && Boolean(lastAssistant && accepts(lastAssistant)) && !afterUser.some(isStreaming)
+      && Boolean(lastAssistant && (accepts(lastAssistant) || failed)) && !afterUser.some(isStreaming)
       && !['toolUse', 'tool_use', 'tool_calls'].includes(reason);
     return { ...latest, history: drafts.slice(0, -1).slice(-5),
       pendingUpdate: lastUser >= 0, updateFailed };
@@ -194,5 +196,9 @@
     </section>`;
   }
 
-  window.EasyICU.guidedPi.declare('researchDraft', { read, strip, stripCopied, streaming, isStreaming, accepts, current, render });
+  const api = { read, strip, stripCopied, streaming, isStreaming, accepts, current, render, requestsDraftUpdate };
+  // The sidecar uses the same parser/intent check, keeping completion checks
+  // identical to the browser's accepted schema without a second schema copy.
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  if (typeof window !== 'undefined') window.EasyICU.guidedPi.declare('researchDraft', api);
 })();
