@@ -554,7 +554,11 @@ def _analysis_status(
             else (
                 "The analysis is technically valid but requires major scientific revision."
                 if domain_state == "review_required"
-                else "Execution completeness does not close the open scientific design defects."
+                else (
+                    "Analysis completion has not been confirmed; the scientific assessment remains open."
+                    if axes.get("execution_complete") is not True
+                    else "Analysis completion does not establish validation or close open scientific design issues."
+                )
             )
         ),
         evidence_refs=[
