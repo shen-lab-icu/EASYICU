@@ -21,6 +21,53 @@ def _evidence_record_field(record: Any, name: str) -> Any:
     return getattr(record, name, None)
 
 
+def current_conflicted_evidence_aliases(
+    per_step_records: Sequence[Mapping[str, Any]],
+    *,
+    current_evidence_ids: set[str],
+    aliases: Mapping[str, str],
+) -> set[str]:
+    """Names claimed by another currently successful, evidenced step.
+
+    Retained aliases keep historical citations stable but do not identify which
+    of two concurrent results the author intended. Ignore superseded/failed
+    attempts and conflicts whose original binding is no longer current.
+    """
+    from .runtime_artifacts import current_successful_step_records
+
+    conflicts: set[str] = set()
+    for step in current_successful_step_records(per_step_records):
+        active_ids = {
+            str(item) for item in (step.get("evidence_ids") or ())
+            if str(item) in current_evidence_ids
+        }
+        if not active_ids:
+            continue
+        retained = step.get("retained_cross_step_aliases")
+        if not isinstance(retained, Mapping):
+            continue
+        for raw_alias, raw_owner_id in retained.items():
+            alias, owner_id = str(raw_alias), str(raw_owner_id)
+            if owner_id in current_evidence_ids and aliases.get(alias) == owner_id:
+                conflicts.add(alias)
+    return conflicts
+
+
+def is_conflicted_evidence_reference(
+    name: str, evidence_id: str, *, aliases: Mapping[str, str], conflicts: set[str],
+) -> bool:
+    """Cover exact aliases and the store's unique-prefix alias fallback."""
+    if name == evidence_id:
+        return False
+    if name in aliases:
+        return name in conflicts
+    prefix = f"{name}_"
+    return any(
+        alias.startswith(prefix) and aliases.get(alias) == evidence_id
+        for alias in conflicts
+    )
+
+
 def _current_verified_evidence_record(
     evidence_store: Any,
     name: str,
@@ -35,7 +82,27 @@ def _current_verified_evidence_record(
         item.evidence_id
         for item in evidence_store.current_verified_records(per_step_records)
     }
-    return record if record.evidence_id in current_ids else None
+    if record.evidence_id not in current_ids:
+        return None
+    if name == record.evidence_id:
+        return record
+    if not any(
+        isinstance(row, Mapping) and row.get("retained_cross_step_aliases")
+        for row in per_step_records
+    ):
+        return record
+    aliases_fn = getattr(evidence_store, "aliases", None)
+    if not callable(aliases_fn):
+        return None
+    aliases = aliases_fn()
+    conflicts = current_conflicted_evidence_aliases(
+        per_step_records, current_evidence_ids=current_ids, aliases=aliases,
+    )
+    if is_conflicted_evidence_reference(
+        name, record.evidence_id, aliases=aliases, conflicts=conflicts,
+    ):
+        return None
+    return record
 
 
 @dataclass(frozen=True)
@@ -123,5 +190,7 @@ __all__ = [
     "ExecutedProductEvidenceAuthority",
     "_current_verified_evidence_record",
     "_evidence_record_field",
+    "current_conflicted_evidence_aliases",
+    "is_conflicted_evidence_reference",
     "executed_product_evidence_authority",
 ]

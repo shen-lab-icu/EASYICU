@@ -3179,10 +3179,27 @@ class EvidenceStore:
         verified_records = (self.current_verified_records(per_step_records)
                             if per_step_records is not None else self.verified_records())
         verified_ids = {record.evidence_id for record in verified_records}
+        from .evidence_record_resolution import (
+            current_conflicted_evidence_aliases, is_conflicted_evidence_reference,
+        )
+
+        aliases = self.aliases()
+        conflicts = (
+            current_conflicted_evidence_aliases(
+                per_step_records, current_evidence_ids=verified_ids,
+                aliases=aliases,
+            )
+            if per_step_records is not None else set()
+        )
 
         def resolve_evidence(ref: str) -> bool:
             record = self.get(ref)
-            return record is not None and record.evidence_id in verified_ids
+            return (
+                record is not None and record.evidence_id in verified_ids
+                and not is_conflicted_evidence_reference(
+                    ref, record.evidence_id, aliases=aliases, conflicts=conflicts,
+                )
+            )
 
         def resolve_claim(ref: str):
             claim = self._scientific_claim_by_ref(ref)
@@ -3288,6 +3305,18 @@ class EvidenceStore:
             if per_step_records is not None
             else None
         )
+        from .evidence_record_resolution import (
+            current_conflicted_evidence_aliases, is_conflicted_evidence_reference,
+        )
+
+        aliases = self.aliases()
+        conflicts = (
+            current_conflicted_evidence_aliases(
+                per_step_records, current_evidence_ids=current_ids,
+                aliases=aliases,
+            )
+            if per_step_records is not None and current_ids is not None else set()
+        )
         scaffold = self._expand_scientific_claim_tokens(
             scaffold,
             reader_labels=reader_labels,
@@ -3295,6 +3324,7 @@ class EvidenceStore:
         )
         out: List[str] = []
         all_missing: List[str] = []
+        ambiguous_references: List[str] = []
         i = 0
         n = len(scaffold)
         while i < n:
@@ -3325,10 +3355,15 @@ class EvidenceStore:
             missing: List[str] = []
             for requested_id in requested_ids:
                 rec = self.get(requested_id)
+                ambiguous = rec is not None and is_conflicted_evidence_reference(
+                    requested_id, rec.evidence_id, aliases=aliases, conflicts=conflicts,
+                )
                 if rec is None or (
                     current_ids is not None and rec.evidence_id not in current_ids
-                ):
+                ) or ambiguous:
                     missing.append(requested_id)
+                    if ambiguous:
+                        ambiguous_references.append(requested_id)
                     continue
                 if verbose:
                     suffix = _binding_caveat(rec, verbose=verbose)
@@ -3351,12 +3386,17 @@ class EvidenceStore:
             i = k + 2 if double_wrapped else k + 1
         if all_missing and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
             unique_missing = sorted(set(all_missing))
+            ambiguous_aliases = sorted(set(ambiguous_references))
             raise EvidenceEnforcementError(
                 f"STRICT evidence mode: {len(unique_missing)} manuscript "
                 f"placeholder(s) do not resolve to a registered evidence id: "
                 f"{', '.join(unique_missing)}. Register the underlying "
                 f"artefact, or correct the placeholder before binding.",
-                detail={"missing_evidence_ids": unique_missing},
+                detail={
+                    "missing_evidence_ids": unique_missing,
+                    **({"ambiguous_evidence_aliases": ambiguous_aliases}
+                       if ambiguous_aliases else {}),
+                },
             )
         return "".join(out)
 

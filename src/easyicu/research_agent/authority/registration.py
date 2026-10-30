@@ -195,6 +195,15 @@ def filter_success_alias_bindings(
         for evidence_id in filtered
         if _record_source_name(evidence_id)
     }
+    # The store intentionally keeps a generic basename already owned by a
+    # different step. Record that collision too, so consumers with the current
+    # step ledger can require an exact evidence id instead of silently citing
+    # whichever parallel step published first.
+    for evidence_id, alias in implicit_basename_aliases.items():
+        existing_id = str(existing_aliases.get(alias) or "").strip()
+        existing_owner = str(owners_by_evidence_id.get(existing_id) or "").strip()
+        if existing_id and existing_id != evidence_id and existing_owner != step_id:
+            retained.setdefault(alias, existing_id)
     alias_claimants: Dict[str, List[str]] = {}
     for evidence_id, aliases in filtered.items():
         for alias in aliases:
