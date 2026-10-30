@@ -84,6 +84,15 @@ class ProviderHardStopLedgerError(ProviderHardStopError):
     """Raised when the durable ledger cannot be trusted or persisted."""
 
 
+def is_pre_transport_capacity_rejection(call: Mapping[str, object]) -> bool:
+    """Recognize only the host's closed, pre-worker admission disposition."""
+    return (call.get("state") == "failed_pre_transport_capacity"
+            and call.get("error_type") == "MetadataProviderCapacityExhausted"
+            and all(call.get(name) is None for name in (
+                "reported_prompt_tokens", "reported_completion_tokens", "reported_total_tokens",
+            )))
+
+
 @dataclass(frozen=True)
 class ProviderHardStopLimits:
     """Frozen ceilings and explicit price assumptions for one batch."""
@@ -1116,6 +1125,28 @@ class ProviderHardStopLedger:
             self._persist_locked()
             return attempt_id
 
+    def reject_metadata_capacity_before_transport(self, *, task_id: str, attempt_id: str) -> None:
+        """Seal a local admission rejection without releasing any budget hold.
+
+        Only the metadata client's local slot-admission boundary calls this.
+        No Provider response or exception text can establish this disposition.
+        A crash before this write leaves the existing in-progress reservation.
+        """
+        with self._durable_transaction():
+            task = self._task_locked(task_id)
+            calls = task.get("calls")
+            matches = [call for call in (calls if isinstance(calls, list) else [])
+                       if isinstance(call, dict) and call.get("attempt_id") == attempt_id]
+            if len(matches) != 1 or matches[0].get("state") != "in_progress":
+                raise ProviderHardStopLedgerError("Provider attempt is not a unique in-progress call")
+            call = matches[0]
+            call["finished_at"] = _utc_now()
+            call["error_type"] = "MetadataProviderCapacityExhausted"
+            call["state"] = "failed_pre_transport_capacity"
+            # Keep accounted_tokens, estimated cost, prompt bytes and call
+            # count unchanged: this is a provenance correction, not a refund.
+            self._persist_locked()
+
     def finish_transport_attempt(
         self,
         *,
@@ -1348,6 +1379,7 @@ class ProviderHardStopLedger:
             accounted_tokens = 0
             accounted_cost = 0.0
             unknown_states: Dict[str, int] = {}
+            not_sent_calls = 0
             for raw_call in calls:
                 if not isinstance(raw_call, Mapping):
                     raise ProviderHardStopLedgerError(
@@ -1366,6 +1398,9 @@ class ProviderHardStopLedger:
                     )
                     reported_total += int(raw_reported_total or 0)
                     reported_cost += call_cost
+                    continue
+                if is_pre_transport_capacity_rejection(raw_call):
+                    not_sent_calls += 1
                     continue
                 unknown_calls += 1
                 unknown_accounted_tokens += call_tokens
@@ -1391,6 +1426,7 @@ class ProviderHardStopLedger:
                     ),
                     "states": dict(sorted(unknown_states.items())),
                 },
+                "pre_transport_capacity_rejections": not_sent_calls,
                 "conservative_upper_bound": {
                     "n_calls": len(calls),
                     "total_tokens": accounted_tokens,
@@ -1511,6 +1547,16 @@ class _ActiveHardStopCall:
             self._notify("started")
         return remaining
 
+    def reject_metadata_capacity_before_transport(self) -> None:
+        """Finalize the active reservation after local capacity denial."""
+        if self._active_attempt_id is None:
+            raise ProviderHardStopLedgerError("No active Provider attempt to reject")
+        self.task.ledger.reject_metadata_capacity_before_transport(
+            task_id=self.task.task_id, attempt_id=self._active_attempt_id,
+        )
+        self._active_attempt_id = None
+        self._attempt_started_monotonic = None
+
     def complete(self, usage: Optional[Mapping[str, object]]) -> None:
         if self._active_attempt_id is None:
             raise ProviderHardStopLedgerError(
@@ -1591,6 +1637,14 @@ def consume_active_provider_hard_stop_attempt(*, provider: Optional[str] = None)
     return None
 
 
+def record_active_metadata_capacity_rejection() -> None:
+    """Seal only the local slot owner's pre-transport capacity rejection."""
+    state = _ACTIVE_HARD_STOP_CALL.get()
+    if state is None:
+        raise ProviderHardStopLedgerError("No active Provider hard-stop scope")
+    state.reject_metadata_capacity_before_transport()
+
+
 def record_active_provider_transport_failure(error_type: str) -> None:
     """Close a raw failed request durably before any retry wait or teardown.
 
@@ -1622,8 +1676,10 @@ __all__ = [
     "ProviderHardStopLimits",
     "TaskProviderHardStop",
     "consume_active_provider_hard_stop_attempt",
+    "is_pre_transport_capacity_rejection",
     "load_provider_hard_stop_ledger",
     "provider_hard_stop_call_scope",
+    "record_active_metadata_capacity_rejection",
     "record_active_provider_retry_wait",
     "record_active_provider_transport_failure",
     "validate_provider_transport_reservation_capacity",

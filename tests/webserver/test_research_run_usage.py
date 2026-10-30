@@ -137,6 +137,22 @@ def _call(role="planner", *, failed=False):
     }
 
 
+def test_capacity_rejection_is_not_sent_but_keeps_conservative_budget(tmp_path):
+    rejected = {
+        **_call(failed=True),
+        "state": "failed_pre_transport_capacity",
+        "error_type": "MetadataProviderCapacityExhausted",
+    }
+    _ledger(tmp_path / ".runtime/provider_hard_stop_ledger.json", [rejected, _call(failed=True)])
+    usage = research_run_usage(tmp_path)
+    assert usage["calls"] == 2
+    assert usage["failed_calls"] == 2
+    assert usage["pre_transport_capacity_rejections"] == 1
+    assert usage["usage_unknown_calls"] == 1
+    assert usage["accounted_tokens"] == 400
+    assert usage["estimated_cost_usd"] == pytest.approx(0.08)
+
+
 def test_all_attempts_and_roles_preserve_failed_and_zero_call_denominators(tmp_path):
     _ledger(
         tmp_path / ".runtime/provider_hard_stop_ledger.json",
