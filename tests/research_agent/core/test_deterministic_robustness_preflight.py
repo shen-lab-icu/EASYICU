@@ -1333,6 +1333,7 @@ summary = {
     source = {
         "step_id": "primary",
         "script_path": script_path,
+        "source_root": tmp_path,
         "script_sha256": hashlib.sha256(script_path.read_bytes()).hexdigest(),
         "summary": {
             "input_bindings": [{"input_key": "artifact:analysis_cohort"}],
@@ -1697,6 +1698,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
     source = {
         "primary_contract": primary_contract,
         "script_path": source_script,
+        "source_root": tmp_path,
         "step_id": "01_primary_model",
         "script_sha256": hashlib.sha256(source_script.read_bytes()).hexdigest(),
         "outputs_dir": source_outputs,
@@ -1803,6 +1805,7 @@ def test_exact_replay_uses_declared_coefficient_companion_without_primary_id(
     source = {
         "primary_contract": primary_contract,
         "script_path": source_script,
+        "source_root": tmp_path,
         "step_id": "01_primary_model",
         "script_sha256": hashlib.sha256(source_script.read_bytes()).hexdigest(),
         "outputs_dir": source_outputs,

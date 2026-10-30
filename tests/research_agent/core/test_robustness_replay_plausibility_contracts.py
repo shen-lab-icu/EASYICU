@@ -314,6 +314,7 @@ summary = {
 def _source(script_path: Path, contracts: dict | None) -> dict:
     return {
         "step_id": "primary",
+        "source_root": script_path.parent.parent,
         "script_path": script_path,
         "script_sha256": hashlib.sha256(script_path.read_bytes()).hexdigest(),
         "summary": {"input_bindings": [{"input_key": "artifact:analysis_cohort"}]},
@@ -345,6 +346,82 @@ def _primary_data() -> pd.DataFrame:
             "age": [50.0, None, 70.0, 80.0],
         }
     )
+
+
+def test_replay_rejects_script_changed_after_source_selection(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    contracts = _contracts(120.0)
+    _run_as_robustness_step(tmp_path, monkeypatch, contracts)
+    script = _receipt_bound_primary(tmp_path, contracts)
+    source = _source(script, contracts)
+    script.write_text("raise RuntimeError('changed after selection')\n", encoding="utf-8")
+    result = _replay_primary_model_for_complete_case(
+        spec=_SPEC, source=source, primary_data=_primary_data(),
+        out_dir=tmp_path / "robustness",
+    )
+    assert result["error"] is not None
+    assert "script" in result["error"] and "digest" in result["error"]
+
+
+@pytest.mark.parametrize("condition", ["traversal", "symlink_file", "symlink_parent", "hardlink", "changed"])
+def test_replay_script_snapshot_rejects_unapproved_paths_and_bytes(
+    tmp_path: Path, condition: str,
+) -> None:
+    from easyicu.research_agent.execution.runners.primary_model_contracts import snapshot_replay_script
+
+    root = tmp_path / "run"
+    root.mkdir()
+    source_dir = root / "primary"
+    source_dir.mkdir()
+    script = source_dir / "analysis.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    replay_root = tmp_path / "replay"
+    replay_root.mkdir()
+    if condition == "traversal":
+        script = root / ".." / "outside.py"
+    elif condition == "symlink_file":
+        script.unlink()
+        script.symlink_to(tmp_path / "outside.py")
+    elif condition == "symlink_parent":
+        moved = root / "real_primary"
+        source_dir.rename(moved)
+        source_dir.symlink_to(moved, target_is_directory=True)
+    elif condition == "hardlink":
+        (root / "other.py").hardlink_to(script)
+    elif condition == "changed":
+        script.write_text("print(2)\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        snapshot_replay_script(
+            source_root=root, source_path=script,
+            expected_sha256=digest, replay_root=replay_root,
+        )
+    assert list(replay_root.iterdir()) == []
+
+
+def test_replay_script_snapshot_uses_approved_bytes_and_never_overwrites(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.primary_model_contracts import snapshot_replay_script
+
+    root = tmp_path / "run"
+    root.mkdir()
+    script = root / "analysis.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    replay_root = tmp_path / "replay"
+    replay_root.mkdir()
+    captured = snapshot_replay_script(
+        source_root=root, source_path=script, expected_sha256=digest, replay_root=replay_root,
+    )
+    script.write_text("print(2)\n", encoding="utf-8")
+    assert captured.read_text(encoding="utf-8") == "print(1)\n"
+    script.write_text("print(1)\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="snapshot could not be created safely"):
+        snapshot_replay_script(
+            source_root=root, source_path=script, expected_sha256=digest, replay_root=replay_root,
+        )
 
 
 def _run_as_robustness_step(tmp_path: Path, monkeypatch, contracts: dict) -> None:
