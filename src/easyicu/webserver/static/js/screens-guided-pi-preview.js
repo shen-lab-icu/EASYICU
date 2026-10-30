@@ -338,12 +338,19 @@
     const view = params.get('pi_view');
     if (!['artifact', 'evidence'].includes(view)) return false;
     if (!/^[a-f0-9]{64}$/.test(params.get('pi_view_sha') || '')) return false;
+    const artifact = params.get('pi_view_artifact') || '';
+    const kind = params.get('pi_view_kind') || 'research_artifact';
+    // A deep link carries the immutable filename, not the UI label. Recover
+    // registered human-readable labels while leaving unfamiliar names intact.
+    const renderer = window.AGENT_RENDER;
+    const label = kind === 'research_artifact' && renderer && typeof renderer.artifactTitle === 'function'
+      ? renderer.artifactTitle(artifact, null, true) : artifact;
     const resource = safeResource({
-      kind: params.get('pi_view_kind') || 'research_artifact',
+      kind,
       run_id: params.get('pi_view_run') || '',
-      artifact: params.get('pi_view_artifact') || '',
+      artifact,
       sha256: params.get('pi_view_sha') || '',
-      label: params.get('pi_view_artifact') || '',
+      label,
     });
     if (!resource || !String(projectId || '').trim()) return false;
     const alreadyOpen = state.resource && state.projectId === String(projectId || '').trim()

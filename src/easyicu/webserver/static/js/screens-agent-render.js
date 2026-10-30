@@ -121,7 +121,7 @@
     return /^#?\s*Manuscript scaffold not generated\s*(?:\n|$)/i.test(opening)
       || /<!--\s*easyicu:manuscript-state\s+kind=(?:blocked|paused|probe)\b/.test(opening);
   }
-  function artifactTitle(name, manuscript) {
+  function artifactTitle(name, manuscript, knownOnly = false) {
     const n = String(name || '');
     const pendingReview = manuscript && manuscript.status === 'locked_pending_human_review'
       && !manuscriptUnavailable(String(manuscript.markdown_preview || '').slice(0, 600));
@@ -156,7 +156,7 @@
       'human_signoff.json': t('Human sign-off', '人工签署'),
     };
     if (labels[n]) return labels[n];
-    return n.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return knownOnly ? n : n.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
   function artifactCategory(name) {
     const n = String(name || '').toLowerCase();
@@ -1166,6 +1166,8 @@
     'Technical executability is not evidence of novelty or publication value.': '技术上可以执行，不等于已经证明研究具有创新性或投稿价值。',
     'A dated search returned sources and the plan mapping is complete.': '已完成带日期的文献检索，并记录了文献与研究计划的对应关系。',
     'The cohort definition and export authority are explicit.': '队列定义和数据导出权限已有明确记录。',
+    'The current literature package cannot establish currency or design support.': '当前文献资料尚不能证明证据的时效性或对研究设计的支持。',
+    'Provenance exists, but scientific population scope is not fully established.': '已有来源记录，但研究人群的范围尚未完全明确。',
     'Execution completeness does not close the open scientific design defects.': '即使分析执行完整，也不能说明尚未解决的科学设计问题已关闭。',
     'Analysis completion has not been confirmed; the scientific assessment remains open.': '尚未确认分析已完成，科学评估仍有待处理事项。',
     'Analysis completion does not establish validation or close open scientific design issues.': '分析完成本身不能证明验证已通过，也不能关闭尚未解决的科学设计问题。',
@@ -1219,20 +1221,26 @@
   function scientificReadinessView(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const domains = Array.isArray(p.domains) ? p.domains : [];
-    const findings = Array.isArray(p.findings) ? p.findings : [];
+    const hasFindings = Array.isArray(p.findings);
+    const findings = hasFindings ? p.findings : [];
+    const unspecified = t('Not provided', '未提供');
+    const reviewRequired = typeof p.human_review_required === 'boolean'
+      ? (p.human_review_required ? t('Required', '需要') : t('Not required', '不需要')) : unspecified;
+    const publicationStatus = typeof p.paper_authorized === 'boolean'
+      ? (p.paper_authorized ? t('Authorized', '已授权') : t('Not authorized', '未授权')) : unspecified;
     const facts = [
-      [t('Run', '运行'), p.run_id || ''],
-      [t('Claim ceiling', '论断上限'), runStatusLabel(p.claim_ceiling || p.status)],
-      [t('Human review', '人工审阅'), p.human_review_required ? t('Required', '需要') : t('Not required', '不需要')],
-      [t('Publication use', '投稿使用'), p.paper_authorized ? t('Authorized', '已授权') : t('Not authorized', '未授权')],
-      [t('Open findings', '待处理项'), String(findings.length)],
+      [t('Run', '运行'), p.run_id || unspecified],
+      [t('Claim ceiling', '论断上限'), p.claim_ceiling ? runStatusLabel(p.claim_ceiling) : unspecified],
+      [t('Human review', '人工审阅'), reviewRequired],
+      [t('Publication use', '投稿使用'), publicationStatus],
+      [t('Open findings', '待处理项'), hasFindings ? String(findings.length) : unspecified],
     ];
     const domainCards = domains.map(row => {
-      const n = Array.isArray(row.evidence_refs) ? row.evidence_refs.length : 0;
+      const refs = Array.isArray(row.evidence_refs) ? row.evidence_refs : null;
       return `<article class="ag-readiness-domain">
         <div class="ag-readiness-domain-head"><h4>${esc(scientificDomainLabel(row.domain))}</h4><span class="ag-readiness-status">${esc(scientificReviewStatus(row.status))}</span></div>
         <p>${esc(scientificReviewText(row.summary))}</p>
-        <small>${esc(t(`${n} references`, `${n} 项证据`))}</small>
+        <small>${esc(refs ? t(`${refs.length} references`, `${refs.length} 项证据`) : t('Evidence count not provided', '未提供证据数量'))}</small>
       </article>`;
     }).join('');
     const findingCards = findings.map(row => `<article class="ag-readiness-finding">
@@ -1240,8 +1248,8 @@
       <div class="ag-readiness-finding-copy"><div><span>${esc(t('Why it matters', '影响'))}</span><p>${esc(scientificReviewText(row.message))}</p></div>
       <div><span>${esc(t('Next step', '下一步'))}</span><p>${esc(scientificReviewText(row.remediation))}</p></div></div>
     </article>`).join('');
-    const findingContent = findingCards || `<p class="ag-readiness-empty">${esc(t('No open scientific findings are present.', '没有待处理科学问题。'))}</p>`;
-    const findingHeading = `${esc(t('Open scientific findings', '待处理科学问题'))} <span>${esc(t(`${findings.length} findings`, `${findings.length} 项`))}</span>`;
+    const findingContent = findingCards || `<p class="ag-readiness-empty">${esc(hasFindings ? t('No open scientific findings are present.', '没有待处理科学问题。') : t('Scientific findings were not provided.', '未提供科学问题清单。'))}</p>`;
+    const findingHeading = `${esc(t('Open scientific findings', '待处理科学问题'))} <span>${esc(hasFindings ? t(`${findings.length} findings`, `${findings.length} 项`) : unspecified)}</span>`;
     const findingSection = findings.length > 3
       ? `<details class="ag-readiness-findings"><summary>${findingHeading}</summary><div class="ag-readiness-list">${findingContent}</div></details>`
       : `<section class="ag-readiness-findings"><h3>${findingHeading}</h3><div class="ag-readiness-list">${findingContent}</div></section>`;
