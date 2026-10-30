@@ -39,12 +39,14 @@ def _owner(binding: RawPreparationHostBinding, receipt: Mapping[str, Any], job_i
                                       action_key=receipt.get('decision_key'))
     if not row or row.get('child_job_id') != job_id:
         raise ValueError('preparation_intent_action_mismatch')
-    pending, _ = agent_pipeline_runs.raw_preparation_review_owner(binding.run_id, binding.study_context_id)
+    pending, planned = agent_pipeline_runs.raw_preparation_review_owner(binding.run_id, binding.study_context_id)
     root = Path(pending.run_dir)
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise ValueError('preparation_intent_root_invalid')
     current = study_contexts.get_context(binding.study_context_id)
-    if not current or study_contexts.scientific_configuration_sha256(current) != receipt.get('scientific_configuration_sha256'):
+    if (not current or not isinstance(planned, Mapping)
+            or study_contexts.scientific_configuration_sha256(current) != receipt.get('scientific_configuration_sha256')
+            or study_contexts.scientific_configuration_sha256(planned) != receipt.get('scientific_configuration_sha256')):
         raise ValueError('preparation_intent_configuration_changed')
     return root
 
@@ -120,6 +122,100 @@ def admit_preparation_handoff(*, job_id: str, checkpoint: RawPreparationCheckpoi
     with AnchoredDirectory.open(_private_directory()) as directory:
         _publish_once(directory, job_id + '.preparation-handoff.json', encoded)
         directory.assert_still_selected()
+
+
+def recover_approved_unstarted_handoff(*, job_id: str, job: Any, checkpoint: RawPreparationCheckpoint,
+        binding: RawPreparationHostBinding, scope: Mapping[str, Any], timeout: float,
+        store_path: Path, journal_path: Path) -> dict[str, Any]:
+    """Finish a missing /3 handoff only for the original unstarted host job.
+
+    The caller must hold the deployment lease and admission lock. This creates
+    no approval, cannot replay a consumed grant, and does not dispatch work.
+    """
+    from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+    from easyicu.webserver.host_action_contracts import HostActionRequest, RawPreparationReviewDecision, decision_key, host_action_id
+    from easyicu.webserver.host_action_jobs import _Ask, _raw_claim_occupied
+    from easyicu.webserver.pi_copilot.service import get_pi_copilot_service
+    from easyicu.webserver.preparation_recovery_snapshot import _read_signed
+    from easyicu.webserver.raw_preparation_decisions import recover_host_review
+
+    if scope.get('adapter_id') != 'eicu-demo-first-observed-single-hospital-adult/1':
+        raise ValueError('preparation_handoff_recovery_adapter_unsupported')
+    if (job is None or job.id != job_id or job.kind != 'raw-preparation-review' or job.is_cancel_requested()
+            or not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or not math.isfinite(timeout) or not 0 < timeout <= 86400
+            or not Path(store_path).is_absolute() or '..' in Path(store_path).parts
+            or not Path(journal_path).is_absolute() or '..' in Path(journal_path).parts):
+        raise ValueError('preparation_handoff_recovery_invalid')
+    state = job.snapshot()
+    if (state.get('status') != 'running'
+            and not (state.get('status') == 'failed' and state.get('recovered') and state.get('interrupted'))):
+        raise ValueError('preparation_handoff_recovery_terminal')
+    if checkpoint.state != 'approved':
+        raise ValueError('preparation_handoff_recovery_approval_missing')
+    pending_body = checkpoint.model_dump(mode='json', exclude={'checkpoint_sha256'})
+    pending_body.update(state='pending', decision=None)
+    pending = RawPreparationCheckpoint.model_validate({**pending_body, 'checkpoint_sha256': canonical_sha256(pending_body)})
+    receipt, root = _review(checkpoint=checkpoint, binding=binding, scope=scope, job_id=job_id)
+    with AnchoredDirectory.open(root) as directory:
+        saved = RawPreparationCheckpoint.model_validate_json(directory.read_bytes(
+            'raw_preparation_checkpoint.json', max_bytes=1024 * 1024))
+        directory.assert_still_selected()
+    if saved != checkpoint:
+        raise ValueError('preparation_handoff_recovery_checkpoint_changed')
+    if recover_host_review(pending=pending, binding=binding, scope=scope, job_id=job_id, run_dir=root) != checkpoint:
+        raise ValueError('preparation_handoff_recovery_approval_changed')
+    PlanReviewAuthority.model_validate(checkpoint.request.payload['plan_review_authority'])
+    choice = RawPreparationReviewDecision(run_id=binding.run_id,
+        scientific_configuration_sha256=receipt['scientific_configuration_sha256'],
+        checkpoint_sha256=pending.checkpoint_sha256, scope_sha256=canonical_sha256(dict(scope)),
+        review_authority_sha256=checkpoint.request.authority_sha256, nonce=binding.nonce)
+    action = HostActionRequest(session_id=binding.session_id, project_id=binding.project_id,
+                               action_code='review_raw_preparation', decision=choice)
+    key = decision_key(choice, review_decision='approved')
+    if receipt.get('decision_key') != key:
+        raise ValueError('preparation_handoff_recovery_action_changed')
+    owner = get_pi_copilot_service()
+    owner.host_action_session(binding.session_id, project_id=binding.project_id,
+                              study_context_id=binding.study_context_id)
+    ask = _Ask(request=action, study_context_id=binding.study_context_id, key=key,
+               action_id=host_action_id(binding.session_id, action.action_code, key), conversations=owner)
+    claimed = _raw_claim_occupied(ask, decision_key(choice, review_decision='rejected'))
+    if claimed is None or not claimed.same_decision or claimed.job is not job:
+        raise ValueError('preparation_handoff_recovery_job_changed')
+    lease = root / ('.preparation-execution-' + job_id)
+    if lease.exists() or lease.is_symlink():
+        raise ValueError('preparation_handoff_lifecycle_present')
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        for name in (binding.nonce + '.used', job_id + '.preparation-started',
+                     job_id + '.preparation-snapshot.json', job_id + '.preparation-completed.json'):
+            if not directory.is_absent(name):
+                raise ValueError('preparation_handoff_execution_evidence_present')
+        intent_exists = not directory.is_absent(job_id + '.preparation-intent.json')
+        handoff_exists = not directory.is_absent(job_id + '.preparation-handoff.json')
+        directory.assert_still_selected()
+    if handoff_exists:
+        return verify_unstarted_preparation_handoff(job_id=job_id, job=job, store_path=store_path, journal_path=journal_path)
+    if not intent_exists:
+        admit_preparation_intent(job_id=job_id, checkpoint=checkpoint, binding=binding, scope=scope)
+    intent = _read_signed(job_id + '.preparation-intent.json')
+    expected = {'schema_version': 'easyicu.preparation-intent/1', 'job_id': job_id,
+        'binding': binding.model_dump(mode='json'), 'checkpoint': checkpoint.model_dump(mode='json'),
+        'scope': json.loads(canonical_json(dict(scope))), 'root': str(root),
+        'scientific_configuration_sha256': receipt['scientific_configuration_sha256'],
+        'decision_key': key, 'runtime_sha256': runtime_digest()}
+    if intent != expected:
+        raise ValueError('preparation_handoff_recovery_intent_changed')
+    body = {'schema_version': 'easyicu.preparation-handoff/1', 'job_id': job_id,
+        'intent_sha256': canonical_sha256(intent), 'runtime_sha256': intent['runtime_sha256'],
+        'study_context_id': binding.study_context_id, 'timeout_seconds': timeout,
+        'command_schema': 'easyicu.durable-preparation/3', 'store_path': str(store_path),
+        'journal_path': str(journal_path), 'job_created': job.created}
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        _publish_once(directory, job_id + '.preparation-handoff.json',
+                      canonical_json({**body, 'signature': _signature(body)}).encode())
+        directory.assert_still_selected()
+    return verify_unstarted_preparation_handoff(job_id=job_id, job=job, store_path=store_path, journal_path=journal_path)
 
 
 def verify_unstarted_preparation_handoff(*, job_id: str, job: Any, store_path: Path,

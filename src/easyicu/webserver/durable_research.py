@@ -220,6 +220,44 @@ class DurableResearchService:
             _LOG.warning('Durable research dispatch pending for job %s', job_id)
             threading.Thread(target=self._retry_dispatch, args=(job_id,), daemon=True).start()
 
+    def recover_approved_preparation_handoff(self, job_id: str, *, checkpoint: Any, binding: Any,
+                                             scope: dict[str, Any], timeout: float) -> dict[str, Any]:
+        """Reattach the exact approved but unstarted first-observed job.
+
+        This internal bridge does not offer a review action. The caller must
+        already hold the original signed host decision; it never creates a
+        new job or resets a command's attempt ledger.
+        """
+        from easyicu.webserver.raw_preparation_durable import recover_approved_unstarted_handoff
+        self._require_handoff_deployment_lease()
+        if self.manager._journal is None or not self.dispatcher._launched:
+            raise DurableResearchError('preparation_handoff_service_unavailable')
+        with self._admission_lock:
+            job = self.manager.get(job_id)
+            if self.store.get(job_id) is not None:
+                # The existing outbox owns every later transition. Do not reset
+                # or dispatch it again through this admission path.
+                raise DurableResearchError('preparation_handoff_already_admitted')
+            payload = recover_approved_unstarted_handoff(job_id=job_id, job=job, checkpoint=checkpoint,
+                binding=binding, scope=scope, timeout=timeout, store_path=self.store.path.absolute(),
+                journal_path=self.manager._journal.path.absolute())
+            if self.store.get(job_id) is not None or job.is_cancel_requested():
+                raise DurableResearchError('preparation_handoff_state_changed')
+            self._require_handoff_deployment_lease()
+            if job.snapshot().get('interrupted'):
+                job = self.manager.reserve('raw-preparation-review', job_id=job_id, resume_interrupted=True)
+            # The signed handoff already exists. If reopening capacity or the
+            # outbox write fails, a later adoption can still find that exact
+            # unstarted handoff instead of stranding an active command.
+            self.store.prepare_active_handoff(job_id, payload)
+            job.register_cancel_callback(lambda: self.store.request_cancel(job_id))
+        try:
+            self._dispatch(job_id)
+        except Exception:
+            _LOG.warning('Durable research dispatch pending for job %s', job_id)
+            threading.Thread(target=self._retry_dispatch, args=(job_id,), daemon=True).start()
+        return {'job_id': job_id, 'preparation_status': 'preparing', 'analysis_authorized': False}
+
     def activate(self, job_id: str, runner: Callable) -> None:
         with self._lock:
             self._live[job_id] = runner
