@@ -21,7 +21,10 @@ def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(population_spec_review, "reviewed_population_spec", lambda **_: projection)
     monkeypatch.setattr(raw_preparation_candidate.SourceIdentity, "from_record",
                         lambda *_: SimpleNamespace(database="eicu_demo"))
-    scope = {"source_table": "patient", "source_columns": ["patientunitstayid", "age"],
+    scope = {"adapter_id": "eicu-demo-first-observed-single-hospital-adult/1",
+             "purpose": "prepare_only", "analysis_authorized": False, "read_outcome_columns": False,
+             "not_lifetime_first_icu": True,
+             "source_table": "patient", "source_columns": ["patientunitstayid", "age"],
              "population_definition": "adult_first_observed_icu_in_single_visible_hospitalization",
              "multiple_hospitalization_policy": "exclude_patient", "criterion": criterion}
     monkeypatch.setattr(first_observed_preparation, "proposed_first_observed_scope", lambda **_: scope)
@@ -31,17 +34,89 @@ def _setup(tmp_path, monkeypatch):
     return projection, scope
 
 
-def test_first_observed_preview_has_no_grant_or_checkpoint(tmp_path, monkeypatch):
+def test_first_observed_request_refuses_another_preparation_checkpoint(tmp_path, monkeypatch):
     _, scope = _setup(tmp_path, monkeypatch)
     before = (tmp_path / "sic_raw_preparation_checkpoint.json").read_bytes()
-    outcome = raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")
-    preview = outcome["first_observed_preparation_preview"]
-    assert outcome["status"] == "blocked"
-    assert preview["source_columns"] == scope["source_columns"]
-    assert preview["not_lifetime_first_icu"] and not preview["preparation_authorized"]
-    assert not preview["analysis_authorized"]
+    with pytest.raises(ValueError, match="pending_conflict"):
+        raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")
     assert not (tmp_path / "raw_preparation_checkpoint.json").exists()
     assert (tmp_path / "sic_raw_preparation_checkpoint.json").read_bytes() == before
+
+
+def test_first_observed_request_is_idempotent_and_does_not_grant_analysis(tmp_path, monkeypatch):
+    from easyicu.webserver import durable_research
+    _setup(tmp_path, monkeypatch)
+    (tmp_path / "sic_raw_preparation_checkpoint.json").unlink()
+    monkeypatch.setattr(durable_research, "current_service", lambda: None)
+    first = raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")
+    second = raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")
+    assert first == second and first["status"] == "pending"
+    assert not first["analysis_authorized"] and not first["approvable"]
+    assert first["reason_code"] == "raw_preparation_durable_service_unavailable"
+    checkpoint = raw_preparation_candidate.RawPreparationCheckpoint.model_validate_json(
+        (tmp_path / "raw_preparation_checkpoint.json").read_bytes())
+    assert checkpoint.state == "pending" and checkpoint.decision is None
+    assert checkpoint.request.payload["first_observed_icu_preparation_scope"]["read_outcome_columns"] is False
+
+
+def test_first_observed_offer_requires_available_guarded_service(tmp_path, monkeypatch):
+    from easyicu.webserver import durable_research, study_contexts
+    _setup(tmp_path, monkeypatch)
+    (tmp_path / "sic_raw_preparation_checkpoint.json").unlink()
+    raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")
+    monkeypatch.setattr(study_contexts, "get_context", lambda _: {"id": "study"})
+    monkeypatch.setattr(study_contexts, "scientific_configuration_sha256", lambda _: "a" * 64)
+    monkeypatch.setattr(durable_research, "current_service", lambda: None)
+    with pytest.raises(ValueError, match="durable_service_unavailable"):
+        raw_preparation_candidate.available_host_review(run_id="run", study_context_id="study")
+    service = SimpleNamespace(manager=SimpleNamespace(_journal=object()),
+                              dispatcher=SimpleNamespace(_launched=True),
+                              _require_handoff_deployment_lease=lambda: None)
+    monkeypatch.setattr(durable_research, "current_service", lambda: service)
+    assert raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")["approvable"]
+    choice, checkpoint, scope, root = raw_preparation_candidate.available_host_review(
+        run_id="run", study_context_id="study")
+    assert root == tmp_path and checkpoint.state == "pending"
+    assert scope["read_outcome_columns"] is False and choice.checkpoint_sha256 == checkpoint.checkpoint_sha256
+
+
+def test_first_observed_review_ui_explains_private_preparation_and_no_analysis():
+    from tests.support.node import run_node
+    from tests.webserver.copilot.pi_copilot_static_fixtures import _read
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node unavailable")
+    script = f"""
+      global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation.js')!r});
+      const scope={{adapter_id:'eicu-demo-first-observed-single-hospital-adult/1',purpose:'prepare_only',
+        analysis_authorized:false,not_lifetime_first_icu:true,read_outcome_columns:false,
+        population_definition:'adult_first_observed_icu_in_single_visible_hospitalization',
+        source_columns:['patientunitstayid','uniquepid','patienthealthsystemstayid','unitvisitnumber','unittype','age']}};
+      const workflow={{next_action_code:'plan_scientific_changes_required',raw_preparation:{{status:'awaiting_consumption_closure',scope}},
+        host_decisions:{{raw_preparation_review:{{scope_sha256:'a'.repeat(64)}}}}}};
+      const owner=window.EU_GUIDED_PI_CONFIRMATION.create({{tr:(en,zh)=>zh,esc:v=>String(v??''),iconHtml:()=>'',resourceButton:()=>'',
+        sessionIsStale:()=>false,busy:()=>false,workflow:()=>workflow,session:()=>({{session_id:'session',archived_child_jobs:[]}})}});
+      const pending=owner.workflowConfirmationHtml();
+      const message=owner.workflowConfirmation().message;
+      workflow.raw_preparation={{status:'first_observed_complete',analysis_authorized:false}};
+      const completed=owner.workflowConfirmationHtml();
+      workflow.raw_preparation={{status:'first_observed_unavailable',analysis_authorized:false,recovery_session_id:'session'}};
+      const resumable=owner.workflowConfirmationHtml();
+      workflow.raw_preparation.recovery_session_id='another';
+      const otherSession=owner.workflowConfirmationHtml();
+      process.stdout.write(JSON.stringify({{pending,message,completed,resumable,otherSession}}));
+    """
+    result = json.loads(run_node(node, script, check=True).stdout)
+    html = result['pending']
+    assert "data-gpi-preparation-review=\"approved\"" in html
+    assert "不读取结局" in html and "后续科研数据绑定尚未接通" in html
+    assert "不能证明是终生首次 ICU" in html
+    assert "单独审阅的首次 ICU 准备仅生成私有坐标" in result['message']
+    assert "私有首次 ICU 坐标已准备完成" in result['completed']
+    assert "data-gpi-preparation-review" not in result['completed']
+    assert "继续原准备任务" in result['resumable'] and "data-gpi-preparation-review=\"approved\"" in result['resumable']
+    assert "data-gpi-preparation-review" not in result['otherSession']
 
 
 def test_preview_fails_closed_on_plan_or_criterion_change(tmp_path, monkeypatch):
@@ -120,3 +195,22 @@ def test_preview_click_forwards_complete_api_result():
     """
     result = json.loads(run_node(node, script, check=True).stdout)
     assert result["actual"]["first_observed_preparation_preview"] == result["expected"]
+
+
+def test_status_refresh_only_reloads_workflow():
+    from tests.support.node import run_node
+    from tests.webserver.copilot.pi_copilot_static_fixtures import _read
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node unavailable")
+    script = 'global.window = {};\n' + _read('js/screens-guided-pi-events.js') + """
+      let click, reloads=0, renders=0;
+      const host={querySelector:()=>null,addEventListener:(name,fn)=>{if(name==='click')click=fn;}};
+      const state={host,session:{session_id:'session',binding:{study_context_id:'study'}},workflow:{}};
+      const owner=window.EasyICU.guidedPi.require('events').create({state,projectId:()=> 'project',
+        tr:(en,zh)=>zh,render:()=>{renders++},loadWorkflow:async()=>{reloads++}});
+      owner.wire();
+      click({target:{closest:s=>s==='[data-gpi-preparation-status-refresh]' ? {} : null}});
+      setImmediate(()=>process.stdout.write(JSON.stringify({reloads,renders})));
+    """
+    assert json.loads(run_node(node, script, check=True).stdout) == {"reloads": 1, "renders": 1}
