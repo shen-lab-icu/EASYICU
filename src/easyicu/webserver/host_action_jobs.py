@@ -145,6 +145,18 @@ def check_agent_run_request(
             status_code=400,
             field="execution_resume_source_run_id",
         )
+    if host_action.action_code == "prepare_analysis_data":
+        # This button accepts one displayed candidate for data preparation.
+        # Never let a client pair that decision with another plan's roster.
+        if (getattr(decision, "next_action_code", "") != "plan_execution_upgrade_required"
+                or not getattr(decision, "source_run_id", "")
+                or str(body.get("plan_revision_source_run_id") or "").strip()
+                != decision.source_run_id):
+            raise _refuse(
+                "host_action_request_mismatch",
+                status_code=400,
+                field="plan_revision_source_run_id",
+            )
 
 
 def check_review_request(
