@@ -958,7 +958,7 @@ def _list_concept_catalog(
         else build_available_catalog(Path(str(source["path"]).strip()).expanduser())
     )
 
-    def project_concept(concept: Any) -> Dict[str, str]:
+    def project_concept(concept: Any) -> Dict[str, Any]:
         return {
             "concept_id": str(concept.concept_id)[:80],
             "module": Path(concept.file_name).stem.lower()[:80],
@@ -972,6 +972,8 @@ def _list_concept_catalog(
                 concept.canonical_alternative or ""
             )[:80],
         }
+
+    from easyicu.webserver.pi_copilot.source_concept_reference import source_concept_reference
 
     rows = []
     for concept in catalog.concepts:
@@ -989,7 +991,15 @@ def _list_concept_catalog(
         searchable = " ".join(re.findall(r"[a-z0-9]+", searchable))
         if query_terms and not any(term in searchable for term in query_terms):
             continue
-        rows.append(project_concept(concept))
+        row = project_concept(concept)
+        # A dictionary declaration can guide source review, but is never proof
+        # that this run read those fields or that record-level units match.
+        reference = source_concept_reference(
+            row["concept_id"], database or str((source or {}).get("database") or "")
+        )
+        if reference is not None:
+            row["source_dictionary_reference"] = reference
+        rows.append(row)
     rows = rows[:limit]
     catalog_by_id = {
         str(concept.concept_id): concept for concept in catalog.concepts
@@ -1031,6 +1041,10 @@ def _list_concept_catalog(
                 else {"source_id": str(source["id"])}
             ),
             "concepts": rows,
+            "source_dictionary_reference_note": (
+                "Declared mappings and units are packaged dictionary references only; "
+                "they do not verify the selected source, actual reads, or per-record units."
+            ),
             "canonical_alternatives": canonical_alternatives,
             "returned_count": len(rows),
             "truncated": len(rows) == limit,
