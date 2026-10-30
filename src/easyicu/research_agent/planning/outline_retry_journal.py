@@ -124,6 +124,26 @@ def load_retry_journal(path: Path, *, expected_sha256: str | None = None) -> dic
     return value
 
 
+def foundation_retry_source(checkpoint_path: Path) -> tuple[Path, str] | None:
+    """Find a signed foundation retry beside the accepted source checkpoint.
+
+    An earlier outline/family journal is expected after an accepted outline;
+    it is not a foundation response and must never be replayed as one.
+    A present malformed journal is rejected rather than treated as absent.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    journal = checkpoint_path.parent / ".runtime" / FILE_NAME
+    if not journal.exists() and not journal.is_symlink():
+        return None
+    value = load_retry_journal(journal)
+    stage = value.get("binding", {}).get("stage")
+    if stage in {"outline", "family_spec"}:
+        return None
+    if stage != "foundation":
+        raise ValueError("retry_journal_stage_invalid")
+    return journal, hashlib.sha256(journal.read_bytes()).hexdigest()
+
+
 def _atomic_write(path: Path, value: Mapping[str, Any]) -> None:
     parent = path.parent
     if parent.is_symlink():
@@ -201,7 +221,7 @@ class OutlineRetryJournal:
         if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
                for value in (request_sha256, dependency_sha256, literature_sha256)):
             raise ValueError("retry_journal_authority_invalid")
-        if stage not in {"outline", "family_spec"} or type(parse_attempt_limit) is not int or not 1 <= parse_attempt_limit < MAX_CALLS:
+        if stage not in {"outline", "family_spec", "foundation"} or type(parse_attempt_limit) is not int or not 1 <= parse_attempt_limit < MAX_CALLS:
             raise ValueError("retry_journal_stage_invalid")
         self._parse_attempt_limit = parse_attempt_limit
         binding = {"request_sha256": request_sha256, "dependency_sha256": dependency_sha256,
@@ -233,13 +253,23 @@ class OutlineRetryJournal:
                     _verify_pending_guard(task, _planner_rows(task)[-1], pending["request_sha256"])
                     self._data["abandoned"] += 1
                 self._data["expected_retry_request_sha256"] = pending["request_sha256"]
+                self._data["expected_retry_guarded"] = bool(unrecorded)
                 self._data["pending"] = None
+                self._data["accounted_planner_calls"] = current
             else:
                 records = self._data["records"]
-                last_count = (records[-1].get("planner_calls_after") if records
-                              else self._data.get("initial_planner_calls"))
+                last_count = self._data.get("accounted_planner_calls")
+                if last_count is None:
+                    last_count = (records[-1].get("planner_calls_after") if records
+                                  else self._data.get("initial_planner_calls"))
                 if not isinstance(last_count, int) or current != last_count:
                     raise ValueError("retry_journal_ledger_changed")
+                expected = self._data.get("expected_retry_request_sha256")
+                if expected is not None and self._data.get("expected_retry_guarded"):
+                    rows = _planner_rows(task)
+                    if not rows:
+                        raise ValueError("retry_journal_ledger_changed")
+                    _verify_pending_guard(task, rows[-1], expected)
         else:
             self._data = {"schema_version": SCHEMA, "binding": binding, "records": [],
                           "pending": None, "abandoned": 0,
@@ -281,6 +311,7 @@ class OutlineRetryJournal:
         if expected is not None and expected != request_sha:
             raise ValueError("retry_journal_request_mismatch")
         self._data["expected_retry_request_sha256"] = None
+        self._data.pop("expected_retry_guarded", None)
         self._data["pending"] = {"request_sha256": request_sha, "planner_calls": _planner_calls(self._task)}
         _atomic_write(self._path, self._data)
         from easyicu.research_agent.providers.metadata_request_binding import metadata_request_binding
@@ -303,6 +334,7 @@ class OutlineRetryJournal:
                                       "finish_reason": self.last_finish_reason, "usage": self.last_usage,
                                       "transport_attempts": self.last_transport_attempts,
                                       "planner_calls_after": _planner_calls(self._task)})
+        self._data.pop("accounted_planner_calls", None)
         self._data["pending"] = None
         _atomic_write(self._path, self._data)
         self._index += 1

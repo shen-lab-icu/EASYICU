@@ -271,6 +271,60 @@ def _verify_guarded_planner_inflight(seed: Any, task_row: Mapping[str, Any]) -> 
         _refuse("metadata_provider_concurrency_unavailable")
 
 
+def _verify_checkpoint_inflight_retry(
+    wrapper: Path, checkpoint: Mapping[str, Any], task_row: Mapping[str, Any],
+) -> None:
+    """A guarded request alone cannot restore a later phase's retry state.
+
+    An accepted outline checkpoint does not contain foundation responses or
+    parser feedback.  Only the authenticated journal for that exact pending
+    request can restore it; other unjournaled planning phases remain stopped.
+    """
+    from easyicu.research_agent.planning.outline_retry_journal import FILE_NAME, load_retry_journal
+    from easyicu.webserver import metadata_provider_concurrency as slots
+
+    calls = task_row.get("calls")
+    if not isinstance(calls, list):
+        _refuse("budget_binding_changed")
+    active = [c for c in calls if isinstance(c, dict) and c.get("state") == "in_progress"]
+    if not active:
+        return
+    if len(active) != 1:
+        _refuse("planner_provider_worker_unverified")
+    if active[0].get("role") == "provider_recovery_probe":
+        return
+    if active[0].get("role") != "planner":
+        _refuse("planner_provider_worker_unverified")
+    relative = checkpoint.get("path")
+    if not isinstance(relative, str) or not relative:
+        _refuse("planner_retry_journal_missing")
+    path = wrapper / relative
+    try:
+        path.resolve().relative_to(wrapper.resolve())
+    except (OSError, ValueError):
+        _refuse("planner_retry_journal_invalid")
+    journal = path if path.name == FILE_NAME else path.parent / ".runtime" / FILE_NAME
+    try:
+        record = load_retry_journal(journal)
+    except (OSError, ValueError):
+        _refuse("planner_retry_journal_missing")
+    binding = record.get("binding")
+    pending = record.get("pending")
+    stage = binding.get("stage") if isinstance(binding, dict) else None
+    if path.name != FILE_NAME and stage != "foundation":
+        _refuse("planner_retry_journal_missing")
+    held = slots.get(str(active[0].get("attempt_id") or ""))
+    request_sha = pending.get("request_sha256") if isinstance(pending, dict) else None
+    if pending is None and record.get("expected_retry_guarded") is True:
+        planner_calls = sum(isinstance(call, dict) and call.get("role") == "planner" for call in calls)
+        if (type(record.get("abandoned")) is int and record["abandoned"] > 0
+                and record.get("accounted_planner_calls") == planner_calls):
+            request_sha = record.get("expected_retry_request_sha256")
+    if (not isinstance(request_sha, str) or not isinstance(held, dict)
+            or request_sha != held.get("request_sha256")):
+        _refuse("planner_retry_journal_invalid")
+
+
 def _recover_unstarted_metadata_planner(
     descriptor: Mapping[str, Any], job: Any, wrapper: Path, seed: Mapping[str, Any],
 ) -> Callable[[Any], Any]:
@@ -479,6 +533,7 @@ def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], A
     if checkpoint is None:
         _refuse("planner_checkpoint_missing")
     _verify_guarded_planner_inflight(seed, task_row)
+    _verify_checkpoint_inflight_retry(wrapper, checkpoint, task_row)
     environment = _provider_environment(seed)
     client, public = provider_adapter.build_research_agent_provider_client(dict(seed.provider_meta), environ=environment)
     if any(public.get(key) != seed.provider_public.get(key) for key in _PROVIDER_IDENTITY):
