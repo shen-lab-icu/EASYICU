@@ -1166,7 +1166,9 @@
     'Technical executability is not evidence of novelty or publication value.': '技术上可以执行，不等于已经证明研究具有创新性或投稿价值。',
     'A dated search returned sources and the plan mapping is complete.': '已完成带日期的文献检索，并记录了文献与研究计划的对应关系。',
     'The cohort definition and export authority are explicit.': '队列定义和数据导出权限已有明确记录。',
-    'Execution completeness does not close the open scientific design defects.': '分析执行完成，不代表尚未解决的科学设计问题已经关闭。',
+    'Execution completeness does not close the open scientific design defects.': '即使分析执行完整，也不能说明尚未解决的科学设计问题已关闭。',
+    'Analysis completion has not been confirmed; the scientific assessment remains open.': '尚未确认分析已完成，科学评估仍有待处理事项。',
+    'Analysis completion does not establish validation or close open scientific design issues.': '分析完成本身不能证明验证已通过，也不能关闭尚未解决的科学设计问题。',
     'Draft generation is not equivalent to publication readiness.': '生成稿件不等于已经达到投稿条件。',
     'No accepted, digest-bound prior-art review proves that this question is a reliable or sufficiently differentiated research idea.': '尚无已接受且绑定版本的既往研究审阅，能够证明该问题可靠并具有足够差异化。',
     'Run Idea Mining prior-art retrieval, inspect same-topic hits, and accept the refreshed handoff before treating the idea as publishable.': '先完成研究想法的既往文献检索，核对同主题研究，并接受更新后的交接记录，再判断该问题能否用于投稿。',
@@ -1218,43 +1220,36 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const domains = Array.isArray(p.domains) ? p.domains : [];
     const findings = Array.isArray(p.findings) ? p.findings : [];
-    const summary = artifactTable(
-      t('Review boundary', '审阅边界'),
-      [t('Item', '项目'), t('Current state', '当前状态')],
-      [
-        [t('Run', '运行'), p.run_id || ''],
-        [t('Claim ceiling', '论断上限'), runStatusLabel(p.claim_ceiling || p.status)],
-        [t('Human review', '人工审阅'), p.human_review_required ? t('Required', '需要') : t('Not required', '不需要')],
-        [t('Publication use', '投稿使用'), p.paper_authorized ? t('Authorized', '已授权') : t('Not authorized', '未授权')],
-        [t('Open findings', '待处理项'), String(findings.length)],
-      ],
-    );
-    const domainTable = artifactTable(
-      t('Review domains', '审阅领域'),
-      [t('Domain', '领域'), t('Evidence', '证据'), t('Status', '状态'), t('Conclusion', '结论')],
-      domains.map(row => [
-        scientificDomainLabel(row.domain),
-        t(`${Array.isArray(row.evidence_refs) ? row.evidence_refs.length : 0} references`, `${Array.isArray(row.evidence_refs) ? row.evidence_refs.length : 0} 项`),
-        scientificReviewStatus(row.status),
-        scientificReviewText(row.summary),
-      ]),
-      t('No review domains are present.', '没有可展示的审阅领域。'),
-    );
-    const findingTable = artifactTable(
-      t('Open scientific findings', '待处理科学问题'),
-      [t('Severity', '级别'), t('Finding', '问题'), t('Why it matters', '影响'), t('Next step', '下一步')],
-      findings.map(row => [
-        scientificReviewStatus(row.severity),
-        scientificFindingTitle(row.code, row.domain),
-        scientificReviewText(row.message),
-        scientificReviewText(row.remediation),
-      ]),
-      t('No open scientific findings are present.', '没有待处理科学问题。'),
-      { disclosure: findings.length > 3, open: false, meta: t(`${findings.length} findings`, `${findings.length} 项`) },
-    );
-    return `<div class="ag-artifact-readable ag-scientific-review-reader">
-      <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Scientific review', '科学审阅'))}</div></div><span class="pill" style="height:22px;">${esc(runStatusLabel(p.status || p.claim_ceiling))}</span></div>
-      ${summary}${domainTable}${findingTable}
+    const facts = [
+      [t('Run', '运行'), p.run_id || ''],
+      [t('Claim ceiling', '论断上限'), runStatusLabel(p.claim_ceiling || p.status)],
+      [t('Human review', '人工审阅'), p.human_review_required ? t('Required', '需要') : t('Not required', '不需要')],
+      [t('Publication use', '投稿使用'), p.paper_authorized ? t('Authorized', '已授权') : t('Not authorized', '未授权')],
+      [t('Open findings', '待处理项'), String(findings.length)],
+    ];
+    const domainCards = domains.map(row => {
+      const n = Array.isArray(row.evidence_refs) ? row.evidence_refs.length : 0;
+      return `<article class="ag-readiness-domain">
+        <div class="ag-readiness-domain-head"><h4>${esc(scientificDomainLabel(row.domain))}</h4><span class="ag-readiness-status">${esc(scientificReviewStatus(row.status))}</span></div>
+        <p>${esc(scientificReviewText(row.summary))}</p>
+        <small>${esc(t(`${n} references`, `${n} 项证据`))}</small>
+      </article>`;
+    }).join('');
+    const findingCards = findings.map(row => `<article class="ag-readiness-finding">
+      <div class="ag-readiness-finding-head"><span class="ag-readiness-severity">${esc(scientificReviewStatus(row.severity))}</span><h4>${esc(scientificFindingTitle(row.code, row.domain))}</h4></div>
+      <div class="ag-readiness-finding-copy"><div><span>${esc(t('Why it matters', '影响'))}</span><p>${esc(scientificReviewText(row.message))}</p></div>
+      <div><span>${esc(t('Next step', '下一步'))}</span><p>${esc(scientificReviewText(row.remediation))}</p></div></div>
+    </article>`).join('');
+    const findingContent = findingCards || `<p class="ag-readiness-empty">${esc(t('No open scientific findings are present.', '没有待处理科学问题。'))}</p>`;
+    const findingHeading = `${esc(t('Open scientific findings', '待处理科学问题'))} <span>${esc(t(`${findings.length} findings`, `${findings.length} 项`))}</span>`;
+    const findingSection = findings.length > 3
+      ? `<details class="ag-readiness-findings"><summary>${findingHeading}</summary><div class="ag-readiness-list">${findingContent}</div></details>`
+      : `<section class="ag-readiness-findings"><h3>${findingHeading}</h3><div class="ag-readiness-list">${findingContent}</div></section>`;
+    return `<div class="ag-artifact-readable ag-scientific-review-reader ag-readiness-reader">
+      <header class="ag-readiness-header"><div><div class="eyebrow">${esc(t('Scientific review', '科学审阅'))}</div><h2>${esc(t('Study review', '研究审阅'))}</h2></div><span class="ag-readiness-status">${esc(runStatusLabel(p.status || p.claim_ceiling))}</span></header>
+      <section class="ag-readiness-boundary"><h3>${esc(t('Review boundary', '审阅边界'))}</h3><dl>${facts.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl></section>
+      <section class="ag-readiness-domains"><h3>${esc(t('Review domains', '审阅领域'))}</h3><div class="ag-readiness-list">${domainCards || `<p class="ag-readiness-empty">${esc(t('No review domains are present.', '没有可展示的审阅领域。'))}</p>`}</div></section>
+      ${findingSection}
     </div>`;
   }
   function artifactStructuredView(name, payload, context) {
