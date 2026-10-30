@@ -306,7 +306,8 @@
           : extractionOwner ? extractionOwner.renderExtraction(state.extraction) : `<p>${tr('Extraction record: Not recorded', '提取记录：未记录')}</p>`;
       // What the run sent to the model, its replay and problem report (runTrust).
       const trust = modules.optional('runTrust');
-      return `${error}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button>${trust ? trust.replayButtonHtml(review.run_ref) + trust.problemButtonHtml(review.run_ref, '') : ''}</div>
+      const proposal = entry.proposalUrl ? `<p class="gpi-run-proposal"><a href="${esc(entry.proposalUrl)}" target="_blank" rel="noopener noreferrer">${tr('View research configuration excerpt', '查看待审研究配置摘录')}</a> <small>${tr('Not a complete plan. Sources and literature are not bound to each decision; this does not authorize execution.', '不是完整方案；来源和文献尚未逐项绑定，也不授权执行。')}</small></p>` : '';
+      return `${error}${proposal}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button>${trust ? trust.replayButtonHtml(review.run_ref) + trust.problemButtonHtml(review.run_ref, '') : ''}</div>
         ${extraction}
         ${primary ? table(primary) : ''}${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary>${table(other)}</details>` : ''}
         ${trust ? trust.sectionHtml(review.run_ref, entry.trustOpen) : ''}
@@ -361,8 +362,22 @@
         entries.set(ref, entry);
       }
       entry.open = true; entry.checks.clear();
+      entry.proposalUrl = '';
       await entry.controller.openRun(run);
       if (ticket === generation) await entry.controller.readExtraction(context().projectId, run.run_id);
+      const ctx = context();
+      const coordinates = [ctx.projectId, ctx.sessionId, run.run_id].map(value => String(value || '').trim());
+      if (ticket !== generation || !entry.controller.state.review || coordinates.some(value => !value) || typeof window.fetch !== 'function') return;
+      const url = '/api/pi/proposal/' + coordinates.map(encodeURIComponent).join('/');
+      try {
+        const response = await window.fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+        const current = context();
+        if (ticket === generation && entries.get(ref) === entry && entry.open
+            && coordinates[0] === String(current.projectId || '').trim()
+            && coordinates[1] === String(current.sessionId || '').trim()
+            && response.ok) entry.proposalUrl = url;
+      } catch (_) { /* The original run and failure information remain visible. */ }
+      if (ticket === generation) changed();
     }
     function handleClick(event) {
       const target = event.target;
