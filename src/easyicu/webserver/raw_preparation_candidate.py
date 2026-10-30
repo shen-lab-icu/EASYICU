@@ -132,6 +132,35 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
     identity = SourceIdentity.from_record(_constraints(context).get("source_identity"))
     if identity is None:
         raise ValueError("raw_preparation_source_unavailable")
+    if identity.database == "eicu_demo":
+        from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
+        population = reviewed_population_spec(run_dir=run_dir, pending=pending)
+        criteria = population.get("criteria", ()) if isinstance(population, Mapping) else ()
+        matches = [item for item in criteria if isinstance(item, Mapping)
+                   and isinstance(item.get("criterion"), Mapping)
+                   and item["criterion"].get("kind") == "first_observed_icu_single_hospital_adult"
+                   and item["criterion"].get("role") == "include"]
+        if matches:
+            if len(matches) != 1 or population.get("plan_sha256") != authority.plan_sha256:
+                raise ValueError("raw_preparation_first_observed_population_ambiguous")
+            requests = [item for item in pending.requests
+                        if isinstance(item.payload.get("plan_review_authority"), Mapping)
+                        and PlanReviewAuthority.model_validate(item.payload["plan_review_authority"]) == authority]
+            if len(requests) != 1:
+                raise ValueError("raw_preparation_first_observed_review_ambiguous")
+            from easyicu.webserver.first_observed_preparation import proposed_first_observed_scope
+            scope = proposed_first_observed_scope(run_dir=run_dir, request=requests[0])
+            if scope.get("criterion") != matches[0]["criterion"]:
+                raise ValueError("raw_preparation_first_observed_population_changed")
+            # A preview is not a checkpoint or a grant. Keep the actual values
+            # constrained to the adapter's fixed metadata-only declaration.
+            return {"status": "blocked", "blocker_codes": ["first_observed_preparation_unavailable"],
+                    "first_observed_preparation_preview": {
+                        "source_table": scope["source_table"], "source_columns": scope["source_columns"],
+                        "population_definition": scope["population_definition"],
+                        "multiple_hospitalization_policy": scope["multiple_hospitalization_policy"],
+                        "not_lifetime_first_icu": True, "preparation_authorized": False,
+                        "analysis_authorized": False}}
     matches = [item for item in sources.load_registry().get("sources", [])
                if isinstance(item, Mapping) and item.get("path")
                and sources.registered_source_identity(str(item["path"])) == identity]

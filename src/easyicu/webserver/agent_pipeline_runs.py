@@ -688,12 +688,15 @@ def _pipeline_failure_code(
 ) -> str:
     from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
     from easyicu.webserver.metadata_provider_concurrency import MetadataProviderCapacityExhausted
+    from easyicu.webserver.metadata_provider_client import MetadataProviderCoordinationUnavailable
 
     chain = _pipeline_exception_chain(exc)
     if any(isinstance(item, ProviderHardStopExceeded) for item in chain):
         return "research_pipeline_provider_budget_exhausted"
     if any(isinstance(item, MetadataProviderCapacityExhausted) for item in chain):
         return "research_pipeline_metadata_provider_capacity_unavailable"
+    if any(isinstance(item, MetadataProviderCoordinationUnavailable) for item in chain):
+        return "research_pipeline_metadata_shared_scope_unavailable"
     typed_failure = _safe_pipeline_typed_failure(exc)
     if typed_failure.get("owner") == "easyicu.databases.research_capabilities_v1":
         return typed_failure["reason_code"]
@@ -8180,6 +8183,12 @@ def make_research_pipeline_run_runner(
                     "capacity. This request was not sent. Preserve the run record; "
                     "the previous request may still be running or its remote status "
                     "may be unknown."
+                )
+            elif code == "research_pipeline_metadata_shared_scope_unavailable":
+                message = (
+                    "The configured shared model coordination scope could not be "
+                    "verified. This request was not sent. Check the enrolled homes "
+                    "and preserve all earlier request records."
                 )
             elif code == "research_pipeline_plan_contract_exhausted":
                 message = (

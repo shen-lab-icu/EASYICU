@@ -153,6 +153,16 @@ def test_capacity_rejection_is_not_sent_but_keeps_conservative_budget(tmp_path):
     assert usage["estimated_cost_usd"] == pytest.approx(0.08)
 
 
+def test_unverified_shared_scope_is_separately_counted_as_not_sent(tmp_path):
+    rejected = {**_call(failed=True), "state": "failed_pre_transport_coordination",
+                "error_type": "MetadataProviderCoordinationUnavailable"}
+    _ledger(tmp_path / ".runtime/provider_hard_stop_ledger.json", [rejected])
+    usage = research_run_usage(tmp_path)
+    assert usage["pre_transport_coordination_rejections"] == 1
+    assert usage["usage_unknown_calls"] == 0
+    assert usage["accounted_tokens"] == 200
+
+
 def test_all_attempts_and_roles_preserve_failed_and_zero_call_denominators(tmp_path):
     _ledger(
         tmp_path / ".runtime/provider_hard_stop_ledger.json",

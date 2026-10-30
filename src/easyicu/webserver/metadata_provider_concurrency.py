@@ -43,6 +43,25 @@ def account_identity(public: Mapping[str, Any]) -> str:
 
 def _open() -> sqlite3.Connection:
     root = state_paths.state_root()
+    from easyicu.webserver.metadata_provider_shared_scope import (
+        SHARED_ROOT_ENV, SharedScopeError, open_enrolled_scope, read_enrollment,
+    )
+
+    shared = str(os.environ.get(SHARED_ROOT_ENV) or "").strip()
+    enrollment = read_enrollment(root)
+    if enrollment is not None and shared != enrollment:
+        raise SharedScopeError("metadata_shared_scope_configuration_required")
+    if shared and enrollment is None:
+        raise SharedScopeError("metadata_shared_scope_unavailable")
+    if shared:
+        # No fallback: a missing enrollment or changed legacy snapshot must
+        # not silently open a new independent capacity ledger.
+        try:
+            return open_enrolled_scope(Path(shared), root)
+        except SharedScopeError:
+            raise
+        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+            raise SharedScopeError("metadata_shared_scope_unavailable") from exc
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = root / "metadata-provider-slots.sqlite3"
     fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -117,6 +136,12 @@ def has_capacity(account: str) -> bool:
 def release(attempt_id: str) -> None:
     connection = _open()
     try:
+        from easyicu.webserver.metadata_provider_shared_scope import SHARED_ROOT_ENV
+
+        if os.environ.get(SHARED_ROOT_ENV) and connection.execute(
+            "SELECT 1 FROM imported_slots WHERE attempt_id=?", (attempt_id,)
+        ).fetchone() is not None:
+            raise RuntimeError("metadata_provider_imported_slot_requires_terminal_proof")
         connection.execute("DELETE FROM slots WHERE attempt_id=?", (attempt_id,))
     finally:
         connection.close()

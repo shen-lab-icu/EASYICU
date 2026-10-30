@@ -14,6 +14,10 @@ for (const lang of [0, 1]) {
     .runFailureText('research_pipeline_metadata_provider_capacity_unavailable');
   if (!text.includes(lang ? '本次请求没有发出' : 'This request was not sent')) process.exit(1);
   if (!text.includes(lang ? '远端状态未知' : 'remote status may be unknown')) process.exit(2);
+  const shared = owner.create({tr: (en, zh) => lang ? zh : en, staticPreview: false})
+    .runFailureText('research_pipeline_metadata_shared_scope_unavailable');
+  if (!shared.includes(lang ? '本次请求没有发出' : 'This request was not sent')) process.exit(5);
+  if (!shared.includes(lang ? '实例登记' : 'enrollment')) process.exit(6);
   const incomplete = owner.create({tr: (en, zh) => lang ? zh : en, staticPreview: false})
     .runFailureText('research_agent_pipeline_failed_closed', {code: 'planned_products_missing'});
   if (!incomplete.includes(lang ? '分析尚未完成' : 'analysis is incomplete')) process.exit(3);

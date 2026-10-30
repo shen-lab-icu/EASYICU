@@ -1169,6 +1169,10 @@
           'An earlier model request still occupies the allowed capacity. This request was not sent. The earlier request may still be running or its remote status may be unknown. Keep the run record for support; do not repeatedly retry until the request status is resolved.',
           '之前的模型请求仍占用可用容量，本次请求没有发出。之前的请求可能仍在运行，或其远端状态未知。请保留运行记录供排查，在请求状态确认前不要反复重试。',
         ),
+        research_pipeline_metadata_shared_scope_unavailable: tr(
+          'EasyICU could not verify the configured shared model coordination scope. This request was not sent. Check enrollment and earlier request records before continuing.',
+          'EasyICU 无法核验配置的共享模型协调范围，本次请求没有发出。请先检查实例登记和先前请求记录，再继续。',
+        ),
         research_pipeline_time_window_invalid: tr(
           'The study time window is not valid for this data.',
           '研究时间窗对这份数据无效。',

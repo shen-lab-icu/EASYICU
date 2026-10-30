@@ -519,6 +519,9 @@
                 partial_multitable_projection: result && result.partial_multitable_projection
                   && typeof result.partial_multitable_projection === 'object' && !Array.isArray(result.partial_multitable_projection)
                   ? result.partial_multitable_projection : null,
+                first_observed_preparation_preview: result && result.first_observed_preparation_preview
+                  && typeof result.first_observed_preparation_preview === 'object' && !Array.isArray(result.first_observed_preparation_preview)
+                  ? result.first_observed_preparation_preview : null,
               };
             } catch (_) {
               if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession

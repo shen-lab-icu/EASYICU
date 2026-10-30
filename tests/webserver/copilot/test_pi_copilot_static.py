@@ -137,7 +137,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261029-journey4" in index
-    assert "js/screens-guided-pi-events.js?v=20261030-multitable-preview1" in index
+    assert "js/screens-guided-pi-events.js?v=20261030-first-observed1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261030-demo1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
@@ -155,7 +155,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261030-cohort-dependencies1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261030-first-observed1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
@@ -176,7 +176,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261030-provider-capacity1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261030-shared-capacity1" in index
     assert "js/screens-guided-pi.js?v=20261030-preparation1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (

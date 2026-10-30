@@ -93,6 +93,15 @@ def is_pre_transport_capacity_rejection(call: Mapping[str, object]) -> bool:
             )))
 
 
+def is_pre_transport_coordination_rejection(call: Mapping[str, object]) -> bool:
+    """Recognize a host-verified shared scope refusal before the worker starts."""
+    return (call.get("state") == "failed_pre_transport_coordination"
+            and call.get("error_type") == "MetadataProviderCoordinationUnavailable"
+            and all(call.get(name) is None for name in (
+                "reported_prompt_tokens", "reported_completion_tokens", "reported_total_tokens",
+            )))
+
+
 @dataclass(frozen=True)
 class ProviderHardStopLimits:
     """Frozen ceilings and explicit price assumptions for one batch."""
@@ -1132,6 +1141,25 @@ class ProviderHardStopLedger:
         No Provider response or exception text can establish this disposition.
         A crash before this write leaves the existing in-progress reservation.
         """
+        self._reject_metadata_before_transport(
+            task_id=task_id, attempt_id=attempt_id,
+            state="failed_pre_transport_capacity", error_type="MetadataProviderCapacityExhausted",
+        )
+
+    def reject_metadata_coordination_before_transport(self, *, task_id: str, attempt_id: str) -> None:
+        """Seal a failed shared-scope check without releasing its budget hold."""
+        self._reject_metadata_before_transport(
+            task_id=task_id, attempt_id=attempt_id,
+            state="failed_pre_transport_coordination", error_type="MetadataProviderCoordinationUnavailable",
+        )
+
+    def _reject_metadata_before_transport(self, *, task_id: str, attempt_id: str,
+                                          state: str, error_type: str) -> None:
+        if (state, error_type) not in {
+            ("failed_pre_transport_capacity", "MetadataProviderCapacityExhausted"),
+            ("failed_pre_transport_coordination", "MetadataProviderCoordinationUnavailable"),
+        }:
+            raise ProviderHardStopLedgerError("Invalid metadata admission disposition")
         with self._durable_transaction():
             task = self._task_locked(task_id)
             calls = task.get("calls")
@@ -1141,8 +1169,8 @@ class ProviderHardStopLedger:
                 raise ProviderHardStopLedgerError("Provider attempt is not a unique in-progress call")
             call = matches[0]
             call["finished_at"] = _utc_now()
-            call["error_type"] = "MetadataProviderCapacityExhausted"
-            call["state"] = "failed_pre_transport_capacity"
+            call["error_type"] = error_type
+            call["state"] = state
             # Keep accounted_tokens, estimated cost, prompt bytes and call
             # count unchanged: this is a provenance correction, not a refund.
             self._persist_locked()
@@ -1380,6 +1408,7 @@ class ProviderHardStopLedger:
             accounted_cost = 0.0
             unknown_states: Dict[str, int] = {}
             not_sent_calls = 0
+            coordination_rejections = 0
             for raw_call in calls:
                 if not isinstance(raw_call, Mapping):
                     raise ProviderHardStopLedgerError(
@@ -1401,6 +1430,9 @@ class ProviderHardStopLedger:
                     continue
                 if is_pre_transport_capacity_rejection(raw_call):
                     not_sent_calls += 1
+                    continue
+                if is_pre_transport_coordination_rejection(raw_call):
+                    coordination_rejections += 1
                     continue
                 unknown_calls += 1
                 unknown_accounted_tokens += call_tokens
@@ -1427,6 +1459,7 @@ class ProviderHardStopLedger:
                     "states": dict(sorted(unknown_states.items())),
                 },
                 "pre_transport_capacity_rejections": not_sent_calls,
+                "pre_transport_coordination_rejections": coordination_rejections,
                 "conservative_upper_bound": {
                     "n_calls": len(calls),
                     "total_tokens": accounted_tokens,
@@ -1557,6 +1590,15 @@ class _ActiveHardStopCall:
         self._active_attempt_id = None
         self._attempt_started_monotonic = None
 
+    def reject_metadata_coordination_before_transport(self) -> None:
+        if self._active_attempt_id is None:
+            raise ProviderHardStopLedgerError("No active Provider attempt to reject")
+        self.task.ledger.reject_metadata_coordination_before_transport(
+            task_id=self.task.task_id, attempt_id=self._active_attempt_id,
+        )
+        self._active_attempt_id = None
+        self._attempt_started_monotonic = None
+
     def complete(self, usage: Optional[Mapping[str, object]]) -> None:
         if self._active_attempt_id is None:
             raise ProviderHardStopLedgerError(
@@ -1645,6 +1687,14 @@ def record_active_metadata_capacity_rejection() -> None:
     state.reject_metadata_capacity_before_transport()
 
 
+def record_active_metadata_coordination_rejection() -> None:
+    """Seal only the local, pre-worker shared-scope rejection."""
+    state = _ACTIVE_HARD_STOP_CALL.get()
+    if state is None:
+        raise ProviderHardStopLedgerError("No active Provider hard-stop scope")
+    state.reject_metadata_coordination_before_transport()
+
+
 def record_active_provider_transport_failure(error_type: str) -> None:
     """Close a raw failed request durably before any retry wait or teardown.
 
@@ -1677,9 +1727,11 @@ __all__ = [
     "TaskProviderHardStop",
     "consume_active_provider_hard_stop_attempt",
     "is_pre_transport_capacity_rejection",
+    "is_pre_transport_coordination_rejection",
     "load_provider_hard_stop_ledger",
     "provider_hard_stop_call_scope",
     "record_active_metadata_capacity_rejection",
+    "record_active_metadata_coordination_rejection",
     "record_active_provider_retry_wait",
     "record_active_provider_transport_failure",
     "validate_provider_transport_reservation_capacity",
