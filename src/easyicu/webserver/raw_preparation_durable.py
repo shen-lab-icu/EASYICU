@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping
@@ -52,9 +53,10 @@ def _review(*, checkpoint: RawPreparationCheckpoint, binding: RawPreparationHost
             scope: Mapping[str, Any], job_id: str) -> tuple[dict, Path]:
     if canonical_sha256(checkpoint.request.payload.get('raw_preparation_scope')) != canonical_sha256(dict(scope)):
         raise ValueError('preparation_intent_scope_mismatch')
-    require_reviewable_multitable_scope(scope)
     receipt = dict(verify_host_review(checkpoint=checkpoint, scope=scope, **binding.model_dump(mode='python')))
-    return receipt, _owner(binding, receipt, job_id)
+    root = _owner(binding, receipt, job_id)
+    require_reviewable_multitable_scope(scope)
+    return receipt, root
 
 
 def admit_preparation_intent(*, job_id: str, checkpoint: RawPreparationCheckpoint,
@@ -72,6 +74,124 @@ def admit_preparation_intent(*, job_id: str, checkpoint: RawPreparationCheckpoin
     with AnchoredDirectory.open(_private_directory()) as directory:
         _publish_once(directory, job_id + '.preparation-intent.json', content)
         directory.assert_still_selected()
+
+
+def admit_preparation_handoff(*, job_id: str, checkpoint: RawPreparationCheckpoint,
+        binding: RawPreparationHostBinding, scope: Mapping[str, Any], timeout: float, store_path: Path,
+        journal_path: Path, job_created: float) -> None:
+    """Accept one explicit /3 handoff after the host decision and intent exist.
+
+    Atomic publication is the admission point. This is not a new decision and
+    cannot authorize research analysis. Caller owns the deployment lease.
+    """
+    if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or not math.isfinite(timeout) or not 0 < timeout <= 86400):
+        raise ValueError('preparation_handoff_timeout_invalid')
+    if (not Path(store_path).is_absolute() or '..' in Path(store_path).parts
+            or not Path(journal_path).is_absolute() or '..' in Path(journal_path).parts
+            or type(job_created) not in {int, float} or not math.isfinite(job_created) or job_created <= 0):
+        raise ValueError('preparation_handoff_store_invalid')
+    admit_preparation_intent(job_id=job_id, checkpoint=checkpoint, binding=binding, scope=scope)
+    from easyicu.webserver.preparation_recovery_snapshot import _read_signed
+    intent = _read_signed(job_id + '.preparation-intent.json')
+    body = {'schema_version': 'easyicu.preparation-handoff/1', 'job_id': job_id,
+            'intent_sha256': canonical_sha256(intent), 'runtime_sha256': intent['runtime_sha256'],
+            'study_context_id': binding.study_context_id, 'timeout_seconds': timeout,
+            'command_schema': 'easyicu.durable-preparation/3', 'store_path': str(store_path),
+            'journal_path': str(journal_path), 'job_created': job_created}
+    encoded = canonical_json({**body, 'signature': _signature(body)}).encode()
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        _publish_once(directory, job_id + '.preparation-handoff.json', encoded)
+        directory.assert_still_selected()
+
+
+def verify_unstarted_preparation_handoff(*, job_id: str, job: Any, store_path: Path,
+                                         journal_path: Path) -> dict[str, Any]:
+    """Verify a /3 handoff with no prior command or worker launch evidence.
+
+    The caller must own the deployment lease and serialize admissions. This
+    function cannot prove that a prior worker was cleaned up and consequently
+    refuses any existing lifecycle, consumption, or snapshot receipt.
+    """
+    if (not isinstance(job_id, str) or not _JOB.fullmatch(job_id) or job is None
+            or getattr(job, 'id', None) != job_id or getattr(job, 'kind', None) != 'raw-preparation-review'
+            or job.is_cancel_requested()):
+        raise ValueError('preparation_handoff_job_invalid')
+    state = job.snapshot()
+    if (state.get('status') not in {'running', 'failed'}
+            or (state.get('status') == 'failed' and not (state.get('recovered') and state.get('interrupted')))):
+        raise ValueError('preparation_handoff_job_terminal')
+    from easyicu.webserver.preparation_recovery_snapshot import _read_signed
+    handoff = _read_signed(job_id + '.preparation-handoff.json')
+    intent = _read_signed(job_id + '.preparation-intent.json')
+    if (set(handoff) != {'schema_version', 'job_id', 'intent_sha256', 'runtime_sha256',
+                          'study_context_id', 'timeout_seconds', 'command_schema', 'store_path',
+                          'journal_path', 'job_created'}
+            or handoff.get('schema_version') != 'easyicu.preparation-handoff/1'
+            or handoff.get('command_schema') != 'easyicu.durable-preparation/3'
+            or handoff.get('store_path') != str(store_path)
+            or handoff.get('journal_path') != str(journal_path)
+            or handoff.get('job_created') != job.created
+            or handoff.get('job_id') != job_id or handoff.get('intent_sha256') != canonical_sha256(intent)
+            or handoff.get('runtime_sha256') != runtime_digest()
+            or intent.get('runtime_sha256') != handoff.get('runtime_sha256')
+            or intent.get('schema_version') != 'easyicu.preparation-intent/1'
+            or intent.get('job_id') != job_id):
+        raise ValueError('preparation_handoff_binding_invalid')
+    timeout = handoff.get('timeout_seconds')
+    if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or not math.isfinite(timeout) or not 0 < timeout <= 86400):
+        raise ValueError('preparation_handoff_timeout_invalid')
+    checkpoint = RawPreparationCheckpoint.model_validate(intent.get('checkpoint'))
+    binding = RawPreparationHostBinding.model_validate(intent.get('binding'))
+    scope = intent.get('scope')
+    if not isinstance(scope, dict) or binding.study_context_id != handoff.get('study_context_id'):
+        raise ValueError('preparation_handoff_binding_invalid')
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        for name in (binding.nonce + '.used', job_id + '.preparation-started',
+                     job_id + '.preparation-snapshot.json', job_id + '.preparation-completed.json'):
+            if not directory.is_absent(name):
+                raise ValueError('preparation_handoff_execution_evidence_present')
+        directory.assert_still_selected()
+    saved_root = Path(str(intent.get('root') or ''))
+    if not saved_root.is_absolute() or '..' in saved_root.parts or saved_root.is_symlink():
+        raise ValueError('preparation_handoff_owner_changed')
+    lease_dir = saved_root / ('.preparation-execution-' + job_id)
+    if lease_dir.exists() or lease_dir.is_symlink():
+        raise ValueError('preparation_handoff_lifecycle_present')
+    if canonical_sha256(checkpoint.request.payload.get('raw_preparation_scope')) != canonical_sha256(scope):
+        raise ValueError('preparation_handoff_binding_invalid')
+    receipt = dict(verify_host_review(checkpoint=checkpoint, scope=scope, **binding.model_dump(mode='python')))
+    root = _owner(binding, receipt, job_id)
+    if (str(root) != intent.get('root') or receipt.get('decision_key') != intent.get('decision_key')
+            or receipt.get('scientific_configuration_sha256') != intent.get('scientific_configuration_sha256')):
+        raise ValueError('preparation_handoff_owner_changed')
+    require_reviewable_multitable_scope(scope)
+    return {'schema_version': 'easyicu.durable-preparation/3', 'study_context_id': binding.study_context_id,
+            'timeout_seconds': timeout, 'handoff_sha256': canonical_sha256(handoff)}
+
+
+def verify_preparation_handoff_command(*, job_id: str, job: Any, payload: Mapping[str, Any],
+                                       store_path: Path, journal_path: Path) -> None:
+    """Recheck the immutable /3 command binding on every DBOS attempt."""
+    from easyicu.webserver.preparation_recovery_snapshot import _read_signed
+    handoff = _read_signed(job_id + '.preparation-handoff.json')
+    intent = _read_signed(job_id + '.preparation-intent.json')
+    expected = {'schema_version': 'easyicu.durable-preparation/3',
+                'study_context_id': handoff.get('study_context_id'),
+                'timeout_seconds': handoff.get('timeout_seconds'),
+                'handoff_sha256': canonical_sha256(handoff)}
+    actual = {key: value for key, value in dict(payload).items() if key != '_resume_attempt'}
+    if (actual != expected or handoff.get('schema_version') != 'easyicu.preparation-handoff/1'
+            or handoff.get('command_schema') != 'easyicu.durable-preparation/3'
+            or handoff.get('store_path') != str(store_path)
+            or handoff.get('journal_path') != str(journal_path)
+            or handoff.get('job_created') != job.created
+            or handoff.get('job_id') != job_id or intent.get('job_id') != job_id
+            or handoff.get('intent_sha256') != canonical_sha256(intent)
+            or handoff.get('runtime_sha256') != runtime_digest()
+            or intent.get('runtime_sha256') != handoff.get('runtime_sha256')):
+        raise ValueError('preparation_handoff_command_mismatch')
 
 
 def recover_preparation_before_consumption(*, job_id: str, job: Any, timeout: float) -> Path:

@@ -90,6 +90,18 @@ class ResearchCommandStore:
             if cursor.rowcount != 1:
                 raise DurableResearchError("research_command_activation_conflict")
 
+    def prepare_active_handoff(self, job_id: str, payload: dict[str, Any]) -> None:
+        """Atomically persist and activate one independently accepted handoff."""
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id)
+                or payload.get("schema_version") != "easyicu.durable-preparation/3"):
+            raise DurableResearchError("preparation_handoff_command_invalid")
+        encoded = json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":"))
+        if len(encoded.encode()) > 128 * 1024:
+            raise DurableResearchError("research_command_too_large")
+        with self._connection() as connection:
+            connection.execute("INSERT INTO commands VALUES (?, ?, ?, 'active', 0, ?, NULL)",
+                               (job_id, encoded, runtime_digest(), time.time()))
+
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM commands WHERE id=?", (job_id,)).fetchone()
@@ -105,6 +117,11 @@ class ResearchCommandStore:
     def active_ids(self) -> list[str]:
         with self._connection() as connection:
             return [row[0] for row in connection.execute("SELECT id FROM commands WHERE status='active' ORDER BY created")]
+
+    def known_ids(self) -> set[str]:
+        """Identify existing commands without re-admitting terminal jobs."""
+        with self._connection() as connection:
+            return {row[0] for row in connection.execute("SELECT id FROM commands")}
 
     def bind_provider(self, job_id: str, binding: dict[str, Any]) -> None:
         """Remember the original budget task before scientific work can proceed."""

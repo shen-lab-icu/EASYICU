@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import threading
 import logging
+import os
+import re
+import stat
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,11 +25,12 @@ _LOG = logging.getLogger(__name__)
 
 _PREPARATION_SCHEMA = "easyicu.durable-preparation/1"
 _SEALED_PREPARATION_SCHEMA = "easyicu.durable-preparation/2"
+_HANDOFF_PREPARATION_SCHEMA = "easyicu.durable-preparation/3"
 
 
 def _command_kind(payload: dict[str, Any]) -> str:
     return "raw-preparation-review" if payload.get("schema_version") in {
-        _PREPARATION_SCHEMA, _SEALED_PREPARATION_SCHEMA,
+        _PREPARATION_SCHEMA, _SEALED_PREPARATION_SCHEMA, _HANDOFF_PREPARATION_SCHEMA,
     } else "agent-run"
 
 
@@ -41,6 +45,7 @@ class DurableResearchService:
         self.recover_runner = recover_runner or scientific_recover_runner
         self._live: dict[str, Callable] = {}
         self._lock = threading.Lock()
+        self._admission_lock = threading.Lock()
         self._execution_locks: dict[str, threading.Lock] = {}
         self._stopping = threading.Event()
         factory = dispatcher_factory or DurableWorkflowDispatcher
@@ -48,6 +53,7 @@ class DurableResearchService:
                                   application_version="easyicu-research-durable-v1")
 
     def launch(self) -> None:
+        self._recover_handoffs()
         # Reattach transport synchronously: no browser can consume a synthetic
         # interrupted terminal event for a command about to resume.
         active = self.store.active_ids()
@@ -121,6 +127,92 @@ class DurableResearchService:
                     "cohort_complete": False, "analysis_authorized": False}
 
         self.activate(job_id, run)
+
+    @staticmethod
+    def _require_handoff_deployment_lease() -> None:
+        """Require this process to own the selected Web deployment lock."""
+        from easyicu.webserver import deployment_lease
+        handle = deployment_lease._HANDLE
+        path = deployment_lease.state_paths.state_root() / 'webserver-single-process.lock'
+        try:
+            if handle is None or handle.closed or path.is_symlink():
+                raise ValueError
+            opened, selected = os.fstat(handle.fileno()), path.stat()
+            if (not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (selected.st_dev, selected.st_ino)
+                    or os.pread(handle.fileno(), 64, 0).decode().strip() != str(os.getpid())):
+                raise ValueError
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise DurableResearchError('preparation_handoff_deployment_lease_missing') from exc
+
+    def _recover_handoffs(self) -> None:
+        """Adopt only exact /3 handoffs with an intact unstarted lifecycle."""
+        from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+        from easyicu.webserver import state_paths
+        private = state_paths.state_root() / 'private-preparation-decisions'
+        if not private.exists() and not private.is_symlink():
+            return
+        with AnchoredDirectory.open(private) as directory:
+            names = sorted(name for name in os.listdir(private)
+                           if re.fullmatch(r'[A-Za-z0-9_-]{1,128}\.preparation-handoff\.json', name))
+            directory.assert_still_selected()
+        known = self.store.known_ids()
+        names = [name for name in names if name.removesuffix('.preparation-handoff.json') not in known]
+        if not names:
+            return
+        self._require_handoff_deployment_lease()
+        if self.manager._journal is None or len(names) > 1000:
+            raise DurableResearchError('preparation_handoff_inventory_invalid')
+        with self._admission_lock:
+            for name in names:
+                identity = name.removesuffix('.preparation-handoff.json')
+                if self.store.get(identity) is not None:
+                    continue
+                try:
+                    self._adopt_unstarted_handoff(identity)
+                except Exception:
+                    # Never manufacture a command from incomplete or stale
+                    # authority. The original job/receipt remains visible.
+                    _LOG.warning('Preparation handoff could not be safely recovered')
+
+    def _adopt_unstarted_handoff(self, job_id: str) -> None:
+        from easyicu.webserver.raw_preparation_durable import verify_unstarted_preparation_handoff
+        self._require_handoff_deployment_lease()
+        if self.manager._journal is None:
+            raise DurableResearchError('preparation_handoff_journal_missing')
+        job = self.manager.get(job_id)
+        payload = verify_unstarted_preparation_handoff(job_id=job_id, job=job, store_path=self.store.path.absolute(),
+                                                       journal_path=self.manager._journal.path.absolute())
+        if job.is_cancel_requested() or self.store.get(job_id) is not None:
+            raise DurableResearchError('preparation_handoff_state_changed')
+        self._require_handoff_deployment_lease()
+        self.store.prepare_active_handoff(job_id, payload)
+
+    def activate_preparation_handoff(self, job_id: str, *, checkpoint: Any, binding: Any,
+                                     scope: dict[str, Any], timeout: float) -> None:
+        """Durably accept a /3 handoff, then create its outbox atomically.
+
+        This owner is not exposed by the product route. An accepted handoff
+        remains recoverable if the process dies before outbox creation.
+        """
+        from easyicu.webserver.raw_preparation_durable import admit_preparation_handoff
+        self._require_handoff_deployment_lease()
+        if self.manager._journal is None or not self.dispatcher._launched:
+            raise DurableResearchError('preparation_handoff_service_unavailable')
+        with self._admission_lock:
+            job = self.manager.get(job_id)
+            if (job is None or job.kind != 'raw-preparation-review' or job.status != 'running'
+                    or job.is_cancel_requested() or self.store.get(job_id) is not None):
+                raise DurableResearchError('preparation_handoff_job_invalid')
+            admit_preparation_handoff(job_id=job_id, checkpoint=checkpoint, binding=binding,
+                                       scope=scope, timeout=timeout, store_path=self.store.path.absolute(),
+                                       journal_path=self.manager._journal.path.absolute(), job_created=job.created)
+            self._adopt_unstarted_handoff(job_id)
+            job.register_cancel_callback(lambda: self.store.request_cancel(job_id))
+        try:
+            self._dispatch(job_id)
+        except Exception:
+            _LOG.warning('Durable research dispatch pending for job %s', job_id)
+            threading.Thread(target=self._retry_dispatch, args=(job_id,), daemon=True).start()
 
     def activate(self, job_id: str, runner: Callable) -> None:
         with self._lock:
@@ -244,10 +336,15 @@ class DurableResearchService:
                 if _command_kind(payload) == "raw-preparation-review":
                     from easyicu.webserver.raw_preparation_durable import (
                         recover_preparation_before_consumption, recover_preparation_with_sealed_snapshot,
+                        verify_preparation_handoff_command,
                     )
                     try:
+                        if payload.get('schema_version') == _HANDOFF_PREPARATION_SCHEMA:
+                            self._require_handoff_deployment_lease()
+                            verify_preparation_handoff_command(job_id=job_id, job=bound_job, payload=payload,
+                                store_path=self.store.path.absolute(), journal_path=self.manager._journal.path.absolute())
                         recover = (recover_preparation_with_sealed_snapshot
-                                   if payload.get("schema_version") == _SEALED_PREPARATION_SCHEMA
+                                   if payload.get("schema_version") in {_SEALED_PREPARATION_SCHEMA, _HANDOFF_PREPARATION_SCHEMA}
                                    else recover_preparation_before_consumption)
                         recover(job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
                     except Exception as exc:
