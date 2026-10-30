@@ -3207,23 +3207,17 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
         ]
         == "ICU mortality is unavailable because this export does not include an ICU-specific event column."
     )
-    sepsis_curve = next(
+    age_curve = next(
         row
         for row in survival_analysis["curves"]
-        if row["outcome_id"] == "hospital_death" and row["group_id"] == "sepsis"
+        if row["outcome_id"] == "hospital_death" and row["group_id"] == "age"
     )
-    assert sepsis_curve["logrank"]["status"] == "ready"
-    assert sepsis_curve["logrank"]["test"] == "logrank"
-    assert sepsis_curve["logrank"]["df"] == 1
-    assert sepsis_curve["display_horizon_days"] == 30.0
-    assert sepsis_curve["logrank"]["p_value"] > 0
-    assert "<" not in sepsis_curve["logrank"]["p_value_label"]
-    assert sepsis_curve["number_at_risk"]["times"] == [0.0, 1.0, 3.0, 6]
-    risk_rows = {
-        row["label"]: row["values"] for row in sepsis_curve["number_at_risk"]["rows"]
-    }
-    assert risk_rows["Non-sepsis"] == [2, 2, 2, 1]
-    assert risk_rows["Sepsis"] == [1, 1, 1, 0]
+    assert age_curve["logrank"]["status"] == "ready"
+    assert age_curve["logrank"]["test"] == "logrank"
+    assert age_curve["logrank"]["df"] == 1
+    assert age_curve["display_horizon_days"] == 30.0
+    assert age_curve["number_at_risk"]["times"] == [0.0, 1.0, 3.0, 6]
+    assert not any(row["group_id"] in {"sepsis", "sofa2"} for row in survival_analysis["curves"])
     assert all("stay_id" not in json.dumps(row) for row in survival_analysis["curves"])
     assert payload["sofa_reclassification"]["status"] == "blocked"
     assert payload["sofa_reclassification"]["missing_modules"] == ["sofa1_score"]
@@ -3764,15 +3758,16 @@ def test_cohort_review_large_parquet_export_reuses_active_source_for_km_and_cove
     assert survival["status"] == "ready"
     assert survival["default_outcome"] == "hospital_death"
     assert survival["curves"]
-    sepsis_curve = next(
+    age_curve = next(
         row
         for row in survival["curves"]
-        if row["outcome_id"] == "hospital_death" and row["group_id"] == "sepsis"
+        if row["outcome_id"] == "hospital_death" and row["group_id"] == "age"
     )
-    assert sepsis_curve["display_horizon_days"] == 30.0
-    assert sepsis_curve["number_at_risk"]["times"][-1] == 30.0
-    assert sepsis_curve["logrank"]["p_value_label"]
-    assert "<" not in sepsis_curve["logrank"]["p_value_label"]
+    assert age_curve["display_horizon_days"] == 30.0
+    assert age_curve["number_at_risk"]["times"][-1] == 30.0
+    assert age_curve["logrank"]["p_value_label"]
+    assert "<" not in age_curve["logrank"]["p_value_label"]
+    assert not any(row["group_id"] in {"sepsis", "sofa2"} for row in survival["curves"])
     assert len(json.dumps(survival)) < 80_000
     assert "stay_id" not in json.dumps(survival)
 

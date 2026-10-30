@@ -20,6 +20,7 @@ from easyicu.webserver.patient_drilldown import eligibility as _eligibility
 from easyicu.webserver import entity_ids as _entity_ids
 from easyicu.webserver.patient_drilldown import feature_detail as _feature_detail
 from easyicu.webserver.patient_drilldown import navigation as _navigation
+from easyicu.webserver.patient_drilldown import sampling as _sampling
 from easyicu.webserver import review_labels
 from easyicu.webserver import prepared_frames
 
@@ -242,13 +243,11 @@ def patient_review_entity(body: Dict[str, Any]) -> Dict[str, Any]:
     sofa2 = _read_module_frame(path, desc, "sofa2_score", entity_set)
     vitals = _read_module_frame(path, desc, "vitals", entity_set)
     review_frames = _read_review_frames(path, desc, entity_set)
-    death_by_entity = dataio._stay_bool(outcome, "death", missing_false=True)
+    death_by_entity = dataio._stay_bool(outcome, "death", missing_false=False)
     los_by_entity = dataio._stay_numeric(outcome, "los_icu", "median")
     sofa_by_entity = dataio._stay_numeric(sofa2, "sofa2", "max")
     sepsis_by_entity = dataio._stay_bool(sepsis, "sep3_sofa2", missing_false=True)
     for entity_id in comparison_ids:
-        if outcome is not None and not outcome.empty:
-            death_by_entity.setdefault(entity_id, False)
         if sepsis is not None and not sepsis.empty:
             sepsis_by_entity.setdefault(entity_id, False)
     entities = [
@@ -403,23 +402,19 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     vitals = dataio._filter_by_stay(frames.get("vitals"), entity_set)
     review_frames = _read_review_frames(path, desc, entity_set)
 
-    death_by_entity = dataio._stay_bool(outcome, "death", missing_false=True)
+    death_by_entity = dataio._stay_bool(outcome, "death", missing_false=False)
     los_by_entity = dataio._stay_numeric(outcome, "los_icu", "median")
     sofa_by_entity = dataio._stay_numeric(sofa2, "sofa2", "max")
     sepsis_by_entity = dataio._stay_bool(sepsis, "sep3_sofa2", missing_false=True)
     for entity_id in review_entity_ids:
-        if outcome is not None and not outcome.empty:
-            death_by_entity.setdefault(entity_id, False)
         if sepsis is not None and not sepsis.empty:
             sepsis_by_entity.setdefault(entity_id, False)
-    death_by_entity_all = dataio._stay_bool(outcome_all, "death", missing_false=True)
+    death_by_entity_all = dataio._stay_bool(outcome_all, "death", missing_false=False)
     los_by_entity_all = dataio._stay_numeric(outcome_all, "los_icu", "median")
     sepsis_by_entity_all = dataio._stay_bool(
         sepsis_all, "sep3_sofa2", missing_false=True
     )
     for entity_id in entity_ids:
-        if outcome_all is not None and not outcome_all.empty:
-            death_by_entity_all.setdefault(entity_id, False)
         if sepsis_all is not None and not sepsis_all.empty:
             sepsis_by_entity_all.setdefault(entity_id, False)
 
@@ -453,6 +448,10 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         vitals=vitals,
     )
 
+    # Use the same sex classification and known-only denominator as Cohort Review.
+    from easyicu.webserver.cohort_review import _sex_summary
+
+    sex_summary = _sex_summary(list(demo["sex"]) if "sex" in demo.columns else [None] * len(demo))
     summary = {
         "entities": int((desc.get("summary") or {}).get("stays") or len(entity_ids)),
         "modules": int((desc.get("summary") or {}).get("modules") or 0),
@@ -474,14 +473,14 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         "mean_age": (
             dataio._series_mean(demo.get("age")) if "age" in demo.columns else None
         ),
-        "female_pct": (
-            dataio._sex_pct(demo.get("sex"), "female")
-            if "sex" in demo.columns
-            else None
-        ),
+        "female_pct": sex_summary["female_pct"],
+        "female_known_count": sex_summary["known_count"],
+        "female_unknown_count": sex_summary["unknown_count"],
         "mortality": dataio._bool_pct(
-            list((death_by_entity_all or death_by_entity).values())
+            [death_by_entity_all[entity_id] for entity_id in entity_ids if entity_id in death_by_entity_all]
         ),
+        "mortality_known_count": sum(entity_id in death_by_entity_all for entity_id in entity_ids),
+        "mortality_unknown_count": sum(entity_id not in death_by_entity_all for entity_id in entity_ids),
         "median_los_icu": dataio._median(
             list((los_by_entity_all or los_by_entity).values())
         ),
@@ -968,27 +967,19 @@ def _paired_numeric_time_values(
     one = frame.sort_values(time_col)
     for raw_time, raw_value in zip(one[time_col], one[feature]):
         num = dataio._num(raw_value)
-        if num is None:
+        time = _json_cell(raw_time)
+        if num is None or time is None:
             continue
         values.append(float(num))
-        times.append(_json_cell(raw_time))
+        times.append(time)
     point_count = len(values)
-    sampled = _bounded_signal_indices(point_count)
+    sampled = _sampling.trajectory_indices(values, _MAX_SIGNAL_POINTS)
     return (
         [times[index] for index in sampled],
         [values[index] for index in sampled],
         point_count,
         values,
     )
-
-
-def _bounded_signal_indices(point_count: int) -> List[int]:
-    """Select at most 12 ordered points while preserving the full time window."""
-    if point_count <= _MAX_SIGNAL_POINTS:
-        return list(range(point_count))
-    last = point_count - 1
-    intervals = _MAX_SIGNAL_POINTS - 1
-    return [(index * last) // intervals for index in range(_MAX_SIGNAL_POINTS)]
 
 
 def _time_axis_payload(time_col: str, times: List[Any]) -> Dict[str, str]:
@@ -1065,6 +1056,7 @@ def _time_lane_payloads(
                     "times": times,
                     "time_axis": _time_axis_payload(str(time_col), times),
                     "point_count": point_count,
+                    "sampling_method": "endpoints_extrema_largest_gap_v1",
                     "current": all_values[-1],
                     "min": round(min(all_values), 3),
                     "max": round(max(all_values), 3),
@@ -1816,6 +1808,7 @@ def _feature_traces_for_entities(
                 "times": times,
                 "time_axis": _time_axis_payload(str(time_col), times),
                 "point_count": point_count,
+                "sampling_method": "endpoints_extrema_largest_gap_v1",
                 "bounded": True,
                 "max_points": _MAX_SIGNAL_POINTS,
             }
@@ -2368,7 +2361,7 @@ def _signals_payload(vitals: Any, entity_id: str) -> List[Dict[str, Any]]:
         if key not in one.columns:
             continue
         values = dataio._numeric_values(one[key])
-        bounded = [values[index] for index in _bounded_signal_indices(len(values))]
+        bounded = [values[index] for index in _sampling.trajectory_indices(values, _MAX_SIGNAL_POINTS)]
         if bounded:
             out.append(
                 {
@@ -2378,6 +2371,7 @@ def _signals_payload(vitals: Any, entity_id: str) -> List[Dict[str, Any]]:
                     "current": values[-1],
                     "values": bounded,
                     "point_count": len(values),
+                    "sampling_method": "endpoints_extrema_largest_gap_v1",
                     "bounded": True,
                     "max_points": _MAX_SIGNAL_POINTS,
                 }

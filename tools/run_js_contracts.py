@@ -26,6 +26,8 @@ TESTS = ROOT / "tests" / "js"
 JS = ROOT / "src" / "easyicu" / "webserver" / "static" / "js"
 
 CONTRACTS: dict[str, list[str]] = {
+    "cohort_clinical_semantics.test.js": [],
+    "custom_cohort_grouping.test.js": [],
     "settings_control_truth.test.js": [],
     "skill_package_import.test.js": [],
     "storage_and_remembered_keys.test.js": [],

@@ -3136,14 +3136,12 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
         assert stale_patient_selector not in cohort_css
 
 
-def test_km_panel_surfaces_effect_size() -> None:
-    """[6] The KM panel must surface an effect contrast (end-of-follow-up survival +
-    absolute risk difference), not just a lone log-rank p-value."""
+def test_km_panel_requires_audited_same_time_contrast() -> None:
+    """Different groups' last observed points are not a same-time risk contrast."""
     cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
-    cohort_css = _static_css("cohort.css")
-    assert "function cohortSurvivalEffect(curve)" in cohort_survival_js
-    assert "absolute risk difference" in cohort_survival_js
-    assert ".surv-effect" in cohort_css
+    assert "function cohortSurvivalEffect(curve)" not in cohort_survival_js
+    assert "same-time group difference requires an audited calculation" in cohort_survival_js
+    assert "Discharge alive is censored" in cohort_survival_js
 
 
 def test_review_breadcrumb_parent_matches_sidebar_group() -> None:

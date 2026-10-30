@@ -98,7 +98,7 @@ assert.equal(signal.series[0].smooth, false, 'clinical trajectories must not be 
 assert.equal(signal.series[0].step, false);
 assert.deepEqual(
   JSON.parse(JSON.stringify(signal.series[0].markLine.data.map(row => row.name))),
-  ['Median', 'Low', 'High'],
+  ['Displayed-point median', 'Low', 'High'],
 );
 
 const stepSignal = charts.signalOption({

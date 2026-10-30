@@ -179,6 +179,65 @@ def test_entity_detail_requires_matching_ref_and_ordinal(tmp_path: Path) -> None
     _assert_no_direct_identifier_keys(payload)
 
 
+def test_unknown_deaths_remain_unknown_in_patient_summary_and_detail(tmp_path: Path) -> None:
+    root = _write_export(tmp_path / "export", entities=10)
+    outcome = pd.read_csv(root / "outcome.csv")
+    outcome["death"] = outcome["death"].astype("boolean")
+    outcome.loc[outcome.stay_id == 1, "death"] = None
+    outcome = outcome[outcome.stay_id != 2]
+    outcome.to_csv(root / "outcome.csv", index=False)
+    client = TestClient(app)
+
+    payload = client.post("/api/patient-review/drilldown", json={}).json()
+    assert payload["selected"]["outcomes"]["status"] == "Unknown"
+    assert payload["entities"][0]["outcome"] == "Unknown"
+    assert payload["summary"]["mortality_known_count"] == 8
+    assert payload["summary"]["mortality_unknown_count"] == 2
+    assert payload["summary"]["mortality"] == 12.5
+
+    second = payload["entity_navigation"]["options"][1]
+    detail = client.post("/api/patient-review/entity", json={
+        "entity_ref": second["ref"], "entity_ordinal": second["ordinal"]
+    }).json()
+    assert detail["selected"]["outcomes"]["status"] == "Unknown"
+
+
+def test_female_percentage_uses_only_recognized_sex_values(tmp_path: Path) -> None:
+    root = _write_export(tmp_path / "export", entities=10)
+    demo = pd.read_csv(root / "demographics.csv")
+    demo["sex"] = ["F", "M", "female", "MALE", "woman", "man", "unknown", "not female", "0", "1"]
+    demo.to_csv(root / "demographics.csv", index=False)
+
+    payload = TestClient(app).post("/api/patient-review/drilldown", json={}).json()
+    assert payload["summary"]["female_pct"] == 50.0
+    assert payload["summary"]["female_known_count"] == 6
+    assert payload["summary"]["female_unknown_count"] == 4
+
+
+def test_patient_trajectories_keep_observed_extremes_and_total(tmp_path: Path) -> None:
+    root = _write_export(tmp_path / "export", entities=3)
+    values = [80.0] * 38
+    values[3], values[34] = 42.0, 173.0
+    pd.DataFrame({"stay_id": [1] * 38, "charttime": range(38), "hr": values}).to_csv(
+        root / "vitals.csv", index=False
+    )
+    client = TestClient(app)
+    payload = client.post("/api/patient-review/drilldown", json={}).json()
+    lane = next(s for l in payload["time_lanes"] for s in l["signals"] if s["feature"] == "hr")
+    assert lane["point_count"] == 38
+    assert len(lane["values"]) == 12
+    assert (min(lane["values"]), max(lane["values"])) == (42.0, 173.0)
+    assert lane["times"][0] == 0 and lane["times"][-1] == 37
+    assert lane["sampling_method"] == "endpoints_extrema_largest_gap_v1"
+    selected = payload["entity_navigation"]["options"][0]
+    detail = client.post("/api/patient-review/feature", json={
+        "entity_ref": selected["ref"], "entity_ordinal": selected["ordinal"], "feature": "hr"
+    }).json()["signal"]
+    assert detail["point_count"] == 38
+    assert (min(detail["values"]), max(detail["values"])) == (42.0, 173.0)
+    assert detail["sampling_method"] == "endpoints_extrema_largest_gap_v1"
+
+
 def test_patient_summary_omits_day_unit_when_los_is_unknown() -> None:
     cards = patient_drilldown._patient_summary_cards(
         {

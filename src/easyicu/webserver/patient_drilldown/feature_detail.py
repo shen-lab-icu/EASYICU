@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping
 from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver.patient_drilldown.coverage import TIME_COLUMNS
+from easyicu.webserver.patient_drilldown.sampling import trajectory_indices
 from easyicu.webserver.entity_ids import (
     canonicalize_entity_frame,
     resolve_entity_id_column,
@@ -127,6 +128,8 @@ def load_feature_detail(
         number = _finite_number(row.get(feature_id))
         if number is None:
             continue
+        if time_column and _json_cell(row.get(time_column)) is None:
+            continue
         numeric_rows.append(
             (
                 _json_cell(row.get(time_column)) if time_column else None,
@@ -168,8 +171,8 @@ def load_feature_detail(
     }
 
     if len(numeric_rows) >= 2 and time_column:
-        indices = _bounded_indices(len(numeric_rows))
         full_values = [row[1] for row in numeric_rows]
+        indices = trajectory_indices(full_values, MAX_FEATURE_POINTS)
         sampled = [numeric_rows[index] for index in indices]
         base.update(
             {
@@ -186,6 +189,7 @@ def load_feature_detail(
                         str(time_column), [row[0] for row in sampled]
                     ),
                     "point_count": len(numeric_rows),
+                    "sampling_method": "endpoints_extrema_largest_gap_v1",
                     "current": full_values[-1],
                     "min": round(min(full_values), 3),
                     "max": round(max(full_values), 3),
@@ -267,14 +271,6 @@ def _unavailable_payload(
     }
 
 
-def _bounded_indices(point_count: int) -> list[int]:
-    if point_count <= MAX_FEATURE_POINTS:
-        return list(range(point_count))
-    last = point_count - 1
-    intervals = MAX_FEATURE_POINTS - 1
-    return [(index * last) // intervals for index in range(MAX_FEATURE_POINTS)]
-
-
 def _finite_number(value: Any) -> float | None:
     try:
         import math
@@ -288,11 +284,6 @@ def _finite_number(value: Any) -> float | None:
 def _json_cell(value: Any) -> Any:
     if value is None:
         return None
-    if hasattr(value, "isoformat"):
-        try:
-            return value.isoformat()
-        except (TypeError, ValueError):
-            pass
     try:
         import pandas as pd
 
@@ -300,6 +291,11 @@ def _json_cell(value: Any) -> Any:
             return None
     except Exception:
         pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except (TypeError, ValueError):
+            pass
     if isinstance(value, (str, int, float, bool)):
         return value
     return str(value)

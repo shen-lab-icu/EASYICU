@@ -151,7 +151,7 @@ def test_boolean_unknowns_presence_and_survival_reductions(tmp_path, monkeypatch
         desc,
         ["outcome:death", "outcome:icu_death", "outcome:los_icu"],
     )
-    assert payload["summary"]["mortality"]["unknown_count"] == 0
+    assert payload["summary"]["mortality"]["unknown_count"] == 21
     assert (
         payload["survival_analysis"]["outcomes"][2]["event_summary"][
             "excluded_inconsistent_entities"
