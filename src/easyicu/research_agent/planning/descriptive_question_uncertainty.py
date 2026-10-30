@@ -111,13 +111,6 @@ def requested_uncertainty(*texts: str) -> UncertaintyRequirement:
                 negation_prefix = before[:(joined or prefix).start()]
             else:
                 negation_prefix = re.sub(r"\d{1,2}(?:\.\d+)?\s*%\s*$", "", before)
-            if _NEGATION.search(negation_prefix) or _NEGATIVE_SUFFIX.match(after):
-                requested = False
-                levels.clear()
-                stated_levels.clear()
-                saw_level = False
-                continue
-            requested = True
             value = embedded or _PERCENT_BEFORE.search(before) or _PERCENT_AFTER.search(after)
             if joined:
                 values = joined.groups()
@@ -125,6 +118,20 @@ def requested_uncertainty(*texts: str) -> UncertaintyRequirement:
                 values = (prefix.group(1), value.group(1))
             else:
                 values = (value.group(1),) if value else ()
+            if _NEGATION.search(negation_prefix) or _NEGATIVE_SUFFIX.match(after):
+                # Removing one explicitly named level does not withdraw a
+                # different level the researcher also requested.
+                if values and levels:
+                    levels.difference_update(float(value) / 100.0 for value in values)
+                    requested = bool(levels)
+                    stated_levels = set(levels)
+                else:
+                    requested = False
+                    levels.clear()
+                    stated_levels.clear()
+                saw_level = False
+                continue
+            requested = True
             for raw_level in values:
                 level = float(raw_level) / 100.0
                 if 0 < level < 1:
@@ -133,6 +140,7 @@ def requested_uncertainty(*texts: str) -> UncertaintyRequirement:
                             stated_levels.update(levels)
                         else:
                             levels.clear()
+                            stated_levels.clear()
                         saw_level = True
                     stated_levels.add(level)
                     levels = set(stated_levels)
