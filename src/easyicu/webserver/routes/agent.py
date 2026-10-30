@@ -567,7 +567,9 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
     from easyicu.webserver import jobs
     from easyicu.webserver.host_action_contracts import RawPreparationReviewDecision
     from easyicu.webserver.raw_preparation_candidate import available_host_review
-    from easyicu.webserver.raw_preparation_decisions import record_host_review
+    from easyicu.webserver.raw_preparation_decisions import (
+        RawPreparationHostBinding, record_host_review, recover_host_review,
+    )
 
     action = _host_action(body)
     study_id = str(body.get("study_context_id") or "").strip()
@@ -584,7 +586,29 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
         receipt = _submit_host_decision(action, body,
             lambda: {"job_id": jobs.MANAGER.reserve("raw-preparation-review").id}, review_decision=decision)
         if receipt.get("reused"):
-            return receipt
+            # A host decision can be signed immediately before the process
+            # dies, leaving the pending checkpoint on disk. Reconstruct only
+            # that exact decision; never launch a new worker from a replay.
+            if decision != "approved":
+                return receipt
+            job_id = str(receipt.get("job_id") or "")
+            binding = RawPreparationHostBinding(project_id=action.project_id, session_id=action.session_id,
+                study_context_id=study_id, run_id=current.run_id, nonce=current.nonce)
+            decision_path = state_paths.state_root() / "private-preparation-decisions" / (current.nonce + ".json")
+            if not decision_path.exists() and not decision_path.is_symlink():
+                return {**receipt, "preparation_status": "review_recording", "analysis_authorized": False}
+            decided = recover_host_review(pending=checkpoint, binding=binding, scope=preparation_scope,
+                                          job_id=job_id, run_dir=run_dir)
+            with AnchoredDirectory.open(run_dir) as directory:
+                latest = RawPreparationCheckpoint.model_validate_json(directory.read_bytes(
+                    "raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+                if latest.checkpoint_sha256 == checkpoint.checkpoint_sha256:
+                    directory.replace_bytes("raw_preparation_checkpoint.json", decided.model_dump_json().encode())
+                elif latest.checkpoint_sha256 != decided.checkpoint_sha256:
+                    raise ValueError("raw_preparation_pending_stale")
+                directory.assert_still_selected()
+            return {**receipt, "decision": "approved", "preparation_status": "review_recorded",
+                    "analysis_authorized": False}
         job_id = str(receipt.get("job_id") or "")
         try:
             if not (receipt.get("host_action") or {}).get("recorded"):
