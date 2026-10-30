@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from easyicu.webserver import dataio
@@ -86,6 +87,128 @@ def _manifest_modules(manifest: Mapping[str, Any]) -> set[str]:
     return modules
 
 
+def _explicit_execution_concepts(study: Mapping[str, Any]) -> set[str]:
+    execution = study.get("execution_concepts")
+    if not isinstance(execution, Mapping):
+        return set()
+    result = {
+        value.strip()
+        for field in ("primary_exposure", "outcome")
+        if isinstance((value := execution.get(field)), str) and value.strip()
+    }
+    covariates = execution.get("covariates")
+    if isinstance(covariates, list):
+        result.update(value.strip() for value in covariates if isinstance(value, str) and value.strip())
+    return result
+
+
+def _explicit_selection_mismatches(
+    study: Mapping[str, Any], manifest: Mapping[str, Any], requested_modules: tuple[str, ...]
+) -> tuple[str, ...]:
+    # A module name proves neither that a partial selection included the
+    # requested variable nor that the source could actually provide it.
+    required = _explicit_execution_concepts(study)
+    selection = manifest.get("concept_selection")
+    if not required:
+        return ()
+    if not isinstance(selection, Mapping) or selection.get("mode") not in ("explicit", "all_in_selected_modules"):
+        return ("registered_export_concepts_unrecorded",)
+    modules = selection.get("modules")
+    selected_by_module = {
+        str(module).strip().lower(): {value.strip() for value in values if isinstance(value, str) and value.strip()}
+        for module, values in (modules.items() if isinstance(modules, Mapping) else ())
+        if str(module).strip().lower() in requested_modules and isinstance(values, list)
+    }
+    published: set[str] = set()
+    availability_by_concept: dict[str, set[str]] = {}
+    for row in manifest.get("files") or ():
+        if not isinstance(row, Mapping) or not row.get("file"):
+            continue
+        module = str(row.get("module") or "").strip().lower()
+        concepts = row.get("concept_ids")
+        if module not in selected_by_module or not isinstance(concepts, list):
+            continue
+        published.update(
+            value.strip() for value in concepts
+            if isinstance(value, str) and value.strip() in selected_by_module[module]
+        )
+        statuses = row.get("concept_status")
+        if isinstance(statuses, Mapping):
+            for concept, status in statuses.items():
+                if isinstance(status, Mapping):
+                    availability_by_concept.setdefault(str(concept), set()).add(
+                        str(status.get("availability") or "")
+                    )
+    availability = manifest.get("concept_availability")
+    unavailable = availability.get("structurally_unavailable") if isinstance(availability, Mapping) else None
+    unavailable_ids = {
+        str(row.get("concept_id") or "").strip()
+        for row in (unavailable if isinstance(unavailable, list) else ())
+        if isinstance(row, Mapping)
+    }
+    # The catalog owner treats a concept with only these statuses across all
+    # of its files as unavailable, even when the manifest lists its ID.
+    unavailable_ids.update(
+        concept for concept, statuses in availability_by_concept.items()
+        if statuses and statuses <= {"produced_all_null", "structurally_unavailable_placeholder"}
+    )
+    if required & unavailable_ids:
+        return ("registered_export_concepts_unavailable",)
+    missing = required - published
+    if missing:
+        selected_modules = set(selected_by_module)
+        # Once all requested modules were exported in full, extracting the
+        # same modules again cannot prove an absent or differently named ID.
+        # Alias normalization here only detects a possible unresolved mapping;
+        # it never establishes clinical equivalence or permits reuse.
+        modules_complete = set(requested_modules).issubset(selected_modules)
+        if modules_complete and selection.get("mode") == "all_in_selected_modules":
+            return ("registered_export_concepts_unresolved",)
+        from easyicu.research_agent.concept_availability import normalize_concept_name
+
+        if modules_complete and any(
+            normalize_concept_name(name) != name
+            and normalize_concept_name(name) in published
+            for name in missing
+        ):
+            return ("registered_export_concepts_unresolved",)
+        return ("registered_export_concepts_missing",)
+    return ()
+
+
+def _verify_study_source(study: Mapping[str, Any], binding: Mapping[str, Any], registered_path: str) -> None:
+    source = study.get("data_source")
+    if not isinstance(source, Mapping):
+        return
+    requested_database = str(source.get("database") or "").strip()
+    if requested_database:
+        try:
+            same_database = dataio.normalize_database_key(requested_database) == dataio.normalize_database_key(str(binding["database"]))
+        except KeyError as exc:
+            raise dataio.ExportCohortError("registered_export_study_database_mismatch") from exc
+        if not same_database:
+            raise dataio.ExportCohortError("registered_export_study_database_mismatch")
+    source_path = str(source.get("path") or "").strip()
+    if not source_path:
+        return
+    try:
+        study_path = Path(source_path).expanduser().resolve(strict=True)
+        export_path = Path(registered_path).expanduser().resolve(strict=True)
+        raw_path = Path(str(binding["source_data_path"])).resolve(strict=True)
+    except OSError as exc:
+        raise dataio.ExportCohortError("registered_export_study_source_unavailable") from exc
+    if study_path in (export_path, raw_path):
+        return
+    # A newly produced export may replace the previously bound export only
+    # when both resolve to the same reviewed raw data source.
+    try:
+        old = dataio.resolve_registered_export_binding(str(study_path), str(binding["database"]))
+    except dataio.ExportCohortError as exc:
+        raise dataio.ExportCohortError("registered_export_study_source_mismatch") from exc
+    if Path(str(old["source_data_path"])).resolve(strict=True) != raw_path:
+        raise dataio.ExportCohortError("registered_export_study_source_mismatch")
+
+
 def bound_export_mismatches(
     study: Mapping[str, Any], manifest: Mapping[str, Any]
 ) -> tuple[str, ...]:
@@ -128,6 +251,7 @@ def compile_registered_export_handoff(
     binding = dataio.resolve_registered_export_binding(
         str(registered_source.get("path") or ""), database
     )
+    _verify_study_source(study, binding, str(registered_source.get("path") or ""))
     manifest = binding["manifest"]
     requested_cohort = compile_study_cohort(study)
     requested_format = str(study.get("export_format") or "parquet").strip().lower()
@@ -148,6 +272,20 @@ def compile_registered_export_handoff(
         mismatches.append("registered_export_format_mismatch")
     if not set(requested_modules).issubset(observed_modules):
         mismatches.append("registered_export_modules_missing")
+    mismatches.extend(_explicit_selection_mismatches(study, manifest, requested_modules))
+    # For an explicit execution request, an observed window cannot be
+    # reconstructed from an old export with no longitudinal time authority.
+    # The cohort window is a membership rule, not a measurement bound.
+    if _explicit_execution_concepts(study) and study.get("time_window"):
+        from easyicu.research_agent.intake.export_package import (
+            ExportPackageError,
+            require_export_time_window_authority,
+        )
+
+        try:
+            require_export_time_window_authority(manifest, modules=requested_modules)
+        except ExportPackageError:
+            mismatches.append("registered_export_time_window_unbounded")
 
     return ExtractionHandoff(
         source_data_path=str(binding["source_data_path"]),
@@ -226,6 +364,26 @@ def submit_study_extraction(
                 source_id=str(registered_source.get("id") or "")[:80],
                 handoff_receipt=handoff_receipt,
                 submitted=None,
+            )
+        if "registered_export_concepts_unavailable" in handoff.mismatch_codes:
+            raise dataio.ExportCohortError(
+                "registered_export_concepts_unavailable_review_source",
+                {"next_action": "review_source_or_concept_definition"},
+            )
+        if "registered_export_concepts_unresolved" in handoff.mismatch_codes:
+            raise dataio.ExportCohortError(
+                "registered_export_concepts_unresolved_review_mapping",
+                {"next_action": "review_concept_mapping_or_selected_modules"},
+            )
+        if any(code in handoff.mismatch_codes for code in (
+            "registered_export_concepts_missing",
+            "registered_export_concepts_unrecorded",
+        )):
+            # A failed new export is not rebound to the study; retrying from
+            # the old export would otherwise enqueue the same job forever.
+            raise dataio.ExportCohortError(
+                "registered_export_concepts_missing_review_extraction",
+                {"next_action": "prepare_and_bind_export_with_required_concepts"},
             )
         if not handoff.modules:
             raise dataio.ExportCohortError("registered_export_modules_unrecorded")
