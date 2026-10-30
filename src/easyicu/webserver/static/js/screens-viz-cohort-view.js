@@ -166,6 +166,7 @@
       'Current export is loaded, but the cohort is above the interactive KM preview limit; continue with an audited local analysis job on this same export.': '当前导出已加载，但队列超过交互式 KM 预览上限；请在同一个导出上继续运行本地审计分析任务。',
       'Exploratory · unadjusted': '探索性 · 未调整',
       'Time-to-event': '事件时间',
+      'Days since ICU landmark': 'ICU 标志时间点后的天数',
       'Log-rank': 'Log-rank',
       'df 1 · exploratory only · point estimates, no CI': 'df 1 · 仅探索 · 点估计，无置信区间',
       'not enough events': '事件数不足',
@@ -356,6 +357,29 @@
       'No supported two-group split is available for this cohort.': '此队列没有可用的双组分组。',
       'No survival curve could be computed from the available timed records.': '可用时间记录不足，无法计算生存曲线。',
       'Custom KM grouping requires verified baseline age or sex and two non-empty groups.': '自定义 KM 分组需要生存时间起点已确认的年龄或性别，并且两组均非空。',
+      'Landmark grouping requires a directly measured laboratory feature.': '该分组需要直接测量的化验指标；当前字段不是符合条件的化验结果。',
+      'Export time metadata is missing or invalid.': '导出缺少有效的时间元数据，无法核实时间起点。',
+      'The export observation window does not cover the requested landmark.': '导出的观测时间范围未覆盖所选生存起点。',
+      'The selected laboratory file is unavailable or ambiguous.': '所选化验文件不存在或无法唯一确定。',
+      'The selected laboratory file lacks verified time metadata.': '所选化验文件缺少可核验的时间元数据。',
+      'The selected laboratory file lacks verified ICU-relative hours.': '所选化验文件未能核实以 ICU 入科为起点、以小时为单位的时间。',
+      'The measurement unit is not verified for this laboratory feature.': '当前化验指标缺少单位声明，无法判断阈值含义。',
+      'ICU outcome metadata is missing or ambiguous.': 'ICU 结局元数据缺失或无法唯一确定。',
+      'ICU death and ICU length-of-stay metadata are not verified.': 'ICU 死亡和 ICU 住院时长的元数据尚未核实。',
+      'The selected laboratory file lacks required physical columns.': '所选化验文件缺少必需的实际数据列。',
+      'The laboratory file exceeds the interactive landmark preview limit.': '化验文件超过交互式生存预览的大小上限。',
+      'The laboratory time column is not a verified relative-hours representation.': '化验时间列未核实为相对 ICU 入科时间的小时数。',
+      'The export cannot verify or read the selected laboratory time and outcome metadata.': '当前导出无法核实或读取所选化验时间及结局元数据。',
+      'The landmark risk set does not produce two non-empty groups.': '所选生存起点的风险人群不能形成两个非空组。',
+      'ICU discharge-event timing is not verified for this source.': '此数据来源的 ICU 出科事件时间尚未核实。',
+      'The original ICU discharge source is unavailable for verification.': '无法读取原始 ICU 出科来源以核验事件和时间。',
+      'The original ICU discharge source does not match the selected cohort.': '原始 ICU 出科来源与当前队列不一致。',
+      'The exported ICU death status differs from the original discharge source.': '导出的 ICU 死亡状态与原始出科来源不一致。',
+      'The exported ICU follow-up differs from the original discharge source.': '导出的 ICU 随访时间与原始出科来源不一致。',
+      'The cohort exceeds the interactive landmark preview limit.': '队列超过交互式生存预览的大小上限。',
+      'Another landmark preview is running; try again after it finishes.': '另一个时间起点预览正在运行，请等待完成后重试。',
+      'Too many measurements share the earliest landmark timestamp.': '最早时间点的测量记录过多，无法安全汇总。',
+      'The source files changed during landmark verification; try again.': '数据文件在核验过程中发生变化，请重新计算。',
       'Custom split does not produce two non-empty groups.': '自定义分组没有产生两个非空组，无法进行组间对照。',
       'Sepsis events may occur after the survival time origin; a verified baseline group or time-varying analysis is required.': '脓毒症事件可能发生在生存时间起点之后；需要经核实的基线分组或时变分析。',
       'The whole-stay maximum SOFA-2 is not a verified baseline measurement at the survival time origin.': '整个入住期间的最高 SOFA-2 并非生存时间起点经核实的基线测量。',
@@ -1197,9 +1221,11 @@
     const kind = draft.kind || 'numeric_threshold';
     const categories = ((review.custom_group_options || {}).categories || []);
     const features = ((review.feature_catalog || {}).modules || []).flatMap(module => (module.features || []));
-    const numeric = features.filter(feature => feature && feature.audience !== 'internal' && feature.kind === 'numeric' && feature.id);
+    const allNumeric = features.filter(feature => feature && feature.audience !== 'internal' && feature.kind === 'numeric' && feature.id);
+    const numeric = state.panel === 'survival' ? allNumeric.filter(feature => feature.id === 'demographics:age' || ['blood_gas', 'chemistry', 'hematology'].includes(feature.module)) : allNumeric;
     const hasSex = features.some(feature => feature && feature.id === 'demographics:sex');
-    const featureId = draft.feature_id || (kind === 'categorical_values' ? (categories[0] || {}).feature_id : (numeric.find(f => f.id === 'demographics:age') || numeric[0] || {}).id) || '';
+    const defaultFeature = kind === 'categorical_values' ? (categories[0] || {}).feature_id : (numeric.find(f => f.id === 'demographics:age') || numeric[0] || {}).id;
+    const featureId = (kind === 'numeric_threshold' && !numeric.some(row => row.id === draft.feature_id) ? defaultFeature : draft.feature_id) || defaultFeature || '';
     const category = categories.find(row => row.feature_id === featureId) || {};
     const choices = category.values || [];
     const selectedA = draft.value_a || '';
@@ -1209,9 +1235,15 @@
       + choices.map(value => option(value, value, value === selected)).join('');
     const applying = !!state.customBusy;
     const committed = state.customGroup;
+    const isLabSurvival = state.panel === 'survival' && kind === 'numeric_threshold' && featureId !== 'demographics:age';
+    const configuredWindows = (review.custom_group_options || {}).landmark_hours;
+    const windows = Array.isArray(configuredWindows) ? configuredWindows.filter(Number.isFinite) : [];
+    const hasLandmark = windows.length > 0;
+    const landmarkHours = windows && windows.includes(draft.landmark_hours) ? draft.landmark_hours : (windows && windows.includes(24) ? 24 : (windows || [])[0]);
     return `<section class="card pad mt-12" data-custom-group-editor>
       <h2>${t('Custom grouping', '自定义分组')}</h2>
-      <p>${t('Applies only to this local preview. It does not change a research plan or run. Numeric groups compare each stay’s median over the available export window; survival requires a verified group at the time origin.', '只作用于本地预览，不改变科研计划或执行。数值分组使用导出可用时间范围内每次入住的中位数；生存分析要求分组在时间起点已确认。')}</p>
+      <p>${t('Applies only to this local preview. It does not change a research plan or run. Group contrast uses each stay’s median over the available export window; survival requires a group established by its time origin.', '只作用于本地预览，不改变科研计划或执行。组间对照使用导出可用时间范围内每次入住的中位数；生存分析要求在时间起点前确定分组。')}</p>
+      ${isLabSurvival ? (hasLandmark ? `<p role="note">${t('For directly measured laboratory fields in blood gas, chemistry or hematology, the first valid result during [ICU admission, landmark) defines the group. Survival starts at the landmark; patients with no result or who leave the ICU before the landmark are excluded. Currently supported for verified eICU sources, ICU death and ICU follow-up only. Group contrast and survival use different values and populations; eligibility depends on verified time metadata and a declared unit; check the unit against the source.', '血气、生化、血液学中的直接化验指标，采用 ICU 入科后至所选时间点之前的首次有效结果分组，并从该时间点开始计算生存；无有效结果或此前已离开 ICU 的患者不纳入。目前仅支持经核验的 eICU 来源、ICU 死亡及 ICU 随访；组间对照和生存曲线采用的取值与人群不同。具体字段须有可核验的时间元数据和单位声明；单位需核对来源。')}</p>` : `<p role="status">${t('The current service does not yet support timed numeric survival groups. Age and sex remain available.', '当前服务尚未启用按时间窗口的数值生存分组，年龄和性别仍可使用。')}</p>`) : (state.panel === 'survival' && kind === 'categorical_values' ? `<p role="note">${t('Recorded categories are currently available for descriptive group contrast only; they cannot be used for survival without a verified time origin.', '当前记录类别仅支持描述性组间对照；生存分析需核实分组时间起点。')}</p>` : '')}
       <div class="row wrap gap-10">
         <label>${t('Grouping type', '分组方式')} <select data-custom-kind ${applying ? 'disabled' : ''}>
           ${option('numeric_threshold', t('Numeric threshold', '数值阈值'), kind === 'numeric_threshold')}
@@ -1222,13 +1254,14 @@
           ? categories.map(row => option(row.feature_id, cohortFeatureName(row.feature_id.split(':')[1]) || row.label || row.feature_id, row.feature_id === featureId)).join('')
           : numeric.map(row => option(row.id, `${catalogModuleText(row.module, row.module)} · ${cohortFeatureName(row.column) || row.label || row.column}`, row.id === featureId)).join('')}</select></label>`}
         ${kind === 'numeric_threshold' ? `<label>${t('Threshold', '阈值')} <input type="number" step="any" data-custom-threshold value="${esc(draft.threshold == null ? '' : draft.threshold)}" ${applying ? 'disabled' : ''}></label>` : ''}
+        ${isLabSurvival && hasLandmark ? `<label>${t('Measurement window and survival start', '测量窗口及生存起点')} <select data-custom-landmark ${applying ? 'disabled' : ''}>${windows.map(hours => option(hours, t(`ICU admission to ${hours} h; start at ${hours} h`, `ICU 入科后 ${hours} 小时内；第 ${hours} 小时起算`), hours === landmarkHours)).join('')}</select></label>` : ''}
         ${kind === 'categorical_values' ? `<label>${t('First category', '类别一')} <select data-custom-value-a ${applying ? 'disabled' : ''}>${choiceList(selectedA)}</select></label><label>${t('Second category', '类别二')} <select data-custom-value-b ${applying ? 'disabled' : ''}>${choiceList(selectedB)}</select></label>` : ''}
-        <button type="button" class="btn primary" data-custom-apply ${applying ? 'disabled' : ''}>${applying ? t('Applying…', '正在计算…') : t('Apply to preview', '应用于预览')}</button>
+        <button type="button" class="btn primary" data-custom-apply ${applying || (isLabSurvival && !hasLandmark) ? 'disabled' : ''}>${applying ? t('Applying…', '正在计算…') : t('Apply to preview', '应用于预览')}</button>
         ${committed ? `<button type="button" class="btn" data-custom-clear ${applying ? 'disabled' : ''}>${t('Clear grouping', '清除分组')}</button>` : ''}
       </div>
       <p class="muted">${t('Threshold groups are ≤ threshold and > threshold. Candidate numeric types are catalog hints; the server verifies actual values. Missing or other categories are reported separately.', '阈值分组为 ≤ 阈值和 > 阈值。数值字段来自目录类型提示，服务端会核验实际取值；缺失或其他类别单独列出。')}</p>
       ${state.customError ? `<p role="alert">${esc(state.customError)}</p>` : ''}
-      ${committed ? `<p>${t('Active preview grouping', '当前预览分组')}：${esc(customGroupFeatureLabel(committed))} · ${committed.kind === 'numeric_threshold' ? `≤ ${esc(committed.threshold)} / > ${esc(committed.threshold)}` : committed.kind === 'sex' ? t('female / male', '女性 / 男性') : (committed.values || []).map(esc).join(' / ')}</p>` : ''}
+      ${committed ? `<p>${t('Active preview grouping', '当前预览分组')}：${esc(customGroupFeatureLabel(committed))} · ${committed.kind === 'numeric_threshold' ? `≤ ${esc(committed.threshold)} / > ${esc(committed.threshold)}` : committed.kind === 'sex' ? t('female / male', '女性 / 男性') : (committed.values || []).map(esc).join(' / ')}${committed.landmark_hours != null ? ` · ${t('survival landmark', '生存起点')} ${esc(committed.landmark_hours)} h` : ''}</p>` : ''}
     </section>`;
   }
 

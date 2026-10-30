@@ -77,7 +77,7 @@
     if (!group) return receipt === null && !custom;
     if (!receipt || receipt.kind !== group.kind || receipt.feature_id !== group.feature_id) return false;
     if (!custom || custom.kind !== group.kind || custom.feature_id !== group.feature_id) return false;
-    if (group.kind === 'numeric_threshold') return typeof receipt.threshold === 'number' && Number.isFinite(receipt.threshold) && receipt.threshold === group.threshold;
+    if (group.kind === 'numeric_threshold') return typeof receipt.threshold === 'number' && Number.isFinite(receipt.threshold) && receipt.threshold === group.threshold && (group.landmark_hours == null || receipt.landmark_hours === group.landmark_hours);
     if (group.kind === 'categorical_values') return Array.isArray(receipt.values) && receipt.values.length === 2 && receipt.values.every((value, i) => value === group.values[i]);
     return group.kind === 'sex';
   }
@@ -363,6 +363,7 @@
       const groupKind = root.querySelector('[data-custom-kind]');
       const groupFeature = root.querySelector('[data-custom-feature]');
       const threshold = root.querySelector('[data-custom-threshold]');
+      const landmark = root.querySelector('[data-custom-landmark]');
       const valueA = root.querySelector('[data-custom-value-a]');
       const valueB = root.querySelector('[data-custom-value-b]');
       if (groupKind) groupKind.addEventListener('change', () => {
@@ -376,6 +377,7 @@
         repaintScreen('cohort');
       });
       if (threshold) threshold.addEventListener('input', () => { state.customDraft.threshold = threshold.value; });
+      if (landmark) landmark.addEventListener('change', () => { state.customDraft.landmark_hours = Number(landmark.value); });
       if (valueA) valueA.addEventListener('change', () => { state.customDraft.value_a = valueA.value; });
       if (valueB) valueB.addEventListener('change', () => { state.customDraft.value_b = valueB.value; });
       root.querySelectorAll('[data-custom-apply]').forEach(button => button.addEventListener('click', () => {
@@ -400,6 +402,16 @@
             return;
           }
           group = { kind: 'numeric_threshold', feature_id: groupFeature.value, threshold: number };
+          if (state.panel === 'survival' && group.feature_id !== 'demographics:age') {
+            const supported = ((cohortReview() || {}).custom_group_options || {}).landmark_hours;
+            const hours = landmark ? Number(landmark.value) : NaN;
+            if (!Array.isArray(supported) || !supported.includes(hours)) {
+              state.customError = t('This service does not support the selected survival window.', '当前服务不支持所选的生存时间窗口。');
+              repaintScreen('cohort');
+              return;
+            }
+            group.landmark_hours = hours;
+          }
         }
         applyCustomGroup(group);
       }));

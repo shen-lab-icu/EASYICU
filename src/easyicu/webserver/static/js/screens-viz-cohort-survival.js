@@ -20,12 +20,19 @@
     const groups = survival.group_options || [];
     const readyOutcomes = outcomes.filter(row => row.status === 'ready');
     const readyGroups = groups.filter(row => row.status === 'ready');
-    const selectedOutcome = survival.default_outcome || (readyOutcomes[0] && readyOutcomes[0].id) || state.survivalOutcome;
-    state.survivalOutcome = selectedOutcome || state.survivalOutcome;
     const selectedGroup = readyGroups.some(row => row.id === state.survivalGroup)
       ? state.survivalGroup
       : (survival.default_group || (readyGroups[0] && readyGroups[0].id));
-    const curve = (survival.curves || []).find(row => row.outcome_id === selectedOutcome && row.group_id === selectedGroup);
+    const landmarkHours = selectedGroup === 'custom' && state.customGroup && state.customGroup.landmark_hours;
+    const selectedOutcome = landmarkHours ? 'icu_death' : (survival.default_outcome || (readyOutcomes[0] && readyOutcomes[0].id) || state.survivalOutcome);
+    state.survivalOutcome = selectedOutcome || state.survivalOutcome;
+    // Fail closed if an older or mixed service returns an unshifted or mismatched curve.
+    const curve = (survival.curves || []).find(row => row.outcome_id === selectedOutcome && row.group_id === selectedGroup && (!landmarkHours || (
+      row.landmark_hours === landmarkHours && row.event_time_basis === 'icu_discharge_status_and_exit_time_proxy'
+      && row.measurement_aggregation === 'first' && row.measurement_window_end_inclusive === false
+      && Array.isArray(row.measurement_window_hours) && row.measurement_window_hours[0] === 0 && row.measurement_window_hours[1] === landmarkHours
+      && typeof row.measurement_unit === 'string' && !!row.measurement_unit.trim() && row.landmark_counts
+    )));
     const outcomeCards = cohortSurvivalOutcomeCards(outcomes, selectedOutcome);
     const groupButtons = groups.map(row => {
       const ready = row.status === 'ready';
@@ -36,17 +43,28 @@
     }).join('');
     const blockedOutcomes = outcomes.filter(row => row.status !== 'ready');
     const blockedGroups = groups.filter(row => row.status !== 'ready');
+    // Explain blocked choices next to their buttons, not after a long plot.
+    // A blocked custom group must not look as if the fallback curve represents it.
+    const customBlocked = blockedGroups.find(row => row.id === 'custom');
+    const blockedCounts = customBlocked && (customBlocked.groups || []).length
+      ? `<div class="d">${customBlocked.basis === 'icu_landmark_first_measurement' ? t('Landmark risk-set groups', '生存起点风险集分组') : t('Group counts', '分组人数')}：${customBlocked.groups.map(g => `${esc(g.label)} = ${fmtInt(g.count)}`).join(' · ')}${customBlocked.measurement_unit ? ` · ${t('declared unit (check source)', '声明单位（需核对来源）')} ${esc(customBlocked.measurement_unit)}` : ''}</div>` : '';
+    const blockedNotice = customBlocked ? `<div class="note warn mt-12" role="status"><div class="body"><div class="t">${t('Custom survival grouping is unavailable', '自定义生存分组不可用')}</div><div class="d">${esc(cohortReason(customBlocked.reason || 'Unavailable for this export'))} ${t('The curve below uses the selected available grouping, not this custom grouping.', '下方曲线使用当前可用的分组，并非这个自定义分组。')}</div>${blockedCounts}</div></div>` : '';
     if (!curve) {
+      const reason = landmarkHours
+        ? t('The service did not return an ICU survival curve for the requested landmark. Review the reasons below; no other curve has been substituted.', '服务没有返回所选时间起点的 ICU 生存曲线。请查看下方原因；不会用其他曲线代替。')
+        : cohortReason(survival.reason || 'This export does not expose an outcome with both event and time-to-event columns.');
       return `
       <div class="sec-stack"><div class="lbl">${cohortText('Survival analysis')}</div><h2>${cohortText('Kaplan-Meier module')}</h2></div>
       <div class="surv-toolbar">
-        <div><div class="surv-label">${cohortText('Outcome overview')}</div>${outcomeCards}</div>
+        <div><div class="surv-label">${cohortText('Outcome overview')}${landmarkHours ? ` · ${t('whole cohort, not landmark risk set', '全队列，非 landmark 风险集')}` : ''}</div>${outcomeCards}</div>
         <div><div class="surv-label">${cohortText('Grouping')}</div><div class="surv-segments">${groupButtons}</div></div>
       </div>
-      <div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Survival analysis blocked')}</div><div class="d">${esc(cohortReason(survival.reason || 'This export does not expose an outcome with both event and time-to-event columns.'))}</div></div></div>
-      ${cohortSurvivalSourceHint(survival)}
+      ${blockedNotice}
       ${cohortSurvivalBlockedList(blockedOutcomes)}
-      ${cohortSurvivalBlockedList(blockedGroups)}`;
+      ${cohortSurvivalBlockedList(blockedGroups)}
+      <div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Survival analysis blocked')}</div><div class="d">${esc(reason)}</div></div></div>
+      ${cohortSurvivalSourceHint(survival)}
+      `;
     }
     const logrank = curve.logrank || {};
     const pValueLabel = logrank.p_value_label || fmtP(logrank.p_value);
@@ -54,15 +72,19 @@
     return `
       <div class="sec-stack"><div class="lbl">${cohortText('Survival analysis')}</div><h2>${cohortText('Kaplan-Meier curves and log-rank')}</h2></div>
       <div class="surv-toolbar">
-        <div><div class="surv-label">${cohortText('Outcome overview')}</div>${outcomeCards}</div>
+        <div><div class="surv-label">${cohortText('Outcome overview')}${landmarkHours ? ` · ${t('whole cohort, not landmark risk set', '全队列，非 landmark 风险集')}` : ''}</div>${outcomeCards}</div>
         <div><div class="surv-label">${cohortText('Grouping')}</div><div class="surv-segments">${groupButtons}</div></div>
       </div>
+      ${blockedNotice}
+      ${cohortSurvivalBlockedList(blockedOutcomes)}
+      ${cohortSurvivalBlockedList(blockedGroups)}
       <div class="surv-card mt-14">
         <div class="surv-head">
           <div>
             <div class="eyebrow">${cohortText('Exploratory · unadjusted')}</div>
             <h3>${esc(cohortText(curve.label || 'Kaplan-Meier curve'))}</h3>
             <p>${esc(cohortText(curve.time_label || 'Time-to-event'))} · ${t('event', '事件')} <span class="mono">${esc(curve.event_column || '')}</span> · ${t('time', '时间')} <span class="mono">${esc(curve.time_column || '')}</span></p>
+            ${landmarkHours ? cohortLandmarkNote(curve) : ''}
             ${windowNote ? `<p>${esc(windowNote)}</p>` : ''}
           </div>
           <div class="surv-logrank">
@@ -77,8 +99,25 @@
         ${cohortRiskTable(curve)}
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM 曲线和 log-rank 检验由队列汇总计算，属于探索性结果。要写进论文的结论，仍需在研究对话中核对证据并经人工审阅。')}</div></div></div>
-      ${cohortSurvivalBlockedList(blockedOutcomes)}
-      ${cohortSurvivalBlockedList(blockedGroups)}`;
+      `;
+  }
+
+  function cohortLandmarkNote(curve) {
+    const hours = curve.landmark_hours;
+    const counts = curve.landmark_counts || {};
+    const items = [
+      ['included', t('included', '纳入')],
+      ['missing_followup', t('missing follow-up', '随访时间缺失')],
+      ['missing_event', t('event status unknown', '结局未知')],
+      ['death_at_or_before_landmark', t('death at or before landmark', '起点前或起点时死亡')],
+      ['discharged_at_or_before_landmark', t('left ICU at or before landmark', '起点前或起点时离开 ICU')],
+      ['missing_measurement', t('no valid measurement in window', '窗口内无有效测量')],
+    ];
+    const countText = items.filter(([key]) => counts[key] != null).map(([key, label]) => `${label} ${fmtInt(counts[key])}`).join(' · ');
+    const unit = curve.measurement_unit ? ` · ${t('declared unit (check source)', '声明单位（需核对来源）')} ${curve.measurement_unit}` : '';
+    const eventBasis = curve.event_time_basis === 'icu_discharge_status_and_exit_time_proxy'
+      ? `<p>${t('ICU death status is taken from ICU discharge; the ICU exit time is a proxy for event time, not a recorded time of death.', 'ICU 死亡状态来自 ICU 出科记录；事件时间使用 ICU 出科时点作为代理，并非记录的死亡时刻。')}</p>` : '';
+    return `<p>${esc(t(`Landmark at ${hours} hours after ICU admission. First valid measurement from admission up to (excluding) the landmark; ties use the median. ICU survival is measured from the landmark.`, `生存起点为 ICU 入科后第 ${hours} 小时；按入科至该起点之前的首次有效测量分组，同一最早时点多次测量取中位数。生存时间从该起点开始计算。`) + unit)}</p>${eventBasis}${countText ? `<p>${esc(countText)}</p>` : ''}`;
   }
 
   function cohortSurvivalOutcomeCards(outcomes, selectedOutcome) {
