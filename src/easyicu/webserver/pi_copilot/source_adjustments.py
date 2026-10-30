@@ -8,6 +8,7 @@ module only bounds what the browser receives. An exact study projects nothing.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Mapping
 
 _STATUSES = {"substitution", "refusal"}
@@ -88,6 +89,25 @@ def project_source_adjustments(review: Any) -> dict[str, Any] | None:
 def current_source_adjustments(review_authority: Mapping[str, Any]) -> dict[str, Any] | None:
     review = review_authority.get("scientific_plan_review")
     facts = review.get("facts") if isinstance(review, Mapping) else None
-    return project_source_adjustments(
+    projected = project_source_adjustments(
         facts.get("database_capability_review") if isinstance(facts, Mapping) else None
     )
+    if projected is None or not isinstance(facts, Mapping):
+        return projected
+    candidate = facts.get("database_time_origin_review")
+    selection = candidate.get("selection") if isinstance(candidate, Mapping) else None
+    receipt = candidate.get("registered_export_receipt") if isinstance(candidate, Mapping) else None
+    if not isinstance(selection, Mapping) or not isinstance(receipt, Mapping):
+        return projected
+    field = selection.get("source_field")
+    if (candidate.get("execution_contract_available") is not False
+            or candidate.get("disposition") not in {"proposed_not_selected", "proposed_not_approved"}
+            or selection.get("requested_origin") != "icu_admission"
+            or selection.get("selected_origin") != "first_intensive_or_intermediate_care_transfer"
+            or not isinstance(field, Mapping) or field.get("table") != "cases" or field.get("column") != "ICUOffset"
+            or receipt.get("selected_origin") != selection.get("selected_origin")
+            or receipt.get("source_identity_sha256") != selection.get("source_identity_sha256")
+            or any(not isinstance(receipt.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", receipt[key])
+                   for key in ("source_identity_sha256", "manifest_sha256", "export_authority_sha256"))):
+        return projected
+    return {**projected, "time_origin_candidate": {"field": "cases.ICUOffset"}}

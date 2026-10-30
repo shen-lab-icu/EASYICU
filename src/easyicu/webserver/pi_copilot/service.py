@@ -101,6 +101,7 @@ from .run_authority import (
     list_bound_run_history,
     provider_recovery_receipts,
     research_pipeline_project_root,
+    research_pipeline_workspace,
 )
 from .turn_authority import (
     explicitly_confirms_easyicu_registered_source,
@@ -5232,6 +5233,16 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         # Keep governance at wrapper scope, but preview the digest-pinned
         # record from the concrete pipeline run that owns the registry.
         evidence_run_dir = run_step_trace.pipeline_run_dir(project_dir, clean_run)
+        if clean_evidence == "preplan_literature_bundle":
+            # Failed wrappers retain the concrete pipeline in one child whose
+            # id differs from the wrapper id. Resolve it only through the
+            # authorized wrapper, its study identity, audit and registry.
+            binding = run_step_trace.failed_literature_preview_binding(
+                Path(project_dir), wrapper_run_id=clean_run,
+                study_id=str(row.get("study_id") or ""),
+            )
+            if binding is not None:
+                evidence_run_dir = binding[0]
         loaded = agent_runs.read_run_evidence_preview(
             str(evidence_run_dir), clean_evidence, clean_sha
         )
@@ -5250,6 +5261,17 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 status_code=404 if code == "evidence_preview_not_found" else 409,
                 details={"evidence_id": clean_evidence},
             )
+        if clean_evidence == "preplan_literature_bundle":
+            checked = loaded.get("payload") or {}
+            if (not isinstance(checked, Mapping) or checked.get("kind") != "log"
+                    or checked.get("producer") != "hypothesis_blueprint"
+                    or checked.get("generation_mode") != "deterministic_skill"
+                    or checked.get("renderer") not in {"literature_cards", "metadata"}):
+                raise PiCopilotError(
+                    "pi_research_evidence_literature_binding_invalid",
+                    "The registered literature changed or is not a supported candidate preview.",
+                    status_code=409, details={"evidence_id": clean_evidence},
+                )
         privacy_scan = loaded.get("privacy_scan") or {}
         if not privacy_scan.get("passed"):
             raise PiCopilotError(
@@ -5423,6 +5445,68 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             "claim_ceiling": governance.get("claim_ceiling") or "unsupported",
         }
 
+    def _replay_jobs_with_literature(
+        self, record: PiSessionRecord, replay: Mapping[str, Any],
+    ) -> list[Dict[str, Any]]:
+        """Add current, bounded facts to failed jobs without rewriting replay.
+
+        The replay digest continues to describe the stored conversation; this
+        separate display projection is rebuilt only from that project's own
+        wrapper, pipeline coordinate, audit event and registered evidence.
+        """
+        source_jobs = replay.get("child_jobs")
+        if not isinstance(source_jobs, list):
+            return []
+        jobs_out = [dict(job) for job in source_jobs if isinstance(job, Mapping)]
+        candidates: list[tuple[Dict[str, Any], Dict[str, Any]]] = []
+        for job in jobs_out:
+            if job.get("kind") != "agent-run" or job.get("status") != "failed":
+                continue
+            progress = job.get("progress")
+            if not isinstance(progress, list):
+                continue
+            job["progress"] = [dict(row) if isinstance(row, Mapping) else row for row in progress]
+            literature = [row for row in job["progress"]
+                          if isinstance(row, dict) and row.get("action") == "literature_build"]
+            for event in literature:
+                # A previously displayed fact is not current after evidence
+                # changes or disappears; recheck it on every replay.
+                event.pop("literature_record_registered", None)
+                event.pop("query_count", None)
+                event.pop("record_count", None)
+                event.pop("literature_evidence", None)
+            if len(literature) == 1:
+                candidates.append((job, literature[0]))
+        if not candidates or not record.binding.study_context_id:
+            return jobs_out
+        study_id = str(record.binding.study_context_id)
+        try:
+            if self.project_store.resolve(str(record.project_id)) != study_id:
+                return jobs_out
+            root = research_pipeline_workspace().existing_project_root(study_id)
+        except (PiCopilotError, OSError, ValueError):
+            return jobs_out
+        if root is None:
+            return jobs_out
+        from easyicu.webserver.run_record import RunDirectory
+
+        # Limit work on a large archived conversation; never touch its receipts.
+        for job, event in candidates[-8:]:
+            job_id = str(job.get("job_id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", job_id):
+                continue
+            try:
+                wrapper = RunDirectory.create(root, study_id, job_id).path
+                facts = run_step_trace.failed_replay_literature_facts(
+                    wrapper, wrapper_run_id=f"run_{job_id}", study_id=study_id,
+                    pipeline_run_id=str(event.get("run_id") or ""),
+                    event_timestamp=str(event.get("timestamp") or ""),
+                )
+            except (OSError, ValueError):
+                continue
+            event.update(facts)
+        return jobs_out
+
     def _public_session(
         self,
         record: PiSessionRecord,
@@ -5553,7 +5637,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             "last_mentions": [ref.model_dump(mode="json", exclude_none=True) for ref in record.last_mentions],
             "last_turn_events": list(latest_replay_turn.get("events") or []),
             "conversation_replay": replay,
-            "archived_child_jobs": list(replay.get("child_jobs") or []),
+            "archived_child_jobs": self._replay_jobs_with_literature(record, replay),
             "pinned_for_presentation": record.pinned_for_presentation,
             "session_storage": "private_local_jsonl",
             "scientific_authority": "EasyICU",

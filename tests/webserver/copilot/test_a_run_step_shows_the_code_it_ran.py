@@ -136,7 +136,7 @@ def _synthetic_run(run: Path) -> Path:
             "planned_later",
         )
     ]}))
-    _write(run / "preplan_literature_bundle.json", json.dumps({
+    literature = _write(run / "preplan_literature_bundle.json", json.dumps({
         "search_provenance": {"search_queries": {
             "pubmed": ["sepsis glucose mortality", "glucose /Users/someone/notes.txt"],
         }},
@@ -144,7 +144,7 @@ def _synthetic_run(run: Path) -> Path:
     }))
     records: List[Dict[str, Any]] = []
 
-    def register(eid: str, kind: str, step: str, name: str, data: bytes, mode: str = "") -> None:
+    def register(eid: str, kind: str, step: str | None, name: str, data: bytes, mode: str = "") -> None:
         relative = f"evidence/{eid}__{name}"
         _write(run / relative, data)
         record = {"evidence_id": eid, "kind": kind, "relative_path": relative,
@@ -153,6 +153,7 @@ def _synthetic_run(run: Path) -> Path:
             record["generation_mode"] = mode
         records.append(record)
 
+    register("preplan_literature_bundle", "log", None, "preplan_literature_bundle.json", literature)
     _write(run / "steps/cohort_accounting/outputs/cohort.parquet", b"PAR1 synthetic rows PAR1")
 
     baseline = run / "steps/baseline_table"
@@ -212,6 +213,7 @@ def test_finished_run_trace_rows_are_its_actions_with_times(run_dir: Path) -> No
     assert rows[1]["source_label"] == "MIMIC-IV demo" and rows[1]["source_database"] == "miiv"
     assert rows[2]["group_variable_count"] == 1
     assert rows[3]["query_count"] == 2 and rows[3]["record_count"] == 3
+    assert rows[3]["literature_record_registered"] is True
     assert rows[3]["queries"] == ["sepsis glucose mortality"], "a query naming a host path stays local"
     assert [(row["retry_phase"], row["current"], row["total"]) for row in rows[4:8]] == [
         ("started", 1, 3), ("rejected", 1, 3), ("started", 2, 3), ("accepted", 2, 3),
@@ -230,6 +232,157 @@ def test_finished_run_trace_rows_are_its_actions_with_times(run_dir: Path) -> No
     assert [row["event"] for row in rows if row["event"]] == [
         row["event"] for row in AUDIT if row["phase"] == "step"
     ]
+
+
+@pytest.mark.parametrize("damage", ["missing_record", "duplicate", "wrong_id", "wrong_kind", "wrong_step", "registry_digest", "root_changed", "copy_changed", "wrong_run"])
+def test_literature_fact_requires_the_same_runs_registered_exact_record(run_dir: Path, damage: str) -> None:
+    index = run_dir / "evidence/evidence_index.json"
+    records = json.loads(index.read_text())
+    record = next(row for row in records if row["evidence_id"] == "preplan_literature_bundle")
+    if damage == "missing_record":
+        records.remove(record)
+    elif damage == "duplicate":
+        records.append(dict(record))
+    elif damage == "wrong_id":
+        record["evidence_id"] = "different_record"
+        record["relative_path"] = record["relative_path"].replace(
+            "preplan_literature_bundle__", "different_record__", 1,
+        )
+        _write(run_dir / record["relative_path"], (run_dir / "preplan_literature_bundle.json").read_bytes())
+    elif damage == "wrong_kind":
+        record["kind"] = "statistic"
+    elif damage == "wrong_step":
+        record["produced_by_step"] = "another_step"
+    elif damage == "registry_digest":
+        record["sha256"] = "f" * 64
+    elif damage == "root_changed":
+        _write(run_dir / "preplan_literature_bundle.json", '{"citations": []}')
+    elif damage == "copy_changed":
+        _write(run_dir / record["relative_path"], '{"citations": []}')
+    elif damage == "wrong_run":
+        payload = json.loads((run_dir / "preplan_literature_bundle.json").read_text())
+        payload["run_id"] = "another_run"
+        raw = _write(run_dir / "preplan_literature_bundle.json", json.dumps(payload))
+        _write(run_dir / record["relative_path"], raw)
+        record["sha256"] = _sha(raw)
+    _write(index, json.dumps(records))
+    literature = next(row for row in run_step_trace.trace_timings_projection(run_dir)
+                      if row.get("action") == "literature_build")
+    assert "literature_record_registered" not in literature
+    assert "record_count" not in literature
+
+
+def _failed_replay_wrapper(root: Path) -> Path:
+    wrapper = root / "run_job1"
+    _synthetic_run(wrapper / "pipeline" / "run_inner")
+    _write(wrapper / "run_context.json", json.dumps({
+        "run_id": "run_job1", "study_id": "study1", "engine": "easyicu.research_agent.pipeline",
+    }))
+    _write(wrapper / "source_run_manifest.json", json.dumps({
+        "run_id": "run_job1", "status": "failed", "engine": "easyicu.research_agent.pipeline",
+    }))
+    return wrapper
+
+
+def test_failed_replay_reads_only_same_run_registered_literature(tmp_path: Path) -> None:
+    wrapper = _failed_replay_wrapper(tmp_path)
+    facts = run_step_trace.failed_replay_literature_facts(
+        wrapper, wrapper_run_id="run_job1", study_id="study1",
+        pipeline_run_id="run_inner", event_timestamp=_at(3),
+    )
+    assert facts == {"literature_record_registered": True, "query_count": 2, "record_count": 3}
+    assert "queries" not in facts
+
+
+def _mark_registered_literature_as_projectable(wrapper: Path) -> dict:
+    index = wrapper / "pipeline/run_inner/evidence/evidence_index.json"
+    records = json.loads(index.read_text())
+    record = next(row for row in records if row["evidence_id"] == "preplan_literature_bundle")
+    record.update(producer="hypothesis_blueprint", generation_mode="deterministic_skill")
+    _write(index, json.dumps(records))
+    return record
+
+
+def test_failed_replay_projects_only_the_verified_real_literature_identity(tmp_path: Path) -> None:
+    wrapper = _failed_replay_wrapper(tmp_path)
+    record = _mark_registered_literature_as_projectable(wrapper)
+    facts = run_step_trace.failed_replay_literature_facts(
+        wrapper, wrapper_run_id="run_job1", study_id="study1",
+        pipeline_run_id="run_inner", event_timestamp=_at(3),
+    )
+    assert facts["literature_evidence"] == {
+        "run_id": "run_job1", "evidence_id": "preplan_literature_bundle", "sha256": record["sha256"],
+    }
+    bound = run_step_trace.failed_literature_preview_binding(
+        wrapper, wrapper_run_id="run_job1", study_id="study1",
+    )
+    assert bound is not None and bound[0] == wrapper / "pipeline/run_inner"
+    assert bound[1] == facts["literature_evidence"]
+
+
+@pytest.mark.parametrize("damage", ["producer", "mode", "audit", "duplicate", "source", "copy", "wrong_study", "other_pipeline"])
+def test_failed_literature_preview_binding_fails_closed(tmp_path: Path, damage: str) -> None:
+    wrapper = _failed_replay_wrapper(tmp_path)
+    record = _mark_registered_literature_as_projectable(wrapper)
+    pipeline = wrapper / "pipeline/run_inner"
+    index = pipeline / "evidence/evidence_index.json"
+    records = json.loads(index.read_text())
+    target = next(row for row in records if row["evidence_id"] == "preplan_literature_bundle")
+    study_id = "study1"
+    if damage == "producer":
+        target["producer"] = "another_owner"
+    elif damage == "mode":
+        target["generation_mode"] = "generated"
+    elif damage == "audit":
+        (pipeline / "audit_log.jsonl").unlink()
+    elif damage == "duplicate":
+        records.append(dict(target))
+    elif damage == "source":
+        _write(pipeline / "preplan_literature_bundle.json", "{}")
+    elif damage == "copy":
+        _write(pipeline / record["relative_path"], "{}")
+    elif damage == "wrong_study":
+        study_id = "other-study"
+    elif damage == "other_pipeline":
+        (wrapper / "pipeline/run_other").mkdir()
+    _write(index, json.dumps(records))
+    assert run_step_trace.failed_literature_preview_binding(
+        wrapper, wrapper_run_id="run_job1", study_id=study_id,
+    ) is None
+
+
+@pytest.mark.parametrize("damage", [
+    "wrong_study", "wrong_wrapper", "wrong_pipeline", "wrong_time", "missing_manifest",
+    "unregistered", "tampered", "ambiguous_pipeline", "symlink_pipeline", "oversized_audit",
+])
+def test_failed_replay_does_not_guess_at_mismatched_or_unavailable_history(
+    tmp_path: Path, damage: str,
+) -> None:
+    wrapper = _failed_replay_wrapper(tmp_path)
+    pipeline = wrapper / "pipeline" / "run_inner"
+    args = {"wrapper_run_id": "run_job1", "study_id": "study1",
+            "pipeline_run_id": "run_inner", "event_timestamp": _at(3)}
+    if damage == "wrong_study":
+        args["study_id"] = "study_other"
+    elif damage == "wrong_wrapper":
+        args["wrapper_run_id"] = "run_other"
+    elif damage == "wrong_pipeline":
+        args["pipeline_run_id"] = "run_other"
+    elif damage == "wrong_time":
+        args["event_timestamp"] = _at(40)
+    elif damage == "missing_manifest":
+        (wrapper / "source_run_manifest.json").unlink()
+    elif damage == "unregistered":
+        (pipeline / "evidence/evidence_index.json").unlink()
+    elif damage == "tampered":
+        _write(pipeline / "preplan_literature_bundle.json", '{"citations": []}')
+    elif damage == "ambiguous_pipeline":
+        (wrapper / "pipeline/run_other").mkdir()
+    elif damage == "symlink_pipeline":
+        (wrapper / "pipeline/run_other").symlink_to(pipeline)
+    elif damage == "oversized_audit":
+        _write(pipeline / "audit_log.jsonl", b" " * (run_step_trace.MAX_AUDIT_BYTES + 1))
+    assert run_step_trace.failed_replay_literature_facts(wrapper, **args) == {}
 
 
 def test_trace_action_reads_only_fixed_envelopes() -> None:
@@ -474,7 +627,7 @@ def test_browser_rows_and_step_panel_contract() -> None:
 
 
 def _extraction_run(root: Path, *, source_field: Any = None, extracted: Any = 30,
-                    analysis_unit: Any = "icu_stay") -> Path:
+                    analysis_unit: Any = "icu_stay", item_ids: Any = None) -> Path:
     """Small metadata receipts only; no patient rows or database files."""
     run = _synthetic_run(root)
     records = json.loads((run / "evidence/evidence_index.json").read_text())
@@ -491,7 +644,8 @@ def _extraction_run(root: Path, *, source_field: Any = None, extracted: Any = 30
             "metadata": {"source_concept": "marker", "canonical_unit": "mg/L",
                          "aggregation": "max", "source_lineage": [{
                              "table": "assay", "selector_variable": "test_name",
-                             "item_ids": ["marker"], "value_variable": source_field,
+                             "item_ids": ["marker"] if item_ids is None else item_ids,
+                             "value_variable": source_field,
                              "time_variable": "sample_hour", "unit_variable": "unit",
                          }]},
             "derivation_window": {"origin": "icu_admission", "start_hours": 0, "end_hours": 6},
@@ -558,6 +712,14 @@ def test_extraction_receipt_keeps_each_step_denominator_and_null_source(tmp_path
     assert counts["cohort_accounting"]["unit"] == "icu_stay"
     assert counts["outcome_distribution"]["model"] is True
     assert not any(row["step_id"] == "running_step" for row in receipt["steps"])
+
+
+def test_sealed_extraction_receipt_shows_integer_and_string_item_ids(tmp_path: Path) -> None:
+    run = _extraction_run(
+        tmp_path / RUN_ID, item_ids=[657, 454, 465, "marker", True, 1.5, None],
+    )
+    receipt = run_step_trace.project_step_detail(run, "baseline_table")["extraction_record"]
+    assert receipt["concepts"][0]["items"] == ["657", "454", "465", "marker"]
 
 
 def test_complete_receipt_and_no_execution_receipt_are_distinct(tmp_path: Path) -> None:

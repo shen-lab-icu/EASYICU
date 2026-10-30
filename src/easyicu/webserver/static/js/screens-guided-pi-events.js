@@ -383,10 +383,12 @@
             preview.openRunEvidence(
               RESOURCE_OWNER.fromButton(resource), projectId(), evidence,
             );
-            void recordHostAction('review_scientific_review', [
-              String(resource.dataset.gpiResourceRun || projectId()),
-              String(evidence.dataset.evidenceId || 'evidence'),
-            ].join(':'));
+            if (resource.dataset.gpiResourceKind !== 'research_evidence') {
+              void recordHostAction('review_scientific_review', [
+                String(resource.dataset.gpiResourceRun || projectId()),
+                String(evidence.dataset.evidenceId || 'evidence'),
+              ].join(':'));
+            }
           } else {
             openResourceButton(resource);
           }

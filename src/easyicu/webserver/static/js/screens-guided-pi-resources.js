@@ -26,6 +26,7 @@
       if (!resource) return '';
       if (isWorkspaceFile(resource)) return `workspace:${workspaceFile(resource)}`;
       if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
+      if (resource.kind === 'research_evidence') return `research-evidence:${resource.run_id || ''}:${resource.evidence_id || ''}:${resource.evidence_sha256 || ''}`;
       if (resource.kind === 'demo_artifact') return `demo:${resource.artifact || ''}`;
       if (resource.kind === 'demo_document') return `demo-document:${resource.artifact || ''}`;
       if (resource.kind === 'idea_plan') return `idea-plan:${resource.run_id || ''}`;
@@ -141,7 +142,7 @@
       const supported = new Set([
         'demo_document', 'demo_artifact', 'data_package_review',
         'data_workbench_snapshot', 'native_workspace', 'system_validation_document',
-        'research_document', 'research_report', 'research_artifact', 'idea_plan', 'literature_source', 'webpage',
+        'research_document', 'research_report', 'research_artifact', 'research_evidence', 'idea_plan', 'literature_source', 'webpage',
       ]);
       return supported.has(resource && resource.kind) ? resource.kind : 'file';
     }
@@ -267,6 +268,8 @@
         review_sha256: element.dataset.gpiResourceDigest,
         checked_sha256: element.dataset.gpiResourceCheckedDigest,
         sha256: element.dataset.gpiResourceDigest,
+        evidence_id: element.dataset.evidenceId,
+        evidence_sha256: element.dataset.evidenceSha256,
       };
     }
 

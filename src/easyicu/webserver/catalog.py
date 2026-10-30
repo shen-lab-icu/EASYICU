@@ -539,11 +539,14 @@ def build_catalog() -> Dict[str, Any]:
         coverage["instance_coverage_basis"] = instance_basis
     # A database that holds a variable only as a substitute (age in bands, ICU
     # death for death) says so in the dictionary, from the data map's facts.
-    from easyicu.webserver.data_map import concept_substitutes
+    from easyicu.webserver.data_map import concept_substitutes, concept_source_semantics
 
     for key, by_database in concept_substitutes().items():
         if key in concept_coverage:
             concept_coverage[key]["substitutes"] = by_database
+    for key, by_database in concept_source_semantics().items():
+        if key in concept_coverage:
+            concept_coverage[key]["source_semantics"] = by_database
     active_export_coverage = _active_export_coverage(concept_dict, registry)
 
     return {

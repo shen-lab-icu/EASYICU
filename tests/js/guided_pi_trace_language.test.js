@@ -131,6 +131,19 @@ const upsert = (target, row) => {
     activity.notePipelineEvent(recovery, { type: 'progress', step: 'provider_recovery_wait', timestamp: at(1) });
     activity.notePipelineEvent(recovery, { type: 'progress', step: 'provider_auto_resume', timestamp: at(8) });
     assert.equal(recovery.steps[0].endedAt - recovery.steps[0].startedAt, 7000);
+    const transport = { status: 'running', runningTitle: 'Preparing', steps: [] };
+    const retryId = 'a'.repeat(32);
+    activity.notePipelineEvent(transport, { type: 'progress', step: 'data_foundation', timestamp: at(1) });
+    for (const [phase, current, time] of [['failed', 1, 2], ['waiting', 1, 3], ['started', 2, 4]]) {
+      activity.notePipelineEvent(transport, { type: 'progress', step: 'provider_transport_retry',
+        retry_id: retryId, retry_phase: phase, current, status: 'running', timestamp: at(time) });
+    }
+    assert.equal(transport.steps.filter(row => row.step === 'provider_transport_retry').length, 1);
+    assert.equal(transport.steps.find(row => row.step === 'data_foundation').status, 'running');
+    assert.match(activity.render(transport), language === 'zh' ? /正在发起第 2 次模型请求/ : /Retrying model request 2/);
+    activity.notePipelineEvent(transport, { type: 'progress', step: 'provider_transport_retry',
+      retry_id: retryId, retry_phase: 'continued', current: 2, status: 'complete', timestamp: at(5) });
+    assert.match(activity.render(transport), language === 'zh' ? /模型重试已返回/ : /continued after a retry/);
     const endOnly = { steps: [] };
     activity.notePipelineEvent(endOnly, { type: 'progress', step: 'step', step_id: 'baseline_context',
       current_step: 1, total_steps: 1, status: 'complete', timestamp: at(1) });

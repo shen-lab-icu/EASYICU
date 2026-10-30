@@ -525,6 +525,10 @@ def _project_job(
     audit_events = [
         {"type": "progress", "step": row.get("phase"), "label": row.get("event"),
          **({"run_id": audit_run_id} if audit_run_id else {}),
+         **({"retry_id": row["retry_id"]}
+            if row.get("phase") == "provider_transport_retry"
+            and isinstance(row.get("retry_id"), str)
+            and re.fullmatch(r"[0-9a-f]{32}", row["retry_id"]) else {}),
          **{key: row[key] for key in (
              "timestamp", "status", "step_id", "current", "total", "planning_unit",
              "started_at", "ended_at",
@@ -570,6 +574,10 @@ def _project_job(
             }
             | {
                 **({"label": label} if label else {}),
+                **({"retry_id": event["retry_id"]}
+                   if event.get("step") == "provider_transport_retry"
+                   and isinstance(event.get("retry_id"), str)
+                   and re.fullmatch(r"[0-9a-f]{32}", event["retry_id"]) else {}),
                 **({"restart_stage": "metadata_planning"}
                    if event.get("step") == "provider_auto_resume"
                    and event.get("restart_stage") == "metadata_planning" else {}),
@@ -902,6 +910,9 @@ def _trace_facts(event: Mapping[str, Any]) -> Dict[str, Any]:
     """
 
     facts: Dict[str, Any] = {}
+    if (event.get("action") == "literature_build"
+            and event.get("literature_record_registered") is True):
+        facts["literature_record_registered"] = True
     for key in ("action", "executor", "run_kind", "repair_kind", "run_id"):
         code = stable_code(event.get(key))
         if code:
@@ -955,6 +966,7 @@ def _compact_job_progress(events: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         # Typed actions stay distinct: each repair attempt and each planning
         # validation attempt is its own operation with its own times.
         key = (step, step_id, event.get("planning_unit"), event.get("retry_phase"),
+               event.get("retry_id") if step == "provider_transport_retry" else None,
                event.get("current") if step.startswith("provider_") or event.get("action") else None,
                event.get("action"), event.get("repair_kind"), event.get("attempt"))
         previous = grouped.get(key)

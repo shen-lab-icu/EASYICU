@@ -39,8 +39,8 @@ assert.match(overview, /每位患者一行的队列与分组/);
 assert.match(overview, /estimate\.csv/);
 assert.doesNotMatch(overview, /English fallback|LONG_PLAN_TEXT|LONG_CONTRACT_TEXT/);
 const preview = owner.preview(pkg);
-assert.ok(preview.indexOf('data-sk-function="1"') < preview.indexOf('data-sk-function="0"'), 'kernel must precede helper');
-assert.match(preview, /def estimate\(data: DataFrame\) -&gt; Result|def estimate\(data: DataFrame\) -> Result/);
+assert.match(preview, /data-sk-tab="implementation"/);
+assert.doesNotMatch(preview, /data-sk-function=|def estimate\(/);
 
 const rendered = owner.render(pkg, 1);
 const code = rendered.slice(rendered.indexOf('<pre class="eusk-source-code"'));
@@ -90,8 +90,9 @@ const generatedWithGate = { ...pkg, implementation: { mode: 'generated_code', en
   { ...entry, name: 'run_time_varying_association', qualname: 'run_time_varying_association', role: 'helper' },
 ] } };
 const generatedPreview = owner.preview(generatedWithGate);
-assert.ok(generatedPreview.indexOf('data-sk-function="1"') < generatedPreview.indexOf('data-sk-function="0"'), 'generated-code helper must precede internal gate');
+assert.doesNotMatch(generatedPreview, /data-sk-function=/);
 const generatedDefault = owner.render(generatedWithGate);
+assert.ok(generatedDefault.indexOf('data-sk-function="1"') < generatedDefault.indexOf('data-sk-function="0"'), 'generated-code helper must precede internal gate');
 assert.match(generatedDefault, /<h2>run_time_varying_association<\/h2>/);
 assert.doesNotMatch(generatedDefault, /<h2>initial_code_origin<\/h2>/);
 assert.match(owner.render(generated), /&lt;script>/);

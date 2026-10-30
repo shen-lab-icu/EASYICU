@@ -17,6 +17,7 @@
   }
   function title(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
+    if (p.renderer === 'literature_cards') return tr('Literature candidates', '文献候选');
     if (recordPurpose(p.display_name)) return recordPurpose(p.display_name);
     if (p.renderer === 'json' && p.kind !== 'statistic') return tr('Evidence record', '证据记录');
     return text(p.display_name || p.evidence_id || tr('Evidence', '证据'), 160);
@@ -25,6 +26,7 @@
     const renderer = String(payload && payload.renderer || 'metadata');
     const labels = {
       code: tr('Code', '代码'), json: 'JSON', table: tr('Table', '表格'),
+      literature_cards: tr('Literature', '文献'),
       metadata: tr('File', '文件'),
     };
     return labels[renderer] || tr('File', '文件');
@@ -387,11 +389,30 @@
     const reason = String(payload.withheld_reason || 'unsupported_evidence_type');
     return `<div class="gpi-evidence-withheld"><strong>${esc(tr('File information', '文件信息'))}</strong><p>${esc(reasons[reason] || reasons.unsupported_evidence_type)}</p>${payload.bytes != null ? `<span>${esc(String(payload.bytes))} bytes</span>` : ''}</div>`;
   }
+  function literatureCardsView(payload) {
+    const value = payload && payload.value && typeof payload.value === 'object' ? payload.value : {};
+    const cards = Array.isArray(value.cards) ? value.cards.filter(card => card && typeof card === 'object').slice(0, 40) : [];
+    const review = value.review && typeof value.review === 'object' ? value.review : {};
+    const shortfalls = Array.isArray(review.shortfalls) ? review.shortfalls.filter(item => item && typeof item === 'object').slice(0, 7) : [];
+    const items = cards.map(card => {
+      const facts = Array.isArray(card.evidence) ? card.evidence.filter(fact => fact && typeof fact === 'object').slice(0, 14) : [];
+      const url = text(card.source_url, 500);
+      const safeUrl = /^https:\/\/[^\s/@]+(?:[/:?#]|$)/i.test(url) ? url : '';
+      const level = card.access_mode === 'abstract'
+        ? tr('Abstract excerpt; full text not reviewed', '摘要片段，未审阅全文')
+        : card.access_mode === 'open_access_fulltext' || card.access_mode === 'licensed_fulltext_manifest' || card.access_mode === 'user_supplied_fulltext'
+          ? tr('Recorded full-text evidence; applicability still needs review', '已记录全文证据，适用性仍需审阅')
+          : tr('Source access level unavailable', '来源访问层级不可用');
+      return `<article class="gpi-evidence-literature-card"><h4>${esc(text(card.title, 500))}</h4><p>${esc(level)}</p><p>${esc(tr('Recorded role: ', '记录角色：') + text(card.evidence_role, 80))}</p>${facts.map(fact => `<div><strong>${esc(text(fact.review_role || fact.dimension, 80))}</strong><p>${esc(text(fact.source_backed_summary, 500))}</p>${fact.locator ? `<small>${esc(text(fact.locator, 160))}</small>` : ''}</div>`).join('')}${safeUrl ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">${esc(tr('Open source record', '打开来源页面'))}</a>` : ''}</article>`;
+    }).join('');
+    return `<section class="gpi-evidence-literature"><h3>${esc(tr('Recorded literature candidates', '已记录的文献候选'))}</h3><p>${esc(tr('These are the candidates recorded for this run. Relevance and support for each claim still require review.', '这里显示本次运行记录的候选；相关性及每项论点是否得到支持仍需审阅。'))}</p>${value.searched_at ? `<p>${esc(tr('Search time: ', '检索时间：') + text(value.searched_at, 80))}</p>` : ''}${shortfalls.length ? `<p>${esc(tr('Evidence coverage remains incomplete.', '文献覆盖尚未满足目标。'))}</p><ul>${shortfalls.map(item => `<li>${esc(text(item.role, 80))}: ${esc(String(item.actual))} / ${esc(String(item.target))}</li>`).join('')}</ul>` : ''}${items || `<p>${esc(tr('No reviewable evidence cards were recorded.', '未记录可审阅的证据卡。'))}</p>`}${value.cards_truncated ? `<p>${esc(tr('Additional cards are not shown in this bounded preview.', '有界预览未显示其余证据卡。'))}</p>` : ''}${Number(value.suppressed_ambiguous_cards || 0) ? `<p>${esc(tr('Some ambiguous records were withheld.', '部分记录因对应关系不明确而未显示。'))}</p>` : ''}</section>`;
+  }
   function render(payload, locator) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const isStatistic = p.previewable && p.renderer === 'json' && p.kind === 'statistic' && !recordPurpose(p.display_name);
     let body = metadataView(p);
     if (p.previewable && p.renderer === 'code') body = codeView(p);
+    else if (p.previewable && p.renderer === 'literature_cards') body = literatureCardsView(p);
     else if (isStatistic) {
       const selected = selectedNumberView(p, locator);
       const wholeFile = statisticView(p);
@@ -402,7 +423,7 @@
     }
     else if (p.previewable && p.renderer === 'json') body = reviewRecordView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
-    const summaryFirst = p.previewable && p.renderer === 'json';
+    const summaryFirst = p.previewable && (p.renderer === 'json' || p.renderer === 'literature_cards');
     return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}</div>`;
   }
 

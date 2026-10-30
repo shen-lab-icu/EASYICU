@@ -21,8 +21,8 @@ context.window = context;
 const all = ['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic'];
 context.EU_CATALOG = {
   groups: [['demo', 'Demographics', '人口学']],
-  groupConcepts: { demo: ['age', 'weight', 'death', 'hr'] },
-  dict: { age: ['Age', '年龄', 'years'], weight: ['Weight', '体重', 'kg'], death: ['In-hospital Mortality', '院内死亡', 'boolean'], hr: ['Heart rate', '心率', 'bpm'] },
+  groupConcepts: { demo: ['age', 'weight', 'death', 'hr', 'los_icu'] },
+  dict: { age: ['Age', '年龄', 'years'], weight: ['Weight', '体重', 'kg'], death: ['In-hospital Mortality', '院内死亡', 'boolean'], hr: ['Heart rate', '心率', 'bpm'], los_icu: ['ICU stay length', 'ICU住院时长', 'days'] },
   desc: {},
   variants: {},
   cov: {},
@@ -33,10 +33,14 @@ context.EU_CATALOG = {
       miiv: { kind: 'capped_or_shifted', exact_through: 89 },
       aumc: { kind: 'binned', bin_labels: ['18-39', '40-49', '80+'] },
       hirid: { kind: 'binned', bin_width: 5, top_code: 90 },
+      sic: { kind: 'approximate', top_code: 90 },
     } },
-    weight: { kind: 'mapped', databases: 6, declared_databases: all, audience: 'clinical', substitutes: { sic: { kind: 'binned', bin_width: 5 } } },
+    weight: { kind: 'mapped', databases: 6, declared_databases: all, audience: 'clinical', substitutes: { sic: { kind: 'approximate' } } },
     death: { kind: 'mapped', databases: 6, declared_databases: all, audience: 'clinical', substitutes: { hirid: { meaning: 'icu_death', time_kind: 'last_observation_proxy' } } },
     hr: { kind: 'mapped', databases: 6, declared_databases: all, audience: 'clinical' },
+    los_icu: { kind: 'mapped', databases: 6, declared_databases: all, audience: 'clinical', source_semantics: {
+      sic: { kind: 'care_unit_to_case_closure_proxy', exact_icu_los: false },
+    } },
   },
 };
 context.EU_CAPABILITIES = { deployment: { hosted: false } };
@@ -61,12 +65,17 @@ const rowOf = (markup, concept) => markup.split('data-dict-concept="').find(part
 (async () => {
   // Variables: each substituted database is marked in the row and says how.
   let page = dictionary.render();
+  assert(rowOf(page, 'los_icu').includes('首次转入 ICU 或中间监护病房到病例闭合'));
+  assert(rowOf(page, 'los_icu').includes('不等于精确的 ICU 住院时长'));
+  assert.deepEqual(marks(rowOf(page, 'los_icu')).map(([name]) => name), ['SIC']);
+  assert(page.includes('不代表各库临床口径相同、具备精确研究能力'));
   assert.deepEqual(marks(rowOf(page, 'age')).map(([, title]) => title), [
     'MIMIC-IV：89 岁以上的值被截断或平移',
     'AmsterdamUMCdb：按区间记录：18-39、40-49、80+',
     'HiRID：每 5 岁记为一段；90 岁及以上为一段',
+    'SICdb：数值经过取整，精确区间边界未说明',
   ]);
-  assert.deepEqual(marks(rowOf(page, 'weight')).map(([, title]) => title), ['SICdb：每 5 kg 记为一段']);
+  assert.deepEqual(marks(rowOf(page, 'weight')).map(([, title]) => title), ['SICdb：数值经过取整，精确区间边界未说明']);
   assert.deepEqual(marks(rowOf(page, 'death')).map(([, title]) => title), ['HiRID：口径为 ICU 内死亡']);
   assert.deepEqual(marks(rowOf(page, 'hr')), []);
   assert(!/验收|accepted on real data/.test(page), 'nothing claims acceptance on real data');

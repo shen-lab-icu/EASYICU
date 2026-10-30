@@ -17,6 +17,25 @@ function draft(overrides = {}) {
     data_requirements: ['ICU 入出时间', '指标及测量时间'], open_questions: ['时间零点的定义'], changes: ['首次整理'], ...overrides };
 }
 const block = value => '```easyicu-research-draft\n' + JSON.stringify(value) + '\n```';
+
+test('source limits display only for the current study, revision and registered source', () => {
+  const { owner } = harness();
+  const snapshot = owner.current([{ role: 'assistant', complete: true, text: block(draft()) }]);
+  const fact = { schema: 'easyicu.source-boundary-discussion/1', status: 'discussion_only_not_approved_not_executable',
+    database: 'sic', study_context_id: 'study-a', study_revision: 3, registration_id: 'src-a',
+    start_column: 'ICUOffset', end_column: 'TimeOfStay' };
+  const receipt = { study_context_id: 'study-a', revision: 3,
+    configuration: { data_source: { database: 'sic', source_id: 'src-a' } } };
+  const render = workflow => owner.render(snapshot, { tr, esc, workflow });
+  assert.match(render({ source_boundary_review: fact, study_setup_receipt: receipt }), /当前数据来源的限制/);
+  assert.match(render({ source_boundary_review: fact, study_setup_receipt: receipt }), /讨论草案未记录成稿时的数据来源身份/);
+  for (const wrong of [
+    { ...receipt, study_context_id: 'study-other' }, { ...receipt, revision: 4 },
+    { ...receipt, configuration: { data_source: { database: 'sic', source_id: 'src-other' } } },
+    { ...receipt, configuration: { data_source: { database: 'miiv', source_id: 'src-a' } } },
+  ]) assert.doesNotMatch(render({ source_boundary_review: fact, study_setup_receipt: wrong }), /当前数据来源的限制/);
+  assert.doesNotMatch(render({ study_setup_receipt: receipt }), /当前数据来源的限制/);
+});
 function harness() {
   const body = { innerHTML: '', querySelector: () => null };
   const head = { innerHTML: '' };
@@ -159,7 +178,18 @@ test('pending source offers draft discussion without adding any grant; actual so
   assert.equal(JSON.stringify(pending), before);
   const named = { key: 'miiv', label: 'MIMIC-IV v3.1' };
   assert.doesNotMatch(owner.render(pending, { tr, esc, icon: () => '', namedDatabase: named }), /继续讨论草案/);
-  assert.match(owner.render(pending, { tr, esc, icon: () => '', namedDatabase: named, discussionDraft: {} }), /继续讨论草案/);
+  const drafted = owner.render(pending, { tr, esc, icon: () => '', namedDatabase: named, discussionDraft: {} });
+  assert.doesNotMatch(drafted, /继续讨论草案|data-gpi-next-choice=/);
+  assert.match(drafted, /选择用于核验的数据 · 可稍后/);
+  assert.match(drafted, /data-gpi-data-source-action="begin_local_selection"/);
+  assert.doesNotMatch(drafted, /data-gpi-(?:grants|run|configure|approve)/);
+  const projectSource = { data_source_authorization: { status: 'pending', reason: 'project_source_confirmation_required',
+    source: { label: 'Example ICU' } } };
+  const projectHtml = owner.render(projectSource, { tr, esc, icon: () => '', discussionDraft: {} });
+  assert.match(projectHtml, /选择用于核验的数据 · 可稍后/);
+  assert.match(projectHtml, /data-gpi-data-source-action="use_study_required_data"/);
+  assert.match(projectHtml, /选择数据源不等于批准分析/);
+  assert.equal(projectSource.data_source_authorization.status, 'pending');
   assert.equal(owner.requiresConfirmation(pending), true);
   assert.equal(owner.requiresConfirmation({ data_source_authorization: { status: 'confirmed' } }), false);
 });

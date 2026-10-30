@@ -105,15 +105,28 @@
     let original = '';
     let substitute = '';
     let reason = '';
-    if (capability === 'analysis_unit') {
+    if (capability === 'time_zero' && item.original === 'icu_admission'
+        && item.substitute === 'first_intensive_or_intermediate_care_transfer') {
+      original = tr('ICU admission', '纯 ICU 入科');
+      substitute = tr('First intensive or intermediate care transfer', '首次转入重症或中间护理病区');
+      reason = tr('The requested origin differs from the recorded source. The plan and source must both bind the replacement before approval.',
+        '原问题的时间起点与来源记录不同；计划和数据来源都必须明确绑定该替代后才能审阅批准。');
+    } else if (capability === 'analysis_unit') {
       original = pair(UNITS, item.original);
       substitute = pair(UNITS, item.substitute);
       reason = tr(`${database} has no hospitalization identifier, so each ICU stay is analysed on its own.`,
         `${database} 没有住院标识，只能把每次 ICU 入住作为一个分析单位。`);
     } else if (capability === 'outcome_meaning') {
-      original = pair(MORTALITY, item.original);
-      substitute = pair(MORTALITY, item.substitute);
-      reason = tr(`${database} records death differently from the question.`, `${database} 记录的死亡口径与问题不同。`);
+      if (item.original === 'los_icu' && item.substitute === 'care_unit_to_case_closure_days') {
+        original = tr('ICU-only length of stay', '纯 ICU 住院时长');
+        substitute = tr('Time from intensive/intermediate care entry to case closure', '重症或中间护理病区入科到病例关闭的时长');
+        reason = tr('Case closure can include non-ICU time; this changes the endpoint and needs explicit review.',
+          '病例关闭可能包含非 ICU 时间；这是结局口径变化，必须明确审阅。');
+      } else {
+        original = pair(MORTALITY, item.original);
+        substitute = pair(MORTALITY, item.substitute);
+        reason = tr(`${database} records death differently from the question.`, `${database} 记录的死亡口径与问题不同。`);
+      }
     } else if (capability === 'event_time' || capability === 'censor_time') {
       original = pair(DEATH_TIME, item.original);
       substitute = pair(DEATH_TIME, item.substitute);
@@ -140,9 +153,15 @@
     const label = tr(`Planned: ${original}; used: ${substitute}`, `原定：${original}；改为：${substitute}`);
     return `<li><div class="gpi-source-swap" role="group" aria-label="${esc(label)}"><s>${esc(original)}</s><span aria-hidden="true">→</span><strong>${esc(substitute)}</strong></div><p>${esc(reason)}${field ? ` <code>${esc(field)}</code>` : ''}</p></li>`;
   }
-  function missingText(item) {
+  function missingText(item, database) {
     const code = String(item && item.code || '');
     const capability = String(item && item.capability || '');
+    if (code === 'icu_los_unavailable' && String(database || '').toLowerCase() === 'sic') {
+      return tr(
+        'a continuous ICU-only length of stay cannot be confirmed; time from first intensive or intermediate care transfer to case closure is only an alternative for discussion',
+        '尚无法确认连续的纯 ICU 住院时长；从首次转入重症或中间护理病区到病例关闭的时长仅可作为待讨论的替代',
+      );
+    }
     if (code === 'required_concept_unmapped') {
       const concept = capability.replace(/^concept:/, '');
       return tr(`it has no ${conceptName(concept)} data`, `没有${conceptName(concept)}的数据`);
@@ -167,9 +186,11 @@
     if (!decision || decision.status === 'exact') return '';
     const database = databaseName(decision.database);
     if (decision.status === 'refusal') {
-      const reasons = [...new Set((Array.isArray(decision.missing) ? decision.missing : []).map(missingText).filter(Boolean))];
+      const reasons = [...new Set((Array.isArray(decision.missing) ? decision.missing : []).map(item => missingText(item, decision.database)).filter(Boolean))];
+      const candidate = review.time_origin_candidate && review.time_origin_candidate.field === 'cases.ICUOffset'
+        ? `<p>${esc(tr('The registered export declares cases.ICUOffset as the first transfer to intensive or intermediate care. This is a candidate for discussion, not a selected or approved ICU-only start. The execution contract is not yet available.', '已登记导出声明 cases.ICUOffset 为首次转入重症或中间护理病区的时间。这是待讨论的候选，不是已选择或批准的纯 ICU 起点；相关执行能力尚未具备。'))}</p>` : '';
       return `<section class="gpi-source-adjustments is-refusal"><h4>${esc(tr(`This study cannot run on ${database}`, `这项研究在 ${database} 上做不了`))}</h4>${reasons.length
-        ? `<ul>${reasons.map(text => `<li>${esc(text)}</li>`).join('')}</ul>` : ''}</section>`;
+        ? `<ul>${reasons.map(text => `<li>${esc(text)}</li>`).join('')}</ul>` : ''}${candidate}</section>`;
     }
     if (decision.status !== 'substitution') return '';
     const rows = items(decision);

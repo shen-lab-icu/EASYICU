@@ -177,6 +177,19 @@ const outcome = modules.require('runOutcome').create({
   require(path.join(jsDir, 'screens-guided-pi-preview.js'));
   await modules.require('preview').openRunEvidence(resource, 'project_e1', { dataset });
   assert.deepEqual(sourceCalls, [['project_e1', resource.run_id, primary.evidence_id, sha('a')]]);
+  const literatureRef = { kind: 'research_evidence', run_id: 'run_failed',
+    evidence_id: 'preplan_literature_bundle', evidence_sha256: sha('b'), label: '查看文献候选' };
+  const literatureTag = resources.button(literatureRef);
+  assert.match(literatureTag, /data-gpi-resource-kind="research_evidence"/);
+  assert.match(literatureTag, /data-gpi-resource-artifact=""/);
+  const literatureData = Object.fromEntries([...literatureTag.matchAll(/data-([a-z0-9-]+)="([^"]*)"/g)].map(([, key, value]) => [
+    key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value,
+  ]));
+  await modules.require('preview').openRunEvidence(resources.fromButton({ dataset: literatureData }), 'project_e1', { dataset: literatureData });
+  assert.deepEqual(sourceCalls[1], ['project_e1', 'run_failed', 'preplan_literature_bundle', sha('b')]);
+  const forgedData = { ...literatureData, evidenceId: 'quality_gate' };
+  await modules.require('preview').openRunEvidence(resources.fromButton({ dataset: forgedData }), 'project_e1', { dataset: forgedData });
+  assert.equal(sourceCalls.length, 2, 'an arbitrary artifact cannot masquerade as literature evidence');
   global.EU_API = savedApi;
   for (const invalid of [{ sha256: '' }, { sha256: 'bad' }, { evidence_id: '../bad' }, { source_status: 'stale' }]) {
     payloads['result_tables.json'] = { tables: [{ ...primary, ...invalid }] };

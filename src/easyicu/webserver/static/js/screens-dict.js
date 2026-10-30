@@ -73,6 +73,19 @@
   // recorded in bands or capped above a limit, or a death counted elsewhere.
   const UNIT_WORDS = { years: ['year', '岁'], kg: ['kg', 'kg'] };
   function substituteOf(k, db) { return (((C().conceptCoverage || {})[k] || {}).substitutes || {})[db] || null; }
+  function sourceSemanticOf(k, db) {
+    const declared = (((C().conceptCoverage || {})[k] || {}).source_semantics || {})[db];
+    // The bundled offline catalog must not imply an exact SIC definition.
+    return declared || (k === 'los_icu' && db === 'sic' ? { kind: 'care_unit_to_case_closure_proxy' } : null);
+  }
+  function sourceSemanticText(k, db) {
+    const semantic = sourceSemanticOf(k, db);
+    if (semantic && semantic.kind === 'care_unit_to_case_closure_proxy') {
+      return L('SICdb: first transfer to ICU or intermediate care until case closure; not exact ICU length of stay.',
+        'SICdb：从首次转入 ICU 或中间监护病房到病例闭合的时长，不等于精确的 ICU 住院时长。');
+    }
+    return '';
+  }
   function substituteText(k, sub) {
     if (!sub) return '';
     if (sub.meaning) {
@@ -81,6 +94,7 @@
     }
     const unit = UNIT_WORDS[unitOf(k)] ? L(...UNIT_WORDS[unitOf(k)]) : '';
     const zhUnit = unit && /^[\x20-\x7e]+$/.test(unit) ? `${unit} ` : unit;
+    if (sub.kind === 'approximate') return L('Rounded value; exact bounds are not specified', '数值经过取整，精确区间边界未说明');
     if (sub.kind === 'binned' && Number(sub.bin_width) > 0) {
       const top = sub.top_code == null ? NaN : Number(sub.top_code);
       return L(`Recorded in ${sub.bin_width}-${unit} bands`, `每 ${sub.bin_width} ${zhUnit}记为一段`)
@@ -158,7 +172,7 @@
       : '';
     const mark = db => {
       if (!declared.includes(db)) return `<i>${html(DB_NAMES().abbr(db) || dbName(db))}</i>`;
-      const note = substituteText(meta.key, substituteOf(meta.key, db));
+      const note = sourceSemanticText(meta.key, db) || substituteText(meta.key, substituteOf(meta.key, db));
       return note
         ? `<i class="on sub" title="${html(`${dbName(db)}${L(': ', '：')}${note}`)}">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`
         : `<i class="on">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`;
@@ -193,7 +207,7 @@
     if (inst) {
       const covered = ((C().conceptCoverage || {})[k] || {}).instance_databases_covered || [];
       const cls = covered.length === inst.length ? 'hi' : covered.length ? 'mid' : 'lo';
-      const notes = covered.map(db => [db, substituteText(k, substituteOf(k, db))]).filter(([, note]) => note)
+      const notes = covered.map(db => [db, sourceSemanticText(k, db) || substituteText(k, substituteOf(k, db))]).filter(([, note]) => note)
         .map(([db, note]) => `${dbName(db)}${L(': ', '：')}${note}`);
       return `<span class="cov-badge ${cls}"${notes.length ? ` title="${html(notes.join(L('; ', '；')))}"` : ''}><span class="cov-n">${covered.length ? covered.map(dbName).join(' · ') : L('Not in this instance', '本实例无')}</span></span>`;
     }
@@ -241,7 +255,7 @@
   }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;
-    const coverageLabel = instanceDbs() ? L('Databases here', '本实例数据库') : L('Mapped databases', '映射的数据库');
+    const coverageLabel = instanceDbs() ? L('Declared mappings here', '本实例声明映射') : L('Declared mappings', '字典声明映射');
     const head = `
       <div class="dict-row dict-head">
         <span class="dc-code">${L('Code', '代码')}</span>
@@ -258,7 +272,7 @@
       return `
       <button type="button" class="dict-row dict-concept-row${variantOf ? ' is-variant' : ''} ${dictSelected === k ? 'selected' : ''}" data-dict-concept="${html(k)}" aria-pressed="${dictSelected === k ? 'true' : 'false'}"${expanded}>
         <span class="dc-code mono">${k}</span>
-        <span class="dc-name"><span class="dn-t">${window.EU_LANG === 'zh' ? zhOf(k) : nameOf(k)}</span>${d ? `<span class="dn-d">${d}</span>` : ''}${fold}</span>
+        <span class="dc-name"><span class="dn-t">${window.EU_LANG === 'zh' ? zhOf(k) : nameOf(k)}</span>${d ? `<span class="dn-d">${d}</span>` : ''}${sourceSemanticText(k, 'sic') ? `<span class="dn-d">${html(sourceSemanticText(k, 'sic'))}</span>` : ''}${fold}</span>
         <span class="dc-unit mono">${unitOf(k)}</span>
         <span class="dc-cov">${covBadge(k)}</span>
         ${dictCat === 'all' ? `<span class="dc-cat">${variantOf ? '' : groupNameOf(group)}</span>` : ''}
@@ -306,6 +320,7 @@
       <div class="dict-lineage-tabs" role="tablist">${lanes.map(lane=>`<button type="button" class="${lane.database===active.database?'active':''}" data-dict-lineage-db="${html(lane.database)}">${html(lane.label)}</button>`).join('')}</div>
       <div class="dict-audit-track" data-dict-audit-track>${steps.map(([label,value],index)=>`<div class="dict-audit-step"><i>${index+1}</i><div><b>${html(label)}</b><span>${html(value)}</span></div></div>`).join('')}</div>
       ${substitute ? `<p class="dict-lineage-sub" data-dict-substitute>${html(`${active.label}${L(': ', '：')}${substitute}`)}</p>` : ''}
+      ${sourceSemanticText(dictLineage.concept, active.database) ? `<p class="dict-lineage-sub" data-dict-source-semantics>${html(sourceSemanticText(dictLineage.concept, active.database))}</p>` : ''}
       <div class="dict-lineage-lanes" data-dict-lineage-lanes>${lanes.map((lane,index)=>`<article style="--dict-lane-color:${window.EU_PALETTE.color(index)}"><div><i></i><b>${html(lane.label)}</b><span>${html(lane.database)}</span></div><strong>${html(mappingSummary(lane))}</strong><em>${html(Array.from(new Set((lane.mappings||[]).map(mapping=>mapping.callback).filter(Boolean))).join('；') || L('no callback declared', '未声明回调'))}</em><small>→ ${html(dictLineage.concept)}${canonical.unit?` · ${html(canonical.unit)}`:''}</small></article>`).join('')}</div>
     </section>`;
   }
@@ -377,7 +392,7 @@
 
       ${instanceDbs() ? '' : `<div class="dict-catalog-note">
         ${icon('help', 14)}
-        <span>${t('This column shows which ICU databases the dictionary maps each feature to. It is the dictionary’s declaration, not coverage in the data currently selected.', '这一列显示字典把每个特征映射到了哪些 ICU 数据库；这是字典的声明，不是当前所选数据中的实际覆盖。')}</span>
+        <span>${t('These are declared dictionary mappings, not proof of equivalent clinical meaning, exact research capability, or coverage in the selected data.', '这一列是字典声明的映射，不代表各库临床口径相同、具备精确研究能力或当前所选数据实际覆盖。')}</span>
       </div>`}
 
       <div class="dict-search">

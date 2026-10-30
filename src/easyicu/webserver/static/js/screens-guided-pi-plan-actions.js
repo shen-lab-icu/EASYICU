@@ -371,7 +371,7 @@
           // own findings instead of rediscovering them on every user click.
           planner_start_mode: reasonCode === 'planner_checkpoint_resume_available'
             ? 'resume_checkpoint'
-            : revisingScientificPlan || executionUpgrade || retryingFailedPlan || staleScientificPolicy
+            : revisingScientificPlan || executionUpgrade || replanningFailedExecution || staleScientificPolicy
               ? 'auto'
               : 'fresh',
           plan_revision_source_run_id: revisionSourceRunId,

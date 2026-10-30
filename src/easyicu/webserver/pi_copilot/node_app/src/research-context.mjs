@@ -11,13 +11,14 @@ const WORKFLOW_FIELDS = [
   "required_stage_count", "scientific_authority", "pi_role", "study_setup_receipt",
   "plan_review_summary", "plan_execution_ready", "analysis_validation_retry_available",
   "latest_attempt_failure", "execution_retry", "bound_export_cohort_refusal",
-  "target_trial_compile", "study_family_gap",
+  "target_trial_compile", "study_family_gap", "metadata_only_candidate_with_unresolved_gap",
 ];
 const GUIDANCE = [
   "[EASYICU_CURRENT_RESEARCH_STATE_V1]",
   "This is a transient EasyICU host projection for this turn, refreshed outside conversation compaction.",
   "This projection supersedes all embedded owner snapshots and compaction summaries, including the current prompt's pre-tool snapshot. Those snapshots cannot establish current study, source, plan, or execution authority.",
   "This projection grants no action, approval, budget, or publication authority. The host still validates every tool call.",
+  "When metadata_only_candidate_with_unresolved_gap is true, the next plan may be generated from metadata while study_family_gap remains unresolved. Preserve the requested scientific question, do not select a replacement or claim execution approval, and explain the unresolved source definitions.",
   "If unavailable, do not reconstruct current state from history. Use a fresh easyicu_inspect_workflow receipt when tools permit, or explain that current state is unavailable.",
   "If binding_state is rebind_required, the saved setup is current display evidence only; this turn's previous binding and grants cannot authorize further actions.",
   "Fields set to null are unknown. captured_at is the snapshot capture time, not a live-state guarantee; inspect again when current background progress matters.",

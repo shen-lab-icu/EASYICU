@@ -318,6 +318,68 @@ def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
     assert blocked.value.code == "pi_research_evidence_privacy_blocked"
 
 
+def test_failed_run_literature_preview_uses_its_actual_registered_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.webserver.copilot.test_a_run_step_shows_the_code_it_ran import _failed_replay_wrapper
+    from tests.webserver.test_research_evidence_preview import _literature_source
+
+    wrapper = _failed_replay_wrapper(tmp_path)
+    pipeline = wrapper / "pipeline/run_inner"
+    index = pipeline / "evidence/evidence_index.json"
+    records = json.loads(index.read_text())
+    record = next(row for row in records if row["evidence_id"] == "preplan_literature_bundle")
+    raw = _literature_source()
+    digest = hashlib.sha256(raw).hexdigest()
+    record.update(sha256=digest, producer="hypothesis_blueprint", generation_mode="deterministic_skill")
+    (pipeline / "preplan_literature_bundle.json").write_bytes(raw)
+    (pipeline / record["relative_path"]).write_bytes(raw)
+    index.write_text(json.dumps(records))
+
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())
+    service.project_store.bind("project-a", "study1")
+    service.project_store.bind("project-b", "other-study")
+    monkeypatch.setattr(service_module.agent_runs, "list_run_history", lambda **kwargs: {
+        "runs": [{"run_id": "run_job1", "study_id": "study1", "project_dir": str(wrapper)}]
+        if kwargs.get("study_id") == "study1" else [],
+    })
+    monkeypatch.setattr(service_module.agent_runs, "read_run_review", lambda _path: {
+        "ok": True, "gate": {"status": "analysis_only"},
+        "readiness": {"status": "awaiting_human_signoff", "signed": False,
+                      "signoff_stale": False, "reportable": False},
+    })
+    def preview(project="project-a", run="run_job1", sha=digest):
+        return service.get_research_evidence_preview(
+            project_id=project, run_id=run,
+            evidence_id="preplan_literature_bundle", expected_sha256=sha,
+        )
+
+    result = preview()
+    assert result["payload"]["renderer"] == "literature_cards"
+    assert result["payload"]["sha256"] == digest
+    assert result["governance"]["claim_ceiling"] == "analysis_only"
+    assert str(tmp_path) not in json.dumps(result)
+    with pytest.raises(PiCopilotError) as wrong_project:
+        preview(project="project-b")
+    assert wrong_project.value.code == "pi_research_run_not_found"
+    with pytest.raises(PiCopilotError) as wrong_run:
+        preview(run="run_other")
+    assert wrong_run.value.code == "pi_research_run_not_found"
+    with pytest.raises(PiCopilotError) as wrong_digest:
+        preview(sha="f" * 64)
+    assert wrong_digest.value.code == "evidence_preview_sha_mismatch"
+    original_reader = service_module.agent_runs.read_run_evidence_preview
+    monkeypatch.setattr(service_module.agent_runs, "read_run_evidence_preview", lambda *_args: {
+        "ok": True, "payload": {"kind": "log", "producer": "changed", "generation_mode": "system", "renderer": "json"},
+        "privacy_scan": {"passed": True},
+    })
+    with pytest.raises(PiCopilotError) as changed_between_checks:
+        preview()
+    assert changed_between_checks.value.code == "pi_research_evidence_literature_binding_invalid"
+    monkeypatch.setattr(service_module.agent_runs, "read_run_evidence_preview", original_reader)
+    (pipeline / "preplan_literature_bundle.json").write_text("{}")
+    with pytest.raises(PiCopilotError):
+        preview()
+
+
 def test_project_document_preview_requires_the_current_ledger_digest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

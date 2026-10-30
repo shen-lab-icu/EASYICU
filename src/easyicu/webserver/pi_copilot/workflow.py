@@ -133,6 +133,9 @@ class ResearchWorkflowSnapshot(BaseModel):
         "conversation_and_orchestration"
     )
     study_setup_receipt: StudySetupReceipt
+    # Read-only source facts for the *current* project and registration;
+    # never an applied endpoint or a grant to prepare or execute data.
+    source_boundary_review: Optional[Mapping[str, Any]] = None
     plan_review_summary: Optional[Mapping[str, Any]] = None
     plan_decision: Optional[SurvivalLandmarkDecision] = None
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
@@ -151,6 +154,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: Why v1 does not offer the study's family on its bound database, codes
     #: only (``study_family_scope``); the plan step names it instead of a plan.
     study_family_gap: Optional[Mapping[str, Any]] = None
+    metadata_only_candidate_with_unresolved_gap: bool = False
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -302,6 +306,53 @@ def _study_with_registered_source_identity(
             **dict(source),
             "source_id": str(registered.get("id") or "").strip(),
         },
+    }
+
+
+def _source_boundary_review(study: Mapping[str, Any], registry: Mapping[str, Any],
+                            study_id: str) -> Optional[Mapping[str, Any]]:
+    """Current bound source's limitations; fail closed on ambiguity or drift."""
+    from easyicu.databases import normalize_database_key
+    from easyicu.databases.research_capabilities import research_capability_profile
+
+    if not study_id or str(study.get("id") or "").strip() != study_id:
+        return None
+    revision = study.get("revision")
+    if type(revision) is not int or revision < 0:
+        return None
+    source = study.get("data_source")
+    if not isinstance(source, Mapping):
+        return None
+    selected_path = str(source.get("path") or "").strip()
+    if not selected_path:
+        return None
+    try:
+        database = normalize_database_key(str(source.get("database") or ""))
+        profile = research_capability_profile(database)
+    except KeyError:
+        return None
+    start, end = profile.care_unit_admission_proxy, profile.case_close_proxy
+    if start is None or end is None:
+        return None
+    matches = [row for row in registry.get("sources", ()) if isinstance(row, Mapping)
+               and row.get("ok") and str(row.get("path") or "").strip() == selected_path]
+    if len(matches) != 1 or not str(matches[0].get("id") or "").strip():
+        return None
+    try:
+        if normalize_database_key(str(matches[0].get("database") or "")) != database:
+            return None
+    except KeyError:
+        return None
+    return {
+        "schema": "easyicu.source-boundary-discussion/1",
+        "study_context_id": study_id,
+        "study_revision": revision,
+        "registration_id": str(matches[0]["id"])[:160],
+        "database": database,
+        "status": "discussion_only_not_approved_not_executable",
+        "start_column": start.column,
+        "end_column": end.column,
+        "reference": "https://www.sicdb.com/Documentation/Table%3A_Cases",
     }
 
 
@@ -962,6 +1013,11 @@ def build_research_workflow_snapshot(
         if fresh_plan_offered and not export_cohort_blocks_plan
         else None
     )
+    from easyicu.webserver.study_family_scope import metadata_only_sic_definition_gap
+    source_for_scope = study_row.get("data_source")
+    metadata_candidate_gap = metadata_only_sic_definition_gap(
+        str(source_for_scope.get("database") or "") if isinstance(source_for_scope, Mapping) else "", family_gap
+    )
     legacy_full_scaffold = bool(full_run and not pipeline_run and has_plan)
 
     stages = [
@@ -1022,7 +1078,7 @@ def build_research_workflow_snapshot(
                 else "running"
                 if planning_running
                 else "blocked"
-                if export_cohort_blocks_plan or family_gap is not None or source_coordinate_gap
+                if export_cohort_blocks_plan or (family_gap is not None and not metadata_candidate_gap) or source_coordinate_gap
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -1042,7 +1098,7 @@ def build_research_workflow_snapshot(
                 else export_cohort_reason_code
                 if export_cohort_blocks_plan
                 else family_gap["code"]
-                if family_gap is not None
+                if family_gap is not None and not metadata_candidate_gap
                 else "study_coordinate_unavailable"
                 if source_coordinate_gap
                 else plan_regeneration_reason_code
@@ -1235,7 +1291,7 @@ def build_research_workflow_snapshot(
     }
     if next_action in STOP_POLICIES and next_action != "operator_plan_approval_required":
         stop_gate.update(status="blocked", reason=next_action)
-    if family_gap is not None:
+    if family_gap is not None and not metadata_candidate_gap:
         stop_gate["detail"] = family_gap
     planning_source = None
     if next_action == "bound_export_cohort_mismatch":
@@ -1279,6 +1335,7 @@ def build_research_workflow_snapshot(
             dict(target_trial_compile) if target_trial_compile is not None else None
         ),
         study_family_gap=family_gap,
+        metadata_only_candidate_with_unresolved_gap=metadata_candidate_gap,
     )
 
 
@@ -1626,6 +1683,7 @@ def build_project_workflow_projection(
     """
 
     clean_study_id = str(study_context_id or "").strip()
+    exact_bound_study_id = clean_study_id if study_override is None else ""
     if study_override is not None:
         study: Mapping[str, Any] = dict(study_override)
     elif clean_study_id:
@@ -1696,6 +1754,9 @@ def build_project_workflow_projection(
         target_trial_compile=trial_compile,
     )
     snapshot = build_research_workflow_snapshot(**snapshot_inputs)
+    snapshot = snapshot.model_copy(update={
+        "source_boundary_review": _source_boundary_review(study, registry, exact_bound_study_id),
+    })
     if (
         latest_run
         and snapshot.next_action_code == "failed_pipeline_execution_retry_available"
@@ -1711,6 +1772,9 @@ def build_project_workflow_projection(
         snapshot = build_research_workflow_snapshot(
             **snapshot_inputs, execution_retry=assessment.public()
         )
+        snapshot = snapshot.model_copy(update={
+            "source_boundary_review": _source_boundary_review(study, registry, exact_bound_study_id),
+        })
     if projected_study is not study:
         snapshot = snapshot.model_copy(
             update={

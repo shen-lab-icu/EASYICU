@@ -77,8 +77,8 @@ process.stdout.write(owner.runFailureText('research_pipeline_progressive_compile
         ),
         (
             "longitudinal_representation_unavailable",
-            "no such time series",
-            "没有这样的时间序列",
+            "could not confirm",
+            "尚无法确认",
         ),
         (
             "multiple_sources_required",
@@ -87,8 +87,8 @@ process.stdout.write(owner.runFailureText('research_pipeline_progressive_compile
         ),
         (
             "estimand_unsupported",
-            "for example an association, a prediction",
-            "例如关联、预测或描述性汇总",
+            "could not confirm an executable path",
+            "未能确认所提估计量或时间设计有可执行路径",
         ),
         (
             "design_element_unsupported",
@@ -100,11 +100,24 @@ process.stdout.write(owner.runFailureText('research_pipeline_progressive_compile
 def test_each_requirement_reads_as_its_own_sentence(cause, en, zh) -> None:
     english, chinese = _copy(cause, "en"), _copy(cause, "zh")
 
-    assert english.startswith("Planning found that the question needs something")
+    if cause == "longitudinal_representation_unavailable":
+        assert "question needs repeated measurements" not in english
+        assert "没有这样的时间序列" not in chinese
+        assert "time alignment" in english
+        assert "时间对齐" in chinese
+    elif cause == "estimand_unsupported":
+        assert "the original research question has not been changed" in english
+        assert "原研究问题保持不变" in chinese
+        assert "for example an association" not in english
+        assert "例如关联" not in chinese
+        assert "outcome definition" in english and "结局定义" in chinese
+    else:
+        assert english.startswith("Planning found that the question needs something")
+        assert chinese.startswith("规划发现这个问题需要")
     assert en in english
-    assert chinese.startswith("规划发现这个问题需要")
     assert zh in chinese
-    assert chinese.count("。") == 1
+    if cause not in {"longitudinal_representation_unavailable", "estimand_unsupported"}:
+        assert chinese.count("。") == 1
     assert "变量水平或模型项" not in chinese
 
 

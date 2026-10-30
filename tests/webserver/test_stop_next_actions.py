@@ -325,6 +325,28 @@ def test_only_an_explicitly_optional_element_offers_removal(reason, required) ->
     assert "unrelated" not in actions[0].model_dump_json()
 
 
+def test_unverifiable_capability_gap_receipt_cannot_offer_requirement_removal() -> None:
+    from easyicu.research_agent.planning.capability_gap import CapabilityGapCheck, capability_gap_stop
+    from easyicu.research_agent.planning.progressive_contract import ProgressivePlanOutline
+    from tests.research_agent.planning.progressive_planner_fixtures import _outline_payload
+
+    outline = ProgressivePlanOutline.model_validate({
+        **_outline_payload(), "steps": [],
+        "capability_gap": "longitudinal_representation_unavailable",
+        "rationale": "The candidate needs a time representation whose availability has not been established.",
+    })
+    stop = capability_gap_stop(outline, CapabilityGapCheck(
+        "unverifiable", "The host cannot establish whether this question needs repeated measurements."
+    ))
+    detail = owner.safe_stop_coordinates(stop.easyicu_safe_diagnostic)
+    assert "question_required" not in detail
+    projected = owner.project_stop_next_actions({
+        "status": "blocked", "reason": "research_pipeline_progressive_compile_failed",
+        "detail": {**detail, "cause_code": "longitudinal_representation_unavailable"},
+    })
+    assert [action["kind"] for action in projected] == ["edit_plan"]
+
+
 def test_a_message_alone_cannot_name_an_element_or_make_it_optional() -> None:
     actions = owner.next_actions_for_stop(
         "research_pipeline_progressive_compile_failed",

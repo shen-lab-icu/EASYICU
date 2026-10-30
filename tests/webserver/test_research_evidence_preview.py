@@ -56,6 +56,106 @@ def _register(
     return path, digest
 
 
+def _literature_source(*, filler: int = 0, summary: str = "This source describes an ICU cohort.") -> bytes:
+    return json.dumps({
+        "research_question": "A synthetic research question",
+        "citations": [{
+            "key": "paper_1", "title": "Synthetic study", "year": "2025",
+            "pmid": "12345", "relevance": "x" * filler,
+        }],
+        "screening_decisions": [{
+            "citation_key": "paper_1", "source": "pubmed", "disposition": "include",
+            "evidence_role": "database", "rationale": "A synthetic source candidate.",
+        }],
+        "design_evidence_cards": [{
+            "citation_key": "paper_1", "evidence_role": "database", "access_mode": "abstract",
+            "abstract_locator": "https://pubmed.ncbi.nlm.nih.gov/12345/",
+            "abstract_sha256": "a" * 64, "supplement_status": "unknown",
+            "reviewed_at": "2026-10-29T12:00:00Z",
+            "evidence": [{"dimension": "study_population", "review_role": "data_source",
+                          "source_backed_summary": summary, "locator": "Abstract"}],
+        }],
+    }).encode()
+
+
+def _register_literature(run_dir: Path, raw: bytes, *, producer: str = "hypothesis_blueprint") -> tuple[Path, str]:
+    return _register(
+        run_dir, evidence_id="preplan_literature_bundle", kind="log",
+        name="preplan_literature_bundle__preplan_literature_bundle.json", content=raw,
+        producer=producer, generation_mode="deterministic_skill",
+    )
+
+
+def test_large_registered_literature_projects_only_bounded_source_cards(tmp_path: Path) -> None:
+    raw = _literature_source(filler=600_000)
+    _, digest = _register_literature(tmp_path, raw)
+    preview = build_evidence_preview(tmp_path, "preplan_literature_bundle", digest)
+    assert len(raw) > 512 * 1024
+    assert preview["renderer"] == "literature_cards" and preview["previewable"]
+    assert preview["value"]["mapping_status"] == "not_assessed"
+    card = preview["value"]["cards"][0]
+    assert card["access_mode"] == "abstract"
+    assert card["source_url"] == "https://pubmed.ncbi.nlm.nih.gov/12345/"
+    assert card["evidence"][0]["review_role"] == "data_source"
+    assert card["evidence"][0]["source_backed_summary"] == "This source describes an ICU cohort."
+    assert "x" * 1000 not in json.dumps(preview)
+
+
+def test_literature_preview_is_same_run_and_digest_pinned(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    path, digest = _register_literature(first, _literature_source())
+    _, other_digest = _register_literature(second, _literature_source(summary="Another ICU source fact."))
+    assert digest != other_digest
+    with pytest.raises(EvidencePreviewError) as wrong_run:
+        build_evidence_preview(second, "preplan_literature_bundle", digest)
+    assert wrong_run.value.code == "evidence_preview_sha_mismatch"
+    path.write_bytes(_literature_source(summary="Changed evidence after registration."))
+    with pytest.raises(EvidencePreviewError) as tampered:
+        build_evidence_preview(first, "preplan_literature_bundle", digest)
+    assert tampered.value.code == "evidence_preview_digest_mismatch"
+
+
+def test_literature_preview_keeps_a_separate_strict_source_size_cap(tmp_path: Path) -> None:
+    _, digest = _register_literature(tmp_path, _literature_source(filler=4 * 1024 * 1024))
+    preview = build_evidence_preview(tmp_path, "preplan_literature_bundle", digest)
+    assert not preview["previewable"] and preview["withheld_reason"] == "preview_size_limit"
+
+
+@pytest.mark.parametrize("description", [
+    "token=example-secret-value", "/Volumes/private/record", "patient_id: 12345",
+])
+def test_oversized_literature_metadata_is_also_privacy_scanned(tmp_path: Path, description: str) -> None:
+    _, digest = _register_literature(tmp_path, _literature_source(filler=4 * 1024 * 1024))
+    index = tmp_path / "evidence" / "evidence_index.json"
+    records = json.loads(index.read_text())
+    records[0]["description"] = description
+    index.write_text(json.dumps(records))
+    with pytest.raises(EvidencePreviewError) as caught:
+        build_evidence_preview(tmp_path, "preplan_literature_bundle", digest)
+    assert caught.value.code == "evidence_preview_privacy_scan_failed"
+    assert description not in str(caught.value)
+
+
+def test_large_nonowner_evidence_does_not_get_the_literature_exception(tmp_path: Path) -> None:
+    _, digest = _register_literature(tmp_path, _literature_source(filler=600_000), producer="untrusted")
+    preview = build_evidence_preview(tmp_path, "preplan_literature_bundle", digest)
+    assert not preview["previewable"] and preview["withheld_reason"] == "preview_size_limit"
+
+
+@pytest.mark.parametrize("summary", [
+    "The source contains patient_id: 12345 in the reported excerpt.",
+    "The source contains token=example-secret-value in the reported excerpt.",
+    "The source contains /Volumes/private/record in the reported excerpt.",
+])
+def test_literature_projection_refuses_sensitive_text(tmp_path: Path, summary: str) -> None:
+    _, digest = _register_literature(tmp_path, _literature_source(summary=summary))
+    with pytest.raises(EvidencePreviewError) as caught:
+        build_evidence_preview(tmp_path, "preplan_literature_bundle", digest)
+    assert caught.value.code == "evidence_preview_privacy_scan_failed"
+    assert summary not in str(caught.value)
+
+
 def test_review_file_labels_resolve_to_digest_pinned_registry_records(
     tmp_path: Path,
 ) -> None:

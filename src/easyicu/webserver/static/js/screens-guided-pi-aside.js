@@ -236,12 +236,12 @@
       const draftOwner = window.EasyICU.guidedPi.optional('researchDraft');
       const draft = !host.demoMode() && draftOwner && typeof host.messages === 'function'
         ? draftOwner.current(host.messages()) : null;
-      const draftHtml = draft ? draftOwner.render(draft, { tr, esc }) : '';
       const demo = host.demoMode() && window.EasyICU.guidedPi.optional('demo');
       // The demo replay advances its stages chapter by chapter.
       const walkthrough = host.demoMode() && window.EasyICU.guidedPi.optional('demoWalkthrough');
       const workflow = walkthrough ? walkthrough.workflow()
         : demo && typeof demo.workflow === 'function' ? demo.workflow() : host.workflow();
+      const draftHtml = draft ? draftOwner.render(draft, { tr, esc, workflow }) : '';
       if (host.shell() !== 'pi' || (!host.demoMode() && !projectId())) return;
       if (resultProjectId !== projectId()) { resultProjectId = projectId(); resultQuery = ''; }
       const aside = document.getElementById('gdStudyAside');

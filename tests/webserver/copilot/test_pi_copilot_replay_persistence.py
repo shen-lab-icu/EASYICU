@@ -11,7 +11,7 @@ import pytest
 
 from easyicu.webserver import study_contexts
 from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
-from easyicu.webserver.pi_copilot.contracts import PiCopilotError, PiSessionRecord
+from easyicu.webserver.pi_copilot.contracts import AuthorityBinding, PiCopilotError, PiSessionRecord
 from easyicu.webserver.pi_copilot.projections import project_job, project_pi_replay_event
 from easyicu.webserver.pi_copilot.replay_store import PiConversationReplayStore
 from easyicu.webserver.pi_copilot.service import PiCopilotService
@@ -634,6 +634,49 @@ def test_service_forwards_transcript_cursor_and_pages_replay(tmp_path: Path) -> 
         "message-001"
     ]
     assert public["conversation_replay"]["turn_page"]["next_cursor"] == "1"
+
+
+def test_failed_job_display_overlay_is_project_bound_and_does_not_change_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from easyicu.webserver import run_step_trace
+    from easyicu.webserver.pi_copilot import service as service_module
+    from easyicu.webserver.run_record import RunDirectory
+
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=_Gateway(tmp_path))
+    record = PiSessionRecord(
+        session_id="pi-demo", project_id="project-demo",
+        binding=AuthorityBinding(study_context_id="study1"),
+    )
+    monkeypatch.setattr(service.project_store, "resolve", lambda project: "study1")
+    monkeypatch.setattr(service_module, "research_pipeline_workspace", lambda: SimpleNamespace(
+        existing_project_root=lambda study: tmp_path / study,
+    ))
+    monkeypatch.setattr(RunDirectory, "create", lambda root, study, job: SimpleNamespace(
+        path=root / study / f"run_{job}",
+    ))
+    calls = []
+    def projected(wrapper, **kwargs):
+        calls.append((wrapper, kwargs))
+        return {"literature_record_registered": True, "record_count": 3, "query_count": 2}
+    monkeypatch.setattr(run_step_trace, "failed_replay_literature_facts", projected)
+    replay = {"replay_sha256": "a" * 64, "child_jobs": [{
+        "job_id": "job1", "kind": "agent-run", "status": "failed", "progress": [{
+            "action": "literature_build", "run_id": "run_inner", "timestamp": "2026-01-01T00:00:03+00:00",
+        }],
+    }]}
+    original = json.loads(json.dumps(replay))
+    output = service._replay_jobs_with_literature(record, replay)
+    assert replay == original
+    assert output[0]["progress"][0]["literature_record_registered"] is True
+    assert calls[0][0] == tmp_path / "study1/study1/run_job1"
+    assert calls[0][1]["pipeline_run_id"] == "run_inner"
+    assert calls[0][1]["wrapper_run_id"] == "run_job1"
+    monkeypatch.setattr(service.project_store, "resolve", lambda project: "study_other")
+    calls.clear()
+    assert "literature_record_registered" not in service._replay_jobs_with_literature(record, replay)[0]["progress"][0]
+    assert calls == []
 
 
 def test_historical_data_package_link_reads_exact_snapshot_after_study_advances(

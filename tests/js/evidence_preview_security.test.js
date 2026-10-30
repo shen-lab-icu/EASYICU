@@ -18,6 +18,24 @@ vm.runInContext(modulesSource, context);
 vm.runInContext(source, context);
 const renderer = context.window.EasyICU.guidedPi.require('evidencePreview');
 
+const literature = renderer.render({
+  renderer: 'literature_cards', previewable: true, kind: 'log', evidence_id: 'preplan_literature_bundle',
+  sha256: 'a'.repeat(64), value: {
+    cards: [{ title: '<img src=x onerror=bad()>', evidence_role: 'database', access_mode: 'abstract',
+      source_url: 'https://pubmed.ncbi.nlm.nih.gov/12345/',
+      evidence: [{ review_role: 'data_source', source_backed_summary: '<script>bad()</script>', locator: 'Abstract' }] },
+    { title: 'Unsafe link', access_mode: 'unknown', source_url: 'javascript:alert(1)', evidence: [] }],
+    review: {shortfalls: [{role: 'definition', actual: 0, target: 3}]},
+  },
+}, {});
+assert.ok(literature.includes('Abstract excerpt; full text not reviewed'));
+assert.ok(literature.includes('Relevance and support for each claim still require review'));
+assert.ok(literature.includes('https://pubmed.ncbi.nlm.nih.gov/12345/'));
+assert.ok(literature.includes('&lt;script&gt;bad()&lt;/script&gt;'));
+assert.ok(!literature.includes('<img src=x'));
+assert.ok(!literature.includes('href="javascript:'));
+assert.equal(context.globalThis.pwned, false);
+
 const code = renderer.render({
   renderer: 'code', previewable: true, kind: 'code', evidence_id: 'code_1',
   sha256: 'a'.repeat(64), text: '<img src=x onerror="globalThis.pwned=true">\nestimate = 1.2',

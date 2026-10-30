@@ -516,18 +516,20 @@
       const end = pipelineTime(event.ended_at);
       const step = String(event.step || event.type || 'pipeline');
       const system = step.startsWith('provider_');
+      const transportRetry = step === 'provider_transport_retry';
       const kind = step === 'planning' && planningEventFacts(event).phase === 'rejected' ? 'retry' : 'pipeline';
-      const id = system ? `pipeline-${step}-${event.current || event.seq || 0}` : kind === 'retry'
+      const retryId = /^[0-9a-f]{32}$/.test(String(event.retry_id || '')) ? event.retry_id : '';
+      const id = transportRetry && retryId ? `pipeline-${step}-${retryId}` : system ? `pipeline-${step}-${event.current || event.seq || 0}` : kind === 'retry'
         ? `pipeline-plan-retry-${planningEventFacts(event).unit || 'plan'}-${event.current || 0}` : `pipeline-${step}`;
       const next = facts ? planStepRow(facts, at, { durationKnown: at != null }) : {
         id, kind, step, label: pipelineEventLabel(event), at, actor: event.actor,
         ...(system ? { current: boundedCount(event.current), total: boundedCount(event.total) } : {}),
         status: ['error', 'failed', 'cancelled', 'blocked'].includes(event.status)
           || step === 'provider_continuation_refused' ? 'error'
-          : event.status === 'complete' || (system && step !== 'provider_recovery_wait') ? 'complete' : 'running',
+          : event.status === 'complete' || (system && step !== 'provider_recovery_wait' && !transportRetry) ? 'complete' : 'running',
       };
       const previous = activity.steps.find(row => row.id === next.id);
-      closeRunningRows(activity, at, next.id, false);
+      if (!transportRetry) closeRunningRows(activity, at, next.id, false);
       const started = previous && previous.durationKnown !== false && previous.startedAt != null
         ? previous.startedAt : start != null ? start : next.status === 'running' ? at : null;
       Object.assign(next, { startedAt: started, durationKnown: started != null && at != null });
@@ -579,6 +581,7 @@
         current: boundedCount(event.current), total: boundedCount(event.total),
         attempt: boundedCount(event.attempt), repairKind: code(event.repair_kind),
         queryCount: boundedCount(event.query_count), recordCount: boundedCount(event.record_count),
+        literatureRecordRegistered: event.literature_record_registered === true,
         queries: (Array.isArray(event.queries) ? event.queries : []).slice(0, 4).map(value => text(value, 200)).filter(Boolean),
         sourceLabel: text(event.source_label, 160), sourceDatabase: text(event.source_database, 64),
         groupVariableCount: boundedCount(event.group_variable_count), planStepCount: boundedCount(event.plan_step_count),
@@ -612,6 +615,17 @@
       closeRunningRows(activity, at, id, false);
       const row = previous || { id, kind: 'pipeline', step: 'action', action, stage: ACTION_STAGES[action], icon: ACTION_ICONS[action] };
       Object.assign(row, actionFieldsOf(event), { at, status: failed ? 'error' : span ? 'running' : 'complete' });
+      if (action === 'literature_build') {
+        const ref = event.literature_evidence && typeof event.literature_evidence === 'object'
+          ? event.literature_evidence : {};
+        const valid = event.literature_record_registered === true
+          && ref.evidence_id === 'preplan_literature_bundle'
+          && /^[a-f0-9]{64}$/.test(String(ref.sha256 || ''))
+          && RUN_ID.test(String(ref.run_id || ''));
+        row.resources = valid ? [{ kind: 'research_evidence', run_id: ref.run_id,
+          evidence_id: ref.evidence_id, evidence_sha256: ref.sha256, evidence_kind: 'log',
+          label: tr('View literature candidates', '查看文献候选'), media_type: 'application/json' }] : [];
+      }
       if (span) {
         row.startedAt = previous && previous.startedAt != null ? previous.startedAt : start != null ? start : at;
         delete row.endedAt;
@@ -664,9 +678,12 @@
     }
     function actionDetail(row) {
       if (row.action === 'literature_build' && row.queryCount != null) {
-        return row.recordCount != null
+        const counts = row.recordCount != null
           ? tr(`${row.queryCount} queries · ${row.recordCount} records`, `${row.queryCount} 条检索式 · ${row.recordCount} 条记录`)
           : tr(`${row.queryCount} queries`, `${row.queryCount} 条检索式`);
+        return row.literatureRecordRegistered
+          ? `${counts} · ${tr('A screening record is registered; its contents and citations still need review.', '已登记文献筛选记录，内容与引用仍需审阅。')}`
+          : counts;
       }
       return '';
     }
@@ -764,6 +781,13 @@
     }
 
     function pipelineEventLabel(event) {
+      if (event && event.step === 'provider_transport_retry') {
+        const count = boundedCount(event.current);
+        if (event.retry_phase === 'failed') return tr(`Model request ${count || ''} did not succeed`.trim(), `第 ${count || '?'} 次模型请求未成功`);
+        if (event.retry_phase === 'waiting') return tr('Waiting before retrying the model request', '模型请求未成功，正在等待重试');
+        if (event.retry_phase === 'started') return tr(`Retrying model request ${count || ''}`.trim(), `正在发起第 ${count || '?'} 次模型请求`);
+        if (event.retry_phase === 'continued') return tr('The model request continued after a retry', '模型重试已返回，研究流程继续');
+      }
       const type = String((event && event.type) || '');
       if (event && String(event.step || '').startsWith('provider_')
         && !['provider_continuation_refused', 'provider_auto_resume', 'provider_recovery_wait'].includes(event.step))
@@ -1172,8 +1196,10 @@
       // One host sentence before a job's trace says what EasyICU will do.
       const owner = jobNarration();
       const openingText = owner && row ? owner.opening(row.jobCode, tr) : '';
-      const historicalAttempt = row && row.supersededAttempt
-        ? `<p class="gpi-trace-note">${esc(tr('Earlier failed attempt · superseded by a resend · read only', '较早的失败尝试 · 已被重发替代 · 仅供查看'))}</p>` : '';
+      const historicalAttempt = row && row.supersededAttempt === true && failed
+        ? `<p class="gpi-trace-note">${esc(row.supersededByPlanAttempt === true
+          ? tr('Earlier plan attempt · a later plan attempt exists · read only', '较早的计划尝试 · 已有后续计划尝试 · 仅供查看')
+          : tr('Earlier attempt · superseded by a resend · read only', '较早的尝试 · 已被重发替代 · 仅供查看'))}</p>` : '';
       const opening = historicalAttempt + (openingText ? `<p class="gpi-turn-opening">${esc(openingText)}</p>` : '');
       const rowCount = visibleSteps.filter(step => !(owner && owner.replaces(step))).length;
       const longTrace = visibleSteps.length + narration.length > 5;
@@ -1184,7 +1210,8 @@
       const failureExplained = Boolean(options && options.failureExplained);
       const causes = failureExplained ? new Map() : failureCauses(visibleSteps, row);
       if (running) {
-        const title = row.runningTitle || (latest
+        const title = latest && latest.step === 'provider_transport_retry' && latest.status === 'running'
+          ? stepLabel(latest) : row.runningTitle || (latest
           ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
         const note = String(row.runningNote || '').trim() || tr(
           'Still running. You can wait here; EasyICU will ask when review or confirmation is needed.',
@@ -1207,7 +1234,9 @@
       // only submit/start/model lifecycle events should read as a plain response
       // instead of exposing an empty or misleading execution disclosure.
       if (!visibleSteps.length && !failed) return '';
-      const title = failed ? tr('Execution needs attention', '执行过程需要处理') : kicker;
+      const title = failed && row && row.supersededAttempt === true
+        ? tr('Earlier attempt stopped', '较早的尝试已停止')
+        : failed ? tr('Execution needs attention', '执行过程需要处理') : kicker;
       // A job that stopped before any step has no row to carry its cause; it
       // is said under the summary, or the stop reads as nothing at all.
       const unplacedCause = failed && !failureExplained && !causes.size && row && row.failureCode

@@ -95,3 +95,25 @@ def test_a_study_with_no_identified_source_is_not_judged() -> None:
     study = {**_study(_COX, "eicu"), "data_source": {"path": "/prepared/export"}}
 
     assert _snapshot(study).study_family_gap is None
+
+
+def test_sic_association_los_gap_offers_only_metadata_candidate_and_keeps_gap():
+    study = {**_study("Association of first-day lactate with ICU length of stay", "sic"),
+             "analysis_design": {"analysis_family": "association_study", "analysis_unit": "icu_stay", "variance_estimator": "model_based"},
+             "execution_concepts": {"outcome": "los_icu", "primary_exposure": "lact"}}
+    snapshot = _snapshot(study)
+    assert snapshot.next_action_code == "provider_ready_to_generate_plan"
+    assert _plan_stage(snapshot).status == "ready"
+    assert snapshot.metadata_only_candidate_with_unresolved_gap is True
+    assert {item["capability"] for item in snapshot.study_family_gap["missing_capabilities"]} == {"icu_los"}
+    assert snapshot.plan_execution_ready is False
+
+
+def test_unmapped_sic_exposure_still_blocks_candidate():
+    study = {**_study("Association of first-day lactate with ICU length of stay", "sic"),
+             "analysis_design": {"analysis_family": "association_study", "analysis_unit": "icu_stay", "variance_estimator": "model_based"},
+             "execution_concepts": {"outcome": "los_icu", "primary_exposure": "d_dimer"}}
+    snapshot = _snapshot(study)
+    assert snapshot.metadata_only_candidate_with_unresolved_gap is False
+    assert snapshot.next_action_code == STUDY_FAMILY_DATABASE_OUT_OF_SCOPE
+    assert _plan_stage(snapshot).status == "blocked"
