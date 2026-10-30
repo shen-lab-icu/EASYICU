@@ -1137,7 +1137,7 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     assert "Concept-catalog convergence rule" in source
     assert "canonical_alternatives rows" in source
     assert "Concept lookup is just in time, not prefetch" in source
-    assert "do not make a catalog-only call first" in source
+    assert "Before formal plan generation, do not resolve or describe execution concepts merely to make setup look complete" in source
     assert "first-stay restriction is a scientific analysis-unit decision" in source
     assert "adult ICU population alone authorizes neither first-stay nor all-stay" in source
     assert "Every completed research reply must end with a localized standalone" in source

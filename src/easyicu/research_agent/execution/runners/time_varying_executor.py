@@ -237,7 +237,7 @@ def run_time_varying_g_method(*, frame: pd.DataFrame, specification: GMethodSpec
     from ...methods.gformula import gformula_ate
     from ...methods.msm import validate_g_method_panel
     from ...methods.target_trial import fit_target_trial_msm
-    from ...planning.target_trial_spec import require_g_method_source
+    from ...contracts.time_varying_exposure import require_g_method_source
 
     spec = GMethodSpec.model_validate(specification.model_dump())
     source = frame.attrs.get(G_METHOD_SOURCE_KEY)
@@ -292,7 +292,7 @@ def run_time_varying_g_method(*, frame: pd.DataFrame, specification: GMethodSpec
 
 def g_method_executor_code(step: AnalysisStep, *, plausibility_scope: FlagOnlyPlausibilityScope | None = None) -> str:
     """Render the exact reviewed g-method through the existing typed input owner."""
-    from ...planning.target_trial_spec import require_g_method_step
+    from ...contracts.time_varying_exposure import require_g_method_step
 
     spec = require_g_method_step(step)
     scope = plausibility_scope

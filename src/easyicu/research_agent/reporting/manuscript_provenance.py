@@ -572,7 +572,7 @@ class _ClaimLineage:
             nodes[5].update(status="missing", missing_reason="source_identity_not_recorded")
         # The release owner supplies public metadata. A database/demo label is
         # never proof that this run used an official archive.
-        from easyicu.webserver.demo_source_contracts import get_source
+        from easyicu.official_demo_sources import get_source
 
         try:
             official = get_source(facts.get("source_id"))

@@ -1509,10 +1509,12 @@ def update_study_context(
             outcome_changed = True
             # A previous machine concept is not proof for a newly selected
             # human outcome; require a fresh, source-bound mapping.
-            execution = dict((current or {}).get("execution_concepts") or {})
-            execution.update(dict(patch.get("execution_concepts") or {}))
-            execution.pop("outcome", None)
-            patch["execution_concepts"] = execution
+            existing_execution = (current or {}).get("execution_concepts") or {}
+            if existing_execution or "execution_concepts" in patch:
+                execution = dict(existing_execution)
+                execution.update(dict(patch.get("execution_concepts") or {}))
+                execution.pop("outcome", None)
+                patch["execution_concepts"] = execution
     if (
         params.get("primary_exposure")
         and str(context.user_message or "").strip()
@@ -1901,18 +1903,10 @@ def update_study_context(
                     if exc.detail.get(key) is not None
                 },
             )
-        source_path = str(effective_source.get("path") or "").strip()
-        from easyicu.research_agent.acquisition.catalog import build_available_catalog
-
-        catalog = build_available_catalog(Path(source_path).expanduser())
         allowed_modules = {
             str(value).strip().lower()
             for value in effective_modules
             if str(value).strip()
-        }
-        concept_modules = {
-            concept.concept_id: Path(concept.file_name).stem.lower()
-            for concept in catalog.concepts
         }
         bound_ids = [
             value
@@ -1923,6 +1917,16 @@ def update_study_context(
             )
             if value
         ]
+        concept_modules = {}
+        if bound_ids:
+            source_path = str(effective_source.get("path") or "").strip()
+            from easyicu.research_agent.acquisition.catalog import build_available_catalog
+
+            catalog = build_available_catalog(Path(source_path).expanduser())
+            concept_modules = {
+                concept.concept_id: Path(concept.file_name).stem.lower()
+                for concept in catalog.concepts
+            }
         absent_from_source = sorted(set(bound_ids) - set(concept_modules))
         if absent_from_source:
             return _result(

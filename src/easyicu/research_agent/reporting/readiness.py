@@ -85,6 +85,7 @@ from .completion import (
     count_missing_evidence_markers as _count_missing_evidence_markers,
     count_writer_attempts,
     has_figure_only_output_contract,
+    invalid_plan_execution_status,
     RunCompletionDecision,
     RunCompletionFacts,
     readiness_status as _readiness_status,
@@ -460,27 +461,10 @@ def execution_gate_status(
     run_dir: Optional[Path] = None,
     context: Optional[ResearchContext] = None,
 ) -> Dict[str, Any]:
-    if plan is None:
-        return {
-            "execution_complete": False,
-            "required_step_count": 0,
-            "completed_step_count": 0,
-            "missing_steps": [],
-            "failed_steps": [{"step_id": "plan", "status": "not_available"}],
-        }
+    invalid_plan = invalid_plan_execution_status(plan)
+    if invalid_plan is not None:
+        return invalid_plan
     required_step_ids = [s.step_id for s in plan.steps]
-    if not required_step_ids:
-        return {
-            "execution_complete": False,
-            "step_scientific_requirements_complete": False,
-            "required_step_count": 0,
-            "completed_step_count": 0,
-            "missing_steps": [],
-            "failed_steps": [{"step_id": "plan", "status": "no_steps"}],
-            "optional_render_failures": [],
-            "scientific_incomplete_steps": [],
-            "step_completion_states": [],
-        }
     # 🔧 2026-05-16: previously this dict excluded `00_probe` records on the
     # assumption the planner never lists it. But the planner *does* sometimes
     # include `00_probe` in the published plan, and a deterministic probe

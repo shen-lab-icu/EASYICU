@@ -21,8 +21,7 @@ from .literature_contract import (
     REVIEW_ROLES, ReviewRole, RecordReview, ReviewCoverage, ReviewPolicy, ReviewShortfall,
 )
 from ..bibliographic_metadata import CitationRecord, LiteratureScreeningDecision
-from .literature_contract import analysis_terms
-from .official_database_resources import match_official_source_identity
+from .literature_contract import analysis_terms, match_official_source_identity
 
 
 LiteratureDesignDimension = Literal[

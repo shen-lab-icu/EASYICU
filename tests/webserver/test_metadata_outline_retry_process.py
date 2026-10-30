@@ -82,7 +82,8 @@ def checkpoint_callback(checkpoint):
 ProgressivePlannerAgent(llm).run(context, **options,
     checkpoint_callback=checkpoint_callback if stage == "foundation" else None,
     resume_dependency_context={"cohort_file_sha256": "b" * 64, "llm_signature": "synthetic", "prompt_version": "v1"},
-    outline_retry_journal={"task": task, "run_dir": run_dir, "literature_sha256": "e" * 64})
+    outline_retry_journal={"task": task, "run_dir": run_dir, "literature_sha256": "e" * 64,
+                           "guard_verifier": supervised.verify_outline_retry_guard})
 '''
 
 _FOUNDATION_CONTINUE = r'''
@@ -137,6 +138,7 @@ try:
         resume_outline_validated_callback=recorder.persist_validated_outline,
         resume_dependency_context={"cohort_file_sha256": "b" * 64, "llm_signature": "synthetic", "prompt_version": "v1"},
         outline_retry_journal={"task": task, "run_dir": target, "literature_sha256": "e" * 64,
+                               "guard_verifier": guarded.verify_outline_retry_guard,
                                "accepted_checkpoint_path": checkpoint_path})
 except FoundationAccepted:
     (root / "foundation_accepted").write_text("accepted")
@@ -244,7 +246,8 @@ def test_production_factory_creates_own_guarded_metadata_request(tmp_path, monke
             try:
                 self.send_response(200); self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError): pass
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         def log_message(self, *_args): pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
@@ -300,7 +303,8 @@ def test_production_factory_creates_own_guarded_metadata_request(tmp_path, monke
     finally:
         release.set(); release_again.set()
         for child in children:
-            if child.poll() is None: child.kill(); child.wait(timeout=5)
+            if child.poll() is None:
+                child.kill(); child.wait(timeout=5)
         server.shutdown(); thread.join(timeout=5); server.server_close()
 
 
@@ -380,7 +384,8 @@ def test_foundation_survives_two_host_sigkills_without_resetting_budget(tmp_path
     finally:
         release.set()
         for child in children:
-            if child.poll() is None: child.kill(); child.wait(timeout=5)
+            if child.poll() is None:
+                child.kill(); child.wait(timeout=5)
         server.shutdown(); thread.join(timeout=5); server.server_close()
 
 
@@ -485,7 +490,7 @@ def test_outline_retry_survives_real_host_sigkill_with_original_budget(tmp_path,
                     context, **options,
                     resume_dependency_context={"cohort_file_sha256": "b" * 64, "llm_signature": "synthetic", "prompt_version": "v1"},
                     outline_retry_journal={"task": original_task, "run_dir": root / "continued", "source_path": source,
-                        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "literature_sha256": "e" * 64})
+                        "guard_verifier": guarded.verify_outline_retry_guard, "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "literature_sha256": "e" * 64})
             return run
         monkeypatch.setattr(agent_pipeline_runs, "make_research_pipeline_run_runner", make_runner)
         descriptor = research_auto_resume.prepare_descriptor(study=study, project_root=root, credential_source="pi_verified",

@@ -167,10 +167,12 @@ def run_pipeline_progressive_planner(
     know_how_binding: PlannerKnowHowBinding,
     planning_contract_context: str,
     finding_sink: Callable[[ValidationFinding], None],
-    metadata_outline_journal_task: Any = None,
+    metadata_outline_journal_services: Any = None,
 ) -> ProgressivePlannerRunResult | ProgressiveDesignCanaryDraft:
     """Bind pipeline-owned inputs to the narrow Progressive Planner contract."""
 
+    metadata_outline_journal_task = getattr(metadata_outline_journal_services, "metadata_outline_journal_task", None)
+    metadata_outline_guard_verifier = getattr(metadata_outline_journal_services, "metadata_outline_guard_verifier", None)
     kwargs = dict(planner_kwargs)
     kwargs |= _literature_design.progressive_literature_design_kwargs(
         preplan_literature
@@ -194,6 +196,7 @@ def run_pipeline_progressive_planner(
         finding_sink=finding_sink,
         stop_after_outline=stop_after_outline,
         metadata_outline_journal_task=metadata_outline_journal_task,
+        metadata_outline_guard_verifier=metadata_outline_guard_verifier,
         metadata_outline_literature_sha256=(
             canonical_sha256(preplan_literature.model_dump(mode="json") if preplan_literature is not None else None)
             if metadata_outline_journal_task is not None else None
@@ -550,6 +553,7 @@ def run_progressive_planner(
     finding_sink: Callable[[ValidationFinding], None],
     stop_after_outline: bool = False,
     metadata_outline_journal_task: Any = None,
+    metadata_outline_guard_verifier: Any = None,
     metadata_outline_literature_sha256: str | None = None,
 ) -> ProgressivePlannerRunResult | ProgressiveDesignCanaryDraft:
     """Run Progressive v2 while importing only a host-validated Dev chain."""
@@ -610,6 +614,7 @@ def run_progressive_planner(
             },
             outline_retry_journal=(
                 {"task": metadata_outline_journal_task, "run_dir": run_dir,
+                 "guard_verifier": metadata_outline_guard_verifier,
                  "literature_sha256": metadata_outline_literature_sha256,
                  "source_path": retry_source, "source_sha256": resume_checkpoint_sha256,
                  "accepted_checkpoint_path": (

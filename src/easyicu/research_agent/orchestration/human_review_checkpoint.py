@@ -21,7 +21,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_sha256
-from .workflow import HumanReviewRequest
+from ..authority.plan_review import HumanReviewRequest
 
 
 CHECKPOINT_FILENAME = "human_review_checkpoint.json"

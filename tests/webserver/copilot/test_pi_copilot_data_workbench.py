@@ -120,13 +120,11 @@ def test_copilot_schema_and_prompt_forbid_implicit_source_fallback() -> None:
         tool = main.split(f'name: "{tool_name}"', 1)[1].split("hostTool", 1)[0]
         assert "source_id: Type.String" in tool
         assert "source_id: Type.Optional" not in tool
-    assert (
-        "the first reply must say it is ambiguous between MIMIC-III v1.4 "
-        "and MIMIC-IV v3.1" in main
-    )
-    assert "ask one direct choice before any cohort" in main
-    assert "call easyicu_list_data_sources directly with that database key" in main
-    assert "Never treat a bound, active, demo, or sample source as implicit consent" in main
+    assert "If a requested data operation names only ambiguous MIMIC" in main
+    assert "explain MIMIC-III v1.4 versus MIMIC-IV v3.1" in main
+    assert "ask the exact database before any cohort" in main
+    assert "call easyicu_list_data_sources with that database key only when data selection is the current next step" in main
+    assert "An active, demo or sample source is not consent for a newly named database" in main
     assert "ask one direct Extraction authorization question and stop without calling" in main
 
 
@@ -422,12 +420,12 @@ def test_selected_hospital_death_distribution_matches_cohort_owner_semantics() -
         ["stay-a", "stay-b", "stay-c", "stay-d"], [profile]
     )
 
-    assert distribution["observed"] == 4
-    assert distribution["observed_pct"] == 100.0
+    assert distribution["observed"] == 2
+    assert distribution["observed_pct"] == 50.0
     assert distribution["categories"] == [
         {"label": "Positive", "count": 1},
-        {"label": "Negative", "count": 3},
-        {"label": "Unknown", "count": 0},
+        {"label": "Negative", "count": 1},
+        {"label": "Unknown", "count": 2},
     ]
 
 

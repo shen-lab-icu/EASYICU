@@ -106,7 +106,7 @@ def test_workflow_progress_orders_plan_before_extraction():
 
 
 def test_opening_update_preserves_question_without_silently_confirming_design(monkeypatch):
-    question = "我想研究 ICU 患者乳酸与院内死亡的关系。"
+    question = "我想研究 ICU 患者乳酸与院内死亡的关系。主要结局为院内死亡。"
     current = {
         "id": "entry-owner-test", "revision": 1, "question": "",
         "data_source": {"database": "miiv", "path": "/test/miiv"},
@@ -157,12 +157,40 @@ def test_opening_update_preserves_question_without_silently_confirming_design(mo
     assert _finalize(workflow, args) is not None
 
 
+def test_outcome_change_clears_stale_binding_without_opening_source(monkeypatch):
+    current = {
+        "id": "entry-outcome-change", "revision": 1,
+        "question": "研究 ICU 住院时长", "outcome": "ICU 住院时长",
+        "data_source": {"database": "miiv", "path": "/test/miiv"},
+        "execution_concepts": {"outcome": "los_icu"},
+    }
+    writes = []
+    monkeypatch.setattr(study_tools, "_bound_context", lambda _binding: dict(current))
+    monkeypatch.setattr(
+        study_tools.study_contexts, "upsert_context",
+        lambda row, **_kw: writes.append(dict(row)) or {**current, **row, "revision": 2},
+    )
+    result = study_tools.execute_tool(
+        "easyicu_update_study_context", {"outcome": "院内死亡"},
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-outcome-change",
+                binding=AuthorityBinding(study_context_id=current["id"], study_revision=1),
+            ),
+            user_message="主要结局为院内死亡。", allowed_actions={"configure"},
+        ),
+    )
+    assert result["code"] == "study_context_updated"
+    assert writes[-1]["outcome"] == "院内死亡"
+    assert not writes[-1]["execution_concepts"].get("outcome")
+
+
 def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
     monkeypatch,
 ):
     question = (
         "在 MIMIC-IV ICU 患者中估计 Sepsis-3 的患病率，"
-        "并描述 Sepsis-3 状态与院内死亡的关系。"
+        "并描述 Sepsis-3 状态与院内死亡的关系。主要结局为院内死亡。"
     )
     current = {
         "id": "entry-descriptive-owner-test", "revision": 1, "question": "",

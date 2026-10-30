@@ -43,6 +43,24 @@ PLANNING_RECOVERY_TIMEOUT_SECONDS = 120.0
 _PLANNING_CALL: ContextVar[bool] = ContextVar("structured_planning_transport", default=False)
 
 
+_REQUEST_SHA256: ContextVar[str | None] = ContextVar("metadata_request_sha256", default=None)
+
+
+def current_metadata_request_sha256() -> str | None:
+    """Return the request digest bound to the current metadata retry."""
+    return _REQUEST_SHA256.get()
+
+
+@contextmanager
+def metadata_request_binding(value: str) -> Iterator[None]:
+    """Bind the retry journal request to its matching Provider slot."""
+    token = _REQUEST_SHA256.set(value)
+    try:
+        yield
+    finally:
+        _REQUEST_SHA256.reset(token)
+
+
 @contextmanager
 def planning_transport_scope(role: str) -> Iterator[None]:
     """Only idempotent structured planning may recover an unanswered request."""

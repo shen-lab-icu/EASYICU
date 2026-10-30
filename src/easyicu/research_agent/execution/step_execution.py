@@ -9,13 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import json
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..contracts.runtime import RunResult
+from .runtime_diagnostics import host_runtime_available as host_runtime_available
 
 
 class CodeOrigin(str, Enum):
@@ -49,31 +47,6 @@ def initial_code_origin(runner_kind: str, step_id: str, host_code: Optional[str]
     return CodeOrigin.MODEL_GENERATED
 
 
-def host_runtime_available(probe_timeout_seconds: float) -> bool:
-    """Probe the app interpreter's typed-executor imports without a cohort."""
-    from ..contracts.method_packages import BASELINE_PACKAGES
-
-    names = [*BASELINE_PACKAGES, "psutil"]
-    source = (
-        "import importlib.util, sys; "
-        f"sys.exit(0 if all(importlib.util.find_spec(n) for n in {names!r}) else 1)"
-    )
-    try:
-        command = [sys.executable, "-c", source]
-        frozen = bool(getattr(sys, "frozen", False))
-        if frozen:
-            from easyicu.runtime.host_worker import frozen_worker_command
-
-            command = frozen_worker_command(
-                sys.executable, "capabilities", "--names", json.dumps(names),
-            )
-        result = subprocess.run(
-            command, capture_output=True,
-            timeout=max(0.1, probe_timeout_seconds), check=False,
-        )
-        return result.returncode == 0 and (not frozen or set(names).issubset(json.loads(result.stdout)))
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
-        return False
 
 
 @dataclass(frozen=True)

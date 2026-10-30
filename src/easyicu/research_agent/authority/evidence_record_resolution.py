@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional
 
 from .step_runtime import (
     StepAuthorityRuntimeError,
@@ -21,102 +21,11 @@ def _evidence_record_field(record: Any, name: str) -> Any:
     return getattr(record, name, None)
 
 
-def current_conflicted_evidence_aliases(
-    per_step_records: Sequence[Mapping[str, Any]],
-    *,
-    current_evidence_ids: set[str],
-    aliases: Mapping[str, str],
-) -> set[str]:
-    """Names claimed by another currently successful, evidenced step.
-
-    Retained aliases keep historical citations stable but do not identify which
-    of two concurrent results the author intended. Ignore superseded/failed
-    attempts and names whose current binding no longer has another owner.
-    """
-    from .runtime_artifacts import current_successful_step_records
-
-    current_steps = current_successful_step_records(per_step_records)
-    owners_by_id: dict[str, set[str]] = {}
-    for step in current_steps:
-        step_id = str(step.get("step_id") or "").strip()
-        for evidence_id in step.get("evidence_ids") or ():
-            if str(evidence_id) in current_evidence_ids:
-                owners_by_id.setdefault(str(evidence_id), set()).add(step_id)
-    conflicts: set[str] = set()
-    for step in current_steps:
-        active_ids = {
-            str(item) for item in (step.get("evidence_ids") or ())
-            if str(item) in current_evidence_ids
-        }
-        if not active_ids:
-            continue
-        retained = step.get("retained_cross_step_aliases")
-        if not isinstance(retained, Mapping):
-            continue
-        step_id = str(step.get("step_id") or "").strip()
-        for raw_alias in retained:
-            alias = str(raw_alias)
-            owner_id = aliases.get(alias)
-            # The original winner may have retried and replaced its evidence
-            # id; the claimant's current step still competes for this alias.
-            if (
-                owner_id in current_evidence_ids
-                and owners_by_id.get(owner_id) != {step_id}
-            ):
-                conflicts.add(alias)
-    return conflicts
-
-
-def is_conflicted_evidence_reference(
-    name: str, evidence_id: str, *, aliases: Mapping[str, str], conflicts: set[str],
-) -> bool:
-    """Cover exact aliases and the store's unique-prefix alias fallback."""
-    if name == evidence_id:
-        return False
-    if name in aliases:
-        return name in conflicts
-    prefix = f"{name}_"
-    return any(
-        alias.startswith(prefix) and aliases.get(alias) == evidence_id
-        for alias in conflicts
-    )
-
-
-def _current_verified_evidence_record(
-    evidence_store: Any,
-    name: str,
-    per_step_records: Sequence[Mapping[str, Any]],
-) -> Any:
-    """Resolve an alias only when its producer is current and successful."""
-
-    record = evidence_store.get(name)
-    if record is None:
-        return None
-    current_ids = {
-        item.evidence_id
-        for item in evidence_store.current_verified_records(per_step_records)
-    }
-    if record.evidence_id not in current_ids:
-        return None
-    if name == record.evidence_id:
-        return record
-    if not any(
-        isinstance(row, Mapping) and row.get("retained_cross_step_aliases")
-        for row in per_step_records
-    ):
-        return record
-    aliases_fn = getattr(evidence_store, "aliases", None)
-    if not callable(aliases_fn):
-        return None
-    aliases = aliases_fn()
-    conflicts = current_conflicted_evidence_aliases(
-        per_step_records, current_evidence_ids=current_ids, aliases=aliases,
-    )
-    if is_conflicted_evidence_reference(
-        name, record.evidence_id, aliases=aliases, conflicts=conflicts,
-    ):
-        return None
-    return record
+from .runtime_artifacts import (
+    _current_verified_evidence_record as _current_verified_evidence_record,
+    current_conflicted_evidence_aliases as current_conflicted_evidence_aliases,
+    is_conflicted_evidence_reference as is_conflicted_evidence_reference,
+)
 
 
 @dataclass(frozen=True)

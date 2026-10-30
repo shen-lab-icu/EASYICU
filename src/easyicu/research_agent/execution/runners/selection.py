@@ -20,7 +20,7 @@ from ...authority.target_trial_runtime import TargetTrialRuntimeAuthority
 from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND, G_METHOD_ACTION
-from ...planning.target_trial_spec import require_g_method_step
+from ...contracts.time_varying_exposure import require_g_method_step
 from ...schema import AnalysisPlan, AnalysisStep
 from ..step_executor_registry import (
     AmbiguousExecutorOwnership,

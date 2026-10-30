@@ -8,12 +8,14 @@ returned by that caller.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from dataclasses import dataclass, field
 from threading import Event
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
-from ..schema import AgentRuntimeState, AnalysisStep
+from ..schema import AnalysisStep
 from ..authority.provider_hard_stop import ProviderHardStopError
+from .step_worker_state import guarded_parallel_execute, merge_parallel_runtime_states
 
 _SUCCESS_REPLAN_REQUEST_FIELDS = (
     "replan_requested",
@@ -256,17 +258,9 @@ class RunCoordinator:
         step_list = list(steps)
         stopped = Event()
 
-        def guarded_execute(step: AnalysisStep) -> Any:
-            if stopped.is_set():
-                return None
-            try:
-                return execute_step(step)
-            except BaseException:
-                # A raised step has violated the execution contract.  Match
-                # the sequential fail-closed boundary: do not start queued
-                # work after it, while allowing in-flight workers to settle.
-                stopped.set()
-                raise
+        guarded_execute = partial(
+            guarded_parallel_execute, stopped=stopped, execute_step=execute_step
+        )
 
         stop_error: Optional[BaseException] = None
         with ThreadPoolExecutor(
@@ -286,35 +280,6 @@ class RunCoordinator:
                         pending.cancel()
         if stop_error is not None:
             raise stop_error
-
-
-def merge_parallel_runtime_states(
-    base: AgentRuntimeState,
-    states: Sequence[tuple[str, AgentRuntimeState]],
-) -> AgentRuntimeState:
-    """Merge independent supervisor reflections in the declared plan order.
-
-    Each worker must descend from the same frozen batch state and may append
-    reflections, but may not replace prior memory or the scientific scope.
-    Step-local request, critique and result fields come from the last step
-    that actually advanced its supervisor state in plan order.
-    """
-    reflections = list(base.reflection_memory)
-    selected = base
-    fixed_fields = (
-        "run_id", "analysis_family", "semantics", "extraction_request",
-        "extraction_result", "manuscript_packet",
-    )
-    for step_id, state in states:
-        if any(getattr(base, name) != getattr(state, name) for name in fixed_fields):
-            raise ValueError("parallel supervisor state changed scientific scope")
-        count = len(base.reflection_memory)
-        if state.reflection_memory[:count] != base.reflection_memory:
-            raise ValueError("parallel supervisor state replaced prior reflections")
-        reflections.extend(state.reflection_memory[count:])
-        if state.current_step is not None and state.current_step.step_id == step_id:
-            selected = state
-    return selected.model_copy(update={"reflection_memory": reflections})
 
 
 __all__ = [

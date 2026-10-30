@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_serializer, model_validator
 
 from ..canonical_json import canonical_sha256
 from ..contracts.frozen_payload import freeze_payload, thaw_payload
@@ -115,7 +115,70 @@ class PlanReviewAuthority(BaseModel):
         )
 
 
+class HumanReviewRequest(BaseModel):
+    """Digest-bound pause request; it carries no authority by itself."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: str = Field(pattern=r"^review-[0-9a-f]{16}$")
+    kind: Literal["protocol_claim", "capability_request", "scientific_stop"]
+    summary: str = Field(min_length=1, max_length=1_000)
+    authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    payload: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _id_binds_payload(self) -> "HumanReviewRequest":
+        expected = (
+            "review-" + canonical_sha256(self.model_dump(exclude={"review_id"}))[:16]
+        )
+        if self.review_id != expected:
+            raise ValueError("human-review id does not bind request contents")
+        return self
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        kind: Literal["protocol_claim", "capability_request", "scientific_stop"],
+        summary: str,
+        authority_sha256: str,
+        payload: Mapping[str, Any],
+    ) -> "HumanReviewRequest":
+        body = {
+            "kind": kind,
+            "summary": summary,
+            "authority_sha256": authority_sha256,
+            "payload": dict(payload),
+        }
+        return cls(review_id="review-" + canonical_sha256(body)[:16], **body)
+
+
+class HumanReviewDecision(BaseModel):
+    """Explicit operator decision bound to the paused request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: str
+    authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decision: Literal["approved", "rejected"]
+    reviewer: str = Field(min_length=1, max_length=200)
+    decided_at: str = Field(min_length=1, max_length=80)
+    note: str = Field(default="", max_length=1_000)
+    population_criterion_acceptances: tuple[str, ...] = Field(
+        default=(), max_length=100,
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize_decision(self, handler):
+        result = handler(self)
+        if not self.population_criterion_acceptances:
+            result.pop("population_criterion_acceptances", None)
+        return result
+
+
 __all__ = [
+    "HumanReviewDecision",
+    "HumanReviewRequest",
     "PlanReviewAuthority",
     "ReviewExecutionAuthority",
 ]

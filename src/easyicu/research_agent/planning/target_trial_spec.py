@@ -26,15 +26,18 @@ rule that follows the patient's course) stops the trial when it is compiled.
 
 from __future__ import annotations
 
-import re
-from typing import Any, Literal, Mapping, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..contracts.time_varying_exposure import (
-    G_METHOD_OUTPUTS, G_METHOD_SOURCE_KEY, GMethodError, GMethodSpec, g_method_for_step,
+    G_METHOD_OUTPUTS as G_METHOD_OUTPUTS, G_METHOD_SOURCE_KEY as G_METHOD_SOURCE_KEY,
+    GMethodError as GMethodError, GMethodSpec as GMethodSpec, g_method_for_step as g_method_for_step,
+    require_g_method_source as require_g_method_source,
+    require_g_method_step as require_g_method_step,
+    require_g_method_plan as require_g_method_plan,
 )
-from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.cohort_product_keys import sole_typed_cohort_input as sole_typed_cohort_input
 
 TARGET_TRIAL_SPEC_SCHEMA_VERSION = "easyicu.target_trial_spec/1"
 MAX_TREATMENT_CONCEPTS = 4
@@ -215,75 +218,3 @@ __all__ = [
     "TrialTimeZero",
     "TrialTreatment",
 ]
-
-
-def require_g_method_source(spec: GMethodSpec, source: Mapping[str, Any] | None, *, database: str) -> None:
-    from easyicu.databases.profiles import get_database_profile
-
-    if not isinstance(source, Mapping):
-        raise GMethodError("g_methods_person_period_unavailable", "The selected source has no owner-verified person-period structure.")
-    allowed = {"schema_version", "producer", "database", "structure", "identity_unit", "identity_column",
-               "columns", "pre_treatment_columns", "history_columns", "interval_hours", "time_zero",
-               "source_sha256", "specification_sha256"}
-    if set(source) - allowed:
-        raise GMethodError("g_methods_source_receipt_mismatch", "Source receipts contain only aggregate construction coordinates, never rows or source paths.")
-    try:
-        declared = get_database_profile(spec.database).key
-        selected = get_database_profile(database).key
-        actual = get_database_profile((source or {}).get("database", "")).key
-    except (ValueError, KeyError) as exc:
-        raise GMethodError("g_methods_source_database_mismatch", "A registered selected database and matching source receipt are required.") from exc
-    if declared != selected or actual != selected:
-        raise GMethodError("g_methods_source_database_mismatch", "G-method source and selected database differ.")
-    source = source or {}
-    rosters = ("columns", "history_columns", "pre_treatment_columns")
-    if any(not isinstance(source.get(key), (list, tuple))
-           or len(source[key]) > 128
-           or not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
-                      for name in source[key]) for key in rosters):
-        raise GMethodError("g_methods_source_receipt_mismatch", "Source column rosters must be explicit lists of names.")
-    if (source.get("schema_version") != "easyicu.g_methods_source/1"
-            or source.get("producer") not in {"target_trial", "time_varying"}
-            or source.get("structure") != "person_period"):
-        raise GMethodError("g_methods_person_period_unavailable", "The selected source has no owner-verified person-period structure.")
-    if source.get("identity_unit") != "person" or source.get("identity_column") != spec.identity_column:
-        raise GMethodError("g_methods_person_identity_unavailable", "The history must identify one contiguous treatment stream per person; stay keys alone cannot authorize person-cluster inference.")
-    if not set(spec.confounder_history) <= set(source.get("history_columns", ())):
-        raise GMethodError("g_methods_confounder_history_unavailable", "The selected source does not provide the declared confounder history.")
-    if not {*spec.confounder_history, *spec.baseline_columns} <= set(source.get("pre_treatment_columns", ())):
-        raise GMethodError("g_methods_history_timing_unavailable", "Confounder measurements must precede each treatment assignment.")
-    if source.get("interval_hours") != spec.interval_hours or source.get("time_zero") != spec.time_zero:
-        raise GMethodError("g_methods_history_timing_unavailable", "The source interval grid and time zero differ from the reviewed plan.")
-    if not set(spec.required_columns) <= set(source.get("columns", ())):
-        raise GMethodError("g_methods_source_columns_unavailable", "The selected source lacks declared g-method columns.")
-    if (source.get("specification_sha256") != spec.sha256
-            or re.fullmatch(r"[0-9a-f]{64}", str(source.get("source_sha256", ""))) is None):
-        raise GMethodError("g_methods_source_receipt_mismatch", "Source construction must bind the exact reviewed specification and upstream input digest.")
-
-
-def require_g_method_step(step: Any) -> GMethodSpec | None:
-    spec = g_method_for_step(step)
-    if spec is None:
-        return None
-    if (tuple(step.expected_outputs) != G_METHOD_OUTPUTS
-            or not sole_typed_cohort_input(step)
-            or not set(spec.required_columns) <= set(step.inputs)
-            or step.planned_analysis_role not in {"primary", "secondary", "sensitivity"}
-            or step.scientific_capability not in {None, "causal_g_methods_v1"}
-            or any(getattr(step, key, None) for key in (
-                "model_requirements", "family_primary_result_requirement", "table_one_spec",
-                "cohort_definition_spec", "measurement_audit_spec", "robustness_replay_spec",
-            ))):
-        raise GMethodError("g_methods_step_contract_invalid", "Bind one typed person-period input, the exact columns, estimates, diagnostics, receipt and checklist.")
-    return spec
-
-
-def require_g_method_plan(context: Any, plan: Any) -> None:
-    for step in plan.steps:
-        spec = require_g_method_step(step)
-        if spec is not None:
-            if ((context.primary_exposure and context.primary_exposure != spec.treatment_column)
-                    or (context.target_outcome and context.target_outcome != spec.outcome_column)):
-                raise GMethodError("g_methods_question_mismatch", "The g-method treatment/outcome differs from the research question.")
-            source = context.cohort.provenance.get(G_METHOD_SOURCE_KEY)
-            require_g_method_source(spec, source, database=context.cohort.database)

@@ -12,8 +12,9 @@ from typing import ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.research_agent.canonical_json import canonical_sha256
-from easyicu.research_agent.orchestration.workflow import HumanReviewDecision, HumanReviewRequest
-from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.authority.plan_review import (
+    HumanReviewDecision, HumanReviewRequest, PlanReviewAuthority,
+)
 
 
 class RawPreparationCheckpoint(BaseModel):

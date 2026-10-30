@@ -32,6 +32,8 @@ class PipelineServices:
     provider_hard_stop: Optional[Any] = None
     # A host may enable private outline recovery only for a metadata canary.
     metadata_outline_journal_task: Optional[Any] = None
+    # Only the trusted host can attest interrupted guarded Provider calls.
+    metadata_outline_guard_verifier: Optional[Any] = None
     time_origin_attestor: Optional[Any] = None
     case_duration_attestor: Optional[Any] = None
     case_duration_metadata_attestor: Optional[Any] = None

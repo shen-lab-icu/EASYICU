@@ -19,6 +19,26 @@ from easyicu.webserver import metadata_provider_concurrency as slots
 from easyicu.webserver.metadata_provider_worker import encode_guarded_request, guarded_call, identity
 
 
+def verify_outline_retry_guard(task: Any, call: Mapping[str, Any], request_sha: str) -> None:
+    """The unknown reservation must be the journal's exact guarded request."""
+    from easyicu.runtime.host_execution_lease import assert_host_execution_quiescent, read_host_execution_receipt
+
+    attempt_id = str(call.get("attempt_id") or "")
+    held = slots.get(attempt_id)
+    expected = Path(task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
+    if (not isinstance(held, dict) or call.get("state") != "in_progress"
+            or held.get("task_id") != task.task_id or held.get("ledger_path") != str(task.ledger.path)
+            or held.get("guard_path") != str(expected) or held.get("request_sha256") != request_sha
+            or held.get("worker_sha256") != identity() or not held.get("guard_nonce")):
+        raise ValueError("retry_journal_guard_unverified")
+    assert_host_execution_quiescent(expected, allow_missing=False, wait_timeout=15.0)
+    receipt = read_host_execution_receipt(expected)
+    if (receipt is None or receipt.get("nonce") != held["guard_nonce"]
+            or receipt.get("script_sha256") != held["worker_sha256"]
+            or not slots.has_capacity(held["account"])):
+        raise ValueError("retry_journal_guard_unverified")
+
+
 class MetadataProviderError(RuntimeError):
     def __init__(self, reason: str, *, status_code: int | None = None) -> None:
         super().__init__(reason)
@@ -50,6 +70,7 @@ def guarded_metadata_resume_scope(*, has_checkpoint: bool, scope: Any, acquisiti
 
 class MetadataProviderClient:
     provider_attempt_budget_aware = True
+    verify_outline_retry_guard = staticmethod(verify_outline_retry_guard)
 
     def __init__(self, *, inner: Any, task: Any, provider: Mapping[str, Any],
                  environment: Mapping[str, str], public: Mapping[str, Any], timeout: float) -> None:
@@ -123,7 +144,7 @@ class MetadataProviderClient:
             # hide additional transport retries inside a single health probe.
             is_probe = calls[-1].get("role") == "provider_recovery_probe"
             attempt_id = calls[-1]["attempt_id"]
-            from easyicu.research_agent.providers.metadata_request_binding import current_metadata_request_sha256
+            from easyicu.research_agent.providers.transport_retry import current_metadata_request_sha256
 
             guard = Path(self._task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
             from easyicu.webserver.metadata_provider_shared_scope import SharedScopeError

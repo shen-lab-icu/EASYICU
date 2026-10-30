@@ -208,6 +208,7 @@ from ..authority.provider_budget import (
 )
 from .step_attempt_bootstrap import (
     RAW_UNIVERSE_EXECUTION_ROLE,
+    _step_register_current_step_numeric_claims as _step_register_current_step_numeric_claims,
 )
 from ..authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
@@ -801,56 +802,6 @@ def _step_authorized_deterministic_concept_repair(
         context=context,
         on_semantic_escalation=step_repair_budget.record_semantic_escalation,
     )
-
-
-def _step_register_current_step_numeric_claims(
-    *,
-    step: AnalysisStep,
-    step_summary: Dict[str, Any],
-    step_summary_record_id: Optional[str],
-    standard_executor_terminal_block: bool,
-    evidence: Any,
-    findings: List[ValidationFinding],
-    pipeline: Any,
-    prior_numeric_claims: Any,
-) -> None:
-    """Stage numeric authority before exposing current result aliases."""
-
-    if (
-        not step_summary
-        or step_summary_record_id is None
-        or standard_executor_terminal_block
-    ):
-        return
-    cap = pipeline._max_numeric_claims_per_step
-    evidence.register_step_summary_numerics(
-        step_id=step.step_id,
-        evidence_id=step_summary_record_id,
-        summary=step_summary,
-        max_leaves=cap if cap > 0 else None,
-    )
-    _, derived_errors = evidence.register_step_derived_claims(
-        step_id=step.step_id,
-        evidence_id=step_summary_record_id,
-        summary=step_summary,
-        source_claims=prior_numeric_claims,
-    )
-    for err in derived_errors:
-        findings.append(
-            ValidationFinding(
-                validator="derived_claim",
-                severity="warning",
-                message=(
-                    f"derived_claims entry {err['name']!r} for step "
-                    f"{step.step_id} was rejected: {err['message']}"
-                ),
-                detail={
-                    "step_id": step.step_id,
-                    "claim_name": err["name"],
-                    "reason": err["message"],
-                },
-            )
-        )
 
 
 def _step_publication_figure_preflight_supported(

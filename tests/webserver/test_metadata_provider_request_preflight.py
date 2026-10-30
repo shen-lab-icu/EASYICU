@@ -45,3 +45,38 @@ def test_preflight_never_reserves_capacity_or_budget(tmp_path, monkeypatch, fail
     with slots._open() as db:
         assert db.execute("SELECT attempt_id FROM slots").fetchall()[0][0] == "old"
         assert db.execute("SELECT COUNT(*) FROM slots").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("broken", [None, "task", "ledger", "path", "request", "worker", "nonce", "receipt_nonce", "receipt_worker", "capacity"])
+def test_retry_guard_requires_matching_host_receipt_and_capacity(tmp_path, monkeypatch, broken):
+    from types import SimpleNamespace
+
+    from easyicu.runtime import host_execution_lease
+    from easyicu.webserver import metadata_provider_client as client, metadata_provider_concurrency as slots
+
+    ledger_path = tmp_path / "budget.json"
+    task = SimpleNamespace(task_id="task", ledger=SimpleNamespace(path=ledger_path))
+    attempt = "attempt"
+    path = ledger_path.parent / ".metadata-provider-execution" / attempt
+    call = {"attempt_id": attempt, "state": "in_progress"}
+    held = {"task_id": "task", "ledger_path": str(ledger_path), "guard_path": str(path),
+            "request_sha256": "request", "worker_sha256": "worker", "guard_nonce": "nonce", "account": "account"}
+    receipt = {"nonce": "nonce", "script_sha256": "worker"}
+    fields = {"task": "task_id", "ledger": "ledger_path", "path": "guard_path",
+              "request": "request_sha256", "worker": "worker_sha256", "nonce": "guard_nonce"}
+    if broken in fields:
+        held[fields[broken]] = "" if broken == "nonce" else "different"
+    if broken == "receipt_nonce":
+        receipt["nonce"] = "different"
+    if broken == "receipt_worker":
+        receipt["script_sha256"] = "different"
+    monkeypatch.setattr(slots, "get", lambda value: held if value == attempt else None)
+    monkeypatch.setattr(slots, "has_capacity", lambda account: account == "account" and broken != "capacity")
+    monkeypatch.setattr(client, "identity", lambda: "worker")
+    monkeypatch.setattr(host_execution_lease, "assert_host_execution_quiescent", lambda *a, **k: None)
+    monkeypatch.setattr(host_execution_lease, "read_host_execution_receipt", lambda _path: receipt)
+    if broken is None:
+        assert client.verify_outline_retry_guard(task, call, "request") is None
+    else:
+        with pytest.raises(ValueError, match="retry_journal_guard_unverified"):
+            client.verify_outline_retry_guard(task, call, "request")

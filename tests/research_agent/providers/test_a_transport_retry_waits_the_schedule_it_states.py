@@ -371,3 +371,19 @@ def test_a_drawn_wait_is_cut_to_end_at_the_window():
 
     assert reason == ""
     assert wait == pytest.approx(180.0)
+
+
+def test_metadata_request_binding_restores_nested_digest_after_failure():
+    from easyicu.research_agent.providers.transport_retry import (
+        current_metadata_request_sha256,
+        metadata_request_binding,
+    )
+
+    assert current_metadata_request_sha256() is None
+    with metadata_request_binding("outer"):
+        with pytest.raises(RuntimeError):
+            with metadata_request_binding("inner"):
+                assert current_metadata_request_sha256() == "inner"
+                raise RuntimeError("retry interrupted")
+        assert current_metadata_request_sha256() == "outer"
+    assert current_metadata_request_sha256() is None

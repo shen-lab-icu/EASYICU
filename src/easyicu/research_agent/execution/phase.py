@@ -44,7 +44,7 @@ import tempfile
 import threading
 import traceback
 from contextvars import copy_context
-from dataclasses import dataclass, field as dataclass_field, replace
+from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -104,6 +104,7 @@ from .concept_audit_cache import LLMConceptAuditCache
 from .development_sample import (
     materialize_development_execution_sample,
     record_development_sample_authority,
+    record_pending_development_sample,
 )
 from .envelope_sealing import (
     SealedStepResultEnvelopeSnapshot,
@@ -182,9 +183,7 @@ from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
     materialized_cohort_concept_id_scope,
-    materialize_approved_care_unit_landmark,
     materialize_locked_analysis_cohort,
-    recover_approved_source_analysis_cohort,
     write_locked_cohort_definition,
 )
 from ..authority.execution_input import ExecutionInputAuthorityState
@@ -448,6 +447,9 @@ from .step_attempt_bootstrap import (
     RAW_UNIVERSE_EXECUTION_ROLE,
     explicit_rerun_terms,
     prepare_step_attempt_bootstrap,
+    resumed_cohort_translation_budget,
+    snapshot_step_numeric_claims,
+    record_invalid_provider_receipt,
 )
 from .step_authority_resume import (
     StepAuthorityResumeRequest,
@@ -498,6 +500,9 @@ from .run_coordination import (
 )
 from .cohort_adoption import (
     adopt_existing_host_cohort_materialization,
+    _materialize_approved_case_duration_if_needed,
+    bind_approved_execution_inputs,
+    approved_database_source_time_axis,
     commit_staged_cohort_plan,
     record_planned_host_cohort_checkpoint,
     stage_candidate_cohort_plan,
@@ -551,7 +556,10 @@ from ..authority.step_attempt import (
     StepAuthorityOperations,
 )
 from .step_execution import LockedStepExecutionRequest, StepExecutor
-from .step_worker_state import StepWorkerProgress
+from .step_worker_state import (
+    StepWorkerProgress, StepExecutionState, _parallel_evidence_isolation_available,
+    parallel_isolation_blocked, prepare_parallel_wave, merge_parallel_worker_results,
+)
 from ..repairs.summary import salvage_step_summary
 from ..viability import (
     CohortViability,
@@ -1029,11 +1037,8 @@ def _prepare_execute_phase_authority(
     cohort_path: Optional[Path] = None,
 ) -> _ExecutePhasePreparation:
     """Execute probe + per-step analysis loop, with optional replanning."""
-    approved_source_time_axis = require_approved_database_capabilities(
-        plan_result, run_dir, cohort_path=cohort_path,
-        time_origin_attestor=getattr(getattr(pipeline, "_services", None), "time_origin_attestor", None),
-        case_duration_attestor=getattr(getattr(pipeline, "_services", None), "case_duration_attestor", None),
-        runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+    approved_source_time_axis = approved_database_source_time_axis(
+        pipeline, plan_result, run_dir, cohort_path, require_approved_database_capabilities
     )
     services = pipeline._execute_phase_services()
     context = plan_result.context
@@ -1083,19 +1088,7 @@ def _prepare_execute_phase_authority(
         requested_resume_from_step_id is not None
         and os.environ.get("EASYICU_RESUME_REUSE_STEP_CODE") == "1"
     )
-    resumed_cohort_translation_budget: Optional[Dict[str, Any]] = None
-    resumed_cohort_translation_budget_owner: Optional[str] = None
-    if isinstance(plan_result.resume_state, Mapping):
-        raw_cohort_translation_budget = plan_result.resume_state.get(
-            "cohort_translation_provider_budget"
-        )
-        if isinstance(raw_cohort_translation_budget, Mapping):
-            candidate_owner = str(
-                raw_cohort_translation_budget.get("budget_owner_step_id") or ""
-            ).strip()
-            if candidate_owner:
-                resumed_cohort_translation_budget = dict(raw_cohort_translation_budget)
-                resumed_cohort_translation_budget_owner = candidate_owner
+    resumed_budget = resumed_cohort_translation_budget(plan_result.resume_state)
     # Replan convergence bookkeeping (see _maybe_replan). ``noop_streak``
     # counts consecutive substantively-identical revisions; ``total`` counts
     # substantive revisions; ``disabled`` latches once a guard trips.
@@ -1112,9 +1105,9 @@ def _prepare_execute_phase_authority(
         # for the run.  Later replans cannot buy a fresh allowance by renaming
         # or reshaping the cohort-definition step.
         "cohort_translation_budget_owner_step_id": (
-            resumed_cohort_translation_budget_owner
+            resumed_budget[0]
         ),
-        "cohort_translation_provider_budget": resumed_cohort_translation_budget,
+        "cohort_translation_provider_budget": resumed_budget[1],
         "cohort_translation_provider_budget_error_emitted": False,
         # Directed replans fired when a model/estimation step self-blocks on a
         # task-viable cohort (see _maybe_directed_model_replan). Bounded so a
@@ -1171,49 +1164,6 @@ def _prepare_execute_phase_authority(
         prompt_version=prompt_version,
         prompt_files=prompt_files,
     )
-
-
-def _materialize_approved_case_duration_if_needed(pipeline, *, plan_result, cohort_path, run_dir):
-    """Transition a zero-row planning catalog only after signed host review."""
-    from easyicu.databases.research_substitutions import case_duration_selection
-    from easyicu.research_agent.intake.materialized_metadata import load_verified_materialized_cohort_authority
-
-    if (not hasattr(plan_result.context, "user_preferences")
-            or case_duration_selection(plan_result.context) is None):
-        return cohort_path
-    sealed_input = load_verified_materialized_cohort_authority(cohort_path)
-    if sealed_input is not None:
-        return cohort_path
-    import pyarrow.parquet as pq
-    if pq.ParquetFile(cohort_path).metadata.num_rows != 0:
-        raise ValueError("case_duration_planning_input_is_not_metadata_only")
-    from easyicu.databases.research_approval import require_approved_case_duration_pre_materialization
-
-    services = getattr(pipeline, "_services", None)
-    approved = require_approved_case_duration_pre_materialization(
-        plan_result, run_dir, time_origin_attestor=getattr(services, "time_origin_attestor", None),
-        case_duration_attestor=getattr(services, "case_duration_attestor", None),
-        runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
-    )
-    materializer = getattr(services, "approved_case_duration_materializer", None)
-    if materializer is None:
-        raise ValueError("case_duration_approved_materializer_unavailable")
-    return Path(materializer(plan_result=plan_result, run_dir=run_dir, approved=approved))
-
-
-def _parallel_evidence_isolation_available(*, evidence: Any, run_dir: Path) -> bool:
-    """Whether the host has a verified per-worker evidence view for this run.
-
-    The current execution owner passes a live shared EvidenceStore and the run
-    root to every worker. A later worker can therefore observe another worker's
-    result before that batch has joined. Neither disjoint plan inputs nor a
-    conflict check after the batch proves isolation. No current execution owner
-    supplies a sealed worker-local reader and write merge, so concurrent
-    execution is not admitted here. This is not a user-configurable switch.
-    """
-
-    del evidence, run_dir
-    return False
 
 
 def run_execute_phase(
@@ -1284,43 +1234,11 @@ def run_execute_phase(
     # each generated step. The full universe is injected only into runners for
     # typed steps whose cohort/robustness contract explicitly authorizes it.
     universe_path = cohort_path
-    from easyicu.databases.research_approval import ApprovedCaseDurationBinding
-
-    approved_case_duration = (
-        preparation.approved_source_time_axis
-        if isinstance(preparation.approved_source_time_axis, ApprovedCaseDurationBinding) else None
-    )
-    analysis_path = run_dir / "cohort_analysis.parquet"
-    if approved_case_duration is not None:
-        result = materialize_approved_care_unit_landmark(
-            run_dir=run_dir, universe_path=universe_path, plan_result=plan_result,
-            time_origin_attestor=getattr(getattr(pipeline, "_services", None), "time_origin_attestor", None),
-            case_duration_attestor=getattr(getattr(pipeline, "_services", None), "case_duration_attestor", None),
-            runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
-        )
-        analysis_path = Path(result["path"])
-    elif preparation.approved_source_time_axis is not None:
-        prior = recover_approved_source_analysis_cohort(
-            run_dir=run_dir, plan=plan, universe_path=universe_path,
-            cohort_concept_ids=plan_result.cohort_concept_ids,
-        )
-        if prior is None:
-            materialize_locked_analysis_cohort(
-                run_dir=run_dir, plan=plan, universe_path=universe_path, context=context,
-                cohort_concept_ids=plan_result.cohort_concept_ids,
-                approved_plan_result=plan_result,
-                time_origin_attestor=getattr(getattr(pipeline, "_services", None), "time_origin_attestor", None),
-                runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
-            )
-    run_input_authority_state = ExecutionInputAuthorityState.bind(
-        universe_path=universe_path,
-        analysis_path=analysis_path,
-        trajectory_binding=trajectory_binding,
-        run_dir=run_dir,
+    run_input_authority_state = bind_approved_execution_inputs(
+        pipeline=pipeline, preparation=preparation, plan_result=plan_result,
+        plan=plan, context=context, universe_path=universe_path, run_dir=run_dir,
+        trajectory_binding=trajectory_binding, binding_owner=ExecutionInputAuthorityState,
         legacy_trajectory_verifier=verify_legacy_trajectory_capsule_receipt,
-        plan=plan,
-        context=context,
-        approved_case_duration_binding=approved_case_duration,
     )
     if (
         pipeline._development_sample_size is not None
@@ -1349,28 +1267,7 @@ def run_execute_phase(
         run_input_authority_state.trajectory_authority_sha256 is not None
     )
 
-    if (
-        pipeline._development_sample_size is not None
-        and run_input_authority_state.development_sample is None
-    ):
-        findings.append(
-            ValidationFinding(
-                validator="development_sample_authority",
-                severity="error",
-                message=(
-                    "This run requested a non-paper post-QC development sample. "
-                    "The locked analysis cohort is not materialized yet, so "
-                    "sampling is deferred until cohort QC completes; regardless "
-                    "of whether that occurs, this run cannot become paper authority."
-                ),
-                detail={
-                    "paper_authority": False,
-                    "stage": "awaiting_locked_cohort_materialization_and_qc",
-                    "target_rows": pipeline._development_sample_size,
-                    "seed": pipeline._development_sample_seed,
-                },
-            )
-        )
+    record_pending_development_sample(pipeline, run_input_authority_state, findings)
     if run_input_authority_state.development_sample is not None:
         record_development_sample_authority(
             binding=run_input_authority_state.development_sample,
@@ -1881,17 +1778,11 @@ def run_execute_phase(
         step_outputs_supplier=_plan_step_outputs,
     )
 
-    parallel_runtime_states: Dict[str, Any] = {}
+    run_coordinator.step_execution_state = StepExecutionState(runtime_state, shared_lock)
 
-    def _execute_one_step(
-        step: AnalysisStep, *, batch_base: Any = None,
-        batch_binding_resolver: Any = None, batch_numeric_claims: Any = None,
-        batch_artifact_authority: Any = None,
-    ) -> Dict[str, Any]:
-        nonlocal runtime_state
-        step_runtime, step_record = _execute_step(
-            step,
-            runtime_state=runtime_state if batch_base is None else batch_base,
+    def _execute_one_step(step: AnalysisStep, **batch: Any) -> Dict[str, Any]:
+        return run_coordinator.step_execution_state.execute(
+            _execute_step, step, batch=batch,
             _authorize_automatic_repair=_authorize_automatic_repair,
             _automatic_repair_authorized=_automatic_repair_authorized,
             _failed_dependency_record=_failed_dependency_record,
@@ -1923,8 +1814,6 @@ def run_execute_phase(
             llm_signature=llm_signature,
             pattern_auditor=pattern_auditor,
             per_step_records=per_step_records,
-            batch_numeric_claims=batch_numeric_claims,
-            batch_artifact_authority=batch_artifact_authority,
             pipeline=pipeline,
             plan=plan,
             plan_result=plan_result,
@@ -1950,19 +1839,10 @@ def run_execute_phase(
             step_summary_integrity_validator=step_summary_integrity_validator,
             supervisor=supervisor,
             total_steps=total_steps,
-            typed_binding_resolver=(
-                typed_binding_resolver if batch_binding_resolver is None
-                else batch_binding_resolver
-            ),
+            typed_binding_resolver=typed_binding_resolver,
             universe_path=universe_path,
             usage_auditor=usage_auditor,
         )
-        if batch_base is None:
-            runtime_state = step_runtime
-        else:
-            with shared_lock:
-                parallel_runtime_states[step.step_id] = step_runtime
-        return step_record
 
     if (
         pipeline._development_sample_size is not None
@@ -2042,33 +1922,6 @@ def run_execute_phase(
         _append_terminal_step_record=_append_terminal_step_record,
     )
 
-    # No current worker owner can prove that peer evidence, numeric claims and
-    # run-root authority remain invisible until the batch is joined. Retain the
-    # user's worker limit for future runs but do not use it as permission to
-    # make a scientific result depend on completion order.
-    isolation_blocked = (
-        pipeline._max_concurrent_steps > 1
-        and len(steps_to_run) > 1
-        and not pipeline._enable_replanning
-        and not has_typed_input_dependencies
-        and not has_primary_cohort_universe_producer
-        and requested_stop_after_step_id is None
-        and pipeline._submission_profile_name is None
-        and not _parallel_evidence_isolation_available(evidence=evidence, run_dir=run_dir)
-    )
-    if isolation_blocked:
-        findings.append(
-            ValidationFinding(
-                validator="parallel_evidence_isolation",
-                severity="info",
-                message=(
-                    "Concurrent steps were run in plan order because the host "
-                    "cannot yet isolate each worker's evidence reads."
-                ),
-                detail={"reason": "parallel_evidence_isolation_unavailable"},
-            )
-        )
-
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
@@ -2077,7 +1930,12 @@ def run_execute_phase(
         or has_primary_cohort_universe_producer
         or requested_stop_after_step_id is not None
         or pipeline._submission_profile_name is not None
-        or isolation_blocked
+        or parallel_isolation_blocked(
+            pipeline=pipeline, steps=steps_to_run, typed_dependencies=has_typed_input_dependencies,
+            cohort_producer=has_primary_cohort_universe_producer,
+            stop_after=requested_stop_after_step_id, evidence=evidence, run_dir=run_dir,
+            isolation_available=_parallel_evidence_isolation_available, findings=findings,
+        )
     ):
 
         # Replanning can replace ``plan`` while the coordinator is running.
@@ -2152,53 +2010,26 @@ def run_execute_phase(
             apply_revised_plan=_apply_revised_plan,
             on_step_exception=_record_step_exception,
         )
+        runtime_state = run_coordinator.step_execution_state.current
     else:
 
-        # All independent workers receive the same frozen state. After joining,
-        # merge their append-only reflections in plan order, not completion order.
-        batch_base = runtime_state
-        # Capture once before submitting any worker. This pins the binding
-        # index, checkpoint ledger and numeric source claims to the same wave.
-        # Other evidence reads, writes and run-root files are still shared;
-        # this snapshot does not authorize the currently disabled path.
-        from .runner import capture_wave_artifact_authority
-
-        with shared_lock:
-            _flush_partial_manifest()
-            batch_step_records = copy.deepcopy(per_step_records)
-        batch_evidence = evidence.read_view()
-        batch_artifact_authority = capture_wave_artifact_authority(
-            workdir=run_dir, run_id=run_id, step_records=batch_step_records,
-            evidence_records=batch_evidence.records(),
-            resumed=plan_result.resume_state is not None,
-        )
-        batch_numeric_claims = batch_evidence.authoritative_numeric_claims(
-            batch_step_records
-        )
-        batch_binding_resolver = replace(
-            typed_binding_resolver,
-            evidence_store=batch_evidence,
-            per_step_records=batch_step_records,
-            unpublished_evidence_store=evidence,
-        )
         run_coordinator.run_parallel(
-            steps=steps_to_run,
-            max_workers=pipeline._max_concurrent_steps,
-            execute_step=functools.partial(
-                _execute_one_step, batch_base=batch_base,
-                batch_binding_resolver=batch_binding_resolver,
-                batch_numeric_claims=batch_numeric_claims,
-                batch_artifact_authority=batch_artifact_authority,
+            steps=steps_to_run, max_workers=pipeline._max_concurrent_steps,
+            execute_step=prepare_parallel_wave(
+                runtime_state=runtime_state, shared_lock=shared_lock,
+                flush_manifest=_flush_partial_manifest, per_step_records=per_step_records,
+                evidence=evidence, run_dir=run_dir, run_id=run_id, plan_result=plan_result,
+                typed_binding_resolver=typed_binding_resolver, execute_step=_execute_one_step,
             ),
             submit_step=_submit_in_current_context,
             on_worker_error=functools.partial(_record_step_exception, parallel=True),
         )
-        with shared_lock:
-            completed_states = [
-                (step.step_id, parallel_runtime_states[step.step_id])
-                for step in steps_to_run if step.step_id in parallel_runtime_states
-            ]
-        runtime_state = merge_parallel_runtime_states(batch_base, completed_states)
+        runtime_state = merge_parallel_worker_results(
+            runtime_state=runtime_state, shared_lock=shared_lock, steps=steps_to_run,
+            parallel_runtime_states=run_coordinator.step_execution_state.parallel_runtime_states,
+            merge_states=merge_parallel_runtime_states,
+        )
+
     if run_input_authority_state.corrupted:
         _flush_partial_manifest(
             {
@@ -4039,18 +3870,10 @@ def _execute_step(
     universe_path: Any,
     usage_auditor: Any,
 ) -> Tuple[Any, Dict[str, Any]]:
-    # Freeze the current successful claim view before a worker runs. This is a
-    # partial isolation boundary, not permission to run workers concurrently:
-    # a parallel scheduler must capture one view before dispatching the wave.
-    if batch_numeric_claims is None:
-        with shared_lock:
-            prior_claim_records = copy.deepcopy(per_step_records)
-        prior_claims = evidence.authoritative_numeric_claims(prior_claim_records)
-    else:
-        prior_claims = batch_numeric_claims
-    prior_numeric_claims = [
-        copy.deepcopy(claim) for claim in prior_claims if claim.step_id != step.step_id
-    ]
+    batch_numeric_claims = snapshot_step_numeric_claims(
+        batch_numeric_claims, evidence=evidence, records=per_step_records,
+        lock=shared_lock, step_id=step.step_id,
+    )
     attempt_bootstrap = prepare_step_attempt_bootstrap(
         resume_state=plan_result.resume_state,
         per_step_records=per_step_records,
@@ -4082,47 +3905,16 @@ def _execute_step(
     budget_runtime = attempt_bootstrap.budget_runtime
     provider_budget = budget_runtime.provider_budget
     step_repair_budget = budget_runtime.repair_budget
-    provider_receipt_path = budget_runtime.receipt_path
-    provider_receipt_relative_path = budget_runtime.receipt_relative_path
     reserved_final_category = budget_runtime.reserved_final_category
     provider_receipt_integrity_error = budget_runtime.integrity_error
     _sync_provider_budget = step_repair_budget.sync_provider
     if provider_receipt_integrity_error is not None:
-        step_record.update(
-            {
-                "status": "contract_failed",
-                "generation_mode": "system",
-                "provider_call_budget_receipt_invalid": True,
-                "provider_call_budget_receipt_error": (
-                    provider_receipt_integrity_error
-                ),
-            }
-        )
-        receipt_finding = ValidationFinding(
-            validator="provider_call_budget_receipt",
-            severity="error",
-            message=(
-                f"Step {step.step_id} cannot resume because its durable "
-                "provider-call receipt is missing, corrupt, or inconsistent."
-            ),
-            detail={
-                "step_id": step.step_id,
-                "receipt_path": provider_receipt_relative_path,
-                "reason": provider_receipt_integrity_error,
-            },
-        )
-        with shared_lock:
-            findings.append(receipt_finding)
-            _append_terminal_step_record(per_step_records, step_record)
-            _flush_partial_manifest()
-        emit_progress(
-            "step",
-            f"Step {step.step_id} failed closed: provider-call receipt invalid.",
-            status="failed",
-            run_id=run_id,
-            step_id=step.step_id,
-            current_step=step_order.get(step.step_id, 0) + 1,
-            total_steps=total_steps,
+        record_invalid_provider_receipt(
+            step=step, step_record=step_record, error=provider_receipt_integrity_error,
+            receipt_path=budget_runtime.receipt_relative_path, shared_lock=shared_lock,
+            findings=findings, per_step_records=per_step_records,
+            append_record=_append_terminal_step_record, flush_manifest=_flush_partial_manifest,
+            emit_progress=emit_progress, run_id=run_id, step_order=step_order, total_steps=total_steps,
         )
         return runtime_state, step_record
     terminal_step_record, preparation = _step_prepare_execution_authority(
@@ -4150,7 +3942,7 @@ def _execute_step(
         prompt_files=prompt_files,
         prompt_version=prompt_version,
         provider_budget=provider_budget,
-        provider_receipt_path=provider_receipt_path,
+        provider_receipt_path=budget_runtime.receipt_path,
         requested_resume_from_step_id=requested_resume_from_step_id,
         reserved_final_category=reserved_final_category,
         run_dir=run_dir,
@@ -4607,7 +4399,7 @@ def _execute_step(
         local_runtime_state=local_runtime_state,
         pending_success_aliases=pending_success_aliases,
         per_step_records=per_step_records,
-        prior_numeric_claims=prior_numeric_claims,
+        prior_numeric_claims=batch_numeric_claims,
         pipeline=pipeline,
         plan=plan,
         plan_result=plan_result,

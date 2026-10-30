@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..methods.descriptive_inputs import REQUESTED_CONCEPT_NO_DATA, context_columns_without_data
 from .adjustment_authority import concept_relatives
+from ..contracts.analysis_design import PlanShapeRemediation as PlanShapeRemediation
 
 if TYPE_CHECKING:
     from ..schema import AnalysisPlan, ResearchContext
@@ -428,27 +429,6 @@ class RequiredPlanShape(BaseModel):
     effect_measure: Literal["odds_ratio", "risk_ratio"] | None = None
 
 
-class PlanShapeRemediation(BaseModel):
-    """One use of an exact action/role/input ceiling from a host finding."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    operation: Literal["add_step", "replace_module"]
-    action: str | None = Field(default=None, min_length=1)
-    module: str | None = Field(default=None, min_length=1)
-    planned_analysis_role: AnalysisRole
-    inputs: tuple[str, ...]
-    step_id: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def _bounded_operation(self):
-        if self.action is None and self.module is None:
-            raise ValueError("structural remediation needs an action or module")
-        if (self.operation == "replace_module") != (self.step_id is not None):
-            raise ValueError("only replace_module names a source step_id")
-        if len(set(self.inputs)) != len(self.inputs) or any(not value.strip() for value in self.inputs):
-            raise ValueError("structural remediation inputs must be distinct nonempty identities")
-        return self
 
 
 class PlanStructuralChange(BaseModel):

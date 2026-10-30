@@ -183,25 +183,11 @@ def _planner_calls(task: Any) -> int:
     return len(_planner_rows(task))
 
 
-def _verify_pending_guard(task: Any, call: Mapping[str, Any], request_sha: str) -> None:
-    """The unknown reservation must be the journal's exact guarded request."""
-    from easyicu.runtime.host_execution_lease import assert_host_execution_quiescent, read_host_execution_receipt
-    from easyicu.webserver import metadata_provider_concurrency as slots
-    from easyicu.webserver.metadata_provider_worker import identity as worker_identity
-
-    attempt_id = str(call.get("attempt_id") or "")
-    held = slots.get(attempt_id)
-    expected = Path(task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
-    if (not isinstance(held, dict) or call.get("state") != "in_progress"
-            or held.get("task_id") != task.task_id or held.get("ledger_path") != str(task.ledger.path)
-            or held.get("guard_path") != str(expected) or held.get("request_sha256") != request_sha
-            or held.get("worker_sha256") != worker_identity() or not held.get("guard_nonce")):
+def _verify_pending_guard(task: Any, call: Mapping[str, Any], request_sha: str, verifier: Any) -> None:
+    """Require the trusted host to verify the original guarded reservation."""
+    if not callable(verifier):
         raise ValueError("retry_journal_guard_unverified")
-    assert_host_execution_quiescent(expected, allow_missing=False, wait_timeout=15.0)
-    receipt = read_host_execution_receipt(expected)
-    if (receipt is None or receipt.get("nonce") != held["guard_nonce"]
-            or receipt.get("script_sha256") != held["worker_sha256"]
-            or not slots.has_capacity(held["account"])):
+    if verifier(task, call, request_sha) is not None:
         raise ValueError("retry_journal_guard_unverified")
 
 
@@ -211,7 +197,7 @@ class OutlineRetryJournal:
     def __init__(self, *, inner: Any, task: Any, run_dir: Path, request_sha256: str,
                  dependency_sha256: str, literature_sha256: str, source_path: Path | None = None,
                  source_sha256: str | None = None, stage: str = "outline",
-                 parse_attempt_limit: int = 4) -> None:
+                 parse_attempt_limit: int = 4, guard_verifier: Any = None) -> None:
         self._inner, self._task = inner, task
         self._path = Path(run_dir) / ".runtime" / FILE_NAME
         self._index = 0
@@ -262,7 +248,7 @@ class OutlineRetryJournal:
                     # to this pending response without inventing evidence.
                     if unrecorded != 1:
                         raise ValueError("retry_journal_ledger_changed")
-                    _verify_pending_guard(task, _planner_rows(task)[-1], pending["request_sha256"])
+                    _verify_pending_guard(task, _planner_rows(task)[-1], pending["request_sha256"], guard_verifier)
                     self._data["abandoned"] += 1
                 self._data["expected_retry_request_sha256"] = pending["request_sha256"]
                 self._data["expected_retry_guarded"] = bool(unrecorded)
@@ -281,7 +267,7 @@ class OutlineRetryJournal:
                     rows = _planner_rows(task)
                     if not rows:
                         raise ValueError("retry_journal_ledger_changed")
-                    _verify_pending_guard(task, rows[-1], expected)
+                    _verify_pending_guard(task, rows[-1], expected, guard_verifier)
         else:
             self._data = {"schema_version": SCHEMA, "binding": binding, "records": [],
                           "pending": None, "abandoned": 0,
@@ -326,7 +312,7 @@ class OutlineRetryJournal:
         self._data.pop("expected_retry_guarded", None)
         self._data["pending"] = {"request_sha256": request_sha, "planner_calls": _planner_calls(self._task)}
         _atomic_write(self._path, self._data)
-        from easyicu.research_agent.providers.metadata_request_binding import metadata_request_binding
+        from easyicu.research_agent.providers.transport_retry import metadata_request_binding
 
         with metadata_request_binding(request_sha):
             result = authorized_complete(self._inner, messages, **kwargs)

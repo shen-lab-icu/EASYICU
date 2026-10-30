@@ -5,9 +5,9 @@ from easyicu.research_agent.intake.materialized_metadata import implementation_b
 
 
 def require_case_duration_exposure_materialization(verified, authority, *, source_concept=None):
-    from easyicu.research_agent.cohort import materializer
-
-    owner = Path(materializer.__file__).resolve()
+    # Hash the owning implementation directly without importing the
+    # materializer, which itself imports the cohort schema.
+    owner = Path(__file__).with_name("materializer.py").resolve()
     expected = implementation_bundle_sha256((
         owner, owner.with_name("primitives.py"), owner.parents[1] / "intake" / "materialized_metadata.py",
         owner.parents[2] / "concept" / "metadata_projection.py",

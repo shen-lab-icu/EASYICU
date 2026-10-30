@@ -31,3 +31,16 @@ def require_phenotyping_features(
             if item is None or role in _FORBIDDEN_FEATURE_ROLES or outcomes & lineage:
                 raise ValueError(f"phenotyping_feature_role_forbidden: {name} is not a non-outcome fitting feature")
     return features
+
+
+def validate_phenotyping_step(step: Any) -> None:
+    """Validate the step against its declared contract."""
+    if step.phenotyping_feature_columns is not None:
+        if step.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or step.planned_analysis_role != "primary":
+            raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
+        require_phenotyping_features(step.phenotyping_feature_columns, inputs=step.inputs)
+    if step.phenotype_comparison_spec is not None:
+        if step.scientific_action_id != "phenotyping.outcome_by_cluster" or step.planned_analysis_role != "secondary":
+            raise ValueError("phenotype_comparison_spec belongs only to a secondary outcome-by-cluster step")
+        if not {step.phenotype_comparison_spec.identity_column, *(v.name for v in step.phenotype_comparison_spec.variables)}.issubset(step.inputs):
+            raise ValueError("phenotype_comparison_input_mismatch")

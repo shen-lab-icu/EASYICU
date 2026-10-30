@@ -20,7 +20,7 @@ from typing import Any, Iterable, TYPE_CHECKING
 import zipfile
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime webserver import
-    from easyicu.webserver.demo_source_contracts import DemoSourcePaths, DemoSourceSpec
+    from easyicu.official_demo_sources import DemoSourcePaths, DemoSourceSpec
 
 
 PACK_SCHEMA = "easyicu.official_demo_release_pack/1"

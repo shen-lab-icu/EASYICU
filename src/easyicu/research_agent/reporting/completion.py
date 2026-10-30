@@ -43,6 +43,31 @@ class ManuscriptOutcome(BaseModel):
     ] | None = None
 
 
+def invalid_plan_execution_status(plan: AnalysisPlan | None) -> dict[str, Any] | None:
+    """Return a fail-closed execution verdict for missing or empty plans."""
+    if plan is None:
+        return {
+            "execution_complete": False,
+            "required_step_count": 0,
+            "completed_step_count": 0,
+            "missing_steps": [],
+            "failed_steps": [{"step_id": "plan", "status": "not_available"}],
+        }
+    if not plan.steps:
+        return {
+            "execution_complete": False,
+            "step_scientific_requirements_complete": False,
+            "required_step_count": 0,
+            "completed_step_count": 0,
+            "missing_steps": [],
+            "failed_steps": [{"step_id": "plan", "status": "no_steps"}],
+            "optional_render_failures": [],
+            "scientific_incomplete_steps": [],
+            "step_completion_states": [],
+        }
+    return None
+
+
 def completion_outcomes(
     axes: Mapping[str, Any], *, pending: bool = False,
 ) -> dict[str, Any]:

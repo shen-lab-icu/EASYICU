@@ -268,3 +268,98 @@ def prepare_step_attempt_bootstrap(
         execution_cohort_path=execution_cohort_path,
         budget_runtime=budget_runtime,
     )
+
+
+def resumed_cohort_translation_budget(resume_state: Mapping[str, Any] | None) -> tuple[str | None, dict[str, Any] | None]:
+    """Recover the existing step owner and provider budget without resetting it."""
+    if isinstance(resume_state, Mapping):
+        budget = resume_state.get("cohort_translation_provider_budget")
+        if isinstance(budget, Mapping):
+            owner = str(budget.get("budget_owner_step_id") or "").strip()
+            if owner:
+                return owner, dict(budget)
+    return None, None
+
+
+def snapshot_step_numeric_claims(batch_claims, *, evidence, records, lock, step_id):
+    """Freeze prior authoritative claims and exclude the current step's old attempts."""
+    import copy
+    if batch_claims is None:
+        with lock:
+            snapshot = copy.deepcopy(records)
+        claims = evidence.authoritative_numeric_claims(snapshot)
+    else:
+        claims = batch_claims
+    return [copy.deepcopy(claim) for claim in claims if claim.step_id != step_id]
+
+
+def record_invalid_provider_receipt(*, step, step_record, error, receipt_path, shared_lock,
+                                    findings, per_step_records, append_record, flush_manifest,
+                                    emit_progress, run_id, step_order, total_steps):
+    """Persist and report a corrupt provider receipt before aborting the step."""
+    step_record.update({"status": "contract_failed", "generation_mode": "system",
+                        "provider_call_budget_receipt_invalid": True,
+                        "provider_call_budget_receipt_error": error})
+    finding = ValidationFinding(
+        validator="provider_call_budget_receipt", severity="error",
+        message=(f"Step {step.step_id} cannot resume because its durable "
+                 "provider-call receipt is missing, corrupt, or inconsistent."),
+        detail={"step_id": step.step_id, "receipt_path": receipt_path, "reason": error},
+    )
+    with shared_lock:
+        findings.append(finding)
+        append_record(per_step_records, step_record)
+        flush_manifest()
+    emit_progress("step", f"Step {step.step_id} failed closed: provider-call receipt invalid.",
+                  status="failed", run_id=run_id, step_id=step.step_id,
+                  current_step=step_order.get(step.step_id, 0) + 1, total_steps=total_steps)
+
+
+def _step_register_current_step_numeric_claims(
+    *,
+    step: AnalysisStep,
+    step_summary: Dict[str, Any],
+    step_summary_record_id: Optional[str],
+    standard_executor_terminal_block: bool,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    pipeline: Any,
+    prior_numeric_claims: Any,
+) -> None:
+    """Stage numeric authority before exposing current result aliases."""
+
+    if (
+        not step_summary
+        or step_summary_record_id is None
+        or standard_executor_terminal_block
+    ):
+        return
+    cap = pipeline._max_numeric_claims_per_step
+    evidence.register_step_summary_numerics(
+        step_id=step.step_id,
+        evidence_id=step_summary_record_id,
+        summary=step_summary,
+        max_leaves=cap if cap > 0 else None,
+    )
+    _, derived_errors = evidence.register_step_derived_claims(
+        step_id=step.step_id,
+        evidence_id=step_summary_record_id,
+        summary=step_summary,
+        source_claims=prior_numeric_claims,
+    )
+    for err in derived_errors:
+        findings.append(
+            ValidationFinding(
+                validator="derived_claim",
+                severity="warning",
+                message=(
+                    f"derived_claims entry {err['name']!r} for step "
+                    f"{step.step_id} was rejected: {err['message']}"
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    "claim_name": err["name"],
+                    "reason": err["message"],
+                },
+            )
+        )

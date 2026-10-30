@@ -973,7 +973,7 @@ def _list_concept_catalog(
             )[:80],
         }
 
-    from easyicu.webserver.pi_copilot.source_concept_reference import source_concept_reference
+    from easyicu.webserver.pi_copilot.source_concept_reference import model_visible_source_concept_reference
 
     rows = []
     for concept in catalog.concepts:
@@ -994,7 +994,7 @@ def _list_concept_catalog(
         row = project_concept(concept)
         # A dictionary declaration can guide source review, but is never proof
         # that this run read those fields or that record-level units match.
-        reference = source_concept_reference(
+        reference = model_visible_source_concept_reference(
             row["concept_id"], database or str((source or {}).get("database") or "")
         )
         if reference is not None:
