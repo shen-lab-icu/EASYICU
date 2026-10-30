@@ -492,6 +492,7 @@ from .run_coordination import (
     RunCoordinator,
     RunExecutionState,
     RunTransition,
+    merge_parallel_runtime_states,
     _successful_run_transition_requests_replan,
     _successful_step_requests_replan,
 )
@@ -1865,11 +1866,15 @@ def run_execute_phase(
         step_outputs_supplier=_plan_step_outputs,
     )
 
-    def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
+    parallel_runtime_states: Dict[str, Any] = {}
+
+    def _execute_one_step(
+        step: AnalysisStep, *, batch_base: Any = None,
+    ) -> Dict[str, Any]:
         nonlocal runtime_state
-        runtime_state, step_record = _execute_step(
+        step_runtime, step_record = _execute_step(
             step,
-            runtime_state=runtime_state,
+            runtime_state=runtime_state if batch_base is None else batch_base,
             _authorize_automatic_repair=_authorize_automatic_repair,
             _automatic_repair_authorized=_automatic_repair_authorized,
             _failed_dependency_record=_failed_dependency_record,
@@ -1930,6 +1935,11 @@ def run_execute_phase(
             universe_path=universe_path,
             usage_auditor=usage_auditor,
         )
+        if batch_base is None:
+            runtime_state = step_runtime
+        else:
+            with shared_lock:
+                parallel_runtime_states[step.step_id] = step_runtime
         return step_record
 
     if (
@@ -2094,13 +2104,22 @@ def run_execute_phase(
         )
     else:
 
+        # All independent workers receive the same frozen state. After joining,
+        # merge their append-only reflections in plan order, not completion order.
+        batch_base = runtime_state
         run_coordinator.run_parallel(
             steps=steps_to_run,
             max_workers=pipeline._max_concurrent_steps,
-            execute_step=_execute_one_step,
+            execute_step=functools.partial(_execute_one_step, batch_base=batch_base),
             submit_step=_submit_in_current_context,
             on_worker_error=functools.partial(_record_step_exception, parallel=True),
         )
+        with shared_lock:
+            completed_states = [
+                (step.step_id, parallel_runtime_states[step.step_id])
+                for step in steps_to_run if step.step_id in parallel_runtime_states
+            ]
+        runtime_state = merge_parallel_runtime_states(batch_base, completed_states)
     if run_input_authority_state.corrupted:
         _flush_partial_manifest(
             {

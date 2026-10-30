@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from threading import Event
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
-from ..schema import AnalysisStep
+from ..schema import AgentRuntimeState, AnalysisStep
 from ..authority.provider_hard_stop import ProviderHardStopError
 
 _SUCCESS_REPLAN_REQUEST_FIELDS = (
@@ -288,4 +288,36 @@ class RunCoordinator:
             raise stop_error
 
 
-__all__ = ["RunCoordinator", "RunExecutionState", "RunTransition"]
+def merge_parallel_runtime_states(
+    base: AgentRuntimeState,
+    states: Sequence[tuple[str, AgentRuntimeState]],
+) -> AgentRuntimeState:
+    """Merge independent supervisor reflections in the declared plan order.
+
+    Each worker must descend from the same frozen batch state and may append
+    reflections, but may not replace prior memory or the scientific scope.
+    Step-local request, critique and result fields come from the last step
+    that actually advanced its supervisor state in plan order.
+    """
+    reflections = list(base.reflection_memory)
+    selected = base
+    fixed_fields = (
+        "run_id", "analysis_family", "semantics", "extraction_request",
+        "extraction_result", "manuscript_packet",
+    )
+    for step_id, state in states:
+        if any(getattr(base, name) != getattr(state, name) for name in fixed_fields):
+            raise ValueError("parallel supervisor state changed scientific scope")
+        count = len(base.reflection_memory)
+        if state.reflection_memory[:count] != base.reflection_memory:
+            raise ValueError("parallel supervisor state replaced prior reflections")
+        reflections.extend(state.reflection_memory[count:])
+        if state.current_step is not None and state.current_step.step_id == step_id:
+            selected = state
+    return selected.model_copy(update={"reflection_memory": reflections})
+
+
+__all__ = [
+    "RunCoordinator", "RunExecutionState", "RunTransition",
+    "merge_parallel_runtime_states",
+]
