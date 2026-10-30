@@ -791,11 +791,13 @@
       const candidateRows = sourceFiles.map(file => `<li>${esc(String(file.table || ''))} · ${esc(String(file.path || ''))} · ${esc((Array.isArray(file.columns) ? file.columns : []).join(', '))}</li>`).join('');
       const candidateMissing = sourceCandidate && Array.isArray(sourceCandidate.unmapped_variables)
         ? sourceCandidate.unmapped_variables.map(String).join(', ') : '';
+      const identifiers = sourceCandidate && Array.isArray(sourceCandidate.identifier_candidates) ? sourceCandidate.identifier_candidates : [];
+      const identifierRows = identifiers.map(item => `<li>${esc(String(item.variable || tr('No research variable bound', '未绑定研究变量')))} · ${esc(String(item.table || ''))} · ${esc(String(item.column || ''))}</li>`).join('');
       const candidatePreview = sourceCandidate && candidateRows
         ? `<details><summary>${esc(tr('Source file candidates', '来源文件候选'))}</summary><p>${esc(tr(
           'These are dictionary and local conversion-manifest candidates. File contents, source completeness, cohort, outcome and feature calculations are not verified; this does not authorize preparation or analysis. Source identity checks may hash files, without decoding patient rows.',
           '这些是字典和本地转换清单候选，文件内容、来源完整性、人群、结局及特征计算尚未核验；不授权数据准备或分析。核验来源可能计算文件摘要，但不解码患者行。',
-        ))}</p>${candidateMissing ? `<p>${esc(tr('Unmapped variables', '未映射变量'))}: ${esc(candidateMissing)}</p>` : ''}<ul>${candidateRows}</ul></details>` : '';
+        ))}</p>${candidateMissing ? `<p>${esc(tr('Variables without concept or identifier candidates', '未找到概念或标识列候选的变量'))}: ${esc(candidateMissing)}</p>` : ''}${identifierRows ? `<p>${esc(tr('Source-table identifier candidates match configuration and file schemas only; they do not establish research variable bindings, records, joins or derived identifiers.', '来源表标识列候选仅匹配配置和文件字段结构；不代表研究变量已绑定，未验证实际记录、表间关联或派生标识。'))}</p><ul>${identifierRows}</ul>` : ''}<ul>${candidateRows}</ul></details>` : '';
       const preparationBlockedText = preparationAttempt && preparationAttempt.status === 'error'
         ? tr('The check could not complete. Please retry.', '检查未能完成，请重试。')
         : preparationBlockers.includes('raw_preparation_source_unavailable') || preparationBlockers.includes('dependency_source_provenance_mismatch')

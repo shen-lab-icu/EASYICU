@@ -282,7 +282,13 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
     elif source_candidate and source_candidate.get('status') == 'candidate':
         source_panel = ('<p>以下仅为本地转换清单与字典字段候选，尚未验证原始文件内容、'
                         '发行版本完整性、时间窗、队列或特征计算；不授权提取患者记录或分析。核验身份来源可能计算文件摘要，但不会解码患者行。</p>')
-        source_panel += '<p>未映射变量：' + escape('、'.join(source_candidate.get('unmapped_variables') or []) or '无') + '</p>'
+        source_panel += '<p>未找到概念或标识列候选的变量：' + escape('、'.join(source_candidate.get('unmapped_variables') or []) or '无') + '</p>'
+        identifiers = source_candidate.get('identifier_candidates') or []
+        if identifiers:
+            source_panel += '<p>来源表标识列候选仅匹配配置和文件字段结构；不代表研究变量已绑定，未验证实际记录、表间关联或派生标识。</p>'
+            for item in identifiers:
+                source_panel += ('<p>来源表标识列候选：' + escape(str(item.get('variable') or '未绑定研究变量')) + ' · '
+                    + escape(str(item['table'])) + ' · ' + escape(str(item['column'])) + '</p>')
         source_panel += '<p>结局和队列依赖尚未完整建立。</p>'
         for feature in source_candidate.get('features', []):
             ids = feature.get('item_ids') or []
