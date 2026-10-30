@@ -1016,6 +1016,68 @@ def sha256_of_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _lookup_evidence_record(
+    records: Sequence[EvidenceRecord], aliases: Mapping[str, str], name: str,
+) -> Optional[EvidenceRecord]:
+    """Resolve an exact ID, alias, or unambiguous published prefix."""
+
+    by_id: Dict[str, EvidenceRecord] = {}
+    for record in records:
+        by_id.setdefault(record.evidence_id, record)
+    if name in by_id:
+        return by_id[name]
+    if name in aliases and aliases[name] in by_id:
+        return by_id[aliases[name]]
+    prefix = f"{name}_"
+    candidate_ids = {
+        record.evidence_id for record in records
+        if record.evidence_id.startswith(prefix)
+        and bool((record.metadata or {}).get("aliases_published", True))
+    }
+    candidate_ids.update(
+        evidence_id for alias, evidence_id in aliases.items() if alias.startswith(prefix)
+    )
+    if len(candidate_ids) == 1:
+        return by_id.get(next(iter(candidate_ids)))
+    return None
+
+
+class EvidenceReadView:
+    """One copied index and alias generation; artifact bytes remain verified on read.
+
+    This view does not isolate the run directory or store writes. It is not
+    sufficient by itself to authorize parallel execution.
+    """
+
+    def __init__(
+        self, *, root: Path, records: Sequence[EvidenceRecord], aliases: Mapping[str, str],
+    ) -> None:
+        self.root = root
+        self._records = copy.deepcopy(records)
+        self._aliases = dict(aliases)
+
+    def records(self) -> List[EvidenceRecord]:
+        return copy.deepcopy(self._records)
+
+    def aliases(self) -> Dict[str, str]:
+        return dict(self._aliases)
+
+    def get(self, name: str) -> Optional[EvidenceRecord]:
+        return copy.deepcopy(_lookup_evidence_record(self._records, self._aliases, name))
+
+    def current_verified_records(
+        self, per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    ) -> List[EvidenceRecord]:
+        if per_step_records is None:
+            return self.records()
+        from .runtime_artifacts import current_evidence_records, verified_run_evidence_path
+
+        return [
+            record for record in current_evidence_records(self.records(), per_step_records)
+            if verified_run_evidence_path(self.root, record) is not None
+        ]
+
+
 class EvidenceStore:
     """A directory-backed store of hashed artefacts.
 
@@ -2967,6 +3029,14 @@ class EvidenceStore:
         with self._lock:
             return list(self._records)
 
+    def read_view(self) -> EvidenceReadView:
+        """Capture records and aliases together under the authority lock."""
+
+        with self._lock:
+            return EvidenceReadView(
+                root=self.root, records=self._records, aliases=self._aliases,
+            )
+
     def verified_records(self) -> List[EvidenceRecord]:
         """Return every registered record only when its current bytes verify.
 
@@ -3000,38 +3070,9 @@ class EvidenceStore:
 
     def get(self, evidence_id_or_alias: str) -> Optional[EvidenceRecord]:
         with self._lock:
-            # Direct id match first.
-            for r in self._records:
-                if r.evidence_id == evidence_id_or_alias:
-                    return r
-            # Then alias lookup. Resolve under the same lock so a
-            # concurrent register_file can never invalidate the alias
-            # → record path mid-lookup.
-            eid = self._aliases.get(evidence_id_or_alias)
-            if eid is not None:
-                for r in self._records:
-                    if r.evidence_id == eid:
-                        return r
-            # Hosted writers sometimes cite the stable basename of a
-            # hash-suffixed artefact, e.g. ``figure_mortality`` for
-            # ``figure_mortality_ab12cd34``. Accept this only when the
-            # prefix is unique so we do not silently bind an ambiguous claim.
-            prefix = f"{evidence_id_or_alias}_"
-            candidate_ids = {
-                r.evidence_id
-                for r in self._records
-                if r.evidence_id.startswith(prefix)
-                and bool((r.metadata or {}).get("aliases_published", True))
-            }
-            candidate_ids.update(
-                eid for alias, eid in self._aliases.items() if alias.startswith(prefix)
+            return _lookup_evidence_record(
+                self._records, self._aliases, evidence_id_or_alias,
             )
-            if len(candidate_ids) == 1:
-                only = next(iter(candidate_ids))
-                for r in self._records:
-                    if r.evidence_id == only:
-                        return r
-        return None
 
     def resolvable_names(self) -> List[str]:
         """Every name the binder will accept (evidence_ids + aliases)."""

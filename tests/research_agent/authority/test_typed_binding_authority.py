@@ -234,6 +234,78 @@ def test_resolver_snapshots_current_records_under_the_shared_lock(tmp_path) -> N
     assert lock.entries == 1
 
 
+def test_resolver_uses_one_frozen_view_during_multi_input_binding(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    store = EvidenceStore(tmp_path)
+    first = store.register_text(
+        kind="table", description="first", text="a\n1\n", filename="first.csv",
+        evidence_id="first", produced_by_step="one", aliases=["first_alias"],
+    )
+    previous = store.register_text(
+        kind="table", description="previous", text="a\n2\n", filename="second.csv",
+        evidence_id="previous", produced_by_step="two", aliases=["second_alias"],
+    )
+    records = [
+        {"step_id": "one", "status": "ok", "evidence_ids": [first.evidence_id]},
+        {"step_id": "two", "status": "ok", "evidence_ids": [previous.evidence_id]},
+    ]
+    resolver = typed_binding.TypedBindingResolver(
+        evidence_store=store, per_step_records=records, records_lock=threading.Lock(),
+        run_dir=tmp_path, authoritative_cohort_path=tmp_path / "cohort.parquet",
+    )
+    original = typed_binding._current_verified_evidence_record
+    calls = 0
+
+    def resolve_then_publish(view, name, checkpoint):
+        nonlocal calls
+        resolved = original(view, name, checkpoint)
+        calls += 1
+        if calls == 1:
+            updated = store.register_text(
+                kind="table", description="updated", text="a\n3\n", filename="new.csv",
+                evidence_id="updated", produced_by_step="two", publish_aliases=False,
+            )
+            store.publish_success_aliases(updated.evidence_id, aliases=["second_alias"])
+            records.append({"step_id": "two", "status": "ok", "evidence_ids": [updated.evidence_id]})
+        return resolved
+
+    monkeypatch.setattr(typed_binding, "_current_verified_evidence_record", resolve_then_publish)
+    plan = AnalysisPlan(research_question="Resolve one consistent snapshot.", steps=[])
+    refs, _, _ = resolver.resolve_names(["first_alias", "second_alias"], plan=plan)
+    assert [ref.evidence_id for ref in refs] == ["first", "previous"]
+    next_refs, _, _ = resolver.resolve_names(["second_alias"], plan=plan)
+    assert [ref.evidence_id for ref in next_refs] == ["updated"]
+
+
+def test_evidence_read_view_copies_records_and_preserves_lookup_rules(tmp_path) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    store = EvidenceStore(tmp_path)
+    record = store.register_text(
+        kind="table", description="original", text="a\n1\n", filename="a.csv",
+        evidence_id="table_alpha_123", produced_by_step="one", aliases=["alias"],
+    )
+    view = store.read_view()
+    assert view.get("alias").evidence_id == record.evidence_id
+    assert view.get("table_alpha").evidence_id == record.evidence_id
+    view.get("alias").description = "changed"
+    view.records()[0].metadata["aliases_published"] = False
+    assert view.get("alias").description == "original"
+    assert store.get("alias").description == "original"
+    store.register_text(
+        kind="table", description="second", text="a\n2\n", filename="b.csv",
+        evidence_id="table_alpha_456", produced_by_step="two",
+    )
+    assert store.get("table_alpha") is None
+    assert view.get("table_alpha").evidence_id == record.evidence_id
+    checkpoint = [{"step_id": "one", "status": "ok", "evidence_ids": [record.evidence_id]}]
+    (tmp_path / record.relative_path).write_text("damaged", encoding="utf-8")
+    assert view.current_verified_records(checkpoint) == []
+
+
 def test_resolver_uses_the_current_plan_on_every_call(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
