@@ -241,6 +241,12 @@ def _prepare_scientific_launch(
     stated_trial: Optional[_StatedTrial] = None,
 ) -> PreparedScientificLaunch:
     study = dict(request.study_context)
+    if study.get("unconfirmed_outcome"):
+        raise ResearchPipelineRunError(
+            "study_primary_outcome_confirmation_required",
+            "A proposed outcome was not saved; resolve it before planning or running with an older outcome.",
+            details={"field": "outcome"},
+        )
     question = _clean_text(study.get("question"), 1_200)
     if not question:
         raise ResearchPipelineRunError(

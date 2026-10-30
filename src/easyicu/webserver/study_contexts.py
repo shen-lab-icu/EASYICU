@@ -94,6 +94,7 @@ _CONTEXT_FIELDS = {
     "cohort",
     "modules",
     "outcome",
+    "unconfirmed_outcome",
     "primary_exposure",
     "primary_exposure_concept",
     "covariates",
@@ -345,6 +346,7 @@ _SCIENTIFIC_CONFIGURATION_FIELDS = (
     "stated_adjustments",
     "stated_subgroups",
     "stated_variables_unread",
+    "unconfirmed_outcome",
     "primary_exposure_concept",
 )
 
@@ -1485,6 +1487,10 @@ def _sanitize_patch(
     for field, max_length in _TEXT_LIMITS.items():
         if field in raw:
             patch[field] = _text(raw.get(field), field=field, max_length=max_length)
+    if "unconfirmed_outcome" in raw:
+        if not allow_question_wording:
+            raise StudyContextError({"error": "study_unconfirmed_outcome_server_owned", "field": "unconfirmed_outcome"})
+        patch["unconfirmed_outcome"] = _text(raw.get("unconfirmed_outcome"), field="unconfirmed_outcome", max_length=500)
     if "primary_exposure_concept" in raw:
         if not allow_question_wording:
             raise StudyContextError({
@@ -2919,6 +2925,8 @@ def _scientific_fields_sha256(
         allow_quick_answer_handoff=True,
     )
     sanitized.pop("id", None)
+    if not sanitized.get("unconfirmed_outcome"):
+        sanitized.pop("unconfirmed_outcome", None)
     if not sanitized.get("quick_answer_handoff"):
         sanitized.pop("quick_answer_handoff", None)
     if not sanitized.get("attached_skills"):
