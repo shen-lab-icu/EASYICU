@@ -687,10 +687,13 @@ def _pipeline_failure_code(
     budget_mode: str = "full_reviewed",
 ) -> str:
     from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
+    from easyicu.webserver.metadata_provider_concurrency import MetadataProviderCapacityExhausted
 
     chain = _pipeline_exception_chain(exc)
     if any(isinstance(item, ProviderHardStopExceeded) for item in chain):
         return "research_pipeline_provider_budget_exhausted"
+    if any(isinstance(item, MetadataProviderCapacityExhausted) for item in chain):
+        return "research_pipeline_metadata_provider_capacity_unavailable"
     typed_failure = _safe_pipeline_typed_failure(exc)
     if typed_failure.get("owner") == "easyicu.databases.research_capabilities_v1":
         return typed_failure["reason_code"]
@@ -4009,6 +4012,7 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "failed_steps",
             "optional_render_failures",
             "missing_steps",
+            "plan_truncated",
             "analysis_errors",
             "writer_stop",
             "manuscript_requested",
@@ -4086,6 +4090,8 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
                 return {"reason_code": f"{axis}_not_satisfied"}
             exhausted = writer.pop("transport_retry_exhausted", None)
             return {**writer, "cause_code": exhausted} if exhausted else writer
+    if axes.get("plan_truncated") is True:
+        return {"reason_code": "planned_products_missing"}
     return None
 
 
@@ -8167,6 +8173,13 @@ def make_research_pipeline_run_runner(
                 message = (
                     "The configured model provider timed out while the Research "
                     "Agent was generating a contract-valid plan. No analysis was run."
+                )
+            elif code == "research_pipeline_metadata_provider_capacity_unavailable":
+                message = (
+                    "A previous metadata model request still occupies the allowed "
+                    "capacity. This request was not sent. Preserve the run record; "
+                    "the previous request may still be running or its remote status "
+                    "may be unknown."
                 )
             elif code == "research_pipeline_plan_contract_exhausted":
                 message = (

@@ -269,6 +269,9 @@ def test_each_terminal_code_from_the_owners_has_an_explicit_disposition() -> Non
     )
     for code in sorted(codes):
         actions = owner.next_actions_for_stop(code)
+        if owner.STOP_POLICIES[code] == "none":
+            assert not actions, code
+            continue
         assert actions, code
         assert all(action.action_id and action.label_key for action in actions)
 

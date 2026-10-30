@@ -366,6 +366,9 @@ _SCOPE_CODES = frozenset(
     }
 )
 STOP_POLICIES = {
+    # An occupied request may still be using the remote service; neither a
+    # plan edit nor retry establishes that its capacity is available.
+    "research_pipeline_metadata_provider_capacity_unavailable": "none",
     **dict.fromkeys(_EDIT_CODES, "edit_plan"),
     **dict.fromkeys(_RETRY_CODES, "retry"),
     **dict.fromkeys(_REPAIR_CODES, "repair"),
@@ -520,6 +523,8 @@ def next_actions_for_stop(
     if {"planning_menu_missing_supported_concept", "study_coordinate_unrecognized"} & {reason, inner}:
         return []
     policy = STOP_POLICIES.get(reason, "edit_plan")
+    if policy == "none":
+        return []
     if reason not in _RETRY_CODES and inner in _SCOPE_CODES:
         policy = "scope"
     if reason not in _RETRY_CODES and (inner in _DATA_CODES or cause in _DATA_CODES):

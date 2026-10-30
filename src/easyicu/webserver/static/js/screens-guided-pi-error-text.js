@@ -806,6 +806,7 @@
         progressive_family_spec_prediction_risk_set_unavailable: tr('A prediction model is made for the stays still in the ICU when it predicts, which needs each stay\'s ICU length of stay; EasyICU prepares it for a study declared as a prediction model. Planning stopped before the model was called and no analysis was run. Declare the study\'s analysis as a prediction model, then generate the plan again.', '预测模型只针对预测时点仍在 ICU 的入住，需要每次入住的 ICU 住院时长；研究声明为预测模型时，EasyICU 才会准备这一列。规划在调用模型之前停止，没有运行分析。请把研究的分析类型声明为预测模型，再生成计划。'),
         progressive_static_prediction_requires_family_template: tr('A prediction study of this kind is planned from the prediction template, which states the prediction time, the risk set and the predictors available then. This plan did not use the template, so planning stopped and no analysis was run. If prediction is the question you care about most, make it the study\'s primary question and plan again.', '这类预测研究要用预测模板规划，模板会写明预测时点、风险集和可用的预测变量。这份计划没有用模板，规划已停止，没有运行分析。如果预测是你最关心的问题，请把它作为研究的主要问题后重新规划。'),
         execution_complete_not_satisfied: tr('An analysis step did not finish, so the run produced no result it can report.', '有分析步骤没有完成，这次运行没有可以报告的结果。'),
+        planned_products_missing: tr('The plan requires results that were not produced, so the analysis is incomplete. Results already produced remain available to view.', '计划要求的部分结果未生成，因此分析尚未完成；已生成的结果仍可查看。'),
         analysis_validated_not_satisfied: tr('The analysis ran, but its automated validation did not pass, so its results cannot be reported.', '分析已运行，但没有通过自动校验，结果不能报告。'),
         // Every evidence error was a manuscript check; no result lacks its evidence.
         manuscript_checks_not_passed: tr('The manuscript draft did not pass its automated checks.', '论文稿没有通过自动检查。'),
@@ -1163,6 +1164,10 @@
         research_pipeline_provider_timeout: tr(
           'The model service did not return a result in time. See the run record for automatic retries and recovery.',
           '模型服务未及时返回结果。自动重试和恢复进展可在运行记录中查看。',
+        ),
+        research_pipeline_metadata_provider_capacity_unavailable: tr(
+          'An earlier model request still occupies the allowed capacity. This request was not sent. The earlier request may still be running or its remote status may be unknown. Keep the run record for support; do not repeatedly retry until the request status is resolved.',
+          '之前的模型请求仍占用可用容量，本次请求没有发出。之前的请求可能仍在运行，或其远端状态未知。请保留运行记录供排查，在请求状态确认前不要反复重试。',
         ),
         research_pipeline_time_window_invalid: tr(
           'The study time window is not valid for this data.',

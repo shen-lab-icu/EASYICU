@@ -35,7 +35,7 @@ from easyicu.research_agent.orchestration.workflow import (
     HumanReviewRequest,
 )
 from easyicu.research_agent.orchestration.profiles import (
-    CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+    CURRENT_WEB_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
     get_submission_profile,
 )
 from easyicu.webserver import (
@@ -3627,6 +3627,22 @@ def test_terminal_failed_pipeline_returns_to_fresh_plan_confirmation() -> None:
     assert by_id["analysis"].reason_code == "failed_pipeline_requires_fresh_plan"
 
 
+def test_provider_capacity_stop_does_not_offer_fresh_planning() -> None:
+    code = "research_pipeline_metadata_provider_capacity_unavailable"
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(), active_export_present=True, active_job=None,
+        latest_run={"run_id": "run-capacity", "run_type": "full",
+                    "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+                    "gate_reason": code, "run_status": "failed",
+                    "artifact_names": ["source_run_manifest.json"]},
+    )
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.next_action_code == code
+    assert by_id["plan"].status == "blocked"
+    assert by_id["plan"].reason_code == code
+    assert snapshot.next_actions == []
+
+
 def test_failed_approved_execution_retries_exact_plan_when_study_is_unchanged() -> None:
     study = _complete_study()
     digest = study_context_owner.scientific_configuration_sha256(study)
@@ -5767,6 +5783,7 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
         "compile_registered_export_handoff",
         lambda study, _source: SimpleNamespace(
             reusable=False,
+            mismatch_codes=("registered_export_contract_mismatch",),
             source_data_path="/private/prepared/source",
             database="mimiciv",
             modules=tuple(study["modules"]),
@@ -5914,6 +5931,7 @@ def test_extraction_rebuilds_registered_export_when_requested_contract_differs(
         "compile_registered_export_handoff",
         lambda _study, _source: SimpleNamespace(
             reusable=False,
+            mismatch_codes=("registered_export_cohort_mismatch", "registered_export_format_mismatch"),
             source_data_path="/private/demo/raw",
             database="miiv",
             modules=("demographics", "blood_gas", "outcome"),
@@ -8491,7 +8509,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].runner_network == "none"
     assert calls["config"].runner_image == expected_runner_image
     expected_profile = get_submission_profile(
-        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
+        CURRENT_WEB_E1_REVIEWED_DEMO_DEV_PROFILE_REF
     )
     assert calls["config"].submission_profile_name == expected_profile.name
     assert calls["config"].submission_profile_version == expected_profile.version

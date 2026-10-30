@@ -26,7 +26,7 @@ class AnalysisOutcome(BaseModel):
     status: Literal["completed", "blocked", "pending"]
     reason_code: Literal[
         "execution_complete_not_satisfied", "analysis_validated_not_satisfied",
-        "human_plan_review_required",
+        "human_plan_review_required", "planned_products_missing",
     ] | None = None
 
 
@@ -39,6 +39,7 @@ class ManuscriptOutcome(BaseModel):
         "manuscript_checks_not_passed", "evidence_complete_not_satisfied",
         "numeric_verified_not_satisfied", "writer_provider_transport_unavailable",
         "execution_complete_not_satisfied", "analysis_validated_not_satisfied",
+        "planned_products_missing",
     ] | None = None
 
 
@@ -56,6 +57,10 @@ def completion_outcomes(
         for axis in ("execution_complete", "analysis_validated")
         if axes.get(axis) is not True
     ), None)
+    # The completed surviving steps cannot stand in for products that were
+    # dropped by a plan cap and never restored by a later revision.
+    if analysis_reason is None and axes.get("plan_truncated") is True:
+        analysis_reason = "planned_products_missing"
     analysis = AnalysisOutcome(
         status="pending" if pending else "blocked" if analysis_reason else "completed",
         reason_code="human_plan_review_required" if pending else analysis_reason,

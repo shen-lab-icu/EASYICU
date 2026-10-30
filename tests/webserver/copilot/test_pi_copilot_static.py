@@ -88,7 +88,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-literature.css?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "css/guided-pi-research-draft.css?v=20261029-followup1" in index
-    assert "js/screens-guided-pi-research-draft.js?v=20261029-followup1" in index
+    assert "js/screens-guided-pi-research-draft.js?v=20261030-draft-repair1" in index
     assert index.index("js/screens-guided-pi-modules.js?") < index.index("js/screens-guided-pi-research-draft.js?") < index.index("js/screens-guided-pi-aside.js?") < index.index("js/screens-guided-pi.js?")
 
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
@@ -137,7 +137,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261029-journey4" in index
-    assert "js/screens-guided-pi-events.js?v=20261030-preparation1" in index
+    assert "js/screens-guided-pi-events.js?v=20261030-source-candidate1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261030-demo1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
@@ -155,7 +155,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261030-population2" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261030-source-candidate1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
@@ -176,7 +176,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261030-estimand1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261030-provider-capacity1" in index
     assert "js/screens-guided-pi.js?v=20261030-preparation1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
@@ -804,7 +804,7 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         for call in payload["calls"]
         if call[0] == "plan" and call[1]["planner_start_mode"] == "auto"
     ]
-    assert len(revision_calls) == 3
+    assert len(revision_calls) == 2
     bound_revision_calls = [
         call for call in revision_calls if call[1]["plan_revision_source_run_id"]
     ]
@@ -843,7 +843,7 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         for call in revision_calls
         if not call[1]["plan_revision_source_run_id"]
     ]
-    assert len(failed_plan_calls) == 1
+    assert len(failed_plan_calls) == 0
     assert not any(
         call[:2] == ["send", "long internal failure prompt"]
         for call in payload["calls"]
@@ -858,7 +858,10 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         call for call in payload["calls"]
         if call[0] == "plan" and call[1]["planner_start_mode"] == "fresh"
     ]
-    assert len(fresh_plan_calls) == 1
+    assert len(fresh_plan_calls) == 2
+    # Retrying a failed planning run is a fresh plan: no reviewed source was
+    # created to bind. A repair of a reviewed run uses auto mode instead.
+    assert all(not call[1]["plan_revision_source_run_id"] for call in fresh_plan_calls)
     assert not any(
         call[:2] == ["send", "long internal data preparation prompt"]
         for call in payload["calls"]
@@ -6691,10 +6694,10 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards ? RUN_OUTCOME.render" in session_panel
     assert "showProjectContinuationCards ? dataConsentHtml" in session_panel
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
-    assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
+    assert "return { transcriptMessages, latestTurnCompletedIdeaExploration," in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20261029-journey1" in index
-    assert "screens-guided-pi.js?v=20261029-journey2" in index
+    assert "screens-guided-pi-transcript.js?v=20261030-preparation1" in index
+    assert "screens-guided-pi.js?v=20261030-preparation1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -468,7 +468,19 @@ def execution_gate_status(
             "missing_steps": [],
             "failed_steps": [{"step_id": "plan", "status": "not_available"}],
         }
-    required_step_ids = [s.step_id for s in (plan.steps if plan is not None else [])]
+    required_step_ids = [s.step_id for s in plan.steps]
+    if not required_step_ids:
+        return {
+            "execution_complete": False,
+            "step_scientific_requirements_complete": False,
+            "required_step_count": 0,
+            "completed_step_count": 0,
+            "missing_steps": [],
+            "failed_steps": [{"step_id": "plan", "status": "no_steps"}],
+            "optional_render_failures": [],
+            "scientific_incomplete_steps": [],
+            "step_completion_states": [],
+        }
     # 🔧 2026-05-16: previously this dict excluded `00_probe` records on the
     # assumption the planner never lists it. But the planner *does* sometimes
     # include `00_probe` in the published plan, and a deterministic probe
