@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import math
 import re
+from statistics import NormalDist
 from typing import Any, Mapping, Sequence
 
 from ..contracts.cohort_product_keys import is_closed_cohort_product_key
@@ -112,6 +113,25 @@ def _estimate(row: Mapping[str, Any], count: int, denominator: int) -> float:
     return float(value)
 
 
+def _reviewed_wilson(row: Mapping[str, Any], count: int, denominator: int,
+                     level: float) -> tuple[float, tuple[float, float, float]]:
+    """Verify the copied interval against the reviewed independent-row design."""
+    estimate, interval = _recorded_share(row, count, denominator)
+    if (interval is None or row.get("interval_method") != "wilson"
+            or row.get("covariance") != "binomial_independent"
+            or abs(interval[2] - float(level)) > 1e-9):
+        raise ValueError("Wilson interval differs from its reviewed plan")
+    z = NormalDist().inv_cdf((1.0 + float(level)) / 2.0)
+    p = count / denominator
+    divisor = 1.0 + z * z / denominator
+    centre = (p + z * z / (2.0 * denominator)) / divisor
+    half_width = z * math.sqrt(p * (1.0 - p) / denominator + z * z / (4.0 * denominator ** 2)) / divisor
+    expected = (max(0.0, 100.0 * (centre - half_width)), min(100.0, 100.0 * (centre + half_width)))
+    if any(abs(actual - target) > 1e-5 for actual, target in zip(interval[:2], expected)):
+        raise ValueError("Wilson interval contradicts its recorded numerator and denominator")
+    return estimate, interval
+
+
 def _writer_distribution_receipt(summary):
     """Admit the owner's observed-exposure subset only with its closed ledger.
 
@@ -144,8 +164,9 @@ def compile_counts_only_report_facts(
     scientific_claims: Sequence[ScientificClaim] = (),
     context: Any = None,
     manuscript_language: str = "en",
+    plan: Any = None,
 ) -> tuple[DescriptiveReportFact, ...]:
-    """Compile the exact primary counts-only capability, not arbitrary tables."""
+    """Compile verified primary counts and reviewed independent Wilson intervals."""
 
     from .manuscript_labels import source_bound_manuscript_labels
 
@@ -159,8 +180,32 @@ def compile_counts_only_report_facts(
         summary = record.get("step_summary", {})
         if not _writer_distribution_receipt(summary):
             continue
-        if summary.get("interval_method") != "none_counts_only":
+        method = summary.get("interval_method")
+        if method not in {"none_counts_only", "wilson"}:
             continue
+        if method == "wilson":
+            estimates = summary["descriptive_estimates"]
+            if (summary.get("effective_interval_method", method) != "wilson"
+                    or estimates.get("dependence") is not None
+                    or estimates.get("risk_difference") is not None):
+                # Those designs have their own uncertainty/contrast semantics;
+                # retain their existing unsupported-fact behavior.
+                continue
+            # A recorded interval is not proof that the reviewed plan asked
+            # for that level, endpoint or independent-row method.
+            matching = [step for step in getattr(plan, "steps", ())
+                        if step.step_id == record.get("step_id")]
+            spec = matching[0].exposure_outcome_distribution_spec if len(matching) == 1 else None
+            reviewed_level = getattr(spec, "confidence_level", None)
+            if (spec is None or matching[0].planned_analysis_role != "primary"
+                    or getattr(spec, "interval_method", None) != "wilson"
+                    or getattr(spec, "exposure", None) != summary.get("exposure")
+                    or getattr(spec, "outcome", None) != summary.get("outcome")
+                    or summary.get("effective_interval_method", method) != "wilson"
+                    or type(reviewed_level) not in {float, int} or not 0 < reviewed_level < 1
+                    or type(summary.get("confidence_level")) not in {float, int}
+                    or abs(float(summary["confidence_level"]) - float(reviewed_level)) > 1e-9):
+                raise ValueError("Wilson report fact differs from its reviewed plan")
         if record.get("status") != "ok":
             raise ValueError("A failed record cannot supply report facts")
         source = evidence.get(str(record.get("step_summary_evidence_id") or ""))
@@ -217,18 +262,26 @@ def compile_counts_only_report_facts(
             denominator = _count(row.get("denominator"), positive=True)
             if count > denominator or denominator != cohort_n:
                 raise ValueError("Prevalence fact denominator differs from the cohort")
-            estimate = _estimate(row, count, denominator)
+            if method == "wilson":
+                estimate, interval = _reviewed_wilson(row, count, denominator, reviewed_level)
+            else:
+                estimate, interval = _estimate(row, count, denominator), None
             coordinate = f"{summary['exposure']}={level}"
             label = _reader_name(reader_display_labels.get(coordinate, coordinate))
             levels[index] = (level, label, count)
             cohort_count += count
             prefix = f"descriptive_estimates.exposure_prevalence[{position}]"
-            share_parts.append(f"{count:,} ({estimate:.2f}%) {'had ' if not share_parts else ''}{label}")
+            interval_text = (f"; {100 * interval[2]:g}% Wilson CI, {interval[0]:.2f}% to {interval[1]:.2f}%"
+                             if interval is not None else "")
+            share_parts.append(f"{count:,} ({estimate:.2f}%{interval_text}) {'had ' if not share_parts else ''}{label}")
             shares.append(DescriptiveReportFact(
                 subsection="Cohort characteristics",
                 text="",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
-                source_fields=tuple(f"{prefix}.{key}" for key in ("level", "n", "denominator", "estimate_pct")),
+                source_fields=tuple(f"{prefix}.{key}" for key in (
+                    "level", "n", "denominator", "estimate_pct",
+                    *(("ci_low_pct", "ci_high_pct", "confidence_level") if interval is not None else ()),
+                )),
                 cohort_n=analysis_n, cohort_source_field=cohort_field, analysis_unit=unit,
                 supporting_evidence_ids=(
                     *label_citations.get(coordinate, ()),
@@ -276,7 +329,10 @@ def compile_counts_only_report_facts(
                 or (denominator < count and denominator + missing != count)
             ):
                 raise ValueError("Outcome fact denominator differs from its exposure group")
-            estimate = _estimate(row, events, denominator)
+            if method == "wilson":
+                estimate, interval = _reviewed_wilson(row, events, denominator, reviewed_level)
+            else:
+                estimate, interval = _estimate(row, events, denominator), None
             prefix = f"descriptive_estimates.outcome_absolute_risks[{position}]"
             matching_claims = [claim for claim in scientific_claims if (
                 claim.evidence_id == source.evidence_id
@@ -287,14 +343,17 @@ def compile_counts_only_report_facts(
             )]
             if len(matching_claims) > 1:
                 raise ValueError("Ambiguous source-bound descriptive claim")
-            outcome_parts.append(f"{estimate:.2f}% ({events:,} of {denominator:,} {unit}) in {label}")
+            interval_text = (f"; {100 * interval[2]:g}% Wilson CI, {interval[0]:.2f}% to {interval[1]:.2f}%"
+                             if interval is not None else "")
+            outcome_parts.append(f"{estimate:.2f}% ({events:,} of {denominator:,} {unit}{interval_text}) in {label}")
             if missing:
                 outcome_parts[-1] += f"; {missing:,} {unit} had missing outcomes"
             outcome_facts.append(DescriptiveReportFact(
                 subsection="Primary outcome",
                 text="",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
-                source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct"))
+                source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct",
+                    *(("ci_low_pct", "ci_high_pct", "confidence_level") if interval is not None else ())))
                 + ((f"{prefix}.missing_n",) if "missing_n" in row else ()),
                 replaces_claim_ref=matching_claims[0].claim_ref if matching_claims else None,
                 outcome_label=outcome_label, group_label=label, estimate_pct=estimate,
@@ -317,7 +376,7 @@ def verified_descriptive_source_records(projected, evidence):
         if not (
             isinstance(summary, dict) and "descriptive_estimates" in summary
             and summary.get("analysis_role") == "primary"
-            and summary.get("interval_method") == "none_counts_only"
+            and summary.get("interval_method") in {"none_counts_only", "wilson"}
         ):
             continue
         source = _verified_evidence_json(
@@ -640,7 +699,7 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
     """Shared full-run/report-only admission; loose wrapper counts are not facts.
 
     Admits the grouped Table 1 cohort count, a signed survival suite's
-    landmark cohort count, the primary counts-only distribution, the study
+    landmark cohort count, a primary counts-only or independent Wilson distribution, the study
     population's exposure occurrence and a prediction's comparison with an
     existing score (``benchmark_report_facts``), which reads ``plan``.
     """
@@ -657,6 +716,7 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
         reader_display_labels=reader_display_labels,
         context=context, manuscript_language=manuscript_language,
         scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
+        plan=plan,
     )
     return (
         *_compile_grouped_table_one_cohort_report_facts(projected, evidence, context=context),
