@@ -31,12 +31,19 @@ def current_conflicted_evidence_aliases(
 
     Retained aliases keep historical citations stable but do not identify which
     of two concurrent results the author intended. Ignore superseded/failed
-    attempts and conflicts whose original binding is no longer current.
+    attempts and names whose current binding no longer has another owner.
     """
     from .runtime_artifacts import current_successful_step_records
 
+    current_steps = current_successful_step_records(per_step_records)
+    owners_by_id: dict[str, set[str]] = {}
+    for step in current_steps:
+        step_id = str(step.get("step_id") or "").strip()
+        for evidence_id in step.get("evidence_ids") or ():
+            if str(evidence_id) in current_evidence_ids:
+                owners_by_id.setdefault(str(evidence_id), set()).add(step_id)
     conflicts: set[str] = set()
-    for step in current_successful_step_records(per_step_records):
+    for step in current_steps:
         active_ids = {
             str(item) for item in (step.get("evidence_ids") or ())
             if str(item) in current_evidence_ids
@@ -46,9 +53,16 @@ def current_conflicted_evidence_aliases(
         retained = step.get("retained_cross_step_aliases")
         if not isinstance(retained, Mapping):
             continue
-        for raw_alias, raw_owner_id in retained.items():
-            alias, owner_id = str(raw_alias), str(raw_owner_id)
-            if owner_id in current_evidence_ids and aliases.get(alias) == owner_id:
+        step_id = str(step.get("step_id") or "").strip()
+        for raw_alias in retained:
+            alias = str(raw_alias)
+            owner_id = aliases.get(alias)
+            # The original winner may have retried and replaced its evidence
+            # id; the claimant's current step still competes for this alias.
+            if (
+                owner_id in current_evidence_ids
+                and owners_by_id.get(owner_id) != {step_id}
+            ):
                 conflicts.add(alias)
     return conflicts
 
