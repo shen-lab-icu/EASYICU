@@ -84,6 +84,21 @@ def test_retry_journal_refuses_tampering_drift_or_other_prompt(tmp_path, monkeyp
         owner.load_retry_journal(source)
 
 
+def test_unknown_signed_binding_fields_are_named_without_disclosure(tmp_path, monkeypatch):
+    inner, _book, task = _setup(tmp_path, monkeypatch)
+    _journal(inner, task, tmp_path / "source")
+    source = tmp_path / "source" / ".runtime" / owner.FILE_NAME
+    payload = json.loads(source.read_text())
+    payload["binding"]["sensitive_unknown_field"] = "sensitive-value"
+    source.write_text(json.dumps(owner._signed(payload)))
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError) as mismatch:
+        _journal(inner, task, tmp_path / "continued", source_path=source, source_sha256=digest)
+
+    assert str(mismatch.value) == "retry_journal_authority_mismatch: unexpected_fields"
+
+
 def test_progressive_planner_rebuilds_rejected_outline_before_real_retry(tmp_path, monkeypatch):
     # Fake transports exercise retry semantics; real worker ownership is covered by SIGKILL.
     monkeypatch.setattr(owner, "_verify_pending_guard", lambda *_args: None)
@@ -300,10 +315,12 @@ def test_signed_journal_rollback_and_inflight_prompt_drift_are_refused(tmp_path,
     with pytest.raises(ValueError, match="ledger_changed"):
         _journal(inner, task, tmp_path / "rollback", source_path=source,
                  source_sha256=hashlib.sha256(old_signed).hexdigest())
-    with pytest.raises(ValueError, match="authority_mismatch"):
+    with pytest.raises(ValueError, match="authority_mismatch") as mismatch:
         owner.OutlineRetryJournal(inner=inner, task=task, run_dir=tmp_path / "other-lit", request_sha256="b" * 64,
             dependency_sha256="c" * 64, literature_sha256="f" * 64, source_path=source,
             source_sha256=hashlib.sha256(old_signed).hexdigest())
+    # Explain which authority changed without disclosing paths or digest values.
+    assert str(mismatch.value) == "retry_journal_authority_mismatch: literature_sha256"
 
 
 def test_an_unverified_inflight_reservation_cannot_resume_the_journal(tmp_path, monkeypatch):
