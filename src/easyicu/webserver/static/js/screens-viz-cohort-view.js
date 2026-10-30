@@ -13,6 +13,8 @@
   let workspaceSamplingNote;
   let cohortCharts;
   let cohortReview;
+  let cohortFeatureName;
+  let customGroupFeatureLabel;
   const { demoCatalogModules, catalogModuleText } = window.VIZ_DEMO;
 
   /* In-page panels (aligned with cohort_redesign.py _SUBTABS): Group contrast,
@@ -305,32 +307,6 @@
       return t(raw, `${cohortText(m[1])} · 按 ${cohortText(m[2])} 分组`);
     }
     return t(raw, raw);
-  }
-  // A Chinese page names an export column by its catalog concept; a SOFA-2
-  // evidence flag or a timestamp column by its base concept plus what it records.
-  function cohortFeatureName(column) {
-    if (window.EU_LANG !== 'zh' || !column) return '';
-    const dict = (window.EU_CATALOG || {}).dict || {};
-    const id = String(column).toLowerCase();
-    // A SOFA-2 component export may drop the score prefix (cardio_available).
-    const zhOf = key => (dict[key] && dict[key][1]) || (dict[`sofa2_${key}`] && dict[`sofa2_${key}`][1]) || '';
-    if (zhOf(id)) return zhOf(id);
-    const flag = id.match(/^(.+)_(observed|available|time)$/);
-    if (!flag || !zhOf(flag[1])) return '';
-    return `${zhOf(flag[1])}${{ observed: ' 已观测', available: ' 可用', time: '时间' }[flag[2]]}`;
-  }
-  function customGroupFeatureLabel(group) {
-    const id = String(group && group.feature_id || '');
-    const column = id.split(':')[1] || id;
-    const localized = cohortFeatureName(column);
-    if (localized) return localized;
-    if (column === 'age') return t('Age', '年龄');
-    if (column === 'sex') return t('Sex', '性别');
-    const review = cohortReview() || {};
-    const modules = (review.feature_catalog || {}).modules || [];
-    const feature = modules.flatMap(module => module.features || []).find(row => row.id === id);
-    const category = ((review.custom_group_options || {}).categories || []).find(row => row.feature_id === id);
-    return (feature && feature.label) || (category && category.label) || column;
   }
   function cohortMetricText(row) {
     const metric = String((row && row.metric) || '');
@@ -1494,6 +1470,8 @@
       state, t, icon, esc, fmtInt, fmtNum, fmtPct, fmtP,
       cohortCharts, cohortReview, cohortText, cohortReason,
     });
+    cohortFeatureName = survival.featureName;
+    customGroupFeatureLabel = survival.customGroupFeatureLabel;
   }
 
   window.EU_VIZ_COHORT_VIEW = {

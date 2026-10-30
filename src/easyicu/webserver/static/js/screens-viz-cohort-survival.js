@@ -14,6 +14,32 @@
   let cohortText;
   let cohortReason;
 
+  // Name export columns by catalog concept, including SOFA evidence flags.
+  function cohortFeatureName(column) {
+    if (window.EU_LANG !== 'zh' || !column) return '';
+    const dict = (window.EU_CATALOG || {}).dict || {};
+    const id = String(column).toLowerCase();
+    const zhOf = key => (dict[key] && dict[key][1]) || (dict[`sofa2_${key}`] && dict[`sofa2_${key}`][1]) || '';
+    if (zhOf(id)) return zhOf(id);
+    const flag = id.match(/^(.+)_(observed|available|time)$/);
+    if (!flag || !zhOf(flag[1])) return '';
+    return `${zhOf(flag[1])}${{ observed: ' 已观测', available: ' 可用', time: '时间' }[flag[2]]}`;
+  }
+
+  function customGroupFeatureLabel(group) {
+    const id = String(group && group.feature_id || '');
+    const column = id.split(':')[1] || id;
+    const localized = cohortFeatureName(column);
+    if (localized) return localized;
+    if (column === 'age') return t('Age', '年龄');
+    if (column === 'sex') return t('Sex', '性别');
+    const review = cohortReview() || {};
+    const modules = (review.feature_catalog || {}).modules || [];
+    const feature = modules.flatMap(module => module.features || []).find(row => row.id === id);
+    const category = ((review.custom_group_options || {}).categories || []).find(row => row.feature_id === id);
+    return (feature && feature.label) || (category && category.label) || column;
+  }
+
   function cohortSurvivalBody(review) {
     const survival = review.survival_analysis || {};
     const outcomes = survival.outcomes || [];
@@ -292,6 +318,8 @@
   window.EU_VIZ_COHORT_SURVIVAL = {
     init,
     body: cohortSurvivalBody,
+    featureName: cohortFeatureName,
+    customGroupFeatureLabel,
   };
 })();
 
