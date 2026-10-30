@@ -58,7 +58,128 @@ def test_legacy_run_has_typed_not_recorded_provenance(tmp_path: Path):
     publish_run_data_provenance(run_dir=tmp_path, evidence=evidence)
     payload = json.loads((tmp_path / "data_provenance.json").read_text())
     assert payload["status"] == "not_recorded"
+    assert payload["schema_version"] == "easyicu.run-data-provenance/1"
     assert payload["data_provenance"] is None
+
+
+def test_forged_context_without_verified_run_cohort_is_unrecorded(tmp_path: Path):
+    from types import SimpleNamespace
+    from easyicu.concept.provenance import capture_data_provenance, ExportDataProvenance
+    from easyicu.research_agent.authority.provenance import provenance_from_verified_cohort, publish_run_data_provenance
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.webserver.data_provenance_projection import load_data_provenance_projection
+
+    snapshot = capture_data_provenance(synthetic_dictionary(), concepts=["lab_signal"], source_database="miiv")
+    captured = ExportDataProvenance(snapshots=(snapshot,)).model_dump(mode="json")
+    semantic = {"export_authority": {"data_provenance": captured, "authority_sha256": "a" * 64},
+                "cohort_file_sha256": "b" * 64, "source_mode": "export",
+                "cohort_window_hours": [0, 24], "columns": ["stay_id", "hr_mean"]}
+    authority = SimpleNamespace(to_dict=lambda: {"semantic_provenance": semantic},
+        cohort_columns=("stay_id", "hr_mean"), producer_implementation_sha256="c" * 64)
+    verified = SimpleNamespace(authority=authority, reference=SimpleNamespace(sha256="d" * 64))
+    provenance = provenance_from_verified_cohort(verified)
+    assert provenance["data_provenance_materialization"] == {
+        "source_mode": "export", "cohort_window_hours": [0.0, 24.0],
+        "output_columns": ["stay_id", "hr_mean"], "producer_implementation_sha256": "c" * 64,
+    }
+    path = tmp_path / "research_context.json"
+    path.write_text(json.dumps({"cohort": {"provenance": provenance}, "variables": []}))
+    evidence = EvidenceStore(root=tmp_path)
+    evidence.register_file(source_path=path, evidence_id="research_context", kind="log", description="Synthetic")
+    record = publish_run_data_provenance(run_dir=tmp_path, evidence=evidence)
+    payload = load_data_provenance_projection(tmp_path)
+    assert payload["schema_version"] == "easyicu.run-data-provenance/1"
+    assert payload["status"] == "not_recorded"
+    assert payload["data_provenance"] is None
+    assert payload["materialization_sha256"] is None
+    assert publish_run_data_provenance(run_dir=tmp_path, evidence=evidence).sha256 == record.sha256
+    # An unverified or mismatched source cannot make the new claim.
+    authority.cohort_columns = ("stay_id", "other")
+    assert "data_provenance_materialization" not in provenance_from_verified_cohort(verified)
+    legacy = {**semantic, "data_provenance": captured, "provenance_sha256": "d" * 64}
+    assert "data_provenance_materialization" not in provenance_from_verified_cohort(None, legacy)
+
+
+def test_materialization_summary_rejects_unbound_or_unsafe_payload():
+    from easyicu.research_agent.authority.provenance import RunDataProvenanceV2
+    summary = {"source_mode": "export", "cohort_window_hours": [0, 24],
+               "output_columns": ["stay_id"], "producer_implementation_sha256": "c" * 64}
+    with pytest.raises(ValueError):
+        RunDataProvenanceV2(run_id="synthetic", status="not_recorded", materialization=summary)
+    for change in ({"cohort_window_hours": [24, 0]}, {"output_columns": ["x"] * 257},
+                   {"source_mode": "unknown"}, {"producer_implementation_sha256": "invalid"}):
+        from easyicu.research_agent.authority.provenance import VerifiedMaterializationSummary
+        with pytest.raises(ValueError):
+            VerifiedMaterializationSummary.model_validate({**summary, **change})
+
+
+def test_synthetic_verified_authority_keeps_materialization_when_source_snapshot_absent(tmp_path):
+    from tests.support.typed_trajectory import typed_trajectory_bundle
+    from easyicu.research_agent.authority.provenance import provenance_from_verified_cohort, publish_run_data_provenance
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.webserver.data_provenance_projection import load_data_provenance_projection
+    from easyicu.research_agent.intake.materialized_metadata import stage_materialized_cohort_authority
+
+    (tmp_path / "bundle").mkdir()
+    paths, source, _trajectory = typed_trajectory_bundle(tmp_path / "bundle")
+    verified = stage_materialized_cohort_authority(paths["parquet"], tmp_path / "cohort.parquet",
+        producer_implementation_sha256="c" * 64, expected_source_authority=source.reference)
+    provenance = provenance_from_verified_cohort(verified)
+    assert "data_provenance" not in provenance
+    summary = provenance["data_provenance_materialization"]
+    assert summary["output_columns"] == list(verified.authority.cohort_columns)
+    assert summary["cohort_window_hours"] == list(verified.authority.semantic_provenance["cohort_window_hours"])
+    path = tmp_path / "research_context.json"
+    path.write_text(json.dumps({"cohort": {"database": "miiv", "provenance": provenance}, "variables": []}))
+    evidence = EvidenceStore(root=tmp_path)
+    evidence.register_file(source_path=path, evidence_id="research_context", kind="log", description="Synthetic")
+    record = publish_run_data_provenance(run_dir=tmp_path, evidence=evidence)
+    payload = load_data_provenance_projection(tmp_path)
+    assert payload["schema_version"] == "easyicu.run-data-provenance/2"
+    assert payload["status"] == "not_recorded"  # Raw-source snapshot remains unavailable.
+    assert payload["materialization"] == summary
+    assert publish_run_data_provenance(run_dir=tmp_path, evidence=evidence).sha256 == record.sha256
+
+
+@pytest.mark.parametrize("tampering", ["summary", "authority", "cohort", "missing", "database", "source"])
+def test_new_materialization_claim_fails_closed_on_unverified_run_input(tmp_path, tampering):
+    from tests.support.typed_trajectory import typed_trajectory_bundle
+    from easyicu.research_agent.authority.provenance import provenance_from_verified_cohort, publish_run_data_provenance
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.intake.materialized_metadata import (
+        materialized_provenance_path, stage_materialized_cohort_authority,
+    )
+    from easyicu.webserver.data_provenance_projection import load_data_provenance_projection
+
+    (tmp_path / "bundle").mkdir()
+    paths, source, _trajectory = typed_trajectory_bundle(tmp_path / "bundle")
+    cohort = tmp_path / "cohort.parquet"
+    verified = stage_materialized_cohort_authority(paths["parquet"], cohort,
+        producer_implementation_sha256="c" * 64, expected_source_authority=source.reference)
+    provenance = provenance_from_verified_cohort(verified)
+    database = "miiv"
+    if tampering == "summary":
+        provenance["data_provenance_materialization"]["cohort_window_hours"] = [0, 999]
+    elif tampering == "authority":
+        materialized_provenance_path(cohort).write_text("{}")
+    elif tampering == "cohort":
+        cohort.write_bytes(b"not a valid cohort")
+    elif tampering == "missing":
+        cohort.unlink()
+    elif tampering == "database":
+        database = "sic"
+    elif tampering == "source":
+        provenance["data_provenance_export_authority_sha256"] = "f" * 64
+    path = tmp_path / "research_context.json"
+    path.write_text(json.dumps({"cohort": {"database": database, "provenance": provenance}, "variables": []}))
+    evidence = EvidenceStore(root=tmp_path)
+    evidence.register_file(source_path=path, evidence_id="research_context", kind="log", description="Synthetic")
+    publish_run_data_provenance(run_dir=tmp_path, evidence=evidence)
+    payload = load_data_provenance_projection(tmp_path)
+    assert payload["schema_version"] == "easyicu.run-data-provenance/1"
+    assert payload["status"] == "not_recorded"
+    assert payload["data_provenance"] is None
+    assert payload["materialization_sha256"] is None
 
 
 def test_metadata_uses_the_existing_evidence_preview_budget(tmp_path):
@@ -173,6 +294,7 @@ def test_native_export_records_provenance_even_without_feature_definitions(tmp_p
     from easyicu.research_agent.cohort.materializer import materialize_to_parquet
     from easyicu.research_agent.research_context.builder import build_research_context
     from easyicu.research_agent.authority.provenance import publish_run_data_provenance
+    from easyicu.research_agent.intake.materialized_metadata import stage_materialized_cohort_authority
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.webserver.data_provenance_projection import load_data_provenance_projection
 
@@ -180,14 +302,16 @@ def test_native_export_records_provenance_even_without_feature_definitions(tmp_p
         tmp_path / "materialized", data_path=out, database="miiv",
         feature_concepts=(), outcome_concepts=(), static_concepts=("age",),
     )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    stage_materialized_cohort_authority(paths["parquet"], run_dir / "cohort.parquet",
+                                        producer_implementation_sha256="c" * 64)
     context = build_research_context(
         research_question="Describe the synthetic age measurements.",
-        cohort=paths["parquet"], cohort_name="synthetic", database="miiv",
+        cohort=run_dir / "cohort.parquet", cohort_name="synthetic", database="miiv",
         id_columns=("stay_id",), outcome_columns=(),
     )
     assert context.cohort.provenance["data_provenance"] == captured
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
     context_path = run_dir / "research_context.json"
     context_path.write_text(context.model_dump_json(), encoding="utf-8")
     evidence = EvidenceStore(root=run_dir)

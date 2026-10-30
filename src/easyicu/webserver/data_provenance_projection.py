@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from easyicu.research_agent.authority.provenance import RunDataProvenance
+from easyicu.research_agent.authority.provenance import RunDataProvenance, RunDataProvenanceV2
 from .research_evidence_preview import (
     EvidencePreviewError, build_evidence_preview, project_review_evidence_refs,
 )
@@ -50,7 +50,8 @@ def scan_data_provenance_artifact(payload: dict) -> dict:
             return {"ok": False, "error": "artifact_privacy_scan_failed",
                     "artifact": "data_provenance.json", "privacy_scan": scan}
     try:
-        projected = RunDataProvenance.model_validate(payload).model_dump(mode="json")
+        model = RunDataProvenanceV2 if payload.get("schema_version") == "easyicu.run-data-provenance/2" else RunDataProvenance
+        projected = model.model_validate(payload).model_dump(mode="json")
     except ValueError:
         return {"ok": False, "error": "artifact_schema_invalid", "artifact": "data_provenance.json"}
     return {"ok": True, "payload": projected, "privacy_scan": scan}

@@ -384,6 +384,37 @@ class RunDataProvenance(BaseModel):
         return self
 
 
+class VerifiedMaterializationSummary(BaseModel):
+    """Facts copied from a verified materialization authority, not inferred lineage."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    source_mode: Literal["export", "converted"]
+    cohort_window_hours: tuple[float, float]
+    output_columns: tuple[str, ...]
+    producer_implementation_sha256: Digest
+
+    @model_validator(mode="after")
+    def check_bounds(self):
+        if (self.cohort_window_hours[0] > self.cohort_window_hours[1]
+                or not 1 <= len(self.output_columns) <= 256
+                or any(not isinstance(name, str) or not 1 <= len(name) <= 128
+                       for name in self.output_columns)
+                or len(set(self.output_columns)) != len(self.output_columns)):
+            raise ValueError("materialization summary is outside the bounded metadata contract")
+        return self
+
+
+class RunDataProvenanceV2(RunDataProvenance):
+    schema_version: Literal["easyicu.run-data-provenance/2"] = "easyicu.run-data-provenance/2"
+    materialization: VerifiedMaterializationSummary
+
+    @model_validator(mode="after")
+    def check_materialization_binding(self):
+        if self.materialization_sha256 is None or self.cohort_file_sha256 is None:
+            raise ValueError("materialization facts require verified cohort and receipt bindings")
+        return self
+
+
 def provenance_from_verified_cohort(
     verified: VerifiedMaterializedCohortAuthority | None,
     legacy_provenance: dict | None = None,
@@ -394,13 +425,11 @@ def provenance_from_verified_cohort(
     semantic = verified.authority.to_dict()["semantic_provenance"] if verified else legacy_provenance
     export = semantic.get("export_authority") or {}
     captured = export.get("data_provenance") or semantic.get("data_provenance")
-    if captured is None:
+    snapshot = ExportDataProvenance.model_validate(captured) if captured is not None else None
+    if (snapshot is None or not snapshot.snapshots) and verified is None:
         return {}
-    snapshot = ExportDataProvenance.model_validate(captured)
-    if not snapshot.snapshots:
-        return {}
-    return {
-        "data_provenance": snapshot.model_dump(mode="json"),
+    result = {
+        **({"data_provenance": snapshot.model_dump(mode="json")} if snapshot and snapshot.snapshots else {}),
         "data_provenance_export_authority_sha256": export.get("authority_sha256"),
         "data_provenance_materialization_sha256": (
             verified.reference.sha256 if verified else legacy_provenance["provenance_sha256"]
@@ -414,6 +443,23 @@ def provenance_from_verified_cohort(
             if semantic.get("cohort_definition") else None
         ),
     }
+    if verified is not None:
+        authority = verified.authority
+        # The frozen semantic receipt must describe exactly the sealed output;
+        # never use a present-day dictionary or infer a mapping from names.
+        if tuple(semantic.get("columns") or ()) == tuple(authority.cohort_columns):
+            try:
+                summary = VerifiedMaterializationSummary.model_validate({
+                    "source_mode": semantic.get("source_mode"),
+                    "cohort_window_hours": semantic.get("cohort_window_hours"),
+                    "output_columns": semantic.get("columns"),
+                    "producer_implementation_sha256": authority.producer_implementation_sha256,
+                })
+            except ValueError:
+                pass
+            else:
+                result["data_provenance_materialization"] = summary.model_dump(mode="json")
+    return result
 
 
 def publish_run_data_provenance(*, run_dir: Path, evidence: EvidenceStore):
@@ -429,11 +475,40 @@ def publish_run_data_provenance(*, run_dir: Path, evidence: EvidenceStore):
     context = json.loads(context_path.read_text(encoding="utf-8"))
     provenance = context.get("cohort", {}).get("provenance") or {}
     captured = provenance.get("data_provenance")
+    materialization = provenance.get("data_provenance_materialization")
+    if materialization is not None:
+        from ..intake.materialized_metadata import (
+            MaterializedMetadataError, load_verified_materialized_cohort_authority,
+        )
+
+        # Context is merely an evidence-bound claim. Re-establish authority
+        # from the run-owned staged cohort, never a context-supplied path.
+        try:
+            cohort = run_dir / "cohort.parquet"
+            verified = None if cohort.is_symlink() else load_verified_materialized_cohort_authority(cohort)
+            actual = provenance_from_verified_cohort(verified) if verified is not None else {}
+            bound = (
+                verified is not None
+                and context.get("cohort", {}).get("database") == verified.sidecar.source_database
+                and all(provenance.get(key) == actual.get(key) for key in (
+                    "data_provenance_materialization", "data_provenance_materialization_sha256",
+                    "data_provenance_cohort_file_sha256", "data_provenance_export_authority_sha256",
+                    "data_provenance",
+                ))
+                and actual.get("data_provenance_materialization") is not None
+            )
+        except (OSError, ValueError, MaterializedMetadataError):
+            bound = False
+        if not bound:
+            materialization = None
+            captured = None
+            provenance = {}
     if captured is not None:
         captured = ExportDataProvenance.model_validate(captured)
         if not captured.snapshots:
             captured = None
-    payload = RunDataProvenance(
+    payload_type = RunDataProvenanceV2 if materialization is not None else RunDataProvenance
+    payload = payload_type(
         run_id=run_dir.name, status="recorded" if captured else "not_recorded",
         research_context_sha256=context_record.sha256,
         export_authority_sha256=provenance.get("data_provenance_export_authority_sha256"),
@@ -444,6 +519,7 @@ def publish_run_data_provenance(*, run_dir: Path, evidence: EvidenceStore):
         variables=tuple(RunVariableProvenance(
             column=variable["name"], concept_id=variable.get("source_concept"),
         ) for variable in context.get("variables", [])),
+        **({"materialization": materialization} if materialization is not None else {}),
     )
     raw = payload.model_dump_json().encode("utf-8")
     existing = evidence.get("data_provenance")
