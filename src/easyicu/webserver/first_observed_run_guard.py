@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -40,6 +41,22 @@ class FirstObservedRunBindingError(ValueError):
     """The signed coordinate and reviewed run input cannot be proven equal."""
 
 
+@dataclass(frozen=True, slots=True)
+class FirstObservedPopulationProof:
+    """A verified observation for this input, not an approval or capability.
+
+    Its fields are constructible.  A caller must invoke the verifier again at
+    each trust boundary rather than treating a saved instance as authority.
+    """
+
+    cohort_authority_sha256: str
+    coordinate_sha256: str
+    preparation_checkpoint_sha256: str
+    preparation_run_id: str
+    source_identity_sha256: str
+    criterion_sha256: str
+
+
 def _restriction_from_cohort(*, run_dir: Path, cohort_path: Path) -> tuple[Mapping[str, Any] | None, Any]:
     verified = load_verified_materialized_cohort_authority(cohort_path)
     if verified is None:
@@ -58,6 +75,80 @@ def _restriction_from_cohort(*, run_dir: Path, cohort_path: Path) -> tuple[Mappi
         seen.add(parent)
         _, authority = _local_authority_reference(run_dir, authority_sha256=parent)
     return None, verified
+
+
+def verify_prepared_first_observed_population(
+    *, cohort_path: Path, study_context_id: str,
+    criterion: Mapping[str, Any], source_identity: SourceIdentity,
+) -> FirstObservedPopulationProof:
+    """Verify a typed cohort against its host-signed preparation and source.
+
+    This is usable before an execution plan exists. It checks the actual
+    cohort stay IDs as well as the sealed lineage and the consumed host
+    decision, and performs no raw-source acquisition. The returned evidence
+    is not a human approval, an execution grant, or a reusable capability.
+    """
+    cohort_path = Path(cohort_path)
+    if (not isinstance(criterion, Mapping) or not isinstance(source_identity, SourceIdentity)
+            or criterion.get("kind") != "first_observed_icu_single_hospital_adult"
+            or criterion.get("role") != "include"):
+        raise FirstObservedRunBindingError("first_observed_run_population_invalid")
+    restriction, verified_cohort = _restriction_from_cohort(run_dir=cohort_path.parent, cohort_path=cohort_path)
+    if restriction is None:
+        raise FirstObservedRunBindingError("first_observed_materialization_authority_missing")
+    source_run = restriction.get("preparation_run_id")
+    binding_sha = restriction.get("preparation_binding_sha256")
+    if not isinstance(source_run, str) or not isinstance(binding_sha, str):
+        raise FirstObservedRunBindingError("first_observed_host_origin_missing")
+    source_pending, _ = agent_pipeline_runs.raw_preparation_review_owner(source_run, study_context_id)
+    source_dir = Path(source_pending.run_dir)
+    with AnchoredDirectory.open(source_dir) as directory:
+        preparation = RawPreparationCheckpoint.model_validate_json(
+            directory.read_bytes("raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+        directory.assert_still_selected()
+    scope = preparation.request.payload.get(_SCOPE_KEY)
+    if preparation.state != "approved" or not isinstance(scope, Mapping):
+        raise FirstObservedRunBindingError("first_observed_host_preparation_unavailable")
+    raw_pending = preparation.model_dump(mode="json", exclude={"checkpoint_sha256"})
+    raw_pending.update(state="pending", decision=None)
+    nonce = canonical_sha256({"run_id": source_run, "study_context_id": study_context_id,
+                              "checkpoint_sha256": canonical_sha256(raw_pending)})
+    with AnchoredDirectory.open(state_paths.state_root() / "private-preparation-decisions") as directory:
+        receipt = json.loads(directory.read_bytes(nonce + ".json", max_bytes=64 * 1024))
+        directory.assert_still_selected()
+    binding = RawPreparationHostBinding(project_id=receipt["project_id"], session_id=receipt["session_id"],
+        study_context_id=study_context_id, run_id=source_run, nonce=nonce)
+    coordinate = resolve_prepared_first_observed_coordinate(
+        run_dir=source_dir, checkpoint=preparation, binding=binding, scope=scope)
+    expected = {"schema_version": "easyicu.first-observed-icu-restriction/1",
+        "coordinate_sha256": coordinate.sha256, "archive_sha256": coordinate.archive_sha256,
+        "patient_table_sha256": coordinate.patient_table_sha256,
+        "export_manifest_sha256": coordinate.export_manifest_sha256, "plan_sha256": coordinate.plan_sha256,
+        "preparation_checkpoint_sha256": coordinate.preparation_checkpoint_sha256,
+        "population_definition": "adult_first_observed_icu_in_single_visible_hospitalization",
+        "not_lifetime_first_icu": True, "preparation_run_id": binding.run_id,
+        "preparation_binding_sha256": canonical_sha256(binding.model_dump(mode="json"))}
+    if dict(restriction) != expected or binding_sha != expected["preparation_binding_sha256"]:
+        raise FirstObservedRunBindingError("first_observed_materialization_binding_changed")
+    # A valid producer sidecar is not proof that its constructible coordinate
+    # was applied. Verify the actual staged identities against the host bytes.
+    stays = read_verified_materialized_cohort_table(cohort_path, verified=verified_cohort).select(["stay_id"]).to_pandas()
+    if len(restrict_to_first_observed_icu(stays, coordinate=coordinate)) != len(stays):
+        raise FirstObservedRunBindingError("first_observed_materialization_rows_changed")
+    criterion_sha = canonical_sha256(dict(criterion))
+    if criterion_sha != canonical_sha256(scope.get("criterion")):
+        raise FirstObservedRunBindingError("first_observed_run_population_changed")
+    source_sha = canonical_sha256(source_identity.to_dict())
+    if source_sha != scope.get("source_identity_sha256"):
+        raise FirstObservedRunBindingError("first_observed_run_source_changed")
+    return FirstObservedPopulationProof(
+        cohort_authority_sha256=verified_cohort.reference.sha256,
+        coordinate_sha256=coordinate.sha256,
+        preparation_checkpoint_sha256=coordinate.preparation_checkpoint_sha256,
+        preparation_run_id=source_run,
+        source_identity_sha256=source_sha,
+        criterion_sha256=criterion_sha,
+    )
 
 
 def _reject_unrequested_restriction(run_dir: Path) -> None:
@@ -158,52 +249,12 @@ def verify_first_observed_execution_inputs(*, pending: Any, study_context_id: st
     cohort_path = run_dir / relative
     if not cohort_path.resolve().is_relative_to(run_dir.resolve()):
         raise FirstObservedRunBindingError("first_observed_run_cohort_path_invalid")
-    restriction, verified_cohort = _restriction_from_cohort(run_dir=cohort_path.parent, cohort_path=cohort_path)
-    if restriction is None:
-        raise FirstObservedRunBindingError("first_observed_materialization_authority_missing")
-    source_run = restriction.get("preparation_run_id")
-    binding_sha = restriction.get("preparation_binding_sha256")
-    if not isinstance(source_run, str) or not isinstance(binding_sha, str):
-        raise FirstObservedRunBindingError("first_observed_host_origin_missing")
-    source_pending, _ = agent_pipeline_runs.raw_preparation_review_owner(source_run, study_context_id)
-    source_dir = Path(source_pending.run_dir)
-    with AnchoredDirectory.open(source_dir) as directory:
-        preparation = RawPreparationCheckpoint.model_validate_json(
-            directory.read_bytes("raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
-        directory.assert_still_selected()
-    scope = preparation.request.payload.get(_SCOPE_KEY)
-    if preparation.state != "approved" or not isinstance(scope, Mapping):
-        raise FirstObservedRunBindingError("first_observed_host_preparation_unavailable")
-    raw_pending = preparation.model_dump(mode="json", exclude={"checkpoint_sha256"})
-    raw_pending.update(state="pending", decision=None)
-    nonce = canonical_sha256({"run_id": source_run, "study_context_id": study_context_id,
-                              "checkpoint_sha256": canonical_sha256(raw_pending)})
-    with AnchoredDirectory.open(state_paths.state_root() / "private-preparation-decisions") as directory:
-        receipt = json.loads(directory.read_bytes(nonce + ".json", max_bytes=64 * 1024))
-        directory.assert_still_selected()
-    binding = RawPreparationHostBinding(project_id=receipt["project_id"], session_id=receipt["session_id"],
-        study_context_id=study_context_id, run_id=source_run, nonce=nonce)
-    coordinate = resolve_prepared_first_observed_coordinate(
-        run_dir=source_dir, checkpoint=preparation, binding=binding, scope=scope)
-    expected = {"schema_version": "easyicu.first-observed-icu-restriction/1",
-        "coordinate_sha256": coordinate.sha256, "archive_sha256": coordinate.archive_sha256,
-        "patient_table_sha256": coordinate.patient_table_sha256,
-        "export_manifest_sha256": coordinate.export_manifest_sha256, "plan_sha256": coordinate.plan_sha256,
-        "preparation_checkpoint_sha256": coordinate.preparation_checkpoint_sha256,
-        "population_definition": "adult_first_observed_icu_in_single_visible_hospitalization",
-        "not_lifetime_first_icu": True, "preparation_run_id": binding.run_id,
-        "preparation_binding_sha256": canonical_sha256(binding.model_dump(mode="json"))}
-    if dict(restriction) != expected or binding_sha != expected["preparation_binding_sha256"]:
-        raise FirstObservedRunBindingError("first_observed_materialization_binding_changed")
-    # Recheck the actual staged identities; provenance alone is not proof
-    # that a constructible coordinate was applied to these rows.
-    stays = read_verified_materialized_cohort_table(cohort_path, verified=verified_cohort).select(["stay_id"]).to_pandas()
-    if len(restrict_to_first_observed_icu(stays, coordinate=coordinate)) != len(stays):
-        raise FirstObservedRunBindingError("first_observed_materialization_rows_changed")
-    if canonical_sha256(matches[0]) != canonical_sha256(scope.get("criterion")):
-        raise FirstObservedRunBindingError("first_observed_run_population_changed")
     context = parse_research_context_json(verified.context_evidence_path.read_text(encoding="utf-8"))
     source = SourceIdentity.from_record(_constraints(context).get("source_identity"))
-    if source is None or canonical_sha256(source.to_dict()) != scope.get("source_identity_sha256"):
+    if source is None:
         raise FirstObservedRunBindingError("first_observed_run_source_changed")
+    verify_prepared_first_observed_population(
+        cohort_path=cohort_path, study_context_id=study_context_id,
+        criterion=matches[0], source_identity=source,
+    )
     return True
