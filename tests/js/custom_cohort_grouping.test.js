@@ -13,6 +13,10 @@ c.EU_API = { loadCohortReviewSummary(body) { posted.push(body); return new Promi
 c.EU_VIZ_COHORT.init({ t: (_en, zh) => zh, icon: () => '', esc: fmt, fmtInt: fmt, fmtNum: fmt, fmtPct: fmt, fmtP: fmt,
   officialDemoContext: () => null, registryActivePath: () => source, bindSourceRegistry() {}, officialDemoOffers: () => '',
   activeSourceKind: () => null, sourceRegistryBlock: () => '', repaintScreen() {}, vizRail: () => '', workspaceSamplingNote: () => '' });
+c.EU_CATALOG.dict.sofa2_cardio = ['Cardiovascular', '心血管'];
+assert.equal(c.EU_VIZ_COHORT_SURVIVAL.featureName('cardio_observed'), '心血管 已观测');
+assert.equal(c.EU_VIZ_COHORT_SURVIVAL.customGroupFeatureLabel({feature_id: 'demographics:age'}), '年龄');
+assert.equal(c.EU_VIZ_COHORT_SURVIVAL.customGroupFeatureLabel({feature_id: 'demographics:sex'}), '性别');
 const featureCatalog = { modules: [{ features: [
   { id: 'demographics:age', module: 'demographics', column: 'age', label: 'Age', kind: 'numeric' },
   { id: 'demographics:sex', module: 'demographics', column: 'sex', label: 'Sex', kind: 'categorical' },

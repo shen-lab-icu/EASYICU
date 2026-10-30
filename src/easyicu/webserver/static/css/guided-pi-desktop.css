@@ -377,7 +377,15 @@
 }
 /* A researcher can reveal the progress panel without leaving the empty entry. */
 @media(min-width:1181px){
+ .gd-main.gpi-empty-session-focus:not(.gpi-empty-aside-open):not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside-restore{display:grid}
  .gd-main.threecol.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open):not(.gd-project-rail-collapsed){grid-template-columns:var(--gd-project-rail-width) minmax(0,1fr) var(--gd-context-aside-width)}
  .gd-main.threecol.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr) var(--gd-context-aside-width)}
  .gd-main.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:flex}
+}
+@media(max-width:1180px){
+ .gd-main.gpi-empty-session-focus:not(.gpi-empty-aside-open):not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside-restore{display:grid!important}
+ .gd-main.threecol.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:flex;position:fixed;z-index:30;top:0;right:0;width:min(430px,90vw);height:100dvh;max-height:100dvh;box-shadow:var(--shadow-2)}
+ .gd-main.gpi-empty-session-focus.gpi-empty-aside-open .gpi-aside-section[data-gpi-aside-section="progress"]{max-height:none}
+ .gd-main.gpi-empty-session-focus.gpi-empty-aside-open .gpi-aside-section textarea{box-sizing:border-box;width:100%;min-height:80px}
+ .gd-main.gpi-empty-session-focus.gpi-empty-aside-open .gd-aside-collapse{display:grid!important}
 }
