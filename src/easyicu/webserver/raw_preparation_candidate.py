@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 from datetime import datetime, timezone
+import hashlib
 import json
 
 from easyicu.concept.loader import load_dictionary
@@ -66,6 +67,54 @@ def _single_table_pending(plan: PlanReviewAuthority, dependencies: dict, identit
     return RawPreparationCheckpoint.pending(plan_sha256=plan.plan_sha256, request=request)
 
 
+def _partial_multitable_preview(*, identity: SourceIdentity, plan: PlanReviewAuthority,
+                                context: Any, run_dir: Path, candidate: dict) -> dict:
+    """Derive a review-only projection, never a dependency closure or grant."""
+    from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
+    from easyicu.webserver.reviewed_multitable_source import build_source_bound_multitable_scope
+
+    evidence = EvidenceStore(run_dir).get("research_context")
+    path = verified_run_evidence_path(run_dir, evidence) if evidence is not None else None
+    if path is None or evidence.sha256 != candidate.get("research_context_evidence_sha256"):
+        raise ValueError("raw_preparation_context_evidence_missing")
+    with AnchoredDirectory.open(path.parent) as directory:
+        raw = directory.read_bytes(path.name, max_bytes=5 * 1024 * 1024)
+        directory.assert_still_selected()
+    if hashlib.sha256(raw).hexdigest() != evidence.sha256:
+        raise ValueError("raw_preparation_context_evidence_mismatch")
+    evidence_context = parse_research_context_json(raw.decode("utf-8"))
+    if canonical_sha256(evidence_context.model_dump(mode="json")) != canonical_sha256(context.model_dump(mode="json")):
+        raise ValueError("raw_preparation_context_evidence_mismatch")
+    if candidate.get("source_identity_sha256") != canonical_sha256(identity.to_dict()):
+        raise ValueError("raw_preparation_source_mismatch")
+    files = candidate.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError("raw_preparation_multitable_roster_missing")
+    requested: dict[str, list[str]] = {}
+    expected = []
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("table"), str) or not isinstance(item.get("columns"), list):
+            raise ValueError("raw_preparation_multitable_roster_invalid")
+        table, columns = item["table"], item["columns"]
+        if table in requested and requested[table] != columns:
+            raise ValueError("raw_preparation_multitable_columns_inconsistent")
+        requested[table] = columns
+        expected.append({"table": table, "path": item.get("path"), "columns": columns})
+    if len(requested) < 2:
+        raise ValueError("raw_preparation_multitable_roster_missing")
+    scope, roster = build_source_bound_multitable_scope(identity=identity, requested_columns=requested,
+                                                        plan_sha256=plan.plan_sha256)
+    expected.sort(key=lambda row: (row["table"], row["path"]))
+    if scope["inputs"] != expected or roster.get("source_identity_sha256") != candidate["source_identity_sha256"]:
+        raise ValueError("raw_preparation_multitable_candidate_changed")
+    return {"adapter_id": scope["adapter_id"], "plan_sha256": plan.plan_sha256,
+            "scope_sha256": canonical_sha256(scope), "roster_candidate_sha256": roster["candidate_sha256"],
+            "inputs": scope["inputs"], "partial_projection_only": True,
+            "would_stage_full_input_files": True, "would_project_all_rows": True,
+            "cohort_complete": False, "joins_performed": False, "derived_features_computed": False,
+            "dependency_closure_verified": False, "approvable": False, "analysis_authorized": False}
+
+
 def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
     pending, study = agent_pipeline_runs.raw_preparation_review_owner(run_id, study_context_id)
     run_dir = Path(pending.run_dir)
@@ -110,9 +159,20 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
             candidate = candidate_from_bound_research_context(study=study, run_dir=run_dir)
             current = study_contexts.get_context(study_context_id)
             if (current and study_contexts.scientific_configuration_sha256(current)
-                    == study_contexts.scientific_configuration_sha256(study)
-                    and run_artifact_disclosure.scan_browser_projection(candidate).get("passed")):
-                blocked["source_partition_candidate"] = candidate
+                    == study_contexts.scientific_configuration_sha256(study)):
+                partial = None
+                try:
+                    partial = _partial_multitable_preview(
+                        identity=identity, plan=authority, context=context, run_dir=run_dir, candidate=candidate)
+                except (ValueError, OSError, TypeError, KeyError, AuthorityFilesystemError):
+                    pass
+                current = study_contexts.get_context(study_context_id)
+                if (current and study_contexts.scientific_configuration_sha256(current)
+                        == study_contexts.scientific_configuration_sha256(study)
+                        and run_artifact_disclosure.scan_browser_projection(candidate).get("passed")):
+                    blocked["source_partition_candidate"] = candidate
+                    if partial and run_artifact_disclosure.scan_browser_projection(partial).get("passed"):
+                        blocked["partial_multitable_projection"] = partial
         except (ValueError, OSError, TypeError, KeyError, AuthorityFilesystemError):
             pass
         return blocked

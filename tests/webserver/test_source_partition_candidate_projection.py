@@ -172,7 +172,7 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       const esc=v=>String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
       const workflow={{next_action_code:'starting',starting:{{action_code:'prepare_analysis_data'}},
-        raw_preparation_candidate_run_id:'run',raw_preparation_candidate_result:{{status:'blocked',
+        raw_preparation_candidate_run_id:'run',raw_preparation_candidate_result:{{status:'blocked',partial_multitable_projection:{{partial_projection_only:true}},
           blocker_codes:['dependency_cohort_inputs_unknown'],source_partition_candidate:{{
             files:[{{table:'<table>',path:'<file>',columns:['id','<value>']}}],
             unmapped_variables:['<missing>'],identifier_candidates:[{{variable:'<id>',table:'<table>',column:'<column>'}},{{variable:null,table:'cases',column:'CaseID'}}]}}}}}};
@@ -186,6 +186,7 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
     assert '&lt;table>' in html and '&lt;file>' in html and '&lt;missing>' in html
     assert '&lt;id>' in html and '&lt;column>' in html and '未验证实际记录、表间关联或派生标识' in html
     assert '未绑定研究变量' in html and '不代表研究变量已绑定' in html
+    assert '不筛选队列、不关联表、不计算派生特征' in html and '暂不可审批或执行' in html
     assert '<file>' not in html and '不授权数据准备或分析' in html
     assert 'data-gpi-preparation-review' not in html
 
@@ -210,6 +211,7 @@ def test_click_forwards_candidate_and_ignores_stale_run_response():
       const target={closest:s=>s==='[data-gpi-preparation-preview]' ? {dataset:{gpiPreparationPreview:'run'}} : null};
       click({target});
       resolve({status:'blocked',blocker_codes:['dependency_cohort_inputs_unknown'],
+        partial_multitable_projection:{partial_projection_only:true,approvable:false},
         source_partition_candidate:{files:[{table:'lab',path:'lab/1.parquet',columns:['value']}],unmapped_variables:['id']}});
       setImmediate(()=>{
         const forwarded=state.workflow.raw_preparation_candidate_result;
@@ -222,4 +224,5 @@ def test_click_forwards_candidate_and_ignores_stale_run_response():
     result = json.loads(run_node(node, script, check=True).stdout)
     assert result['forwarded']['status'] == 'blocked'
     assert result['forwarded']['source_partition_candidate']['files'][0]['path'] == 'lab/1.parquet'
+    assert result['forwarded']['partial_multitable_projection'] == {'partial_projection_only': True, 'approvable': False}
     assert result['state']['status'] == 'loading'

@@ -516,6 +516,9 @@
                 source_partition_candidate: result && result.source_partition_candidate
                   && typeof result.source_partition_candidate === 'object' && !Array.isArray(result.source_partition_candidate)
                   ? result.source_partition_candidate : null,
+                partial_multitable_projection: result && result.partial_multitable_projection
+                  && typeof result.partial_multitable_projection === 'object' && !Array.isArray(result.partial_multitable_projection)
+                  ? result.partial_multitable_projection : null,
               };
             } catch (_) {
               if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession
