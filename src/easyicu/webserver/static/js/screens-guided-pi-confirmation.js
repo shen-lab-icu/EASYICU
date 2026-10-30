@@ -781,6 +781,7 @@
         dependency_derivation_callback_unknown: tr('A derived feature may read additional inputs.', '派生特征可能还需要其他输入。'),
         dependency_concept_unrecorded: tr('A requested concept has no recorded source mapping.', '有请求的概念缺少已记录的来源映射。'),
         dependency_context_concepts_unrecorded: tr('The source mapping does not cover every variable in the research context.', '来源映射尚未覆盖研究上下文中的全部变量。'),
+        dependency_cohort_concepts_unrecorded: tr('The source mapping does not cover every concept used by the reviewed cohort criteria.', '来源映射尚未覆盖已审阅人群条件使用的全部概念。'),
         dependency_reviewed_window_missing: tr('The reviewed observation window is missing.', '科学审阅中缺少可核对的观察时间窗口。'),
         dependency_reviewed_window_too_large: tr('The reviewed observation window cannot yet be represented for this check.', '这次审阅的时间窗口暂无法用于准备范围检查。'),
       };

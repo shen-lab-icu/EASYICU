@@ -24,7 +24,7 @@ from easyicu.research_agent.research_context.typed import parse_research_context
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.webserver import agent_pipeline_runs, sources
 from easyicu.webserver.raw_preparation_decisions import _publish_once
-from easyicu.webserver.raw_preparation_dependencies import candidate_from_scientific_review
+from easyicu.webserver.raw_preparation_dependencies import candidate_from_scientific_review, reviewed_plan_provenance_concepts
 
 
 def _plan_authority(pending: Any) -> PlanReviewAuthority:
@@ -136,7 +136,7 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
         raise ValueError("raw_preparation_source_unavailable")
     source_root = Path(str(matches[0]["path"]))
     config = load_src_cfg(identity.database)
-    concepts = list(dict.fromkeys(str(item.source_concept or item.name) for item in context.variables))
+    concepts = reviewed_plan_provenance_concepts(context=context, plan=plan)
     if not concepts:
         raise ValueError("raw_preparation_concepts_unavailable")
     snapshot = capture_data_provenance(load_dictionary(include_sofa2=True), concepts=concepts,

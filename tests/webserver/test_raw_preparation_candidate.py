@@ -37,6 +37,35 @@ def test_route_requires_bound_conversation_and_is_only_a_preview(monkeypatch):
     assert error.value.status_code == 400
 
 
+def test_candidate_includes_reviewed_predicate_concept_missing_from_variables(tmp_path, monkeypatch):
+    from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+    from easyicu.research_agent.planning.cohort_contract import CohortDefinition, ConceptPredicate, TimeWindow
+
+    result, source_root, _, checkpoint = _case(tmp_path, monkeypatch, approved=False)
+    context = result.context.model_copy(update={'variables': [v for v in result.context.variables if v.name != 'age']})
+    predicate = ConceptPredicate(concept_id='age', time_window=TimeWindow(
+        anchor='icu_admission', start_offset_hours=0, end_offset_hours=24),
+        aggregation='first', op='>=', value=18)
+    plan = result.plan.model_copy(update={'cohort': CohortDefinition(name='typed', inclusion=(predicate,))})
+    (tmp_path / 'research_context.json').write_text(context.model_dump_json())
+    pending = SimpleNamespace(run_id='run', run_dir=str(tmp_path), requests=(checkpoint.request,))
+    monkeypatch.setattr(agent_pipeline_runs, 'raw_preparation_review_owner', lambda *_: (pending, {'id': 'study'}))
+    monkeypatch.setattr(sources, 'load_registry', lambda: {'sources': [{'path': str(source_root)}]})
+    monkeypatch.setattr(raw_preparation_candidate, '_plan_authority', lambda _: PlanReviewAuthority.create(plan=plan))
+    real_capture = raw_preparation_candidate.capture_data_provenance
+    seen = []
+    def observe(*args, **kwargs):
+        seen.extend(kwargs['concepts'])
+        return real_capture(*args, **kwargs)
+    monkeypatch.setattr(raw_preparation_candidate, 'capture_data_provenance', observe)
+    monkeypatch.setattr(raw_preparation_candidate, 'candidate_from_scientific_review',
+        lambda **_: {'pending': None, 'dependencies': {'blocker_codes': ['dependency_cohort_inputs_unknown']}})
+    outcome = raw_preparation_candidate.create_candidate_for_review(run_id='run', study_context_id='study')
+    assert 'age' in seen
+    assert outcome['status'] == 'blocked'
+    assert not (tmp_path / 'raw_preparation_checkpoint.json').exists()
+
+
 def test_reviewed_plan_gets_only_non_approvable_partial_multitable_preview(tmp_path, monkeypatch):
     from easyicu.databases.research_plan_requirements import _constraints
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
