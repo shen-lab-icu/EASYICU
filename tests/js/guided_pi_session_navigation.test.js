@@ -341,3 +341,51 @@ test('deleting an old selected conversation cannot clear a newer selection in th
   assert.equal(h.calls.remember.length, rememberedBefore, 'do not clear then restore the new selected conversation');
   assert.equal(h.calls.sync.length, syncedBefore, 'do not replace the new conversation URL');
 });
+
+test('stale default offers a recovery only for the current project after failed create', async () => {
+  const h = harness({ session: null });
+  let callback;
+  h.modules.declare('skillAttach', {
+    noteDefaultFailure: async (project, error) => project === 'project-a' && error.code === 'skill_attachment_stale',
+    bindDefaultRecovery: (_host, _project, onResult) => { callback = onResult; },
+    clearDefaultFailure() {},
+  });
+  h.api.createPiCopilotSession = async () => { throw Object.assign(new Error('stale'), { code: 'skill_attachment_stale' }); };
+  await h.nav.createSession();
+  assert.equal(h.state.session, null);
+  assert.match(h.state.error, /项目默认技能已更改或不可用/);
+  assert.equal(typeof callback, 'function');
+  callback('project-a', true, '');
+  assert.match(h.state.error, /已移除本项目默认技能/);
+});
+
+test('late stale-default lookup cannot attach recovery to a different project', async () => {
+  const h = harness({ session: null });
+  const pending = deferred();
+  let bound = false;
+  let isCurrent;
+  h.modules.declare('skillAttach', {
+    noteDefaultFailure: (_project, _error, predicate) => { isCurrent = predicate; return pending.promise; },
+    bindDefaultRecovery: () => { bound = true; },
+  });
+  h.api.createPiCopilotSession = async () => { throw Object.assign(new Error('stale'), { code: 'skill_attachment_stale' }); };
+  const run = h.nav.createSession();
+  await flush();
+  h.switchProject();
+  assert.equal(isCurrent(), false);
+  pending.resolve(true);
+  await run;
+  assert.equal(bound, false);
+  assert.equal(h.state.error, 'Project B current status');
+});
+
+test('a stale hub attachment after session creation is not mistaken for a stale project default', async () => {
+  const h = harness({ session: null });
+  let checked = false;
+  h.modules.declare('skillAttach', { noteDefaultFailure: async () => { checked = true; return true; }, clearDefaultFailure() {} });
+  h.context.STUDY_WORKSPACE.applyHubIntent = () => { throw Object.assign(new Error('attachment stale'), { code: 'skill_attachment_stale' }); };
+  await h.nav.createSession();
+  assert.equal(h.state.session.session_id, 'created-a');
+  assert.equal(h.state.error, 'attachment stale');
+  assert.equal(checked, false);
+});

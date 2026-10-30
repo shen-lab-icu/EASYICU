@@ -320,7 +320,13 @@
       }
       (Array.isArray(rows) ? rows : []).forEach(row => entries.push(row || {}));
       if (!entries.length) return `<p class="gpi-claim-boundary">${esc(t('No registered evidence artifacts.', '没有登记证据产物。'))}</p>`;
-      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(t('Open registered evidence', '打开已登记证据'))}</div><div class="ag-artifact-table-wrap"><table class="ag-artifact-table"><thead><tr><th>${esc(t('Role', '角色'))}</th><th>${esc(t('Type', '类型'))}</th><th>${esc(t('Preview', '预览'))}</th><th>SHA-256</th></tr></thead><tbody>${entries.map(row => `<tr><td>${esc(row.role || '')}${row.status && row.status !== 'current' ? ` <span class="pill warn">${esc(row.status)}</span>` : ''}</td><td>${esc(row.kind || '')}</td><td>${evidenceButton(row, row.evidence_id || t('Open', '打开'), pointer, sourceValue)}${displayAnchorButton(row)}</td><td>${esc(row.sha256 || '')}</td></tr>`).join('')}</tbody></table></div></div>`;
+      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(t('Open registered evidence', '打开已登记证据'))}</div><div class="ag-artifact-table-wrap"><table class="ag-artifact-table"><thead><tr><th>${esc(t('Role', '角色'))}</th><th>${esc(t('Type', '类型'))}</th><th>${esc(t('Preview', '预览'))}</th><th>SHA-256</th></tr></thead><tbody>${entries.map(row => {
+        // The scalar pointer belongs to the exact registered source JSON. A
+        // related table, script or sibling JSON has no such field binding.
+        const exactSource = source && row.evidence_id === source.evidence_id
+          && String(row.sha256 || '').toLowerCase() === String(source.sha256 || '').toLowerCase();
+        return `<tr><td>${esc(row.role || '')}${row.status && row.status !== 'current' ? ` <span class="pill warn">${esc(row.status)}</span>` : ''}</td><td>${esc(row.kind || '')}</td><td>${evidenceButton(row, row.evidence_id || t('Open', '打开'), exactSource ? pointer : '', exactSource ? sourceValue : '')}${displayAnchorButton(row)}</td><td>${esc(row.sha256 || '')}</td></tr>`;
+      }).join('')}</tbody></table></div></div>`;
     };
     const panels = claims.map(claim => {
       const claimId = String(claim && claim.claim_id || '');

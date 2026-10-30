@@ -122,3 +122,34 @@ test('the chain is worded for Chinese readers', () => {
   assert.match(items[5], /与 PhysioNet 官方发布一致/);
   assert.match(items[1], />打开<\/button>/);
 });
+
+test('only the exact source artifact receives the selected number locator', () => {
+  const html = reader().manuscriptProvenanceView({
+    article_blocks: [{ kind: 'paragraph', segments: [{ kind: 'claim', text: '0.82', claim_id: 'claim_1' }] }],
+    claims: [{
+      claim_id: 'claim_1', display_value: '0.82', canonical_value: 0.82,
+      source_json_pointer: '/estimate', evidence: { evidence_id: 'summary', sha256: sha('b'), kind: 'statistic' },
+      related_artifacts: [
+        { evidence_id: 'summary', sha256: sha('b'), kind: 'statistic', role: 'source_json' },
+        { evidence_id: 'summary', sha256: sha('e'), kind: 'statistic', role: 'supporting_artifact' },
+        { evidence_id: 'supporting_json', sha256: sha('c'), kind: 'statistic', role: 'supporting_artifact' },
+        { evidence_id: 'analysis_code', sha256: sha('d'), kind: 'code', role: 'analysis_code' },
+      ],
+    }],
+  }, hooks);
+  const buttons = Array.from(html.matchAll(/<button\b[^>]*data-gpi-evidence-open[^>]*>/g), match => match[0]);
+  for (const button of buttons.filter(value => value.includes('data-evidence-id="summary"') && value.includes(`data-evidence-sha256="${sha('b')}"`))) {
+    assert.match(button, /data-evidence-pointer="\/estimate"/);
+    assert.match(button, /data-evidence-source-value="0\.82"/);
+  }
+  const otherVersion = buttons.find(value => value.includes('data-evidence-id="summary"') && value.includes(`data-evidence-sha256="${sha('e')}"`));
+  assert.ok(otherVersion);
+  assert.doesNotMatch(otherVersion, /data-evidence-pointer="[^"]+"|data-evidence-source-value="[^"]+"/,
+    'the same evidence ID with a different digest is not the selected source');
+  for (const id of ['supporting_json', 'analysis_code']) {
+    const button = buttons.find(value => value.includes(`data-evidence-id="${id}"`));
+    assert.ok(button, `${id} remains previewable`);
+    assert.doesNotMatch(button, /data-evidence-pointer="[^"]+"|data-evidence-source-value="[^"]+"/,
+      'a different artifact must not inherit the scalar locator');
+  }
+});

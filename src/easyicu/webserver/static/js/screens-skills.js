@@ -7,7 +7,7 @@
   const implementation = () => window.EU_SKILL_IMPLEMENTATION;
   const ui = { catalogMode: workflows() ? 'workflows' : 'skills', source: 'all', category: 'all', query: '', hideDisabled: false,
     selected: '', tab: 'overview', install: false, editing: '', draft: '', stages: ['conversation'],
-    installEnabled: true, detail: null, loadingDetail: false, packageDetail: null,
+    installEnabled: false, detail: null, loadingDetail: false, packageDetail: null,
     packageFile: '', implementationEntry: null, loadingPackage: false, busy: false, error: '', notice: '', catalogWarning: '',
     upload: null, uploadName: '', referenceFiles: {} };
   const tr = (en, zh) => window.t(en, zh);
@@ -492,7 +492,7 @@
       if (target.dataset.skEdit !== undefined) { void editSkill(); return; }
       if (target.dataset.skDownload !== undefined) { void downloadSkill(); return; }
       if (target.dataset.skRemove !== undefined) { void removeSkill(); return; }
-      if (target.dataset.skUpload !== undefined) { ui.install = true; ui.editing = ''; ui.draft = ''; ui.upload = null; ui.uploadName = ''; ui.referenceFiles = {}; ui.error = ''; rerender(); return; }
+      if (target.dataset.skUpload !== undefined) { ui.install = true; ui.editing = ''; ui.draft = ''; ui.upload = null; ui.uploadName = ''; ui.referenceFiles = {}; ui.stages = ['conversation']; ui.installEnabled = false; ui.error = ''; rerender(); return; }
       if (target.dataset.skCreateWith !== undefined) { openBuilder('create'); return; }
       if (target.dataset.skUse) {
         const skill = allSkills().find(item => item.id === target.dataset.skUse);

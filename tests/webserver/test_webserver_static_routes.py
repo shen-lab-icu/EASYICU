@@ -730,7 +730,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     # the renderer at call time, so it must be defined before it.
     vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261028-ux1")
     assert fixtures_pos < vocab_pos < render_pos
-    assert "js/screens-agent-report-reader.js?v=20261026-dbnames1" in index_html
+    assert "js/screens-agent-report-reader.js?v=20261030-video1" in index_html
     assert "js/screens-agent-render.js?v=20261026-run-files1" in index_html
     assert "js/screens-agent-question-requirements.js?v=20261026-rr1" in index_html
     assert "css/agent-plan.css?v=20261026-run-files1" in index_html
@@ -2010,10 +2010,10 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert "Object.prototype.hasOwnProperty.call" in dict_js
     assert "C().cov[k] || 0" not in dict_js
     assert "coverage unknown" not in dict_js
-    assert "Mapped databases" in dict_js
-    assert "映射的数据库" in dict_js
+    assert "Declared mappings" in dict_js
+    assert "字典声明映射" in dict_js
     assert "Dictionary mappings" in dict_js and "No catalog audit" not in dict_js
-    assert "This column shows which ICU databases the dictionary maps each feature to" in dict_js
+    assert "not proof of equivalent clinical meaning, exact research capability, or coverage" in dict_js
     assert "Active export coverage" not in dict_js
     assert "当前导出覆盖" not in dict_js
     assert "not extracted" not in dict_js
@@ -2026,7 +2026,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261028-readm1" in index_html
     assert "api.js?v=20261029-freshfix6" in index_html
-    assert "screens-dict.js?v=20261028-readm1" in index_html
+    assert "screens-dict.js?v=20261030-video2" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
     assert "deepdive.css?v=20261028-unsup1" in index_html

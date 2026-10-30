@@ -16,6 +16,9 @@
   let busy = false;
   let error = '';
   let defaults = { projectId: '', items: null };
+  let defaultFailure = null;
+  let defaultFailureRequest = 0;
+  const recoveryBindings = new WeakMap();
 
   const keyOf = row => `${row.source}:${row.id}`;
   function identity(row) {
@@ -128,8 +131,11 @@
     }
     return defaults.items;
   }
+  const sameIdentity = (left, right) => keyOf(left) === keyOf(right)
+    && String(left.digest || '') === String(right.digest || '')
+    && String(left.version || '') === String(right.version || '');
   const sameSet = (left, right) => left.length === right.length
-    && left.every(row => right.some(other => keyOf(other) === keyOf(row)));
+    && left.every(row => right.some(other => sameIdentity(row, other)));
   function defaultsControl(projectId, session) {
     if (!projectId || !session || defaults.projectId !== projectId || !defaults.items) return '';
     const current = draft(session);
@@ -155,10 +161,66 @@
     } finally { busy = false; }
   }
 
+  // A changed/disabled default prevents session creation. Do not substitute a
+  // newer Skill silently: show the frozen defaults and let the researcher
+  // explicitly clear them, guarded against a concurrent project update.
+  async function noteDefaultFailure(projectId, failure, isCurrent = () => true) {
+    if (!['skill_attachment_stale', 'skill_attachment_disabled', 'skill_attachment_unknown'].includes(failure && failure.code)
+      || !projectId || !api().loadProjectDefaultSkills) return false;
+    const request = ++defaultFailureRequest;
+    const payload = await api().loadProjectDefaultSkills(projectId);
+    if (request !== defaultFailureRequest || !isCurrent()) return false;
+    const items = Array.isArray(payload && payload.attached_skills) ? payload.attached_skills : [];
+    defaults = { projectId, items };
+    defaultFailure = items.length ? { projectId, items } : null;
+    return Boolean(defaultFailure);
+  }
+  function defaultRecoveryControl(projectId) {
+    if (!defaultFailure || defaultFailure.projectId !== projectId) return '';
+    const names = defaultFailure.items.map(row => esc(String(row.id || ''))).join(', ');
+    return `<div class="gpi-config-note" role="status"><span>${esc(tr('Current project default Skills:', '当前登记的项目默认技能：'))} ${names}. ${esc(tr('Existing conversations remain unchanged.', '已创建的对话不受影响。'))}</span><button type="button" data-gpi-clear-failed-defaults ${busy ? 'disabled' : ''}>${esc(tr('Remove project default Skills', '移除本项目默认技能'))}</button></div>`;
+  }
+  async function clearFailedDefaults(projectId) {
+    if (busy || !defaultFailure || defaultFailure.projectId !== projectId || !api().setProjectDefaultSkills) return false;
+    const failed = defaultFailure;
+    busy = true; error = '';
+    try {
+      await api().setProjectDefaultSkills(projectId, { attached_skills: [], expected_attached_skills: failed.items });
+      defaults = { projectId, items: [] };
+      if (defaultFailure === failed) defaultFailure = null;
+      return true;
+    } catch (failure) {
+      error = failure && failure.code === 'skill_defaults_changed'
+        ? tr('Project defaults changed. Try creating the conversation again to review the current defaults.', '项目默认技能已变化。请重新创建对话，查看当前默认技能。')
+        : errorText(failure);
+      if (failure && failure.code === 'skill_defaults_changed' && defaultFailure === failed) defaultFailure = null;
+      return false;
+    } finally { busy = false; }
+  }
+  function recoveryError() { return error; }
+  function clearDefaultFailure(projectId) {
+    defaultFailureRequest++;
+    if (defaultFailure && defaultFailure.projectId === projectId) defaultFailure = null;
+  }
+  function bindDefaultRecovery(host, projectId, onResult) {
+    if (!host) return;
+    const existing = recoveryBindings.get(host);
+    if (existing) { existing.projectId = projectId; existing.onResult = onResult; return; }
+    const binding = { projectId, onResult };
+    host.addEventListener('click', event => {
+      if (busy || !event.target || !event.target.closest || !event.target.closest('[data-gpi-clear-failed-defaults]')) return;
+      const selected = binding.projectId();
+      const callback = binding.onResult;
+      void clearFailedDefaults(selected).then(ok => callback(selected, ok, recoveryError()));
+    });
+    recoveryBindings.set(host, binding);
+  }
+
   function reset(sessionId) { if (sessionId) catalogs.delete(sessionId); error = ''; }
 
   window.EasyICU.guidedPi.declare('skillAttach', {
     load, loadDefaults, toggle, ensure, remove, chips, defaultsControl, saveDefaults, attached, reset,
+    noteDefaultFailure, defaultRecoveryControl, clearFailedDefaults, clearDefaultFailure, bindDefaultRecovery,
     hasDraft: session => draft(session).length > 0, maxAttached,
   });
 })();

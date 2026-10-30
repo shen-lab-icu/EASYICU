@@ -97,7 +97,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-message-actions.js?v=20261029-opt2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-starters.js?v=20261029-freshfix6" in index
-    assert "js/screens-guided-pi-idea-source.js?v=20261026-mention1" in index
+    assert "js/screens-guided-pi-idea-source.js?v=20261030-video2" in index
     assert "js/screens-guided-pi-header.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-model-menu.js?v=20261028-ux1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
@@ -111,7 +111,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-demo-walkthrough.css?v=20261026-demo3" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
-        "js/screens-guided-pi-evidence-preview.js?v=20261022-plain3" in index
+        "js/screens-guided-pi-evidence-preview.js?v=20261030-video2" in index
     )
     assert (
         "js/screens-guided-pi-technical-report.js?v=20261022-plain3"
@@ -120,7 +120,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261022-prose1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261029-journey3" in index
+    assert "js/screens-guided-pi-preview.js?v=20261030-video2" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
@@ -141,7 +141,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261029-followup1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261029-followup1" in index
+    assert "js/screens-guided-pi-session-navigation.js?v=20261030-video2" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261030-video2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -158,7 +159,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
-    assert "js/screens-guided-pi-skill-attach.js?v=20261028-slash1" in index
+    assert "js/screens-guided-pi-skill-attach.js?v=20261030-video2" in index
     assert "js/screens-guided-pi-slash-menu.js?v=20261028-slash1" in index
     assert "css/guided-pi-composer-menus.css?v=20261028-slash1" in index
     # "@" mentions: databases, variables and project files resolved by the host (mt1).
@@ -175,7 +176,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261028-surv1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261029-freshfix7" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261030-estimand1" in index
     assert "js/screens-guided-pi.js?v=20261029-journey2" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (

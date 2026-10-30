@@ -110,13 +110,16 @@ class SkillAttachmentService(MentionService):
             self._save_record(record)
             return {"attached_skills": attachment_payload(record.draft_attached_skills)}
 
-    def project_default_skills(self, *, project_id: str, attached_skills: object = None) -> dict:
+    def project_default_skills(
+        self, *, project_id: str, attached_skills: object = None,
+        expected_attached_skills: object = None,
+    ) -> dict:
         self._assert_project_initialized(project_id)
         if attached_skills is not None:
             refs = validate_attachments(
                 attached_skills, activation=self.extension_registry.snapshot(), registry=self.extension_registry,
             )
-            self.project_store.set_default_skills(project_id, refs)
+            self.project_store.set_default_skills(project_id, refs, expected=expected_attached_skills)
         binding = self.project_store.binding(project_id)
         return {"attached_skills": attachment_payload(binding.default_skills)}
 

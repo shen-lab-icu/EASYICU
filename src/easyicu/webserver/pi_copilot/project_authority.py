@@ -254,10 +254,13 @@ class ProjectAuthorityStore:
             late = [row for row in self._read() if row.project_id not in seen]
             return tuple(rows + archived + late)
 
-    def set_default_skills(self, project_id: str, attachments: object) -> None:
+    def set_default_skills(
+        self, project_id: str, attachments: object, *, expected: object = None,
+    ) -> None:
         """Edit project metadata without touching any existing conversation."""
         clean = self._clean(project_id, code="pi_project_binding_required")
         refs = parse_attachments(attachments)
+        expected_refs = None if expected is None else parse_attachments(expected)
         with self._lock, exclusive_file_lock(
             self.path.with_name(self.path.name + ".lock"),
             code="pi_project_authority_lock_unavailable",
@@ -266,6 +269,8 @@ class ProjectAuthorityStore:
             for rows, write in ((active, self._write), (archived, self._write_archive)):
                 for index, binding in enumerate(rows):
                     if binding.project_id == clean:
+                        if expected_refs is not None and binding.default_skills != expected_refs:
+                            raise PiCopilotError("skill_defaults_changed", "skill_defaults_changed", status_code=409)
                         rows[index] = binding.model_copy(update={"default_skills": refs}, deep=True)
                         write(rows)
                         return

@@ -21,6 +21,7 @@
       // connectionReady() covers the account model and the Chat Completions API.
       if (!CONNECT.ask('start_conversation', createSession)) return;
       state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; state.editingMessageId = ''; render();
+      let creatingSession = false;
       try {
         if (state.projectInitialization && state.projectInitialization.required) {
           const bindingReceipt = state.project && state.project.binding_receipt;
@@ -38,6 +39,7 @@
           await loadWorkflow();
           if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
         }
+        creatingSession = true;
         const payload = await api().createPiCopilotSession({
           project_id: expectedProjectId,
           title: `${displayProjectTitle(state.project && state.project.title, tr('Research project', '研究项目'))} · ${state.agentMode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}`,
@@ -47,7 +49,10 @@
           research_provider: state.researchProvider,
           research_model: state.researchProvider === 'codex' ? state.researchModel : null,
         });
+        creatingSession = false;
         if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
+        const recoveryOwner = MODULES.optional('skillAttach');
+        if (recoveryOwner && recoveryOwner.clearDefaultFailure) recoveryOwner.clearDefaultFailure(expectedProjectId);
         state.session = payload.session; state.messages = transcriptMessages(state.session);
         STUDY_WORKSPACE.applyHubIntent(expectedProjectId, state.session);
         const hubAttachment = STUDY_WORKSPACE.takeHubAttachment(expectedProjectId, state.session);
@@ -67,7 +72,25 @@
         }
         state.sessions = [state.session].concat(state.sessions.filter(row => row.session_id !== state.session.session_id));
       } catch (error) {
-        if (expectedProjectId === projectId() && selectionRevision === state.sessionSelectionRevision) state.error = errorText(error);
+        if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
+        state.error = errorText(error);
+        const recoveryOwner = MODULES.optional('skillAttach');
+        if (creatingSession && recoveryOwner && recoveryOwner.noteDefaultFailure) {
+          try {
+            const recoverable = await recoveryOwner.noteDefaultFailure(expectedProjectId, error,
+              () => expectedProjectId === projectId() && selectionRevision === state.sessionSelectionRevision);
+            if (recoverable && expectedProjectId === projectId() && selectionRevision === state.sessionSelectionRevision) {
+              state.error = tr('Cannot start this conversation because a project default Skill changed or is unavailable.', '项目默认技能已更改或不可用，暂时无法开始对话。');
+              recoveryOwner.bindDefaultRecovery(state.host, projectId, (selected, ok, detail) => {
+                if (selected !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
+                state.error = ok
+                  ? tr('Project default Skills removed. Start a new conversation again.', '已移除本项目默认技能，请重新开始对话。')
+                  : detail;
+                render();
+              });
+            }
+          } catch (_) { /* Preserve the original creation error if defaults cannot be read. */ }
+        }
       } finally {
         if (expectedProjectId === projectId() && selectionRevision === state.sessionSelectionRevision) { state.creating = false; render(); }
       }

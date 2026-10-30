@@ -256,6 +256,9 @@
   }
   function selectedNumberView(payload, locator) {
     if (!locator || !locator.pointer) return '';
+    if (locator.restored && (locator.value === '' || locator.value == null)) {
+      return `<div class="gpi-evidence-withheld" role="alert"><strong>${esc(tr('Cannot verify the selected number after reopening', '重开后无法核对所选数字'))}</strong><p>${esc(tr('Open the report and select the number again to inspect its evidence.', '请打开报告并重新选择该数字，查看对应证据。'))}</p></div>`;
+    }
     const pointer = String(locator.pointer);
     let value = payload.value;
     if (!pointer.startsWith('/') || /~(?:[^01]|$)/.test(pointer)) value = undefined;

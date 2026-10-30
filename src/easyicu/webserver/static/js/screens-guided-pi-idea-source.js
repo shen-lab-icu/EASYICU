@@ -9,6 +9,15 @@
   let pending = null;
   let reading = false;
   let error = '';
+  let allowedUrl = '';
+  let currentScope = null;
+  let scopeRevision = 0;
+
+  function syncScope(options) {
+    const scope = `${String(options.projectId || '')}\u0000${String(options.sessionId || '')}`;
+    if (currentScope !== null && currentScope !== scope) reset();
+    currentScope = scope;
+  }
 
   function api() { return window.EU_API || {}; }
   function clone(value) { return value ? JSON.parse(JSON.stringify(value)) : null; }
@@ -27,7 +36,11 @@
     return {
       source_type: ['pdf', 'url', 'manual'].includes(sourceType) ? sourceType : 'manual',
       title: String(suggested.title || source.title || pdf.title || fallback.title || '').slice(0, 220),
+      user_supplied_title: String(suggested.user_supplied_title || source.user_supplied_title || '').slice(0, 220),
+      user_supplied_journal: String(suggested.user_supplied_journal || source.user_supplied_journal || '').slice(0, 120),
+      user_supplied_year: Number(suggested.user_supplied_year || source.user_supplied_year || 0) || null,
       excerpt: String(suggested.excerpt || source.evidence_quote || fallback.excerpt || '').slice(0, 1200),
+      excerpt_origin: String(suggested.excerpt_origin || source.source_text_basis || '').slice(0, 80),
       journal: String(suggested.journal || source.journal || '').slice(0, 160),
       year: Number(suggested.year || source.year || 0) || null,
       doi: String(suggested.doi || source.doi || '').slice(0, 240),
@@ -42,12 +55,24 @@
     if (pending.source_type === 'pdf') return pending.source_file_name || tr('Attached PDF', '已附加 PDF');
     return pending.title || pending.url || tr('Attached article', '已附加文章');
   }
+  function excerptLabel(tr) {
+    if (!pending || pending.source_type !== 'url') return '';
+    const labels = {
+      pubmed_abstract_excerpt: tr('PubMed abstract excerpt', 'PubMed 摘要节选'),
+      crossref_abstract_excerpt: tr('Crossref abstract excerpt', 'Crossref 摘要节选'),
+      web_metadata_description: tr('Web metadata description', '网页元数据简介'),
+      user_supplied_unverified: tr('User-supplied excerpt; unverified', '用户提供的摘录，尚未核实'),
+    };
+    return labels[pending.excerpt_origin] || tr('No source excerpt available', '无可用来源摘录');
+  }
   function status(options) {
+    syncScope(options);
     const { tr, esc } = options;
-    if (!pending && !reading && !error) return '';
+    if (!pending && !reading && !error && !allowedUrl) return '';
     return `<div class="gpi-idea-source-status${pending ? ' has-source' : ''}" aria-live="polite">
       ${reading ? `<span class="gpi-idea-source-reading"><span class="spin"></span>${esc(tr('Reading PDF…', '正在读取 PDF…'))}</span>` : ''}
-      ${pending ? `<span class="gpi-idea-source-chip"><strong>${esc(label(tr))}</strong><small>${esc(tr('bounded source ready', '来源已就绪'))}</small><button type="button" data-gpi-idea-source-remove aria-label="${esc(tr('Remove source', '移除来源'))}">×</button></span>` : ''}
+      ${pending ? `<span class="gpi-idea-source-chip"><strong>${esc(label(tr))}</strong><small>${esc(excerptLabel(tr) || tr('bounded source ready', '来源已就绪'))}</small><button type="button" data-gpi-idea-source-remove aria-label="${esc(tr('Remove source', '移除来源'))}">×</button></span>` : ''}
+      ${allowedUrl ? `<span>${esc(tr('Network access enabled for the selected article link, once.', '已允许联网解析所选文章链接，仅本次有效。'))}</span>` : ''}
       ${error ? `<span class="gpi-idea-source-error" role="alert">${esc(error)}</span>` : ''}
     </div>`;
   }
@@ -87,6 +112,7 @@
           </details>`;
   }
   function controls(options) {
+    syncScope(options);
     const { tr, esc, icon, disabled, allowIdeaSources = true } = options;
     return `<div class="gpi-idea-source">
       <input type="file" accept="application/pdf,.pdf" data-gpi-idea-pdf-input hidden ${disabled ? 'disabled' : ''} />
@@ -94,7 +120,8 @@
         <summary role="button" aria-haspopup="menu" aria-label="${esc(tr('Add to your question', '添加到问题'))}" title="${esc(tr('Add to your question', '添加到问题'))}">${icon('plus', 17)}</summary>
         <div class="gpi-idea-source-popover" role="menu" aria-label="${esc(tr('Add to your question', '添加到问题'))}">
           ${allowIdeaSources ? `<button type="button" role="menuitem" aria-label="${esc(tr('Upload PDF', '上传 PDF'))}" data-gpi-idea-pdf-pick ${disabled || reading ? 'disabled' : ''}>${icon('file', 17)}<strong>${esc(tr('Upload PDF', '上传 PDF'))}</strong></button>
-          <button type="button" role="menuitem" aria-label="${esc(tr('Paste article link', '粘贴文章链接'))}" data-gpi-idea-url-focus ${disabled ? 'disabled' : ''}>${icon('link', 17)}<strong>${esc(tr('Paste article link', '粘贴文章链接'))}</strong></button>` : ''}
+          <button type="button" role="menuitem" aria-label="${esc(tr('Paste article link', '粘贴文章链接'))}" data-gpi-idea-url-focus ${disabled ? 'disabled' : ''}>${icon('link', 17)}<strong>${esc(tr('Paste article link', '粘贴文章链接'))}</strong></button>
+          <button type="button" role="menuitemcheckbox" aria-checked="${!!allowedUrl}" data-gpi-idea-url-network ${disabled ? 'disabled' : ''}>${icon(allowedUrl ? 'check' : 'globe', 17)}<strong>${esc(tr('Allow online resolution of this article link', '允许联网解析这条文章链接'))}</strong></button>` : ''}
           <span class="gpi-idea-source-divider" aria-hidden="true"></span>
           <button type="button" role="menuitem" aria-label="${esc(tr('Mention data or results', '引用数据或成果'))}" data-gpi-composer-picker="materials" ${disabled ? 'disabled' : ''}>${icon('folder', 17)}<strong>${esc(tr('Mention data or results', '引用数据或成果'))}</strong><span class="gpi-menu-hint">${esc(tr('Type', '输入'))} <kbd>@</kbd></span></button>
           <button type="button" role="menuitem" aria-label="${esc(tr('Skills and methods', '技能与方法'))}" data-gpi-composer-picker="skills" ${disabled ? 'disabled' : ''}>${icon('layers', 17)}<strong>${esc(tr('Skills and methods', '技能与方法'))}</strong><span class="gpi-menu-hint">${esc(tr('Type', '输入'))} <kbd>/</kbd></span></button>
@@ -121,22 +148,27 @@
       callbacks.render();
       return;
     }
+    const requestRevision = scopeRevision;
     reading = true; error = ''; callbacks.render();
     const reader = new FileReader();
     reader.onload = async () => {
       try {
+        if (requestRevision !== scopeRevision) return;
         const raw = String(reader.result || '');
         const contentBase64 = raw.includes(',') ? raw.split(',').pop() : raw;
         const payload = await api().ingestIdeaPdf({ filename: name, content_base64: contentBase64 });
+        if (requestRevision !== scopeRevision) return;
         pending = normalize(payload, { source_type: 'pdf', source_file_name: name });
         if (callbacks.onReady) callbacks.onReady();
       } catch (caught) {
+        if (requestRevision !== scopeRevision) return;
         error = caught && caught.message ? caught.message : String(caught);
       } finally {
-        reading = false; callbacks.render();
+        if (requestRevision === scopeRevision) { reading = false; callbacks.render(); }
       }
     };
     reader.onerror = () => {
+      if (requestRevision !== scopeRevision) return;
       reading = false;
       error = tr('Could not read the selected PDF.', '无法读取所选 PDF。');
       callbacks.render();
@@ -144,16 +176,43 @@
     reader.readAsDataURL(file);
   }
   async function prepareForMessage(text, intent) {
-    if (pending) return clone(pending);
     const url = firstUrl(text);
+    if (pending && (pending.source_type !== 'url' || pending.url === url)) return clone(pending);
+    if (pending && pending.source_type === 'url') pending = null;
     if (!url || intent !== 'idea_mining_entry' || !api().resolveIdeaSource) return null;
+    if (url !== allowedUrl) {
+      allowedUrl = '';
+      throw new Error(window.EU_LANG === 'zh'
+        ? '请先粘贴文章链接，再打开加号菜单并选择“允许联网解析这条文章链接”；也可以上传 PDF。'
+        : 'Paste the article link, then open the plus menu and choose “Allow online resolution of this article link”, or upload a PDF.');
+    }
+    allowedUrl = '';
+    const requestRevision = scopeRevision;
     const payload = await api().resolveIdeaSource({
       source_type: 'url', url, topic: String(text || '').slice(0, 600), allow_network: true,
     });
+    if (requestRevision !== scopeRevision) return null;
+    if (!payload || !payload.source_adapter || payload.source_adapter.status !== 'metadata_fetched') {
+      throw new Error(window.EU_LANG === 'zh'
+        ? '未能读取文章元数据。请检查 PubMed 连接器或文章链接，或改为上传 PDF。'
+        : 'Article metadata could not be retrieved. Check the PubMed connector or article link, or upload a PDF.');
+    }
     pending = normalize(payload, { source_type: 'url', url });
     return clone(pending);
   }
   function handleClick(event, callbacks) {
+    if (event.target.closest('[data-gpi-idea-url-network]')) {
+      const input = callbacks.host() && callbacks.host().querySelector('[data-gpi-input]');
+      const url = firstUrl(input && input.value);
+      if (!url) {
+        allowedUrl = '';
+        error = callbacks.tr('Paste an article link first.', '请先粘贴文章链接。');
+      } else {
+        allowedUrl = allowedUrl === url ? '' : url;
+        error = '';
+      }
+      callbacks.render(); return true;
+    }
     if (event.target.closest('[data-gpi-idea-pdf-pick]')) {
       const menu = event.target.closest('.gpi-idea-source-menu');
       if (menu) menu.removeAttribute('open');
@@ -185,8 +244,8 @@
   }
   function hasSource() { return Boolean(pending); }
   function suggestsIdeaMining(text) { return hasSource() || Boolean(firstUrl(text)); }
-  function consume() { const value = clone(pending); pending = null; error = ''; return value; }
-  function reset() { pending = null; reading = false; error = ''; }
+  function consume() { const value = clone(pending); pending = null; error = ''; allowedUrl = ''; return value; }
+  function reset() { pending = null; reading = false; error = ''; allowedUrl = ''; scopeRevision += 1; }
 
   window.EasyICU.guidedPi.declare('ideaSource', {
     consume, controls, handleChange, handleClick, hasSource, prepareForMessage, reset, status,
