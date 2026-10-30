@@ -1,11 +1,12 @@
 """Non-executable drafts never grant analysis or turn unverified text into evidence."""
+import hashlib
+import json
 import pytest
 from pydantic import ValidationError
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-from easyicu.research_agent.planning.method_literature import method_literature_citations
 from easyicu.research_agent.planning.non_executable_proposal import (
     NonExecutableProposal, ProposedDecision, ProposedReference,
     build_non_executable_proposal, verify_proposal,
@@ -20,13 +21,25 @@ def _register(store, evidence_id, text):
 def test_proposal_binds_exact_registered_evidence_and_keeps_missing_explicit(tmp_path):
     store = EvidenceStore(tmp_path)
     config = {"outcome": "case duration", "version": 1}
-    citation = CitationRecord.model_validate(next(x for x in method_literature_citations() if x["key"] == "strobe_2007"))
-    _register(store, "lit", LiteratureBundle(research_question="question", citations=[citation]).model_dump_json())
+    abstract = "A short registered abstract describes the example method."
+    citation = CitationRecord(key="method", title="Method study", year="2019", pmid="12345")
+    bundle = LiteratureBundle.model_validate({"research_question": "question", "citations": [citation.model_dump()],
+        "screening_decisions": [{"citation_key": "method", "source": "PubMed", "disposition": "include",
+            "evidence_role": "method", "rationale": "Method reference"}],
+        "design_evidence_cards": [{"citation_key": "method", "evidence_role": "method", "access_mode": "abstract",
+            "abstract_locator": "https://pubmed.ncbi.nlm.nih.gov/12345/",
+            "abstract_sha256": hashlib.sha256(abstract.encode()).hexdigest(), "supplement_status": "unknown",
+            "reviewed_at": "2026-01-01T00:00:00Z", "evidence": [{"dimension": "primary_model_and_sensitivities",
+            "source_backed_summary": "The study describes an example method.", "locator": "abstract"}]}]})
+    _register(store, "lit", bundle.model_dump_json())
+    _register(store, "abstract", json.dumps({"citation_key": "method", "pmid": "12345", "doi": None,
+        "abstract": abstract}))
     _register(store, "source", '{"field":"duration"}')
     proposal = build_non_executable_proposal(store=store, configuration=config,
         expected_configuration_sha256=canonical_sha256(config), original_question="original question",
         decisions=(ProposedDecision(decision_id="methods", text="candidate model", references=(
-            ProposedReference(evidence_id="lit", kind="literature", citation_key="strobe_2007"),)),
+            ProposedReference(evidence_id="lit", kind="literature", citation_key="method",
+                source_evidence_id="abstract", verbatim_excerpt="describes the example method"),)),
                    ProposedDecision(decision_id="outcome", text="candidate duration", references=(
             ProposedReference(evidence_id="source", kind="source"),))),
         unresolved=("source mapping unknown",))
@@ -35,6 +48,14 @@ def test_proposal_binds_exact_registered_evidence_and_keeps_missing_explicit(tmp
     assert proposal.decisions[1].unbound_evidence == ("literature",)
     assert proposal.decisions[0].bindings[0].applicability_verified is False
     verify_proposal(store=store, proposal=proposal, configuration=config)
+    with pytest.raises(ValueError, match="original_excerpt_unverified"):
+        build_non_executable_proposal(store=store, configuration=config,
+            expected_configuration_sha256=canonical_sha256(config), original_question="original question",
+            decisions=(ProposedDecision(decision_id="methods", text="candidate model", references=(
+                ProposedReference(evidence_id="lit", kind="literature", citation_key="method",
+                    source_evidence_id="abstract", verbatim_excerpt="plausible but invented excerpt"),)),))
+    with pytest.raises(ValidationError, match="registered original text"):
+        ProposedReference(evidence_id="lit", kind="literature", citation_key="method")
     with pytest.raises(ValueError, match="configuration_mismatch"):
         verify_proposal(store=store, proposal=proposal, configuration={"version": 2})
     source = store.get("source")
@@ -48,7 +69,8 @@ def test_unknown_evidence_and_unretained_citation_rejected(tmp_path):
     config = {"version": 1}
     _register(store, "lit", LiteratureBundle(research_question="q", citations=[]).model_dump_json())
     for ref, error in [(ProposedReference(evidence_id="missing", kind="source"), "not_registered"),
-                       (ProposedReference(evidence_id="lit", kind="literature", citation_key="made-up"), "not_retained")]:
+                       (ProposedReference(evidence_id="lit", kind="literature", citation_key="made-up",
+                            source_evidence_id="abstract", verbatim_excerpt="an example excerpt"), "not_retained")]:
         with pytest.raises(ValueError, match=error):
             build_non_executable_proposal(store=store, configuration=config,
                 expected_configuration_sha256=canonical_sha256(config), original_question="q",
