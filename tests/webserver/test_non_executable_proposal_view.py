@@ -33,9 +33,9 @@ def setup(monkeypatch, tmp_path):
     EvidenceStore(tmp_path)
     study = {'id': 'study1', 'question': 'question', 'outcome': 'outcome'}
     row = {'run_id': 'run1', 'study_id': 'study1', 'project_dir': str(tmp_path),
-           'scientific_configuration_sha256': 'bound'}
+           'scientific_configuration_sha256': 'b' * 64}
     monkeypatch.setattr(view.study_contexts, 'get_context', lambda study_id: study)
-    monkeypatch.setattr(view.study_contexts, 'scientific_configuration_sha256', lambda current: 'bound')
+    monkeypatch.setattr(view.study_contexts, 'scientific_configuration_sha256', lambda current: 'b' * 64)
     monkeypatch.setattr(view, 'research_pipeline_project_root', lambda study_id: tmp_path)
     monkeypatch.setattr(view, 'list_bound_run_history', lambda **kw: [row])
     monkeypatch.setattr(view.run_step_trace, 'pipeline_run_dir', lambda wrapper, run: tmp_path)
@@ -197,6 +197,16 @@ def test_registered_explicit_binding_projects_only_the_actual_verbatim_excerpt(m
     method = next(x for x in persisted['proposal']['decisions'] if x['decision_id'] == 'method_background')
     assert method['bindings'][0]['applicability_verified'] is False
     assert method['bindings'][0]['literature_role'] == 'method'
+    # A non-scientific lifecycle update must not silently drop a saved
+    # candidate association; a scientific change still invalidates the run.
+    study['current_stage'] = 'review'
+    after_progress = view.project_proposal(**kw)
+    assert next(x for x in after_progress['proposal']['decisions']
+                if x['decision_id'] == 'method_background')['bindings']
+    monkeypatch.setattr(view.study_contexts, 'scientific_configuration_sha256', lambda current: 'c' * 64)
+    with pytest.raises(ValueError, match='configuration_mismatch'):
+        view.project_proposal(**kw)
+    monkeypatch.setattr(view.study_contexts, 'scientific_configuration_sha256', lambda current: 'b' * 64)
     assert store.get('candidate_literature_bindings') is None
     monkeypatch.setattr(view.PubMedLiteratureClient, '_http_get', lambda self, path, params: xml.replace(b'12345', b'99999'))
     mismatch = client.post('/api/pi/proposal/project1/session1/run1/pubmed-abstract',
@@ -313,7 +323,7 @@ def test_concurrent_authority_change_fails_closed(monkeypatch, tmp_path, changed
         projects = iter(['study1', 'study2'])
         monkeypatch.setattr(service.project_store, 'resolve', lambda *a: next(projects))
     else:
-        digests = iter(['bound', 'changed'])
+        digests = iter(['b' * 64, 'changed'])
         monkeypatch.setattr(view.study_contexts, 'scientific_configuration_sha256', lambda _: next(digests))
     with pytest.raises(ValueError, match='changed'):
         view.project_proposal(service=service, project_id='project1', session_id='session1', run_id='run1')

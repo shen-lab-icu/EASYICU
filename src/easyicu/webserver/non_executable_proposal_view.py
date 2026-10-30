@@ -133,8 +133,8 @@ def save_candidate_reference(*, service: Any, project_id: str, session_id: str, 
     study = study_contexts.get_context(study_id)
     if not study or study_contexts.scientific_configuration_sha256(study) != preview['scientific_configuration_sha256']:
         raise ValueError('proposal_configuration_changed')
-    manifest = {'schema_version': 'easyicu.candidate-literature-bindings/1',
-        'configuration_sha256': canonical_sha256(study), 'references': [{
+    manifest = {'schema_version': 'easyicu.candidate-literature-bindings/2',
+        'configuration_sha256': study_contexts.scientific_configuration_sha256(study), 'references': [{
             'decision_id': proposed.decision_id,
             'decision_text_sha256': hashlib.sha256(decision['text'].encode('utf-8')).hexdigest(),
             'citation_key': proposed.citation_key, 'source_evidence_id': proposed.source_evidence_id,
@@ -283,9 +283,11 @@ def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: 
             manifest = _LiteratureDecisionReferences.model_validate_json(reference_bytes)
         except ValueError as exc:
             raise ValueError("proposal_binding_manifest_invalid") from exc
-        if manifest.schema_version != "easyicu.candidate-literature-bindings/1":
+        if manifest.schema_version not in {"easyicu.candidate-literature-bindings/1", "easyicu.candidate-literature-bindings/2"}:
             raise ValueError("proposal_binding_manifest_configuration_mismatch")
-        if manifest.configuration_sha256 != canonical_sha256(study):
+        expected_binding_sha = (canonical_sha256(study) if manifest.schema_version.endswith('/1')
+                                else scientific_sha)
+        if manifest.configuration_sha256 != expected_binding_sha:
             # Historical candidate manifests remain immutable but cannot bind
             # a new configuration. A stale one should not hide the proposal.
             continue
