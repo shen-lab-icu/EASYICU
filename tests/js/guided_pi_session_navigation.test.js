@@ -33,7 +33,7 @@ function harness(overrides = {}) {
     busy: false, childJobId: '', creating: false, projectLoading: false,
     error: '', draft: '', taskDraft: '', ...overrides,
   };
-  const calls = { create: [], load: [], list: [], rename: [], remove: [], remember: [], sync: [], opened: [], closeSource: 0, closeChild: 0, previewClose: 0, renders: 0, removeReference: 0, removeSkill: 0, removeMethod: 0 };
+  const calls = { create: [], load: [], list: [], rename: [], remove: [], remember: [], sync: [], opened: [], transcriptUpdates: [], closeSource: 0, closeChild: 0, previewClose: 0, renders: 0, removeReference: 0, removeSkill: 0, removeMethod: 0 };
   const api = {
     createPiCopilotSession: async body => { calls.create.push(plain(body)); return { session: row('created-a') }; },
     loadPiCopilotSession: async (id, project) => { calls.load.push({ id, project }); return { session: row(id) }; },
@@ -49,6 +49,7 @@ function harness(overrides = {}) {
     closeSourceView() {}, closeSource() { calls.closeSource++; }, closeChildSource() { calls.closeChild++; },
     EFFORT_MENU: { preferred: () => 'medium' },
     loadWorkflow: async () => {}, transcriptMessages: session => session.messages || [],
+    TRANSCRIPT: { markSupersededPlanAttempts: (messages, session) => calls.transcriptUpdates.push({ messages, session }) },
     hydrateProjectedJob() {}, errorText: error => error.message || String(error),
     render() { calls.renders++; }, navigationSessionTitle: session => session.title || session.session_id,
     sessionMatchesUiLanguage: session => session && session.language === context.window.EU_LANG,
@@ -237,6 +238,8 @@ test('a session workflow finishing after project switch cannot progress the new 
   const run = h.context.openSession('session-a-2');
   await flush();
   assert.equal(loading, 1);
+  assert.equal(h.calls.transcriptUpdates.length, 1);
+  assert.equal(h.calls.transcriptUpdates[0].session.session_id, 'session-a-2');
   h.switchProject();
   pending.resolve();
   await run;

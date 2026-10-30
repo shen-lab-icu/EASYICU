@@ -71,7 +71,13 @@ assert.match(html, /data-sk-mode="skills"[^>]*>技能 <span>3<\/span>/);
 assert.match(html, /data-sk-mode="methods"[^>]*>模块 <span>2<\/span>/);
 assert.match(html, /<span>审查后可用于报告<\/span>/);
 assert.match(html, /<span>仅分析级<\/span>/);
-assert.doesNotMatch(html, /eusk-catalog-summary|EasyICU 已验证|<small>[^<]*<\/small><\/button>/);
+assert.match(html, /研究流程展示整项研究结构，技能是可调用的完整研究或单项能力，模块是方法组件/);
+assert.doesNotMatch(html, /EasyICU 已验证/);
+const sourcePills = html.match(/<button[^>]*class="eusk-pill [^>]*>[\s\S]*?<\/button>/g) || [];
+assert.equal(sourcePills.length, 3, 'the All, My, and EasyICU source filters are present');
+for (const pill of sourcePills) {
+  assert.doesNotMatch(pill, /<small>/, 'source filters do not contain descriptive labels');
+}
 
 const handlers = {};
 const hub = { addEventListener: (name, handler) => { handlers[name] = handler; } };
@@ -88,7 +94,7 @@ assert.match(html, /跨数据库效应合并/);
 assert.equal((html.match(/class="eusk-card /g) || []).length, 2);
 assert.match(html, /<span>配套方法<\/span>/);
 assert.doesNotMatch(html, /生存分析（时间到事件）/);
-assert.doesNotMatch(html, /eusk-catalog-summary/);
+assert.match(html, /研究流程展示整项研究结构，技能是可调用的完整研究或单项能力，模块是方法组件/);
 click({ skOpen: 'builtin:survival-time-to-event' });
 html = screen.render();
 assert.match(html, /生存分析 · 完整研究/);
