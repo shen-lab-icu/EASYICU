@@ -162,6 +162,42 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
                                                          binding=binding, scope=scope)
 
 
+@pytest.mark.parametrize("changed", ["source", "plan", "export_path", "grant"])
+def test_changed_host_binding_after_read_never_publishes_coordinate(tmp_path, monkeypatch, changed):
+    scope, checkpoint, binding = _approved(tmp_path, monkeypatch)
+    proof = {"official_release_independently_verified": True,
+             "patient_table_sha256": scope["patient_table_sha256"],
+             "export_manifest_sha256": scope["export_manifest_sha256"],
+             "complete_patient_source": {"schema_version": "easyicu.eicu_demo_complete_patient_source/1",
+                                         "all_source_rows_compared": True,
+                                         "archive_sha256": scope["archive_sha256"]}}
+    candidate = SimpleNamespace(frame=pd.DataFrame({"stay_id": [1], FLAG_COLUMN: [True],
+        REASON_COLUMN: ["kept"]}), receipt={"source_binding": proof,
+        "schema_version": owner.SCHEMA, "source_global_table_required": True,
+        "not_lifetime_first_icu": True, "outcome_columns_read": False,
+        "receipt_contains_identifier_values": False, "research_execution_authorized": False,
+        "source_stays": 1, "source_patients": 1, "eligible_patients": 1,
+        "excluded_patients_by_reason": {}, "excluded_stays_by_reason": {}})
+    second_scope = dict(scope)
+    if changed == "source":
+        second_scope["patient_table_sha256"] = "0" * 64
+    if changed == "plan":
+        second_scope["plan_sha256"] = "0" * 64
+    values = iter([(scope, tmp_path), (second_scope, tmp_path / "other" if changed == "export_path" else tmp_path)])
+    monkeypatch.setattr(owner, "_host_inputs", lambda **_: next(values))
+    monkeypatch.setattr(owner, "derive_from_verified_eicu_demo", lambda _: candidate)
+    if changed == "grant":
+        def invalid_grant(**_):
+            raise ValueError("raw_preparation_host_receipt_invalid")
+        monkeypatch.setattr(owner, "verify_consumed_host_review", invalid_grant)
+    def forbidden_publication(**_):
+        raise AssertionError("changed host binding must not publish")
+    monkeypatch.setattr(owner, "_private_root", forbidden_publication)
+    expected = "host_receipt_invalid" if changed == "grant" else "scope_changed_before_publication"
+    with pytest.raises(ValueError, match=expected):
+        owner.prepare_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint, binding=binding, scope=scope)
+
+
 def test_source_flow_rejects_invalid_or_sensitive_content():
     valid = {"schema_version": owner.SCHEMA, "source_global_table_required": True,
              "not_lifetime_first_icu": True, "outcome_columns_read": False,

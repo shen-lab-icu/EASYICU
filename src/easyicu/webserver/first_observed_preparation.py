@@ -243,6 +243,13 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
             "binding_sha256": canonical_sha256(binding.model_dump(mode="json")),
             "coordinate_sha256": hashlib.sha256(data).hexdigest(), "source_complete_six_columns": True,
             "analysis_authorized": False, "private_source_flow": source_flow}
+    # The source and reviewed plan can change while the candidate is being
+    # computed. Do not publish an attestation for the earlier snapshot after
+    # its current host bindings have stopped matching.
+    current_scope, current_export = _host_inputs(run_dir=run_dir, request=checkpoint.request)
+    if current_scope != scope or current_export != export:
+        raise ValueError("first_observed_preparation_scope_changed_before_publication")
+    verify_consumed_host_review(checkpoint=checkpoint, binding=binding, scope=scope)
     document = canonical_json({"body": body, "signature": _signature(body)}).encode()
     root = _private_root(create=True)
     with AnchoredDirectory.open(root) as directory:
