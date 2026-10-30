@@ -38,7 +38,7 @@ import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional
 
 from ..authority.declared_levels import closed_planning_levels_for
 from ..cohort.schema import (
@@ -109,7 +109,6 @@ from .population_spec import (
     PopulationCriterion,
     PopulationSpec,
     SpecWindow,
-    diagnosis_code_token,
 )
 
 POPULATION_COMPILE_SCHEMA_VERSION = "easyicu.population_compile/1"
@@ -178,8 +177,6 @@ _SUMMARY_TRANSFORMS = (
     "window_presence_{summary}",
     "fixed_window_presence_{summary}",
 )
-#: First characters that begin both ICD-9 and ICD-10 codes.
-_BOTH_VERSIONS = frozenset({"E", "V"})
 #: The export's recorded study contract (``source_selection.executed_cohort``).
 _EXECUTED_COHORT = "executed_cohort"
 
@@ -613,8 +610,10 @@ def _compile(criterion: PopulationCriterion, reading: _Input) -> CompiledCriteri
         if isinstance(criterion, DiagnosisCodes):
             raise _NotApplied(
                 "population_diagnosis_codes_need_extraction",
-                "Only an export applies diagnosis codes, and no record of this input "
-                "shows an export that applied exactly these codes.",
+                "The export does not prove the stated coding version, code-boundary "
+                "matching and diagnosis ascertainment for the selected population. "
+                "A matching code list alone cannot establish which stays satisfy "
+                "the inclusion or exclusion; review the source and missing records.",
             )
         if isinstance(criterion, FirstIcuStay):
             raise _NotApplied(
@@ -883,13 +882,19 @@ def _holds_summary(
     """
 
     transform = str(getattr(variable, "unit_normalization", None) or "")
-    if column == f"{concept}_{summary}":
-        return True
-    if transform in {
+    requested = {
         template.format(summary=summary) for template in _SUMMARY_TRANSFORMS
-    }:
-        return True
+    }
+    recognized = {
+        template.format(summary=aggregation)
+        for template in _SUMMARY_TRANSFORMS
+        for aggregation in ("min", "max", "mean", "first", "last")
+    }
+    if transform in recognized:
+        return transform in requested
     if transform == _ONE_VALUE_TRANSFORM:
+        return True
+    if column == f"{concept}_{summary}":
         return True
     source = str(getattr(variable, "source_concept", None) or "").strip()
     kind = column_kind(
@@ -1182,44 +1187,15 @@ def _first_stay_proof(sources: _Sources) -> Optional[SourceProof]:
 def _diagnosis_proof(
     criterion: DiagnosisCodes, sources: _Sources
 ) -> Optional[SourceProof]:
-    """The export matched exactly these codes on the criterion's side.
+    """Old export records do not prove an ICD-defined scientific population.
 
-    The export's records name no coding version: it matched the codes in
-    every version it reads.  ICD-9 codes begin with a digit, E or V and
-    ICD-10 codes with a letter, so only a code beginning with E or V names
-    codes of both: the stays an export kept for one may hold the other
-    version's.  Such an inclusion is not shown; an exclusion is, since the
-    stays left hold neither.
+    They retain code strings but not the coding version, source completeness,
+    or a missing-diagnosis policy. In particular, an exclusion that removed
+    both versions of E/V codes may also have removed patients the study did not
+    exclude. A future source-bound producer must establish these coordinates;
+    no unverified flag in the study's own metadata can supply that authority.
     """
-
-    stated = {diagnosis_code_token(code) for code in criterion.codes}
-    side = "include" if criterion.role == "include" else "exclude"
-    if side == "include" and any(code[:1] in _BOTH_VERSIONS for code in stated):
-        return None
-    for item in sources.steps:
-        if item.stage == "export" and item.criterion == "icd":
-            if _tokens(item.parameters.get(side)) == stated:
-                return SourceProof(
-                    kind="export_report_step",
-                    record_ref="source_selection.export_report",
-                    parameters={"criterion": "icd", side: sorted(stated)},
-                )
-    if sources.executed is not None:
-        if _tokens(sources.executed.get(f"icd_{side}")) == stated:
-            return SourceProof(
-                kind="recorded_study_contract",
-                record_ref=f"source_selection.{_EXECUTED_COHORT}",
-                parameters={f"icd_{side}": sorted(stated)},
-            )
     return None
-
-
-def _tokens(values: Any) -> Optional[set[str]]:
-    if not isinstance(values, Sequence) or isinstance(values, str):
-        return None
-    if not all(isinstance(value, str) for value in values):
-        return None
-    return {diagnosis_code_token(value) for value in values}
 
 
 def _proof_text(proof: SourceProof) -> str:

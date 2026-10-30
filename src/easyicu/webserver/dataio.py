@@ -1555,6 +1555,18 @@ def _read_table_columns(path: Path, columns: List[str]) -> Any:
     return pd.read_csv(path)
 
 
+def _read_icd_columns(path: Path, columns: List[str]) -> Any:
+    """Keep source code text intact, including leading zeroes in CSV files."""
+    import pandas as pd
+
+    if path.suffix == ".parquet":
+        return _read_table_columns(path, columns)
+    present = set(_read_columns(path))
+    wanted = list(dict.fromkeys(column for column in columns if column in present))
+    code_columns = {name: "string" for name in ("icd9code", "icd_code", "icd9_code") if name in present}
+    return pd.read_csv(path, usecols=wanted or None, dtype=code_columns)
+
+
 def _normal_text_series(series: Any) -> Any:
     return (
         series.fillna("")
@@ -1565,8 +1577,23 @@ def _normal_text_series(series: Any) -> Any:
     )
 
 
+def _require_recorded_diagnosis(
+    candidate_ids: Optional[Set[Any]], known_ids: Set[Any], *, database: str,
+) -> None:
+    """A stay without a recorded code has unknown, not negative, status."""
+    if candidate_ids is None:
+        return
+    missing = candidate_ids - known_ids
+    if missing:
+        raise ExportCohortError(
+            "icd_diagnosis_status_unknown",
+            {"database": database, "unknown_stays": len(missing)},
+        )
+
+
 def _match_mimic_icd_ids(
-    data_path: Path, stay_id_col: str, include: List[str], exclude: List[str]
+    data_path: Path, stay_id_col: str, include: List[str], exclude: List[str],
+    candidate_ids: Optional[Set[Any]] = None,
 ) -> Tuple[Set[Any], Set[Any]]:
     import pandas as pd
 
@@ -1580,7 +1607,7 @@ def _match_mimic_icd_ids(
     stays = _read_table_columns(
         stays_path, [stay_id_col, "stay_id", "icustay_id", "hadm_id"]
     )
-    diag = _read_table_columns(
+    diag = _read_icd_columns(
         diag_path, ["hadm_id", "icd_code", "icd9_code", "diagnosis"]
     )
     id_col = (
@@ -1605,20 +1632,25 @@ def _match_mimic_icd_ids(
         stays[["hadm_id", id_col]], on="hadm_id", how="inner"
     )
     codes = _normal_text_series(joined[code_col])
+    known = codes.str.fullmatch(r"[A-Z0-9]+", na=False)
+    _require_recorded_diagnosis(
+        candidate_ids, set(joined.loc[known, id_col].dropna().tolist()), database="mimic",
+    )
 
     def select(tokens: List[str]) -> Set[Any]:
         if not tokens:
             return set()
         mask = pd.Series(False, index=joined.index)
         for token in tokens:
-            mask = mask | codes.str.startswith(token)
+            mask = mask | (known & codes.str.startswith(token))
         return set(joined.loc[mask, id_col].dropna().tolist())
 
     return select(include), select(exclude)
 
 
 def _match_eicu_icd_ids(
-    data_path: Path, include: List[str], exclude: List[str]
+    data_path: Path, include: List[str], exclude: List[str],
+    candidate_ids: Optional[Set[Any]] = None,
 ) -> Tuple[Set[Any], Set[Any]]:
     import pandas as pd
 
@@ -1627,31 +1659,37 @@ def _match_eicu_icd_ids(
         raise ExportCohortError(
             "icd_tables_missing", {"required_tables": ["diagnosis"]}
         )
-    diag = _read_table_columns(
-        diag_path, ["patientunitstayid", "icd9code", "diagnosisstring"]
-    )
+    diag = _read_icd_columns(diag_path, ["patientunitstayid", "icd9code"])
     if "patientunitstayid" not in diag.columns:
         raise ExportCohortError("icd_join_columns_missing", {"database": "eicu"})
-    search_cols = [c for c in ["icd9code", "diagnosisstring"] if c in diag.columns]
-    if not search_cols:
+    if "icd9code" not in diag.columns:
         raise ExportCohortError("icd_code_column_missing", {"database": "eicu"})
-
-    normalized = [_normal_text_series(diag[c]) for c in search_cols]
+    # eICU may store multiple ICD-9 and ICD-10 codes in one comma-separated
+    # value. Match the beginning of each code, never arbitrary substrings of
+    # another code or of diagnosisstring. The latter is descriptive text,
+    # not an ICD code and does not establish a match or a coding version.
+    codes = diag.assign(_code=diag["icd9code"].fillna("").astype(str).str.split(","))
+    codes = codes.explode("_code", ignore_index=True)
+    values = _normal_text_series(codes["_code"])
+    known = values.str.fullmatch(r"[A-Z0-9]+", na=False)
+    _require_recorded_diagnosis(
+        candidate_ids, set(codes.loc[known, "patientunitstayid"].dropna().tolist()), database="eicu",
+    )
 
     def select(tokens: List[str]) -> Set[Any]:
         if not tokens:
             return set()
-        mask = pd.Series(False, index=diag.index)
+        mask = pd.Series(False, index=codes.index)
         for token in tokens:
-            for values in normalized:
-                mask = mask | values.str.contains(token, regex=False)
-        return set(diag.loc[mask, "patientunitstayid"].dropna().tolist())
+            mask = mask | (known & values.str.startswith(token))
+        return set(codes.loc[mask, "patientunitstayid"].dropna().tolist())
 
     return select(include), select(exclude)
 
 
 def _match_icd_ids(
-    data_path: Path, database: str, id_col: str, include: List[str], exclude: List[str]
+    data_path: Path, database: str, id_col: str, include: List[str], exclude: List[str],
+    candidate_ids: Optional[Set[Any]] = None,
 ) -> Tuple[Set[Any], Set[Any]]:
     db = _database_for_patient_filter(database)
     if db not in _ICD_SUPPORTED_DATABASES:
@@ -1659,8 +1697,8 @@ def _match_icd_ids(
             "icd_filter_unsupported_database", {"database": database}
         )
     if db in {"miiv", "mimic", "miii"}:
-        return _match_mimic_icd_ids(data_path, id_col, include, exclude)
-    return _match_eicu_icd_ids(data_path, include, exclude)
+        return _match_mimic_icd_ids(data_path, id_col, include, exclude, candidate_ids)
+    return _match_eicu_icd_ids(data_path, include, exclude, candidate_ids)
 
 
 def _cohort_id_column(frame: Any, preferred: str) -> Optional[str]:
@@ -2016,6 +2054,7 @@ def _resolve_export_cohort(
             id_col,
             normalized["icd_include"],
             normalized["icd_exclude"],
+            selected,
         )
         if normalized["icd_include"]:
             selected = selected & include_ids
