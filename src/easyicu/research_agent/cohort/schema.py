@@ -2457,7 +2457,9 @@ def _predicate_mask(
     mask, window = _refine_occurrence_mask_by_event_time(
         data, pred, mask, status=series, event_time_origin=event_time_origin
     )
-    return mask, window, _unrecorded_value_mask(data, series, window)
+    return mask, window, _unrecorded_value_mask(
+        data, series, window, nonfinite_is_unrecorded=pred.missing_policy is not None,
+    )
 
 
 @dataclass(frozen=True)
@@ -2632,6 +2634,8 @@ def _unrecorded_value_mask(
     data: Any,
     series: Any,
     window: Optional[AppliedEventTimeWindow],
+    *,
+    nonfinite_is_unrecorded: bool = False,
 ) -> Any:
     """The rows a predicate read without a recorded value.
 
@@ -2645,9 +2649,18 @@ def _unrecorded_value_mask(
     """
 
     unrecorded = series.isna()
+    if nonfinite_is_unrecorded:
+        # Infinity is not a measurable clinical value. Treat it as unknown
+        # when the reviewed rule explicitly chooses how unknowns are handled;
+        # legacy rules keep their historical evaluation and serialized identity.
+        unrecorded = unrecorded | series.isin([float("inf"), float("-inf")])
     if window is not None:
+        time = data[window.event_time_column]
+        time_unknown = time.isna()
+        if nonfinite_is_unrecorded:
+            time_unknown = time_unknown | time.isin([float("inf"), float("-inf")])
         unrecorded = unrecorded | (
-            _event_occurred(series) & data[window.event_time_column].isna()
+            _event_occurred(series) & time_unknown
         )
     return unrecorded
 
