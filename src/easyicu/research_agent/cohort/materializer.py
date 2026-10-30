@@ -2852,6 +2852,7 @@ def materialize_to_parquet(
     first_icu_stay_per_hospitalization_path: Optional[Union[str, Path]] = None,
     first_icu_stay_per_hospitalization_sha256: Optional[str] = None,
     first_icu_stay_per_hospitalization_authority_coordinates: Optional[Mapping[str, object]] = None,
+    first_observed_icu_coordinate: Any = None,
     **kwargs: Any,
 ) -> Dict[str, Path]:
     """Materialize and write ``<stem>.parquet`` + ``<stem>_provenance.json``.
@@ -2869,6 +2870,24 @@ def materialize_to_parquet(
     bound = inspect.signature(materialize_cohort).bind(**kwargs)
     bound.apply_defaults()
     materialize_args = bound.arguments
+    if first_observed_icu_coordinate is not None:
+        # This is an internal materializer input, not a host grant. Callers must
+        # first verify the consumed preparation decision AND the research
+        # execution authority. A constructible coordinate cannot authorize IO.
+        from ..acquisition.first_observed_icu_coordinate import (
+            FirstObservedIcuCoordinate, restrict_to_first_observed_icu,
+        )
+        if (not isinstance(first_observed_icu_coordinate, FirstObservedIcuCoordinate)
+                or first_icu_stay_path is not None or first_icu_stay_per_hospitalization_path is not None
+                or source_package is None or materialize_args['database'] not in {'eicu', 'eicu_demo'}
+                or source_package.database not in {'eicu', 'eicu_demo'}
+                or source_package.manifest_sha256 != first_observed_icu_coordinate.export_manifest_sha256):
+            raise MaterializedMetadataError('first observed ICU coordinate source mismatch')
+        # Check the exact coordinate and package before extracting patient rows.
+        from ..intake.export_package import verify_export_package
+        verify_export_package(source_package)
+        restrict_to_first_observed_icu(pd.DataFrame({'stay_id': pd.Series(dtype='int64')}),
+                                       coordinate=first_observed_icu_coordinate)
     stem = _canonical_stem(stem)
     out = prepare_real_directory(
         Path(output_dir).expanduser(), label="materialization output directory"
@@ -2941,6 +2960,25 @@ def materialize_to_parquet(
         provenance["columns"] = list(cohort.columns)
         provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
         provenance["first_icu_stay_per_hospitalization_restriction"] = hospital_first_restriction
+    first_observed_restriction: Optional[dict[str, object]] = None
+    if first_observed_icu_coordinate is not None:
+        # The ordinary materializer already applied its requested cohort and
+        # outcomes. Restrict that result before any panel or trajectory is cut.
+        cohort = restrict_to_first_observed_icu(cohort, coordinate=first_observed_icu_coordinate)
+        first_observed_restriction = {
+            'schema_version': 'easyicu.first-observed-icu-restriction/1',
+            'coordinate_sha256': first_observed_icu_coordinate.sha256,
+            'archive_sha256': first_observed_icu_coordinate.archive_sha256,
+            'patient_table_sha256': first_observed_icu_coordinate.patient_table_sha256,
+            'export_manifest_sha256': first_observed_icu_coordinate.export_manifest_sha256,
+            'plan_sha256': first_observed_icu_coordinate.plan_sha256,
+            'preparation_checkpoint_sha256': first_observed_icu_coordinate.preparation_checkpoint_sha256,
+            'population_definition': 'adult_first_observed_icu_in_single_visible_hospitalization',
+            'not_lifetime_first_icu': True,
+        }
+        provenance['n_stays_after_inclusion_exclusion'] = int(len(cohort))
+        provenance['columns'] = list(cohort.columns)
+        provenance['cohort_sha256'] = _hash_df(cohort.reset_index(drop=True))
     identity_options = (
         replacement_identity_path,
         replacement_identity_sha256,
@@ -3009,6 +3047,8 @@ def materialize_to_parquet(
         "identity_column": identity_column,
         "replacement_row_identity": identity_binding,
     }
+    if first_observed_restriction is not None:
+        producer_parameters['first_observed_icu_restriction'] = first_observed_restriction
     if first_icu_stay_restriction is not None:
         producer_parameters["first_icu_stay_restriction"] = first_icu_stay_restriction
     if hospital_first_restriction is not None:
@@ -3118,6 +3158,12 @@ def materialize_to_parquet(
         )
         producer_parameters["trajectory_panel_columns"] = list(panel.columns)
 
+    if first_observed_icu_coordinate is not None:
+        # The prepared source/coordinate can change during materialization.
+        # Refuse publication rather than attach an earlier binding to new data.
+        verify_export_package(source_package)
+        restrict_to_first_observed_icu(pd.DataFrame({'stay_id': pd.Series(dtype='int64')}),
+                                       coordinate=first_observed_icu_coordinate)
     if metadata_collector.enabled:
         _atomic_write_provenance(
             prov_path,
@@ -3202,6 +3248,10 @@ def materialize_to_parquet(
         traj_prov["trajectory_sha256"] = _hash_df(long_df)
         traj_path = out / f"{stem}_trajectory.parquet"
         traj_prov_path = out / f"{stem}_trajectory_provenance.json"
+        if first_observed_icu_coordinate is not None:
+            verify_export_package(source_package)
+            restrict_to_first_observed_icu(pd.DataFrame({'stay_id': pd.Series(dtype='int64')}),
+                                           coordinate=first_observed_icu_coordinate)
         verified_cohort = load_verified_materialized_cohort_authority(parquet_path)
         if verified_cohort is not None:
             trajectory_parameters = {
