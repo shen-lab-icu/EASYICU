@@ -47,10 +47,10 @@ let text = page();
 assert(text.includes('心率') && text.includes('肌酐'), 'clinical concepts are listed');
 assert(!text.includes('AKI参考口径评估状态'), 'an internal concept is not listed by default');
 assert(text.includes('显示内部字段（1）'), 'one toggle offers the hidden fields');
-assert(text.includes('本实例数据库'), 'the coverage column names this instance');
+assert(text.includes('本实例声明映射'), 'the column identifies declared mappings for this instance');
 assert(text.includes('eICU-CRD · MIMIC-IV') && text.includes(' MIMIC-IV '), 'coverage lists the instance databases a concept has');
 assert(!/\d\/6/.test(text) && !text.includes('6 库'), 'no six-database counts on a hosted instance');
-assert(!text.includes('这一列显示字典把每个特征映射到了哪些'), 'no explanatory note on a hosted instance');
+assert(!text.includes('这一列是字典声明的映射'), 'no explanatory note on a hosted instance');
 assert(text.includes('全部 2'), 'the All chip counts listed concepts only');
 
 // The toggle brings the internal concept back.
@@ -74,7 +74,8 @@ context.EU_CAPABILITIES = { deployment: { hosted: false } };
 text = page();
 assert(!text.includes('AKI参考口径评估状态'), 'internal concepts are hidden on the desktop too');
 // Local desktop: each concept names the databases the dictionary maps it to.
-assert(text.includes('M-IV') && text.includes('HiRID') && text.includes('这一列显示字典把每个特征映射到了哪些'), 'the desktop names the mapped databases');
+assert(text.includes('M-IV') && text.includes('HiRID') && text.includes('这一列是字典声明的映射'), 'the desktop names the mapped databases as dictionary declarations');
+assert(text.includes('不代表各库临床口径相同') && text.includes('当前所选数据实际覆盖'), 'dictionary declarations do not imply equivalent clinical meaning or selected data coverage');
 assert(text.includes('数据核对 4/5'), 'an earlier audit that confirmed fewer databases is marked');
 assert(!text.includes('无字典审计'), 'no concept is left as unaudited');
 

@@ -23,6 +23,7 @@ function sessionRefresh(currentId) {
     },
     api: () => ({ loadPiCopilotSession: async id => ({ session: { session_id: id } }) }),
     sessionMatchesUiLanguage: () => true, transcriptMessages: () => [],
+    TRANSCRIPT: { markSupersededPlanAttempts() {} },
     hydrateProjectedJob() {}, reconcileSettledSession() {}, HOST_JOBS: { sync() {} },
     rememberSession() {}, setShell() {}, render() {}, loadWorkflow: async () => {},
     PLAN_ACTIONS: { continueSystemOwnedPlanProgression: async () => {} }, errorText: String,
