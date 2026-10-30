@@ -32,6 +32,8 @@ test('excerpt appears only for the selected bound run and explains its limits', 
   assert.deepEqual(calls[0][1], { method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
   const result = html(o);
   assert.match(result, /查看待审研究配置摘录/);
+  assert.match(result, /<a href="\/api\/pi\/proposal\/project_1\/session_1\/run_1">查看待审研究配置摘录<\/a>/);
+  assert.doesNotMatch(result, /target="_blank"/);
   assert.match(result, /不是完整方案；来源和文献尚未逐项绑定，也不授权执行/);
   assert.match(result, /原运行：已阻断/);
   assert.doesNotMatch(result, /批准方案|批准执行/);

@@ -70,6 +70,20 @@ def test_html_escapes_and_has_no_approval_action(monkeypatch):
     assert '&lt;script&gt;' in response.text and '<script>' not in response.text
     assert '未授权提取患者数据' in response.text
     assert '<form' not in response.text
+    assert 'href="/?pi_project=project&amp;pi_session=session#guided"' in response.text
+
+
+def test_return_link_percent_encodes_untrusted_identifiers(monkeypatch):
+    from easyicu.webserver.routes import non_executable_proposal as route
+    monkeypatch.setattr(route, 'get_pi_copilot_service', lambda: object())
+    monkeypatch.setattr(route, 'project_proposal', lambda **kw: {'proposal': {
+        'original_question': '', 'decisions': []}, 'literature_candidates': None})
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(route.router)
+    text = TestClient(app).get('/api/pi/proposal/a%22%20onclick%3D%22x/session%3F%26bad/run').text
+    assert 'href="/?pi_project=a%22+onclick%3D%22x&amp;pi_session=session%3F%26bad#guided"' in text
+    assert ' onclick="' not in text
 
 
 def test_known_fields_are_readable_and_unknown_or_missing_are_safe(monkeypatch):

@@ -306,7 +306,7 @@
           : extractionOwner ? extractionOwner.renderExtraction(state.extraction) : `<p>${tr('Extraction record: Not recorded', '提取记录：未记录')}</p>`;
       // What the run sent to the model, its replay and problem report (runTrust).
       const trust = modules.optional('runTrust');
-      const proposal = entry.proposalUrl ? `<p class="gpi-run-proposal"><a href="${esc(entry.proposalUrl)}" target="_blank" rel="noopener noreferrer">${tr('View research configuration excerpt', '查看待审研究配置摘录')}</a> <small>${tr('Not a complete plan. Sources and literature are not bound to each decision; this does not authorize execution.', '不是完整方案；来源和文献尚未逐项绑定，也不授权执行。')}</small></p>` : '';
+      const proposal = entry.proposalUrl ? `<p class="gpi-run-proposal"><a href="${esc(entry.proposalUrl)}">${tr('View research configuration excerpt', '查看待审研究配置摘录')}</a> <small>${tr('Not a complete plan. Sources and literature are not bound to each decision; this does not authorize execution.', '不是完整方案；来源和文献尚未逐项绑定，也不授权执行。')}</small></p>` : '';
       return `${error}${proposal}<div class="gpi-run-files-actions"><button type="button" data-run-files-bundle ${disabled || !artifacts.length ? 'disabled' : ''}>${tr('Download all files', '下载全部文件')}</button><button type="button" data-run-files-reload ${disabled ? 'disabled' : ''}>${tr('Refresh status', '刷新状态')}</button>${trust ? trust.replayButtonHtml(review.run_ref) + trust.problemButtonHtml(review.run_ref, '') : ''}</div>
         ${extraction}
         ${primary ? table(primary) : ''}${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary>${table(other)}</details>` : ''}

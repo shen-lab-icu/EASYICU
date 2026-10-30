@@ -1,5 +1,6 @@
 """Read-only candidate display, with all authority resolved on the host."""
 from html import escape
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
@@ -42,6 +43,7 @@ def proposal_view(project_id: str, session_id: str, run_id: str):
             rows.append(f'<article><h2>{escape(row["decision_id"])}</h2><p>{escape(row["text"])}</p>'
                         '<p>来源与文献：尚未逐项绑定</p></article>')
     original = escape(proposal['original_question']) if proposal['original_question'] else '未能核实'
+    return_href = '/?' + urlencode({'pi_project': project_id, 'pi_session': session_id}) + '#guided'
     candidates = payload.get('literature_candidates')
     if candidates:
         keys = candidates['retained_citation_keys']
@@ -56,7 +58,9 @@ def proposal_view(project_id: str, session_id: str, run_id: str):
         'h2{font-size:18px;margin-top:28px}article{background:white;border:1px solid #dde5e1;'
         'border-radius:12px;margin:12px 0;padding:12px 20px}article h2{margin:0;font-size:15px}'
         'article p:last-child{font-size:13px;color:#596864}p{overflow-wrap:anywhere}</style>'
-        '<title>待审研究配置摘录</title><main><h1>待审研究配置摘录</h1>'
+        '<title>待审研究配置摘录</title><main>'
+        f'<a href="{escape(return_href, quote=True)}">返回研究对话</a>'
+        '<h1>待审研究配置摘录</h1>'
         '<p>这不是完整研究方案，仅供讨论；不可执行、未批准、未授权提取患者数据。</p>'
         f'<h2>原始问题</h2><p>{original}</p>{"".join(rows)}'
         f'<h2>已登记的文献候选</h2>{literature}'
