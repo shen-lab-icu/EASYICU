@@ -24,7 +24,10 @@ from easyicu.research_agent.research_context.typed import parse_research_context
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.webserver import agent_pipeline_runs, sources
 from easyicu.webserver.raw_preparation_decisions import _publish_once
-from easyicu.webserver.raw_preparation_dependencies import candidate_from_scientific_review, reviewed_plan_provenance_concepts
+from easyicu.webserver.raw_preparation_dependencies import (
+    candidate_from_scientific_review, reviewed_plan_provenance_concepts,
+    reviewed_population_provenance_concepts,
+)
 
 
 def _plan_authority(pending: Any) -> PlanReviewAuthority:
@@ -136,7 +139,17 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
         raise ValueError("raw_preparation_source_unavailable")
     source_root = Path(str(matches[0]["path"]))
     config = load_src_cfg(identity.database)
-    concepts = reviewed_plan_provenance_concepts(context=context, plan=plan)
+    # A criterion whose input is unavailable may not compile to a plan
+    # predicate yet. The host-verified source spec still names the concept
+    # needed for a preparation proposal; this grants no rows or execution.
+    from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
+
+    population = reviewed_population_spec(run_dir=run_dir, pending=pending)
+    concepts = tuple(dict.fromkeys((
+        *reviewed_plan_provenance_concepts(context=context, plan=plan),
+        *reviewed_population_provenance_concepts(
+            projection=population, plan_sha256=authority.plan_sha256),
+    )))
     if not concepts:
         raise ValueError("raw_preparation_concepts_unavailable")
     snapshot = capture_data_provenance(load_dictionary(include_sofa2=True), concepts=concepts,
