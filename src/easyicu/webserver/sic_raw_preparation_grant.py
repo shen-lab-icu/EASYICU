@@ -141,6 +141,7 @@ def sic_preparation_schema_sha256(source_path: Path, files: tuple[str, ...]) -> 
 
 def verify_sic_raw_preparation_grant(*, plan_result, run_dir: Path, source_path: Path,
                                      requested_scope: SICRawPreparationScope,
+                                     host_binding=None,
                                      now: datetime | None = None) -> VerifiedSICRawPreparationGrant:
     """Verify one explicit host checkpoint and exact requested preparation scope.
 
@@ -227,6 +228,15 @@ def verify_sic_raw_preparation_grant(*, plan_result, run_dir: Path, source_path:
         registered_database=identity.database, registered_identity_sha256=canonical_sha256(identity.to_dict()),
         plan_sha256=plan_sha, context_sha256=context_sha, scientific_review_sha256=record.sha256, now=now,
     )
+    # A self-hashed checkpoint is not proof that a human used a host review
+    # action. This precondition is deliberately independent of metadata and
+    # schema checks and does not itself authorize analysis or raw reads.
+    from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding, verify_host_review
+
+    if not isinstance(host_binding, RawPreparationHostBinding):
+        raise ValueError("sic_raw_preparation_host_decision_required")
+    verify_host_review(checkpoint=checkpoint, scope=requested_scope.model_dump(mode="json"),
+                       now=now, **host_binding.model_dump(mode="python"))
     # Metadata-only recheck: a valid review cannot be reused after the source
     # registration, raw schema, resolver code or configured semantics drift.
     if prepare_case_duration_metadata_plan(source_path, expected_identity=identity).to_dict() != metadata:

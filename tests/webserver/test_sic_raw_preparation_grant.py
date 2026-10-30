@@ -18,11 +18,19 @@ from easyicu.research_agent.research_context.export_selection import SourceIdent
 from easyicu.webserver import sources
 from easyicu.webserver.sic_raw_preparation_grant import (
     SICRawPreparationCheckpoint, SICRawPreparationScope, render_sic_raw_preparation_scope, sic_preparation_schema_sha256,
-    verify_sic_raw_preparation_grant,
+    verify_sic_raw_preparation_grant as _verify_sic_raw_preparation_grant,
 )
+from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding, record_host_review
 from easyicu.webserver.time_origin_source_authority import prepare_case_duration_metadata_plan
 from tests.research_agent.planning.test_time_origin_review_binding import _review
 from tests.support.signed_case_duration import signed_case_duration_case
+
+
+def verify_sic_raw_preparation_grant(*, plan_result, **kwargs):
+    """The test supplies the host binding, never an implicit client claim."""
+    return _verify_sic_raw_preparation_grant(
+        plan_result=plan_result, host_binding=getattr(plan_result, "host_binding", None), **kwargs
+    )
 
 
 def _case(tmp_path, monkeypatch, *, approved=True, summary_override=None):
@@ -75,12 +83,39 @@ def _case(tmp_path, monkeypatch, *, approved=True, summary_override=None):
     request = HumanReviewRequest.create(kind="scientific_stop", summary=summary_override or render_sic_raw_preparation_scope(scope),
                                         payload=payload, authority_sha256=canonical_sha256(payload))
     checkpoint = SICRawPreparationCheckpoint.pending(plan_sha256=scope.plan_sha256, request=request)
+    host_binding = None
     if approved:
-        decision = HumanReviewDecision(review_id=request.review_id, authority_sha256=request.authority_sha256,
-            decision="approved", reviewer="synthetic-reviewer", decided_at=datetime.now(timezone.utc).isoformat())
-        checkpoint = checkpoint.decide(decision)
+        from easyicu.webserver import jobs
+        from easyicu.webserver import agent_pipeline_runs
+        from easyicu.webserver.host_action_contracts import (
+            HostActionRequest, HostActionTag, RawPreparationReviewDecision, decision_key, host_action_id,
+        )
+        from easyicu.webserver.pi_copilot import service
+
+        monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "hosthome"))
+        choice = RawPreparationReviewDecision(
+            run_id="synthetic-run", scientific_configuration_sha256="a" * 64,
+            checkpoint_sha256=checkpoint.checkpoint_sha256, scope_sha256=canonical_sha256(scope.model_dump(mode="json")),
+            review_authority_sha256=request.authority_sha256, nonce="b" * 64,
+        )
+        action = HostActionRequest(session_id="synthetic-session", project_id="synthetic-project",
+                                   action_code="review_raw_preparation", decision=choice)
+        key = decision_key(choice, review_decision="approved")
+        tag = HostActionTag(session_id=action.session_id, project_id=action.project_id,
+            study_context_id="synthetic-study", action_code=action.action_code, decision_key=key,
+            action_id=host_action_id(action.session_id, action.action_code, key))
+        monkeypatch.setattr(jobs.MANAGER, "get", lambda job_id: SimpleNamespace(host_action=tag) if job_id == "synthetic-job" else None)
+        monkeypatch.setattr(agent_pipeline_runs, "server_reviewer_identity", lambda: "synthetic-host-operator")
+        owner = SimpleNamespace(host_action_session=lambda *args, **kwargs: None,
+            host_action_child_job=lambda *args, **kwargs: {"child_job_id": "synthetic-job"})
+        monkeypatch.setattr(service, "get_pi_copilot_service", lambda: owner)
+        checkpoint = record_host_review(host_action=action, pending=checkpoint, decision="approved",
+                                        study_context_id="synthetic-study", job_id="synthetic-job",
+                                        run_id="synthetic-run", scientific_configuration_sha256="a" * 64)
+        host_binding = RawPreparationHostBinding(project_id=action.project_id, session_id=action.session_id,
+            study_context_id="synthetic-study", run_id=choice.run_id, nonce=choice.nonce)
     (tmp_path / "sic_raw_preparation_checkpoint.json").write_text(checkpoint.model_dump_json())
-    result = SimpleNamespace(context=context, plan=plan, evidence=evidence)
+    result = SimpleNamespace(context=context, plan=plan, evidence=evidence, host_binding=host_binding)
     return result, source_path, scope, checkpoint
 
 
@@ -93,6 +128,20 @@ def test_explicit_signed_preparation_only_never_grants_analysis(tmp_path, monkey
     assert not (tmp_path / "approved_executable_plan.json").exists()
     assert not (tmp_path / "human_review_checkpoint.json").exists()
     assert sorted(path.name for path in source.iterdir()) == ["cases.parquet", "laboratory"]
+
+
+def test_client_self_signed_approval_is_not_a_host_review(tmp_path, monkeypatch):
+    result, source, scope, checkpoint = _case(tmp_path, monkeypatch, approved=False)
+    fabricated = checkpoint.decide(HumanReviewDecision(review_id=checkpoint.request.review_id,
+        authority_sha256=checkpoint.request.authority_sha256, decision="approved", reviewer="untrusted-agent",
+        decided_at=datetime.now(timezone.utc).isoformat()))
+    (tmp_path / "sic_raw_preparation_checkpoint.json").write_text(fabricated.model_dump_json())
+    with pytest.raises(ValueError, match="host_decision_required"):
+        verify_sic_raw_preparation_grant(plan_result=result, run_dir=tmp_path, source_path=source, requested_scope=scope)
+    result.host_binding = RawPreparationHostBinding(project_id="forged-project", session_id="forged-session",
+        study_context_id="forged-study", run_id="forged-run", nonce="f" * 64)
+    with pytest.raises(ValueError, match="host_receipt_invalid"):
+        verify_sic_raw_preparation_grant(plan_result=result, run_dir=tmp_path, source_path=source, requested_scope=scope)
 
 
 def test_pending_or_expired_review_is_never_a_grant(tmp_path, monkeypatch):
