@@ -112,6 +112,9 @@
 
   function setProjectRailCollapsed(collapsed) {
     projectRailCollapsed = !!collapsed;
+    const button = typeof document.querySelector === 'function'
+      ? document.querySelector('#gdResearchProjectRail [data-gpi-show-projects]') : null;
+    if (button) button.setAttribute('aria-expanded', String(!projectRailCollapsed));
     try {
       if (window.localStorage) window.localStorage.setItem(PROJECT_RAIL_COLLAPSED_KEY, projectRailCollapsed ? '1' : '0');
     } catch (_) {}
@@ -121,20 +124,16 @@
     return projectRailCollapsed;
   }
 
-  // The global nav's Projects button: from the compact rail it first brings
-  // the project panel back; otherwise it toggles the project switcher.
+  // The global nav's Projects button collapses or restores the project rail;
+  // the project heading remains the control for switching projects.
   function showProjects() {
-    const collapsedMain = document.querySelector('.gd-main.gd-project-rail-collapsed');
-    if (collapsedMain) {
-      setProjectRailCollapsed(false);
-      collapsedMain.classList.remove('gd-project-rail-collapsed');
-      return;
-    }
+    const main = document.querySelector('.gd-main.gpi-workspace');
+    if (!main) return;
+    const collapsed = !main.classList.contains('gd-project-rail-collapsed');
     const picker = document.querySelector('#gdResearchProjectRail .gd-project-picker');
-    if (!picker) return;
-    picker.open = !picker.open;
-    const summary = picker.querySelector('summary');
-    if (summary && picker.open) summary.focus();
+    if (collapsed && picker) picker.open = false;
+    setProjectRailCollapsed(collapsed);
+    main.classList.toggle('gd-project-rail-collapsed', collapsed);
   }
 
   function setProjectManagement(active) {
@@ -231,7 +230,7 @@
       <aside class="gd-rail" id="gdResearchProjectRail">
         <nav class="gpi-global-nav" aria-label="${t('EasyICU navigation', 'EasyICU 导航')}">
           <button type="button" class="gpi-global-brand" data-open="entry" aria-label="${t('New conversation', '新建对话')}" title="${t('New conversation in this project', '在当前项目新建对话')}">${icon('spark', 19)}</button>
-          <button type="button" class="gpi-global-item active" data-gpi-show-projects aria-current="page" title="${t('Research projects', '研究项目')}">${icon('folder', 19)}<span>${t('Projects', '项目')}</span></button>
+          <button type="button" class="gpi-global-item active" data-gpi-show-projects aria-current="page" aria-expanded="${!projectRailCollapsed}" title="${t('Research projects', '研究项目')}">${icon('folder', 19)}<span>${t('Projects', '项目')}</span></button>
           <button type="button" class="gpi-global-item" data-open="skills" title="${t('Research skills', '研究技能')}">${icon('layers', 19)}<span>${t('Skills', '技能')}</span></button>
           <button type="button" class="gpi-global-item" data-open="extraction" title="${t('Data workspace', '数据工作台')}">${icon('grid', 19)}<span>${t('Data', '数据')}</span></button>
           <div class="gpi-global-spacer"></div>
@@ -242,6 +241,7 @@
         <div class="gd-rail-top">
           <div class="gd-rail-heading">
             <div class="gd-rail-list" id="gdSessions"></div>
+            ${hostedOwner() ? '' : `<button class="gd-rail-create" type="button" data-project-new aria-label="${t('New project', '新建项目')}" title="${t('New project', '新建项目')}">${icon('plus', 14)}</button>`}
             <button class="gd-rail-collapse" type="button" data-project-rail-toggle aria-controls="gdResearchProjectRail" aria-label="${t('Hide research projects', '隐藏研究项目栏')}" title="${t('Hide research projects', '隐藏研究项目栏')}">${icon('chevron', 14)}</button>
           </div>
           <div class="gd-folder-controls" id="gdFolderControls"></div>
@@ -316,18 +316,18 @@
       ? String(oldPicker.querySelector('[data-project-search]')?.value || '') : '';
     // The project catalog is a selector, not the default reading surface. An
     // early loading render must not leave every project expanded after URL restore.
-    const pickerOpen = projectManagementActive || (!activeId && !ctx.guidedDrafts.loading)
-      || !!(oldPicker && oldPicker.dataset.projectId === activeId && oldPicker.open);
+    const sameProjectPicker = oldPicker && oldPicker.dataset.projectId === (activeId || '');
+    const pickerOpen = sameProjectPicker ? oldPicker.open
+      : projectManagementActive || (!activeId && !ctx.guidedDrafts.loading);
     const pickerTitle = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title, t('Choose a project', '选择研究项目'));
     // One control names the project the rail is showing and switches it —
     // the reference's "PROJECT / name" combobox. A research project is the
     // study itself (question, data binding, plan, runs, evidence, results,
     // one local folder); the conversations listed under it are threads
     // about that one study, not a second kind of work item.
-    // As a switcher it is a floating menu (closes on an outside press); with
-    // no project chosen, or while managing projects, the list is the surface.
-    const pickerDismissible = !!activeId && !projectManagementActive;
-    host.innerHTML = `<details class="gd-project-picker${projectManagementActive ? ' is-managing' : ''}" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}${pickerDismissible ? ' data-popover-menu' : ''}>
+    // The picker is always a floating menu, including the empty and manage
+    // states. Repaints preserve whether the user dismissed it.
+    host.innerHTML = `<details class="gd-project-picker${projectManagementActive ? ' is-managing' : ''}" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''} data-popover-menu>
       <summary title="${esc(t('Switch research project', '切换研究项目'))}"><small>${t('Project', '项目')}</small><span title="${esc(pickerTitle)}">${esc(pickerTitle)}</span><i aria-hidden="true">⌄</i></summary>
       <div class="gd-project-picker-list">
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><span class="gd-project-heading-actions"><button class="gd-manage-mini ${projectManagementActive ? 'active' : ''}" type="button" data-project-manage>${projectManagementActive ? t('Done', '完成') : t('Manage', '管理')}</button><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></span></div>
