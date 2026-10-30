@@ -23,6 +23,7 @@ from easyicu.webserver import review_labels
 from easyicu.webserver import catalog_metadata
 from easyicu.webserver import prepared_frames
 from easyicu.webserver import cohort_parquet
+from easyicu.webserver import cohort_landmark
 from easyicu.webserver.source_cache_identity import source_file_identity
 
 _READ_MODULES = (
@@ -223,9 +224,21 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     requested_feature_ids = _requested_feature_ids(body)
     cache_key = _summary_cache_key(path, desc, requested_feature_ids, custom_rule)
     with _SUMMARY_CACHE_LOCK:
-        cached = _SUMMARY_CACHE.get(cache_key)
+        # Landmark authority includes a live read-only comparison to the raw
+        # source; do not reuse an aggregate after that source might change.
+        cached = None if custom_rule and len(custom_rule) == 4 else _SUMMARY_CACHE.get(cache_key)
         if cached is not None:
             return copy.deepcopy(cached)
+    initial_outcome_identity = None
+    outcome_file = None
+    if custom_rule and len(custom_rule) == 4:
+        outcome_meta = prepared_frames.module_file_meta(desc, "outcome")
+        if outcome_meta and outcome_meta.get("file"):
+            outcome_file = path / str(outcome_meta["file"])
+            try:
+                initial_outcome_identity = source_file_identity(outcome_file)
+            except OSError:
+                pass
     frames = {
         module: _read_module_frame(path, desc, module) for module in _READ_MODULES
     }
@@ -297,6 +310,20 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     category_options, category_mappings = _custom_category_options(category_demo)
     custom = _build_custom_group(custom_rule, path, desc, entity_ids, feature_catalog,
                                  age_by_entity, sex_by_entity, category_mappings)
+    landmark = None
+    if custom_rule and len(custom_rule) == 4:
+        landmark = cohort_landmark.build_landmark_group(
+            path=path, desc=desc, entity_ids=entity_ids, outcome=outcome,
+            feature=(feature_catalog.get("features_by_id") or {}).get(custom_rule[0]),
+            threshold=custom_rule[2], landmark_hours=custom_rule[3],
+        )
+        try:
+            unchanged_outcome = (initial_outcome_identity is not None and outcome_file is not None
+                                 and source_file_identity(outcome_file) == initial_outcome_identity)
+        except OSError:
+            unchanged_outcome = False
+        if not unchanged_outcome:
+            landmark = cohort_landmark.blocked("The source files changed during landmark verification; try again.")
     coverage = _coverage_payload(path, desc, precomputed=(entity_set, coverage_counts))
     quality = _quality_summary(coverage)
     feature_catalog = _feature_catalog(desc, coverage)
@@ -388,6 +415,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         sofa_by_entity=sofa_by_entity,
         sepsis_by_entity=sepsis_by_entity,
         **({"custom_group": custom} if custom else {}),
+        **({"landmark": landmark} if landmark is not None else {}),
     )
 
     payload = {
@@ -414,7 +442,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             "secrets_returned": False,
         },
         "summary": summary,
-        "custom_group_options": {"version": "1", "categories": category_options},
+        "custom_group_options": {"version": "1", "categories": category_options, "landmark_hours": [6, 12, 24, 48]},
         "custom_group_applied": _custom_group_receipt(custom_rule),
         "groups": _group_payload(
             entity_ids=entity_ids,
@@ -457,10 +485,11 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             selected_features=selected_feature_profiles,
         )
         payload["groups"]["supported"].append(public_custom)
-    with _SUMMARY_CACHE_LOCK:
-        _SUMMARY_CACHE[cache_key] = copy.deepcopy(payload)
-        while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
-            _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
+    if not (custom_rule and len(custom_rule) == 4):
+        with _SUMMARY_CACHE_LOCK:
+            _SUMMARY_CACHE[cache_key] = copy.deepcopy(payload)
+            while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
+                _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
     return payload
 
 
@@ -709,6 +738,14 @@ def _summary_cache_key(
                 )
             except OSError:
                 manifest_identities.append((name, "unreadable"))
+    if custom_rule is not None and len(custom_rule) == 4:
+        # Metadata is consulted for landmark authority and must not stay cached
+        # after a sidecar is changed or removed.
+        for sidecar in sorted(path.glob("column_metadata.sha256-*.json")):
+            try:
+                manifest_identities.append((sidecar.name, *source_file_identity(sidecar)))
+            except OSError:
+                manifest_identities.append((sidecar.name, "unreadable"))
     file_identities: List[Tuple[Any, ...]] = []
     for item in desc.get("files") or []:
         if not isinstance(item, dict) or not item.get("file"):
@@ -745,6 +782,8 @@ def _custom_group_receipt(rule: tuple | None) -> dict | None:
     receipt = {"feature_id": rule[0], "kind": rule[1]}
     if rule[1] == "numeric_threshold":
         receipt["threshold"] = rule[2]
+        if len(rule) == 4:
+            receipt["landmark_hours"] = rule[3]
     elif rule[1] == "categorical_values":
         receipt["values"] = list(rule[2])
     return receipt
@@ -763,6 +802,11 @@ def _parse_custom_group(raw: Any) -> tuple | None:
         threshold = raw.get("threshold")
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
             raise CohortReviewError({"error": "invalid_custom_group_threshold"})
+        landmark = raw.get("landmark_hours")
+        if landmark is not None:
+            if isinstance(landmark, bool) or not isinstance(landmark, int) or landmark not in (6, 12, 24, 48) or feature_id == "demographics:age":
+                raise CohortReviewError({"error": "invalid_custom_group_landmark"})
+            return (feature_id, kind, float(threshold), landmark)
         return (feature_id, kind, float(threshold))
     if kind == "sex" and feature_id == "demographics:sex":
         return (feature_id, kind)
@@ -2789,6 +2833,7 @@ def _survival_analysis_payload(
     sofa_by_entity: Dict[str, float],
     sepsis_by_entity: Dict[str, bool],
     custom_group: Dict[str, Any] | None = None,
+    landmark: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if len(entity_ids) > _SURVIVAL_INTERACTIVE_ENTITY_LIMIT:
         return {
@@ -2847,25 +2892,38 @@ def _survival_analysis_payload(
         sepsis_by_entity=sepsis_by_entity,
     )
     if custom_group:
-        permitted = custom_group["basis"] in {"demographics_age", "demographics_sex"}
-        members = custom_group["_members"]
-        ready = permitted and all(ids for _, ids in members)
-        group_options.append({
-            "id": "custom", "label": custom_group["label"], "basis": custom_group["basis"],
-            "status": "ready" if ready else "blocked",
-            "reason": None if ready else ("Custom KM grouping requires verified baseline age or sex and two non-empty groups."),
-            "groups": custom_group["groups"][:2], "_members": members if ready else [],
-        })
+        if landmark is not None:
+            group_options.append({**landmark["group"], "id": "custom", "label": custom_group["label"]})
+        else:
+            permitted = custom_group["basis"] in {"demographics_age", "demographics_sex"}
+            members = custom_group["_members"]
+            ready = permitted and all(ids for _, ids in members)
+            group_options.append({
+                "id": "custom", "label": custom_group["label"], "basis": custom_group["basis"],
+                "status": "ready" if ready else "blocked",
+                "reason": None if ready else ("Custom KM grouping requires verified baseline age or sex and two non-empty groups."),
+                "groups": custom_group["groups"][:2], "_members": members if ready else [],
+            })
     curves: List[Dict[str, Any]] = []
     for option in outcomes:
         if option.get("status") != "ready":
             continue
         event_by_entity, time_by_entity = option.pop("_vectors")
-        counts = cohort_parquet.survival_counts(
-            event_by_entity, time_by_entity, group_options
-        )
+        ordinary_groups = [g for g in group_options if not (landmark is not None and g["id"] == "custom")]
+        counts = cohort_parquet.survival_counts(event_by_entity, time_by_entity, ordinary_groups)
         for group in group_options:
             if group.get("status") != "ready":
+                continue
+            if landmark is not None and group["id"] == "custom":
+                if option["id"] != "icu_death":
+                    continue
+                l_events, l_times = landmark["vectors"]
+                shifted_option = {**option, "time_label": "Days since ICU landmark"}
+                curve = _survival_curve_payload(outcome_option=shifted_option, group_option=group,
+                                                event_by_entity=l_events, time_by_entity=l_times)
+                if curve:
+                    curve.update(landmark["details"])
+                    curves.append(curve)
                 continue
             curve = _survival_curve_payload(
                 outcome_option=option,
@@ -2899,10 +2957,14 @@ def _survival_analysis_payload(
     default_outcome = default_outcome or (
         ready_outcomes[0]["id"] if ready_outcomes else None
     )
+    if landmark is not None and any(c.get("group_id") == "custom" and c.get("outcome_id") == "icu_death" for c in curves):
+        default_outcome = "icu_death"
     default_group = next(
         (row["id"] for row in ready_groups if row["id"] == "sepsis"), None
     )
     default_group = default_group or (ready_groups[0]["id"] if ready_groups else None)
+    if landmark is not None and any(c.get("group_id") == "custom" and c.get("outcome_id") == "icu_death" for c in curves):
+        default_group = "custom"
     return {
         "status": status,
         "reason": reason,
