@@ -119,6 +119,9 @@ def test_digest_and_fact_integrity_block_the_actual_persisted_review_gate(tmp_pa
         bundle(excerpt=EXCERPT + " Changed."),
         bundle(summary="This paper supports an invented causal claim."),
         conflicting,
+        # Merely omitting the source screening decision cannot grant curated
+        # authority, even if its retained excerpt and card are consistent.
+        bundle().model_copy(update={"screening_decisions": []}),
     ]):
         run_dir = tmp_path / str(index)
         run_dir.mkdir()
@@ -162,7 +165,9 @@ def test_older_review_schema_cannot_authorize_a_new_plan(tmp_path):
     from tests.research_agent.planning.scientific_review_fixtures import _context
 
     review = build_plan_scientific_review(context=_context(), plan=_real_plan(), literature=bundle())
-    archived = review.model_copy(update={"schema_version": "easyicu.plan_scientific_review/19"})
+    # /20 predates the screening-and-curated-identity contract.  Even an
+    # otherwise matching, previously approved record must be re-reviewed.
+    archived = review.model_copy(update={"schema_version": "easyicu.plan_scientific_review/20"})
     path = tmp_path / "scientific_plan_review.json"
     path.write_text(archived.model_dump_json(), encoding="utf-8")
     authority = PlanReviewAuthority.create(
@@ -172,3 +177,24 @@ def test_older_review_schema_cannot_authorize_a_new_plan(tmp_path):
         payload={"plan_review_authority": authority.model_dump(mode="json")},
     )])
     assert _load_pending_scientific_review(tmp_path, pending) == {}
+
+
+def test_old_review_cannot_be_reused_after_citation_authority_change(tmp_path):
+    import pytest
+
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.orchestration.scientific_plan_review_gate import (
+        ScientificPlanReviewArtifactError, persist_or_validate_scientific_plan_review,
+    )
+    from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    current = build_plan_scientific_review(context=_context(), plan=_real_plan(), literature=bundle())
+    archived = current.model_copy(update={"schema_version": "easyicu.plan_scientific_review/20"})
+    evidence = EvidenceStore(tmp_path)
+    persist_or_validate_scientific_plan_review(run_dir=tmp_path, evidence=evidence, current_review=archived)
+    with pytest.raises(ScientificPlanReviewArtifactError) as caught:
+        persist_or_validate_scientific_plan_review(
+            run_dir=tmp_path, evidence=evidence, current_review=current, reuse_existing_review=True,
+        )
+    assert caught.value.code == "scientific_plan_review_binding_drift"

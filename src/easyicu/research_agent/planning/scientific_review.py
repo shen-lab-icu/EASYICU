@@ -210,7 +210,7 @@ class PlanScientificFinding(BaseModel):
     )
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/20"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/21"
 
 
 class PlanScientificReview(BaseModel):
@@ -218,8 +218,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /20
-    # execution review, which checks the integrity of cited source evidence.
+    # Archived reviews remain readable, but cannot substitute for a /21
+    # execution review, which checks source screening and curated identity.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
@@ -231,6 +231,7 @@ class PlanScientificReview(BaseModel):
         "easyicu.plan_scientific_review/18",
         "easyicu.plan_scientific_review/19",
         "easyicu.plan_scientific_review/20",
+        "easyicu.plan_scientific_review/21",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )

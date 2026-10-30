@@ -56,12 +56,21 @@ def inspect_plan_literature_sources(
     for decision in decisions:
         dispositions.setdefault(decision.citation_key, set()).add(decision.disposition)
     issues: list[SourceIntegrityIssue] = []
+    # Use the same eligibility owner that controls final manuscript citations.
+    # In particular, an absent screening record is not proof that an arbitrary
+    # source was curated or reviewed.
+    from ..literature import manuscript_citable_keys
+
+    eligible = set(manuscript_citable_keys(bundle))
     for key in sorted(cited):
         if record_count[key] != 1 or card_count[key] > 1:
             issues.append(SourceIntegrityIssue(key, "source_missing_or_ambiguous", "error"))
             continue
         if dispositions.get(key) and dispositions[key] != {"include"}:
             issues.append(SourceIntegrityIssue(key, "source_not_included", "error"))
+            continue
+        if key not in eligible:
+            issues.append(SourceIntegrityIssue(key, "source_unreviewed_or_ambiguous", "error"))
             continue
         card = by_card.get(key)
         if card is None:

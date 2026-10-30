@@ -342,7 +342,7 @@ def test_review_records_the_same_shape_and_missing_outcome_remediation():
     assert repair.action == "phenotyping.outcome_by_cluster"
     assert repair.planned_analysis_role == "secondary"
     assert "death" in repair.inputs
-    assert review.schema_version == "easyicu.plan_scientific_review/19"
+    assert review.schema_version == "easyicu.plan_scientific_review/21"
 
 
 @pytest.mark.parametrize("family", ["grouped_continuous", "phenotyping", "trajectory"])

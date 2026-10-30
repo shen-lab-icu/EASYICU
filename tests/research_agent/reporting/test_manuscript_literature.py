@@ -11,6 +11,7 @@ from easyicu.research_agent.reporting.manuscript_literature import (
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
+from easyicu.research_agent.planning.method_literature import method_literature_citations
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -24,12 +25,9 @@ def _bundle() -> LiteratureBundle:
                 year="2024",
                 relevance="Source excerpt: Direct comparator.",
             ),
-            CitationRecord(
-                key="strobe_2007",
-                title="The STROBE statement",
-                year="2007",
-                relevance="Methodology: observational reporting.",
-            ),
+            CitationRecord.model_validate(next(
+                item for item in method_literature_citations() if item["key"] == "strobe_2007"
+            )),
         ],
         screening_decisions=[
             LiteratureScreeningDecision(
@@ -235,12 +233,9 @@ The result is compared with prior ICU work [@paper_2024; @strobe_2007].
         update={
             "citations": [
                 *_bundle().citations,
-                CitationRecord(
-                    key="record_2015",
-                    title="The RECORD statement",
-                    year="2015",
-                    relevance="Methodology: routinely collected data reporting.",
-                ),
+                CitationRecord.model_validate(next(
+                    item for item in method_literature_citations() if item["key"] == "record_2015"
+                )),
             ]
         }
     )
