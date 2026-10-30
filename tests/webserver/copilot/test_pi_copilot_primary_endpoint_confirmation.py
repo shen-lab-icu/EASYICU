@@ -63,24 +63,22 @@ def update(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.parametrize(
-    "user_message",
+    "user_message,selected",
     [
-        "主要终点：自入 ICU 起 90 天内全因死亡；ICU 住院天数作为次要描述。",
-        "主要结局：90 天全因死亡",
-        "主要终点采用 90 天全因死亡。",
-        "请把主要终点改为 90 天全因死亡。",
-        "是，确认该主要终点和次要描述结局",
-        "确认该主要终点",
-        "再次确认：主要终点为 90 天全因死亡；次要描述结局为 ICU 住院天数。",
-        "The primary endpoint is 90-day all-cause mortality.",
-        "Primary endpoint: 90-day all-cause mortality from ICU admission.",
+        ("主要终点：自入 ICU 起 90 天内全因死亡；ICU 住院天数作为次要描述。", "自入 ICU 起 90 天内全因死亡"),
+        ("主要结局：90 天全因死亡", "90 天全因死亡"),
+        ("主要终点采用 90 天全因死亡。", "90 天全因死亡"),
+        ("请把主要终点改为 90 天全因死亡。", "90 天全因死亡"),
+        ("再次确认：主要终点为 90 天全因死亡；次要描述结局为 ICU 住院天数。", "90 天全因死亡"),
+        ("The primary endpoint is 90-day all-cause mortality.", "90-day all-cause mortality"),
+        ("Primary endpoint: 90-day all-cause mortality from ICU admission.", "90-day all-cause mortality from ICU admission"),
     ],
 )
-def test_an_explicit_endpoint_answer_saves_the_primary_outcome(update, user_message):
+def test_an_explicit_endpoint_answer_saves_the_primary_outcome(update, user_message, selected):
     result, writes = update(user_message)
 
     assert result["code"] == "study_context_updated"
-    assert writes[-1]["outcome"] == _PROPOSED
+    assert writes[-1]["outcome"] == selected
 
 
 @pytest.mark.parametrize(
@@ -90,6 +88,8 @@ def test_an_explicit_endpoint_answer_saves_the_primary_outcome(update, user_mess
         "主要终点是什么？",
         "是否确认该主要终点？",
         "确认该主要终点？",
+        "是，确认该主要终点和次要描述结局",
+        "确认该主要终点",
         "不确认该主要终点",
         "主要终点：待定",
         "主要终点：？",

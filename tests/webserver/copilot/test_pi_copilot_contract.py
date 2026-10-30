@@ -4287,8 +4287,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
             allowed_actions={"configure"},
         ),
     )
-    assert accepted_rendered_affirmation["code"] == "study_context_updated"
-    assert writes[-1]["outcome"] == "24 小时 landmark 后至出院期间发生的院内死亡"
+    assert accepted_rendered_affirmation["code"] == "study_primary_outcome_confirmation_required"
 
     accepted_explicit_reconfirmation = tool_module.execute_tool(
         "easyicu_update_study_context",
@@ -4315,9 +4314,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
             allowed_actions={"configure"},
         ),
     )
-    assert accepted_compact_choice["code"] == "study_context_updated"
-    assert writes[-1]["outcome"] == "ICU mortality"
-    assert "primary_exposure" not in writes[-1]
+    assert accepted_compact_choice["code"] == "study_primary_outcome_confirmation_required"
 
     accepted_exposure = tool_module.execute_tool(
         "easyicu_update_study_context",
@@ -4394,7 +4391,7 @@ def test_conversational_setup_keeps_confirmed_outcome_when_model_bundles_exposur
     )
 
     assert result["code"] == "study_context_updated"
-    assert writes[0]["outcome"] == "ICU mortality"
+    assert writes[0]["outcome"] == "ICU stay 期间死亡"
     assert "primary_exposure" not in writes[0]
 
 

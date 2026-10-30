@@ -276,53 +276,56 @@ def _message_directly_names_label(message: str, proposed: Any) -> bool:
     )
 
 
+def _literal_outcome_choice(message: str) -> str:
+    """Return one explicit, unambiguous outcome value in the user's own words."""
+    choices: list[str] = []
+    for clause in re.split(r"[。；;\n]", str(message or "")):
+        if not clause.strip() or re.search(r"[?？]|(?:不要|不选择|不采用|不用|先别|暂不|拒绝|不同意|不确认|是否|能否|如果|假如|\bor\b|\b(?:do\s+not|don't|never|not|should|whether|if)\b|或者|还是|或是)", clause, re.I):
+            continue
+        pattern = (r"(?:(?:明确)?(?:选择|采用|使用|确认|设定|设置|指定)\s*(?:候选|主要)?(?:结局|终点)"
+                   r"\s*(?:为|是|[:：])|(?:主要|候选)(?:结局|终点)\s*(?:为|是|[:：]|采用|使用|改为|设为|定义为))"
+                   r"\s*([^，,。；;？?]+)")
+        matches = list(re.finditer(pattern, clause, flags=re.I))
+        for match in matches:
+            value = match.group(1).strip()
+            if value and not re.search(r"(?:或者|还是|或是|以及|和|与|、|\bor\b|待定|未定|不确定)", value, re.I):
+                choices.append(value)
+        english = re.search(r"\bprimary\s+(?:outcome|endpoint)\s*(?:is|will\s+be|:)\s*([^,;?]+)", clause, re.I)
+        if english:
+            value = english.group(1).strip().rstrip(".")
+            if value and not re.search(r"\b(?:or|and|unknown|undecided|tbd)\b", value, re.I):
+                choices.append(value)
+        english_use = re.search(r"\b(?:choose|select|use)\s+(.+?)\s+as\s+(?:the\s+)?primary\s+(?:outcome|endpoint)\b", clause, re.I)
+        if english_use:
+            value = english_use.group(1).strip()
+            if value and not re.search(r"\b(?:or|and|unknown|undecided|tbd)\b", value, re.I):
+                choices.append(value)
+    return choices[0] if len(choices) == 1 else ""
+
+
 def _message_explicitly_selects_primary_outcome(
     message: str, proposed: Any = ""
 ) -> bool:
     """Return whether this turn chooses a candidate outcome label."""
 
-    if _message_directly_names_label(message, proposed):
-        return True
+    literal = _literal_outcome_choice(message)
+    if literal:
+        return str(proposed or "").strip() == literal
+    if re.search(r"(?:(?:选择|采用|使用|确认|设定|指定)\s*(?:候选|主要)?(?:结局|终点)|(?:主要|候选)(?:结局|终点)\s*(?:为|是|[:：]|采用|使用))", str(message or ""), re.I):
+        return False
+    # Refuse denials, open questions and alternatives even if the proposed
+    # label appears verbatim; text mentioning a label is not consent to it.
+    if re.search(r"[?？]|(?:不要|不选择|不采用|不用|先别|暂不|拒绝|不同意|不确认|是否|能否|或者|还是|或是|\bor\b|\b(?:do\s+not|don't|never|not|should|whether|if)\b)", str(message or ""), re.I):
+        return False
 
-    # Protocols call the primary outcome the primary endpoint (主要终点).
-    # Both words designate this one slot; recognizing only one kept a user
-    # who answered in endpoint wording in a confirmation loop.
-    normalized = re.sub(
-        r"\bend[\s_-]?points?\b",
-        "outcome",
-        str(message or "").casefold().replace("终点", "结局"),
-    )
-    return any(
-        re.search(pattern, normalized)
-        for pattern in (
-            r"主要结局.*?(?:使用|采用|设为|定义为|改为|替换为)",
-            # A label-value line designates the slot and fills it at once.
-            r"主要结局\s*[:：]\s*(?!待定|未定|不确定)[^\s？?]",
-            r"(?:确认|同意).*?主要结局.*?(?:为|是|采用|使用)",
-            r"(?:使用|采用|设为|改为|替换为).*?(?:死亡|mortality).*?(?:主要)?结局",
-            r"结局.*?(?:使用|采用|设为|定义为|改为|替换为).*?(?:死亡|mortality)",
-            r"不(?:改成|改为|替换为).*?(?:死亡|mortality)",
-            # The Copilot renders this compact affirmative choice directly
-            # beneath one concrete outcome proposal.  It is an explicit user
-            # decision even though the button text avoids repeating the long
-            # clinical definition.
-            r"^(?:是|确认)[，,\s]*(?:采用|使用|确认)?(?:该|此|上述)?(?:定义|主要结局定义)[。.]?$",
-            # The same affirmative may name the proposed outcome itself and the
-            # secondary items proposed with it.
-            r"^(?:是|确认)[，,、\s]*(?:采用|使用|确认)?(?:该|此|上述)(?:主要)?结局(?:定义)?"
-            r"(?:(?:和|及|与|以及)[^？?]*)?[。.]?$",
-            # A rendered next-step choice is itself an explicit selection even
-            # when its button label is a compact noun phrase.  Requiring the
-            # user to add a verb after clicking the option makes the same
-            # scientific decision repeat indefinitely.
-            r"^(?:icu\s*(?:stay\s*)?(?:住院期间|期间|内)?死亡|icu\s*mortality)(?:\s*[（(]推荐[）)])?$",
-            r"^(?:hospital|in[\s_-]*hospital|28[\s_-]*day|30[\s_-]*day|90[\s_-]*day)[\s_-]*(?:death|mortality)$",
-            r"\bprimary[\s_-]+outcome[\s_-]+(?:is|uses?|will[\s_-]+be)\b",
-            r"\bprimary[\s_-]+outcome\s*:\s*(?!tbd\b|unknown\b|undecided\b)\w",
-            r"\buse[\s_-]+.+?[\s_-]+(?:as[\s_-]+the[\s_-]+)?primary[\s_-]+outcome\b",
-            r"\bdo[\s_-]+not[\s_-]+change[\s_-]+(?:it[\s_-]+)?to\b",
-        )
-    )
+    if _message_directly_names_label(message, proposed):
+        text = str(message or "").strip()
+        return text == str(proposed or "").strip() or bool(re.search(
+            r"(?:我想看|选择|选用|采用|使用|设为|定义为|改为|作为|主要结局|主要终点|"
+            r"\b(?:choose|select|use|primary\s+(?:outcome|endpoint))\b)", text, re.I,
+        ))
+
+    return False
 
 
 def _message_explicitly_selects_primary_exposure(
@@ -1149,6 +1152,12 @@ def update_study_context(
             owner="easyicu.webserver.study_contexts",
         )
 
+    params = dict(params)
+    selected_outcome = _literal_outcome_choice(context.user_message)
+    if selected_outcome and params.get("outcome"):
+        # Do not allow the model to add a horizon, scope, or interpretation to
+        # the researcher's explicitly selected human-readable label.
+        params["outcome"] = selected_outcome
     patch = {
         key: params[key]
         for key in _STUDY_SETUP_FIELDS - {"bind_active_export", "bind_source_id"}
@@ -1373,6 +1382,7 @@ def update_study_context(
                         "safe_alternatives": ["adult_all", "all_icu"],
                     },
                 )
+    outcome_changed = False
     if (
         params.get("outcome")
         and str(context.user_message or "").strip()
@@ -1397,6 +1407,7 @@ def update_study_context(
             dropped = _restore_unconfirmed_study_slot(
                 patch, current or {}, slot="outcome"
             )
+            patch["unconfirmed_outcome"] = str(params.get("outcome") or "").strip()
             for field in ("outcome", *dropped):
                 _record_unconfirmed_omission("outcome", field)
         else:
@@ -1416,6 +1427,19 @@ def update_study_context(
                 owner="easyicu.webserver.study_contexts",
                 details={"field": "outcome"},
             )
+    elif params.get("outcome") and _message_explicitly_selects_primary_outcome(
+        context.user_message, params.get("outcome")
+    ):
+        if (current or {}).get("unconfirmed_outcome"):
+            patch["unconfirmed_outcome"] = ""
+        if str(params["outcome"]).strip() != str((current or {}).get("outcome") or "").strip():
+            outcome_changed = True
+            # A previous machine concept is not proof for a newly selected
+            # human outcome; require a fresh, source-bound mapping.
+            execution = dict((current or {}).get("execution_concepts") or {})
+            execution.update(dict(patch.get("execution_concepts") or {}))
+            execution.pop("outcome", None)
+            patch["execution_concepts"] = execution
     if (
         params.get("primary_exposure")
         and str(context.user_message or "").strip()
@@ -1782,6 +1806,10 @@ def update_study_context(
         patch.pop("execution_concepts", None)
         deferred_until_source.append("execution_concepts")
         execution = None
+        if outcome_changed:
+            retained = dict((current or {}).get("execution_concepts") or {})
+            retained.pop("outcome", None)
+            patch["execution_concepts"] = retained
     if execution is not None:
         try:
             normalized_execution = study_contexts.normalize_execution_concepts(
