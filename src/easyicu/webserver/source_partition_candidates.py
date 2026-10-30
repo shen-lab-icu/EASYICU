@@ -173,8 +173,11 @@ def discover_source_partition_candidates(*, identity: SourceIdentity,
 def candidate_from_bound_research_context(*, study: Mapping[str, Any], run_dir: Path) -> dict:
     """Build a non-executable preview from the run's registered context evidence.
 
-    Only variables with an explicit source concept are mapped. The output does
-    not infer outcome or cohort dependencies, windows, units, or feature logic.
+    Concept mappings require an explicit source concept. Source identifier
+    candidates use configured table ID columns verified against the selected
+    partition schemas. A research variable is offered as a match only for an
+    exact cohort ID name. Neither proves a join or an exported/derived
+    identifier, nor infers cohort or outcome dependencies.
     """
     from easyicu.concept.loader import load_dictionary
     from easyicu.concept.provenance import capture_data_provenance
@@ -239,9 +242,27 @@ def candidate_from_bound_research_context(*, study: Mapping[str, Any], run_dir: 
         raise ValueError("partition_candidate_no_mapped_columns")
     candidate = discover_source_partition_candidates(identity=identity,
         requested_columns={table: sorted(columns) for table, columns in tables.items()})
+    # Show configured source-table IDs after schema verification even when no
+    # research variable is bound. An exact name is only a variable candidate
+    # when the variable is also a cohort-declared ID. A generated identifier
+    # is never equated by inference to a physical source ID.
+    identifier_candidates = []
+    for table in sorted(tables):
+        column = config.tables[table].defaults.id_var
+        files = [item for item in candidate["files"] if item["table"] == table]
+        if not isinstance(column, str) or not column or not files or not all(column in item["columns"] for item in files):
+            continue
+        variable = next((item for item in context.variables if not item.source_concept
+            and item.role == "id" and item.name in context.cohort.id_columns and item.name == column), None)
+        identifier_candidates.append({"variable": variable.name if variable else None, "table": table,
+            "column": column, "actual_records_verified": False,
+            "join_or_derived_identifier_verified": False})
+        if variable:
+            unmapped = [name for name in unmapped if name != variable.name]
     candidate["research_context_evidence_sha256"] = evidence.sha256
     candidate["dictionary_sha256"] = snapshot.dictionary_sha256
     candidate["features"] = features
+    candidate["identifier_candidates"] = identifier_candidates
     candidate["unmapped_variables"] = list(dict.fromkeys(unmapped))
     candidate["outcome_and_cohort_dependencies_complete"] = False
     candidate["candidate_sha256"] = canonical_sha256({k: v for k, v in candidate.items() if k != "candidate_sha256"})

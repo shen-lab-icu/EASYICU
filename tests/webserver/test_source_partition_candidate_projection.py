@@ -19,7 +19,10 @@ def test_only_recorded_concepts_form_candidates_not_guessed_outcome(tmp_path, mo
     context, *_ = signed_case_duration_case()
     variable = next(item for item in context.variables if item.name == 'lact').model_copy(update={'source_concept': 'lact'})
     identifier = next(item for item in context.variables if item.name == 'CaseID')
-    context = context.model_copy(update={'variables': [variable, identifier]})
+    derived_identifier = identifier.model_copy(update={'name': 'patient_stay_id'})
+    non_id = identifier.model_copy(update={'name': 'LaboratoryValue', 'role': 'other'})
+    context = context.model_copy(update={'variables': [variable, identifier, derived_identifier, non_id],
+        'cohort': context.cohort.model_copy(update={'id_columns': ['CaseID', 'patient_stay_id']})})
     identity = SourceIdentity.from_record(_constraints(context)['source_identity'])
     study = {'data_source': {'database': 'sic', 'path': '/registered'}}
     monkeypatch.setattr(discovery.sources, 'registered_source_identity', lambda _: identity)
@@ -28,18 +31,73 @@ def test_only_recorded_concepts_form_candidates_not_guessed_outcome(tmp_path, mo
     captured = {}
     def fake_discover(*, identity, requested_columns):
         captured.update(requested_columns)
-        return {'candidate_sha256': 'a' * 64, 'files': [], 'full_source_roster_verified': False,
+        return {'candidate_sha256': 'a' * 64, 'files': [
+                    {'table': 'laboratory', 'path': 'laboratory/1.parquet',
+                     'columns': requested_columns['laboratory']}], 'full_source_roster_verified': False,
                 'files_content_verified': False, 'analysis_authorized': False}
     monkeypatch.setattr(discovery, 'discover_source_partition_candidates', fake_discover)
     candidate = discovery.candidate_from_bound_research_context(study=study, run_dir=tmp_path)
     assert captured == {'laboratory': ['CaseID', 'LaboratoryID', 'LaboratoryValue', 'Offset']}
     assert candidate['features'][0]['concept'] == 'lact'
-    assert candidate['unmapped_variables'] == ['CaseID']
+    assert candidate['identifier_candidates'] == [{'variable': 'CaseID', 'table': 'laboratory',
+        'column': 'CaseID', 'actual_records_verified': False, 'join_or_derived_identifier_verified': False}]
+    assert candidate['unmapped_variables'] == ['patient_stay_id', 'LaboratoryValue']
     assert candidate['outcome_and_cohort_dependencies_complete'] is False
     assert candidate['analysis_authorized'] is False
     monkeypatch.setattr(discovery.sources, 'registered_source_identity', lambda _: SourceIdentity(database='sic', registration_id='other'))
     with pytest.raises(ValueError, match='context_source_mismatch'):
         discovery.candidate_from_bound_research_context(study=study, run_dir=tmp_path)
+
+
+@pytest.mark.parametrize('case', ['not_cohort_id', 'not_id_role', 'missing_schema_column'])
+def test_identifier_candidate_requires_declared_id_and_selected_schema(case, tmp_path, monkeypatch):
+    context, *_ = signed_case_duration_case()
+    lact = next(item for item in context.variables if item.name == 'lact').model_copy(update={'source_concept': 'lact'})
+    identifier = next(item for item in context.variables if item.name == 'CaseID')
+    if case == 'not_id_role':
+        identifier = identifier.model_copy(update={'role': 'other'})
+    cohort = context.cohort.model_copy(update={'id_columns': [] if case == 'not_cohort_id' else ['CaseID']})
+    context = context.model_copy(update={'variables': [lact, identifier], 'cohort': cohort})
+    identity = SourceIdentity.from_record(_constraints(context)['source_identity'])
+    monkeypatch.setattr(discovery.sources, 'registered_source_identity', lambda _: identity)
+    EvidenceStore(tmp_path).register_text(kind='log', description='context',
+        text=context.model_dump_json(), filename='context.json', evidence_id='research_context')
+    monkeypatch.setattr(discovery, 'discover_source_partition_candidates', lambda **kw: {
+        'files': [{'table': 'laboratory', 'path': 'laboratory/1.parquet',
+                   'columns': ['LaboratoryValue'] if case == 'missing_schema_column'
+                   else kw['requested_columns']['laboratory']}],
+        'analysis_authorized': False})
+    result = discovery.candidate_from_bound_research_context(
+        study={'data_source': {'database': 'sic', 'path': '/registered'}}, run_dir=tmp_path)
+    if case == 'missing_schema_column':
+        assert result['identifier_candidates'] == []
+    else:
+        assert result['identifier_candidates'] == [{'variable': None, 'table': 'laboratory',
+            'column': 'CaseID', 'actual_records_verified': False, 'join_or_derived_identifier_verified': False}]
+    assert result['unmapped_variables'] == ['CaseID']
+    assert result['analysis_authorized'] is False
+
+
+def test_source_identity_is_visible_when_exported_identifier_has_no_verified_mapping(tmp_path, monkeypatch):
+    context, *_ = signed_case_duration_case()
+    lact = next(item for item in context.variables if item.name == 'lact').model_copy(update={'source_concept': 'lact'})
+    case_id = next(item for item in context.variables if item.name == 'CaseID').model_copy(update={'role': 'other'})
+    exported_id = case_id.model_copy(update={'name': 'patient_stay_id', 'role': 'id'})
+    context = context.model_copy(update={'variables': [lact, case_id, exported_id],
+        'cohort': context.cohort.model_copy(update={'id_columns': ['patient_stay_id']})})
+    identity = SourceIdentity.from_record(_constraints(context)['source_identity'])
+    monkeypatch.setattr(discovery.sources, 'registered_source_identity', lambda _: identity)
+    EvidenceStore(tmp_path).register_text(kind='log', description='context',
+        text=context.model_dump_json(), filename='context.json', evidence_id='research_context')
+    monkeypatch.setattr(discovery, 'discover_source_partition_candidates', lambda **kw: {
+        'files': [{'table': 'laboratory', 'path': 'laboratory/1.parquet',
+                   'columns': kw['requested_columns']['laboratory']}], 'analysis_authorized': False})
+    result = discovery.candidate_from_bound_research_context(
+        study={'data_source': {'database': 'sic', 'path': '/registered'}}, run_dir=tmp_path)
+    assert result['identifier_candidates'] == [{'variable': None, 'table': 'laboratory',
+        'column': 'CaseID', 'actual_records_verified': False, 'join_or_derived_identifier_verified': False}]
+    assert result['unmapped_variables'] == ['CaseID', 'patient_stay_id']
+    assert result['analysis_authorized'] is False
 
 
 def test_only_bound_project_session_and_run_can_request_preview(tmp_path, monkeypatch):
@@ -60,13 +118,18 @@ def test_candidate_view_escapes_manifest_data_and_marks_all_boundaries(monkeypat
     monkeypatch.setattr(route, 'project_proposal', lambda **kw: {
         'proposal': {'original_question': 'question', 'decisions': []}, 'literature_candidates': None,
         'source_partition_candidate': {'status': 'candidate', 'candidate_sha256': 'f' * 64,
-            'unmapped_variables': ['<unknown>'],
+            'unmapped_variables': ['<unknown>'], 'identifier_candidates': [
+                {'variable': '<id>', 'table': '<table>', 'column': '<column>'},
+                {'variable': None, 'table': 'cases', 'column': 'CaseID'}],
             'features': [{'concept': '<lact>', 'table': 'lab', 'columns': ['field'], 'derivation_or_callback_present': True}],
             'files': [{'table': 'lab', 'path': '<file>.parquet', 'columns': ['field']}]}})
     app = FastAPI(); app.include_router(route.router)
     response = TestClient(app).get('/api/pi/proposal/project/session/run/source-candidate')
     assert response.status_code == 200
     assert '&lt;lact&gt;' in response.text and '&lt;file&gt;' in response.text and '<lact>' not in response.text
+    assert '&lt;id&gt;' in response.text and '&lt;column&gt;' in response.text
+    assert '未验证实际记录、表间关联或派生标识' in response.text
+    assert '未绑定研究变量' in response.text and '不代表研究变量已绑定' in response.text
     assert '尚未验证原始文件内容' in response.text and '结局和队列依赖尚未完整建立' in response.text
     assert '不授权提取患者记录或分析' in response.text and '存在额外转换规则' in response.text
 
@@ -112,7 +175,7 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
         raw_preparation_candidate_run_id:'run',raw_preparation_candidate_result:{{status:'blocked',
           blocker_codes:['dependency_cohort_inputs_unknown'],source_partition_candidate:{{
             files:[{{table:'<table>',path:'<file>',columns:['id','<value>']}}],
-            unmapped_variables:['<missing>']}}}}}};
+            unmapped_variables:['<missing>'],identifier_candidates:[{{variable:'<id>',table:'<table>',column:'<column>'}},{{variable:null,table:'cases',column:'CaseID'}}]}}}}}};
       const owner=window.EU_GUIDED_PI_CONFIRMATION.create({{tr:(en,zh)=>zh,esc,iconHtml:()=>'',resourceButton:()=>'',
         sessionIsStale:()=>false,busy:()=>false,workflow:()=>workflow,session:()=>({{archived_child_jobs:[]}})}});
       process.stdout.write(owner.workflowConfirmationHtml());
@@ -121,6 +184,8 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
     assert result.returncode == 0, result.stderr
     html = result.stdout
     assert '&lt;table>' in html and '&lt;file>' in html and '&lt;missing>' in html
+    assert '&lt;id>' in html and '&lt;column>' in html and '未验证实际记录、表间关联或派生标识' in html
+    assert '未绑定研究变量' in html and '不代表研究变量已绑定' in html
     assert '<file>' not in html and '不授权数据准备或分析' in html
     assert 'data-gpi-preparation-review' not in html
 
