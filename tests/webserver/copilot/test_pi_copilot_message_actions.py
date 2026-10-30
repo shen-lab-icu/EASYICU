@@ -633,7 +633,8 @@ def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> Non
     assert "MESSAGE_ACTIONS.handleClick(event)" in events
     assert "MESSAGE_ACTIONS.handleSubmit(event)" in events
     message_owner = _read("js/screens-guided-pi-message-actions.js")
-    assert "copyText(row.text)" in message_owner
+    assert "drafts.stripCopied(row.text, lifted.rendered)" in message_owner
+    assert "copyText(text)" in message_owner
     # Editing an earlier turn rewinds to it, so the replies after it are
     # replaced instead of a new message being appended at the bottom.  The Pi
     # branch keeps the original recoverable, so this is not a history rewrite.
@@ -738,12 +739,12 @@ def test_failed_pipeline_never_renders_partial_cohort_decision() -> None:
     assert completed.stdout == ""
 
 
-@pytest.mark.parametrize("workflow_code,run_id,expected_source", [
-    ("failed_pipeline_execution_retry_available", "failed-approved", "failed-approved"),
-    ("failed_pipeline_execution_retry_available", "", None),
-    ("failed_pipeline_requires_fresh_plan", "failed-planning", ""),
+@pytest.mark.parametrize("workflow_code,run_id,expected_source,expected_mode", [
+    ("failed_pipeline_execution_retry_available", "failed-approved", "failed-approved", "auto"),
+    ("failed_pipeline_execution_retry_available", "", None, None),
+    ("failed_pipeline_requires_fresh_plan", "failed-planning", "", "fresh"),
 ])
-def test_fresh_plan_after_failed_execution_binds_source(workflow_code, run_id, expected_source):
+def test_fresh_plan_after_failed_execution_binds_source(workflow_code, run_id, expected_source, expected_mode):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -777,7 +778,7 @@ def test_fresh_plan_after_failed_execution_binds_source(workflow_code, run_id, e
         assert "source is unavailable" in payload["error"]
     else:
         assert payload["submitted"]["plan_revision_source_run_id"] == expected_source
-        assert payload["submitted"]["planner_start_mode"] == "auto"
+        assert payload["submitted"]["planner_start_mode"] == expected_mode
         assert "execution_resume_source_run_id" not in payload["submitted"]
 
 

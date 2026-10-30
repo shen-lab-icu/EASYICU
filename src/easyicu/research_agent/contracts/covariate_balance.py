@@ -9,11 +9,12 @@ No propensity model, matching, trimming, imputation or effect is estimated.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..canonical_json import canonical_sha256
+from .cluster_sizes import CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS
 
 BALANCE_ACTION = "causal_emulation.covariate_balance"
 BALANCE_KIND = "covariate_balance"
@@ -179,3 +180,24 @@ class CovariateBalanceResult(BaseModel):
 
 def covariate_balance_spec_sha256(spec: CovariateBalanceSpec) -> str:
     return canonical_sha256(spec.model_dump(mode="json"))
+
+
+def validate_descriptive_auxiliary_steps(step: Any) -> None:
+    """Enforce the declared balance and cluster-size step contracts."""
+    for spec, action, outputs, columns in (
+        (step.covariate_balance_spec, BALANCE_ACTION, BALANCE_OUTPUTS,
+         {step.covariate_balance_spec.unit_id_column, step.covariate_balance_spec.treatment_column,
+          *(item.column for item in step.covariate_balance_spec.covariates),
+          *([step.covariate_balance_spec.weight_column] if step.covariate_balance_spec.weight_column else [])}
+         if step.covariate_balance_spec else set()),
+        (step.cluster_size_spec, CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS,
+         {step.cluster_size_spec.unit_id_column} if step.cluster_size_spec else set()),
+    ):
+        if spec is None:
+            continue
+        if step.scientific_action_id != action or step.planned_analysis_role not in {"secondary", "auxiliary"}:
+            raise ValueError(f"{action} requires its exact auxiliary or secondary action")
+        if set(step.expected_outputs) != set(outputs) or len(step.expected_outputs) != len(outputs):
+            raise ValueError(f"{action} requires exactly its declared table and receipt outputs")
+        if not columns.issubset(step.inputs):
+            raise ValueError(f"{action} variables must be explicit step inputs")

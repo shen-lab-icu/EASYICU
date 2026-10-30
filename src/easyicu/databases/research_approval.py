@@ -67,7 +67,7 @@ def require_approved_case_duration_pre_materialization(
     from easyicu.databases.research_substitutions import case_duration_selection, time_origin_selection
     from easyicu.databases.time_origin import SourceTimeAxisBinding
     from easyicu.research_agent.authority.case_duration_landmark import CaseDurationLandmarkAuthority
-    from easyicu.research_agent.planning.scientific_review import PlanScientificReview
+    from easyicu.research_agent.contracts.analysis_design import PlanScientificReview
 
     companion = _companion(plan_result.context, plan_result.plan, runtime_authority=runtime_authority)
     origin, duration = time_origin_selection(plan_result.context), case_duration_selection(plan_result.context)
@@ -287,7 +287,7 @@ def require_approved_database_capabilities(plan_result, run_dir: Path, *, cohort
     path = verified_run_evidence_path(run_dir, record) if record is not None else None
     if path is None:
         raise CapabilityApprovalError("capability_substitution_approval_required", decision)
-    from easyicu.research_agent.planning.scientific_review import PlanScientificReview
+    from easyicu.research_agent.contracts.analysis_design import PlanScientificReview
 
     review = PlanScientificReview.model_validate_json(path.read_bytes())
     if (review.facts.get(REVIEW_FIELD) != companion.model_dump(mode="json")
@@ -331,7 +331,7 @@ def require_approved_database_capabilities(plan_result, run_dir: Path, *, cohort
 def _require_bound_time_origin_materialization(plan_result, run_dir, companion, selection, cohort_path, attestor):
     """Recheck the approved export and the actual sealed cohort axis before execution."""
     from easyicu.research_agent.intake.materialized_metadata import load_verified_materialized_cohort_authority
-    from easyicu.research_agent.planning.scientific_review import PlanScientificReview
+    from easyicu.research_agent.contracts.analysis_design import PlanScientificReview
     from easyicu.databases.time_origin import SourceTimeAxisBinding
 
     try:
@@ -370,7 +370,7 @@ def _refuse_lost_reviewed_substitution(plan_result, run_dir, companion):
         if companion is not None:
             raise CapabilityApprovalError("capability_substitution_review_mismatch", companion.decision)
         raise ValueError("capability_substitution_review_mismatch")
-    from easyicu.research_agent.planning.scientific_review import PlanScientificReview
+    from easyicu.research_agent.contracts.analysis_design import PlanScientificReview
 
     review = PlanScientificReview.model_validate_json(path.read_bytes())
     saved = review.facts.get(REVIEW_FIELD)

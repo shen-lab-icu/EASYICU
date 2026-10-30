@@ -7915,6 +7915,10 @@ def make_research_pipeline_run_runner(
                     metadata_outline_journal_task=(
                         provider_hard_stop if acquisition_transport is not client else None
                     ),
+                    metadata_outline_guard_verifier=(
+                        acquisition_transport.verify_outline_retry_guard
+                        if acquisition_transport is not client else None
+                    ),
                     time_origin_attestor=review_time_origin_attestor,
                     case_duration_attestor=attest_case_duration_for_review,
                     case_duration_metadata_attestor=attest_case_duration_metadata,

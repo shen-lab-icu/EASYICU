@@ -8,7 +8,6 @@ calls, repair orchestration, and scientific design remain outside this layer.
 
 from __future__ import annotations
 
-import copy
 import json
 import math
 import re
@@ -44,6 +43,8 @@ from ..authority.development_projection import (
 from ..authority.run_input import canonical_sha256
 from ..authority.runtime_artifacts import (
     current_step_records,
+    unpublished_attempt_evidence,
+    typed_binding_read_view,
     verified_run_evidence_path,
 )
 from .evidence_record_resolution import (
@@ -2178,10 +2179,6 @@ class TypedBindingResolver:
     development_sample: Optional[Any] = None
     unpublished_evidence_store: Optional[Any] = None
 
-    def _records_snapshot(self) -> List[Mapping[str, Any]]:
-        with self.records_lock:
-            return copy.deepcopy(list(self.per_step_records))
-
     def resolve_names(
         self,
         names: Sequence[str],
@@ -2193,15 +2190,9 @@ class TypedBindingResolver:
     ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
         """Return exact evidence refs, typed ids, and host-owned bindings."""
 
-        if allow_unpublished_direct_ids and (
-            consumer_step is None or unpublished_evidence_ids is None
-            or isinstance(unpublished_evidence_ids, (str, bytes))
-        ):
-            raise ValueError("unpublished evidence requires its current step owner and attempt evidence IDs")
-        attempt_ids = set(unpublished_evidence_ids or ())
-        records_snapshot = self._records_snapshot()
-        read_view = getattr(self.evidence_store, "read_view", None)
-        evidence_view = read_view() if callable(read_view) else self.evidence_store
+        attempt_ids, records_snapshot, evidence_view = typed_binding_read_view(
+            self, consumer_step, allow_unpublished_direct_ids, unpublished_evidence_ids,
+        )
         refs: List[EvidenceRef] = []
         typed_evidence_ids: List[str] = []
         typed_bindings: Dict[str, Dict[str, Any]] = {}
@@ -2280,44 +2271,18 @@ class TypedBindingResolver:
                             typed_evidence_ids.append(projected_evidence_id)
                 continue
 
-            direct_record = evidence_view.get(value)
-            if (
-                allow_unpublished_direct_ids
-                and value in attempt_ids
-                and self.unpublished_evidence_store is not None
-            ):
-                # A pre-dispatch view cannot contain this worker's later
-                # outputs. Only its host-supplied exact attempt IDs may use
-                # the live store; no peer ID or alias is admitted here.
-                own_record = self.unpublished_evidence_store.get(value)
-                if (
-                    own_record is not None
-                    and _evidence_record_field(own_record, "evidence_id") == value
-                    and _evidence_record_field(own_record, "produced_by_step")
-                    == consumer_step.step_id
-                ):
-                    direct_record = own_record
-            if (
-                allow_unpublished_direct_ids
-                and direct_record is not None
-                and str(_evidence_record_field(direct_record, "produced_by_step") or "")
-                == consumer_step.step_id
-            ):
-                # Critique can inspect only exact output IDs from its own
-                # in-flight step, and only while their registered bytes still
-                # match. An exact ID is not authority to inspect another
-                # worker's unpublished or superseded result.
-                record = direct_record if (
-                    direct_record is not None
-                    and _evidence_record_field(direct_record, "evidence_id") == value
-                    and value in attempt_ids
-                    and verified_run_evidence_path(self.run_dir, direct_record) is not None
-                ) else None
-            else:
+            handled, record = unpublished_attempt_evidence(
+                evidence_view=evidence_view,
+                live_store=self.unpublished_evidence_store,
+                value=value,
+                allowed=allow_unpublished_direct_ids,
+                attempt_ids=attempt_ids,
+                consumer_step=consumer_step,
+                run_dir=self.run_dir,
+            )
+            if not handled:
                 record = _current_verified_evidence_record(
-                    evidence_view,
-                    value,
-                    records_snapshot,
+                    evidence_view, value, records_snapshot,
                 )
             if record is not None and record.evidence_id not in seen:
                 refs.append(

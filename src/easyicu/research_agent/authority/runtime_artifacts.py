@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -9,6 +10,7 @@ import stat
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -933,3 +935,261 @@ __all__ = [
     "build_execution_replay",
     "write_json_artifact",
 ]
+
+
+def current_conflicted_evidence_aliases(
+    per_step_records: Sequence[Mapping[str, Any]],
+    *,
+    current_evidence_ids: set[str],
+    aliases: Mapping[str, str],
+) -> set[str]:
+    """Names claimed by another currently successful, evidenced step.
+
+    Retained aliases keep historical citations stable but do not identify which
+    of two concurrent results the author intended. Ignore superseded/failed
+    attempts and names whose current binding no longer has another owner.
+    """
+    current_steps = current_successful_step_records(per_step_records)
+    owners_by_id: dict[str, set[str]] = {}
+    for step in current_steps:
+        step_id = str(step.get("step_id") or "").strip()
+        for evidence_id in step.get("evidence_ids") or ():
+            if str(evidence_id) in current_evidence_ids:
+                owners_by_id.setdefault(str(evidence_id), set()).add(step_id)
+    conflicts: set[str] = set()
+    for step in current_steps:
+        active_ids = {
+            str(item) for item in (step.get("evidence_ids") or ())
+            if str(item) in current_evidence_ids
+        }
+        if not active_ids:
+            continue
+        retained = step.get("retained_cross_step_aliases")
+        if not isinstance(retained, Mapping):
+            continue
+        step_id = str(step.get("step_id") or "").strip()
+        for raw_alias in retained:
+            alias = str(raw_alias)
+            owner_id = aliases.get(alias)
+            # The original winner may have retried and replaced its evidence
+            # id; the claimant's current step still competes for this alias.
+            if (
+                owner_id in current_evidence_ids
+                and owners_by_id.get(owner_id) != {step_id}
+            ):
+                conflicts.add(alias)
+    return conflicts
+
+
+def is_conflicted_evidence_reference(
+    name: str, evidence_id: str, *, aliases: Mapping[str, str], conflicts: set[str],
+) -> bool:
+    """Cover exact aliases and the store's unique-prefix alias fallback."""
+    if name == evidence_id:
+        return False
+    if name in aliases:
+        return name in conflicts
+    prefix = f"{name}_"
+    return any(
+        alias.startswith(prefix) and aliases.get(alias) == evidence_id
+        for alias in conflicts
+    )
+
+
+def _current_verified_evidence_record(
+    evidence_store: Any,
+    name: str,
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> Any:
+    """Resolve an alias only when its producer is current and successful."""
+
+    record = evidence_store.get(name)
+    if record is None:
+        return None
+    current_ids = {
+        item.evidence_id
+        for item in evidence_store.current_verified_records(per_step_records)
+    }
+    if record.evidence_id not in current_ids:
+        return None
+    if name == record.evidence_id:
+        return record
+    if not any(
+        isinstance(row, Mapping) and row.get("retained_cross_step_aliases")
+        for row in per_step_records
+    ):
+        return record
+    aliases_fn = getattr(evidence_store, "aliases", None)
+    if not callable(aliases_fn):
+        return None
+    aliases = aliases_fn()
+    conflicts = current_conflicted_evidence_aliases(
+        per_step_records, current_evidence_ids=current_ids, aliases=aliases,
+    )
+    if is_conflicted_evidence_reference(
+        name, record.evidence_id, aliases=aliases, conflicts=conflicts,
+    ):
+        return None
+    return record
+
+
+_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA = "easyicu.run_artifact_authority_snapshot/1"
+
+
+def _canonical_json_bytes(payload: object) -> bytes:
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+
+@dataclass(frozen=True)
+class WaveArtifactAuthority:
+    """Host-selected receipt bytes for one wave, or a fail-closed reason."""
+
+    payload: bytes = b""
+    sha256: str = ""
+    error: str = ""
+
+
+def require_wave_artifact_authority(wave: WaveArtifactAuthority) -> None:
+    """Refuse an invalid wave receipt before any analysis process starts."""
+
+    if not isinstance(wave, WaveArtifactAuthority):
+        raise ValueError("Wave authority receipt has an invalid type.")
+    if wave.error:
+        raise ValueError(f"Wave authority receipt unavailable: {wave.error}")
+    if (
+        not isinstance(wave.payload, bytes)
+        or not wave.payload
+        or hashlib.sha256(wave.payload).hexdigest() != wave.sha256
+    ):
+        raise ValueError("Wave authority receipt digest mismatch.")
+    try:
+        snapshot = json.loads(wave.payload)
+        authority = snapshot["authority"]
+        sequence = snapshot["checkpoint_sequence"]
+        if (
+            snapshot.get("schema_version") != _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA
+            or not isinstance(authority, dict)
+            or isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or sequence < 1
+            or authority.get("checkpoint_sequence") != sequence
+            or not isinstance(authority.get("per_step_records"), list)
+            or not isinstance(authority.get("evidence"), list)
+            or not str(authority.get("run_id") or "").strip()
+            or hashlib.sha256(_canonical_json_bytes(authority)).hexdigest()
+            != snapshot.get("authority_sha256")
+        ):
+            raise ValueError("invalid payload")
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Wave authority receipt payload is invalid.") from exc
+
+
+def _authority_receipt_bytes(authority: Mapping[str, object]) -> bytes:
+    raw_steps = authority.get("per_step_records")
+    if not isinstance(raw_steps, list):
+        raise ValueError("Current checkpoint has no valid per-step ledger.")
+    active_steps = [dict(record) for record in current_step_records(raw_steps)]
+    raw_evidence = authority.get("evidence")
+    evidence = raw_evidence if isinstance(raw_evidence, list) else []
+    selected = {
+        "run_id": authority.get("run_id"),
+        "checkpoint_sequence": authority.get("checkpoint_sequence"),
+        "per_step_records": active_steps,
+        "evidence": [
+            dict(item) if isinstance(item, dict) else item
+            for item in current_evidence_records(evidence, active_steps)
+        ],
+    }
+    snapshot = {
+        "schema_version": _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA,
+        "checkpoint_sequence": selected["checkpoint_sequence"],
+        "authority_sha256": hashlib.sha256(_canonical_json_bytes(selected)).hexdigest(),
+        "authority": selected,
+    }
+    return _canonical_json_bytes(snapshot)
+
+
+def capture_wave_artifact_authority(
+    *, workdir: Path, run_id: str, step_records: Sequence[Mapping[str, object]],
+    evidence_records: Sequence[object], resumed: bool,
+) -> WaveArtifactAuthority:
+    """Freeze a checked durable checkpoint once before dispatching a wave."""
+
+    if resumed:
+        return WaveArtifactAuthority(error="Wave authority recovery is not available.")
+    try:
+        authority = load_run_artifact_authority(workdir)
+        if not isinstance(authority, dict) or authority.get("run_id") != run_id:
+            raise ValueError("Wave checkpoint run identity is missing or mismatched.")
+        sequence = authority.get("checkpoint_sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError("Wave checkpoint sequence is invalid.")
+        persisted_steps = authority.get("per_step_records")
+        persisted_evidence = authority.get("evidence")
+        if not isinstance(persisted_steps, list) or not isinstance(persisted_evidence, list):
+            raise ValueError("Wave checkpoint ledger is invalid.")
+        if _canonical_json_bytes(current_step_records(persisted_steps)) != _canonical_json_bytes(current_step_records(step_records)):
+            raise ValueError("Wave checkpoint step ledger does not match the captured view.")
+        expected_evidence = [
+            record.model_dump(mode="json") for record in evidence_records
+        ]
+        if _canonical_json_bytes(current_evidence_records(persisted_evidence, persisted_steps)) != _canonical_json_bytes(current_evidence_records(expected_evidence, step_records)):
+            raise ValueError("Wave checkpoint evidence does not match the captured view.")
+        payload = _authority_receipt_bytes(authority)
+        return WaveArtifactAuthority(payload=payload, sha256=hashlib.sha256(payload).hexdigest())
+    except (RunArtifactAuthorityError, OSError, TypeError, ValueError) as exc:
+        return WaveArtifactAuthority(error=str(exc))
+
+
+
+
+def unpublished_attempt_evidence(
+    *, evidence_view: Any, live_store: Any, value: str, allowed: bool,
+    attempt_ids: set[str], consumer_step: Any, run_dir: Path,
+) -> tuple[bool, Any]:
+    """Resolve only this step's verified unpublished evidence; never peer output."""
+    direct_record = evidence_view.get(value)
+    if allowed and value in attempt_ids and live_store is not None:
+        own_record = live_store.get(value)
+        if (
+            own_record is not None
+            and _record_field(own_record, "evidence_id") == value
+            and _record_field(own_record, "produced_by_step") == consumer_step.step_id
+        ):
+            direct_record = own_record
+    if (
+        allowed and direct_record is not None
+        and str(_record_field(direct_record, "produced_by_step") or "") == consumer_step.step_id
+    ):
+        valid = (
+            _record_field(direct_record, "evidence_id") == value
+            and value in attempt_ids
+            and verified_run_evidence_path(run_dir, direct_record) is not None
+        )
+        return True, direct_record if valid else None
+    return False, None
+
+
+def typed_binding_read_view(
+    resolver: Any, consumer_step: Any, allow_unpublished: bool, attempt_ids: Any,
+) -> tuple[set[str], list[Mapping[str, Any]], Any]:
+    """Capture one per-call view and validate unpublished-attempt authority."""
+    if allow_unpublished and (
+        consumer_step is None or attempt_ids is None or isinstance(attempt_ids, (str, bytes))
+    ):
+        raise ValueError("unpublished evidence requires its current step owner and attempt evidence IDs")
+    captured_ids = set(attempt_ids or ())
+    with resolver.records_lock:
+        records = copy.deepcopy(list(resolver.per_step_records))
+    read_view = getattr(resolver.evidence_store, "read_view", None)
+    return captured_ids, records, read_view() if callable(read_view) else resolver.evidence_store

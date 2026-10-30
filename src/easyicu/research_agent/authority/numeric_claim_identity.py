@@ -211,3 +211,188 @@ __all__ = [
     "coerce_numeric_effect_scale",
     "infer_numeric_claim_identity",
 ]
+
+
+# Coder-generated step_summary entries can request that a derived
+# numeric value (an OR confidence-interval bound, a between-cohort
+# difference, an AUC delta) be computed from other registered claims
+# and registered as its own NumericClaim. The formula is evaluated
+# here in a restricted-AST sandbox that accepts ONLY:
+#
+#   * Numeric constants
+#   * Names resolving to entries in ``sources`` (or to a math whitelist
+#     constant — pi, e)
+#   * Arithmetic: + - * / **
+#   * Unary +/-
+#   * Calls to a small math whitelist: exp, log, log10, sqrt, abs,
+#     min, max
+#   * Parentheses
+#
+# Rejected: attribute access, subscripts, comprehensions, comparisons,
+# bool ops, lambda, named expressions, anything else. Names starting
+# with ``_`` are rejected outright. The output is a finite float; nan
+# / inf raise. Errors raise ``DerivedFormulaError`` with the offending
+# AST node type for the audit trail.
+#
+# Inspired by data-to-paper's ``\num{<formula>, "<explanation>"}``;
+# our variant evaluates at register-time and persists the result as a
+# regular NumericClaim with ``derived_from`` provenance — so the
+# existing reverse-binder picks it up with no extra plumbing.
+
+
+class DerivedFormulaError(ValueError):
+    """Raised when a derived-claim formula contains a disallowed
+    expression, references an unknown source, or evaluates to a
+    non-finite value. The message is safe to surface in audit findings.
+    """
+
+
+# Math whitelist. ``min`` / ``max`` accept any positive number of
+# args; the rest are single-arg. Anything outside this dict is rejected
+# at call-time.
+import math as _math  # noqa: E402  (deliberate post-typing local-only import)
+
+_DERIVED_FORMULA_FUNCS: Dict[str, Any] = {
+    "exp": _math.exp,
+    "log": _math.log,
+    "log10": _math.log10,
+    "sqrt": _math.sqrt,
+    "abs": abs,
+    "min": min,
+    "max": max,
+}
+_DERIVED_FORMULA_CONSTS: Dict[str, float] = {
+    "pi": _math.pi,
+    "e": _math.e,
+}
+
+
+def _evaluate_derived_formula(
+    formula: str,
+    *,
+    sources: Dict[str, float],
+) -> float:
+    """Evaluate ``formula`` in the restricted sandbox.
+
+    ``sources`` maps Python identifier → canonical float of a
+    registered claim. Names referenced in the formula that aren't in
+    ``sources`` and aren't in the math constants whitelist raise
+    ``DerivedFormulaError``. Returns a finite float.
+    """
+    import ast  # local import — only needed when a derived claim arrives
+
+    try:
+        tree = ast.parse(formula, mode="eval")
+    except SyntaxError as exc:
+        raise DerivedFormulaError(f"derived-formula syntax error: {exc.msg}") from exc
+
+    _ALLOWED_BINOPS = (
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.Pow,
+    )
+    _ALLOWED_UNARYOPS = (ast.UAdd, ast.USub)
+
+    def _walk(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _walk(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)) and not isinstance(
+                node.value, bool
+            ):
+                return float(node.value)
+            raise DerivedFormulaError(
+                f"derived-formula rejected constant of type {type(node.value).__name__}"
+            )
+        if isinstance(node, ast.Name):
+            name = node.id
+            if name.startswith("_"):
+                raise DerivedFormulaError(
+                    f"derived-formula rejected dunder/private name {name!r}"
+                )
+            if name in sources:
+                return float(sources[name])
+            if name in _DERIVED_FORMULA_CONSTS:
+                return _DERIVED_FORMULA_CONSTS[name]
+            raise DerivedFormulaError(
+                f"derived-formula references unknown source {name!r}; "
+                f"available sources: {sorted(sources)}"
+            )
+        if isinstance(node, ast.BinOp):
+            if not isinstance(node.op, _ALLOWED_BINOPS):
+                raise DerivedFormulaError(
+                    f"derived-formula rejected binary operator "
+                    f"{type(node.op).__name__}"
+                )
+            lhs = _walk(node.left)
+            rhs = _walk(node.right)
+            try:
+                if isinstance(node.op, ast.Add):
+                    return lhs + rhs
+                if isinstance(node.op, ast.Sub):
+                    return lhs - rhs
+                if isinstance(node.op, ast.Mult):
+                    return lhs * rhs
+                if isinstance(node.op, ast.Div):
+                    if rhs == 0.0:
+                        raise DerivedFormulaError("derived-formula division by zero")
+                    return lhs / rhs
+                if isinstance(node.op, ast.Pow):
+                    return lhs**rhs
+            except OverflowError as exc:
+                # Python raises OverflowError on float ** float when the
+                # result would exceed float range; we surface this as a
+                # non-finite result so callers see one consistent error
+                # type regardless of whether overflow happens silently
+                # (→ inf, caught below) or eagerly (→ OverflowError).
+                raise DerivedFormulaError(
+                    f"derived-formula evaluated to non-finite value "
+                    f"(arithmetic overflow): {exc}"
+                ) from exc
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, _ALLOWED_UNARYOPS):
+                raise DerivedFormulaError(
+                    f"derived-formula rejected unary operator "
+                    f"{type(node.op).__name__}"
+                )
+            operand = _walk(node.operand)
+            return +operand if isinstance(node.op, ast.UAdd) else -operand
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise DerivedFormulaError(
+                    "derived-formula rejected call with non-name callable"
+                )
+            fname = node.func.id
+            if fname.startswith("_") or fname not in _DERIVED_FORMULA_FUNCS:
+                raise DerivedFormulaError(
+                    f"derived-formula rejected call to {fname!r}; "
+                    f"allowed: {sorted(_DERIVED_FORMULA_FUNCS)}"
+                )
+            if node.keywords:
+                raise DerivedFormulaError(
+                    f"derived-formula rejected keyword arguments to {fname!r}"
+                )
+            args = [_walk(a) for a in node.args]
+            try:
+                return float(_DERIVED_FORMULA_FUNCS[fname](*args))
+            except (ArithmeticError, ValueError, TypeError) as exc:
+                raise DerivedFormulaError(
+                    f"derived-formula call {fname!r} failed: {exc}"
+                ) from exc
+        raise DerivedFormulaError(
+            f"derived-formula rejected AST node {type(node).__name__}"
+        )
+
+    result = _walk(tree)
+    if not isinstance(result, (int, float)):
+        raise DerivedFormulaError(
+            f"derived-formula evaluated to non-numeric {type(result).__name__}"
+        )
+    fresult = float(result)
+    if fresult != fresult or fresult in (float("inf"), float("-inf")):
+        raise DerivedFormulaError(
+            f"derived-formula evaluated to non-finite value {fresult!r}"
+        )
+    return fresult

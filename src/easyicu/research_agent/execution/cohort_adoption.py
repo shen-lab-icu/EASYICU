@@ -133,3 +133,97 @@ def adopt_existing_host_cohort_materialization(
         preexecuted_step_ids=preexecuted_step_ids,
         findings=findings,
     )
+
+
+def _materialize_approved_case_duration_if_needed(pipeline, *, plan_result, cohort_path, run_dir):
+    """Transition a zero-row planning catalog only after signed host review."""
+    from easyicu.databases.research_substitutions import case_duration_selection
+    from easyicu.research_agent.intake.materialized_metadata import load_verified_materialized_cohort_authority
+
+    if (not hasattr(plan_result.context, "user_preferences")
+            or case_duration_selection(plan_result.context) is None):
+        return cohort_path
+    sealed_input = load_verified_materialized_cohort_authority(cohort_path)
+    if sealed_input is not None:
+        return cohort_path
+    import pyarrow.parquet as pq
+    if pq.ParquetFile(cohort_path).metadata.num_rows != 0:
+        raise ValueError("case_duration_planning_input_is_not_metadata_only")
+    from easyicu.databases.research_approval import require_approved_case_duration_pre_materialization
+
+    services = getattr(pipeline, "_services", None)
+    approved = require_approved_case_duration_pre_materialization(
+        plan_result, run_dir, time_origin_attestor=getattr(services, "time_origin_attestor", None),
+        case_duration_attestor=getattr(services, "case_duration_attestor", None),
+        runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+    )
+    materializer = getattr(services, "approved_case_duration_materializer", None)
+    if materializer is None:
+        raise ValueError("case_duration_approved_materializer_unavailable")
+    return Path(materializer(plan_result=plan_result, run_dir=run_dir, approved=approved))
+
+
+def prepare_approved_analysis_cohort(*, pipeline, preparation, plan_result, plan, context, universe_path, run_dir):
+    """Recover or materialize the approved source cohort before binding inputs."""
+    from easyicu.databases.research_approval import ApprovedCaseDurationBinding
+    from ..cohort.schema import (
+        materialize_approved_care_unit_landmark,
+        materialize_locked_analysis_cohort,
+        recover_approved_source_analysis_cohort,
+    )
+
+    approved = preparation.approved_source_time_axis
+    case_duration = approved if isinstance(approved, ApprovedCaseDurationBinding) else None
+    path = run_dir / "cohort_analysis.parquet"
+    if case_duration is not None:
+        services = getattr(pipeline, "_services", None)
+        runtime = getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None)
+        result = materialize_approved_care_unit_landmark(
+            run_dir=run_dir, universe_path=universe_path, plan_result=plan_result,
+            time_origin_attestor=getattr(services, "time_origin_attestor", None),
+            case_duration_attestor=getattr(services, "case_duration_attestor", None),
+            runtime_authority=runtime,
+        )
+        path = Path(result["path"])
+    elif approved is not None:
+        prior = recover_approved_source_analysis_cohort(
+            run_dir=run_dir, plan=plan, universe_path=universe_path,
+            cohort_concept_ids=plan_result.cohort_concept_ids,
+        )
+        if prior is None:
+            services = getattr(pipeline, "_services", None)
+            runtime = getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None)
+            materialize_locked_analysis_cohort(
+                run_dir=run_dir, plan=plan, universe_path=universe_path, context=context,
+                cohort_concept_ids=plan_result.cohort_concept_ids,
+                approved_plan_result=plan_result,
+                time_origin_attestor=getattr(services, "time_origin_attestor", None),
+                runtime_authority=runtime,
+            )
+    return path, case_duration
+
+
+def approved_database_source_time_axis(pipeline, plan_result, run_dir, cohort_path, require_approval):
+    """Resolve the reviewed database time axis before initializing execution."""
+    services = getattr(pipeline, "_services", None)
+    return require_approval(
+        plan_result, run_dir, cohort_path=cohort_path,
+        time_origin_attestor=getattr(services, "time_origin_attestor", None),
+        case_duration_attestor=getattr(services, "case_duration_attestor", None),
+        runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+    )
+
+
+def bind_approved_execution_inputs(*, pipeline, preparation, plan_result, plan, context, universe_path,
+                                   run_dir, trajectory_binding, binding_owner, legacy_trajectory_verifier):
+    """Bind the approved analysis and its verified trajectory to this run."""
+    analysis_path, case_duration = prepare_approved_analysis_cohort(
+        pipeline=pipeline, preparation=preparation, plan_result=plan_result,
+        plan=plan, context=context, universe_path=universe_path, run_dir=run_dir,
+    )
+    return binding_owner.bind(
+        universe_path=universe_path, analysis_path=analysis_path,
+        trajectory_binding=trajectory_binding, run_dir=run_dir,
+        legacy_trajectory_verifier=legacy_trajectory_verifier, plan=plan, context=context,
+        approved_case_duration_binding=case_duration,
+    )

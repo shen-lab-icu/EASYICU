@@ -1596,7 +1596,7 @@ def resolve_primary_capability(
         return _verdict_for(capability, analysis_family=canonical)
 
     primary = primary_steps[0]
-    from .target_trial_spec import require_g_method_step
+    from ..contracts.time_varying_exposure import require_g_method_step
 
     try:
         g_spec = require_g_method_step(primary)
@@ -2018,7 +2018,7 @@ def assess_scientific_capability(
     elif capability.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID:
         input_contract_resolved = not signed_trajectory_plan_contract_errors(plan)
     elif capability.capability_id == G_METHOD_CAPABILITY:
-        from .target_trial_spec import require_g_method_plan
+        from ..contracts.time_varying_exposure import require_g_method_plan
 
         try:
             require_g_method_plan(context, plan)

@@ -340,7 +340,7 @@ def test_an_unverified_inflight_reservation_cannot_resume_the_journal(tmp_path, 
 
 
 def test_pending_guard_rejects_another_request_digest(tmp_path, monkeypatch):
-    from easyicu.webserver import metadata_provider_concurrency as slots
+    from easyicu.webserver import metadata_provider_client, metadata_provider_concurrency as slots
     from easyicu.webserver.metadata_provider_worker import identity as worker_identity
 
     _inner, book, task = _setup(tmp_path, monkeypatch)
@@ -352,7 +352,7 @@ def test_pending_guard_rejects_another_request_digest(tmp_path, monkeypatch):
             "request_sha256": "f" * 64, "worker_sha256": worker_identity(), "guard_nonce": "synthetic"}
     monkeypatch.setattr(slots, "get", lambda _attempt: held)
     with pytest.raises(ValueError, match="guard_unverified"):
-        owner._verify_pending_guard(task, call, "a" * 64)
+        owner._verify_pending_guard(task, call, "a" * 64, metadata_provider_client.verify_outline_retry_guard)
 
 
 def test_lost_attempt_does_not_expand_the_normal_retry_budget(tmp_path, monkeypatch):
@@ -446,3 +446,37 @@ def test_family_spec_journal_cannot_be_replayed_as_outline_or_with_a_larger_budg
             owner.OutlineRetryJournal(inner=inner, task=task, run_dir=tmp_path / f"{stage}-{limit}",
                 request_sha256="b" * 64, dependency_sha256="c" * 64, literature_sha256="e" * 64,
                 source_path=source, source_sha256=digest, stage=stage, parse_attempt_limit=limit)
+
+
+@pytest.mark.parametrize("branch", ["pending", "guarded_retry"])
+@pytest.mark.parametrize("failure", ["missing", "non_none", "exception"])
+def test_interrupted_journal_requires_successful_host_verification_before_transport(
+    tmp_path, monkeypatch, branch, failure,
+):
+    inner, book, task = _setup(tmp_path, monkeypatch)
+    initial = _journal(inner, task, tmp_path / "source")
+    request_sha = "a" * 64
+    book.reserve_transport_attempt(task_id="task", role="planner", model="synthetic",
+        messages=[LLMMessage("user", "original")], max_tokens=16, prior_attempt_id=None)
+    if branch == "pending":
+        initial._data["pending"] = {"planner_calls": 0, "request_sha256": request_sha}
+    else:
+        initial._data.update(pending=None, accounted_planner_calls=1,
+                             expected_retry_request_sha256=request_sha, expected_retry_guarded=True)
+    source = tmp_path / "source" / ".runtime" / owner.FILE_NAME
+    owner._atomic_write(source, initial._data)
+    sent = []
+    monkeypatch.setattr(owner, "authorized_complete", lambda *args, **kwargs: sent.append(1))
+
+    def verifier(*_args):
+        if failure == "exception":
+            raise RuntimeError("synthetic_host_verification_failure")
+        return True
+
+    with pytest.raises((ValueError, RuntimeError)):
+        _journal(inner, task, tmp_path / "continued", source_path=source,
+                 source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                 guard_verifier=None if failure == "missing" else verifier)
+    assert sent == []
+    assert len(book.snapshot()["tasks"][0]["calls"]) == 1
+    assert not (tmp_path / "continued" / ".runtime" / owner.FILE_NAME).exists()

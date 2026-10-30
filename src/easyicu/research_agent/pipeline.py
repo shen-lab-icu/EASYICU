@@ -2522,7 +2522,7 @@ class ResearchAgentPipeline:
                         cohort_path=cohort_path,
                         llm_signature=llm_signature,
                         planner_kwargs=planner_run_kwargs,
-                        metadata_outline_journal_task=self._metadata_outline_journal_task,
+                        metadata_outline_journal_services=self._services,
                         preplan_literature=preplan_literature,
                         required_primary_cohort_selection_mode=self._required_primary_cohort_selection_mode,
                         know_how_binding=know_how_binding,

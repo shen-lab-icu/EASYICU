@@ -729,3 +729,19 @@ __all__ = [
     "materialize_development_execution_sample",
     "record_development_sample_authority",
 ]
+
+
+def record_pending_development_sample(pipeline, authority, findings):
+    """Record that a requested development sample must wait for cohort QC."""
+    if pipeline._development_sample_size is None or authority.development_sample is not None:
+        return
+    from ..schema import ValidationFinding
+    findings.append(ValidationFinding(
+        validator="development_sample_authority", severity="error",
+        message=("This run requested a non-paper post-QC development sample. "
+                 "The locked analysis cohort is not materialized yet, so "
+                 "sampling is deferred until cohort QC completes; regardless "
+                 "of whether that occurs, this run cannot become paper authority."),
+        detail={"paper_authority": False, "stage": "awaiting_locked_cohort_materialization_and_qc",
+                "target_rows": pipeline._development_sample_size, "seed": pipeline._development_sample_seed},
+    ))

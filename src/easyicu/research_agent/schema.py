@@ -39,8 +39,8 @@ from .contracts.capability_declaration import (
     validate_scientific_capability_id,
 )
 from .contracts.claim_ceiling import DescriptiveClaimContract
-from .contracts.covariate_balance import BALANCE_ACTION, BALANCE_OUTPUTS, CovariateBalanceSpec
-from .contracts.cluster_sizes import CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS, ClusterSizeSpec
+from .contracts.covariate_balance import BALANCE_ACTION as BALANCE_ACTION, BALANCE_OUTPUTS as BALANCE_OUTPUTS, CovariateBalanceSpec, validate_descriptive_auxiliary_steps
+from .contracts.cluster_sizes import CLUSTER_SIZE_ACTION as CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS as CLUSTER_SIZE_OUTPUTS, ClusterSizeSpec
 from .contracts.closed_levels import (
     validate_closed_scalar_levels,
 )
@@ -90,8 +90,8 @@ from .planning.robustness_contract import (
     validate_robustness_specs,
 )
 from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
-from .contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS
-from .contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
+from .contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS as RCS_LINEAR_SENSITIVITY_METHODS, validate_functional_form_step
+from .contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION as PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features as require_phenotyping_features, validate_phenotyping_step
 from .research_context.clinical_definition import ClinicalDefinitionReference
 
 # Compatibility exports: these contracts have dependency-neutral owners, while
@@ -1974,38 +1974,9 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
-        for spec, action, outputs, columns in (
-            (self.covariate_balance_spec, BALANCE_ACTION, BALANCE_OUTPUTS,
-             {self.covariate_balance_spec.unit_id_column, self.covariate_balance_spec.treatment_column,
-              *(item.column for item in self.covariate_balance_spec.covariates),
-              *([self.covariate_balance_spec.weight_column] if self.covariate_balance_spec.weight_column else [])}
-             if self.covariate_balance_spec else set()),
-            (self.cluster_size_spec, CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS,
-             {self.cluster_size_spec.unit_id_column} if self.cluster_size_spec else set()),
-        ):
-            if spec is None:
-                continue
-            if self.scientific_action_id != action or self.planned_analysis_role not in {"secondary", "auxiliary"}:
-                raise ValueError(f"{action} requires its exact auxiliary or secondary action")
-            if set(self.expected_outputs) != set(outputs) or len(self.expected_outputs) != len(outputs):
-                raise ValueError(f"{action} requires exactly its declared table and receipt outputs")
-            if not columns.issubset(self.inputs):
-                raise ValueError(f"{action} variables must be explicit step inputs")
-        if self.phenotyping_feature_columns is not None:
-            if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
-                raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
-            require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.inputs)
-        if self.phenotype_comparison_spec is not None:
-            if self.scientific_action_id != "phenotyping.outcome_by_cluster" or self.planned_analysis_role != "secondary":
-                raise ValueError("phenotype_comparison_spec belongs only to a secondary outcome-by-cluster step")
-            if not {self.phenotype_comparison_spec.identity_column, *(v.name for v in self.phenotype_comparison_spec.variables)}.issubset(self.inputs):
-                raise ValueError("phenotype_comparison_input_mismatch")
-        if self.functional_form_spec is not None and (
-            self.planned_analysis_role != "sensitivity"
-            or self.method not in RCS_LINEAR_SENSITIVITY_METHODS
-            or len(self.sensitivity_spec_ids) != 1
-        ):
-            raise ValueError("functional_form_spec requires one exact RCS-versus-linear sensitivity")
+        validate_descriptive_auxiliary_steps(self)
+        validate_phenotyping_step(self)
+        validate_functional_form_step(self)
         binding_keys = [item.citation_key for item in self.literature_design_bindings]
         if len(binding_keys) != len(set(binding_keys)):
             raise ValueError(

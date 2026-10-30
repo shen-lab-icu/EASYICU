@@ -6,7 +6,7 @@ still validate its population, adjustment set, dependence, and source inputs.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -56,3 +56,13 @@ class FunctionalFormSpec(BaseModel):
         if not 0 < lower < middle < upper < 1:
             raise ValueError("functional-form knot quantiles must be strictly ordered inside (0, 1)")
         return self
+
+
+def validate_functional_form_step(step: Any) -> None:
+    """Validate the step against its declared contract."""
+    if step.functional_form_spec is not None and (
+        step.planned_analysis_role != "sensitivity"
+        or step.method not in RCS_LINEAR_SENSITIVITY_METHODS
+        or len(step.sensitivity_spec_ids) != 1
+    ):
+        raise ValueError("functional_form_spec requires one exact RCS-versus-linear sensitivity")

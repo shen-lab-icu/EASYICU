@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 
 _RUNNER_UNAVAILABLE_REMEDIATION: dict[str, str] = {
     "host_runner_refuses_model_code": (
@@ -94,3 +97,30 @@ def classify_docker_failure(stderr: str, stdout: str) -> str:
     if any(marker in text for marker in _DOCKER_DAEMON_UNREACHABLE_MARKERS):
         return "docker_daemon_unreachable"
     return "docker_probe_failed"
+
+
+def host_runtime_available(probe_timeout_seconds: float) -> bool:
+    """Probe the app interpreter's typed-executor imports without a cohort."""
+    from ..contracts.method_packages import BASELINE_PACKAGES
+
+    names = [*BASELINE_PACKAGES, "psutil"]
+    source = (
+        "import importlib.util, sys; "
+        f"sys.exit(0 if all(importlib.util.find_spec(n) for n in {names!r}) else 1)"
+    )
+    try:
+        command = [sys.executable, "-c", source]
+        frozen = bool(getattr(sys, "frozen", False))
+        if frozen:
+            from easyicu.runtime.host_worker import frozen_worker_command
+
+            command = frozen_worker_command(
+                sys.executable, "capabilities", "--names", json.dumps(names),
+            )
+        result = subprocess.run(
+            command, capture_output=True,
+            timeout=max(0.1, probe_timeout_seconds), check=False,
+        )
+        return result.returncode == 0 and (not frozen or set(names).issubset(json.loads(result.stdout)))
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        return False

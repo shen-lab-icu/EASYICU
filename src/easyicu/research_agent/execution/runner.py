@@ -10,6 +10,13 @@ it does not claim to sandbox model code. Evidence hashing belongs to EvidenceSto
 from __future__ import annotations
 
 from ..canonical_json import sha256_file as _sha256_file
+from ..authority.runtime_artifacts import (
+    WaveArtifactAuthority as WaveArtifactAuthority,
+    _authority_receipt_bytes,
+    _canonical_json_bytes,
+    capture_wave_artifact_authority as capture_wave_artifact_authority,
+    require_wave_artifact_authority as require_wave_artifact_authority,
+)
 
 import ast
 import glob
@@ -55,8 +62,8 @@ from .kernel_identity import (
     runner_image_probe_source,
 )
 from .method_capabilities import set_runtime_capability_snapshot_provider
-from .step_execution import host_runtime_available
 from .runtime_diagnostics import (
+    host_runtime_available,
     classify_docker_failure as _classify_docker_failure,
     runner_unavailable_remediation as runner_unavailable_remediation,
 )
@@ -73,7 +80,6 @@ _SAFE_INHERITED_ENV_KEYS = (
     "WINDIR",
 )
 
-_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA = "easyicu.run_artifact_authority_snapshot/1"
 _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT"
 _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV = (
     "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256"
@@ -349,18 +355,6 @@ def reject_reserved_runner_env(
             + ", ".join(conflicts)
         )
 
-
-def _canonical_json_bytes(payload: object) -> bytes:
-    return (
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-        + "\n"
-    ).encode("utf-8")
 
 
 def _sha256_directory_tree(path: Path) -> str:
@@ -691,113 +685,6 @@ def _remove_authority_snapshot(path: Path) -> None:
     else:
         path.unlink(missing_ok=True)
 
-
-@dataclass(frozen=True)
-class WaveArtifactAuthority:
-    """Host-selected receipt bytes for one wave, or a fail-closed reason."""
-
-    payload: bytes = b""
-    sha256: str = ""
-    error: str = ""
-
-
-def require_wave_artifact_authority(wave: WaveArtifactAuthority) -> None:
-    """Refuse an invalid wave receipt before any analysis process starts."""
-
-    if not isinstance(wave, WaveArtifactAuthority):
-        raise ValueError("Wave authority receipt has an invalid type.")
-    if wave.error:
-        raise ValueError(f"Wave authority receipt unavailable: {wave.error}")
-    if (
-        not isinstance(wave.payload, bytes)
-        or not wave.payload
-        or hashlib.sha256(wave.payload).hexdigest() != wave.sha256
-    ):
-        raise ValueError("Wave authority receipt digest mismatch.")
-    try:
-        snapshot = json.loads(wave.payload)
-        authority = snapshot["authority"]
-        sequence = snapshot["checkpoint_sequence"]
-        if (
-            snapshot.get("schema_version") != _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA
-            or not isinstance(authority, dict)
-            or isinstance(sequence, bool)
-            or not isinstance(sequence, int)
-            or sequence < 1
-            or authority.get("checkpoint_sequence") != sequence
-            or not isinstance(authority.get("per_step_records"), list)
-            or not isinstance(authority.get("evidence"), list)
-            or not str(authority.get("run_id") or "").strip()
-            or hashlib.sha256(_canonical_json_bytes(authority)).hexdigest()
-            != snapshot.get("authority_sha256")
-        ):
-            raise ValueError("invalid payload")
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
-        raise ValueError("Wave authority receipt payload is invalid.") from exc
-
-
-def _authority_receipt_bytes(authority: Mapping[str, object]) -> bytes:
-    from ..authority.runtime_artifacts import current_evidence_records, current_step_records
-
-    raw_steps = authority.get("per_step_records")
-    if not isinstance(raw_steps, list):
-        raise ValueError("Current checkpoint has no valid per-step ledger.")
-    active_steps = [dict(record) for record in current_step_records(raw_steps)]
-    raw_evidence = authority.get("evidence")
-    evidence = raw_evidence if isinstance(raw_evidence, list) else []
-    selected = {
-        "run_id": authority.get("run_id"),
-        "checkpoint_sequence": authority.get("checkpoint_sequence"),
-        "per_step_records": active_steps,
-        "evidence": [
-            dict(item) if isinstance(item, dict) else item
-            for item in current_evidence_records(evidence, active_steps)
-        ],
-    }
-    snapshot = {
-        "schema_version": _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA,
-        "checkpoint_sequence": selected["checkpoint_sequence"],
-        "authority_sha256": hashlib.sha256(_canonical_json_bytes(selected)).hexdigest(),
-        "authority": selected,
-    }
-    return _canonical_json_bytes(snapshot)
-
-
-def capture_wave_artifact_authority(
-    *, workdir: Path, run_id: str, step_records: Sequence[Mapping[str, object]],
-    evidence_records: Sequence[object], resumed: bool,
-) -> WaveArtifactAuthority:
-    """Freeze a checked durable checkpoint once before dispatching a wave."""
-
-    from ..authority.runtime_artifacts import (
-        RunArtifactAuthorityError, current_evidence_records, current_step_records,
-        load_run_artifact_authority,
-    )
-
-    if resumed:
-        return WaveArtifactAuthority(error="Wave authority recovery is not available.")
-    try:
-        authority = load_run_artifact_authority(workdir)
-        if not isinstance(authority, dict) or authority.get("run_id") != run_id:
-            raise ValueError("Wave checkpoint run identity is missing or mismatched.")
-        sequence = authority.get("checkpoint_sequence")
-        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
-            raise ValueError("Wave checkpoint sequence is invalid.")
-        persisted_steps = authority.get("per_step_records")
-        persisted_evidence = authority.get("evidence")
-        if not isinstance(persisted_steps, list) or not isinstance(persisted_evidence, list):
-            raise ValueError("Wave checkpoint ledger is invalid.")
-        if _canonical_json_bytes(current_step_records(persisted_steps)) != _canonical_json_bytes(current_step_records(step_records)):
-            raise ValueError("Wave checkpoint step ledger does not match the captured view.")
-        expected_evidence = [
-            record.model_dump(mode="json") for record in evidence_records
-        ]
-        if _canonical_json_bytes(current_evidence_records(persisted_evidence, persisted_steps)) != _canonical_json_bytes(current_evidence_records(expected_evidence, step_records)):
-            raise ValueError("Wave checkpoint evidence does not match the captured view.")
-        payload = _authority_receipt_bytes(authority)
-        return WaveArtifactAuthority(payload=payload, sha256=hashlib.sha256(payload).hexdigest())
-    except (RunArtifactAuthorityError, OSError, TypeError, ValueError) as exc:
-        return WaveArtifactAuthority(error=str(exc))
 
 
 def _capture_run_artifact_authority_snapshot(

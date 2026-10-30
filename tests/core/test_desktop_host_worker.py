@@ -78,7 +78,7 @@ def test_worker_does_not_execute_after_authorization_coordinates_change(tmp_path
 
 def test_frozen_host_commands_use_only_fixed_worker_protocol(tmp_path, monkeypatch):
     from easyicu.research_agent.execution.host_runner import HostRunner
-    from easyicu.research_agent.execution import step_execution
+    from easyicu.research_agent.execution import runtime_diagnostics, step_execution
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     runner = object.__new__(HostRunner)
@@ -97,10 +97,10 @@ def test_frozen_host_commands_use_only_fixed_worker_protocol(tmp_path, monkeypat
         calls.append(command)
         return SimpleNamespace(returncode=0, stdout=command[-1].encode())
 
-    monkeypatch.setattr(step_execution.subprocess, "run", probe)
+    monkeypatch.setattr(runtime_diagnostics.subprocess, "run", probe)
     assert step_execution.host_runtime_available(5)
     assert calls[0][1:3] == [host_worker.WORKER_FLAG, "capabilities"]
-    monkeypatch.setattr(step_execution.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=b'[]'))
+    monkeypatch.setattr(runtime_diagnostics.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=b'[]'))
     assert not step_execution.host_runtime_available(5)
 
 

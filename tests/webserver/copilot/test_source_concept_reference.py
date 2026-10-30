@@ -42,6 +42,25 @@ def test_catalog_tool_exposes_reference_without_source_paths(monkeypatch):
     assert "/private/source" not in json.dumps(result)
 
 
+def test_catalog_tool_omits_identifier_names_without_weakening_privacy_gate(monkeypatch):
+    from easyicu.research_agent.acquisition import catalog
+    from easyicu.webserver.pi_copilot.projections import ensure_safe_projection
+
+    monkeypatch.setattr(catalog, "build_available_catalog", lambda _: AvailableCatalog(
+        source="/private/source", concepts=[CatalogConcept(
+            concept_id="death", description="hospital mortality", file_name="outcome.parquet"
+        )]
+    ))
+    context = ToolExecutionContext(data_handling="zero_retention_declared",
+                                   session=PiSessionRecord(session_id="pi-concepts"))
+    result = _list_concept_catalog(context, {"query": "death"}, source={
+        "id": "source", "path": "/private/source", "database": "miiv", "modules": []
+    })
+    mappings = result["details"]["concepts"][0]["source_dictionary_reference"]["declared_mappings"]
+    assert all("id_var" not in mapping.get("source_table_defaults", {}) for mapping in mappings)
+    assert ensure_safe_projection(result) == result
+
+
 def test_unavailable_dictionary_does_not_invent_a_mapping(monkeypatch):
     from easyicu.webserver.pi_copilot import source_concept_reference as owner
 

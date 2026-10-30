@@ -3881,6 +3881,7 @@ class ProgressivePlannerAgent:
                 raise ValueError("metadata family-spec journal requires dependency authority")
             family_llm = OutlineRetryJournal(
                 inner=self.llm, task=outline_retry_journal["task"],
+                guard_verifier=outline_retry_journal.get("guard_verifier"),
                 run_dir=outline_retry_journal["run_dir"],
                 request_sha256=dependency, dependency_sha256=dependency,
                 literature_sha256=outline_retry_journal["literature_sha256"],
@@ -4473,6 +4474,7 @@ class ProgressivePlannerAgent:
                     raise ValueError("metadata outline journal requires dependency authority")
                 outline_llm = OutlineRetryJournal(
                     inner=self.llm, task=outline_retry_journal["task"],
+                    guard_verifier=outline_retry_journal.get("guard_verifier"),
                     run_dir=outline_retry_journal["run_dir"],
                     request_sha256=dependency, dependency_sha256=dependency,
                     literature_sha256=outline_retry_journal["literature_sha256"],
@@ -4753,6 +4755,7 @@ class ProgressivePlannerAgent:
                 retry_source = foundation_retry_source(accepted_source) if accepted_source else None
                 foundation_llm = OutlineRetryJournal(
                     inner=self.llm, task=outline_retry_journal["task"],
+                    guard_verifier=outline_retry_journal.get("guard_verifier"),
                     run_dir=outline_retry_journal["run_dir"],
                     request_sha256=canonical_sha256({
                         "dependency_sha256": dependency, "outline_sha256": outline_sha256,

@@ -84,3 +84,22 @@ def source_concept_reference(concept_id: str, database: str) -> dict[str, Any] |
     return {"database": key, "dictionary_sha256": digest, "source_config_sha256": config_digest, "declared_units": units,
             "declared_mappings": mappings, "scope": "packaged_dictionary_reference_only",
             "actual_source_reads_verified": False, "record_units_verified": False}
+
+
+def model_visible_source_concept_reference(concept_id: str, database: str) -> dict[str, Any] | None:
+    """Omit identifier names that the existing model-output privacy gate rejects."""
+    from .contracts import PiCopilotError
+    from .projections import reject_sensitive_message
+
+    reference = source_concept_reference(concept_id, database)
+    if reference is None:
+        return None
+    for mapping in reference["declared_mappings"]:
+        defaults = mapping.get("source_table_defaults", {})
+        name = defaults.get("id_var")
+        if name:
+            try:
+                reject_sensitive_message(name)
+            except PiCopilotError:
+                defaults.pop("id_var")
+    return reference
