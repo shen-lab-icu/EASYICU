@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -55,6 +55,31 @@ class FirstObservedPopulationProof:
     preparation_run_id: str
     source_identity_sha256: str
     criterion_sha256: str
+
+
+def host_first_observed_review_scope(*, study_context_id: str):
+    """Install the Web host's live verifier for a single planning invocation.
+
+    Neither the callback nor its study owner comes from a request payload.
+    Its result is scientific evidence only; the execution gate still rechecks
+    the complete approved plan and run-input capsule.
+    """
+    from easyicu.research_agent.planning.population_compile import host_first_observed_population_scope
+
+    if not isinstance(study_context_id, str) or not study_context_id.strip():
+        raise ValueError("first_observed_study_context_invalid")
+
+    def verify(context: Any, criterion: Any) -> Mapping[str, Any]:
+        source = SourceIdentity.from_record(_constraints(context).get("source_identity"))
+        raw_path = context.cohort_parquet
+        if source is None or not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+            raise FirstObservedRunBindingError("first_observed_run_source_changed")
+        return asdict(verify_prepared_first_observed_population(
+            cohort_path=Path(raw_path), study_context_id=study_context_id,
+            criterion=criterion.model_dump(mode="json"), source_identity=source,
+        ))
+
+    return host_first_observed_population_scope(verify)
 
 
 def _restriction_from_cohort(*, run_dir: Path, cohort_path: Path) -> tuple[Mapping[str, Any] | None, Any]:
@@ -218,7 +243,7 @@ def verify_first_observed_execution_inputs(*, pending: Any, study_context_id: st
         return False
     if len(matches) != 1 or matches[0].get("role") != "include":
         raise FirstObservedRunBindingError("first_observed_run_population_invalid")
-    population = reviewed_population_spec(run_dir=run_dir, pending=pending)
+    population = reviewed_population_spec(run_dir=run_dir, pending=pending, study_context_id=study_context_id)
     if not isinstance(population, Mapping) or population.get("plan_sha256") != plan.plan_sha256:
         raise FirstObservedRunBindingError("first_observed_run_population_unverified")
     if plan.execution is None:

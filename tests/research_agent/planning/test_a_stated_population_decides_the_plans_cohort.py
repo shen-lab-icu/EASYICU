@@ -263,7 +263,8 @@ def test_without_a_spec_the_planners_predicates_select_the_rows() -> None:
 
 
 def test_an_empty_spec_keeps_every_input_row() -> None:
-    plan, _receipt = _compile(_cohort({"criteria": []}, *_PLANNERS_OWN))
+    context = _context(question="Among ICU patients, is the exposure associated with the outcome?")
+    plan, _receipt = _compile(_cohort({"criteria": []}, *_PLANNERS_OWN), context)
 
     assert _selection(plan.cohort) == ("all_input_rows", [], [], [])
 
@@ -410,7 +411,7 @@ def test_a_cohort_that_applies_every_inclusion_refuses_nothing() -> None:
 
 def test_the_same_inclusion_is_applied_when_the_time_zero_follows_it() -> None:
     long_stay = {**_STAYED, "min_hours": 48, "quote": "stayed in the ICU"}
-    context = _context(window=72.0)
+    context = _context(question="Among patients who stayed in the ICU, is the exposure associated with the outcome?", window=72.0)
 
     plan, _receipt = _compile(_cohort(_spec(long_stay), _PLANNERS_OWN[1]), context)
 
@@ -745,12 +746,17 @@ def test_a_planning_run_makes_the_plan_and_refuses_its_approval(
     assert result.plan.cohort.unapplied_population_criteria == ("stayed in the ICU",)
     stops = [item for item in findings if item.severity == "error"]
     assert [item.detail["reason"] for item in stops] == [
+        "population_criterion_decision_unconfirmed",
         "population_inclusion_not_applied"
     ]
-    (request,) = human_review_requests_for_plan(
+    requests = human_review_requests_for_plan(
         findings=findings, plan=result.plan, require_plan_review=True
     )
-    assert request.payload["approval_allowed"] is False
+    assert [request.payload["reason"] for request in requests] == [
+        "population_criterion_decision_unconfirmed",
+        "population_inclusion_not_applied",
+    ]
+    assert all(request.payload["approval_allowed"] is False for request in requests)
     (proposals,) = [
         item
         for item in findings
