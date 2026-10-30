@@ -2681,6 +2681,24 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             exclude_session_id=record.session_id,
         )
         opened_state = self._ensure_open(record)
+        revision_run_id = ""
+        if (
+            record.agent_mode == "research"
+            and not regenerate_user_entry_id
+            and not message_intent
+            and message_origin == "typed"
+            and "provider_run" in inferred_actions
+        ):
+            from .plan_revision_intent import requested_candidate_run
+
+            candidate_workflow = build_project_workflow_projection(
+                study_context_id=record.binding.study_context_id,
+            )
+            revision_run_id = requested_candidate_run(
+                provider_text, message_origin=message_origin, projection=candidate_workflow,
+            )
+            if revision_run_id:
+                message_intent = "request_candidate_plan_revision"
         if record.agent_mode == "research" and not regenerate_user_entry_id and not message_intent:
             workflow = build_project_workflow_projection(
                 study_context_id=record.binding.study_context_id,
@@ -2803,6 +2821,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             started.conversation_updated_at = utc_now()
             started.last_turn_allowed_actions = sorted(requested_actions)
             self._save_record(started)
+            revision_receipt = {"submitted": False}
 
             def emit(event: Dict[str, Any]) -> None:
                 if job.cancel_requested:
@@ -2829,6 +2848,15 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 projected = project_pi_replay_event(event)
                 if projected is None:
                     return
+                if (
+                    projected.get("type") == "tool_end"
+                    and projected.get("tool_name") == "easyicu_request_replan"
+                    and projected.get("status") == "ok"
+                    and not projected.get("is_error")
+                    and projected.get("code") == "easyicu_full_run_submitted"
+                    and projected.get("job_id")
+                ):
+                    revision_receipt["submitted"] = True
                 self.replay_store.append_event(
                     session_id=record.session_id,
                     project_id=str(record.project_id),
@@ -2938,6 +2966,8 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     event_sink=emit,
                     tool_context=active_tool_context,
                 )
+                if revision_run_id and not job.cancel_requested and not revision_receipt["submitted"]:
+                    raise RuntimeError("pi_plan_revision_not_submitted")
                 refreshed = self._get_record(record.session_id)
                 refreshed.pi_session_id = (
                     str(state.get("pi_session_id") or "") or refreshed.pi_session_id
@@ -3079,6 +3109,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 data_handling=self._data_handling_for_session(record),
                 note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
                 propose_multi_database=lambda request: propose_multi_database(self, request, _message_job_id=job.id),
+                expected_replan_source_run_id=revision_run_id,
                 user_message=text,
                 idea_source=idea_source,
                 allowed_actions=requested_actions,

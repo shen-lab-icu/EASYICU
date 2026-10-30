@@ -628,6 +628,8 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
     ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user activated the host-owned provider_ready_to_generate_plan control. Call easyicu_run exactly once with run_type='full', then stop after the submission receipt. The run owner decides from the bound source whether this is metadata-only planning or a prepared-package run. Do not inspect an older run, ask setup questions, request extraction, repeat the confirmation, or explain internal authorization and budget mechanics."
     : turnIntent === "confirm_fresh_plan_generation"
     ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user activated the host-owned fresh-plan control after a prior plan attempt became unusable. Call easyicu_request_replan exactly once with strategy='fresh' and a concise reason that the unchanged study must receive a fresh candidate plan from its currently bound prepared data, then stop after the submission receipt. Do not mutate or reuse the failed plan, start analysis, ask setup or configuration questions, request data preparation, inspect the old run, or explain internal authorization and budget mechanics. The host owns failed-run selection, replay binding, and fresh-plan validation."
+    : turnIntent === "request_candidate_plan_revision"
+    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe researcher explicitly requested changes to the current candidate plan. Call easyicu_request_replan exactly once with strategy='fresh' and a short reason that the requested amendments require a new candidate, then stop after the submission receipt. The host binds the researcher's exact words to the current plan and enforces the one-turn provider grant. Never claim the revision was submitted without a successful tool receipt, approve a plan, prepare data, run analysis, or ask the researcher to return to the same edit control."
     : turnIntent === "confirm_planner_checkpoint_resume"
     ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user confirmed the host-owned planner_checkpoint_resume_available control. Call easyicu_request_replan exactly once with strategy='resume_checkpoint' and a concise reason that the unchanged study must continue from its validated development Planner checkpoint, then stop after the submission receipt. Do not inspect the old run, explain its blocker, start a fresh plan, ask for a path or job id, or claim that analysis ran. The host owns checkpoint selection and validation."
     : turnIntent === "advance_after_data_source_confirmation"
@@ -1471,7 +1473,7 @@ async function promptSession(requestId, params) {
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
-  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
+  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "request_candidate_plan_revision" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
   }
   // The host binds this question to the researcher's own typed message; only
@@ -1494,7 +1496,7 @@ async function promptSession(requestId, params) {
   try {
     if (intent === "confirm_formal_plan_generation") {
       record.session.setActiveToolsByName(["easyicu_run"]);
-    } else if (intent === "confirm_fresh_plan_generation") {
+    } else if (intent === "confirm_fresh_plan_generation" || intent === "request_candidate_plan_revision") {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
     } else if (intent === "confirm_planner_checkpoint_resume") {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);

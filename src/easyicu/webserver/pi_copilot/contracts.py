@@ -507,8 +507,10 @@ class ToolExecutionContext:
         note_credentialed_history: Optional[Callable[[], None]] = None,
         quick_answer_submit: Optional[Callable[..., Dict[str, Any]]] = None,
         propose_multi_database: Optional[Callable[[MultiDatabaseRequest], Dict[str, Any]]] = None,
+        expected_replan_source_run_id: str = "",
     ) -> None:
         self.session = session
+        self.expected_replan_source_run_id = str(expected_replan_source_run_id or "")
         self.quick_answer_submit = quick_answer_submit
         from easyicu.research_agent.providers.client_trust import DataHandling
 

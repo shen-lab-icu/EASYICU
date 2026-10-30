@@ -4053,6 +4053,23 @@ def _run(
 
         def authorize() -> None:
             action = "report_revision" if report_source_run_id else "provider_run"
+            if context.expected_replan_source_run_id:
+                from .plan_revision_intent import requested_candidate_run
+
+                current_projection = build_project_workflow_projection(
+                    study_context_id=context.session.binding.study_context_id,
+                )
+                current_candidate = requested_candidate_run(
+                    context.user_message, message_origin="typed", projection=current_projection,
+                )
+                if current_candidate != context.expected_replan_source_run_id:
+                    raise research_run_submission.ResearchRunSubmissionError(
+                        {
+                            "error": "plan_revision_source_changed",
+                            "message": "The candidate plan changed before the requested revision. Review the current plan and request changes again.",
+                            "owner": "easyicu.webserver.pi_copilot",
+                        }
+                    )
             # D-P1-1: backend text inference is a necessary condition even
             # when the service already filtered the grant list.
             if not _privileged_action_inferred(context, action):
@@ -4344,6 +4361,23 @@ def _request_replan(
         )
     study = _bound_context(context.session.binding)
     latest = _select_run(context)
+    expected_run = context.expected_replan_source_run_id
+    if expected_run and strategy != "fresh":
+        return _result(
+            context,
+            status="blocked",
+            code="plan_revision_requires_fresh_candidate",
+            summary="The requested amendments require a fresh candidate plan, not a checkpoint continuation.",
+            owner="easyicu.webserver.routes.agent",
+        )
+    if expected_run and str((latest or {}).get("run_id") or "") != expected_run:
+        return _result(
+            context,
+            status="blocked",
+            code="plan_revision_source_changed",
+            summary="The candidate plan changed before the requested revision. Review the current plan and request changes again.",
+            owner="easyicu.webserver.routes.agent",
+        )
     artifacts = {
         str(value)
         for value in ((latest or {}).get("artifact_names") or [])
@@ -4369,6 +4403,17 @@ def _request_replan(
         and str(latest.get("study_id") or "") == str(study.get("id") or "")
         and "agent_plan.json" in artifacts
     )
+    if expected_run and (
+        not same_study_plan
+        or str((latest or {}).get("run_status") or "") != "human_review_pending"
+    ):
+        return _result(
+            context,
+            status="blocked",
+            code="plan_revision_source_changed",
+            summary="The candidate plan is no longer awaiting review. Review the current plan and request changes again.",
+            owner="easyicu.webserver.routes.agent",
+        )
     review_declared = bool(
         same_study_plan
         and str(latest.get("run_status") or "") == "human_review_pending"
