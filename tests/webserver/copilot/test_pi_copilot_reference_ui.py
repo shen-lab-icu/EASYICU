@@ -75,17 +75,15 @@ def test_entry_offers_searchable_examples_and_collapsed_rail_keeps_navigation() 
     assert "function exampleQuestions(tr)" in starters
     assert "function filter(root, query)" in starters
     assert "SEARCH_LIMIT" not in starters
-    # Manual collapse compacts the rail to the global nav; Projects restores it.
+    # The Projects nav toggles the rail while keeping global navigation visible.
     assert ".gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail{display:flex;grid-column:1;grid-row:1;box-sizing:border-box;width:59px" in desktop_css
     assert ".gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail-restore{display:none}" in desktop_css
     assert ".gd-main.threecol.gpi-workspace.gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr) var(--gd-context-aside-width)}" in desktop_css
     # The nav's Projects button belongs to the project rail owner; the guided
     # screen only delegates to it.
-    assert "const collapsedMain = document.querySelector('.gd-main.gd-project-rail-collapsed');" in projects
-    assert "collapsedMain.classList.remove('gd-project-rail-collapsed');" in projects
+    assert "main.classList.toggle('gd-project-rail-collapsed', collapsed);" in projects
     assert "    showProjects,\n" in projects
     assert "if (projectOwner && projectOwner.showProjects) projectOwner.showProjects();" in guided
-    assert "collapsedMain" not in guided
     # Settings anchors can all reach the top; the reference chip drops its instruction.
     assert ".settings-page{padding-bottom:min(60vh,640px)}" in settings_css
     assert "在下方填写你的问题" not in workspace
@@ -103,8 +101,7 @@ def test_home_reuses_empty_drafts_and_project_switcher_stays_a_switcher() -> Non
     assert "if (emptyDraft) { await openSession(emptyDraft.session_id); return; }" in start_entry
     assert "isEmptyConversation };" in workspace
     assert "if (event.target.closest('[data-gpi-new]')) {\n          clearSessionSelection();\n          render();\n          void startEntry();" in events
-    # The nav Projects button toggles the in-rail switcher, whose list is capped.
-    assert "    picker.open = !picker.open;\n" in _read("js/screens-guided-projects.js")
+    # The project heading opens the in-rail switcher, whose list is capped.
     assert ".gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{position:absolute;z-index:60;" in desktop_css
     assert "max-height:min(70vh,680px)" in desktop_css
 
@@ -1225,14 +1222,13 @@ def test_floating_menus_share_one_dismissal_owner() -> None:
     assert "window.EU_POPOVER_MENUS = Object.freeze({" in owner
     for consumer in ("js/screens-guided-projects.js", "js/screens-skills.js", "js/screens-guided-pi.js"):
         assert index.index("js/popover-menus.js?v=") < index.index(consumer)
-    # Every floating menu is marked; the project switcher only while it is a
-    # switcher (with no project chosen, or while managing, the list is the surface).
+    # Every floating menu is marked, including an empty project picker.
     floating = {
         header: ('<details class="gpi-model-control" data-popover-menu>', '<details class="gpi-layout-control" data-popover-menu>', '<details class="gpi-head-overflow" data-popover-menu>'),
         idea_source: ('<details class="gpi-idea-source-menu" data-popover-menu>',),
         workspace: ('<details class="gpi-access-menu" data-popover-menu>', '<details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}">'),
         effort: ('<details class="gpi-effort-menu" data-gpi-effort-menu data-popover-menu>',),
-        projects: ("const pickerDismissible = !!activeId && !projectManagementActive;", "${pickerDismissible ? ' data-popover-menu' : ''}>"),
+        projects: ("${pickerOpen ? ' open' : ''} data-popover-menu>",),
         skills: ('<details class="eusk-create-menu" data-popover-menu>', '<details class="eusk-actions-menu" data-popover-menu>'),
     }
     for source, markers in floating.items():

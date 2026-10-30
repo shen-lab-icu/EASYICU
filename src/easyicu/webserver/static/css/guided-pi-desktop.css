@@ -1,5 +1,7 @@
 /* A small product rail separates global navigation from this project's work. */
 .gpi-global-nav{display:none}
+.gd-rail-create{flex:none;width:30px;height:30px;display:grid;place-items:center;padding:0;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--ink-3);cursor:pointer}
+.gd-rail-create:hover,.gd-rail-create:focus-visible{border-color:var(--hair);background:var(--surface);color:var(--accent-ink);outline:0}
 @media(min-width:1181px){
  .gd-main.gpi-workspace{--gd-project-rail-width:276px}
  .gd-main.gpi-workspace .gd-rail{position:relative;padding-left:52px}
@@ -44,8 +46,8 @@
  .gd-main.gpi-workspace .gd-project-picker[open]>summary i{transform:translateY(-50%) rotate(180deg)}
  /* Anchored under the whole top block, so "New / open research project" stays
     reachable while the list is open. */
- .gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{position:absolute;z-index:60;top:calc(100% + 4px);left:10px;right:auto;width:min(440px,calc(100vw - 86px));box-sizing:border-box;max-height:min(70vh,680px);padding:6px 8px 8px}
- .gd-main.gpi-workspace .gd-project-picker.is-managing[open]>.gd-project-picker-list{width:min(640px,calc(100vw - 86px));max-height:min(75vh,760px)}
+ .gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{position:absolute;z-index:60;top:calc(100% + 4px);left:10px;right:10px;width:auto;box-sizing:border-box;max-height:min(70vh,680px);padding:6px 8px 8px}
+ .gd-main.gpi-workspace .gd-project-picker.is-managing[open]>.gd-project-picker-list{max-height:min(75vh,760px)}
  .gd-main.gpi-workspace:not(.gd-project-rail-collapsed):not(.gpi-source-open) .gd-rail:has(.gd-project-picker[open]){overflow:visible}
  .gd-main.gpi-workspace .gpi-conversations{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:0;border-top:1px solid #a7a69d}
  .gd-main.gpi-workspace .gpi-conversations[hidden]{display:none}

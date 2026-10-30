@@ -43,11 +43,33 @@ const shellRail = global.EU_GUIDED_PROJECTS.renderShellRail(context(null));
 assert.match(shellRail, /data-project-rail-toggle/g);
 assert.match(shellRail, /gd-rail-restore/);
 assert.match(shellRail, /gd-rail-collapse/);
+assert.match(shellRail, /data-project-new aria-label="New project"/);
 assert.equal(global.EU_GUIDED_PROJECTS.isProjectRailCollapsed(), false);
 global.EU_GUIDED_PROJECTS.setProjectRailCollapsed(true);
 assert.equal(global.EU_GUIDED_PROJECTS.isProjectRailCollapsed(), true);
 assert.equal(localStorageValues.get('easyicu.guided.projectRailCollapsed.v1'), '1');
 global.EU_GUIDED_PROJECTS.setProjectRailCollapsed(false);
+
+// The global Projects button toggles the rail, without changing the project.
+const classes = new Set();
+const main = { classList: {
+  contains: value => classes.has(value),
+  toggle(value, enabled) { if (enabled) classes.add(value); else classes.delete(value); },
+} };
+const pickerForToggle = { open: true };
+const projectsButton = { expanded: '', setAttribute(name, value) { if (name === 'aria-expanded') this.expanded = value; } };
+global.document.querySelector = selector => selector === '.gd-main.gpi-workspace' ? main
+  : selector === '#gdResearchProjectRail .gd-project-picker' ? pickerForToggle
+    : selector === '#gdResearchProjectRail [data-gpi-show-projects]' ? projectsButton : null;
+global.EU_GUIDED_PROJECTS.showProjects();
+assert.equal(classes.has('gd-project-rail-collapsed'), true);
+assert.equal(projectsButton.expanded, 'false');
+assert.equal(pickerForToggle.open, false);
+assert.equal(localStorageValues.get('easyicu.guided.projectRailCollapsed.v1'), '1');
+global.EU_GUIDED_PROJECTS.showProjects();
+assert.equal(classes.has('gd-project-rail-collapsed'), false);
+assert.equal(projectsButton.expanded, 'true');
+assert.equal(localStorageValues.get('easyicu.guided.projectRailCollapsed.v1'), '0');
 
 global.EU_GUIDED_PROJECTS.renderProjectRail(context({
   id: 'study-e1',
