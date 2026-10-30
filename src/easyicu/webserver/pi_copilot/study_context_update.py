@@ -1152,6 +1152,79 @@ def update_study_context(
             owner="easyicu.webserver.study_contexts",
         )
 
+    # The very first turn may contain the complete research question, while the
+    # model attempts to save a paraphrase. Preserve that host-captured turn
+    # without weakening the normal exact-wording check or accepting any of the
+    # model's other setup fields. Later turns and choices are not initial text.
+    if (
+        current is not None
+        and not str(current.get("question") or "").strip()
+        and context.session.agent_mode == "research"
+        and isinstance(params.get("question"), str)
+        and len(context.user_turns) == 1
+        and context.user_turns[0].get("message_origin") == "typed"
+        and not context.user_turns[0].get("superseded")
+        and str(context.user_turns[0].get("text") or "").strip() == str(context.user_message or "").strip()
+        and "configure" in context.allowed_actions
+        and resolve_question_wording(
+            str(params["question"]), user_turns=context.user_turns,
+            previous_reply=context.previous_reply,
+        ) is None
+    ):
+        from .turn_authority import _names_what_it_studies, infer_research_entry_intent
+
+        wording = str(context.user_message).strip()
+        meta_question = re.search(
+            r"^(?:请问\s*)?(?:能否|是否支持|可以(?:使用|做|研究)|如何使用|怎么使用|如何生成|怎么生成)|"
+            r"^(?:can|could|does|how\s+(?:do|can|to))\b",
+            wording, re.IGNORECASE,
+        )
+        if (not meta_question and infer_research_entry_intent(wording) == "implement_scientific_question"
+                and _names_what_it_studies(wording)):
+            from easyicu.webserver.study_question_wording import question_sha256
+
+            patch = {
+                "id": current["id"],
+                "question": wording,
+                "question_wording": {"source": "user_message", "question_sha256": question_sha256(wording)},
+            }
+            try:
+                patch = study_contexts.validate_context_update(
+                    patch, current_context=current, lifecycle_write=False,
+                    _server_question_wording_write=True,
+                )
+            except study_contexts.StudyContextError as exc:
+                return _result(
+                    context, status="blocked", code=str(exc.detail.get("error") or "study_context_update_blocked"),
+                    summary="The typed StudyContext owner rejected the original question.",
+                    owner="easyicu.webserver.study_contexts", details={"field": exc.detail.get("field")},
+                )
+            grant_block = _consume_action(context, "configure")
+            if grant_block is not None:
+                return grant_block
+            try:
+                updated = study_contexts.upsert_context(
+                    patch, active=True, expected_revision=int(current.get("revision") or 0),
+                    require_revision=True, lifecycle_write=False, _server_question_wording_write=True,
+                )
+            except study_contexts.StudyContextError as exc:
+                return _result(
+                    context, status="blocked", code=str(exc.detail.get("error") or "study_context_update_blocked"),
+                    summary="The original question could not be saved.",
+                    owner="easyicu.webserver.study_contexts", details={"field": exc.detail.get("field")},
+                )
+            workflow = project_workflow(context, study_override=updated)
+            result = _result(
+                context, status="ok", code="study_context_updated",
+                summary="Saved the researcher's complete original question; other suggested setup fields were not saved.",
+                owner="easyicu.webserver.study_contexts",
+                details={"study": project_study_context(updated), "workflow": workflow,
+                         "rebind_required": True, "host_rebind_after_turn": True,
+                         "question_wording": updated.get("question_wording")},
+            )
+            context.invalidate_authority("study_context_updated")
+            return result
+
     params = dict(params)
     selected_outcome = _literal_outcome_choice(context.user_message)
     if selected_outcome and params.get("outcome"):
