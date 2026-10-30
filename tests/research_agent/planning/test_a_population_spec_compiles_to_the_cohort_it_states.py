@@ -805,6 +805,17 @@ def test_a_bare_column_holds_the_summary_its_typing_states(
     )
 
 
+@pytest.mark.parametrize("source_summary, requested_summary", [("max", "first"), ("first", "max"), ("min", "mean")])
+def test_explicit_summary_typing_beats_a_conflicting_column_name(source_summary, requested_summary) -> None:
+    variable = ConceptDescriptor(
+        name=f"lact_{requested_summary}", source_concept="lact", unit="mmol/L",
+        unit_normalization=f"window_numeric_{source_summary}",
+        analysis_window="icu_admission[0,24]h", role=VariableRole.OTHER, dtype="float64",
+    )
+    result = _one(_measurement("lact", requested_summary, "<=", 4, unit="mmol/L", missing_policy="exclude"), _ctx(variable))
+    assert result.reason == "population_column_unresolved"
+
+
 def test_a_measurement_threshold_is_stated_in_its_columns_unit() -> None:
     assert _one(_measurement("lact", "max", ">", 2)).disposition == "applied_by_plan"
     assert _one(_measurement("lact", "max", ">", 2, unit=" MMOL / l ")).applied
@@ -997,19 +1008,15 @@ def test_the_first_icu_stay_is_applied_only_by_a_record_of_it() -> None:
     assert stale.disposition == "requires_extraction"
 
 
-def test_diagnosis_codes_are_applied_only_by_an_export_that_applied_them() -> None:
+def test_an_unversioned_export_does_not_prove_an_icd_population() -> None:
     sepsis = {"kind": "diagnosis_codes", "system": "icd10", "codes": ["A41.9", "a40"]}
 
     export = _one(sepsis, _recorded_ctx(icd=(["A40", "A419"], [])))
-    assert (export.disposition, export.proof.parameters) == (
-        "applied_by_source",
-        {"criterion": "icd", "include": ["A40", "A419"]},
-    )
+    assert export.reason == "population_diagnosis_codes_need_extraction"
     contract = _one(sepsis, _recorded_ctx(executed={"icd_include": ["A419", "A40"]}))
-    assert contract.proof.kind == "recorded_study_contract"
-    # A record that keeps a code as written is read as an export matches it.
+    assert not contract.applied
     written = _one(sepsis, _recorded_ctx(executed={"icd_include": ["a41.9", " A40"]}))
-    assert written.proof.kind == "recorded_study_contract"
+    assert not written.applied
     # Another code set, or the codes on the other side, applies something else.
     assert _one(sepsis, _recorded_ctx(icd=(["A41"], []))).reason == (
         "population_diagnosis_codes_need_extraction"
@@ -1018,16 +1025,19 @@ def test_diagnosis_codes_are_applied_only_by_an_export_that_applied_them() -> No
     excluded = _one(
         {**sepsis, "role": "exclude"}, _recorded_ctx(icd=([], ["A40", "A419"]))
     )
-    assert excluded.disposition == "applied_by_source"
-    # E and V begin codes of both versions: the stays kept for an ICD-10 E87
-    # may hold ICD-9 E870-E879 instead.  The stays left after removing them
-    # hold neither.
+    assert not excluded.applied
+    # Cross-version exclusion is also unsafe: removing ICD-9 E870-E879 while
+    # the study states ICD-10 E87 can exclude extra patients.
     endocrine = {"kind": "diagnosis_codes", "system": "icd10", "codes": ["E87"]}
     assert _one(endocrine, _recorded_ctx(icd=(["E87"], []))).reason == (
         "population_diagnosis_codes_need_extraction"
     )
     removed = _one({**endocrine, "role": "exclude"}, _recorded_ctx(icd=([], ["E87"])))
-    assert removed.disposition == "applied_by_source"
+    assert not removed.applied
+    for prefix in ("E87", "V10"):
+        for role in ("include", "exclude"):
+            criterion = {"kind": "diagnosis_codes", "system": "icd10", "codes": [prefix], "role": role}
+            assert not _one(criterion, _recorded_ctx(icd=([prefix], [prefix]))).applied
 
 
 # The compiled population ------------------------------------------------------
