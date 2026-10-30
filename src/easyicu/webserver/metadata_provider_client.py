@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from easyicu.research_agent.authority.provider_hard_stop import (
     consume_active_provider_hard_stop_attempt, record_active_provider_retry_wait,
     record_active_provider_transport_failure, record_active_metadata_capacity_rejection,
+    record_active_metadata_coordination_rejection,
 )
 from easyicu.research_agent.providers.transport_retry import TransportRetrySchedule
 from easyicu.webserver import metadata_provider_concurrency as slots
@@ -21,6 +22,10 @@ class MetadataProviderError(RuntimeError):
     def __init__(self, reason: str, *, status_code: int | None = None) -> None:
         super().__init__(reason)
         self.status_code = status_code
+
+
+class MetadataProviderCoordinationUnavailable(RuntimeError):
+    """Shared scope verification failed before a metadata worker was started."""
 
 
 def guarded_acquisition_supported() -> bool:
@@ -116,6 +121,8 @@ class MetadataProviderClient:
             from easyicu.research_agent.providers.metadata_request_binding import current_metadata_request_sha256
 
             guard = Path(self._task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
+            from easyicu.webserver.metadata_provider_shared_scope import SharedScopeError
+
             try:
                 slots.reserve(attempt_id=attempt_id, account=self._account, task_id=self._task.task_id,
                               ledger_path=self._task.ledger.path, guard_path=guard, worker_sha256=identity(),
@@ -125,6 +132,13 @@ class MetadataProviderClient:
                 # runs before the supervised worker can receive a request.
                 record_active_metadata_capacity_rejection()
                 raise
+            except SharedScopeError as exc:
+                # This is distinct from a later scope failure during release:
+                # the worker has not been started and no request was sent.
+                record_active_metadata_coordination_rejection()
+                raise MetadataProviderCoordinationUnavailable(
+                    "metadata_provider_shared_scope_unavailable"
+                ) from exc
             value = guarded_call(
                 guard, request, timeout=max(0.001, min(self._timeout, remaining)),
                 on_prepared=lambda nonce: slots.bind_guard(attempt_id, nonce),

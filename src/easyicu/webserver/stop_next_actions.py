@@ -372,6 +372,7 @@ STOP_POLICIES = {
     # An occupied request may still be using the remote service; neither a
     # plan edit nor retry establishes that its capacity is available.
     "research_pipeline_metadata_provider_capacity_unavailable": "none",
+    "research_pipeline_metadata_shared_scope_unavailable": "none",
     # These are pending researcher decisions, not permission to generate a
     # replacement plan or silently keep the study's previous outcome.
     "case_duration_plan_approval_required": "none",

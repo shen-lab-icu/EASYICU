@@ -3627,8 +3627,11 @@ def test_terminal_failed_pipeline_returns_to_fresh_plan_confirmation() -> None:
     assert by_id["analysis"].reason_code == "failed_pipeline_requires_fresh_plan"
 
 
-def test_provider_capacity_stop_does_not_offer_fresh_planning() -> None:
-    code = "research_pipeline_metadata_provider_capacity_unavailable"
+@pytest.mark.parametrize("code", [
+    "research_pipeline_metadata_provider_capacity_unavailable",
+    "research_pipeline_metadata_shared_scope_unavailable",
+])
+def test_provider_capacity_stop_does_not_offer_fresh_planning(code) -> None:
     snapshot = build_research_workflow_snapshot(
         study=_complete_study(), active_export_present=True, active_job=None,
         latest_run={"run_id": "run-capacity", "run_type": "full",

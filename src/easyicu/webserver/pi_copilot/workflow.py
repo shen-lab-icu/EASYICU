@@ -977,13 +977,20 @@ def build_research_workflow_snapshot(
         and isinstance(execution_retry, Mapping)
         and execution_retry.get("state") == "futile"
     )
+    metadata_admission_reason = (
+        str(run_row.get("gate_reason") or "")
+        if failed_pipeline_regeneration_required and str(run_row.get("gate_reason") or "") in {
+            "research_pipeline_metadata_provider_capacity_unavailable",
+            "research_pipeline_metadata_shared_scope_unavailable",
+        }
+        else ""
+    )
     metadata_capacity_blocked = bool(
         failed_pipeline_regeneration_required
-        and str(run_row.get("gate_reason") or "")
-        == "research_pipeline_metadata_provider_capacity_unavailable"
+        and metadata_admission_reason
     )
     plan_regeneration_reason_code = (
-        "research_pipeline_metadata_provider_capacity_unavailable"
+        metadata_admission_reason
         if metadata_capacity_blocked
         else "planner_checkpoint_resume_available"
         if planner_checkpoint_resume_available

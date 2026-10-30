@@ -767,6 +767,11 @@
       const preparationCanReview = Boolean(preparationOffer && (partialCsv || preparationRows));
       const preparationRun = String((host.workflow() || {}).raw_preparation_candidate_run_id || '');
       const preparationAttempt = (host.workflow() || {}).raw_preparation_candidate_result;
+      const firstObserved = preparationAttempt && preparationAttempt.first_observed_preparation_preview;
+      const firstObservedPreview = firstObserved && firstObserved.population_definition === 'adult_first_observed_icu_in_single_visible_hospitalization'
+        && firstObserved.preparation_authorized === false && firstObserved.analysis_authorized === false
+        && Array.isArray(firstObserved.source_columns)
+        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('First observed ICU preparation preview', '首次可观察 ICU 数据准备预览'))}</summary><p>${esc(tr('The proposed adult subset retains the first verifiable ICU stay for patients with one visible hospitalization; patients with multiple visible hospitalizations or unverifiable identity, order or age are excluded. This does not establish a lifetime first ICU admission.', '拟纳入仅有一次可见住院且首次 ICU 可核实的成年患者；多次可见住院或身份、顺序、年龄无法核实的患者将被排除。这不能证明是终生首次 ICU。'))}</p><p>${esc(tr('Source fields', '来源字段'))}: ${esc(firstObserved.source_columns.join(', '))}</p><small>${esc(tr('Preparation and analysis are unavailable until the authorization, recovery and research delivery are connected. This preview reads no patient rows.', '准备授权、中断恢复和科研交付尚未接通，暂不能准备或分析；此预览不读取患者记录。'))}</small></details>` : '';
       const preparationBlockers = Array.isArray(preparationAttempt && preparationAttempt.blocker_codes) ? preparationAttempt.blocker_codes : [];
       const preparationReasons = {
         dependency_cohort_inputs_unknown: tr('The tables used to select patients have not been fully identified.', '尚未完整识别筛选患者所需的来源表。'),
@@ -808,8 +813,11 @@
           ? tr('The registered source could not be confirmed for this review.', '无法确认这次审阅绑定的登记数据源。')
           : preparationBlockers.includes('dependency_scientific_review_missing') || preparationBlockers.includes('dependency_scientific_review_mismatch')
             ? tr('The current plan and its scientific review no longer match.', '当前计划与科学审阅记录不一致。')
+            : firstObservedPreview ? tr('This population is not yet available for execution.', '该人群目前尚不能执行。')
             : tr('The complete source files or their dependencies could not be verified yet. Preparation remains unavailable.', '尚无法核验完整来源文件或读取依赖，暂时不能开始准备。');
-      const pendingPreparation = preparation && preparation.status === 'awaiting_consumption_closure'
+      // A candidate check is independent of the host's in-flight job. Do not
+      // show its stale blocked preview as the result of that starting job.
+      const pendingPreparation = confirmation.code === 'starting' && firstObservedPreview ? '' : preparation && preparation.status === 'awaiting_consumption_closure'
         ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? partialCsv ? tr(
           'Approval starts this single-table preparation. Research analysis still requires separate approval.',
           '批准后将开始这项单表数据准备，研究分析仍需另行批准。',
@@ -825,7 +833,7 @@
         ))}</small>${preparationCanReview ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
         : preparationRun ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('Data preparation', '数据准备'))}</strong><small>${esc(preparationAttempt && ['blocked', 'error'].includes(preparationAttempt.status)
           ? preparationBlockedText
-          : tr('Check proposed source files and fields without extracting patient records; source identity verification may hash files.', '检查拟用的来源文件和字段，不提取患者记录；核验来源时可能计算文件摘要。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}${candidatePreview}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
+          : tr('Check proposed source files and fields without extracting patient records; source identity verification may hash files.', '检查拟用的来源文件和字段，不提取患者记录；核验来源时可能计算文件摘要。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}${firstObservedPreview}${candidatePreview}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
       const trialOwner = confirmation.trialCard ? window.EasyICU.guidedPi.optional('targetTrial') : null;
       const trialBody = trialOwner ? trialOwner.bodyHtml(host.workflow(), { tr, esc }) : '';
       const studyReadingsOwner = window.EasyICU.guidedPi.optional('studyReadings');
