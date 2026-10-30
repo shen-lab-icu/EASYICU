@@ -141,6 +141,17 @@ def stage_reviewed_source_files(*, source_root: Path, staging_root: Path,
                     target_dir.unlink(temp_name, missing_ok=True)
         source_anchor.assert_still_selected()
         staged_anchor.assert_still_selected()
+        # Recheck the complete source roster after copying all files. This
+        # catches persistent changes to earlier files during later copies; it
+        # does not establish an atomic point-in-time snapshot.
+        for item in captured:
+            relative = _relative(item.relative_path)
+            with AnchoredDirectory.open(source_root.joinpath(*relative.parts[:-1])) as source_dir:
+                with source_dir.open_regular(relative.name) as src:
+                    if _hash_file(src) != (item.sha256, item.size_bytes):
+                        raise ValueError("raw_snapshot_source_changed")
+                source_dir.assert_still_selected()
+        source_anchor.assert_still_selected()
     result = StagedRawSnapshot(source_identity_sha256, tuple(captured))
     verify_staged_source_files(staging_root, result)
     return result
@@ -149,7 +160,23 @@ def stage_reviewed_source_files(*, source_root: Path, staging_root: Path,
 def verify_staged_source_files(staging_root: Path, receipt: StagedRawSnapshot) -> None:
     """Recheck staged bytes, including names, before and after a consumer."""
     root = Path(staging_root)
+    expected: dict[str, set[str]] = {"": set()}
+    for entry in receipt.files:
+        relative = _relative(entry.relative_path)
+        for index, component in enumerate(relative.parts):
+            parent = "/".join(relative.parts[:index])
+            expected.setdefault(parent, set()).add(component)
+            if index < len(relative.parts) - 1:
+                expected.setdefault("/".join(relative.parts[:index + 1]), set())
     with AnchoredDirectory.open(root) as anchor:
+        for parent, names in expected.items():
+            directory_path = root.joinpath(*PurePosixPath(parent).parts) if parent else root
+            with AnchoredDirectory.open(directory_path) as directory:
+                # Reject unapproved files, directories and symlinks, including
+                # entries a producer could otherwise read from the snapshot.
+                if set(os.listdir(directory_path)) != names:
+                    raise ValueError("raw_snapshot_roster_changed")
+                directory.assert_still_selected()
         for entry in receipt.files:
             relative = _relative(entry.relative_path)
             with AnchoredDirectory.open(root.joinpath(*relative.parts[:-1])) as directory:
