@@ -10,7 +10,6 @@ KEYS = ("mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid"
 @pytest.mark.parametrize("database,outcome,censor", [
     ("eicu", "icu_death", "icu_discharge"),
     ("aumc", "icu_death", "icu_discharge"),
-    ("sic", "mort_28d", "followup_days_28d"),
 ])
 def test_generic_survival_scope_keeps_databases_with_a_named_substitution(database, outcome, censor):
     from easyicu.databases.research_capabilities import research_capability_profile
@@ -28,16 +27,43 @@ def test_generic_survival_scope_keeps_databases_with_a_named_substitution(databa
     assert database in eligible_family_databases("survival", requirements=requirements)
 
 
+def test_sic_survival_scope_refuses_unverified_icu_origin_without_offering_outcome_substitution():
+    from easyicu.databases.research_capabilities import research_capability_profile
+    from easyicu.databases.research_requirements import StudyRequirements, assess_study, review_only_time_origin
+    from easyicu.webserver.research_capability_scope import eligible_family_databases
+
+    requirements = StudyRequirements(family="survival", outcome="hospital_death")
+    profile = research_capability_profile("sic")
+    decision = assess_study(profile, requirements)
+    assert decision.status == "refusal"
+    assert "time_zero" in {item.capability for item in decision.missing}
+    assert decision.substitutions == ()
+    candidate = review_only_time_origin(profile)
+    assert candidate is not None and candidate.executable is False and candidate.review_required is True
+    assert "sic" not in eligible_family_databases("survival")
+    assert "sic" not in eligible_family_databases("survival", requirements=requirements)
+
+
 @pytest.mark.parametrize("database", KEYS)
 @pytest.mark.parametrize("family", ["descriptive_epidemiology", "association_study", "prediction_model", "trajectory_clustering"])
-def test_no_whole_database_or_trajectory_ban(database, family):
-    assert study_family_database_gap({"analysis_design": {"analysis_family": family}},
-                                     question="Summarize the recorded heart rate.", database=database) is None
+def test_family_scope_requires_a_verified_time_origin_when_trajectory_needs_it(database, family):
+    gap = study_family_database_gap({"analysis_design": {"analysis_family": family}},
+                                    question="Summarize the recorded heart rate.", database=database)
+    if database == "sic" and family == "trajectory_clustering":
+        assert gap["code"] == "study_family_database_out_of_scope"
+        assert [(item["capability"], item["code"]) for item in gap["missing_capabilities"]] == [("time_zero", "time_zero_unavailable")]
+    else:
+        assert gap is None
 
 
 @pytest.mark.parametrize("database", KEYS)
 def test_target_trial_setup_checks_time_zero_and_treatment_timing(database):
-    assert target_trial_database_gap({"data_source": {"database": database}}) is None
+    gap = target_trial_database_gap({"data_source": {"database": database}})
+    if database == "sic":
+        assert gap["code"] == "target_trial_database_out_of_scope"
+        assert [(item["capability"], item["code"]) for item in gap["missing_capabilities"]] == [("time_zero", "time_zero_unavailable")]
+    else:
+        assert gap is None
 
 
 def test_a_hospital_los_request_retains_the_legacy_refusal_code_with_a_capability():
@@ -102,7 +128,8 @@ def test_source_suggestions_keep_assessable_sources_when_one_profile_is_unavaila
     monkeypatch.setattr(scope, "research_capability_profile", without_eicu)
     gap = target_trial_database_gap({"data_source": {"database": "eicu"}})
     assert gap["missing_capabilities"][0]["code"] == "source_profile_unavailable"
-    assert tuple(gap["supported_databases"]) == tuple(key for key in public_database_keys() if key != "eicu")
+    assert tuple(gap["supported_databases"]) == tuple(key for key in public_database_keys() if key not in {"eicu", "sic"})
+    assert "sic" not in gap["supported_databases"]  # Its ICU time zero is not established.
 
 
 def test_invalid_scientific_bindings_are_left_to_the_existing_validation_order():
@@ -151,6 +178,23 @@ def test_population_measurements_and_extreme_age_bounds_are_retained():
         {"kind": "measurement", "concept": "weight", "op": ">=", "value": 75},
     ]}}, family="descriptive_epidemiology")
     assert {(item.concept, item.value) for item in requirements.thresholds} == {("age", 100), ("weight", 75)}
+
+
+@pytest.mark.parametrize("preset", ["adult_all", "adult_first"])
+@pytest.mark.parametrize("provided,expected", [(None, 18), (16, 18), (21, 21)])
+def test_sic_adult_preset_requires_unavailable_exact_age_boundary(preset, provided, expected):
+    from easyicu.databases.research_capabilities import research_capability_profile
+    from easyicu.databases.research_requirements import assess_study
+    from easyicu.webserver.research_capability_scope import study_requirements
+
+    cohort = {"preset": preset}
+    if provided is not None:
+        cohort["age_min"] = provided
+    requirements = study_requirements({"cohort": cohort}, family="association_study")
+    assert [(item.concept, item.operator, item.value) for item in requirements.thresholds] == [("age", ">=", expected)]
+    decision = assess_study(research_capability_profile("sic"), requirements)
+    assert decision.status == "refusal"
+    assert any(item.code == "numeric_threshold_not_resolvable" for item in decision.missing)
 
 
 @pytest.mark.parametrize("code", ["study_capability_refused", "capability_substitution_not_applied",

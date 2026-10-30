@@ -141,6 +141,7 @@ from .host_bound_cohort_executor import (
     host_bound_cohort_executor_code,
     host_bound_cohort_executor_owns_step,
 )
+from .care_unit_landmark_cohort_executor import care_unit_landmark_cohort_executor_code
 from .landmark_categorical_association_executor import (
     LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
     LANDMARK_CATEGORICAL_PRIMARY_ANALYSIS_KIND,
@@ -405,6 +406,18 @@ def _build_registry() -> StepExecutorRegistry:
             selection_reason="signed_baseline_association_contract_preflight",
             progress_message="Running the signed baseline association owner",
             consumed_input_keys=lambda c: tuple(key for key in c.step.inputs if ":" in key),
+        ),
+        StepExecutor(
+            key="signed_care_unit_landmark_cohort",
+            owns=lambda c: c.step.method == "signed_care_unit_landmark_cohort",
+            render=lambda c: care_unit_landmark_cohort_executor_code(
+                c.step, plan=c.plan, authority=c.current_case_scientific_runtime_authority,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=HOST_BOUND_COHORT_ANALYSIS_KIND,
+            selection_reason="signed_case_duration_landmark_contract",
+            progress_message="Publishing the signed care-unit landmark cohort",
+            consumed_input_keys=lambda _c: (),
         ),
         StepExecutor(
             key=HOST_BOUND_COHORT_ANALYSIS_KIND,

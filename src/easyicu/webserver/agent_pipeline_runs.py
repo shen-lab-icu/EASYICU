@@ -5084,6 +5084,37 @@ def _start_web_provider_hard_stop(
     return ledger.start_task(task_id)
 
 
+def _web_provider_progress_task(task: Any, job: Any) -> Any:
+    """Observe this job's transport attempts without changing its ledger."""
+    from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHardStop
+
+    def observe(event: Mapping[str, object]) -> None:
+        phase = event.get("phase")
+        call_id = event.get("call_id")
+        attempt = event.get("attempt")
+        if (phase not in {"failed", "waiting", "started", "continued"}
+                or not isinstance(call_id, str)
+                or not re.fullmatch(r"[0-9a-f]{32}", call_id)
+                or type(attempt) is not int or not 1 <= attempt <= 1000):
+            return
+        payload: Dict[str, Any] = {
+            "type": "progress", "step": "provider_transport_retry",
+            "status": "complete" if phase == "continued" else "running",
+            "retry_phase": phase, "retry_id": call_id, "current": attempt,
+        }
+        wait = event.get("wait_seconds")
+        if isinstance(wait, (int, float)) and not isinstance(wait, bool) and math.isfinite(wait) and 0 <= wait <= 86400:
+            payload["wait_seconds"] = wait
+        job.emit(payload)
+
+    return TaskProviderHardStop(task.ledger, task.task_id, observer=observe)
+
+
+def _web_provider_task_for_job(job: Any, *, existing: Any, start: Callable[[], Any]) -> Any:
+    """Keep the recovery owner's exact task object when a job continues."""
+    return existing if existing is not None else _web_provider_progress_task(start(), job)
+
+
 def _finish_web_provider_hard_stop(
     task: Optional[Any],
     *,
@@ -5416,6 +5447,66 @@ class _CandidatePlanMaterializationAuthority:
     # (``contracts.patient_grouping_need.steps_needing_patient_groups``).
     patient_grouping_steps: tuple[str, ...] = ()
     primary_cohort_definition: Optional[Mapping[str, Any]] = None
+    source_time_axis: Any = None
+
+
+def _require_no_unsigned_case_duration(review):
+    """A pending candidate cannot authorize SIC landmark case-field reads."""
+    if review.facts.get("database_case_duration_review") is not None:
+        raise ResearchPipelineRunError(
+            "case_duration_plan_approval_required",
+            "The selected case-duration landmark needs the complete signed research plan before case fields can be read.",
+        )
+
+
+def _reviewed_candidate_source_time_axis(*, review, preferences, export_path):
+    """Reverify reviewed source coordinates; this grants no analysis authority."""
+    from easyicu.databases.research_approval import TIME_ORIGIN_REVIEW_FIELD
+    from easyicu.databases.research_requirements import TimeOriginSelection
+    from easyicu.databases.time_origin import SourceTimeAxisBinding
+    from easyicu.research_agent.research_context.export_selection import SourceIdentity
+    from easyicu.webserver.time_origin_source_authority import attest_registered_export_time_origin
+
+    fact = review.facts.get(TIME_ORIGIN_REVIEW_FIELD)
+    if fact is None:
+        return None
+    try:
+        if (not review.approval_allowed or not isinstance(fact, Mapping)
+                or fact.get("disposition") != "proposed_not_approved"
+                or fact.get("execution_contract_available") is not True):
+            raise ValueError("time_origin_not_selected")
+        selection = TimeOriginSelection.model_validate(fact.get("selection"))
+        axis = SourceTimeAxisBinding(**fact.get("registered_export_receipt", {}))
+        constraints = preferences.get("data_constraints")
+        constraints = json.loads(constraints) if isinstance(constraints, str) else constraints
+        if not isinstance(constraints, Mapping):
+            raise ValueError("time_origin_source_identity_missing")
+        selected_in_context = TimeOriginSelection.model_validate(
+            constraints.get("database_time_origin_selection")
+        )
+        identity = SourceIdentity.from_record(constraints.get("source_identity"))
+        if (identity is None or selected_in_context != selection
+                or selection.source_identity_sha256 != canonical_sha256(identity.to_dict())
+                or axis.source_identity_sha256 != selection.source_identity_sha256
+                or axis.selected_origin != selection.selected_origin
+                or selection.source_field.table != "cases"
+                or selection.source_field.column != "ICUOffset"
+                or not export_path):
+            raise ValueError("time_origin_selection_binding_drift")
+        actual = attest_registered_export_time_origin(export_path, expected_identity=identity)
+        if actual.to_dict() != {
+            "source_identity_sha256": axis.source_identity_sha256,
+            "export_authority_sha256": axis.export_authority_sha256,
+            "manifest_sha256": axis.manifest_sha256,
+            "selected_origin": axis.selected_origin,
+        }:
+            raise ValueError("time_origin_export_receipt_mismatch")
+        return axis
+    except (TypeError, ValueError, OSError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_time_origin_binding_invalid",
+            "The reviewed time origin or its registered export changed; data preparation was not started.",
+        ) from exc
 
 
 def _candidate_analysis_inputs(
@@ -5594,6 +5685,10 @@ def _load_candidate_plan_materialization_authority(
             "candidate_plan_materialization_authority_invalid",
             "The candidate plan input authority failed its digest check.",
         )
+    # A pending review is a candidate, not a signed clinical decision. In
+    # particular it cannot authorize loading the added SIC case fields.
+    # The approved execute-phase owner performs its own signed gate first.
+    _require_no_unsigned_case_duration(parsed_review)
     try:
         capsule = json.loads(capsule_raw)
     except (TypeError, ValueError) as exc:
@@ -5616,6 +5711,9 @@ def _load_candidate_plan_materialization_authority(
     identity = identity if isinstance(identity, Mapping) else {}
     preferences = identity.get("user_preferences")
     preferences = preferences if isinstance(preferences, Mapping) else {}
+    source_time_axis = _reviewed_candidate_source_time_axis(
+        review=parsed_review, preferences=preferences, export_path=export_path,
+    )
     proposed = _metadata_only_planning_coordinates(
         question=_clean_text(study.get("question"), 1_200),
         database=database,
@@ -5835,6 +5933,7 @@ def _load_candidate_plan_materialization_authority(
         analysis_inputs=analysis_inputs,
         exposure_groupings=exposure_groupings,
         patient_grouping_steps=steps_needing_patient_groups(plan),
+        source_time_axis=source_time_axis,
     )
 
 
@@ -6506,6 +6605,7 @@ def make_research_pipeline_run_runner(
     plan_revision_source_run_id: str = "",
     execution_resume_source_run_id: str = "",
     development_resume_source_job_id: str = "",
+    allow_environment_resume: bool = True,
     budget_mode: str = "planner_canary",
     runner_image: Optional[str] = None,
     plan_change_request: Optional[PlanChangeRequest] = None,
@@ -6524,6 +6624,7 @@ def make_research_pipeline_run_runner(
         plan_revision_source_run_id=plan_revision_source_run_id,
         execution_resume_source_run_id=execution_resume_source_run_id,
         development_resume_source_job_id=development_resume_source_job_id,
+        allow_environment_resume=allow_environment_resume,
         budget_mode=budget_mode,
         runner_image=runner_image,
         plan_change_request=plan_change_request,
@@ -6854,20 +6955,60 @@ def make_research_pipeline_run_runner(
 
             from easyicu.webserver.research_job_recovery import bind_provider_recovery, existing_provider_task
 
-            provider_hard_stop = existing_provider_task(job) or _start_web_provider_hard_stop(
-                wrapper_dir=wrapper_dir,
-                job_id=str(job.id),
-                declaration_sha256=(
-                    study_context_owner.scientific_configuration_sha256(study)
-                ),
-                budget_mode=selected_budget_mode,
-                ledger_name=(
-                    f"provider_hard_stop_retry_{_slug(job.id)}.json"
-                    if execution_resume_target is not None
-                    else "provider_hard_stop_ledger.json"
+            provider_hard_stop = _web_provider_task_for_job(
+                job, existing=existing_provider_task(job),
+                start=lambda: _start_web_provider_hard_stop(
+                    wrapper_dir=wrapper_dir,
+                    job_id=str(job.id),
+                    declaration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                    budget_mode=selected_budget_mode,
+                    ledger_name=(
+                        f"provider_hard_stop_retry_{_slug(job.id)}.json"
+                        if execution_resume_target is not None
+                        else "provider_hard_stop_ledger.json"
+                    ),
                 ),
             )
             bind_provider_recovery(job, wrapper_dir=wrapper_dir, task=provider_hard_stop, client=client)
+            # The full review seed is only available after acquisition. For a
+            # fresh metadata-only plan, freeze the smaller pre-call authority
+            # before acquisition can dispatch its first Provider request.
+            # An interrupted unknown request is never made replayable by this
+            # seed; the restart owner independently checks the durable ledger.
+            from easyicu.webserver.durable_research import current_service
+            from easyicu.webserver.research_early_resume import fresh_seed_scope
+
+            if (
+                current_service() is not None
+                and metadata_only_planning
+                and selected_budget_mode == "planner_canary"
+                and selected_credential_source == "pi_verified"
+                and prepared.source_identity is not None
+                and prepared_revision is None
+                and execution_resume_target is None
+                and development_resume_binding is None
+                and fresh_seed_scope(scope=execution.development_resume_scope,
+                                     acquisition=development_resume_acquisition,
+                                     literature=development_resume_literature)
+                and bound_change_request is None
+                and not source_run_id
+            ):
+                from easyicu.webserver.research_early_resume import create_seed
+
+                create_seed(
+                    wrapper=wrapper_dir, study_id=str(study["id"]),
+                    scientific_sha256=study_context_owner.scientific_configuration_sha256(study),
+                    credential_source=selected_credential_source,
+                    budget_mode=selected_budget_mode, provider_public=provider_public,
+                    database=database, export_path=str(export_path),
+                    runner_image=selected_runner_image,
+                    original_source_identity=prepared.source_identity.to_dict(),
+                    hard_stop_ledger_path=str(provider_hard_stop.ledger.path.resolve()),
+                    hard_stop_task_id=str(provider_hard_stop.task_id),
+                    hard_stop_declaration_sha256=study_context_owner.scientific_configuration_sha256(study),
+                )
             provider_public["provider_hard_stop"] = {
                 "schema_version": "easyicu.web-provider-hard-stop-policy/1",
                 "required": True,
@@ -6875,8 +7016,42 @@ def make_research_pipeline_run_runner(
                 "scope": "acquisition_through_pipeline_terminal",
             }
             hard_stop_limits = provider_hard_stop.ledger.limits
+            acquisition_transport = client
+            from easyicu.webserver.metadata_provider_client import (
+                guarded_acquisition_supported, guarded_metadata_resume_scope,
+            )
+
+            if (
+                current_service() is not None and metadata_only_planning
+                and selected_budget_mode == "planner_canary"
+                and selected_credential_source == "pi_verified"
+                and prepared.source_identity is not None
+                and prepared_revision is None and execution_resume_target is None
+                and bound_change_request is None
+                and not source_run_id and research_provider_environment is not None
+                and guarded_acquisition_supported()
+                and guarded_metadata_resume_scope(
+                    has_checkpoint=development_resume_binding is not None,
+                    scope=execution.development_resume_scope,
+                    acquisition=development_resume_acquisition,
+                )
+            ):
+                from easyicu.webserver.metadata_provider_client import MetadataProviderClient
+
+                acquisition_transport = MetadataProviderClient(
+                    inner=client, task=provider_hard_stop, provider=provider,
+                    environment=research_provider_environment, public=provider_public,
+                    timeout=request_timeout,
+                )
+                # Provider outage probes are part of this metadata-only run.
+                # Guard them too: an interrupted probe has an unknown remote
+                # outcome and must retain the same ledger and capacity slot.
+                bind_provider_recovery(
+                    job, wrapper_dir=wrapper_dir, task=provider_hard_stop,
+                    client=acquisition_transport,
+                )
             acquisition_client = HardStopClient(
-                client,
+                acquisition_transport,
                 role="acquisition",
                 task=provider_hard_stop,
             )
@@ -7064,6 +7239,9 @@ def make_research_pipeline_run_runner(
                     ),
                     first_icu_stay=foundation_profile.get("first_icu_stay"),
                     first_icu_stay_per_hospitalization=foundation_profile.get("first_icu_stay_per_hospitalization"),
+                    **({"source_time_axis": candidate_authority.source_time_axis}
+                       if candidate_authority is not None and candidate_authority.source_time_axis is not None
+                       else {}),
                 )
                 if (
                     foundation_profile.get("first_icu_stay") is not None
@@ -7607,10 +7785,30 @@ def make_research_pipeline_run_runner(
                     runner_image=selected_runner_image or DockerRunner.DEFAULT_IMAGE,
                     run_dir=wrapper_dir / "pipeline" / execution_resume_target.pipeline_run_id,
                 )
+            from easyicu.webserver.time_origin_source_authority import attest_case_duration_for_review, review_time_origin_attestor
+            from easyicu.webserver.case_duration_materialization import (
+                attest_case_duration_metadata, materialize_approved_case_duration_universe,
+            )
+
+            planning_client = client
+            if acquisition_transport is not client:
+                # The metadata-only plan uses the guarded transport for its
+                # Planner role only. Other roles and reviewed execution retain
+                # their existing client and authority.
+                from easyicu.research_agent.providers.llm import LLMRouter
+
+                planning_client = LLMRouter(default=client, planner=acquisition_transport)
             pipeline = ResearchAgentPipeline.from_config(
                 config,
                 services=PipelineServices(
-                    llm=client,
+                    llm=planning_client,
+                    metadata_outline_journal_task=(
+                        provider_hard_stop if acquisition_transport is not client else None
+                    ),
+                    time_origin_attestor=review_time_origin_attestor,
+                    case_duration_attestor=attest_case_duration_for_review,
+                    case_duration_metadata_attestor=attest_case_duration_metadata,
+                    approved_case_duration_materializer=materialize_approved_case_duration_universe,
                     human_review_gate=_WebHumanReviewGate(),
                     provider_hard_stop=provider_hard_stop,
                     execution_runtime_revision=execution_runtime_revision,

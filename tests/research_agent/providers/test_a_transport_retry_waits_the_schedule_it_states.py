@@ -118,6 +118,27 @@ def test_a_scheduled_retry_waits_its_drawn_delay_then_succeeds(
     assert sleeps == [pytest.approx(wait)]
 
 
+def test_scheduled_transport_emits_retry_progress_without_changing_the_schedule(
+    monkeypatch, ra, tmp_path,
+):
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger, TaskProviderHardStop
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from tests.support.provider_recovery import _limits
+
+    ledger = ProviderHardStopLedger(path=(tmp_path / "ledger.json").resolve(), task_ids=("E1",),
+        limits=_limits(max_wall_clock_seconds_per_task=600), batch_id="test")
+    original = ledger.start_task("E1")
+    events = []
+    task = TaskProviderHardStop(original.ledger, original.task_id, observer=events.append)
+    client, completions, sleeps = _client(monkeypatch, [_failure(), _ok()])
+    assert _ask(HardStopClient(client, role="acquisition", task=task)) == "OK"
+    assert completions.calls == 2
+    assert sleeps == [pytest.approx(180.0)]
+    assert [event["phase"] for event in events] == ["failed", "waiting", "started", "continued"]
+    assert events[1]["wait_seconds"] == pytest.approx(180.0)
+    assert len(ledger.snapshot()["tasks"][0]["calls"]) == 2
+
+
 def test_a_retry_after_lengthens_a_wait_and_never_shortens_it(monkeypatch, ra):
     client, _completions, sleeps = _client(
         monkeypatch, [_failure(retry_after=240), _ok()]

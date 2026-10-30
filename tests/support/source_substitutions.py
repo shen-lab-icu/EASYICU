@@ -28,13 +28,17 @@ from easyicu.research_agent.planning.scientific_review import PlanScientificRevi
 def context(database, *, unit="icu_stay", outcome=None, thresholds=()):
     profile = research_capability_profile(database)
     identity = next(item.column for item in profile.units if item.unit == "icu_stay")
-    return ResearchContext(research_question="Estimate the association of baseline weight with recorded mortality.",
-        primary_exposure="weight", target_outcome=outcome,
+    # SIC's weight is rounded with unspecified boundaries; unrelated source
+    # contracts use an exact-valued synthetic exposure instead.
+    exposure = "lact" if database == "sic" else "weight"
+    return ResearchContext(research_question=f"Estimate the association of {exposure} with recorded mortality.",
+        primary_exposure=exposure, target_outcome=outcome,
         cohort=CohortDescriptor(cohort_name="synthetic", database=database, n_stays=4,
             id_columns=[identity], outcome_columns=["icu_death", "death"]),
         variables=[ConceptDescriptor(name=identity, dtype="int64", role="id"),
             ConceptDescriptor(name="age", dtype="float64", role="demographic", unit="years"),
             ConceptDescriptor(name="weight", dtype="float64", role="demographic", unit="kg"),
+            ConceptDescriptor(name="lact", dtype="float64", role="lab", unit="mmol/L"),
             ConceptDescriptor(name="icu_death", dtype="boolean", role="outcome", source_concept="icu_death"),
             ConceptDescriptor(name="death", dtype="boolean", role="outcome", source_concept="death")],
         user_preferences=UserPreferences(data_constraints=json.dumps({
@@ -48,11 +52,12 @@ def context(database, *, unit="icu_stay", outcome=None, thresholds=()):
 def plan(ctx, spec=None):
     cohort = compile_population(spec or PopulationSpec(criteria=[]), ctx).cohort_definition()
     outcome = ctx.target_outcome or "icu_death"
+    exposure = ctx.primary_exposure or "weight"
     step = AnalysisStep(step_id="association", intent="Estimate the declared association.",
         method="adjusted_association_models", expected_outputs=["table:adjusted_association_estimates"],
-        inputs=["weight", outcome], planned_analysis_role="primary", model_requirements=[{
+        inputs=[exposure, outcome], planned_analysis_role="primary", model_requirements=[{
             "requirement_id": "primary", "outcome": outcome, "outcome_type": "binary",
-            "method_family": "logistic_regression", "exposure_source": "weight", "covariates": [],
+            "method_family": "logistic_regression", "exposure_source": exposure, "covariates": [],
             "analysis_role": "primary", "analysis_set": "complete_case"}])
     return AnalysisPlan(research_question=ctx.research_question, analysis_type="association_study",
                         cohort=cohort, steps=[step])

@@ -59,7 +59,7 @@ def test_unit_proposal_binds_native_icu_identity_and_requires_approval(database,
 
 
 @pytest.mark.parametrize("database,requested,aligned", [("aumc", 65, 60), ("mimic", 95, 90), ("miiv", 95, 90), ("eicu", 95, 90),
-                                                       ("hirid", 63, 65), ("sic", 63, 65), ("hirid", 18, 20), ("sic", 18, 20)])
+                ("hirid", 63, 65), ("hirid", 18, 20)])
 def test_age_proposal_is_compiled_before_approval(database, requested, aligned, tmp_path):
     from easyicu.databases.research_substitutions import bind_source_substitutions
 
@@ -106,6 +106,51 @@ def test_aumc_band_values_are_ordered_categories_not_continuous_covariates():
     age, weight = (next(v for v in ctx.variables if v.name == name) for name in ("age", "weight"))
     assert age.is_ordinal and age.ordinal_levels == [30, 45, 55, 65, 75, 90]
     assert weight.is_ordinal and weight.ordinal_levels == [50, 65, 75, 85, 95, 105, 120]
+
+
+def test_sic_rounded_model_values_require_source_binding_and_plan_review(tmp_path):
+    from easyicu.databases.research_substitutions import approximate_variables_used, bind_source_substitutions
+
+    ctx = bind_source_substitutions(context("sic", outcome="icu_death"))
+    binding = json.loads(ctx.user_preferences.data_constraints)["database_capability_binding"]
+    assert set(binding["approximate_covariates"]) == {"age", "weight"}
+    assert not binding["binned_covariates"]
+    compiled = plan(ctx)
+    requirement = compiled.steps[0].model_requirements[0]
+    requirement.exposure_source = "weight"
+    requirement.covariates = ["age"]
+    assert set(approximate_variables_used(ctx, compiled)) == {"weight", "age"}
+    assert "exact intervals" in next(v for v in ctx.variables if v.name == "age").description
+    with pytest.raises(CapabilityApprovalError, match="capability_substitution_approval_required"):
+        require_approved_database_capabilities(
+            SimpleNamespace(context=ctx, plan=compiled, evidence=EvidenceStore(tmp_path)), tmp_path,
+        )
+    approved = _approve(tmp_path, EvidenceStore(tmp_path), ctx, compiled, _review(ctx, compiled))
+    require_approved_database_capabilities(approved, tmp_path)
+
+
+def test_sic_rounded_model_without_source_binding_fails_closed(tmp_path):
+    ctx = context("sic", outcome="icu_death")
+    compiled = plan(ctx)
+    compiled.steps[0].model_requirements[0].exposure_source = "weight"
+    with pytest.raises(CapabilityApprovalError, match="capability_substitution_not_applied"):
+        require_approved_database_capabilities(
+            SimpleNamespace(context=ctx, plan=compiled, evidence=EvidenceStore(tmp_path)), tmp_path,
+        )
+
+
+def test_sic_adult_predicate_cannot_turn_a_rounded_value_into_exact_age():
+    from easyicu.databases.research_substitutions import bind_source_substitutions
+
+    requirement = ThresholdRequirement(concept="age", operator=">=", value=18)
+    ctx = bind_source_substitutions(context("sic", thresholds=(requirement,)))
+    spec = PopulationSpec.model_validate({"criteria": [{
+        "id": "c1", "kind": "age_years", "role": "include", "source": "question",
+        "quote": "Include adults.", "min_years": 18,
+    }]})
+    compiled = compile_population(spec, ctx)
+    assert compiled.blocking
+    assert not compiled.cohort_definition().inclusion
 
 
 def test_an_icu_outcome_is_not_fabricated_from_a_legacy_death_column():

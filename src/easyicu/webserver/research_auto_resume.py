@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
 from easyicu.webserver import study_contexts
@@ -226,6 +227,199 @@ def _original_task(seed: Any) -> Any:
     return task
 
 
+def _verify_guarded_planner_inflight(seed: Any, task_row: Mapping[str, Any]) -> None:
+    """No planner replay overlaps an unverified local or uncounted request."""
+    calls = task_row.get("calls")
+    if not isinstance(calls, list):
+        _refuse("budget_binding_changed")
+    active = [call for call in calls if isinstance(call, dict) and call.get("state") == "in_progress"]
+    if not active:
+        return
+    if (len(active) != 1 or calls[-1] is not active[0]
+            or active[0].get("role") not in {"planner", "provider_recovery_probe"}):
+        _refuse("planner_provider_worker_unverified")
+    from easyicu.runtime.host_execution_lease import (
+        HostExecutionLeaseError, assert_host_execution_quiescent, read_host_execution_receipt,
+    )
+    from easyicu.webserver import metadata_provider_concurrency as slots
+    from easyicu.webserver.metadata_provider_worker import identity as worker_identity
+
+    attempt_id = str(active[0].get("attempt_id") or "")
+    held = slots.get(attempt_id)
+    if not isinstance(held, dict):
+        _refuse("planner_provider_worker_unverified")
+    ledger_path = Path(seed.hard_stop_ledger_path)
+    guard = ledger_path.parent / ".metadata-provider-execution" / attempt_id
+    try:
+        account = slots.account_identity(seed.provider_public)
+    except ValueError:
+        _refuse("provider_identity_changed")
+    if (held.get("task_id") != seed.hard_stop_task_id
+            or held.get("account") != account or held.get("ledger_path") != str(ledger_path)
+            or held.get("guard_path") != str(guard) or held.get("worker_sha256") != worker_identity()
+            or not held.get("guard_nonce")):
+        _refuse("planner_provider_worker_unverified")
+    try:
+        assert_host_execution_quiescent(guard, allow_missing=False, wait_timeout=15.0)
+        receipt = read_host_execution_receipt(guard)
+    except (OSError, HostExecutionLeaseError):
+        _refuse("planner_provider_worker_unverified")
+    if (receipt is None or receipt.get("nonce") != held["guard_nonce"]
+            or receipt.get("script_sha256") != held["worker_sha256"]):
+        _refuse("planner_provider_worker_unverified")
+    if not slots.has_capacity(account):
+        _refuse("metadata_provider_concurrency_unavailable")
+
+
+def _recover_unstarted_metadata_planner(
+    descriptor: Mapping[str, Any], job: Any, wrapper: Path, seed: Mapping[str, Any],
+) -> Callable[[Any], Any]:
+    """Recover a pre-call seed or one guarded, conservatively held request."""
+    from easyicu.research_agent.authority.provider_hard_stop import load_provider_hard_stop_ledger
+    from easyicu.webserver import agent_pipeline_runs, provider_adapter, settings
+    from easyicu.webserver.provider_gate import resolve_provider_gate
+    from easyicu.webserver.provider_job_recovery import ProviderJobRecovery, RecoveryJob
+    from easyicu.webserver.research_early_resume import metadata_binding
+
+    def validate(bound_job: Any) -> tuple[dict, Any]:
+        _check_cancel(bound_job)
+        if (descriptor.get("schema_version") != SCHEMA
+                or descriptor.get("external_llm_opt_in") is not True
+                or settings.load_settings().get("ai_enabled") is not True
+                or descriptor.get("budget_mode") != "planner_canary"
+                or descriptor.get("credential_source") != "pi_verified"
+                or descriptor.get("execution_resume_source_run_id")
+                or seed.get("budget_mode") != descriptor.get("budget_mode")
+                or seed.get("credential_source") != descriptor.get("credential_source")
+                or seed.get("study_id") != descriptor.get("study_context_id")
+                or seed.get("scientific_configuration_sha256") != descriptor.get("scientific_configuration_sha256")):
+            _refuse("early_seed_binding_changed")
+        current = study_contexts.get_context(str(descriptor.get("study_context_id") or ""))
+        if current is None or study_contexts.scientific_configuration_sha256(current) != descriptor.get("scientific_configuration_sha256"):
+            _refuse("configuration_superseded")
+        binding = descriptor.get("provider_binding")
+        if not isinstance(binding, dict) or _owned_wrapper(descriptor, binding) != wrapper:
+            _refuse("provider_binding_missing")
+        ledger_path = Path(str(binding.get("hard_stop_ledger_path") or ""))
+        task_id = str(binding.get("hard_stop_task_id") or "")
+        ledger_runtime = ledger_path.parent
+        ledger_wrapper = ledger_runtime.parent
+        if (ledger_path.name != "provider_hard_stop_ledger.json"
+                or ledger_runtime.name != ".runtime" or ledger_runtime.is_symlink()
+                or _owned_wrapper(descriptor, {"wrapper_dir": str(ledger_wrapper)}) != ledger_wrapper
+                or ledger_path.is_symlink() or not ledger_path.is_file()
+                or str(ledger_path) != seed.get("hard_stop_ledger_path")
+                or task_id != seed.get("hard_stop_task_id")
+                or binding.get("hard_stop_declaration_sha256") != seed.get("hard_stop_declaration_sha256")
+                or binding.get("hard_stop_declaration_sha256") != descriptor["scientific_configuration_sha256"]):
+            _refuse("budget_binding_changed")
+        ledger = load_provider_hard_stop_ledger(ledger_path)
+        rows = ledger.get("tasks") or []
+        if (ledger.get("task_order") != [task_id] or ledger.get("batch_id") != task_id
+                or ledger.get("declaration_sha256") != descriptor["scientific_configuration_sha256"]
+                or ledger.get("limits") != provider_adapter.web_research_agent_hard_stop_limits("planner_canary").canonical_payload()
+                or len(rows) != 1 or rows[0].get("status") != "running"):
+            _refuse("budget_binding_changed")
+        calls = rows[0].get("calls")
+        if not isinstance(calls, list):
+            _refuse("early_provider_attempt_already_reserved")
+        if calls:
+            # A completed selection has no saved response here. Exactly one
+            # still-unknown acquisition may continue only after its guarded
+            # worker is quiescent and its remote slot remains occupied.
+            active = [call for call in calls if call.get("state") == "in_progress"]
+            if (len(active) != 1 or calls[-1] is not active[0]
+                    or any(call.get("role") != "acquisition" for call in calls)
+                    or any(call.get("state") != "failed_usage_unknown" for call in calls[:-1])):
+                _refuse("early_provider_attempt_already_reserved")
+            from easyicu.runtime.host_execution_lease import (
+                HostExecutionLeaseError, assert_host_execution_quiescent, read_host_execution_receipt,
+            )
+            from easyicu.webserver import metadata_provider_concurrency as slots
+            from easyicu.webserver.metadata_provider_worker import identity as worker_identity
+
+            attempt = active[0].get("attempt_id")
+            held = slots.get(str(attempt or ""))
+            guard = ledger_path.parent / ".metadata-provider-execution" / str(attempt or "")
+            if not isinstance(held, dict):
+                _refuse("early_provider_attempt_already_reserved")
+            public = seed.get("provider_public")
+            if not isinstance(public, dict):
+                _refuse("provider_identity_changed")
+            try:
+                expected_account = slots.account_identity(public)
+            except ValueError:
+                _refuse("provider_identity_changed")
+            if (held.get("task_id") != task_id
+                    or held.get("account") != expected_account
+                    or held.get("ledger_path") != str(ledger_path)
+                    or held.get("guard_path") != str(guard)
+                    or held.get("worker_sha256") != worker_identity()
+                    or not held.get("guard_nonce")):
+                _refuse("early_provider_attempt_already_reserved")
+            try:
+                assert_host_execution_quiescent(guard, allow_missing=False, wait_timeout=15.0)
+                receipt = read_host_execution_receipt(guard)
+            except (OSError, HostExecutionLeaseError):
+                _refuse("early_provider_worker_unverified")
+            if (receipt is None or receipt.get("nonce") != held["guard_nonce"]
+                    or receipt.get("script_sha256") != held["worker_sha256"]):
+                _refuse("early_provider_worker_unverified")
+            if not slots.has_capacity(expected_account):
+                _refuse("metadata_provider_concurrency_unavailable")
+        source = seed.get("source")
+        if not isinstance(source, dict):
+            _refuse("early_source_invalid")
+        source_path = str((current.get("data_source") or {}).get("path") or "")
+        try:
+            current_source = metadata_binding(str(source.get("database") or ""), source_path)
+        except (OSError, ValueError):
+            _refuse("early_source_unavailable")
+        if current_source != source:
+            _refuse("early_source_changed")
+        original_task = SimpleNamespace(
+            budget_mode="planner_canary", hard_stop_ledger_path=str(ledger_path),
+            hard_stop_task_id=task_id,
+            hard_stop_declaration_sha256=descriptor["scientific_configuration_sha256"],
+        )
+        return dict(current), original_task
+
+    current, original_task = validate(job)
+    public = seed.get("provider_public")
+    if not isinstance(public, dict) or not public.get("provider"):
+        _refuse("provider_identity_changed")
+    provider = resolve_provider_gate(
+        run_type="full", llm_provider=str(public["provider"]),
+        external_llm_opt_in=True, ai_enabled=True,
+    )
+    original_task.credential_source = "pi_verified"
+    original_task.provider_meta = provider
+    environment = _provider_environment(original_task)
+    client, current_public = provider_adapter.build_research_agent_provider_client(provider, environ=environment)
+    if any(current_public.get(key) != public.get(key) for key in _PROVIDER_IDENTITY):
+        _refuse("provider_identity_changed")
+    task = _original_task(original_task)
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(seed["source"]["export_path"]), study_context=current,
+        project_root=descriptor["project_root"], provider=provider,
+        provider_environment=environment, credential_source="pi_verified",
+        budget_mode="planner_canary", literature_search_authorized=descriptor.get("literature_search_authorized") is True,
+        allow_environment_resume=False, runner_image=seed.get("runner_image"),
+    )
+
+    def resume(bound_job: Any) -> Any:
+        validate(bound_job)
+        task.assert_active()
+        attempt = descriptor.get("_resume_attempt")
+        if type(attempt) is not int or not 2 <= attempt <= 4:
+            _refuse("attempt_binding_invalid")
+        recovery = ProviderJobRecovery(bound_job)
+        recovery.bind(wrapper_dir=wrapper, task=task, client=client)
+        return runner(RecoveryJob(recovery, f"{str(bound_job.id)[:60]}-restart-{attempt}"))
+
+    return resume
+
+
 def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], Any]:
     """Return an exact continuation; no branch may silently launch fresh work."""
     from .research_multi_actions import SCHEMA as MULTI_SCHEMA, recover_multi_runner
@@ -239,6 +433,19 @@ def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], A
     from easyicu.webserver import agent_pipeline_runs, provider_adapter, research_launch_resume
     from easyicu.webserver.provider_job_recovery import ProviderJobRecovery, RecoveryJob
 
+    binding = descriptor.get("provider_binding")
+    if isinstance(binding, dict):
+        early_wrapper = _owned_wrapper(descriptor, binding)
+        from easyicu.webserver.agent_review_recovery import load_recovery_seed
+        from easyicu.webserver.research_early_resume import load_seed
+
+        if load_recovery_seed(early_wrapper) is None:
+            try:
+                early_seed = load_seed(early_wrapper)
+            except (OSError, ValueError):
+                _refuse("early_seed_invalid")
+            if early_seed is not None:
+                return _recover_unstarted_metadata_planner(descriptor, job, early_wrapper, early_seed)
     current, seed, wrapper, task_row = _authority(descriptor, job)
     run_id = str(descriptor.get("execution_resume_source_run_id") or "")
     if run_id:
@@ -271,6 +478,7 @@ def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], A
     )
     if checkpoint is None:
         _refuse("planner_checkpoint_missing")
+    _verify_guarded_planner_inflight(seed, task_row)
     environment = _provider_environment(seed)
     client, public = provider_adapter.build_research_agent_provider_client(dict(seed.provider_meta), environ=environment)
     if any(public.get(key) != seed.provider_public.get(key) for key in _PROVIDER_IDENTITY):

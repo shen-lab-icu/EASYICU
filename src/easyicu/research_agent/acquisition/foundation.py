@@ -365,6 +365,7 @@ def acquire_universe_for_question(
     first_icu_stay: Optional[FirstIcuStayBinding] = None,
     first_icu_stay_per_hospitalization: Optional[FirstIcuStayPerHospitalizationBinding] = None,
     event_onset_windows: Optional[Mapping[str, Tuple[float, float]]] = None,
+    source_time_axis=None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -633,6 +634,7 @@ def acquire_universe_for_question(
         # A design that times an event past the cohort window (a treatment
         # start inside a grace period) names the window its onset is read over.
         event_onset_windows=event_onset_windows,
+        **({"source_time_axis": source_time_axis} if source_time_axis is not None else {}),
         **({"last_value_concepts": [target_outcome]} if target_outcome_aggregation == "last" else {}),
         **identity_kwargs,
     )

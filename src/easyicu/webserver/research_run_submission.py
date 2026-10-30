@@ -442,6 +442,10 @@ def submit_research_run(
         if request.plan_change_request is not None:
             runner_kwargs["plan_change_request"] = request.plan_change_request
         planner_start_mode = request.planner_start_mode
+        if planner_start_mode == "fresh":
+            # Do not let a developer environment variable silently turn an
+            # explicit fresh run into a checkpoint continuation downstream.
+            runner_kwargs["allow_environment_resume"] = False
         plan_revision_source_run_id = request.plan_revision_source_run_id.strip()
         execution_resume_source_run_id = request.execution_resume_source_run_id.strip()
         development_resume_source_job_id = ""

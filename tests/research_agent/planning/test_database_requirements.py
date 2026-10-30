@@ -11,7 +11,20 @@ from easyicu.databases.research_requirements import (
 KEYS = ("mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid", "aumc", "sic")
 
 
-@pytest.mark.parametrize("database", ["hirid", "sic"])
+def _synthetic_sic_mortality_mappings_with_explicit_icu_bounds():
+    """Exercise mortality selection with invented bounds, not native SICdb facts."""
+    from easyicu.databases.research_capabilities import SourceField
+
+    return research_capability_profile("sic").model_copy(update={
+        "database": "synthetic_icu_source",
+        "schema_database": "synthetic",
+        "source_registered": False,
+        "icu_admission": SourceField(source="synthetic_registry", table="stays", column="icu_start"),
+        "icu_discharge": SourceField(source="synthetic_registry", table="stays", column="icu_end"),
+    })
+
+
+@pytest.mark.parametrize("database", ["hirid"])
 @pytest.mark.parametrize("concept,value,aligned", [("age", 18, 20), ("age", 63, 65), ("age", 95, 90), ("weight", 73, 75)])
 def test_published_five_unit_bands_require_an_explicit_threshold_proposal(database, concept, value, aligned):
     threshold = ThresholdRequirement(concept=concept, operator=">=", value=value)
@@ -24,25 +37,42 @@ def test_published_five_unit_bands_require_an_explicit_threshold_proposal(databa
     assert (change.substitute.operator, change.substitute.value) == (">=", aligned)
 
 
+@pytest.mark.parametrize("concept,value", [("age", 18), ("age", 20), ("age", 65), ("age", 90), ("weight", 75)])
+@pytest.mark.parametrize("operator", [">", ">=", "<", "<=", "==", "!="])
+def test_sic_rounded_measurement_has_no_proven_exact_threshold(concept, value, operator):
+    threshold = ThresholdRequirement(concept=concept, operator=operator, value=value)
+    decision = assess_study(research_capability_profile("sic"), StudyRequirements(
+        family="association_study", thresholds=(threshold,)))
+    assert decision.status == "refusal"
+    assert decision.substitutions == ()
+    assert any(item.capability == f"threshold:{concept}" and item.code == "numeric_threshold_not_resolvable"
+               for item in decision.missing)
+
+
 @pytest.mark.parametrize("database", ["mimic", "miiv", "sic"])
 @pytest.mark.parametrize("unit", ["icu_stay", None])
 def test_hospital_death_never_uses_icu_censoring_as_exact(database, unit):
     profile = research_capability_profile(database)
     requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit=unit)
     decision = assess_study(profile, requirements)
+    if database == "sic":
+        assert decision.status == "refusal"
+        assert decision.requirements == requirements
+        assert {item.capability for item in decision.missing} == {"time_zero", "censor_time"}
+        assert decision.substitutions == ()
+        native = assess_study(profile, requirements.model_copy(update={"outcome": "icu_death"}))
+        assert native.status == "refusal"
+        assert "time_zero" in {item.capability for item in native.missing}
+        return
     assert decision.status == "substitution"
     assert decision.requirements == requirements
     changes = {item.capability: item for item in decision.substitutions}
     censor = changes["censor_time"]
     assert censor.original == "icu_discharge"
     assert censor.reason_code == "mortality_censoring_differs"
-    if database == "sic":
-        assert changes["outcome_meaning"].substitute == "mort_28d"
-        assert censor.substitute == "followup_days_28d"
-    else:
-        assert set(changes) == {"censor_time"}
-        assert censor.substitute == "hospital_discharge"
-        assert censor.source_field == profile.hospital_discharge
+    assert set(changes) == {"censor_time"}
+    assert censor.substitute == "hospital_discharge"
+    assert censor.source_field == profile.hospital_discharge
     native = assess_study(profile, requirements.model_copy(update={"outcome": "icu_death"}))
     assert native.status == "exact"
     assert native.substitutions == ()
@@ -57,8 +87,8 @@ def test_censoring_mismatch_uses_source_facts_and_refuses_when_no_complete_alter
     decision = assess_study(profile, StudyRequirements(
         family="survival", outcome="hospital_death", censoring_unit="icu_stay"))
     assert decision.status == "refusal"
-    assert [(item.capability, item.code) for item in decision.missing] == [
-        ("censor_time", "censor_time_unavailable")]
+    assert {(item.capability, item.code) for item in decision.missing} == {
+        ("time_zero", "time_zero_unavailable"), ("censor_time", "censor_time_unavailable")}
 
 
 @pytest.mark.parametrize("database,status,endpoint,table,status_column,time_column", [
@@ -67,7 +97,7 @@ def test_censoring_mismatch_uses_source_facts_and_refuses_when_no_complete_alter
     ("eicu", "substitution", "icu_death", "patient", "unitdischargestatus", "unitdischargeoffset"),
     ("hirid", "refusal", None, None, None, None),
     ("aumc", "substitution", "icu_death", "admissions", "destination", "dischargedat"),
-    ("sic", "substitution", "mort_28d", "derived_outcomes", "mort_28d", "followup_days_28d"),
+    ("sic", "refusal", None, None, None, None),
 ])
 def test_default_survival_offers_only_supported_mortality_with_explicit_coordinates(
     database, status, endpoint, table, status_column, time_column,
@@ -81,8 +111,11 @@ def test_default_survival_offers_only_supported_mortality_with_explicit_coordina
     if status == "exact":
         assert decision.substitutions == decision.missing == ()
     elif status == "refusal":
-        assert [(item.capability, item.code) for item in decision.missing] == [
-            ("censor_time", "censor_time_unavailable")]
+        expected = {("censor_time", "censor_time_unavailable")}
+        if database == "sic":
+            expected.add(("time_zero", "time_zero_unavailable"))
+            assert decision.substitutions == ()
+        assert {(item.capability, item.code) for item in decision.missing} == expected
     else:
         assert not decision.missing
         changes = {item.capability: item for item in decision.substitutions}
@@ -109,7 +142,7 @@ def test_default_survival_offers_only_supported_mortality_with_explicit_coordina
 
 
 def test_default_survival_order_uses_facts_and_shortest_complete_followup():
-    profile = research_capability_profile("sic").model_copy(update={"database": "synthetic_source"})
+    profile = _synthetic_sic_mortality_mappings_with_explicit_icu_bounds()
     requirements = StudyRequirements(family="survival", outcome="hospital_death", censoring_unit="hospitalization")
     assert assess_study(profile, requirements).substitutions[0].substitute == "mort_28d"
     concepts = tuple(item.model_copy(update={"mapped": False}) if item.concept == "followup_days_28d" else item
@@ -134,7 +167,11 @@ def test_mortality_offer_does_not_hide_other_missing_requirements_or_change_a_na
     profile = profile.model_copy(update={"mortality_outcomes": (native.model_copy(update={"event_time": None}),)})
     decision = assess_study(profile, requirements.model_copy(update={"outcome": "icu_death", "censoring_unit": None}))
     assert decision.status == "refusal"
-    assert [(item.capability, item.code) for item in decision.missing] == [("event_time", "event_time_unavailable")]
+    assert decision.substitutions == ()
+    assert {(item.capability, item.code) for item in decision.missing} == {
+        ("time_zero", "time_zero_unavailable"), ("event_time", "event_time_unavailable"),
+        ("censor_time", "censor_time_unavailable"),
+    }
 
 
 def test_source_preparation_preserves_the_assessed_time_to_event_proposal():
@@ -280,8 +317,14 @@ def test_family_requirements_come_from_existing_family_and_protocol_owners():
     assert {"time_zero", "treatment_timing"} <= set(family_requirements("causal_inference"))
     for key in KEYS:
         profile = research_capability_profile(key)
-        assert assess_study(profile, StudyRequirements(family="trajectory_clustering")).status == "exact"
-        assert assess_study(profile, StudyRequirements(family="causal_inference", treatment_concepts=("abx",))).status == "exact"
+        for req in (StudyRequirements(family="trajectory_clustering"),
+                    StudyRequirements(family="causal_inference", treatment_concepts=("abx",))):
+            decision = assess_study(profile, req)
+            if key == "sic":
+                assert decision.status == "refusal"
+                assert [(item.capability, item.code) for item in decision.missing] == [("time_zero", "time_zero_unavailable")]
+            else:
+                assert decision.status == "exact"
 
 
 def test_capability_loss_not_database_name_controls_decision():
@@ -324,12 +367,15 @@ def test_missing_time_zero_treatment_and_observation_timing_are_named():
         assert missing in {item.capability for item in decision.missing}
 
 
-@pytest.mark.parametrize("database,expected", [("miiv", "exact"), ("sic", "exact"), ("mimic", "refusal"), ("eicu", "refusal")])
+@pytest.mark.parametrize("database,expected", [("miiv", "exact"), ("sic", "refusal"), ("mimic", "refusal"), ("eicu", "refusal")])
 def test_fixed_horizon_followup_reads_its_existing_registry(database, expected):
     decision = assess_study(research_capability_profile(database), StudyRequirements(
         family="survival", outcome="mort_28d", concepts=("mort_28d", "followup_days_28d"),
     ))
     assert decision.status == expected
+    if database == "sic":
+        assert [(item.capability, item.code) for item in decision.missing] == [("time_zero", "time_zero_unavailable")]
+        assert decision.substitutions == ()
 
 
 def test_an_outcome_is_a_required_concept_even_when_the_caller_does_not_repeat_it():
@@ -347,7 +393,32 @@ def test_absent_units_and_time_zero_are_reported_together_without_an_attribute_e
 
 
 def test_fixed_horizon_followup_supplies_its_own_event_and_censor_coordinates():
-    profile = research_capability_profile("sic").model_copy(update={
+    native_sic = research_capability_profile("sic")
+    decision = assess_study(native_sic, StudyRequirements(family="survival", outcome="mort_28d"))
+    assert decision.status == "refusal"
+    assert [(item.capability, item.code) for item in decision.missing] == [("time_zero", "time_zero_unavailable")]
+    # A distinct, explicitly synthetic profile isolates event/censor behavior
+    # once exact ICU bounds are provided; it does not upgrade native SICdb.
+    profile = _synthetic_sic_mortality_mappings_with_explicit_icu_bounds().model_copy(update={
         "mortality": None, "mortality_outcomes": (), "icu_discharge": None, "hospital_discharge": None,
     })
     assert assess_study(profile, StudyRequirements(family="survival", outcome="mort_28d")).status == "exact"
+
+
+def test_sic_time_origin_proxy_is_review_only_and_does_not_grant_survival_execution():
+    from easyicu.databases.research_requirements import review_only_time_origin
+
+    profile = research_capability_profile("sic")
+    candidate = review_only_time_origin(profile)
+    assert profile.icu_admission is None and profile.icu_discharge is None
+    assert candidate is not None
+    assert candidate.requested_origin == "icu_admission"
+    assert candidate.proposed_origin == "first_intensive_or_intermediate_care_transfer"
+    assert candidate.source_field.table == "cases" and candidate.source_field.column == "ICUOffset"
+    assert candidate.source_identity_scope == "packaged_registry_only"
+    assert candidate.review_required is True and candidate.executable is False
+    assert candidate.execution_contract_available is False
+    decision = assess_study(profile, StudyRequirements(family="survival", outcome="mort_28d"))
+    assert decision.status == "refusal"
+    assert decision.substitutions == ()
+    assert [(item.capability, item.code) for item in decision.missing] == [("time_zero", "time_zero_unavailable")]

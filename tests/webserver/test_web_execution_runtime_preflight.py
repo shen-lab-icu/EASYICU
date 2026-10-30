@@ -566,3 +566,66 @@ def test_a_resume_after_approval_also_names_the_runtime(monkeypatch) -> None:
     assert "runtime_unavailable = (" in resume
     assert '"research_pipeline_execution_runtime_unavailable"' in resume
     assert '"research_pipeline_review_resume_failed"' in resume
+
+
+def test_sic_metadata_candidate_uses_new_profile_without_rewriting_historical_or_execution():
+    from dataclasses import asdict
+    from easyicu.research_agent.orchestration import profiles
+
+    research_launch_runtime._require_profile_dictionaries(budget_mode="planner_canary")
+    for live in (False, True):
+        ref = research_launch_runtime._submission_profile_ref(budget_mode="planner_canary", live_pubmed=live)
+        profile = profiles.get_submission_profile(ref)
+        assert profile.version == "20261029"
+        assert profile.expected_concept_dict_sha == "a5b69c801822befa6e77cac707f366494f5ad97433dae50d4140dfe6e4097ef2"
+        historical = profiles.get_submission_profile(f"{profile.name}/20261026")
+        assert historical.expected_concept_dict_sha == "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532"
+        assert {key for key, value in asdict(profile).items() if value != asdict(historical)[key]} == {
+            "version", "locked_at", "expected_concept_dict_sha"
+        }
+        execution = profiles.get_submission_profile(research_launch_runtime._submission_profile_ref(
+            budget_mode="full_reviewed", live_pubmed=live))
+        assert execution.version == "20261029"
+        assert execution.expected_concept_dict_sha == profile.expected_concept_dict_sha
+        previous_execution = profiles.get_submission_profile(f"{execution.name}/20261026")
+        assert previous_execution.expected_concept_dict_sha == historical.expected_concept_dict_sha
+        assert {key for key, value in asdict(execution).items() if value != asdict(previous_execution)[key]} == {
+            "version", "locked_at", "expected_concept_dict_sha"
+        }
+
+
+def test_sic_dictionary_reseal_keeps_profile_preflight_both_modes():
+    # Dictionary compatibility is not a plan signature or permission to run.
+    for budget_mode in ("planner_canary", "full_reviewed"):
+        research_launch_runtime._require_profile_dictionaries(budget_mode=budget_mode)
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_web_host_profile_reseals_only_dictionary_and_keeps_history(live):
+    from dataclasses import asdict
+    from easyicu.research_agent.orchestration import profiles
+
+    ref = research_launch_runtime._submission_profile_ref(
+        budget_mode="full_reviewed", live_pubmed=live, runner_kind="host")
+    current = profiles.get_submission_profile(ref)
+    old = profiles.get_submission_profile(f"{current.name}/20261026")
+    assert current.version == "20261029"
+    assert old.expected_concept_dict_sha == "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532"
+    assert {k for k, v in asdict(current).items() if v != asdict(old)[k]} == {
+        "version", "locked_at", "expected_concept_dict_sha"}
+    research_launch_runtime._require_profile_dictionaries(budget_mode="full_reviewed", runner_kind="host")
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_web_host_dictionary_preflight_rejects_stale_actual_profile(monkeypatch, live):
+    from dataclasses import replace
+    from easyicu.research_agent.orchestration import profiles
+    get_profile = profiles.get_submission_profile
+    ref = research_launch_runtime._submission_profile_ref(
+        budget_mode="full_reviewed", live_pubmed=live, runner_kind="host")
+    monkeypatch.setattr(profiles, "get_submission_profile", lambda value:
+        replace(get_profile(value), expected_concept_dict_sha="0" * 64) if value == ref else get_profile(value))
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        research_launch_runtime._require_profile_dictionaries(budget_mode="full_reviewed", runner_kind="host")
+    assert exc.value.code == "research_pipeline_profile_dictionary_mismatch"
+    assert exc.value.details["profile_ref"] == ref

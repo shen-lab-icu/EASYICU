@@ -323,7 +323,10 @@ def persist_or_validate_scientific_plan_review(
             for field in binding_fields
         ) or _retention_cohort_sha256(existing_review) != _retention_cohort_sha256(
             current_review
-        ) or existing_review.facts.get("database_capability_review") != current_review.facts.get("database_capability_review"):
+        ) or any(
+            existing_review.facts.get(key) != current_review.facts.get(key)
+            for key in ("database_capability_review", "database_time_origin_review", "database_case_duration_review")
+        ):
             raise ScientificPlanReviewArtifactError(
                 code="scientific_plan_review_binding_drift",
                 path=path,
@@ -414,6 +417,9 @@ def prepare_scientific_plan_review_gate(
     reuse_existing_review: bool = False,
     runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
     model_retention: Optional[PrimaryModelRetentionEvidence],
+    time_origin_attestor: Any = None,
+    case_duration_attestor: Any = None,
+    case_duration_metadata_attestor: Any = None,
 ) -> ScientificPlanReviewGate:
     """Build, bind, and project the exact review offered to a human.
 
@@ -434,7 +440,12 @@ def prepare_scientific_plan_review_gate(
     )
     from easyicu.databases.research_approval import bind_database_capability_review
 
-    current_review = bind_database_capability_review(current_review, context=context, plan=plan)
+    current_review = bind_database_capability_review(
+        current_review, context=context, plan=plan, time_origin_attestor=time_origin_attestor,
+        runtime_authority=runtime_authority,
+        case_duration_attestor=case_duration_attestor,
+        case_duration_metadata_attestor=case_duration_metadata_attestor,
+    )
     review, artifact_path = persist_or_validate_scientific_plan_review(
         run_dir=run_dir,
         evidence=evidence,

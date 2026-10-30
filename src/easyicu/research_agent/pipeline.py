@@ -1516,6 +1516,13 @@ class ResearchAgentPipeline:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self._llm = services.llm
         self._provider_hard_stop = services.provider_hard_stop
+        self._metadata_outline_journal_task = services.metadata_outline_journal_task
+        if (self._metadata_outline_journal_task is not None
+                and self._metadata_outline_journal_task is not self._provider_hard_stop):
+            raise ValueError("metadata outline journal must use the original Provider task")
+        if (self._metadata_outline_journal_task is not None
+                and self._config.development_planner_efficiency_max_calls is not None):
+            raise ValueError("metadata outline journal cannot reset an efficiency budget")
         hard_stop_config = {
             "max_provider_attempts_per_run": config.max_provider_attempts_per_run,
             "max_provider_attempts_per_batch": config.max_provider_attempts_per_batch,
@@ -2515,6 +2522,7 @@ class ResearchAgentPipeline:
                         cohort_path=cohort_path,
                         llm_signature=llm_signature,
                         planner_kwargs=planner_run_kwargs,
+                        metadata_outline_journal_task=self._metadata_outline_journal_task,
                         preplan_literature=preplan_literature,
                         required_primary_cohort_selection_mode=self._required_primary_cohort_selection_mode,
                         know_how_binding=know_how_binding,
@@ -2968,13 +2976,20 @@ class ResearchAgentPipeline:
         # is exposed only to typed robustness/cohort-construction steps.
         analysis_cohort: Optional[Dict[str, Any]] = None
         if not reused_prior_plan:
-            analysis_cohort = materialize_locked_analysis_cohort(
-                run_dir=run_dir,
-                plan=plan,
-                universe_path=cohort_path,
-                context=context,
-                cohort_concept_ids=cohort_concept_ids,
-            )
+            from easyicu.databases.research_substitutions import time_origin_selection
+            if time_origin_selection(context) is not None:
+                # The selected proxy axis is a proposed scientific change.
+                # Do not apply this new plan's cohort to patient rows until the
+                # exact final plan and source interpretation are signed.
+                analysis_cohort = {"status": "deferred_until_approved"}
+            else:
+                analysis_cohort = materialize_locked_analysis_cohort(
+                    run_dir=run_dir,
+                    plan=plan,
+                    universe_path=cohort_path,
+                    context=context,
+                    cohort_concept_ids=cohort_concept_ids,
+                )
             if analysis_cohort["status"] == "applied":
                 findings.append(
                     ValidationFinding(
@@ -3048,6 +3063,9 @@ class ResearchAgentPipeline:
                     self._config.require_reportable_scientific_capability
                 ),
                 reuse_existing_review=reused_prior_plan,
+                time_origin_attestor=self._services.time_origin_attestor,
+                case_duration_attestor=self._services.case_duration_attestor,
+                case_duration_metadata_attestor=self._services.case_duration_metadata_attestor,
                 runtime_authority=(
                     self._scientific_runtime_authorities.current_case
                 ),
@@ -3248,10 +3266,11 @@ class ResearchAgentPipeline:
             # A fixed skill plans without the Planner, so it is not asked.
             if self._config.development_progressive_resume_checkpoint_path is not None:
                 from .planning.progressive_contract import ProgressivePlanCompileError
+                from .planning.outline_retry_journal import source_run_dir
 
                 try:
                     context = restore_exposure_grouping_phase(
-                        source_run_dir=Path(self._config.development_progressive_resume_checkpoint_path).parent,
+                        source_run_dir=source_run_dir(Path(self._config.development_progressive_resume_checkpoint_path)),
                         context=context, cohort_path=cohort_path, run_dir=run_dir,
                         rebuild_context=functools.partial(
                             bound_context_on, builder, context_kwargs, self._config

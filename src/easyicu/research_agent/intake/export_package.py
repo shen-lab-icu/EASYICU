@@ -550,6 +550,7 @@ class ExportPackage:
     column_metadata_scope: Optional[str]
     source_seal_kind: Optional[str]
     data_provenance: Optional[ExportDataProvenance] = None
+    declared_time_origin: Optional[str] = None
 
     def index_dict(self) -> Dict[str, Dict[str, object]]:
         """Return the compatibility index shape used by existing callers."""
@@ -1437,7 +1438,20 @@ def require_export_time_window_authority(
     The cohort observation window selects stays; it is not authority for the
     temporal extent of their measurements. Intake never repairs older exports.
     """
-    if not any(module not in {"demographics", "outcome"} for module in modules):
+    static_modules = {"demographics", "outcome"}
+    # The opt-in SIC landmark module contains only three fixed case-level
+    # concepts. An arbitrary module cannot opt out of time bounds merely by
+    # using this name: its declared concept selection must match exactly.
+    landmark = "sic_case_landmark"
+    if landmark in modules and str(manifest.get("database", "")).lower() == "sic":
+        from easyicu.concept.sic_landmark import SIC_CASE_LANDMARK_COLUMNS
+
+        selection = manifest.get("concept_selection")
+        selected_modules = selection.get("modules") if isinstance(selection, Mapping) else None
+        selected = selected_modules.get(landmark) if isinstance(selected_modules, Mapping) else None
+        if isinstance(selected, list) and set(selected) == SIC_CASE_LANDMARK_COLUMNS:
+            static_modules.add(landmark)
+    if not any(module not in static_modules for module in modules):
         return
     authority = manifest.get("time_window_authority")
     if not isinstance(authority, Mapping) or authority.get("required") is not True:
@@ -1772,6 +1786,12 @@ def _open_export_package_impl(
         manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
         authority_sha256=authority_sha256,
         database=database,
+        declared_time_origin=(
+            manifest.get("canonical_physical_schema", {}).get("time_origin")
+            if isinstance(manifest.get("canonical_physical_schema"), Mapping)
+            and isinstance(manifest["canonical_physical_schema"].get("time_origin"), str)
+            else None
+        ),
         export_format=export_format,
         files=tuple(physical_files),
         concept_index=MappingProxyType(concept_index),
@@ -1983,7 +2003,27 @@ def require_column_metadata(package: ExportPackage) -> None:
         )
 
 
-def require_canonical_time_projection(package: ExportPackage, concept: str) -> None:
+def require_source_time_axis_binding(package: ExportPackage, source_time_axis) -> None:
+    """Verify physical source identity only; callers still enforce plan approval."""
+    from easyicu.databases.time_origin import (
+        SIC_CARE_UNIT_ORIGIN, SourceTimeAxisBinding, native_export_time_origin,
+    )
+
+    if (not isinstance(source_time_axis, SourceTimeAxisBinding)
+            or native_export_time_origin(package.database) != SIC_CARE_UNIT_ORIGIN
+            or source_time_axis.export_authority_sha256 != package.authority_sha256
+            or source_time_axis.manifest_sha256 != package.manifest_sha256
+            or source_time_axis.selected_origin != SIC_CARE_UNIT_ORIGIN
+            or package.declared_time_origin != SIC_CARE_UNIT_ORIGIN):
+        raise ExportPackageError(
+            "typed SIC time coordinates require an exact source-bound care-unit axis",
+            code="export_time_projection_required", manifest_path=package.manifest_path,
+        )
+
+
+def require_canonical_time_projection(
+    package: ExportPackage, concept: str, *, source_time_axis=None,
+) -> None:
     """Reject raw database-native time before an hours-based consumer runs."""
 
     resolved = resolve_exported_concept(package.concept_index, concept)
@@ -1992,6 +2032,24 @@ def require_canonical_time_projection(package: ExportPackage, concept: str) -> N
     info = package.concept_index[resolved]
     if info.get("column_metadata_v2") is True:
         coordinates = tuple(info.get("column_metadata_time_coordinates") or ())
+        from easyicu.databases.time_origin import (
+            SIC_CARE_UNIT_ORIGIN, native_export_time_origin,
+        )
+        if coordinates and native_export_time_origin(package.database) == SIC_CARE_UNIT_ORIGIN:
+            # The source axis must be bound to this immutable export, and the
+            # manifest and each consumed sidecar must agree. This is a data
+            # consistency check, not a scientific-plan authorization gate.
+            require_source_time_axis_binding(package, source_time_axis)
+            if (len(coordinates) != 1
+                    or not isinstance(coordinates[0], Mapping)
+                    or coordinates[0].get("origin") != SIC_CARE_UNIT_ORIGIN
+                    or coordinates[0].get("unit") != "h"):
+                raise ExportPackageError(
+                    "typed SIC time coordinates require an exact source-bound care-unit axis",
+                    code="export_time_projection_required", manifest_path=package.manifest_path,
+                    member=str(info.get("relative_path") or ""),
+                )
+            return
         if len(coordinates) > 1 or any(
             not isinstance(item, Mapping)
             or item.get("origin") != "icu_admission"

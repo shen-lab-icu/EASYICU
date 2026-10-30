@@ -30,6 +30,12 @@ class PipelineServices:
     runner_factory: Optional[Any] = None
     case_plugin_registry: Optional[Any] = None
     provider_hard_stop: Optional[Any] = None
+    # A host may enable private outline recovery only for a metadata canary.
+    metadata_outline_journal_task: Optional[Any] = None
+    time_origin_attestor: Optional[Any] = None
+    case_duration_attestor: Optional[Any] = None
+    case_duration_metadata_attestor: Optional[Any] = None
+    approved_case_duration_materializer: Optional[Any] = None
     execution_runtime_revision: Optional[ExecutionRuntimeRevision] = None
     # Host admission control for a fresh repair of a digest-bound reviewed plan.
     plan_revision_guard: Optional[Any] = None

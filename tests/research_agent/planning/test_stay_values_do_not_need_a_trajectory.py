@@ -5,15 +5,18 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
+from easyicu.research_agent.agents.progressive_prompt_contracts import outline_study_anchors
+from easyicu.research_agent.contracts.association_execution import ASSOCIATION_HOST_ESTIMATORS
 from easyicu.research_agent.planning.capability_gap import (
     capability_gap_confirmation_facts, capability_gap_stop, check_capability_gap,
+    metadata_continuous_association_options,
 )
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressiveCapabilityGap, ProgressivePlanCompileError, ProgressivePlanOutline,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
-from easyicu.research_agent.schema import ConceptDescriptor, UserPreferences
+from easyicu.research_agent.schema import AggregationRule, ConceptDescriptor, EndpointSpec, UserPreferences
 
 from tests.research_agent.planning.progressive_planner_fixtures import _context, _outline_payload
 
@@ -83,6 +86,158 @@ def _claim(context):
     return {**_outline_payload(), "analysis_type": context.user_preferences.inferred_analysis_family,
             "steps": [], "capability_gap": GAP,
             "rationale": "Time alignment and patient dependence require an unavailable repeated-measure representation."}
+
+
+def _unbound_window_study():
+    """A metadata-only first-day question, with no actual summary receipt."""
+
+    context = _study("association", database="sic")
+    exposure = ConceptDescriptor(
+        name="lact", source_concept="lact", role="lab", dtype="float64",
+        aggregation_default=AggregationRule.MEDIAN_ONLY,
+    )
+    outcome = context.variable("care_duration")
+    preferences = context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps({
+            "materialization_window": {
+                "anchor": "icu_admission", "hours": 24, "role": "outer_observation_window",
+            },
+        }),
+    })
+    return context.model_copy(update={
+        "variables": [exposure, outcome], "primary_exposure": exposure.name,
+        "research_question": (
+            "Relate the first ICU day's lactate level to ICU length of stay in adults."
+        ),
+        "user_preferences": preferences,
+    })
+
+
+def _continuous_metadata_study():
+    return _unbound_window_study().model_copy(update={
+        "endpoint": EndpointSpec(name="care_duration", kind="continuous", absence_semantics="absent_row_is_unmeasured"),
+        "notes": "PRIVATE_PATIENT_SENTINEL",
+        "cohort_parquet": "PRIVATE_PATH_SENTINEL",
+    })
+
+
+def test_metadata_continuous_association_components_remain_unselected_proposals():
+    context = _continuous_metadata_study()
+    before = context.model_dump(mode="json")
+    options = metadata_continuous_association_options(context)
+    assert options is not None
+    assert options["status"] == "proposal_only_not_selected_or_materialized"
+    assert options["exposure_concept"] == "lact"
+    assert options["outcome"] == "care_duration"
+    assert options["continuous_estimator_component"] == ASSOCIATION_HOST_ESTIMATORS["continuous"]
+    [window] = options["summary_options"]
+    assert window["window_hours_after_icu_admission"] == [0, 24]
+    assert {item["proposed_column"] for item in window["options"]} == {
+        "lact_first", "lact_max", "lact_mean", "lact_min",
+    }
+    assert all(item["summary"] != "median" for item in window["options"])
+    rule = options["planning_rule"]
+    for text in ("not an approved choice", "not the first, maximum", "risk set",
+                 "source-specific outcome semantics", "changes the estimand", "actual offered contracts"):
+        assert text in rule
+    first_prompt = outline_study_anchors(context)
+    confirmation = capability_gap_confirmation_facts(context, offered_families=("association_study",))
+    assert json.loads(first_prompt)["metadata_continuous_association_options"] == options
+    assert json.loads(confirmation.split("\n", 1)[1])["metadata_continuous_association_options"] == options
+    assert "PRIVATE_" not in first_prompt and "PRIVATE_" not in confirmation
+    assert context.model_dump(mode="json") == before
+    assert check_capability_gap(ProgressiveCapabilityGap(requirement=GAP), context=context).verification == "unverifiable"
+
+
+@pytest.mark.parametrize("missing", ["not_metadata", "rows_read", "outcome", "endpoint", "exposure", "window", "trajectory"])
+def test_metadata_options_never_override_missing_or_changed_authority(missing):
+    context = _continuous_metadata_study()
+    provenance = dict(context.cohort.provenance)
+    if missing in {"not_metadata", "rows_read"}:
+        provenance["evidence_stage" if missing == "not_metadata" else "patient_rows_read"] = (
+            "prepared" if missing == "not_metadata" else True
+        )
+        context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"provenance": provenance})})
+    elif missing == "outcome":
+        context = context.model_copy(update={"target_outcome": "missing"})
+    elif missing == "endpoint":
+        context = context.model_copy(update={"endpoint": None})
+    elif missing == "exposure":
+        context = context.model_copy(update={"primary_exposure": "missing"})
+    elif missing == "window":
+        context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={"data_constraints": "{}"})})
+    else:
+        context = context.model_copy(update={"research_question": "Study repeated lactate measurements over time within each ICU stay."})
+    assert metadata_continuous_association_options(context) is None
+
+
+@pytest.mark.parametrize("earlier_rejections", [0, 1, 2, 3])
+def test_an_unverifiable_longitudinal_gap_gets_one_bounded_confirmation(earlier_rejections):
+    context = _unbound_window_study()
+    claim = json.dumps(_claim(context))
+    llm = ScriptedMockLLMClient(["{}"] * earlier_rejections + [claim, claim])
+    llm.supports_strict_json_schema = True
+    checkpoints, progress = [], []
+
+    assert check_capability_gap(ProgressiveCapabilityGap(requirement=GAP), context=context).verification == "unverifiable"
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(llm).run(
+            context, checkpoint_callback=checkpoints.append,
+            progress_callback=progress.append, stop_after_outline=True,
+        )
+
+    assert caught.value.reason_code == "progressive_capability_gap"
+    assert caught.value.easyicu_safe_diagnostic["cause_code"] == GAP
+    assert caught.value.details["findings"][0]["verification"] == "unverifiable"
+    assert "question_required" not in caught.value.easyicu_safe_diagnostic
+    assert "question_required" not in caught.value.details
+    assert "whose necessity the host cannot verify" in str(caught.value)
+    assert len(llm.calls) == min(earlier_rejections + 2, 4)
+    confirmations = [event for event in progress if event.reason_code == "progressive_capability_gap_confirmation_required"]
+    assert len(confirmations) == (1 if earlier_rejections < 3 else 0)
+    assert checkpoints[0].prompt_metrics.get("capability_gap_confirmation_count", 0) == len(confirmations)
+    if confirmations:
+        feedback = llm.calls[earlier_rejections + 1][0][-1].content
+        for phrase in (
+            "cannot establish", "outer window", "allowed aggregation", "not patient data",
+            "eligibility", "exposure alignment", "time origin", "keep an appropriate capability gap",
+            '"stay_level_representation":null', '"fixed_window_association":null',
+        ):
+            assert phrase in feedback
+
+
+def test_confirmation_does_not_hide_a_different_unsupported_design():
+    context = _unbound_window_study()
+    revised = {**_claim(context), "capability_gap": "design_element_unsupported",
+               "rationale": "The proposed time alignment cannot be established from the declared source facts."}
+    llm = ScriptedMockLLMClient([json.dumps(_claim(context)), json.dumps(revised)])
+    llm.supports_strict_json_schema = True
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent(llm).run(context, stop_after_outline=True)
+    assert len(llm.calls) == 2
+    assert caught.value.reason_code == "progressive_capability_gap"
+    assert caught.value.easyicu_safe_diagnostic["cause_code"] == "design_element_unsupported"
+    assert caught.value.details["findings"][0]["verification"] == "unverifiable"
+
+
+def test_the_planner_can_revise_an_unverifiable_gap_to_a_valid_outline():
+    context = _context()
+    outline = _outline_payload()
+    claim = {**outline, "steps": [], "capability_gap": GAP,
+             "rationale": "The proposed association requires an unavailable longitudinal representation."}
+    assert check_capability_gap(ProgressiveCapabilityGap(requirement=GAP), context=context).verification == "unverifiable"
+    llm = ScriptedMockLLMClient([json.dumps(claim), json.dumps(outline)])
+    llm.supports_strict_json_schema = True
+    checkpoints = []
+
+    corrected = ProgressivePlannerAgent(llm).run(
+        context, checkpoint_callback=checkpoints.append, stop_after_outline=True,
+    )
+
+    assert len(llm.calls) == 2
+    assert corrected.capability_gap is None
+    assert corrected.steps
+    assert checkpoints[0].prompt_metrics["capability_gap_confirmation_count"] == 1
 
 
 @pytest.mark.parametrize("kind", ["description", "window_description", "association", "prediction"])

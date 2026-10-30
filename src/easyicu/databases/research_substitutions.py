@@ -12,9 +12,57 @@ import json
 from .profiles import get_database_profile
 from .research_capabilities import research_capability_profile
 from .research_plan_requirements import _constraints, plan_capability_decision
-from .research_requirements import CapabilityDecision, StudyRequirements, ThresholdRequirement, assess_study, family_requirements
+from .research_requirements import CapabilityDecision, CapabilitySubstitution, StudyRequirements, ThresholdRequirement, assess_study, family_requirements
 
 BINDING_FIELD = "database_capability_binding"
+TIME_ORIGIN_FIELD = "database_time_origin_selection"
+CASE_DURATION_FIELD = "database_case_duration_selection"
+
+
+def time_origin_selection(context):
+    """Validate a discussion candidate against the host's frozen source identity.
+
+    This does not make the source, window, sidecar, or plan executable. The
+    enclosing context and plan are separately digest-bound by scientific review.
+    """
+    from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.research_context.export_selection import SourceIdentity
+    from .research_requirements import TimeOriginSelection, review_only_time_origin
+
+    constraints = _constraints(context)
+    raw = constraints.get(TIME_ORIGIN_FIELD)
+    if raw is None and TIME_ORIGIN_FIELD not in constraints:
+        return None
+    selection = TimeOriginSelection.model_validate(raw)
+    identity = SourceIdentity.from_record(constraints.get("source_identity"))
+    profile = registered_source_profile(context.cohort.database)
+    proposal = review_only_time_origin(profile) if profile is not None else None
+    if (identity is None or proposal is None
+            or identity.database != context.cohort.database
+            or selection.selected_origin != SIC_CARE_UNIT_ORIGIN
+            or selection.source_field != proposal.source_field
+            or selection.source_identity_sha256 != canonical_sha256(identity.to_dict())):
+        raise ValueError("time_origin_selection_binding_drift")
+    return selection
+
+
+def case_duration_selection(context):
+    """Validate a proposed endpoint against the same registered source axis."""
+    from .research_requirements import CaseDurationSelection
+
+    constraints = _constraints(context)
+    if CASE_DURATION_FIELD not in constraints:
+        return None
+    candidate = CaseDurationSelection.model_validate(constraints[CASE_DURATION_FIELD])
+    axis = time_origin_selection(context)
+    profile = registered_source_profile(context.cohort.database)
+    if (axis is None or profile is None or profile.case_close_proxy is None
+            or candidate.source_identity_sha256 != axis.source_identity_sha256
+            or candidate.start_field != axis.source_field
+            or candidate.end_field != profile.case_close_proxy):
+        raise ValueError("case_duration_selection_binding_drift")
+    return candidate
 
 
 def registered_source_profile(database):
@@ -26,22 +74,56 @@ def registered_source_profile(database):
     return research_capability_profile(database)
 
 
-def source_decision(profile, requirements):
+def source_decision(profile, requirements, *, time_origin=None, case_duration=None):
     """Select a named native endpoint for a new executable source proposal.
 
     Time-to-event alternatives belong to assess_study, including their order.
     Other families retain their existing native status proposal. Refusals
     cannot be repaired here by choosing a different endpoint.
     """
-    decision = assess_study(profile, requirements)
-    if decision.status == "refusal":
-        return decision
-    if "event_time" in family_requirements(requirements.family):
-        return decision
-    if any(item.capability == "outcome_meaning" for item in decision.substitutions):
-        native = next((item for item in profile.mortality_outcomes if item.meaning == "icu_death"), None)
-        if native is not None:
-            return assess_study(profile.model_copy(update={"mortality": native}), requirements)
+    effective_profile = profile
+    if time_origin is not None:
+        candidate = profile.care_unit_admission_proxy
+        if candidate is None or candidate != time_origin.source_field:
+            raise ValueError("time_origin_selection_binding_drift")
+        effective_profile = profile.model_copy(update={"icu_admission": candidate})
+    effective_requirements = requirements
+    if case_duration is not None:
+        if (profile.case_close_proxy is None or case_duration.end_field != profile.case_close_proxy
+                or time_origin is None or case_duration.start_field != time_origin.source_field
+                or requirements.outcome != case_duration.requested_outcome):
+            raise ValueError("case_duration_selection_binding_drift")
+        effective_requirements = requirements.model_copy(update={
+            "outcome": case_duration.proposed_outcome,
+            "concepts": tuple(case_duration.proposed_outcome if name == case_duration.requested_outcome else name
+                              for name in requirements.concepts),
+        })
+    decision = assess_study(effective_profile, effective_requirements)
+    if decision.status != "refusal" and "event_time" not in family_requirements(requirements.family):
+        if any(item.capability == "outcome_meaning" for item in decision.substitutions):
+            native = next((item for item in profile.mortality_outcomes if item.meaning == "icu_death"), None)
+            if native is not None:
+                decision = assess_study(effective_profile.model_copy(update={"mortality": native}), requirements)
+    if time_origin is not None:
+        change = CapabilitySubstitution(
+            capability="time_zero", original=time_origin.requested_origin,
+            substitute=time_origin.selected_origin, reason_code="care_unit_origin_not_icu_only",
+            source_field=time_origin.source_field,
+        )
+        decision = decision.model_copy(update={
+            "status": "refusal" if decision.missing else "substitution",
+            "substitutions": (*decision.substitutions, change),
+        })
+    if case_duration is not None:
+        change = CapabilitySubstitution(
+            capability="outcome_meaning", original=case_duration.requested_outcome,
+            substitute=case_duration.proposed_outcome, reason_code="case_close_is_not_icu_discharge",
+            source_field=case_duration.end_field,
+        )
+        decision = decision.model_copy(update={
+            "requirements": requirements, "status": "refusal" if decision.missing else "substitution",
+            "substitutions": (*decision.substitutions, change),
+        })
     return decision
 
 
@@ -56,15 +138,22 @@ def _binding_payload(context, profile, decision):
             target = item.substitute
     identity = next((item.column for item in profile.units if item.unit == effective_unit), None)
     bands = {}
+    approximations = {}
     for variable in context.variables:
         concept = variable.source_concept or variable.name
         numeric = getattr(profile, concept, None) if concept in {"age", "weight"} else None
         if numeric is not None and numeric.kind == "binned":
             bands[variable.name] = {"labels": list(numeric.bin_labels), "values": list(numeric.bin_values),
                                    "coding": "categorical", "ordered": True}
+        elif numeric is not None and numeric.kind == "approximate":
+            approximations[variable.name] = {
+                "interpretation": numeric.field.interpretation if numeric.field else None,
+                "coding": "unverified",
+            }
     mortality = next((item for item in profile.mortality_outcomes if item.meaning == target), None)
     return {"decision": decision.model_dump(mode="json"), "effective_analysis_unit": effective_unit,
             "identifier": identity, "outcome_meaning": target, "binned_covariates": bands,
+            **({"approximate_covariates": approximations} if approximations else {}),
             "mortality_timing": mortality.model_dump(mode="json") if mortality else None,
             "execution_authority": "scientific_plan_review_and_approved_executable_plan",
             "planning_rule": "source_coordinates_require_whole_plan_approval"}
@@ -82,7 +171,8 @@ def source_binding(context):
     profile = registered_source_profile(context.cohort.database)
     if profile is None:
         raise ValueError("capability_substitution_binding_drift")
-    decision = source_decision(profile, requirements)
+    decision = source_decision(profile, requirements, time_origin=time_origin_selection(context),
+                               case_duration=case_duration_selection(context))
     if binding != _binding_payload(context, profile, decision):
         raise ValueError("capability_substitution_binding_drift")
     return binding
@@ -103,7 +193,8 @@ def bind_source_substitutions(context, *, restoring=False):
             research_question=context.research_question, steps=[])).requirements
     else:
         requirements = StudyRequirements.model_validate(original)
-    decision = source_decision(profile, requirements)
+    decision = source_decision(profile, requirements, time_origin=time_origin_selection(context),
+                               case_duration=case_duration_selection(context))
     # Refusals are still reported by the review/gate, never repaired here.
     if decision.status == "refusal":
         return context
@@ -121,13 +212,21 @@ def bind_source_substitutions(context, *, restoring=False):
         raise ValueError("capability_substitution_requires_extraction")
     variables = []
     bands = binding["binned_covariates"]
+    approximations = binding.get("approximate_covariates", {})
     for variable in context.variables:
         if variable.name in bands:
             # Existing numeric loader values denote bins, not measured years/kg.
             variable = variable.model_copy(update={"is_ordinal": True,
                 "ordinal_levels": bands[variable.name]["values"]})
+        elif variable.name in approximations:
+            interpretation = approximations[variable.name].get("interpretation")
+            if interpretation:
+                previous = variable.description or ""
+                description = interpretation if not previous else f"{previous}\n{interpretation}"
+                if interpretation not in previous:
+                    variable = variable.model_copy(update={"description": description})
         variables.append(variable)
-    if not decision.substitutions and not bands:
+    if not decision.substitutions and not bands and not binding.get("approximate_covariates"):
         return context
     constraints.update(database_study_requirements=requirements.model_dump(mode="json"))
     constraints[BINDING_FIELD] = binding
@@ -199,6 +298,31 @@ def source_model_term_errors(context, plan):
                 if term is None or term.coding != "categorical" or len(ordered) < 2 or term.levels != ordered:
                     invalid.append(f"binned_covariate:{name}")
     return tuple(dict.fromkeys(invalid))
+
+
+def approximate_variables_used(context, plan):
+    """Find rounded variables consumed by the proposed plan, even if unbound."""
+    profile = registered_source_profile(context.cohort.database)
+    if profile is None:
+        return ()
+    from easyicu.research_agent.methods.descriptive_inputs import plan_value_columns
+
+    names = {context.primary_exposure, context.target_outcome, *plan_value_columns(plan)}
+    for step in plan.steps:
+        names.update(step.inputs or ())
+        for requirement in step.model_requirements:
+            names.update((requirement.exposure_source, requirement.outcome))
+            names.update(requirement.covariates or ())
+            names.update(term.name for term in requirement.model_terms or ())
+    variables = {item.name: item for item in context.variables}
+    found = []
+    for name in names:
+        variable = variables.get(name)
+        concept = (variable.source_concept or variable.name) if variable else name
+        numeric = getattr(profile, concept, None) if concept in {"age", "weight"} else None
+        if numeric is not None and numeric.kind == "approximate":
+            found.append(name)
+    return tuple(sorted(found))
 
 
 def source_plan_labels(context, labels):

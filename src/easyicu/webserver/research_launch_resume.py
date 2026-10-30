@@ -18,6 +18,9 @@ from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressivePlanningArtifactError,
     load_progressive_planner_checkpoint_chain,
 )
+from easyicu.research_agent.planning.outline_retry_journal import (
+    FILE_NAME as OUTLINE_RETRY_FILE, load_retry_journal, source_run_dir as _checkpoint_run_dir,
+)
 from easyicu.webserver.research_launch_scientific import (
     _normalized_metadata_planning_operationalized_columns,
 )
@@ -111,10 +114,23 @@ def _development_progressive_resume_binding(
         if match and path.is_file() and not path.is_symlink():
             checkpoints.append((int(match.group(1)), path))
     if not checkpoints:
-        raise ResearchPipelineRunError(
-            "research_pipeline_development_resume_checkpoint_missing",
-            "The prior canary has no validated Progressive Planner checkpoint.",
-        )
+        # The private journal is a replayable rejected-response prefix, not an
+        # accepted outline or a plan. Historical runs have no such authority.
+        retry = run_dirs[0] / ".runtime" / OUTLINE_RETRY_FILE
+        if checkpoint_sequence is not None or budget_mode != "planner_canary":
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_checkpoint_missing",
+                "The prior canary has no validated Progressive Planner checkpoint.",
+            )
+        try:
+            load_retry_journal(retry)
+            raw = retry.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_checkpoint_missing",
+                "The prior canary has no verified Planner retry journal.",
+            ) from exc
+        return retry, hashlib.sha256(raw).hexdigest()
     selected_sequence_text = (
         "" if checkpoint_sequence is None else str(checkpoint_sequence).strip()
     )
@@ -223,7 +239,7 @@ def _development_resume_launch_scope(
         budget_mode="planner_canary",
     )
     try:
-        seed = agent_review_recovery.load_recovery_seed(checkpoint.parents[2])
+        seed = agent_review_recovery.load_recovery_seed(_checkpoint_run_dir(checkpoint).parent.parent)
     except agent_review_recovery.WebReviewRecoveryError as exc:
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_scope_invalid",
@@ -263,7 +279,7 @@ def _development_resume_launch_scope(
             "research_pipeline_development_resume_scope_invalid",
             "The prior Planner launch scope has an invalid plan contract.",
         )
-    not_replayed = _development_resume_phases_not_replayed(checkpoint.parent)
+    not_replayed = _development_resume_phases_not_replayed(_checkpoint_run_dir(checkpoint))
     if not_replayed:
         raise ResearchPipelineRunError(
             DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED,
@@ -304,11 +320,11 @@ def _development_resume_launch_scope(
             "The prior Planner's reviewed requirements did not pass validation.",
         ) from exc
     try:
-        groupings = load_resume_exposure_groupings(checkpoint.parent)
+        groupings = load_resume_exposure_groupings(_checkpoint_run_dir(checkpoint))
         package_identity = ""
         prepared_grouping = (
             verify_prepared_grouped_continuation(
-                run_dir=checkpoint.parent, source=groupings,
+                run_dir=_checkpoint_run_dir(checkpoint), source=groupings,
                 pipeline_config=seed.pipeline_config,
                 package_binding=seed.prepared_package_binding,
                 scope_identity=(checkpoint_sha256, digest, str(study.get("id") or "")),
@@ -464,7 +480,7 @@ def metadata_planning_restart_allowed(
     """
     if scope.budget_mode != "planner_canary" or scope.prepared_grouping is not None:
         return False
-    wrapper = checkpoint_path.parents[2]
+    wrapper = _checkpoint_run_dir(checkpoint_path).parent.parent
     directory = wrapper / "pipeline_input"
     try:
         if directory.is_symlink() or (directory.exists() and (
@@ -481,7 +497,7 @@ def metadata_planning_restart_allowed(
 def _development_resume_literature_bundle(*, checkpoint_path: Path) -> Dict[str, Any]:
     """Load the exact literature authority hashed into a Dev checkpoint."""
 
-    path = checkpoint_path.parent / "preplan_literature_bundle.json"
+    path = _checkpoint_run_dir(checkpoint_path) / "preplan_literature_bundle.json"
     if path.is_symlink() or not path.is_file():
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_literature_missing",
@@ -512,7 +528,7 @@ def _inherited_metadata_planning_input(
     file. New continuations restage their own receipt and do not need this path.
     """
 
-    source_run_dir = checkpoint_path.parent.resolve()
+    source_run_dir = _checkpoint_run_dir(checkpoint_path).resolve()
     current_checkpoint_digests: set[str] = set()
     try:
         for path in source_run_dir.iterdir():
@@ -635,7 +651,7 @@ def _development_resume_acquisition_profile(
     export. It never accepts a client path or reuses patient rows blindly.
     """
 
-    source_run_dir = checkpoint_path.parent.resolve()
+    source_run_dir = _checkpoint_run_dir(checkpoint_path).resolve()
     wrapper_dir = source_run_dir.parent.parent.resolve()
     pipeline_input = (wrapper_dir / "pipeline_input").resolve()
     provenance_path = pipeline_input / "web_research_universe_provenance.json"

@@ -39,7 +39,7 @@ import signal
 import stat
 from threading import Lock
 import time
-from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Sequence
 import uuid
 
 from easyicu.runtime.platform_compat import descriptor_identity, fsync_directory, lock_exclusive, open_nofollow, unlock_file
@@ -1403,9 +1403,11 @@ class ProviderHardStopLedger:
 class TaskProviderHardStop:
     """One task-scoped view over the shared durable batch ledger."""
 
-    def __init__(self, ledger: ProviderHardStopLedger, task_id: str) -> None:
+    def __init__(self, ledger: ProviderHardStopLedger, task_id: str, *,
+                 observer: Optional[Callable[[Mapping[str, object]], None]] = None) -> None:
         self.ledger = ledger
         self.task_id = str(task_id)
+        self.observer = observer
 
     def assert_active(self) -> float:
         return self.ledger.assert_task_active(self.task_id)
@@ -1467,6 +1469,22 @@ class _ActiveHardStopCall:
         self.attempt_ids: list[str] = []
         self._active_attempt_id: Optional[str] = None
         self._attempt_started_monotonic: Optional[float] = None
+        self._progress_id = uuid.uuid4().hex
+
+    def _notify(self, phase: str, *, wait_seconds: Optional[float] = None) -> None:
+        observer = self.task.observer
+        if observer is None:
+            return
+        event: Dict[str, object] = {
+            "phase": phase, "call_id": self._progress_id,
+            "attempt": len(self.attempt_ids),
+        }
+        if wait_seconds is not None:
+            event["wait_seconds"] = wait_seconds
+        try:
+            observer(event)
+        except Exception:  # Observability must never govern a provider call.
+            pass
 
     def reserve_attempt(self, provider: Optional[str] = None) -> float:
         prior = self._active_attempt_id
@@ -1488,7 +1506,10 @@ class _ActiveHardStopCall:
         self.attempt_ids.append(attempt_id)
         self._active_attempt_id = attempt_id
         self._attempt_started_monotonic = time.monotonic()
-        return self.task.assert_active()
+        remaining = self.task.assert_active()
+        if len(self.attempt_ids) > 1:
+            self._notify("started")
+        return remaining
 
     def complete(self, usage: Optional[Mapping[str, object]]) -> None:
         if self._active_attempt_id is None:
@@ -1503,6 +1524,8 @@ class _ActiveHardStopCall:
         )
         self._active_attempt_id = None
         self._attempt_started_monotonic = None
+        if len(self.attempt_ids) > 1:
+            self._notify("continued")
 
     def fail(self, error_type: str, *, transport_ended: bool = False) -> None:
         if self._active_attempt_id is None:
@@ -1519,6 +1542,8 @@ class _ActiveHardStopCall:
         )
         self._active_attempt_id = None
         self._attempt_started_monotonic = None
+        if transport_ended:
+            self._notify("failed")
 
 
 _ACTIVE_HARD_STOP_CALL: ContextVar[Optional[_ActiveHardStopCall]] = ContextVar(
@@ -1578,6 +1603,13 @@ def record_active_provider_transport_failure(error_type: str) -> None:
         state.fail(error_type, transport_ended=True)
 
 
+def record_active_provider_retry_wait(wait_seconds: float) -> None:
+    """Publish only an already-selected retry wait; never choose a retry."""
+    state = _ACTIVE_HARD_STOP_CALL.get()
+    if state is not None:
+        state._notify("waiting", wait_seconds=wait_seconds)
+
+
 __all__ = [
     "MAX_COMPLETION_TOKENS_PER_SECOND",
     "PROVIDER_HARD_STOP_SCHEMA",
@@ -1592,6 +1624,7 @@ __all__ = [
     "consume_active_provider_hard_stop_attempt",
     "load_provider_hard_stop_ledger",
     "provider_hard_stop_call_scope",
+    "record_active_provider_retry_wait",
     "record_active_provider_transport_failure",
     "validate_provider_transport_reservation_capacity",
 ]

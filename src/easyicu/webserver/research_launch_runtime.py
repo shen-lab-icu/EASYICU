@@ -55,12 +55,12 @@ def _submission_profile_ref(
     """
 
     from easyicu.research_agent.orchestration.profiles import (
-        CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
-        CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
-        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
-        CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
-        DESKTOP_FIRST_RESULT,
-        DESKTOP_FIRST_RESULT_LIVE_PUBMED,
+        CURRENT_WEB_E1_PLANNER_CANARY_DEV_PROFILE_REF as CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
+        CURRENT_WEB_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF as CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
+        CURRENT_WEB_E1_REVIEWED_DEMO_DEV_PROFILE_REF as CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+        CURRENT_WEB_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF as CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
+        WEB_DESKTOP_FIRST_RESULT_2026_10_29,
+        WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29,
     )
     from easyicu.webserver.capabilities import pubmed_connector_block_reason
 
@@ -69,7 +69,7 @@ def _submission_profile_ref(
     live_pubmed = bool(live_pubmed and pubmed_connector_block_reason(path="preplan_literature") is None)
 
     if runner_kind == "host":
-        return (DESKTOP_FIRST_RESULT_LIVE_PUBMED if live_pubmed else DESKTOP_FIRST_RESULT).ref
+        return (WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29 if live_pubmed else WEB_DESKTOP_FIRST_RESULT_2026_10_29).ref
     if str(budget_mode or "").strip().lower() == "full_reviewed":
         return (
             CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF
@@ -111,7 +111,7 @@ def recorded_submission_profile_ref(
         return None
 
 
-def _require_profile_dictionaries(*, budget_mode: str) -> None:
+def _require_profile_dictionaries(*, budget_mode: str, runner_kind: str | None = None) -> None:
     """Reject a stale development profile before provider or extraction work.
 
     Both literature variants are runtime-selectable. Validate their immutable
@@ -127,7 +127,7 @@ def _require_profile_dictionaries(*, budget_mode: str) -> None:
 
     fingerprint = compute_concept_dict_fingerprint()
     for live_pubmed in (False, True):
-        ref = _submission_profile_ref(budget_mode=budget_mode, live_pubmed=live_pubmed)
+        ref = _submission_profile_ref(budget_mode=budget_mode, live_pubmed=live_pubmed, runner_kind=runner_kind)
         profile = get_submission_profile(ref)
         try:
             assert_dict_matches(

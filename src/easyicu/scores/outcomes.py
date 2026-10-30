@@ -228,15 +228,23 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
 
 
 def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
-    cases = _raw_table(database, data_path, "cases")
+    cases = _raw_table(database, data_path, "cases").reset_index(drop=True)
     cmap = {c.lower(): c for c in cases.columns}
     cid = cmap["caseid"]
     df = pd.DataFrame({"_stay": cases[cid].values})
-    off_death = pd.to_numeric(cases[cmap["offsetofdeath"]], errors="coerce")
-    icu_off = pd.to_numeric(cases[cmap["icuoffset"]], errors="coerce").fillna(0)
+    raw_death = cases[cmap["offsetofdeath"]]
+    off_death = pd.to_numeric(raw_death, errors="coerce")
+    icu_off = pd.to_numeric(cases[cmap["icuoffset"]], errors="coerce")
+    # SICdb's offset is the first transfer to intensive OR intermediate care.
+    # A missing/non-finite origin cannot establish any time relative to it.
+    valid_origin = pd.Series(np.isfinite(icu_off) & (icu_off >= 0), index=cases.index)
+    valid_death = pd.Series(np.isfinite(off_death), index=cases.index)
+    unusable_death = raw_death.notna() & ~valid_death
+    icu_off = icu_off.where(valid_origin)
+    off_death = off_death.where(valid_death)
     df["days_to_death"] = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
     time_of_stay = pd.to_numeric(cases[cmap["timeofstay"]], errors="coerce")
-    los_seconds = time_of_stay - icu_off
+    los_seconds = time_of_stay.where(np.isfinite(time_of_stay)) - icu_off
     df["los_days"] = los_seconds.where(los_seconds >= 0) / 86400.0
     df["followup_days"] = np.nan
     followup_column = cmap.get("estimatedsurvivalobservationtime")
@@ -244,12 +252,21 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
         followup = cases[followup_column]
         numeric = pd.to_numeric(followup, errors="coerce")
         followup_days = pd.Series(np.nan, index=cases.index, dtype="float64")
-        followup_days.loc[numeric.eq(3076)] = 183.0
+        followup_days.loc[numeric.eq(3076)] = 180.0
         followup_days.loc[numeric.eq(3077)] = 365.0
         text = followup.astype(str).str.strip().str.lower()
-        followup_days.loc[text.str.contains("6 month", na=False)] = 183.0
+        followup_days.loc[text.str.contains("6 month", na=False)] = 180.0
         followup_days.loc[text.str.contains("1 year", na=False)] = 365.0
-        df["followup_days"] = followup_days.to_numpy()
+        # SICdb's registry death offset is capped at one year from primary
+        # admission. Conservatively treat the 6-month/one-year follow-up
+        # category as beginning there too, then move its bound to the first
+        # intensive-or-intermediate-care transfer. The source describes an
+        # estimated category, so 180 days is a conservative operational
+        # assumption, not proof of exact individual follow-up.
+        source_bound = followup_days - icu_off / 86400.0
+        df["followup_days"] = source_bound.where(
+            valid_origin & ~unusable_death & (source_bound >= 0)
+        ).to_numpy()
     df["hadm_id"] = np.nan
     return df
 

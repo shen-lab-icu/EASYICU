@@ -3,6 +3,7 @@
 import ast
 from dataclasses import replace
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -91,9 +92,14 @@ def test_adapter_links_are_the_callables_the_executor_really_dispatches(mapping)
         for adapter in HIGH_FREQUENCY_METHOD_ADAPTERS:
             if adapter.action_id not in spec.action_ids:
                 continue
-            targets = [executor.render.__globals__[adapter.owner_entrypoint]
-                       for executor in STANDARD_EXECUTORS.executors
-                       if adapter.owner_entrypoint in executor.render.__code__.co_names]
+            targets = []
+            for executor in STANDARD_EXECUTORS.executors:
+                bindings = inspect.getclosurevars(executor.render)
+                target = bindings.nonlocals.get(adapter.owner_entrypoint)
+                if target is None:
+                    target = bindings.globals.get(adapter.owner_entrypoint)
+                if target is not None:
+                    targets.append(target)
             assert targets
             target = targets[0]
             assert all(item is target for item in targets)

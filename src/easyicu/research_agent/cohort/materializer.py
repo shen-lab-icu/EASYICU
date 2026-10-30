@@ -82,6 +82,7 @@ from ..intake.export_package import (
     open_export_package,
     read_exported_concept,
     require_canonical_time_projection,
+    require_source_time_axis_binding,
     resolve_exported_concept,
     verify_export_package,
 )
@@ -514,7 +515,10 @@ def _semantic_materialization_provenance(
         raise MaterializedMetadataError(
             "materialization provenance lacks semantic keys: " + ", ".join(missing)
         )
-    return {key: provenance[key] for key in _SEMANTIC_PROVENANCE_KEYS}
+    result = {key: provenance[key] for key in _SEMANTIC_PROVENANCE_KEYS}
+    if "source_time_axis" in provenance:
+        result["source_time_axis"] = provenance["source_time_axis"]
+    return result
 
 
 def _normalize_event_indicator_columns(wide: pd.DataFrame) -> List[str]:
@@ -770,6 +774,7 @@ def _load_concept(
     patient_ids: Optional[Sequence[int]],
     unavailable: List[str],
     event_time_column: Optional[str] = None,
+    source_time_axis=None,
 ) -> pd.DataFrame:
     """Load one concept from an export package or a converted database.
 
@@ -783,7 +788,7 @@ def _load_concept(
     try:
         if source_mode == "export":
             if isinstance(root, ExportPackage):
-                require_canonical_time_projection(root, concept)
+                require_canonical_time_projection(root, concept, source_time_axis=source_time_axis)
             extra_columns = (
                 [f"{concept}_observed", f"{concept}_available"]
                 if str(concept).startswith("sofa2")
@@ -1360,7 +1365,7 @@ def _export_concept_is_stay_level(package: ExportPackage, concept: str) -> bool:
 
 
 def _export_event_time_source(
-    package: ExportPackage, concept: str
+    package: ExportPackage, concept: str, *, source_time_axis=None,
 ) -> Tuple[Optional[str], bool]:
     """Where an export records the time of an outcome event.
 
@@ -1400,11 +1405,13 @@ def _export_event_time_source(
             index[issued[0]].get("column_metadata_binding"), "metadata", None
         )
         if (
-            getattr(metadata, "time_origin", None) != "icu_admission"
+            getattr(metadata, "time_origin", None) != (
+                source_time_axis.selected_origin if source_time_axis is not None else "icu_admission"
+            )
             or getattr(metadata, "time_unit", None) != "h"
         ):
             raise MaterializedMetadataError(
-                f"export event time {issued[0]!r} is not in hours from ICU admission"
+                f"export event time {issued[0]!r} does not match the selected source-hour axis"
             )
         return issued[0], False
     return None, not _export_concept_is_stay_level(package, concept)
@@ -1579,6 +1586,7 @@ def materialize_cohort(
     host_derivations: Sequence[str] = (),
     event_onset_windows: Optional[Mapping[str, Window]] = None,
     last_value_concepts: Sequence[str] = (),
+    source_time_axis=None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build a per-stay analysis cohort from the EasyICU data layer.
 
@@ -1604,6 +1612,7 @@ def materialize_cohort(
         host_derivations=host_derivations,
         event_onset_windows=event_onset_windows,
         last_value_concepts=last_value_concepts,
+        source_time_axis=source_time_axis,
     )
     return cohort, provenance
 
@@ -1624,6 +1633,7 @@ def _materialize_cohort_with_metadata(
     host_derivations: Sequence[str] = (),
     event_onset_windows: Optional[Mapping[str, Window]] = None,
     last_value_concepts: Sequence[str] = (),
+    source_time_axis=None,
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
@@ -1643,6 +1653,7 @@ def _materialize_cohort_with_metadata(
         host_derivations=host_derivations,
         event_onset_windows=event_onset_windows,
         last_value_concepts=last_value_concepts,
+        source_time_axis=source_time_axis,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -1675,6 +1686,7 @@ def _materialize_cohort_from_resolved_source(
     verify_source_package: bool = True,
     event_onset_windows: Optional[Mapping[str, Window]] = None,
     last_value_concepts: Sequence[str] = (),
+    source_time_axis=None,
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     """Materialize from one already-resolved, explicitly owned source."""
 
@@ -1688,6 +1700,19 @@ def _materialize_cohort_from_resolved_source(
             code="export_package_database_mismatch",
             manifest_path=export_package.manifest_path,
         )
+    if source_time_axis is not None:
+        if export_package is None or source_mode != "export":
+            raise MaterializedMetadataError(
+                "a source time-axis binding requires its verified export package"
+            )
+        require_source_time_axis_binding(export_package, source_time_axis)
+        if cohort_definition is not None:
+            for pred in (*cohort_definition.inclusion, *cohort_definition.exclusion):
+                tw = getattr(pred, "time_window", None)
+                if tw is not None and str(tw.anchor).strip().lower() != source_time_axis.selected_origin:
+                    raise MaterializedMetadataError(
+                        "source-bound cohort predicate must explicitly use the selected care-unit origin"
+                    )
     source_handle: Union[Path, ExportPackage] = export_package or root
     from easyicu.concept.provenance_capture import ExtractionProvenanceCapture
     provenance_capture = ExtractionProvenanceCapture() if source_mode != "export" else None
@@ -1711,6 +1736,7 @@ def _materialize_cohort_from_resolved_source(
                 patient_ids,
                 unavailable,
                 event_time_column=event_time_column,
+                **({"source_time_axis": source_time_axis} if source_time_axis is not None else {}),
             )
         loaded, normalization_receipt = _normalize_legacy_export_categorical(
             loaded,
@@ -1849,6 +1875,10 @@ def _materialize_cohort_from_resolved_source(
         # The named native builder emits a dense nullable status, unlike a
         # positive-only event stream. An unknown discharge never means alive.
         dense_status_outcomes.update(set(outcome_set) & {"icu_death"})
+    if str(database).lower() == "sic" and "death_during_case" in {*static_set, *outcome_set}:
+        # This is a dense, nullable case-horizon status, never a sparse
+        # positive-only event stream. Unknown disposition/time stays unknown.
+        dense_status_outcomes.add("death_during_case")
     feature_set = [c for c in dict.fromkeys(feature_concepts) if c not in static_set]
     if not set(last_value_concepts) <= set(feature_set):
         raise MaterializedMetadataError(
@@ -1885,7 +1915,7 @@ def _materialize_cohort_from_resolved_source(
                 export_package, concept
             ):
                 stay_level_issued_times[concept] = _export_event_time_source(
-                    export_package, concept
+                    export_package, concept, source_time_axis=source_time_axis,
                 )[0]
     stay_level_sources: Dict[str, Dict[str, Any]] = {}
     stay_level_untyped_events: List[str] = []
@@ -2044,7 +2074,7 @@ def _materialize_cohort_from_resolved_source(
     outcome_event_time_sources: Dict[str, Dict[str, Any]] = {}
     for c in outcome_set:
         issued_event_time, row_time_is_event_time = (
-            _export_event_time_source(export_package, c)
+            _export_event_time_source(export_package, c, source_time_axis=source_time_axis)
             if export_package is not None
             else (None, True)
         )
@@ -2118,7 +2148,10 @@ def _materialize_cohort_from_resolved_source(
         if stay_level_sources.get(concept, {}).get("source") not in (
             None,
             "stay_level_value",
-        ) and str(anchor or "").strip().lower() not in {"icu_admit", "icu_admission"}:
+        ) and str(anchor or "").strip().lower() not in (
+            {source_time_axis.selected_origin} if source_time_axis is not None
+            else {"icu_admit", "icu_admission"}
+        ):
             raise MaterializedMetadataError(
                 f"predicate on stay-level event {concept!r} is anchored at "
                 f"{anchor!r}; the export times it from ICU admission"
@@ -2169,7 +2202,8 @@ def _materialize_cohort_from_resolved_source(
         # over the cohort window, or a bare predicate column over the window
         # of the predicate it was derived for.  Every <concept>_time this
         # filter reads is the materializer's own, in hours after ICU admission.
-        cohort_column_window = host_column_window(*cohort_window)
+        time_origin = source_time_axis.selected_origin if source_time_axis is not None else "icu_admission"
+        cohort_column_window = host_column_window(*cohort_window, origin=time_origin)
         require_column_windows_readable(
             cohort_definition,
             columns=wide.columns,
@@ -2180,13 +2214,13 @@ def _materialize_cohort_from_resolved_source(
                     if column != ID_COL
                 },
                 **{
-                    column: host_column_window(*window)
+                    column: host_column_window(*window, origin=time_origin)
                     for column, window in onset_column_windows.items()
                 },
                 **{
                     concept: ColumnWindow(
-                        label=f"icu_admission[{start:g},{end:g}]h",
-                        anchor="icu_admission",
+                        label=f"{time_origin}[{start:g},{end:g}]h",
+                        anchor=time_origin,
                         start_hours=start,
                         end_hours=end,
                     )
@@ -2207,6 +2241,7 @@ def _materialize_cohort_from_resolved_source(
                     if record.get("source") != "stay_level_value"
                 ),
             ],
+            event_time_origin=time_origin,
         )
     else:
         cohort = wide
@@ -2222,6 +2257,12 @@ def _materialize_cohort_from_resolved_source(
         **({"data_provenance": provenance_capture.finish()} if provenance_capture is not None else {}),
         "database": database,
         "cohort_window_hours": list(cohort_window),
+        **({"source_time_axis": {
+            "source_identity_sha256": source_time_axis.source_identity_sha256,
+            "export_authority_sha256": source_time_axis.export_authority_sha256,
+            "manifest_sha256": source_time_axis.manifest_sha256,
+            "selected_origin": source_time_axis.selected_origin,
+        }} if source_time_axis is not None else {}),
         "feature_concepts": list(feature_concepts),
         "outcome_concepts": list(outcome_concepts),
         "static_concepts": static_set,
@@ -2270,6 +2311,7 @@ def build_trajectory_long(
     patient_ids: Optional[Sequence[int]] = None,
     prefer_existing: bool = True,
     bounds_violation_policy: str = "reject",
+    source_time_axis=None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Long-format trajectory with concept-owner evidence receipts.
 
@@ -2299,6 +2341,7 @@ def build_trajectory_long(
         source_mode=source_mode,
         root=root,
         bounds_violation_policy=bounds_violation_policy,
+        source_time_axis=source_time_axis,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -2323,6 +2366,7 @@ def _build_trajectory_long_from_resolved_source(
     export_package: Optional[ExportPackage],
     bounds_violation_policy: str,
     verify_source_package: bool = True,
+    source_time_axis=None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build trajectory rows from one already-resolved, explicitly owned source."""
 
@@ -2336,6 +2380,10 @@ def _build_trajectory_long_from_resolved_source(
             code="export_package_database_mismatch",
             manifest_path=export_package.manifest_path,
         )
+    if source_time_axis is not None:
+        if export_package is None or source_mode != "export":
+            raise MaterializedMetadataError("a source time-axis binding requires its verified export package")
+        require_source_time_axis_binding(export_package, source_time_axis)
     source_handle: Union[Path, ExportPackage] = export_package or root
     from easyicu.concept.provenance_capture import ExtractionProvenanceCapture
     provenance_capture = ExtractionProvenanceCapture() if source_mode != "export" else None
@@ -2362,6 +2410,7 @@ def _build_trajectory_long_from_resolved_source(
                 database,
                 patient_ids,
                 unavailable,
+                **({"source_time_axis": source_time_axis} if source_time_axis is not None else {}),
             )
         df, normalization_receipt = _normalize_legacy_export_categorical(
             df,
@@ -2564,6 +2613,12 @@ def _build_trajectory_long_from_resolved_source(
         "export_authority": _export_authority_provenance(export_package),
         **({"data_provenance": provenance_capture.finish()} if provenance_capture is not None else {}),
         "database": database,
+        **({"source_time_axis": {
+            "source_identity_sha256": source_time_axis.source_identity_sha256,
+            "export_authority_sha256": source_time_axis.export_authority_sha256,
+            "manifest_sha256": source_time_axis.manifest_sha256,
+            "selected_origin": source_time_axis.selected_origin,
+        }} if source_time_axis is not None else {}),
         "trajectory_window_hours": list(window) if window is not None else None,
         "trajectory_concepts_requested": list(dict.fromkeys(concepts)),
         "trajectory_concepts_materialized": materialized,
@@ -2617,6 +2672,7 @@ def _materialize_with_open_export_package(
         verify_source_package=False,
         event_onset_windows=materialize_args.get("event_onset_windows"),
         last_value_concepts=materialize_args.get("last_value_concepts", ()),
+        source_time_axis=materialize_args.get("source_time_axis"),
     )
 
 
@@ -2638,6 +2694,7 @@ def _trajectory_with_open_export_package(
         root=package.root,
         export_package=package,
         bounds_violation_policy=materialize_args["bounds_violation_policy"],
+        source_time_axis=materialize_args.get("source_time_axis"),
         verify_source_package=False,
     )
 
@@ -2836,6 +2893,7 @@ def materialize_to_parquet(
             host_derivations=materialize_args.get("host_derivations", ()),
             event_onset_windows=materialize_args.get("event_onset_windows"),
             last_value_concepts=materialize_args.get("last_value_concepts", ()),
+            source_time_axis=materialize_args.get("source_time_axis"),
         )
     else:
         cohort, provenance, metadata_collector = _materialize_with_open_export_package(
@@ -2982,6 +3040,8 @@ def materialize_to_parquet(
                 patient_ids=materialize_args["patient_ids"],
                 prefer_existing=materialize_args["prefer_existing"],
                 bounds_violation_policy=materialize_args["bounds_violation_policy"],
+                **({"source_time_axis": materialize_args["source_time_axis"]}
+                   if materialize_args.get("source_time_axis") is not None else {}),
             )
         else:
             built = _trajectory_with_open_export_package(
@@ -3080,6 +3140,7 @@ def materialize_to_parquet(
         producer_implementation_sha256=implementation_bundle_sha256(
             (
                 Path(__file__),
+                Path(__file__).with_name("primitives.py"),
                 Path(__file__).resolve().parents[1]
                 / "intake"
                 / "materialized_metadata.py",

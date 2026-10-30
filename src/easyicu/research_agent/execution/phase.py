@@ -182,7 +182,9 @@ from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
     materialized_cohort_concept_id_scope,
+    materialize_approved_care_unit_landmark,
     materialize_locked_analysis_cohort,
+    recover_approved_source_analysis_cohort,
     write_locked_cohort_definition,
 )
 from ..authority.execution_input import ExecutionInputAuthorityState
@@ -994,6 +996,7 @@ def _repair_publication_figure_in_staging(
 @dataclass
 class _ExecutePhasePreparation:
     services: Any
+    approved_source_time_axis: Any
     context: Any
     coder_base_context: Any
     evidence: Any
@@ -1022,9 +1025,15 @@ def _prepare_execute_phase_authority(
     run_dir: Path,
     resume_from_step_id: Optional[str],
     stop_after_step_id: Optional[str],
+    cohort_path: Optional[Path] = None,
 ) -> _ExecutePhasePreparation:
     """Execute probe + per-step analysis loop, with optional replanning."""
-    require_approved_database_capabilities(plan_result, run_dir)
+    approved_source_time_axis = require_approved_database_capabilities(
+        plan_result, run_dir, cohort_path=cohort_path,
+        time_origin_attestor=getattr(getattr(pipeline, "_services", None), "time_origin_attestor", None),
+        case_duration_attestor=getattr(getattr(pipeline, "_services", None), "case_duration_attestor", None),
+        runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+    )
     services = pipeline._execute_phase_services()
     context = plan_result.context
     # Preserve the Planner's variable projection with the original run notes.
@@ -1138,6 +1147,7 @@ def _prepare_execute_phase_authority(
     _assert_execution_plan_locks(run_dir, plan, plan_result.cohort_concept_ids)
     return _ExecutePhasePreparation(
         services=services,
+        approved_source_time_axis=approved_source_time_axis,
         context=context,
         coder_base_context=coder_base_context,
         evidence=evidence,
@@ -1160,6 +1170,34 @@ def _prepare_execute_phase_authority(
         prompt_version=prompt_version,
         prompt_files=prompt_files,
     )
+
+
+def _materialize_approved_case_duration_if_needed(pipeline, *, plan_result, cohort_path, run_dir):
+    """Transition a zero-row planning catalog only after signed host review."""
+    from easyicu.databases.research_substitutions import case_duration_selection
+    from easyicu.research_agent.intake.materialized_metadata import load_verified_materialized_cohort_authority
+
+    if (not hasattr(plan_result.context, "user_preferences")
+            or case_duration_selection(plan_result.context) is None):
+        return cohort_path
+    sealed_input = load_verified_materialized_cohort_authority(cohort_path)
+    if sealed_input is not None:
+        return cohort_path
+    import pyarrow.parquet as pq
+    if pq.ParquetFile(cohort_path).metadata.num_rows != 0:
+        raise ValueError("case_duration_planning_input_is_not_metadata_only")
+    from easyicu.databases.research_approval import require_approved_case_duration_pre_materialization
+
+    services = getattr(pipeline, "_services", None)
+    approved = require_approved_case_duration_pre_materialization(
+        plan_result, run_dir, time_origin_attestor=getattr(services, "time_origin_attestor", None),
+        case_duration_attestor=getattr(services, "case_duration_attestor", None),
+        runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+    )
+    materializer = getattr(services, "approved_case_duration_materializer", None)
+    if materializer is None:
+        raise ValueError("case_duration_approved_materializer_unavailable")
+    return Path(materializer(plan_result=plan_result, run_dir=run_dir, approved=approved))
 
 
 def run_execute_phase(
@@ -1186,12 +1224,16 @@ def run_execute_phase(
     the queue) and step outcomes are recorded back into the log.  Both
     must travel together; when both are absent the path is unchanged.
     """
+    cohort_path = _materialize_approved_case_duration_if_needed(
+        pipeline, plan_result=plan_result, cohort_path=cohort_path, run_dir=run_dir,
+    )
     preparation = _prepare_execute_phase_authority(
         pipeline,
         plan_result=plan_result,
         run_dir=run_dir,
         resume_from_step_id=resume_from_step_id,
         stop_after_step_id=stop_after_step_id,
+        cohort_path=cohort_path,
     )
     services = preparation.services
     context = preparation.context
@@ -1226,14 +1268,43 @@ def run_execute_phase(
     # each generated step. The full universe is injected only into runners for
     # typed steps whose cohort/robustness contract explicitly authorizes it.
     universe_path = cohort_path
+    from easyicu.databases.research_approval import ApprovedCaseDurationBinding
+
+    approved_case_duration = (
+        preparation.approved_source_time_axis
+        if isinstance(preparation.approved_source_time_axis, ApprovedCaseDurationBinding) else None
+    )
+    analysis_path = run_dir / "cohort_analysis.parquet"
+    if approved_case_duration is not None:
+        result = materialize_approved_care_unit_landmark(
+            run_dir=run_dir, universe_path=universe_path, plan_result=plan_result,
+            time_origin_attestor=getattr(getattr(pipeline, "_services", None), "time_origin_attestor", None),
+            case_duration_attestor=getattr(getattr(pipeline, "_services", None), "case_duration_attestor", None),
+            runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+        )
+        analysis_path = Path(result["path"])
+    elif preparation.approved_source_time_axis is not None:
+        prior = recover_approved_source_analysis_cohort(
+            run_dir=run_dir, plan=plan, universe_path=universe_path,
+            cohort_concept_ids=plan_result.cohort_concept_ids,
+        )
+        if prior is None:
+            materialize_locked_analysis_cohort(
+                run_dir=run_dir, plan=plan, universe_path=universe_path, context=context,
+                cohort_concept_ids=plan_result.cohort_concept_ids,
+                approved_plan_result=plan_result,
+                time_origin_attestor=getattr(getattr(pipeline, "_services", None), "time_origin_attestor", None),
+                runtime_authority=getattr(getattr(pipeline, "_scientific_runtime_authorities", None), "current_case", None),
+            )
     run_input_authority_state = ExecutionInputAuthorityState.bind(
         universe_path=universe_path,
-        analysis_path=run_dir / "cohort_analysis.parquet",
+        analysis_path=analysis_path,
         trajectory_binding=trajectory_binding,
         run_dir=run_dir,
         legacy_trajectory_verifier=verify_legacy_trajectory_capsule_receipt,
         plan=plan,
         context=context,
+        approved_case_duration_binding=approved_case_duration,
     )
     if (
         pipeline._development_sample_size is not None

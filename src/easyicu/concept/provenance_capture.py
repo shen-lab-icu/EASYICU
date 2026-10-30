@@ -51,6 +51,7 @@ class ExtractionProvenanceCapture:
             class_prefixes=tuple(source_config.class_prefix), cohort_filters=filters,
             resource_inputs_sha256=self._inputs, resolver_parameters=resolver_parameters,
             source_config_sha256=metadata_digest(source_config.model_dump(mode="json")),
+            source_config=source_config,
         )
         snapshot = capture_data_provenance(dictionary, **parameters)
         self._snapshots.append(snapshot)

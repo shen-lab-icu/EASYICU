@@ -2554,6 +2554,15 @@ def make_export_runner(
 
         provenance_capture = ExtractionProvenanceCapture()
 
+        # Internal SIC case fields are opt-in and excluded from the ordinary
+        # default catalog; explicit authorized callers may select this module.
+        if modules and "sic_case_landmark" in modules:
+            if str(database).strip().lower() != "sic":
+                raise ValueError("SIC case landmark module requires SICdb")
+            CONCEPT_GROUPS_INTERNAL = {
+                **CONCEPT_GROUPS_INTERNAL,
+                "sic_case_landmark": extraction.EXTRACT_MODULES["sic_case_landmark"],
+            }
         sel_modules = [
             m
             for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
@@ -2930,14 +2939,25 @@ def make_export_runner(
         metadata_ref = write_content_addressed_sidecar(out, metadata_sidecar)
 
         from easyicu.synthetic_source_provenance import source_fields
+        time_window_authority = extraction._native_export_time_window_authority(
+            modules=sel, stay_time_upper_bounds=stay_time_upper_bounds or {},
+            required=True,
+        )
+        data_provenance = provenance_capture.finish()
+        sic_clock = None
+        if "sic_case_landmark" in sel:
+            from easyicu.webserver.sic_export_clock import sic_export_clock
+
+            sic_clock = sic_export_clock(
+                database=metadata_database, file_bindings=metadata_file_bindings,
+                time_window_authority=time_window_authority, data_provenance=data_provenance,
+            )
         manifest = {
             "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
             **source_fields(data_path),
             "export_kind": "web_module_extraction",
-            "time_window_authority": extraction._native_export_time_window_authority(
-                modules=sel, stay_time_upper_bounds=stay_time_upper_bounds or {},
-                required=True,
-            ),
+            "time_window_authority": time_window_authority,
+            **({"canonical_physical_schema": sic_clock} if sic_clock else {}),
             "database": database,
             "data_path": str(data_path),
             "format": export_format,
@@ -2978,7 +2998,7 @@ def make_export_runner(
                 else {"included": False}
             ),
             "column_metadata": metadata_ref.to_dict(),
-            "data_provenance": provenance_capture.finish(),
+            "data_provenance": data_provenance,
         }
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

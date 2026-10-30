@@ -452,6 +452,7 @@ def _planner_declared_context_column_bindings(
     context: Any,
     columns: Any,
     label: str = "cohort",
+    event_time_origin: str = "icu_admission",
 ) -> Dict[str, str]:
     """Bind canonical predicate concepts to explicitly planned wide columns.
 
@@ -483,11 +484,17 @@ def _planner_declared_context_column_bindings(
     # direct column against its sealed descriptor even when the plan has no
     # separate cohort-materialisation step.  Cross-name bindings below remain
     # restricted to an explicit analysis-cohort producer.
+    event_times_other = event_times_typed_otherwise_than_hours(context)
+    if event_time_origin != "icu_admission":
+        event_times_other = {
+            column: coordinates for column, coordinates in event_times_other.items()
+            if not (coordinates[0] == event_time_origin and coordinates[1] in {"h", "hour", "hours"})
+        }
     require_column_windows_readable(
         definition,
         columns=available,
         column_windows=context_column_windows(context),
-        event_times_not_in_hours=event_times_typed_otherwise_than_hours(context),
+        event_times_not_in_hours=event_times_other,
         label=label,
     )
     for predicate in (*definition.inclusion, *definition.exclusion):
@@ -1318,6 +1325,87 @@ def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
     return out
 
 
+def materialize_approved_care_unit_landmark(
+    *, run_dir: Path, universe_path: Path, plan_result: Any,
+    time_origin_attestor: Any, case_duration_attestor: Any, runtime_authority: Any,
+) -> Dict[str, Any]:
+    """Publish the reviewed SIC landmark risk set from a sealed universe.
+
+    This entry point re-runs the signed host gate before reading patient rows.
+    It never accepts a caller-supplied candidate authority as authorization.
+    """
+    from easyicu.databases.research_approval import (
+        ApprovedCaseDurationBinding, require_approved_database_capabilities,
+    )
+    from easyicu.research_agent.authority.case_duration_landmark import apply_case_duration_landmark
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from ..intake.materialized_metadata import (
+        MaterializedMetadataError, implementation_bundle_sha256,
+        load_verified_materialized_cohort_authority, publish_ordered_subset_materialized_cohort,
+        read_verified_materialized_cohort_table,
+    )
+
+    parent = load_verified_materialized_cohort_authority(universe_path)
+    if parent is None:
+        raise MaterializedMetadataError("landmark requires a sealed source universe")
+    approved = require_approved_database_capabilities(
+        plan_result, Path(run_dir), cohort_path=Path(universe_path),
+        time_origin_attestor=time_origin_attestor, case_duration_attestor=case_duration_attestor,
+        runtime_authority=runtime_authority,
+    )
+    if not isinstance(approved, ApprovedCaseDurationBinding):
+        raise MaterializedMetadataError("landmark requires signed case-duration approval")
+    authority, axis = approved.authority, approved.source_axis
+    authority.validate_plan(plan_result.plan)
+    from .case_duration_exposure import require_case_duration_exposure_materialization
+    require_case_duration_exposure_materialization(parent, authority)
+    plan_sha = canonical_sha256(plan_result.plan.model_dump(mode="json"))
+    primary = next(step for step in plan_result.plan.steps if step.planned_analysis_role == "primary")
+    output = Path(run_dir) / "cohort_landmark.parquet"
+    axis_record = {
+        "source_identity_sha256": axis.source_identity_sha256,
+        "export_authority_sha256": axis.export_authority_sha256,
+        "manifest_sha256": axis.manifest_sha256,
+        "selected_origin": axis.selected_origin,
+    }
+    if parent.authority.semantic_provenance.get("source_time_axis") != axis_record:
+        raise MaterializedMetadataError("landmark source axis differs from the universe")
+    if output.exists():
+        child = load_verified_materialized_cohort_authority(output)
+        if child is None:
+            raise MaterializedMetadataError("landmark cohort exists without sealed authority")
+        provenance = child.authority.semantic_provenance
+        if (child.authority.parent_authority_sha256 != parent.reference.sha256
+                or provenance.get("source_time_axis") != axis_record
+                or provenance.get("plan_sha256") != plan_sha
+                or provenance.get("landmark_contract_sha256") != authority.execution_contract_sha256):
+            raise MaterializedMetadataError("landmark cohort does not match the approved input")
+        return {"path": output, "authority_ref": child.reference.to_dict(),
+                "counts": provenance["counts"], "reused": True}
+    frame = read_verified_materialized_cohort_table(universe_path, verified=parent).to_pandas().reset_index(drop=True)
+    subset, counts = apply_case_duration_landmark(frame, authority=authority, source_axis=axis, primary_step=primary)
+    provenance = {
+        "schema_version": "easyicu.approved_care_unit_landmark_cohort/1",
+        "source_time_axis": axis_record, "plan_sha256": plan_sha,
+        "landmark_contract_sha256": authority.execution_contract_sha256,
+        "counts": counts, "n_universe": counts["input_rows"], "n_analysis_cohort": counts["eligible_rows"],
+    }
+    child = publish_ordered_subset_materialized_cohort(
+        universe_path, output, selected_row_positions=tuple(int(i) for i in subset.index),
+        semantic_provenance=provenance,
+        producer_implementation_sha256=implementation_bundle_sha256((
+            Path(__file__), Path(__file__).with_name("case_duration_exposure.py"),
+            Path(__file__).resolve().parents[1] / "authority" / "case_duration_landmark.py",
+            Path(__file__).resolve().parents[1] / "authority" / "care_unit_landmark.py",
+        )),
+        producer_parameters={"landmark_contract_sha256": authority.execution_contract_sha256, "plan_sha256": plan_sha},
+        expected_parent_authority=parent.reference,
+    )
+    if child is None:
+        raise MaterializedMetadataError("landmark cohort publication lost authority")
+    return {"path": output, "authority_ref": child.reference.to_dict(), "counts": counts, "reused": False}
+
+
 def materialize_locked_analysis_cohort(
     *,
     run_dir: Path,
@@ -1326,6 +1414,9 @@ def materialize_locked_analysis_cohort(
     context: Any = None,
     stem: str = "cohort_analysis",
     cohort_concept_ids: Sequence[str] = (),
+    approved_plan_result: Any = None,
+    time_origin_attestor: Any = None,
+    runtime_authority: Any = None,
 ) -> Dict[str, Any]:
     """Apply the locked cohort definition to the universe → analysis cohort.
 
@@ -1371,6 +1462,48 @@ def materialize_locked_analysis_cohort(
     # fallback below. A typed cohort that loses or corrupts its authority must
     # fail closed rather than silently becoming an untyped universe.
     typed_parent = load_verified_materialized_cohort_authority(universe_path)
+    parent_axis = (
+        typed_parent.authority.semantic_provenance.get("source_time_axis")
+        if typed_parent is not None else None
+    )
+    from easyicu.databases.research_substitutions import time_origin_selection
+    selected_origin = (
+        time_origin_selection(context)
+        if context is not None and hasattr(context, "user_preferences") else None
+    )
+    if selected_origin is not None and parent_axis is None:
+        raise MaterializedMetadataError("selected source time origin lacks a sealed source-axis receipt")
+    event_time_origin = "icu_admission"
+    if parent_axis is not None:
+        from easyicu.databases.research_approval import require_approved_database_capabilities
+        from easyicu.research_agent.canonical_json import canonical_sha256
+
+        if approved_plan_result is None or time_origin_attestor is None or context is None:
+            raise MaterializedMetadataError("source-bound cohort requires the approved plan and source attestation")
+        try:
+            if (canonical_sha256(approved_plan_result.plan.model_dump(mode="json"))
+                    != canonical_sha256(plan.model_dump(mode="json"))
+                    or canonical_sha256(approved_plan_result.context.model_dump(mode="json"))
+                    != canonical_sha256(context.model_dump(mode="json"))):
+                raise ValueError("approved plan or context changed")
+            axis = require_approved_database_capabilities(
+                approved_plan_result, Path(run_dir), cohort_path=Path(universe_path),
+                time_origin_attestor=time_origin_attestor,
+                runtime_authority=runtime_authority,
+            )
+            if axis is None or dict(parent_axis) != {
+                "source_identity_sha256": axis.source_identity_sha256,
+                "export_authority_sha256": axis.export_authority_sha256,
+                "manifest_sha256": axis.manifest_sha256,
+                "selected_origin": axis.selected_origin,
+            }:
+                raise ValueError("approved source axis differs from the cohort")
+            event_time_origin = axis.selected_origin
+            for predicate in (*definition.inclusion, *definition.exclusion):
+                if predicate.time_window.anchor != event_time_origin:
+                    raise ValueError("cohort predicate does not name the approved source axis")
+        except (TypeError, ValueError, OSError, AttributeError) as exc:
+            raise MaterializedMetadataError("source-bound cohort approval or source binding is invalid") from exc
     try:
         import pandas as pd  # type: ignore
 
@@ -1390,12 +1523,14 @@ def materialize_locked_analysis_cohort(
             plan=plan,
             context=context,
             columns=filter_input.columns,
+            event_time_origin=event_time_origin,
         )
         cohort, cohort_flow = _build_cohort_with_flow(
             definition,
             filter_input,
             column_bindings=column_bindings,
             whole_stay_columns=whole_stay_event_columns(context),
+            event_time_origin=event_time_origin,
         )
     except Exception as exc:
         if typed_parent is not None:
@@ -1422,6 +1557,7 @@ def materialize_locked_analysis_cohort(
         "n_analysis_cohort": int(len(cohort)),
         "predicate_column_bindings": predicate_bindings,
         "cohort_flow": cohort_flow,
+        **({"source_time_axis": dict(parent_axis)} if parent_axis is not None else {}),
     }
     authority_ref = None
     authority_path = None
@@ -1588,6 +1724,40 @@ def load_materialized_analysis_cohort_result(
     }
 
 
+def recover_approved_source_analysis_cohort(
+    *, run_dir: Path, plan: Any, universe_path: Path,
+    cohort_concept_ids: Sequence[str] = (),
+) -> Optional[Dict[str, Any]]:
+    """Recover only the exact closed cohort derived from this sealed universe.
+
+    Approval is checked by the caller before this recovery. A partial or stale
+    prior transaction is not overwritten or treated as a successful result.
+    """
+    from ..intake.materialized_metadata import (
+        MaterializedMetadataError, load_verified_materialized_cohort_authority,
+    )
+
+    root = Path(run_dir)
+    cohort = root / "cohort_analysis.parquet"
+    ledger = root / "cohort_analysis_provenance.json"
+    flow = root / "cohort_analysis_flow.csv"
+    if not any(path.exists() or path.is_symlink() for path in (cohort, ledger, flow)):
+        return None
+    recovered = load_materialized_analysis_cohort_result(
+        run_dir=root, plan=plan, cohort_concept_ids=cohort_concept_ids,
+    )
+    if recovered is None:
+        raise MaterializedMetadataError("prior approved cohort transaction is incomplete or invalid")
+    parent = load_verified_materialized_cohort_authority(Path(universe_path))
+    child = load_verified_materialized_cohort_authority(cohort)
+    if (parent is None or child is None
+            or child.authority.parent_authority_sha256 != parent.reference.sha256
+            or child.authority.semantic_provenance.get("source_time_axis")
+            != parent.authority.semantic_provenance.get("source_time_axis")):
+        raise MaterializedMetadataError("prior approved cohort is bound to a different source axis")
+    return recovered
+
+
 def assert_cohort_definition_locked(
     *,
     run_dir: Path,
@@ -1614,6 +1784,7 @@ def build_cohort(
     *,
     column_bindings: Optional[Dict[str, str]] = None,
     whole_stay_columns: Sequence[str] = (),
+    event_time_origin: str = "icu_admission",
 ) -> Any:
     """Apply a CTAS definition to a stay-level dataframe.
 
@@ -1644,6 +1815,7 @@ def build_cohort(
         data,
         column_bindings=column_bindings,
         whole_stay_columns=whole_stay_columns,
+        event_time_origin=event_time_origin,
     )
     return cohort
 
@@ -1654,6 +1826,7 @@ def _build_cohort_with_flow(
     *,
     column_bindings: Optional[Dict[str, str]] = None,
     whole_stay_columns: Sequence[str] = (),
+    event_time_origin: str = "icu_admission",
 ) -> tuple[Any, list[Dict[str, Any]]]:
     """Apply locked predicates once and return their exact attrition ledger.
 
@@ -1709,6 +1882,7 @@ def _build_cohort_with_flow(
             data,
             predicate,
             column_bindings=column_bindings,
+            event_time_origin=event_time_origin,
         )
         keep = predicate_mask if kind == "inclusion" else ~predicate_mask
         excluded = mask & ~keep
@@ -2221,6 +2395,7 @@ def _predicate_mask(
     pred: ConceptPredicate,
     *,
     column_bindings: Optional[Dict[str, str]] = None,
+    event_time_origin: str = "icu_admission",
 ) -> tuple[Any, Optional["AppliedEventTimeWindow"], Any]:
     """The predicate's mask, its event-time window and its unrecorded rows.
 
@@ -2247,7 +2422,7 @@ def _predicate_mask(
     series = data[column]
     mask = _apply_op(series, pred.op, pred.value)
     mask, window = _refine_occurrence_mask_by_event_time(
-        data, pred, mask, status=series
+        data, pred, mask, status=series, event_time_origin=event_time_origin
     )
     return mask, window, _unrecorded_value_mask(data, series, window)
 
@@ -2324,6 +2499,7 @@ def _refine_occurrence_mask_by_event_time(
     mask: Any,
     *,
     status: Any,
+    event_time_origin: str = "icu_admission",
 ) -> tuple[Any, Optional[AppliedEventTimeWindow]]:
     """Read an event predicate over its window by the event's own time.
 
@@ -2385,10 +2561,13 @@ def _refine_occurrence_mask_by_event_time(
     event_time_col = f"{pred.concept_id}_time"
     if event_time_col not in data.columns:
         return mask, None
-    if str(tw.anchor).strip().lower() not in _EVENT_TIME_ANCHORS:
+    allowed_anchors = (_EVENT_TIME_ANCHORS if event_time_origin == "icu_admission"
+                       else frozenset({event_time_origin}))
+    if str(tw.anchor).strip().lower() not in allowed_anchors:
+        origin_label = "ICU admission" if event_time_origin == "icu_admission" else event_time_origin
         raise CohortDataError(
             f"cohort predicate on {pred.concept_id!r} is anchored at "
-            f"{tw.anchor!r}, but {event_time_col!r} is in hours from ICU admission"
+            f"{tw.anchor!r}, but {event_time_col!r} is in hours from {origin_label}"
         )
     event = _event_occurred(status)
     event_time = data[event_time_col]

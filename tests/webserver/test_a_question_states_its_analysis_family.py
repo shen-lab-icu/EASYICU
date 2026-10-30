@@ -386,3 +386,24 @@ def test_a_new_run_records_the_family_in_its_own_preparation(tmp_path, monkeypat
         pass
 
     assert [write["analysis_design"]["analysis_family"] for write in writes] == ["association_study"]
+
+
+def test_launch_family_inference_preserves_existing_cluster_design(tmp_path, monkeypatch):
+    _grouping(monkeypatch, None)
+    writes = _launch_writes(monkeypatch)
+    study = {"id": "study-launch", "revision": 5, **_bound(tmp_path), "analysis_design": {
+        "analysis_unit": "icu_stay", "variance_estimator": "cluster_robust", "cluster_unit": "patient"}}
+    launched = record_unset_family_design(study, question=_ASSOCIATION_ZH)
+    design = writes[0]["analysis_design"]
+    assert design == {"analysis_family": "association_study", **study["analysis_design"]}
+    assert launched["analysis_design"] == design
+
+
+def test_launch_family_inference_does_not_complete_a_partial_cluster_policy(tmp_path, monkeypatch):
+    _grouping(monkeypatch, object())
+    writes = _launch_writes(monkeypatch)
+    study = {"id": "study-launch", "revision": 5, **_bound(tmp_path), "analysis_design": {
+        "analysis_unit": "icu_stay", "variance_estimator": "cluster_robust"}}
+    record_unset_family_design(study, question=_ASSOCIATION_ZH)
+    assert writes[0]["analysis_design"]["variance_estimator"] == "cluster_robust"
+    assert "cluster_unit" not in writes[0]["analysis_design"]

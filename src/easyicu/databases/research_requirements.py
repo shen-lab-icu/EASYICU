@@ -44,6 +44,56 @@ class MissingCapability(Fact):
     source: str
 
 
+class ReviewOnlyTimeOrigin(Fact):
+    """Registry facts for discussion; never execution or approval authority."""
+
+    database: str
+    source_identity_scope: Literal["packaged_registry_only"] = "packaged_registry_only"
+    requested_origin: Literal["icu_admission"] = "icu_admission"
+    proposed_origin: Literal["first_intensive_or_intermediate_care_transfer"]
+    source_field: SourceField
+    executable: Literal[False] = False
+    review_required: Literal[True] = True
+    execution_contract_available: Literal[False] = False
+
+
+class TimeOriginSelection(Fact):
+    """A proposed source-specific origin; it grants no execution authority."""
+
+    requested_origin: Literal["icu_admission"]
+    selected_origin: Literal["first_intensive_or_intermediate_care_transfer"]
+    source_field: SourceField
+    source_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CaseDurationSelection(Fact):
+    """A proposed case-duration endpoint; not an ICU-only LOS or a grant."""
+
+    requested_outcome: Literal["los_icu"]
+    proposed_outcome: Literal["care_unit_to_case_closure_days"]
+    start_field: SourceField
+    end_field: SourceField
+    source_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def review_only_time_origin(profile: ResearchCapabilityProfile) -> ReviewOnlyTimeOrigin | None:
+    """Expose a source-bound candidate without selecting it or granting access.
+
+    The registered source fact identifies a schema, not the user's local copy.
+    Other proxy semantics must not be attributed the SICdb-specific meaning.
+    """
+    field = profile.care_unit_admission_proxy
+    if (not profile.source_registered or profile.schema_database != "sic"
+            or profile.icu_admission is not None or field is None
+            or field.table != "cases" or field.column != "ICUOffset"):
+        return None
+    return ReviewOnlyTimeOrigin(
+        database=profile.database,
+        proposed_origin="first_intensive_or_intermediate_care_transfer",
+        source_field=field,
+    )
+
+
 class CapabilityDecision(Fact):
     status: Literal["exact", "substitution", "refusal"]
     database: str

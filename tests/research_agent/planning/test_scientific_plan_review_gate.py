@@ -153,6 +153,21 @@ def test_execution_resume_rejects_review_binding_drift(tmp_path: Path) -> None:
     assert exc_info.value.code == "scientific_plan_review_binding_drift"
 
 
+def test_execution_resume_rejects_changed_or_unbound_time_origin_receipt(tmp_path: Path) -> None:
+    evidence = EvidenceStore(tmp_path)
+    archived = _review().model_copy(update={"facts": {"database_time_origin_review": {
+        "registered_export_receipt": {"manifest_sha256": "a" * 64},
+    }}})
+    persist_or_validate_scientific_plan_review(run_dir=tmp_path, evidence=evidence, current_review=archived)
+    for current in (_review(), _review().model_copy(update={"facts": {"database_time_origin_review": {
+        "registered_export_receipt": {"manifest_sha256": "b" * 64},
+    }}})):
+        with pytest.raises(ScientificPlanReviewArtifactError, match="binding_drift"):
+            persist_or_validate_scientific_plan_review(
+                run_dir=tmp_path, evidence=evidence, current_review=current, reuse_existing_review=True,
+            )
+
+
 @pytest.mark.parametrize("version", [10, 11, 12, 13, 14])
 def test_old_review_is_readable_but_not_current_execution_authority(tmp_path: Path, version) -> None:
     evidence = EvidenceStore(tmp_path)

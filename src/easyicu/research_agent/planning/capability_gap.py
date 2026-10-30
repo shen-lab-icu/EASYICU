@@ -6,8 +6,9 @@ capability gap instead of drafting steps that quietly answer another question
 the host first checks the claim against the study's typed context: a claim the
 context contradicts goes back to the Planner as a repair. Concrete requirements
 are checked here. The host has no typed evidence for or against an
-unsupported estimand or unnamed design element. An unnamed design gap gets
-one confirmation against typed host facts before it stops as unverifiable.
+unsupported estimand or unnamed design element. An unnamed design gap, or an
+unverifiable longitudinal-representation gap, gets one confirmation against
+typed host facts before it stops as unverifiable.
 """
 
 from __future__ import annotations
@@ -70,24 +71,39 @@ class CapabilityGapConfirmation:
             self.progress_callback(event)
 
     def check(self, outline: ProgressivePlanOutline, check: CapabilityGapCheck) -> None:
-        if (
-            check.verification == "unverifiable"
-            and outline.capability_gap == "design_element_unsupported"
-            and outline.capability_gap_concept is None
-            and not self.requested
-            and self.retry_available
-        ):
-            self.requested = True
-            raise ProgressivePlanCompileError(
-                "progressive_capability_gap_confirmation_required",
+        if check.verification != "unverifiable" or self.requested or not self.retry_available:
+            return
+        if outline.capability_gap == "design_element_unsupported" and outline.capability_gap_concept is None:
+            message = (
                 "Confirm the unnamed design-element gap against the host facts below. "
                 "Availability alone does not prove the whole design is expressible. "
                 "If the needed element is one of these, draft the steps for the original "
                 "question; otherwise keep the gap and name in rationale what the question "
                 "asks that none of the offered families and typed elements expresses. "
-                "Do not drop a requirement or change the question to fit a family.",
-                path="capability_gap", cause_code=outline.capability_gap,
+                "Do not drop a requirement or change the question to fit a family."
             )
+        elif outline.capability_gap == "longitudinal_representation_unavailable":
+            message = (
+                "Confirm the longitudinal-representation gap against the host facts below. "
+                "The host cannot establish whether the question requires within-stay "
+                "trajectories or repeated measurements; this is not proof that it does "
+                "or does not. Reconsider the question and the proposed design. An outer "
+                "window or an allowed aggregation does not prove a summary was selected, "
+                "materialized, or available, and planning metadata is not patient data. "
+                "Preserve the original outcome and all timing requirements, including "
+                "eligibility, exposure alignment and the time origin. If the required "
+                "representation or another design element remains unproven, keep an "
+                "appropriate capability gap and explain what is missing. Draft steps only "
+                "if the offered capabilities express the original question; do not "
+                "invent data or silently change the research question."
+            )
+        else:
+            return
+        self.requested = True
+        raise ProgressivePlanCompileError(
+            "progressive_capability_gap_confirmation_required", message,
+            path="capability_gap", cause_code=outline.capability_gap,
+        )
 
 
 def capability_gap_stop(
@@ -111,14 +127,18 @@ def capability_gap_stop(
         requirement=gap.requirement, concept=gap.concept,
         verification=check.verification, fact=check.fact, rationale=outline.rationale,
     )
+    message = (
+        "the question needs something no offered family can express"
+        if check.verification == "verified"
+        else "the planner reported a capability gap whose necessity the host cannot verify"
+    )
     stop = ProgressivePlanCompileError(
         "progressive_capability_gap",
-        "the question needs something no offered family can express "
-        f"({gap.requirement}, {check.verification}): {outline.rationale}",
+        f"{message} ({gap.requirement}, {check.verification}): {outline.rationale}",
         path="capability_gap", cause_code=gap.requirement,
         concepts=(gap.concept,) if gap.concept else (),
         element=gap.requirement,
-        question_required=True,
+        question_required=True if check.verification == "verified" else None,
         findings=[diagnostic.model_dump(mode="json", exclude={"rationale"})],
     )
     stop.easyicu_planning_capability_gap = diagnostic
@@ -160,6 +180,7 @@ def capability_gap_confirmation_facts(
         "temporal_constraints": [item.model_dump(mode="json", exclude={"raw_text", "executable_repr"})
                                  for item in context.temporal_constraints],
         "fixed_window_association": fixed_window_association_facts(context),
+        "metadata_continuous_association_options": metadata_continuous_association_options(context),
         "stay_level_representation": stay_level_representation_facts(context),
         "longitudinal_representation": longitudinal_representation_facts(context),
         **{field: [item.model_dump(mode="json") for item in context_stated_variables(context, field)]
@@ -449,6 +470,86 @@ def fixed_window_association_facts(context: ResearchContext) -> dict[str, Any] |
     }
 
 
+def metadata_continuous_association_options(context: ResearchContext) -> dict[str, Any] | None:
+    """Unbound components a metadata-only continuous association may propose.
+
+    This is not a prepared-column receipt, a chosen aggregation, a risk-set
+    authority or an executable model contract.  Project only existing owners'
+    choices, without reading rows or deciding the scientific design.
+    """
+
+    from ..cohort.materializer import summary_column_name
+    from ..concept_availability import variable_source_unavailability
+    from ..contracts.association_execution import ASSOCIATION_HOST_ESTIMATORS
+    from ..contracts.concept_values import names_without_values
+    from .analysis_types import infer_analysis_type, longitudinal_trajectory_requested
+    from .exposure_group_compile import grouping_sources, planned_on_metadata
+
+    provenance = context.cohort.provenance or {}
+    if (
+        not planned_on_metadata(context)
+        or provenance.get("patient_rows_read") is not False
+        or longitudinal_trajectory_requested(context)
+        or infer_analysis_type(context).key != "association_study"
+    ):
+        return None
+    exposure = context.variable(context.primary_exposure) if context.primary_exposure else None
+    outcome = context.variable(context.target_outcome) if context.target_outcome else None
+    endpoint = context.endpoint
+    if (
+        exposure is None or outcome is None or endpoint is None
+        or endpoint.name != outcome.name or endpoint.kind != "continuous"
+        or exposure.unit_normalization
+        or (exposure.source_concept and exposure.name != exposure.source_concept)
+        or any(variable_source_unavailability(item, context.cohort.database) for item in (exposure, outcome))
+    ):
+        return None
+    unavailable = names_without_values(context)
+    if any({item.name, item.source_concept, *item.derived_from_concepts} & unavailable for item in (exposure, outcome)):
+        return None
+    concept = exposure.source_concept or exposure.name
+    sources = [
+        source for source in grouping_sources(context)
+        if source.concept == concept and source.window is not None
+        and all(math.isfinite(hour) for hour in source.window)
+        and 0 <= source.window[0] < source.window[1]
+    ]
+    if not sources:
+        return None
+    return {
+        "status": "proposal_only_not_selected_or_materialized",
+        "exposure_concept": concept,
+        "outcome": outcome.name,
+        "summary_options": [
+            {
+                "window_hours_after_icu_admission": list(source.window),
+                "unit": source.unit,
+                "options": [
+                    {"summary": summary, "proposed_column": summary_column_name(concept, summary)}
+                    for summary in source.summaries
+                ],
+            }
+            for source in sources
+        ],
+        "continuous_estimator_component": ASSOCIATION_HOST_ESTIMATORS["continuous"],
+        "planning_rule": (
+            "These are separate host components offered for consideration, not an "
+            "approved choice, materialized column, proven source, validated risk set "
+            "or executable combined design. Summary options operate on the selected "
+            "export's values; source-specific time binning or aggregation may mean they "
+            "are not the first, maximum or other summary of raw clinical records. "
+            "A landmark at a window end is one candidate only: define and verify the "
+            "at-risk population, time origin, source-specific outcome semantics, death "
+            "and discharge handling, follow-up and patient dependence. Restricting "
+            "the population changes the estimand and requires review. The listed "
+            "continuous estimator is a component, not a recommendation that its "
+            "assumptions hold. Select no unsupported or unbound input in steps. "
+            "If the original question cannot be expressed and validated with the "
+            "actual offered contracts, keep the precise capability gap."
+        ),
+    }
+
+
 def threshold_grouping_expressible(context: ResearchContext, concept: str) -> bool:
     """Whether a typed exposure grouping could group ``concept`` by thresholds.
 
@@ -597,6 +698,7 @@ __all__ = [
     "check_capability_gap",
     "fixed_window_association_facts",
     "longitudinal_representation_facts",
+    "metadata_continuous_association_options",
     "stay_level_representation_facts",
     "threshold_grouping_expressible",
 ]

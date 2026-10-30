@@ -1223,6 +1223,30 @@ class MaterializedColumnMetadataCollector:
         owner = self._source_owner(concept)
         return owner.binding.metadata.role if owner is not None else None
 
+    def _source_window_origin(self, concept: str) -> str:
+        """Use the bound SIC export axis; never reinterpret an old ICU label.
+
+        This records the physical axis only. It does not grant approval to use
+        that axis in a study which requested a different clinical origin.
+        """
+        from easyicu.databases.time_origin import (
+            ICU_ADMISSION_ORIGIN, SIC_CARE_UNIT_ORIGIN, native_export_time_origin,
+        )
+
+        if native_export_time_origin(self._source_database or "") != SIC_CARE_UNIT_ORIGIN:
+            return ICU_ADMISSION_ORIGIN
+        resolved = resolve_exported_concept(self._concept_index, concept)
+        info = self._concept_index.get(resolved, {}) if resolved else {}
+        coordinates = tuple(info.get("column_metadata_time_coordinates") or ())
+        if (len(coordinates) != 1 or not isinstance(coordinates[0], Mapping)
+                or coordinates[0].get("origin") != SIC_CARE_UNIT_ORIGIN
+                or coordinates[0].get("unit") != "h"):
+            raise MaterializedMetadataError(
+                f"SIC source {concept!r} has no verified first intensive or "
+                "intermediate care transfer hour axis; it cannot be labelled ICU admission"
+            )
+        return SIC_CARE_UNIT_ORIGIN
+
     def source_binding(self, concept: str) -> Optional[ColumnMetadataBinding]:
         """Return the exact verified physical binding consumed for a concept."""
 
@@ -1326,8 +1350,9 @@ class MaterializedColumnMetadataCollector:
             return
         names = set(output_columns)
         event_like = source.binding.metadata.role is ConceptColumnRole.EVENT_STATUS
+        time_origin = self._source_window_origin(concept)
         derivation_window = DerivationWindow(
-            origin="icu_admission",
+            origin=time_origin,
             start_hours=window[0],
             end_hours=window[1],
         )
@@ -1381,7 +1406,7 @@ class MaterializedColumnMetadataCollector:
                     role=role,
                     derivation_window=derivation_window,
                     representation_transform=f"window_{suffix}",
-                    time_origin="icu_admission",
+                    time_origin=time_origin,
                     time_unit="h",
                 )
         # The first time the window recorded the event status present: an
@@ -1399,13 +1424,13 @@ class MaterializedColumnMetadataCollector:
                     derivation_window
                     if onset_window is None
                     else DerivationWindow(
-                        origin="icu_admission",
+                        origin=time_origin,
                         start_hours=onset_window[0],
                         end_hours=onset_window[1],
                     )
                 ),
                 representation_transform="first_truthy_event_time",
-                time_origin="icu_admission",
+                time_origin=time_origin,
                 time_unit="h",
             )
 
@@ -1427,6 +1452,11 @@ class MaterializedColumnMetadataCollector:
 
         if not self._enabled:
             return
+        from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN, native_export_time_origin
+        if native_export_time_origin(self._source_database or "") == SIC_CARE_UNIT_ORIGIN:
+            raise MaterializedMetadataError(
+                "SIC cross-concept host derivations need an explicitly bound source time axis"
+            )
         owners: dict[str, _SourceOwner] = {}
         for concept in derivation.source_concepts:
             owner = self._source_owner(concept)
@@ -1518,6 +1548,7 @@ class MaterializedColumnMetadataCollector:
             return
         names = set(output_columns)
         event_like = source.binding.metadata.role is ConceptColumnRole.EVENT_STATUS
+        time_origin = self._source_window_origin(concept)
         if event_like and aggregation == "mean":
             role = ConceptColumnRole.EVENT_FRACTION
         elif event_like:
@@ -1537,7 +1568,7 @@ class MaterializedColumnMetadataCollector:
                 role=role,
                 aggregation=aggregation,
                 derivation_window=DerivationWindow(
-                    origin="icu_admission",
+                    origin=time_origin,
                     start_hours=float(start_hours),
                     end_hours=float(end_hours),
                 ),
@@ -1572,7 +1603,7 @@ class MaterializedColumnMetadataCollector:
                 column_name=event_time,
                 role=ConceptColumnRole.EVENT_TIME,
                 representation_transform="first_truthy_event_time",
-                time_origin="icu_admission",
+                time_origin=self._source_window_origin(concept),
                 time_unit="h",
             )
 
@@ -1589,15 +1620,18 @@ class MaterializedColumnMetadataCollector:
         source = self._source_owner(concept)
         if source is None or concept not in set(output_columns):
             return
-        normalized_anchor = str(anchor or "").strip().lower()
-        if normalized_anchor not in {"icu_admit", "icu_admission"}:
-            raise MaterializedMetadataError(
-                f"typed predicate {concept!r} uses unsupported time anchor "
-                f"{anchor!r}; source time is ICU-admission relative"
-            )
         if not source_has_time:
             self.add_static(concept, output_columns=output_columns)
             return
+        time_origin = self._source_window_origin(concept)
+        normalized_anchor = str(anchor or "").strip().lower()
+        allowed_anchors = ({"icu_admit", "icu_admission"} if time_origin == "icu_admission"
+                           else {time_origin})
+        if normalized_anchor not in allowed_anchors:
+            raise MaterializedMetadataError(
+                f"typed predicate {concept!r} uses unsupported time anchor "
+                f"{anchor!r}; source time is relative to {time_origin}"
+            )
         normalized = str(aggregation or "").strip().lower()
         event_source = source.binding.metadata.role is ConceptColumnRole.EVENT_STATUS
         if normalized == "count":
@@ -1630,7 +1664,7 @@ class MaterializedColumnMetadataCollector:
             role=role,
             aggregation=spec_aggregation,
             derivation_window=DerivationWindow(
-                origin="icu_admission",
+                origin=time_origin,
                 start_hours=window[0],
                 end_hours=window[1],
             ),

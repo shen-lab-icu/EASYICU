@@ -30,6 +30,79 @@ def _effective_unit(constraints: Mapping) -> str:
     return {"hospital_admission": "hospitalization", "row": "icu_stay"}.get(unit, unit)
 
 
+def _time_origin_applied_for_supported_association(context, plan, replacement, runtime_authority=None) -> bool:
+    """Recognize one explicit static association; all other designs stay blocked.
+
+    The source export is reviewed separately and the resulting cohort receipt
+    is checked again before executing. Never equate this origin to ICU-only.
+    """
+    from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority
+    from easyicu.research_agent.authority.case_duration_landmark import CaseDurationLandmarkAuthority
+
+    if isinstance(runtime_authority, CaseDurationLandmarkAuthority):
+        from .research_substitutions import case_duration_selection, time_origin_selection
+
+        try:
+            runtime_authority.validate_plan(plan)
+            origin = time_origin_selection(context)
+            outcome = case_duration_selection(context)
+            if origin is None or outcome is None:
+                return False
+            runtime_authority.validate_source_selections(origin, outcome)
+            windows = tuple(context.time_windows or ())
+            exposure = next((v for v in context.variables if v.name == context.primary_exposure), None)
+            return bool(
+                len(windows) == 1 and windows[0].anchor == replacement
+                and windows[0].start_hours == 0 and windows[0].end_hours == 24
+                and context.target_outcome == outcome.proposed_outcome
+                and context.primary_exposure == runtime_authority.exposure_column
+                and exposure is not None and exposure.analysis_window == windows[0].name
+                and exposure.analysis_window_role == "exposure_definition"
+            )
+        except (ValueError, RuntimeError):
+            return False
+
+    if (plan.analysis_type not in {"association", "association_study"}
+            or not isinstance(runtime_authority, BaselineAssociationRuntimeAuthority)):
+        return False
+    try:
+        runtime_authority.validate_plan(plan)
+        step = runtime_authority.governed_primary_step(plan)
+    except (ValueError, RuntimeError):
+        return False
+    # A method name is also used by generic code generation. Only the signed
+    # owner may be considered; a structural claim still needs the existing
+    # runtime-authority verifier to accept the complete signed plan.
+    from easyicu.research_agent.contracts.association_execution import baseline_association_execution_verdict
+
+    if (step.method != "adjusted_association_models"
+            or step.scientific_capability != "association_baseline_adjusted_v1"
+            or not baseline_association_execution_verdict(step).claimed
+            or not step.model_requirements):
+        return False
+    if context.target_outcome in {None, "los_icu"} or plan.cohort is None:
+        return False
+    windows = tuple(context.time_windows or ())
+    if len(windows) != 1 or windows[0].anchor != replacement:
+        return False
+    exposure = next((v for v in context.variables if v.name == context.primary_exposure), None)
+    if (exposure is None or exposure.analysis_window != windows[0].name
+            or exposure.analysis_window_role != "exposure_definition"):
+        return False
+    if any(req.exposure_source != context.primary_exposure or req.outcome != context.target_outcome
+           or req.outcome_type != "binary" for req in step.model_requirements):
+        return False
+    # The signed cohort step has not yet been taught to propagate this clock
+    # into filtering. This first slice accepts the full universe only.
+    if plan.cohort.inclusion or plan.cohort.exclusion or plan.cohort.unapplied_population_criteria:
+        return False
+    for endpoint in (context.endpoint, plan.endpoint):
+        if endpoint is not None and (endpoint.kind != "binary" or endpoint.name != context.target_outcome
+                                     or endpoint.time_origin is not None):
+            return False
+    return True
+
+
 def plan_capability_decision(context: ResearchContext, plan: AnalysisPlan) -> CapabilityDecision | None:
     """No question parsing and no inference of a field's clinical meaning.
 
@@ -84,15 +157,18 @@ def plan_capability_decision(context: ResearchContext, plan: AnalysisPlan) -> Ca
         # The generic death builder has this dictionary meaning even when the
         # source records another mortality status that needs a separate builder.
         profile = profile.model_copy(update={"mortality_outcomes": (profile.mortality,) if profile.mortality else ()})
-    if "database_capability_binding" in constraints:
-        from .research_substitutions import source_decision
+    if any(key in constraints for key in (
+        "database_capability_binding", "database_time_origin_selection", "database_case_duration_selection",
+    )):
+        from .research_substitutions import case_duration_selection, source_decision, time_origin_selection
 
-        return source_decision(profile, requirements)
+        return source_decision(profile, requirements, time_origin=time_origin_selection(context),
+                               case_duration=case_duration_selection(context))
     return assess_study(profile, requirements)
 
 
 def unapplied_substitution_capabilities(decision: CapabilityDecision, context: ResearchContext,
-                                        plan: AnalysisPlan) -> tuple[str, ...]:
+                                        plan: AnalysisPlan, *, runtime_authority=None) -> tuple[str, ...]:
     """Approval cannot make unchanged predicates or grouping implement a proposal."""
     predicates = (*plan.cohort.inclusion, *plan.cohort.exclusion) if plan.cohort else ()
     coordinates = {(item.concept_id, item.op, item.value) for item in predicates
@@ -100,6 +176,9 @@ def unapplied_substitution_capabilities(decision: CapabilityDecision, context: R
     missing = []
     for item in decision.substitutions:
         replacement = item.substitute
+        if item.capability == "time_zero":
+            if not _time_origin_applied_for_supported_association(context, plan, replacement, runtime_authority):
+                missing.append("time_zero")
         if item.capability == "analysis_unit" and _effective_unit(_constraints(context)) != replacement:
             missing.append(item.capability)
         if (item.capability == "analysis_unit" and "database_capability_binding" in _constraints(context)
