@@ -16,6 +16,11 @@ from typing import Any, Mapping
 
 from easyicu.webserver import state_paths
 
+
+class MetadataProviderCapacityExhausted(RuntimeError):
+    """The local admission limit was reached before starting a new request."""
+
+
 def _limit() -> int:
     """Default one; a higher metadata-owner limit needs explicit configuration.
 
@@ -69,7 +74,7 @@ def reserve(*, attempt_id: str, account: str, task_id: str, ledger_path: Path,
         connection.execute("BEGIN IMMEDIATE")
         count = connection.execute("SELECT COUNT(*) FROM slots WHERE account=?", (account,)).fetchone()[0]
         if count >= _limit():
-            raise RuntimeError("metadata_provider_concurrency_exhausted")
+            raise MetadataProviderCapacityExhausted("metadata_provider_concurrency_exhausted")
         connection.execute("INSERT INTO slots (attempt_id, account, task_id, ledger_path, guard_path, guard_nonce, worker_sha256, created, request_sha256) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)",
                            (attempt_id, account, task_id, str(ledger_path), str(guard_path), worker_sha256, time.time(), request_sha256))
         connection.execute("COMMIT")

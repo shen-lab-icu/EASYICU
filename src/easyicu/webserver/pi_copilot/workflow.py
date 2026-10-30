@@ -977,8 +977,15 @@ def build_research_workflow_snapshot(
         and isinstance(execution_retry, Mapping)
         and execution_retry.get("state") == "futile"
     )
+    metadata_capacity_blocked = bool(
+        failed_pipeline_regeneration_required
+        and str(run_row.get("gate_reason") or "")
+        == "research_pipeline_metadata_provider_capacity_unavailable"
+    )
     plan_regeneration_reason_code = (
-        "planner_checkpoint_resume_available"
+        "research_pipeline_metadata_provider_capacity_unavailable"
+        if metadata_capacity_blocked
+        else "planner_checkpoint_resume_available"
         if planner_checkpoint_resume_available
         else "failed_pipeline_execution_retry_futile"
         if execution_retry_futile
@@ -1084,7 +1091,7 @@ def build_research_workflow_snapshot(
                 else "running"
                 if planning_running
                 else "blocked"
-                if export_cohort_blocks_plan or (family_gap is not None and not metadata_candidate_gap) or source_coordinate_gap
+                if export_cohort_blocks_plan or (family_gap is not None and not metadata_candidate_gap) or source_coordinate_gap or metadata_capacity_blocked
                 else "ready"
                 if plan_regeneration_required
                 else "complete"

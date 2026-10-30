@@ -345,3 +345,39 @@ def test_guarded_recovery_probe_is_one_attempt_on_service_error(tmp_path, monkey
     assert calls[0]["role"] == "provider_recovery_probe"
     assert calls[0]["state"] == "failed_usage_unknown"
     assert slots.get(calls[0]["attempt_id"]) is None
+
+
+def test_capacity_stop_does_not_send_or_release_existing_request(tmp_path, monkeypatch):
+    import easyicu.research_agent.providers.llm  # noqa: F401
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+    from easyicu.webserver import agent_pipeline_runs, metadata_provider_client, metadata_provider_concurrency as slots, provider_adapter
+    from easyicu.webserver.stop_next_actions import next_actions_for_stop
+
+    monkeypatch.setattr(slots.state_paths, "state_root", lambda: tmp_path / "state")
+    monkeypatch.setenv("EASYICU_METADATA_PROVIDER_MAX_INFLIGHT", "1")
+    sent = []
+    monkeypatch.setattr(metadata_provider_client, "guarded_call", lambda *a, **k: sent.append(1))
+    env = {"OPENAI_API_KEY": "synthetic-secret", "OPENAI_BASE_URL": "http://127.0.0.1:1/v1",
+           "OPENAI_MODEL": "synthetic", "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+           "EASYICU_PROVIDER_DATA_HANDLING": "user_accepted_external"}
+    provider = {"provider": "openai", "external": True}
+    inner, public = provider_adapter.build_research_agent_provider_client(provider, environ=env, request_timeout=10)
+    book = ProviderHardStopLedger(path=tmp_path / "budget.json", task_ids=("task",),
+        limits=provider_adapter.web_research_agent_hard_stop_limits("planner_canary"),
+        batch_id="task", declaration_sha256="a" * 64)
+    task = book.start_task("task")
+    client = metadata_provider_client.MetadataProviderClient(
+        inner=inner, task=task, provider=provider, environment=env, public=public, timeout=10,
+    )
+    slots.reserve(attempt_id="old", account=slots.account_identity(public), task_id="old-task",
+                  ledger_path=tmp_path / "old.json", guard_path=tmp_path / "old-guard", worker_sha256="a" * 64)
+    with pytest.raises(slots.MetadataProviderCapacityExhausted) as caught:
+        HardStopClient(client, role="planner", task=task).complete([LLMMessage(role="user", content="synthetic")])
+    assert sent == []
+    assert slots.get("old") is not None
+    code = agent_pipeline_runs._pipeline_failure_code(caught.value)
+    assert code == "research_pipeline_metadata_provider_capacity_unavailable"
+    assert next_actions_for_stop(code) == []
+    assert agent_pipeline_runs._pipeline_failure_code(RuntimeError("metadata_provider_concurrency_exhausted")) == "research_pipeline_execution_failed"
