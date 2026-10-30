@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+from easyicu.research_agent.planning.method_literature import method_literature_citations
 from easyicu.research_agent.reporting.manuscript_literature import (
     audit_manuscript_literature,
 )
@@ -154,11 +155,9 @@ def _literature() -> LiteratureBundle:
     return LiteratureBundle(
         research_question="Sepsis and mortality",
         citations=[
-            CitationRecord(
-                key="strobe_2007",
-                title="The STROBE statement",
-                year="2007",
-            )
+            CitationRecord.model_validate(next(
+                item for item in method_literature_citations() if item["key"] == "strobe_2007"
+            ))
         ],
     )
 

@@ -309,24 +309,72 @@ def manuscript_citable_records(
 ) -> tuple[CitationRecord, ...]:
     """Project a candidate bundle into manuscript citation authority.
 
-    Curated records have no retrieval screening decision and remain citable.
-    Retrieved records are citable only when every recorded disposition is an
-    explicit include.  Exclusion or conflicting decisions fail closed while
-    the original candidate stays in the bundle for search-audit provenance.
+    An explicit include admits a record independently of which source supplied
+    it. Without a screening decision, only a record whose bibliographic
+    identity matches the built-in curated registry is eligible. A missing
+    provenance or decision cannot by itself turn an arbitrary retrieved or
+    author-supplied record into a curated source. Duplicate citation keys or
+    conflicting dispositions fail closed. The original candidate is retained.
     """
 
     if literature is None:
         return ()
+    from collections import Counter
+
     dispositions_by_key: dict[str, set[str]] = {}
     for decision in literature.screening_decisions:
         dispositions_by_key.setdefault(decision.citation_key, set()).add(
             decision.disposition
         )
+    key_counts = Counter(record.key for record in literature.citations)
+    pmid_counts = Counter(
+        str(record.pmid).strip() for record in literature.citations if record.pmid
+    )
+    doi_counts = Counter(
+        str(record.doi).strip().lower().removeprefix("https://doi.org/")
+        for record in literature.citations if record.doi
+    )
+    builtin_records = {
+        record.key: record
+        for record in (
+            *(
+                CitationRecord.model_validate(
+                    complete_missing_authors(value.model_dump(mode="json"))[0]
+                )
+                for value in _CURATED
+            ),
+            *(CitationRecord.model_validate(value) for value in method_literature_citations()),
+        )
+    }
+
+    def is_builtin(record: CitationRecord) -> bool:
+        expected = builtin_records.get(record.key)
+        if expected is None:
+            return False
+        # Do not permit a forged record to gain the curated key's authority.
+        # Only impact may be enriched on a duplicate retrieval; the original
+        # authored source text and bibliographic identity must remain the same.
+        return all(
+            getattr(record, field) == getattr(expected, field)
+            for field in (
+                "title", "year", "authors", "venue", "doi", "pmid", "url",
+                "relevance", "bibliographic_notices", "publication_types",
+            )
+        )
+
     return tuple(
         record
         for record in literature.citations
-        if not dispositions_by_key.get(record.key)
-        or dispositions_by_key[record.key] == {"include"}
+        if key_counts[record.key] == 1
+        and (not record.pmid or pmid_counts[str(record.pmid).strip()] == 1)
+        and (
+            not record.doi
+            or doi_counts[str(record.doi).strip().lower().removeprefix("https://doi.org/")] == 1
+        )
+        and (
+            dispositions_by_key.get(record.key) == {"include"}
+            or (not dispositions_by_key.get(record.key) and is_builtin(record))
+        )
     )
 
 
