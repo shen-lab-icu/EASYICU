@@ -158,7 +158,10 @@ def _trajectory_plan() -> dict[str, Any]:
                     "table:descriptive_result",
                 ],
                 "method": "descriptive_cluster_characterization",
-                "scientific_action_id": "phenotyping.cluster_sizes",
+                # This controlled multi-output characterization is exercised
+                # through the ordinary runner. The standalone cluster-sizes
+                # action has its own exact two-product, frozen-source contract
+                # and must not be claimed by this different synthetic step.
                 "icu_rule_refs": [],
                 "model_requirements": [],
                 "trajectory_stability_spec": None,
