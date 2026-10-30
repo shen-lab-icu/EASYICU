@@ -88,6 +88,9 @@ def test_pipeline_passes_frozen_state_to_parallel_workers(ra, synthetic_cohort, 
     # Force only this offline diagnostic through the existing parallel branch to
     # exercise its state handoff; this is not a scientific scheduling verdict.
     monkeypatch.setattr(phase, "_step_emit_execution_preflight", lambda **kwargs: (False, False))
+    # This fixture exercises the merge in isolation; the production owner has
+    # not yet established a sealed worker-local evidence view.
+    monkeypatch.setattr(phase, "_parallel_evidence_isolation_available", lambda **kwargs: True)
     monkeypatch.setattr(phase, "merge_parallel_runtime_states", capture_merge)
     pipeline = ra.ResearchAgentPipeline(
         workdir=str(tmp_path), llm=ra.MockLLMClient(), max_concurrent_steps=2,
