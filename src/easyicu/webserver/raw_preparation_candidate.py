@@ -67,7 +67,7 @@ def _single_table_pending(plan: PlanReviewAuthority, dependencies: dict, identit
 
 
 def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
-    pending, _ = agent_pipeline_runs.raw_preparation_review_owner(run_id, study_context_id)
+    pending, study = agent_pipeline_runs.raw_preparation_review_owner(run_id, study_context_id)
     run_dir = Path(pending.run_dir)
     if not run_dir.is_absolute() or ".." in run_dir.parts:
         raise ValueError("raw_preparation_run_unavailable")
@@ -99,7 +99,23 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
     if result["pending"] is None:
         result["pending"] = _single_table_pending(authority, result["dependencies"], identity)
     if result["pending"] is None:
-        return {"status": "blocked", "blocker_codes": result["dependencies"]["blocker_codes"]}
+        blocked = {"status": "blocked", "blocker_codes": result["dependencies"]["blocker_codes"]}
+        # This is only a metadata preview, not the blocked dependency roster
+        # and not a grant. Source/context and the current configuration must
+        # still match after the read, or the preview is omitted.
+        from easyicu.webserver import run_artifact_disclosure, study_contexts
+        from easyicu.webserver.source_partition_candidates import candidate_from_bound_research_context
+        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+        try:
+            candidate = candidate_from_bound_research_context(study=study, run_dir=run_dir)
+            current = study_contexts.get_context(study_context_id)
+            if (current and study_contexts.scientific_configuration_sha256(current)
+                    == study_contexts.scientific_configuration_sha256(study)
+                    and run_artifact_disclosure.scan_browser_projection(candidate).get("passed")):
+                blocked["source_partition_candidate"] = candidate
+        except (ValueError, OSError, TypeError, KeyError, AuthorityFilesystemError):
+            pass
+        return blocked
     checkpoint = result["pending"]
     with AnchoredDirectory.open(run_dir) as directory:
         try:

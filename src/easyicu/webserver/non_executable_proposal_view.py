@@ -194,7 +194,8 @@ def _literature_projection(bundle: LiteratureBundle, *, evidence_id: str, sha256
 def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: str,
                      proposed: CandidateLiteratureReference | None = None,
                      collect_citation_key: str | None = None,
-                     collect_pmid: str | None = None) -> dict:
+                     collect_pmid: str | None = None,
+                     include_source_candidate: bool = False) -> dict:
     """Resolve every coordinate from host owners; accept no client evidence or text."""
     project_id, session_id, run_id = (str(x or "").strip() for x in (project_id, session_id, run_id))
     study_id = service.project_store.resolve(project_id)
@@ -310,6 +311,16 @@ def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: 
     proposal = build_non_executable_proposal(store=store, configuration=study,
         expected_configuration_sha256=canonical_sha256(study), original_question=original,
         decisions=tuple(decisions), unresolved=("source_mapping_unverified", "literature_bindings_unverified"))
+    source_candidate = None
+    if include_source_candidate:
+        from easyicu.webserver.source_partition_candidates import candidate_from_bound_research_context
+        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+        try:
+            source_candidate = {"status": "candidate", **candidate_from_bound_research_context(study=study, run_dir=run_dir)}
+        except (ValueError, OSError, TypeError, KeyError, AuthorityFilesystemError):
+            # The proposal remains visible, but never turn an unavailable or
+            # conflicting mapping into an empty or approved source roster.
+            source_candidate = {"status": "unavailable"}
     latest = study_contexts.get_context(study_id)
     if not latest or study_contexts.scientific_configuration_sha256(latest) != scientific_sha:
         raise ValueError("proposal_configuration_changed")
@@ -355,7 +366,8 @@ def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: 
     if collect_pmid is not None:
         candidate_paper = register_pubmed_candidate(pmid=collect_pmid, root=candidate_root)
     payload = {"run_id": run_id, "scientific_configuration_sha256": scientific_sha,
-               "proposal": proposal.model_dump(mode="json"), "literature_candidates": literature}
+               "proposal": proposal.model_dump(mode="json"), "literature_candidates": literature,
+               "source_partition_candidate": source_candidate}
     if collected:
         payload['candidate_abstract_evidence_id'] = collected[0]
         payload['candidate_abstract_excerpt'] = collected[1]

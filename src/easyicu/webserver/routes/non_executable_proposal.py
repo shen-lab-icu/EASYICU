@@ -114,6 +114,17 @@ def proposal_view(project_id: str, session_id: str, run_id: str):
     return _render_proposal(payload, project_id, session_id, run_id)
 
 
+@router.get('/api/pi/proposal/{project_id}/{session_id}/{run_id}/source-candidate', response_class=HTMLResponse)
+def proposal_source_candidate(project_id: str, session_id: str, run_id: str):
+    """Inspect candidate source metadata for this bound, non-executable proposal."""
+    try:
+        payload = project_proposal(service=get_pi_copilot_service(), project_id=project_id,
+                                   session_id=session_id, run_id=run_id, include_source_candidate=True)
+    except (ValueError, PiCopilotError) as exc:
+        raise HTTPException(status_code=409, detail="候选来源暂不可用，请核对项目、会话与研究配置。") from exc
+    return _render_proposal(payload, project_id, session_id, run_id)
+
+
 @router.post('/api/pi/proposal/{project_id}/{session_id}/{run_id}/candidate', response_class=HTMLResponse)
 async def preview_candidate_reference(project_id: str, session_id: str, run_id: str, request: Request):
     """Validate a transient suggestion against host-bound evidence; never approve or persist it."""
@@ -262,6 +273,30 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
     external_form = (f'<form method="post" action="{escape(external_href, quote=True)}">'
         '<label>PubMed PMID <input name="pmid" inputmode="numeric" pattern="[0-9]{1,12}" required></label>'
         '<button type="submit">登记未筛选候选摘要</button></form>')
+    source_href = candidate_href.removesuffix('/candidate') + '/source-candidate'
+    source_candidate = payload.get('source_partition_candidate')
+    source_panel = ('<p>从本次运行已记录的概念及来源配置推导，检查转换清单与本地文件字段。'
+                    f'<a href="{escape(source_href, quote=True)}">查看来源候选</a></p>')
+    if source_candidate and source_candidate.get('status') == 'unavailable':
+        source_panel = '<p>当前来源或运行的概念映射无法核验；未建立可展示的来源候选。</p>'
+    elif source_candidate and source_candidate.get('status') == 'candidate':
+        source_panel = ('<p>以下仅为本地转换清单与字典字段候选，尚未验证原始文件内容、'
+                        '发行版本完整性、时间窗、队列或特征计算；不授权提取患者记录或分析。核验身份来源可能计算文件摘要，但不会解码患者行。</p>')
+        source_panel += '<p>未映射变量：' + escape('、'.join(source_candidate.get('unmapped_variables') or []) or '无') + '</p>'
+        source_panel += '<p>结局和队列依赖尚未完整建立。</p>'
+        for feature in source_candidate.get('features', []):
+            ids = feature.get('item_ids') or []
+            item_detail = (' · 字典 ID：' + escape('、'.join(str(value) for value in ids))
+                + ('（仅显示前 100 项）' if feature.get('item_ids_truncated') else '')) if ids else ''
+            unit_detail = (' · 字典声明单位：' + escape(str(feature['declared_unit']))) if feature.get('declared_unit') else ''
+            source_panel += ('<article><h3>' + escape(str(feature['concept'])) + '</h3><p>候选表：'
+                + escape(str(feature['table'])) + ' · 字段：' + escape('、'.join(feature['columns']))
+                + item_detail + unit_detail
+                + (' · 存在额外转换规则，需核验' if feature.get('derivation_or_callback_present') else '') + '</p></article>')
+        for item in source_candidate.get('files', []):
+            source_panel += ('<p>' + escape(str(item['table'])) + ' · ' + escape(str(item['path']))
+                + ' · 字段：' + escape('、'.join(item['columns'])) + '</p>')
+        source_panel += '<p>候选摘要：' + escape(source_candidate['candidate_sha256']) + '</p>'
     evidence_count = len(candidates['retained_citation_keys']) if candidates else 0
     collect_open = ' open' if collected else ''
     external_open = ' open' if external_paper else ''
@@ -322,6 +357,8 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
         f'<section class="question"><h2>原始问题</h2><p>{original}</p></section>'
         '<h2 class="section-title">研究配置</h2><p class="section-note">查看当前记录的研究要素及其证据状态。</p>'
         f'<div class="decision-grid">{"".join(rows)}</div>'
+        '<h2 class="section-title">数据来源候选</h2>'
+        f'<details class="panel"{" open" if source_candidate else ""}><summary>来源表与分区</summary><div class="panel-body">{source_panel}</div></details>'
         '<h2 class="section-title">文献与候选绑定</h2>'
         '<p class="section-note">来源记录和候选片段需要结合具体决定审阅。</p>'
         f'<details class="panel"><summary>已登记的文献候选 · {evidence_count} 条</summary><div class="panel-body">{literature}</div></details>'

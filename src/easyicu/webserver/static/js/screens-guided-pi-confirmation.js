@@ -786,6 +786,16 @@
       };
       const preparationReasonRows = [...new Set(preparationBlockers.map(code => Object.prototype.hasOwnProperty.call(preparationReasons, code) ? preparationReasons[code] : '').filter(Boolean))]
         .map(reason => `<li>${esc(reason)}</li>`).join('');
+      const sourceCandidate = preparationAttempt && preparationAttempt.source_partition_candidate;
+      const sourceFiles = sourceCandidate && Array.isArray(sourceCandidate.files) ? sourceCandidate.files : [];
+      const candidateRows = sourceFiles.map(file => `<li>${esc(String(file.table || ''))} · ${esc(String(file.path || ''))} · ${esc((Array.isArray(file.columns) ? file.columns : []).join(', '))}</li>`).join('');
+      const candidateMissing = sourceCandidate && Array.isArray(sourceCandidate.unmapped_variables)
+        ? sourceCandidate.unmapped_variables.map(String).join(', ') : '';
+      const candidatePreview = sourceCandidate && candidateRows
+        ? `<details><summary>${esc(tr('Source file candidates', '来源文件候选'))}</summary><p>${esc(tr(
+          'These are dictionary and local conversion-manifest candidates. File contents, source completeness, cohort, outcome and feature calculations are not verified; this does not authorize preparation or analysis. Source identity checks may hash files, without decoding patient rows.',
+          '这些是字典和本地转换清单候选，文件内容、来源完整性、人群、结局及特征计算尚未核验；不授权数据准备或分析。核验来源可能计算文件摘要，但不解码患者行。',
+        ))}</p>${candidateMissing ? `<p>${esc(tr('Unmapped variables', '未映射变量'))}: ${esc(candidateMissing)}</p>` : ''}<ul>${candidateRows}</ul></details>` : '';
       const preparationBlockedText = preparationAttempt && preparationAttempt.status === 'error'
         ? tr('The check could not complete. Please retry.', '检查未能完成，请重试。')
         : preparationBlockers.includes('raw_preparation_source_unavailable') || preparationBlockers.includes('dependency_source_provenance_mismatch')
@@ -809,7 +819,7 @@
         ))}</small>${preparationCanReview ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
         : preparationRun ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('Data preparation', '数据准备'))}</strong><small>${esc(preparationAttempt && ['blocked', 'error'].includes(preparationAttempt.status)
           ? preparationBlockedText
-          : tr('Check the proposed source files and fields without reading patient rows.', '检查拟用的来源文件和字段，不读取患者数据。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
+          : tr('Check proposed source files and fields without extracting patient records; source identity verification may hash files.', '检查拟用的来源文件和字段，不提取患者记录；核验来源时可能计算文件摘要。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}${candidatePreview}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
       const trialOwner = confirmation.trialCard ? window.EasyICU.guidedPi.optional('targetTrial') : null;
       const trialBody = trialOwner ? trialOwner.bodyHtml(host.workflow(), { tr, esc }) : '';
       const studyReadingsOwner = window.EasyICU.guidedPi.optional('studyReadings');
