@@ -1201,6 +1201,21 @@ def _materialize_approved_case_duration_if_needed(pipeline, *, plan_result, coho
     return Path(materializer(plan_result=plan_result, run_dir=run_dir, approved=approved))
 
 
+def _parallel_evidence_isolation_available(*, evidence: Any, run_dir: Path) -> bool:
+    """Whether the host has a verified per-worker evidence view for this run.
+
+    The current execution owner passes a live shared EvidenceStore and the run
+    root to every worker. A later worker can therefore observe another worker's
+    result before that batch has joined. Neither disjoint plan inputs nor a
+    conflict check after the batch proves isolation. No current execution owner
+    supplies a sealed worker-local reader and write merge, so concurrent
+    execution is not admitted here. This is not a user-configurable switch.
+    """
+
+    del evidence, run_dir
+    return False
+
+
 def run_execute_phase(
     pipeline: ExecutePhaseHost,
     *,
@@ -2020,6 +2035,33 @@ def run_execute_phase(
         _append_terminal_step_record=_append_terminal_step_record,
     )
 
+    # No current worker owner can prove that peer evidence, numeric claims and
+    # run-root authority remain invisible until the batch is joined. Retain the
+    # user's worker limit for future runs but do not use it as permission to
+    # make a scientific result depend on completion order.
+    isolation_blocked = (
+        pipeline._max_concurrent_steps > 1
+        and len(steps_to_run) > 1
+        and not pipeline._enable_replanning
+        and not has_typed_input_dependencies
+        and not has_primary_cohort_universe_producer
+        and requested_stop_after_step_id is None
+        and pipeline._submission_profile_name is None
+        and not _parallel_evidence_isolation_available(evidence=evidence, run_dir=run_dir)
+    )
+    if isolation_blocked:
+        findings.append(
+            ValidationFinding(
+                validator="parallel_evidence_isolation",
+                severity="info",
+                message=(
+                    "Concurrent steps were run in plan order because the host "
+                    "cannot yet isolate each worker's evidence reads."
+                ),
+                detail={"reason": "parallel_evidence_isolation_unavailable"},
+            )
+        )
+
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
@@ -2028,6 +2070,7 @@ def run_execute_phase(
         or has_primary_cohort_universe_producer
         or requested_stop_after_step_id is not None
         or pipeline._submission_profile_name is not None
+        or isolation_blocked
     ):
 
         # Replanning can replace ``plan`` while the coordinator is running.
