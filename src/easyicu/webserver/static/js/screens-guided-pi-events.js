@@ -508,13 +508,18 @@
             try {
               const result = await api().previewRawPreparation({run_id: runId, study_context_id: studyId,
                 session_id: expectedSession, project_id: expectedProject});
-              if (projectId() !== expectedProject || String((state.session || {}).session_id || '') !== expectedSession) return;
+              if (projectId() !== expectedProject || String((state.session || {}).session_id || '') !== expectedSession
+                || !state.workflow || runId !== String(state.workflow.raw_preparation_candidate_run_id || '')) return;
               if (result && result.status === 'pending' && loadWorkflow) await loadWorkflow();
               else if (state.workflow) state.workflow.raw_preparation_candidate_result = {
                 status: 'blocked', blocker_codes: Array.isArray(result && result.blocker_codes) ? result.blocker_codes : [],
+                source_partition_candidate: result && result.source_partition_candidate
+                  && typeof result.source_partition_candidate === 'object' && !Array.isArray(result.source_partition_candidate)
+                  ? result.source_partition_candidate : null,
               };
             } catch (_) {
-              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession && state.workflow) {
+              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession
+                && state.workflow && runId === String(state.workflow.raw_preparation_candidate_run_id || '')) {
                 state.workflow.raw_preparation_candidate_result = { status: 'error' };
               }
             }
