@@ -23,7 +23,7 @@ from easyicu.research_agent.schema import (
 )
 
 
-def paused_population(*, extraction=False):
+def paused_population(*, extraction=False, exclusion=False):
     spec = PopulationSpec.model_validate(
         {
             "criteria": [
@@ -50,6 +50,11 @@ def paused_population(*, extraction=False):
                 if extraction
                 else []
             )
+            + ([{
+                "id": "c4", "kind": "not_typed", "role": "exclude",
+                "source": "question", "quote": "Exclude prior AKI",
+                "why": "No verified admission AKI definition",
+            }] if exclusion else [])
         }
     )
     context = ResearchContext(
@@ -139,6 +144,15 @@ def test_accepting_omissions_does_not_waive_an_extraction_stop():
     workflow, pause, calls, records, _ = paused_population(extraction=True)
     with pytest.raises(ValueError, match="cannot be approved"):
         workflow.resume([approve(request, ("c1", "c2")) for request in pause.requests])
+    assert calls == records == []
+
+
+def test_accepting_old_inclusion_omissions_cannot_waive_an_unapplied_exclusion():
+    workflow, pause, calls, records, _ = paused_population(exclusion=True)
+    request = pause.requests[0]
+    assert {row["criterion"]["id"] for row in request.payload["population_compile"]["criteria"]} == {"c1", "c2", "c4"}
+    with pytest.raises(ValueError, match="cannot be approved"):
+        workflow.resume([approve(request, ("c1", "c2"))])
     assert calls == records == []
 
 

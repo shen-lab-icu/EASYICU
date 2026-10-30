@@ -89,6 +89,15 @@ def request_allows_approval(request: Any, accepted_ids: Sequence[str] = ()) -> b
     """
     if request.payload.get("approval_allowed") is not False:
         return not accepted_ids
+    record = sealed_population(request, reason=NOT_APPLIED_STOP)
+    if record is None or any(
+        row["disposition"] == "not_applied" and row["criterion"]["role"] == "exclude"
+        for row in record["criteria"]
+    ):
+        # The existing acceptance receipt authorizes only omitted inclusions;
+        # accepting those cannot waive an unrelated exclusion. Revise the plan
+        # rather than rewriting an old signed acceptance into broader authority.
+        return False
     required = unapplied_inclusions(request)
     ids = [row["criterion"]["id"] for row in required]
     return (

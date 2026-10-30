@@ -210,11 +210,12 @@ def _condition(
     }
 
 
-def _absent(concept: str, *, start: float = 0.0, end: float | None = 24.0) -> dict:
+def _absent(concept: str, *, start: float = 0.0, end: float | None = 24.0, **extra) -> dict:
     return {
         "kind": "event_absent",
         "concept": concept,
         "window": None if end is None else _window(start, end),
+        **extra,
     }
 
 
@@ -448,6 +449,12 @@ _REASON_CASES: list[tuple[str, dict, Any, float | None]] = [
         None,
         None,
     ),
+    (
+        "population_single_hospital_first_observed_icu_not_restricted",
+        {"kind": "first_observed_icu_single_hospital_adult"},
+        None,
+        None,
+    ),
 ]
 
 
@@ -615,6 +622,154 @@ def test_a_measurement_is_compared_over_the_summary_its_column_holds() -> None:
     assert _one(_measurement("map", "min", "<", 65)).reason == (
         "population_column_unresolved"
     )
+
+
+@pytest.mark.parametrize(
+    "role,policy,expected",
+    [
+        ("include", "exclude", [1]),
+        ("include", "retain", [1, 3]),
+        ("exclude", "exclude", [2]),
+        ("exclude", "retain", [2, 3]),
+    ],
+)
+def test_measurement_missing_policy_reaches_real_cohort_filter(role, policy, expected):
+    import pandas as pd
+    from easyicu.research_agent.cohort.schema import _build_cohort_with_flow
+
+    spec = _spec(_measurement("lact", "max", "<=", 4, unit="mmol/L",
+                             role=role, missing_policy=policy))
+    compiled = compile_population(spec, _ctx())
+    assert compiled.criteria[0].disposition == "applied_by_plan"
+    predicate = compiled.criteria[0].predicates[0]
+    assert predicate.missing_policy == policy
+    rows = pd.DataFrame({"stay_id": [1, 2, 3], "lact_max": [3., 5., None]})
+    selected, _ = _build_cohort_with_flow(compiled.cohort_definition(), rows)
+    assert selected["stay_id"].tolist() == expected
+
+
+def test_unspecified_measurement_missing_policy_keeps_legacy_serialization():
+    criterion = _measurement("lact", "max", "<=", 4, unit="mmol/L")
+    spec = _spec(criterion)
+    assert "missing_policy" not in spec.model_dump(mode="json")["criteria"][0]
+    compiled = compile_population(spec, _ctx())
+    assert "missing_policy" not in compiled.criteria[0].predicates[0].to_dict()
+
+
+@pytest.mark.parametrize("kind", ["condition_present", "event_absent"])
+@pytest.mark.parametrize("policy,expected", [("exclude", [2]), ("retain", [2, 3])])
+def test_absence_criterion_unknown_policy_reaches_real_cohort_filter(kind, policy, expected):
+    import pandas as pd
+    from easyicu.research_agent.cohort.schema import _build_cohort_with_flow
+
+    criterion = (_condition("sep3", role="exclude", missing_policy=policy)
+                 if kind == "condition_present" else
+                 _absent("sep3", missing_policy=policy))
+    compiled = compile_population(_spec(criterion), _ctx())
+    assert compiled.criteria[0].predicates[0].missing_policy == policy
+    selected, _ = _build_cohort_with_flow(
+        compiled.cohort_definition(),
+        pd.DataFrame({"stay_id": [1, 2, 3], "sep3": [1, 0, None]}),
+    )
+    assert selected["stay_id"].tolist() == expected
+
+
+@pytest.mark.parametrize("database", ["miiv", "eicu"])
+def test_custom_measurement_and_condition_reach_cohort_rows_and_flow(database):
+    import pandas as pd
+    from easyicu.research_agent.cohort.schema import _build_cohort_with_flow
+
+    creatinine = ConceptDescriptor(
+        name="creat_first", role=VariableRole.LAB, dtype="float64",
+        source_concept="creat", unit="mg/dL",
+        analysis_window="icu_admission[0,24]h",
+    )
+    spec = _spec(
+        _measurement("creat", "first", "<=", 4, unit="mg/dL", missing_policy="exclude"),
+        _condition("sep3", role="exclude", missing_policy="exclude"),
+    )
+    context = _ctx(creatinine)
+    context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"database": database})})
+    compiled = compile_population(spec, context)
+    assert [item.disposition for item in compiled.criteria] == ["applied_by_plan"] * 2
+    assert compiled.criteria[0].predicates[0].missing_policy == "exclude"
+    rows = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4, 5],
+        "creat_first": [3.0, 5.0, None, 3.0, 3.0],
+        "sep3": [0, 0, 0, 1, None],
+    })
+    selected, flow = _build_cohort_with_flow(compiled.cohort_definition(), rows)
+    assert selected["stay_id"].tolist() == [1]
+    assert [(step["n_before"], step["n_excluded"], step["n_remaining"]) for step in flow] == [
+        (5, 0, 5), (5, 2, 3), (3, 2, 1),
+    ]
+    assert flow[1]["n_excluded_missing"] == 1
+    assert flow[2]["n_excluded_missing"] == 1
+
+
+def test_new_candidate_requires_decisions_for_ambiguous_dynamic_population():
+    from easyicu.research_agent.orchestration.progressive_planning import (
+        population_criterion_decision_finding,
+    )
+
+    context = _ctx(ConceptDescriptor(
+        name="creat_first", role=VariableRole.LAB, dtype="float64",
+        source_concept="creat", unit="mg/dL",
+        analysis_window="icu_admission[0,24]h",
+    ))
+    spec = _spec(
+        _measurement("creat", "first", "<=", 4),
+        _condition("sep3", role="exclude"),
+    )
+    finding = population_criterion_decision_finding(compile_population(spec, context), context)
+    assert finding.detail["approval_allowed"] is False
+    assert finding.detail["reason"] == "population_criterion_decision_unconfirmed"
+    assert finding.detail["criteria"] == [
+        {"id": "c1", "quote": "criterion number 1", "decisions": ["missing_value_policy", "threshold_unit"]},
+        {"id": "c2", "quote": "criterion number 2", "decisions": ["missing_value_policy"]},
+    ]
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.planning.population_review import request_allows_approval
+    from easyicu.research_agent.schema import AnalysisPlan
+    candidate = AnalysisPlan(research_question="synthetic", steps=[])
+    requests = human_review_requests_for_plan(findings=[finding], plan=candidate, require_plan_review=True)
+    assert len(requests) == 1
+    assert not request_allows_approval(requests[0], ())
+    decided = _spec(
+        _measurement("creat", "first", "<=", 4, unit="mg/dL", missing_policy="exclude"),
+        _condition("sep3", role="exclude", missing_policy="stop"),
+    )
+    assert population_criterion_decision_finding(compile_population(decided, context), context) is None
+
+
+@pytest.mark.parametrize("source", ["question", "outline", "preset"])
+@pytest.mark.parametrize("unit,blocked", [(None, True), ("mg/dL", True), ("1", False)])
+def test_unstated_threshold_unit_is_allowed_only_for_known_dimensionless_inputs(source, unit, blocked):
+    from easyicu.research_agent.orchestration.progressive_planning import population_criterion_decision_finding
+
+    context = _ctx(ConceptDescriptor(
+        name="creat_first", role=VariableRole.LAB, dtype="float64", source_concept="creat",
+        unit=unit, analysis_window="icu_admission[0,24]h",
+    ))
+    criterion = _measurement("creat", "first", "<=", 4, missing_policy="exclude", source=source)
+    finding = population_criterion_decision_finding(compile_population(_spec(criterion), context), context)
+    assert (finding is not None) is blocked
+    if blocked:
+        assert finding.detail["approval_allowed"] is False
+        assert finding.detail["criteria"][0]["decisions"] == ["threshold_unit"]
+
+
+@pytest.mark.parametrize("role", ["include", "exclude"])
+def test_system_proposed_condition_still_requires_an_explicit_missing_value_policy(role):
+    from easyicu.research_agent.orchestration.progressive_planning import population_criterion_decision_finding
+
+    context = _ctx()
+    criterion = _condition("sep3", role=role, source="outline")
+    finding = population_criterion_decision_finding(compile_population(_spec(criterion), context), context)
+    assert finding.detail["approval_allowed"] is False
+    assert finding.detail["criteria"][0]["decisions"] == ["missing_value_policy"]
+
+
 
 
 @pytest.mark.parametrize(
@@ -930,8 +1085,8 @@ def test_the_cohort_lists_the_criteria_it_does_not_apply() -> None:
         "criterion number 6",
         "criterion number 7",
     )
-    # Only an inclusion the analysis would not apply waits for the user.
-    assert [item.criterion.id for item in compiled.blocking] == ["c5", "c7"]
+    # Both inclusion and exclusion omissions change the population.
+    assert [item.criterion.id for item in compiled.blocking] == ["c3", "c5", "c6", "c7"]
     # Criteria that share their sentence list it once.
     shared = compile_population(
         _spec(
@@ -1081,8 +1236,8 @@ def test_a_ventilated_population_alive_at_its_landmark_compiles() -> None:
         ("applied_by_plan", None),
         ("not_applied", "population_determined_after_time_zero"),
     ]
-    # An exclusion left unapplied keeps more stays: approval does not wait on it.
-    assert early.blocking == ()
+    # An exclusion left unapplied keeps more stays and must stop approval.
+    assert [item.criterion.id for item in early.blocking] == ["c2"]
 
 
 def test_a_minimum_stay_beyond_the_landmark_is_not_applied_and_waits_for_the_user() -> (

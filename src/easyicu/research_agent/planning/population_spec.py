@@ -45,6 +45,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -89,6 +90,13 @@ class _Criterion(BaseModel):
     quote: str = Field(min_length=2, max_length=160)
     source: CriterionSource
     role: CriterionRole
+
+    @model_serializer(mode="wrap")
+    def _without_unspecified_missing_policy(self, handler):
+        data = handler(self)
+        if getattr(self, "missing_policy", None) is None:
+            data.pop("missing_policy", None)
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -164,6 +172,17 @@ class FirstIcuStayPerHospitalization(_Kept):
     kind: Literal["first_icu_stay_per_hospitalization"]
 
 
+class FirstObservedIcuSingleHospitalAdult(_Kept):
+    """Adult first observed ICU in one visible source hospitalization.
+
+    Patients with more than one visible hospitalization, missing identity or
+    unprovable ICU order are excluded. This is a restricted source-visible
+    cohort, not the patient's lifetime first ICU or first ICU per hospital.
+    """
+
+    kind: Literal["first_observed_icu_single_hospital_adult"]
+
+
 class IcuStayHours(_Kept):
     """An ICU length of stay within ``[min_hours, max_hours]``."""
 
@@ -189,6 +208,7 @@ class ConditionPresent(_Criterion):
     kind: Literal["condition_present"]
     concepts_all_of: list[str] = Field(min_length=1, max_length=MAX_CONDITION_CONCEPTS)
     window: Optional[SpecWindow]
+    missing_policy: Optional[Literal["exclude", "retain", "stop"]] = None
 
     @field_validator("concepts_all_of")
     @classmethod
@@ -236,6 +256,9 @@ class Measurement(_Criterion):
     value: float = Field(allow_inf_nan=False)
     #: The threshold's unit when the statement gives one.
     unit: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    #: An explicitly stated decision for rows with no evaluable measurement.
+    #: Legacy specs omit it and retain their original materialization behavior.
+    missing_policy: Optional[Literal["exclude", "retain", "stop"]] = None
 
     @field_validator("concept")
     @classmethod
@@ -256,6 +279,7 @@ class EventAbsent(_Kept):
     kind: Literal["event_absent"]
     concept: str = Field(min_length=1, max_length=128)
     window: Optional[SpecWindow]
+    missing_policy: Optional[Literal["exclude", "retain", "stop"]] = None
 
     @field_validator("concept")
     @classmethod
@@ -275,6 +299,7 @@ PopulationCriterion = Annotated[
         AgeYears,
         FirstIcuStay,
         FirstIcuStayPerHospitalization,
+        FirstObservedIcuSingleHospitalAdult,
         IcuStayHours,
         ConditionPresent,
         DiagnosisCodes,

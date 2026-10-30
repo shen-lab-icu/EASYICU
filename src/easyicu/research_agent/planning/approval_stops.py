@@ -29,6 +29,7 @@ from .question_requirements import (
 
 PLAN_APPROVAL_STOPS: tuple[str, ...] = (
     *POPULATION_APPROVAL_STOPS.values(),
+    "population_criterion_decision_unconfirmed",
     *QUESTION_REQUIREMENT_STOP_CODES,
 )
 

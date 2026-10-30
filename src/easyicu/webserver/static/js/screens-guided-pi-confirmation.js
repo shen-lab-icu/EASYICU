@@ -425,6 +425,16 @@
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
       ] : [];
       const populationAcceptance = (workflow.plan_review_summary || {}).population_acceptance;
+      if (code === 'population_criterion_decision_unconfirmed') return {
+        code, grants: [], nonApprovable: true,
+        title: tr('Decide how to apply the population criteria', '请明确人群条件的判定方式'),
+        note: tr(
+          'The plan needs an explicit choice for missing or unmeasurable values, and the unit for any measurement threshold that needs one. Open the complete plan to review the criteria, then request a revised plan; analysis has not started.',
+          '计划需要明确数值缺失或无法判定时如何处理，并为需要单位的阈值注明单位。如果问题里已经说明，请让 EasyICU 按原话修订；分析尚未开始。',
+        ),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: planStopResources,
+      };
       if (code === 'population_inclusion_not_applied' && populationAcceptance) return {
         code, grants: [], nonApprovable: !populationAcceptance.available,
         title: tr('Review the population criteria this plan cannot apply', '逐条审阅本计划无法施加的人群条件'),
@@ -445,7 +455,7 @@
           'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
           '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
         ),
-        title: tr('A stated inclusion criterion cannot be applied as written', '研究写明的纳入条件按原文无法施加'),
+        title: tr('A stated population criterion cannot be applied as written', '研究写明的人群条件按原文无法施加'),
         note: tr(
           'This plan cannot be approved, and no analysis has started. Revise the criterion in the conversation, or generate the plan again.',
           '这份计划不能批准，分析尚未开始。可以在对话中修改这个条件，或重新生成计划。',
@@ -461,7 +471,7 @@
           code, grants: [], nonApprovable: !available,
           populationPreparation: preparation,
           approve: tr('Apply these population settings', '应用这些人群条件'),
-          title: tr('A stated inclusion criterion needs data extracted for this study’s population', '研究写明的纳入条件需要按本研究人群重新提取数据'),
+          title: tr('A stated population criterion needs data extracted for this study’s population', '研究写明的人群条件需要按本研究人群重新提取数据'),
           note: available ? tr(
             'Review the criteria and settings below. Applying them saves this population for data preparation. Request extraction in the conversation next; analysis still requires a new plan and review.',
             '请核对下方条件及设置变化。应用后，这组人群条件会写入数据准备设置；随后可在对话中请求提取。分析仍需重新生成计划并审核。',
@@ -573,16 +583,51 @@
       return null;
     }
 
+    function reviewedPopulationSpecHtml(projection) {
+      if (!projection || projection.schema_version !== 'easyicu.reviewed_population_spec_projection/1' || !Array.isArray(projection.criteria)) return '';
+      const missingLabels = {
+        exclude: tr('exclude patients with unknown values', '排除无法判定的患者'),
+        retain: tr('retain patients with unknown values', '保留无法判定的患者'),
+        stop: tr('stop if any value is unknown', '存在无法判定的值时停止'),
+      };
+      const disposition = {
+        applied_by_plan: tr('applied by the plan', '计划中已施加'),
+        applied_by_source: tr('applied by the source', '来源已施加'),
+        requires_extraction: tr('needs data preparation', '需要数据准备'),
+        not_applied: tr('not applied', '尚未施加'),
+      };
+      const rows = projection.criteria.map(item => {
+        const c = item && item.criterion || {};
+        const fields = [];
+        const concept = Array.isArray(c.concepts_all_of) ? c.concepts_all_of.join(', ') : c.concept;
+        if (concept) fields.push(`${tr('Concept', '概念')}: ${concept}`);
+        if (c.kind === 'diagnosis_codes' && Array.isArray(c.codes)) fields.push(`${tr('Diagnosis code prefixes', '诊断编码前缀')} (${String(c.system || '').toUpperCase()}): ${c.codes.join(', ')}`);
+        if (c.op && typeof c.value === 'number') fields.push(`${tr('Threshold', '阈值')}: ${c.op} ${c.value} ${c.unit || tr('(unit not stated)', '（单位未注明）')}`);
+        if (c.summary) fields.push(`${tr('Summary', '汇总方式')}: ${c.summary}`);
+        if (Object.prototype.hasOwnProperty.call(c, 'window')) {
+          const w = c.window;
+          fields.push(w ? `${tr('Window', '时间窗')}: [${w.start_hours}, ${w.end_hours}) ${tr('hours from ICU admission', '小时，以 ICU 入住为起点')}` : tr('Window: whole ICU stay', '时间窗：整个 ICU 入住期间'));
+        }
+        if (['measurement', 'condition_present', 'event_absent'].includes(c.kind)) fields.push(`${tr('Unknown values', '无法判定时')}: ${missingLabels[c.missing_policy] || tr('not specified', '未注明')}`);
+        if (c.kind === 'event_absent') fields.push(tr('Event must be absent', '要求事件未发生'));
+        const role = c.role === 'exclude' ? tr('Exclude', '排除') : tr('Include', '纳入');
+        return `<li><strong>${esc(role)} · ${esc(c.quote || '')}</strong><small>${esc(fields.join(' · '))}</small><small>${esc(disposition[item.disposition] || tr('status unverified', '状态未核验'))}</small></li>`;
+      }).join('');
+      if (!rows) return '';
+      return `<details class="gpi-confirmation-data-status" open><summary>${esc(tr('Population conditions in the reviewed plan', '待审计划中的人群条件'))}</summary><small>${esc(tr('These are the plan’s proposed conditions and decisions; review them before approval.', '这些是计划提出的条件和处理方式，请在批准前逐条审阅。'))}</small><ul>${rows}</ul></details>`;
+    }
+
     function populationPreparationHtml(preparation) {
       if (!preparation) return '';
       const reasons = {
         population_preparation_all_stays_conflict: tr('Conflicts with your choice to retain all stays.', '与已选择的保留全部入住冲突。'),
         population_preparation_patient_hospitalization_scope_mismatch: tr('The question asks for each patient’s first ICU stay; the first ICU stay per hospitalization is different. Revise the plan and verify patient ordering before preparation.', '原问题要求每位患者首次 ICU 入住；每次住院首次 ICU 不是同一人群。请先修订计划并核实患者入住顺序。'),
+        population_preparation_eicu_demo_first_observed_unavailable: tr('The requested eICU Demo subset needs a verified complete-source selection and exclusion record; this preparation is not available yet.', '所需的 eICU Demo 子人群需要完整来源核验与排除记录；该数据准备方式尚不可用。'),
         population_preparation_bound_unrepresentable: tr('Extraction cannot preserve these exact bounds.', '提取无法保留这组精确界限。'),
         population_preparation_empty_age_range: tr('Conflicts with the current age range.', '与当前年龄范围冲突。'),
         population_determined_after_time_zero: tr('This condition is determined after time zero.', '该条件在研究起点之后才能确定。'),
         population_preparation_kind_unsupported: tr('Extraction settings cannot express this complete condition.', '当前提取设置不能完整表达该条件。'),
-        population_inclusion_not_applied: tr('This inclusion remains unapplied.', '这条纳入条件仍无法施加。'),
+        population_inclusion_not_applied: tr('This population criterion remains unapplied.', '这条人群条件仍无法施加。'),
         population_kind_not_typed: tr('No supported condition kind expresses it.', '目前没有可准确表达该条件的类型。'),
         population_concept_unavailable: tr('The required concept is unavailable.', '所需临床概念不可用。'),
         population_identifier_column: tr('An identifier cannot define this clinical condition.', '标识列不能判定该临床条件。'),
@@ -822,6 +867,7 @@
         : '';
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
+      const reviewedPopulation = reviewedPopulationSpecHtml(review && review.reviewed_population_spec);
       // index.html always loads this owner (static contract); harnesses that
       // load the confirmation alone simply show no database card.
       const adjustmentOwner = window.EasyICU.guidedPi.optional('sourceAdjustments');
@@ -833,7 +879,7 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}

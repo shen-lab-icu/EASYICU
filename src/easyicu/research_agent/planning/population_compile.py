@@ -102,6 +102,7 @@ from .population_spec import (
     EventAbsent,
     FirstIcuStay,
     FirstIcuStayPerHospitalization,
+    FirstObservedIcuSingleHospitalAdult,
     IcuStayHours,
     Measurement,
     NotTyped,
@@ -144,8 +145,9 @@ REQUIRES_EXTRACTION_REASONS = (
     "population_diagnosis_codes_need_extraction",
     "population_first_icu_stay_not_restricted",
     "population_first_icu_stay_per_hospitalization_not_restricted",
+    "population_single_hospital_first_observed_icu_not_restricted",
 )
-#: Why a plan cannot be approved while an inclusion is ``blocking``, one code
+#: Why a plan cannot be approved while a criterion is ``blocking``, one code
 #: per remedy (population spec design 3.3 and 3.5): an extraction of the
 #: study's own population, or a decision the study itself must make.
 #: Stable: a published code never changes.
@@ -275,12 +277,12 @@ class CompiledPopulation:
 
     @property
     def blocking(self) -> tuple[CompiledCriterion, ...]:
-        """Inclusions the analysis would not apply: approval waits for the user."""
+        """Any stated restriction the analysis cannot apply blocks approval."""
 
         return tuple(
             item
             for item in self.criteria
-            if item.criterion.role == "include" and not item.applied
+            if not item.applied
         )
 
     def cohort_definition(self, name: str = "primary") -> CohortDefinition:
@@ -627,6 +629,13 @@ def _compile(criterion: PopulationCriterion, reading: _Input) -> CompiledCriteri
                 "stay within each hospitalization. A per-patient first-stay "
                 "receipt cannot establish this different population.",
             )
+        if isinstance(criterion, FirstObservedIcuSingleHospitalAdult):
+            raise _NotApplied(
+                "population_single_hospital_first_observed_icu_not_restricted",
+                "The accepted source-visible adult first-ICU subset "
+                "needs its own verified source and extraction receipt; neither "
+                "per-patient nor per-hospitalization first-stay proof establishes it.",
+            )
         side, predicates, note = _plan_predicates(criterion, reading)
     except _NotApplied as found:
         return CompiledCriterion(
@@ -687,7 +696,8 @@ def _plan_predicates(
     elif isinstance(criterion, ConditionPresent):
         side = "inclusion" if criterion.role == "include" else "exclusion"
         predicates = tuple(
-            _status_predicate(reading, concept, _hours(criterion.window))
+            _status_predicate(reading, concept, _hours(criterion.window),
+                              missing_policy=criterion.missing_policy)
             for concept in criterion.concepts_all_of
         )
     elif isinstance(criterion, Measurement):
@@ -704,7 +714,8 @@ def _plan_predicates(
         # read any condition, by its own time or over its column's window.
         side = "exclusion"
         predicates = (
-            _status_predicate(reading, criterion.concept, _hours(criterion.window)),
+            _status_predicate(reading, criterion.concept, _hours(criterion.window),
+                              missing_policy=criterion.missing_policy),
         )
     else:  # pragma: no cover - the union is closed
         raise TypeError(f"unknown population criterion {type(criterion).__name__}")
@@ -775,7 +786,8 @@ def _resolve(reading: _Input, concept: str, aggregation: str) -> str:
 
 
 def _status_predicate(
-    reading: _Input, concept: str, hours: tuple[float, float]
+    reading: _Input, concept: str, hours: tuple[float, float],
+    *, missing_policy: Optional[str] = None,
 ) -> ConceptPredicate:
     """``concept`` present within ``hours``: its 0/1 status equals 1.
 
@@ -793,7 +805,8 @@ def _status_predicate(
             "cannot be read from it.",
         )
     start, end = hours
-    return _predicate(concept, start, end, aggregation="max", op="==", value=1)
+    return _predicate(concept, start, end, aggregation="max", op="==", value=1,
+                      missing_policy=missing_policy)
 
 
 def _hours(window: Optional[SpecWindow]) -> tuple[float, float]:
@@ -813,6 +826,7 @@ def _measurement_predicate(reading: _Input, criterion: Measurement) -> ConceptPr
         op=criterion.op,
         value=criterion.value,
         unit=criterion.unit,
+        missing_policy=criterion.missing_policy,
     )
 
 
@@ -825,6 +839,7 @@ def _threshold_predicate(
     op: str,
     value: float,
     unit: Optional[str],
+    missing_policy: Optional[str] = None,
 ) -> ConceptPredicate:
     """``summary`` of ``concept`` over ``hours`` compared with a threshold."""
 
@@ -851,7 +866,10 @@ def _threshold_predicate(
                 f"{column!r} in {getattr(variable, 'unit', None)!r}.",
             )
     start, end = hours
-    return _predicate(concept, start, end, aggregation=summary, op=op, value=value)
+    return _predicate(
+        concept, start, end, aggregation=summary, op=op, value=value,
+        missing_policy=missing_policy,
+    )
 
 
 def _holds_summary(
@@ -947,7 +965,8 @@ def _bounded(
 
 
 def _predicate(
-    concept: str, start: float, end: float, *, aggregation: str, op: str, value: Any
+    concept: str, start: float, end: float, *, aggregation: str, op: str, value: Any,
+    missing_policy: Optional[str] = None,
 ) -> ConceptPredicate:
     try:
         return ConceptPredicate(
@@ -958,6 +977,7 @@ def _predicate(
             aggregation=aggregation,  # type: ignore[arg-type]
             op=op,  # type: ignore[arg-type]
             value=value,
+            **({"missing_policy": missing_policy} if missing_policy is not None else {}),
         )
     except CohortSchemaError as exc:
         raise _NotApplied("population_concept_unavailable", str(exc)) from exc

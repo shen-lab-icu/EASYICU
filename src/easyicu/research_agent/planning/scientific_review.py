@@ -3520,6 +3520,7 @@ def build_plan_scientific_review(
     require_reportable_capability: bool = False,
     runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
     model_retention: Optional[PrimaryModelRetentionEvidence] = None,
+    bound_plan_revision_contract: str = "",
 ) -> PlanScientificReview:
     """Score and adjudicate the exact proposed plan before human approval."""
 
@@ -3528,6 +3529,46 @@ def build_plan_scientific_review(
     require_g_method_plan(context, plan)
 
     findings: list[PlanScientificFinding] = []
+    from .descriptive_question_uncertainty import (
+        amendment_user_messages, primary_distribution_gaps, requested_uncertainty,
+    )
+
+    amendment_messages = amendment_user_messages(bound_plan_revision_contract)
+    uncertainty_requirement = requested_uncertainty(context.research_question, *amendment_messages)
+    uncertainty_fact = None
+    coverage = primary_distribution_gaps(plan.model_dump(mode="json"), uncertainty_requirement)
+    if coverage is not None:
+        distribution_steps, missing = coverage
+        uncertainty_fact = {
+            "requested_confidence_levels": list(uncertainty_requirement.confidence_levels),
+            "revision_contract_sha256": canonical_sha256(bound_plan_revision_contract) if amendment_messages else None,
+            "distribution_step_ids": list(distribution_steps),
+            "unmet_distribution_step_ids": list(missing),
+        }
+        if not distribution_steps or missing:
+            findings.append(PlanScientificFinding(
+                code="QUESTION_DESCRIPTIVE_UNCERTAINTY_NOT_MET",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The researcher requested a confidence interval for the descriptive result, "
+                    "but the reviewed plan does not specify the requested confidence "
+                    "interval for its primary distribution."
+                ),
+                evidence_refs=[
+                    "research_context.json.research_question",
+                    "pipeline_config.bound_plan_revision_contract",
+                    "analysis_plan.json.steps.exposure_outcome_distribution_spec",
+                ],
+                remediation=(
+                    "Bind an appropriate, executable interval and requested confidence "
+                    "level to the reviewed distribution only when the source and "
+                    "independent-unit or patient-grouping authority support it. Otherwise "
+                    "explain the missing source authority and ask the researcher to "
+                    "review a feasible change; do not silently omit the request."
+                ),
+                remediation_route="study_authority_change",
+            ))
     from .literature_source_integrity import inspect_plan_literature_sources
 
     for source_issue in inspect_plan_literature_sources(
@@ -5152,6 +5193,7 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            **({"requested_descriptive_uncertainty": uncertainty_fact} if uncertainty_fact else {}),
             "requested_columns_without_data": list(unobserved),
             "stated_adjustment_coverage": adjustment_coverage.model_dump(mode="json"),
             "stated_subgroup_coverage": subgroup_coverage.model_dump(mode="json"),

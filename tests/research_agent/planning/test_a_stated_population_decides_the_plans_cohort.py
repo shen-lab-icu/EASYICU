@@ -419,7 +419,7 @@ def test_the_same_inclusion_is_applied_when_the_time_zero_follows_it() -> None:
     ]
 
 
-def test_an_exclusion_the_plan_cannot_apply_is_listed_not_stopped() -> None:
+def test_an_exclusion_the_plan_cannot_apply_stops_approval() -> None:
     excluded = {
         "kind": "not_typed",
         "why": "no kind states a prior referral",
@@ -433,8 +433,10 @@ def test_an_exclusion_the_plan_cannot_apply_is_listed_not_stopped() -> None:
 
     assert plan.cohort.unapplied_population_criteria == ("met the marker criteria",)
     assert [item.concept_id for item in plan.cohort.inclusion] == ["age"]
-    # An exclusion left unapplied keeps more stays; it refuses no approval.
-    assert stops == []
+    # An exclusion left unapplied keeps more stays, so it stops approval.
+    assert len(stops) == 1
+    assert stops[0].detail["approval_allowed"] is False
+    assert stops[0].detail["criteria"][0]["role"] == "exclude"
 
 
 # -- what goes back to the Planner ---------------------------------------------
