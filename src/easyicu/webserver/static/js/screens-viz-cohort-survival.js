@@ -35,6 +35,7 @@
       return `<button class="${cls}" ${attr}><span>${esc(cohortText(row.label || row.id))}</span><b>${ready ? n : cohortText('blocked')}</b></button>`;
     }).join('');
     const blockedOutcomes = outcomes.filter(row => row.status !== 'ready');
+    const blockedGroups = groups.filter(row => row.status !== 'ready');
     if (!curve) {
       return `
       <div class="sec-stack"><div class="lbl">${cohortText('Survival analysis')}</div><h2>${cohortText('Kaplan-Meier module')}</h2></div>
@@ -44,7 +45,8 @@
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Survival analysis blocked')}</div><div class="d">${esc(cohortReason(survival.reason || 'This export does not expose an outcome with both event and time-to-event columns.'))}</div></div></div>
       ${cohortSurvivalSourceHint(survival)}
-      ${cohortSurvivalBlockedList(blockedOutcomes)}`;
+      ${cohortSurvivalBlockedList(blockedOutcomes)}
+      ${cohortSurvivalBlockedList(blockedGroups)}`;
     }
     const logrank = curve.logrank || {};
     const pValueLabel = logrank.p_value_label || fmtP(logrank.p_value);
@@ -70,11 +72,13 @@
           </div>
         </div>
         ${cohortSurvivalChart(curve)}
-        ${cohortSurvivalEffect(curve)}
+        <div class="muted">${t('The event-free estimate is specific to the selected endpoint and censoring rule. A same-time group difference requires an audited calculation.', '无事件估计仅对应所选结局及其删失规则；组间同一时点差值需要经审计的计算。')}</div>
+        ${curve.outcome_id === 'hospital_death' ? `<div class="muted">${t('Discharge alive is censored: this is an in-hospital death analysis, not all-cause 30-day survival.', '存活出院按删失处理：这是院内死亡分析，并非全因 30 天生存。')}</div>` : ''}
         ${cohortRiskTable(curve)}
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM 曲线和 log-rank 检验由队列汇总计算，属于探索性结果。要写进论文的结论，仍需在研究对话中核对证据并经人工审阅。')}</div></div></div>
-      ${cohortSurvivalBlockedList(blockedOutcomes)}`;
+      ${cohortSurvivalBlockedList(blockedOutcomes)}
+      ${cohortSurvivalBlockedList(blockedGroups)}`;
   }
 
   function cohortSurvivalOutcomeCards(outcomes, selectedOutcome) {
@@ -151,7 +155,7 @@
         <div class="ico">${icon('db', 14)}</div>
         <div class="body">
           <div class="t">${t('Current export is already loaded', '当前导出已加载')}</div>
-          <div class="d">${t('Cohort Review is using the active EasyICU export. KM/log-rank will run here when the Outcome module has both an event flag and a time-to-event or censoring-time column; otherwise continue from this same export in an audited local Agent analysis. No re-import is required.', '队列统计正在使用当前数据。只要结局模块同时有事件标志和事件时间（或删失时间）列，KM 生存曲线和 log-rank 检验就会直接在这里计算；否则请在研究对话中基于同一份数据继续分析，不需要重新导入。')}</div>
+          <div class="d">${t('Cohort Review uses the active export. KM/log-rank also requires a supported grouping at the time origin as well as event and time columns. Review the reasons below or continue with an audited local analysis. No re-import is required.', '队列统计使用当前数据。KM 曲线和 log-rank 除事件及时间列外，还需要在时间起点有效的分组。请查看下方原因，或继续进行经审计的本地分析，不需要重新导入。')}</div>
           <div class="d mono" style="margin-top:4px;">${esc(reason)}</div>
         </div>
       </div>
@@ -210,33 +214,10 @@
           censorMarks: group.censor_marks || [],
         })),
       })}
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, continue with this cohort in Guided Copilot.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入研究对话继续。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('A downward step represents events at that time and can include more than one event. Separation shows different unadjusted estimates; it does not by itself establish a reliable or causal difference.', '曲线下降表示该时点发生了事件，同一时点可能有多例。曲线分离反映未经校正的估计不同，不能仅凭图形认定可靠差异或因果关系。')}</span></div>
     </div>`;
   }
 
-  // Coarse, always-available effect summary so the panel does not surface a lone
-  // p-value: end-of-follow-up survival per group + absolute risk difference
-  // (unadjusted, no CI). Complements the log-rank rather than replacing it.
-  function cohortSurvivalEffect(curve) {
-    const groups = (curve.groups || []).filter(g => Array.isArray(g.points) && g.points.length);
-    if (groups.length < 2) return '';
-    const finals = groups.map(g => {
-      const last = g.points[g.points.length - 1];
-      const surv = Number(last && last.survival);
-      return { label: g.label, time: Number(last && last.time), surv, risk: 100 - surv };
-    }).filter(f => Number.isFinite(f.surv));
-    if (finals.length < 2) return '';
-    const tMax = Math.max(...finals.map(f => f.time).filter(Number.isFinite));
-    const survBits = finals.map(f => `${esc(cohortText(f.label))} ${fmtNum(f.surv, 1)}%`).join(' vs ');
-    const risks = finals.map(f => f.risk);
-    const ard = Math.max(...risks) - Math.min(...risks);
-    const tLabel = Number.isFinite(tMax) ? `${fmtNum(tMax, 0)}${t('d survival', ' 天生存')}` : t('end-of-follow-up survival', '随访末生存');
-    return `<div class="surv-effect">
-      <span class="surv-effect-lab">${t('Effect (absolute · unadjusted)', '效应量（绝对 · 未校正）')}</span>
-      <span>${tLabel}: ${survBits}</span>
-      <span>${t('absolute risk difference', '绝对风险差')} <strong>${fmtNum(ard, 1)} ${t('pp', '个百分点')}</strong></span>
-    </div>`;
-  }
   function cohortRiskTable(curve) {
     const risk = curve.number_at_risk || {};
     const times = risk.times || [];

@@ -16,7 +16,12 @@
     sofaMatrixMode: 'pct',
     sofaMatrixGranularity: 'exact',
     error: null,
+    customGroup: null,
+    customDraft: { kind: 'numeric_threshold' },
+    customBusy: false,
+    customError: null,
   };
+  let requestSequence = 0;
   let view;
   let cohortCharts;
   let t;
@@ -64,6 +69,17 @@
   function syncCohortFeatureSelection(payload) {
     const ids = cohortSelectedFeatureIds(payload);
     if (ids.length) state.selectedFeatures = ids;
+  }
+  function customGroupReceiptMatches(payload, group) {
+    if (!payload || !payload.custom_group_options || payload.custom_group_options.version !== '1') return false;
+    const receipt = payload.custom_group_applied;
+    const custom = (((payload.groups || {}).supported) || []).find(row => row.id === 'custom');
+    if (!group) return receipt === null && !custom;
+    if (!receipt || receipt.kind !== group.kind || receipt.feature_id !== group.feature_id) return false;
+    if (!custom || custom.kind !== group.kind || custom.feature_id !== group.feature_id) return false;
+    if (group.kind === 'numeric_threshold') return typeof receipt.threshold === 'number' && Number.isFinite(receipt.threshold) && receipt.threshold === group.threshold;
+    if (group.kind === 'categorical_values') return Array.isArray(receipt.values) && receipt.values.length === 2 && receipt.values.every((value, i) => value === group.values[i]);
+    return group.kind === 'sex';
   }
   function reloadCohortForFeatureSelection() {
     state.view = 'loading';
@@ -113,9 +129,15 @@
       done && done(false);
       return;
     }
+    const sequence = ++requestSequence;
     const body = { source_path: active };
     if (state.selectedFeatures.length) body.selected_features = state.selectedFeatures.slice();
+    if (state.customGroup) body.custom_group = { ...state.customGroup };
     window.EU_API.loadCohortReviewSummary(body).then(payload => {
+      if (sequence !== requestSequence || registryActivePath() !== active) return;
+      if (state.customGroup && !customGroupReceiptMatches(payload, state.customGroup)) {
+        throw new Error(t('The service did not confirm the requested grouping. Restart or update the service before using custom grouping.', '服务未确认请求的自定义分组，请重启或更新服务后重试。'));
+      }
       window.EU_COHORT_REVIEW = payload;
       syncCohortFeatureSelection(payload);
       window.EU_VIZ_WORKSPACE = cohortWorkspaceFromReview(payload);
@@ -123,10 +145,53 @@
       window.EU_HASWORK = true;
       done && done(true);
     }).catch(err => {
+      if (sequence !== requestSequence || registryActivePath() !== active) return;
       window.EU_COHORT_REVIEW = null;
       window.EU_VIZ_WORKSPACE = null;
       state.error = String(err && err.message || err);
       done && done(false);
+    });
+  }
+  function applyCustomGroup(group) {
+    if (state.customBusy || !registryActivePath()) return;
+    const source = registryActivePath();
+    const sequence = ++requestSequence;
+    const body = { source_path: source };
+    if (state.selectedFeatures.length) body.selected_features = state.selectedFeatures.slice();
+    if (group) body.custom_group = group;
+    state.customBusy = true;
+    state.customError = null;
+    repaintScreen('cohort');
+    window.EU_API.loadCohortReviewSummary(body).then(payload => {
+      if (sequence !== requestSequence || registryActivePath() !== source) return;
+      if (!customGroupReceiptMatches(payload, group)) {
+        state.customBusy = false;
+        state.customError = t('The service did not confirm the requested grouping. Restart or update the service before using custom grouping.', '服务未确认请求的自定义分组，请重启或更新服务后重试。');
+        repaintScreen('cohort');
+        return;
+      }
+      window.EU_COHORT_REVIEW = payload;
+      window.EU_VIZ_WORKSPACE = cohortWorkspaceFromReview(payload);
+      syncCohortFeatureSelection(payload);
+      state.customGroup = group;
+      state.customBusy = false;
+      state.compare = group ? 'custom' : 'outcome';
+      const custom = (((payload || {}).survival_analysis || {}).group_options || []).find(row => row.id === 'custom');
+      state.survivalGroup = group && custom && custom.status === 'ready' ? 'custom' : '';
+      repaintScreen('cohort');
+    }).catch(err => {
+      if (sequence !== requestSequence || registryActivePath() !== source) return;
+      state.customBusy = false;
+      const code = err && (err.code || err.message);
+      const messages = {
+        custom_group_feature_unavailable: t('This field is not available in the current export.', '当前导出没有这个字段。'),
+        custom_group_numeric_unavailable: t('This field has no valid numeric values for threshold grouping.', '这个字段没有可用于阈值分组的有效数值。'),
+        custom_group_category_unavailable: t('The chosen categories are not available in the current export.', '所选类别不在当前导出中。'),
+        invalid_custom_group_threshold: t('Enter a finite numeric threshold.', '请输入有限数值作为阈值。'),
+        invalid_custom_group_categories: t('Choose two distinct recorded categories.', '请选择两个不同的已记录类别。'),
+      };
+      state.customError = messages[code] || String(err && err.message || err);
+      repaintScreen('cohort');
     });
   }
   S.cohort = {
@@ -190,7 +255,7 @@
         });
       }
       root.querySelectorAll('[data-cohort-run]').forEach(b => b.addEventListener('click', () => {
-        if (state.view === 'loading') return;
+        if (state.view === 'loading' || state.customBusy) return;
         if (!registryActivePath()) {
           state.view = 'idle';
           window.EU_COHORT_REVIEW = null;
@@ -214,9 +279,8 @@
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
-        state.view = 'idle';
+        resetForSourceChange();
         state.featureScope = 'recommended';
-        window.EU_COHORT_REVIEW = null;
         window.EU_VIZ_WORKSPACE = null;
         repaintScreen('cohort');
       }));
@@ -265,6 +329,7 @@
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-toggle]').forEach(b => b.addEventListener('click', () => {
+        if (state.customBusy) return;
         const id = b.dataset.cohortFeatureToggle;
         if (!id || b.getAttribute('aria-disabled') === 'true') return;
         const selected = new Set(state.selectedFeatures.length ? state.selectedFeatures : cohortSelectedFeatureIds(cohortReview()));
@@ -275,11 +340,13 @@
         reloadCohortForFeatureSelection();
       }));
       root.querySelectorAll('[data-cohort-feature-default]').forEach(b => b.addEventListener('click', () => {
+        if (state.customBusy) return;
         resetCohortFeatureSelection();
         window.EU_STALE = true;
         reloadCohortForFeatureSelection();
       }));
       root.querySelectorAll('[data-cohort-feature-clear]').forEach(b => b.addEventListener('click', () => {
+        if (state.customBusy) return;
         state.selectedFeatures = [];
         const review = cohortReview();
         if (review && review.feature_selection) review.feature_selection.selected = [];
@@ -293,6 +360,50 @@
         window.EU_STALE = true;
         repaintScreen('cohort');
       }));
+      const groupKind = root.querySelector('[data-custom-kind]');
+      const groupFeature = root.querySelector('[data-custom-feature]');
+      const threshold = root.querySelector('[data-custom-threshold]');
+      const valueA = root.querySelector('[data-custom-value-a]');
+      const valueB = root.querySelector('[data-custom-value-b]');
+      if (groupKind) groupKind.addEventListener('change', () => {
+        state.customDraft = { kind: groupKind.value };
+        state.customError = null;
+        repaintScreen('cohort');
+      });
+      if (groupFeature) groupFeature.addEventListener('change', () => {
+        state.customDraft = { ...state.customDraft, feature_id: groupFeature.value, value_a: '', value_b: '' };
+        state.customError = null;
+        repaintScreen('cohort');
+      });
+      if (threshold) threshold.addEventListener('input', () => { state.customDraft.threshold = threshold.value; });
+      if (valueA) valueA.addEventListener('change', () => { state.customDraft.value_a = valueA.value; });
+      if (valueB) valueB.addEventListener('change', () => { state.customDraft.value_b = valueB.value; });
+      root.querySelectorAll('[data-custom-apply]').forEach(button => button.addEventListener('click', () => {
+        if (state.customBusy) return;
+        const kind = groupKind && groupKind.value;
+        let group;
+        if (kind === 'sex') {
+          group = { kind, feature_id: 'demographics:sex' };
+        } else if (kind === 'categorical_values') {
+          if (!groupFeature || !groupFeature.value || !valueA || !valueB || !valueA.value || !valueB.value || valueA.value === valueB.value) {
+            state.customError = t('Choose two distinct recorded categories.', '请选择两个不同的已记录类别。');
+            repaintScreen('cohort');
+            return;
+          }
+          group = { kind, feature_id: groupFeature.value, values: [valueA.value, valueB.value] };
+        } else {
+          const raw = threshold ? threshold.value.trim() : '';
+          const number = Number(raw);
+          if (!groupFeature || !groupFeature.value || !raw || !Number.isFinite(number)) {
+            state.customError = t('Choose a field and enter a finite threshold.', '请选择字段并输入有效的有限阈值。');
+            repaintScreen('cohort');
+            return;
+          }
+          group = { kind: 'numeric_threshold', feature_id: groupFeature.value, threshold: number };
+        }
+        applyCustomGroup(group);
+      }));
+      root.querySelectorAll('[data-custom-clear]').forEach(button => button.addEventListener('click', () => applyCustomGroup(null)));
     },
     render() {
       if (window.__euCohortPanel) { state.panel = window.__euCohortPanel; window.__euCohortPanel = null; }
@@ -349,7 +460,9 @@
         </div>`;
       }
       return head + `
+      ${review && review.summary && (!review.summary.mortality || review.summary.mortality.known_count == null) ? `<div class="note warn mt-12" role="status">${t('The current service is still running the older statistics logic; mortality and related summaries have not been updated. Restart the service before relying on them.', '当前服务仍在运行旧统计逻辑，死亡率等尚未更新；请重启服务后再使用这些结果。')}</div>` : ''}
       ${view.tabs()}
+      ${['groups', 'survival'].includes(state.panel) && view.customGroupEditor ? view.customGroupEditor(review) : ''}
       <div id="cohbody">${view.panelBody()}</div>
       <div class="nextbar accent mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
@@ -387,8 +500,13 @@
   }
 
   function resetForSourceChange() {
+    ++requestSequence;
     window.EU_COHORT_REVIEW = null;
     resetCohortFeatureSelection();
+    state.customGroup = null;
+    state.customDraft = { kind: 'numeric_threshold' };
+    state.customBusy = false;
+    state.customError = null;
     state.view = 'idle';
     state.error = null;
   }

@@ -118,7 +118,19 @@
   function median(values) {
     if (!values.length) return null;
     const sorted = values.slice().sort((a, b) => a - b);
-    return sorted[Math.floor(sorted.length / 2)];
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  function observationScope(signal, shown, helpers) {
+    const total = Number(signal && signal.point_count);
+    if (!Number.isFinite(total) || total < shown || total <= 0) {
+      return hT(helpers, `${shown} displayed observations; total unavailable`, `显示 ${shown} 个观测点；总数未知`);
+    }
+    if (total <= shown) return hT(helpers, `Showing all ${total} available observations`, `显示全部 ${total} 个已读取观测点`);
+    return signal.sampling_method === 'endpoints_extrema_largest_gap_v1'
+      ? hT(helpers, `Showing ${shown} of ${total} observations; sampled with first, last, minimum and maximum retained`, `显示 ${shown} / ${total} 个观测点；抽样保留首末值及最低、最高值，其他观测可能省略`)
+      : hT(helpers, `Showing ${shown} of ${total} observations; sampled points may omit observations`, `显示 ${shown} / ${total} 个观测点；抽样可能省略其他观测`);
   }
 
   function thresholdsFor(sig, helpers) {
@@ -142,7 +154,7 @@
     if (Number.isFinite(midpoint)) {
       rows.unshift({
         value: midpoint,
-        label: hT(helpers, 'Median', '中位数'),
+        label: hT(helpers, 'Displayed-point median', '显示点中位数'),
         color: '#94a3b8',
         dash: '4 4',
       });
@@ -182,6 +194,7 @@
     return `
       <div class="pt-vsm-cell" data-patient-series-feature="${hEsc(helpers, signalKey(sig))}">
         <div class="pt-vsm-title">${hEsc(helpers, label)}${unit ? ` <span class="mono">${hEsc(helpers, unit)}</span>` : ''}</div>
+        <div class="pt-echart-hint">${hEsc(helpers, observationScope(sig, values.length, helpers))}</div>
         ${chart}
       </div>`;
   }
@@ -349,7 +362,7 @@
       </div>
       <div class="pt-vsm-legend">
         <span><i style="background:var(--accent);"></i>${hT(helpers, 'Patient trajectory', '患者轨迹')}</span>
-        <span><i class="dash" style="color:#94a3b8;"></i>${hT(helpers, 'Median', '中位数')}</span>
+        <span><i class="dash" style="color:#94a3b8;"></i>${hT(helpers, 'Displayed-point median', '显示点中位数')}</span>
         <span><i class="dash" style="color:#ef4444;"></i>${hT(helpers, 'Clinical reference guide', '临床参考线')}</span>
         ${window.EU_PATIENT_CHARTS && window.EU_PATIENT_CHARTS.available()
           ? `<span class="pt-echart-hint">${hT(helpers, 'Hover for exact time and value', '悬停查看精确时间和值')}</span>`
@@ -509,7 +522,7 @@
           thresholds: [],
         }, fallback) : fallback;
         return `<article class="pt-trajectory-row">
-          <div class="pt-trajectory-entity"><b>${hEsc(helpers, label)}</b><span>${hFmtInt(helpers, row.values.length)} ${hEsc(helpers, hT(helpers, 'observations', '个观测'))}</span></div>
+          <div class="pt-trajectory-entity"><b>${hEsc(helpers, label)}</b><span>${hEsc(helpers, observationScope(row.trace, row.values.length, helpers))}</span></div>
           <div class="pt-trajectory-chart">${chart}</div>
           <div class="pt-trajectory-delta"><span>${hEsc(helpers, hT(helpers, 'start → last', '起点 → 末值'))}</span><b>${hFmtNum(helpers, start, 1)} → ${hFmtNum(helpers, latest, 1)}${unit ? ` ${hEsc(helpers, unit)}` : ''}</b><em class="${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}">Δ ${delta > 0 ? '+' : ''}${hFmtNum(helpers, delta, 1)}</em></div>
         </article>`;

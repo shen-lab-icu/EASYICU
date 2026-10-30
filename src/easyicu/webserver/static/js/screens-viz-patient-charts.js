@@ -223,7 +223,7 @@
     const midpoint = median(values);
     if (midpoint != null) {
       rows.push({
-        name: zh('Median', '中位数'),
+        name: zh('Displayed-point median', '显示点中位数'),
         yAxis: midpoint,
         lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 },
       });

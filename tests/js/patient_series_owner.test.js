@@ -131,6 +131,33 @@ const loadedStaticHtml = series.renderModulePanels(loadedStaticLanes, {
 assert.match(loadedStaticHtml, /value: 3.2/);
 assert.match(loadedStaticHtml, /Module data loaded/);
 
+const chartHelpers = {
+  esc: value => String(value), fmtInt: value => String(value), t: en => en,
+  axisSpark: () => '<svg></svg>',
+};
+context.EU_PALETTE = { color: () => '#000' };
+const sampledLane = [{ lane: 'vitals', label: 'Vitals', signals: [{
+  feature: 'hr', values: [40, 90, 170], times: [0, 1, 2], point_count: 38,
+  sampling_method: 'endpoints_extrema_largest_gap_v1',
+}] }];
+const sampledHtml = series.renderModulePanels(sampledLane, chartHelpers);
+assert.match(sampledHtml, /Showing 3 of 38 observations; sampled with first, last, minimum and maximum retained/);
+assert.match(sampledHtml, /Displayed-point median/);
+const galleryHtml = series.renderTimeSeriesWorkspace({ lanes: sampledLane, mode: 'single' }, chartHelpers);
+assert.match(galleryHtml, /Showing 3 of 38 observations; sampled with first, last, minimum and maximum retained/);
+const comparisonHtml = series.renderTimeSeriesWorkspace({
+  mode: 'compare', review: { multi_entity_comparison: { feature: 'hr', traces: [
+    { label: 'Entity 1', values: [40, 90, 170], times: [0, 1, 2], point_count: 38, sampling_method: 'endpoints_extrema_largest_gap_v1' },
+    { label: 'Entity 2', values: [50, 70], times: [0, 1], point_count: 2 },
+  ] } },
+}, chartHelpers);
+assert.match(comparisonHtml, /Showing 3 of 38 observations; sampled with first, last, minimum and maximum retained/);
+assert.match(comparisonHtml, /Showing all 2 available observations/);
+delete sampledLane[0].signals[0].sampling_method;
+const oldBackendHtml = series.renderModulePanels(sampledLane, chartHelpers);
+assert.match(oldBackendHtml, /sampled points may omit observations/);
+assert.doesNotMatch(oldBackendHtml, /maximum retained/);
+
 process.stdout.write(JSON.stringify({
   all_features_discoverable: true,
   categorical_observations_distinct: true,

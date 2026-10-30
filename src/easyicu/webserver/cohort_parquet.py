@@ -355,11 +355,6 @@ def feature_profiles(
                         expression = f"CAST({expression} AS FLOAT)"
                 elif kind == "binary":
                     expression = f"bool_or({_flag(column, dtype)})"
-                    if (
-                        feature["module"].strip().lower() == "outcome"
-                        and column.strip().lower() in death_columns
-                    ):
-                        expression = f"coalesce({expression}, false)"
                 else:
                     expression = f"bool_or({present})"
                 expressions.append(expression)

@@ -271,10 +271,10 @@ assert(!/未知\s+0\b/.test(cohortZh) && !/死亡\s+未知/.test(cohortZh), 'an 
 for (const word of ['Table 1', '研究引导', '当前导出已加载', '分析前审阅模块覆盖率', '为保证大型本地导出']) {
   assert(!cohortZh.includes(word), `Chinese Cohort Statistics should not show "${word}"`);
 }
-assert.strictEqual(cohortZh.split('描述性').length - 1, 1, 'only the split chooser says 描述性 (no per-row status pill)');
+assert(!/状态\s*描述性/.test(cohortZh), 'descriptive rows do not get redundant status pills');
 assert(cohortZh.includes('在研究对话中继续'), 'the next step names the research conversation');
 assert(!/\bHR\b/.test(cohortZh), 'Chinese Cohort Statistics should not name heart rate by its column code');
-for (const word of ['基线特征表', '血气分析', '生命体征', '心率', '心率 中位数', '乳酸', ' 可用 %', '院内死亡时间 有记录比例 %']) {
+for (const word of ['描述性分组汇总', '血气分析', '生命体征', '心率', '心率 中位数', '乳酸', ' 可用 %', '院内死亡时间 有记录比例 %']) {
   assert(cohortZh.includes(word), `Chinese Cohort Statistics should show "${word}"`);
 }
 

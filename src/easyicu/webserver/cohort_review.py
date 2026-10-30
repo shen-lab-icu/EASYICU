@@ -111,6 +111,11 @@ _MODULE_COLUMNS = {
         "age_at_admission",
         "sex",
         "gender",
+        "adm",
+        "admission_type",
+        "adm_type",
+        "admission_location",
+        "icu_unit_type",
     ),
     "outcome": (
         "stay_id",
@@ -212,10 +217,11 @@ _UNSUPPORTED_STATISTICS = {
 def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return real Cohort Review aggregates for one registered export."""
     _reject_unsupported_request(body)
+    custom_rule = _parse_custom_group(body.get("custom_group"))
     source, desc = _resolve_registered_source(body)
     path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
     requested_feature_ids = _requested_feature_ids(body)
-    cache_key = _summary_cache_key(path, desc, requested_feature_ids)
+    cache_key = _summary_cache_key(path, desc, requested_feature_ids, custom_rule)
     with _SUMMARY_CACHE_LOCK:
         cached = _SUMMARY_CACHE.get(cache_key)
         if cached is not None:
@@ -233,7 +239,9 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
 
     demo = demo.copy()
     demo["stay_id"] = demo["stay_id"].map(entity_id_contract.normalize_entity_id)
-    demo = demo[demo["stay_id"].astype(bool)].drop_duplicates("stay_id")
+    demo = demo[demo["stay_id"].astype(bool)]
+    category_demo = demo.copy()
+    demo = demo.drop_duplicates("stay_id")
     if demo.empty:
         raise CohortReviewError({"error": "no_entity_denominator"})
 
@@ -251,7 +259,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     sepsis_col = _first_column(sepsis, _SEPSIS_COLUMNS)
 
     death_by_entity = (
-        dataio._stay_bool(outcome, death_col, missing_false=True) if death_col else {}
+        dataio._stay_bool(outcome, death_col) if death_col else {}
     )
     los_by_entity = dataio._stay_numeric(outcome, los_col, "median") if los_col else {}
     sofa1_by_entity = dataio._stay_numeric(sofa1, sofa1_col, "max") if sofa1_col else {}
@@ -259,9 +267,6 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     sepsis_by_entity = (
         dataio._stay_bool(sepsis, sepsis_col, missing_false=True) if sepsis_col else {}
     )
-    if outcome is not None and not outcome.empty and death_col:
-        for entity_id in entity_ids:
-            death_by_entity.setdefault(entity_id, False)
     if sepsis is not None and not sepsis.empty and sepsis_col:
         for entity_id in entity_ids:
             sepsis_by_entity.setdefault(entity_id, False)
@@ -289,6 +294,9 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         selected_feature_ids,
         coverage_counts=coverage_counts,
     )
+    category_options, category_mappings = _custom_category_options(category_demo)
+    custom = _build_custom_group(custom_rule, path, desc, entity_ids, feature_catalog,
+                                 age_by_entity, sex_by_entity, category_mappings)
     coverage = _coverage_payload(path, desc, precomputed=(entity_set, coverage_counts))
     quality = _quality_summary(coverage)
     feature_catalog = _feature_catalog(desc, coverage)
@@ -379,6 +387,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         sex_by_entity=sex_by_entity,
         sofa_by_entity=sofa_by_entity,
         sepsis_by_entity=sepsis_by_entity,
+        **({"custom_group": custom} if custom else {}),
     )
 
     payload = {
@@ -405,6 +414,8 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             "secrets_returned": False,
         },
         "summary": summary,
+        "custom_group_options": {"version": "1", "categories": category_options},
+        "custom_group_applied": _custom_group_receipt(custom_rule),
         "groups": _group_payload(
             entity_ids=entity_ids,
             age_by_entity=age_by_entity,
@@ -435,6 +446,17 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         "sofa_reclassification": sofa_reclassification,
         "blocked_features": blocked_features,
     }
+    if custom:
+        members = custom["_members"]
+        public_custom = {key: value for key, value in custom.items() if key != "_members"}
+        public_custom["profile"] = _group_profile(
+            "custom", groups=members, entity_ids=entity_ids,
+            age_by_entity=age_by_entity, sex_by_entity=sex_by_entity,
+            death_by_entity=death_by_entity, los_by_entity=los_by_entity,
+            sofa_by_entity=sofa_by_entity, sepsis_by_entity=sepsis_by_entity,
+            selected_features=selected_feature_profiles,
+        )
+        payload["groups"]["supported"].append(public_custom)
     with _SUMMARY_CACHE_LOCK:
         _SUMMARY_CACHE[cache_key] = copy.deepcopy(payload)
         while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
@@ -520,7 +542,7 @@ def materialized_analysis_review(
     age_by_entity = _entity_numeric(frame, age_col) if age_col else {}
     sex_by_entity = _entity_text(frame, sex_col) if sex_col else {}
     death_by_entity = (
-        dataio._stay_bool(frame, death_col, missing_false=True) if death_col else {}
+        dataio._stay_bool(frame, death_col) if death_col else {}
     )
     los_by_entity = dataio._stay_numeric(frame, los_col, "median") if los_col else {}
 
@@ -673,7 +695,8 @@ def _materialized_feature_module(column: str) -> str:
 
 
 def _summary_cache_key(
-    path: Path, desc: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None
+    path: Path, desc: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None,
+    custom_rule: tuple | None = None,
 ) -> Tuple[Any, ...]:
     summary = desc.get("summary") or {}
     manifest_identities: List[Tuple[Any, ...]] = []
@@ -712,7 +735,106 @@ def _summary_cache_key(
         summary.get("file_count"),
         summary.get("total_rows"),
         requested_feature_ids or ("__default_features__",),
+        custom_rule,
     )
+
+
+def _custom_group_receipt(rule: tuple | None) -> dict | None:
+    if rule is None:
+        return None
+    receipt = {"feature_id": rule[0], "kind": rule[1]}
+    if rule[1] == "numeric_threshold":
+        receipt["threshold"] = rule[2]
+    elif rule[1] == "categorical_values":
+        receipt["values"] = list(rule[2])
+    return receipt
+
+
+def _parse_custom_group(raw: Any) -> tuple | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise CohortReviewError({"error": "invalid_custom_group"})
+    feature_id = raw.get("feature_id")
+    kind = raw.get("kind")
+    if not isinstance(feature_id, str) or not feature_id or len(feature_id) > 200:
+        raise CohortReviewError({"error": "invalid_custom_group_feature"})
+    if kind == "numeric_threshold":
+        threshold = raw.get("threshold")
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
+            raise CohortReviewError({"error": "invalid_custom_group_threshold"})
+        return (feature_id, kind, float(threshold))
+    if kind == "sex" and feature_id == "demographics:sex":
+        return (feature_id, kind)
+    if kind == "categorical_values":
+        values = raw.get("values")
+        if not isinstance(values, list) or len(values) != 2 or any(not isinstance(v, str) or not v or len(v) > 128 for v in values) or values[0] == values[1]:
+            raise CohortReviewError({"error": "invalid_custom_group_categories"})
+        return (feature_id, kind, tuple(values))
+    raise CohortReviewError({"error": "invalid_custom_group_kind"})
+
+
+def _custom_category_options(demo: Any) -> tuple[list[dict], dict]:
+    options, mappings = [], {}
+    for col in ("sex", "gender", "adm", "admission_type", "adm_type", "admission_location", "icu_unit_type"):
+        if col not in demo.columns:
+            continue
+        mapping = {}
+        for sid, rows in demo.groupby("stay_id", sort=False):
+            values = {str(v).strip() for v in rows[col] if dataio._clean(v)}
+            if len(values) == 1:
+                mapping[str(sid)] = values.pop()
+        values = sorted(set(mapping.values()))
+        if not values or len(values) > 30 or any(len(v) > 128 for v in values):
+            continue
+        feature_id = _feature_id("demographics", col)
+        options.append({"feature_id": feature_id, "label": _feature_label(col), "values": values})
+        mappings[feature_id] = mapping
+    return options, mappings
+
+
+def _build_custom_group(rule, path, desc, entity_ids, catalog, age_mapping, sex_mapping, category_mappings):
+    if rule is None:
+        return None
+    feature_id, kind, *args = rule
+    feature = (catalog.get("features_by_id") or {}).get(feature_id)
+    if not feature:
+        raise CohortReviewError({"error": "custom_group_feature_unavailable"})
+    if kind == "sex":
+        mapping = {sid: _sex_bucket(value) for sid, value in sex_mapping.items()}
+        labels = ["Female", "Male"]
+        predicates = [lambda v: v == "female", lambda v: v == "male"]
+        basis = "demographics_sex"
+    elif kind == "categorical_values":
+        if feature_id not in category_mappings:
+            raise CohortReviewError({"error": "custom_group_category_unavailable"})
+        mapping = category_mappings[feature_id]
+        labels = list(args[0])
+        if any(label not in set(mapping.values()) for label in labels):
+            raise CohortReviewError({"error": "custom_group_category_unavailable"})
+        predicates = [lambda v, label=label: v == label for label in labels]
+        basis = "demographics_category"
+    else:
+        threshold = args[0]
+        if feature_id == "demographics:age":
+            mapping = age_mapping
+            basis = "demographics_age"
+        else:
+            profiles = _selected_feature_profiles(path, desc, set(entity_ids), catalog, [feature_id])
+            if not profiles or profiles[0].get("kind") != "numeric":
+                raise CohortReviewError({"error": "custom_group_numeric_unavailable"})
+            mapping = profiles[0].get("mapping") or {}
+            basis = "whole_stay_entity_median"
+        mapping = {sid: value for sid, value in mapping.items() if math.isfinite(value)}
+        labels = [f"≤ {threshold:g}", f"> {threshold:g}"]
+        predicates = [lambda v: v <= threshold, lambda v: v > threshold]
+    members = [(label, [sid for sid in entity_ids if mapping.get(sid) is not None and predicate(mapping[sid])]) for label, predicate in zip(labels, predicates)]
+    unknown = sum(1 for sid in entity_ids if mapping.get(sid) is None)
+    unassigned = len(entity_ids) - unknown - sum(len(ids) for _, ids in members)
+    groups = [{"label": label, "count": len(ids), "pct": _pct(len(ids), len(entity_ids))} for label, ids in members]
+    groups.extend([{"label": "Unknown", "count": unknown, "pct": _pct(unknown, len(entity_ids))}, {"label": "Other", "count": unassigned, "pct": _pct(unassigned, len(entity_ids))}])
+    has_two_groups = all(ids for _, ids in members)
+    return {"id": "custom", "label": f"{feature['label']} · custom", "status": "supported" if has_two_groups else "blocked", "reason": None if has_two_groups else "Custom split does not produce two non-empty groups.", "basis": basis, "feature_id": feature_id, "kind": kind, "groups": groups, "unknown_count": unknown, "unassigned_count": unassigned, "inferential_statistics_allowed": False, "_members": members}
 
 
 def _reject_unsupported_request(body: Dict[str, Any]) -> None:
@@ -1347,17 +1469,7 @@ def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, 
     column = str(feature.get("column") or "")
     kind = _infer_feature_kind(frame, column)
     if kind == "binary":
-        # The Cohort owner already defines missing hospital-death event rows as
-        # non-events when it builds the mortality summary above.  Reuse that
-        # exact concept-specific semantic for the selected-feature view so the
-        # same export cannot report 10/10 mortality coverage in one panel and
-        # six unknown outcomes in another.  Other binary concepts remain
-        # fail-closed because their missingness may not mean a negative event.
-        missing_false = (
-            str(feature.get("module") or "").strip().lower() == "outcome"
-            and column.strip().lower() in _DEATH_COLUMNS
-        )
-        mapping = dataio._stay_bool(frame, column, missing_false=missing_false)
+        mapping = dataio._stay_bool(frame, column)
         aggregation = "entity_any_positive_pct"
     elif kind == "numeric":
         mapping = dataio._stay_numeric(frame, column, "median")
@@ -1644,11 +1756,6 @@ def _group_payload(
         "supported": supported,
         "blocked": [
             {
-                "id": "custom_threshold",
-                "status": "blocked",
-                "reason": "Custom thresholds require audited row-level cohort construction.",
-            },
-            {
                 "id": "p_value_smd",
                 "status": "blocked",
                 "reason": "Inferential statistics are withheld until the numeric evidence audit gate.",
@@ -1717,7 +1824,7 @@ def _group_profile(
             bool(death_by_entity),
             "Mortality %",
             "percent",
-            [_bool_pct(members, death_by_entity) for members in member_sets],
+            [_bool_pct(members, death_by_entity, known_only=True) for members in member_sets],
             None,
         ),
         (
@@ -1809,7 +1916,10 @@ def _selected_feature_rows(
                     "module": module,
                     "column": feature.get("column"),
                     "kind": "percent",
-                    "values": [_bool_pct(members, mapping) for members in member_sets],
+                    "values": [
+                        _bool_pct(members, mapping, known_only=(module == "outcome" and str(feature.get("column") or "").lower() in _DEATH_COLUMNS))
+                        for members in member_sets
+                    ],
                     "status": "selected_feature",
                     "aggregation": feature.get("aggregation"),
                 }
@@ -2007,20 +2117,18 @@ def _median_for(entity_ids: List[str], mapping: Dict[str, float]) -> float | Non
     return _cohort_median(values)
 
 
-def _bool_pct(entity_ids: List[str], mapping: Dict[str, bool]) -> float | None:
-    if not entity_ids:
-        return None
+def _bool_pct(entity_ids: List[str], mapping: Dict[str, bool], *, known_only: bool = False) -> float | None:
+    known = sum(1 for entity_id in entity_ids if mapping.get(entity_id) in (True, False)) if known_only else len(entity_ids)
     count = sum(1 for entity_id in entity_ids if mapping.get(entity_id) is True)
-    return _pct(count, len(entity_ids))
+    return _pct(count, known)
 
 
 def _female_pct(entity_ids: List[str], mapping: Dict[str, str]) -> float | None:
-    if not entity_ids:
-        return None
+    known = sum(1 for entity_id in entity_ids if _sex_bucket(mapping.get(entity_id)) in {"female", "male"})
     count = sum(
         1 for entity_id in entity_ids if _sex_bucket(mapping.get(entity_id)) == "female"
     )
-    return _pct(count, len(entity_ids))
+    return _pct(count, known)
 
 
 def _group_from_bool(
@@ -2274,7 +2382,8 @@ def _bool_summary(
     unknown = len(entity_ids) - true_count - false_count
     return {
         "count": true_count,
-        "pct": _pct(true_count, len(entity_ids)),
+        "pct": _pct(true_count, true_count + false_count),
+        "known_count": true_count + false_count,
         f"{true_label}_count": true_count,
         f"{false_label}_count": false_count,
         "unknown_count": unknown,
@@ -2290,9 +2399,10 @@ def _sex_summary(values: List[Any]) -> Dict[str, Any]:
     return {
         "count": len(values),
         "female_count": female,
-        "female_pct": _pct(female, len(values)),
+        "female_pct": _pct(female, female + male),
         "male_count": male,
-        "male_pct": _pct(male, len(values)),
+        "male_pct": _pct(male, female + male),
+        "known_count": female + male,
         "unknown_count": unknown,
     }
 
@@ -2371,7 +2481,7 @@ def _clinical_profile_payload(
                     "女性",
                     (summary.get("sex") or {}).get("female_pct"),
                     (summary.get("sex") or {}).get("female_count"),
-                    cohort_size,
+                    (summary.get("sex") or {}).get("known_count"),
                 ),
                 _category_profile_item(
                     "admission",
@@ -2410,7 +2520,7 @@ def _clinical_profile_payload(
                     "院内死亡",
                     summary.get("mortality_pct"),
                     (summary.get("mortality") or {}).get("deceased_count"),
-                    cohort_size,
+                    (summary.get("mortality") or {}).get("known_count"),
                     kind="event_rate",
                 ),
                 _numeric_profile_item(
@@ -2678,6 +2788,7 @@ def _survival_analysis_payload(
     sex_by_entity: Dict[str, str],
     sofa_by_entity: Dict[str, float],
     sepsis_by_entity: Dict[str, bool],
+    custom_group: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if len(entity_ids) > _SURVIVAL_INTERACTIVE_ENTITY_LIMIT:
         return {
@@ -2735,6 +2846,16 @@ def _survival_analysis_payload(
         sofa_by_entity=sofa_by_entity,
         sepsis_by_entity=sepsis_by_entity,
     )
+    if custom_group:
+        permitted = custom_group["basis"] in {"demographics_age", "demographics_sex"}
+        members = custom_group["_members"]
+        ready = permitted and all(ids for _, ids in members)
+        group_options.append({
+            "id": "custom", "label": custom_group["label"], "basis": custom_group["basis"],
+            "status": "ready" if ready else "blocked",
+            "reason": None if ready else ("Custom KM grouping requires verified baseline age or sex and two non-empty groups."),
+            "groups": custom_group["groups"][:2], "_members": members if ready else [],
+        })
     curves: List[Dict[str, Any]] = []
     for option in outcomes:
         if option.get("status") != "ready":
@@ -3047,12 +3168,8 @@ def _survival_group_options(
             "id": "sepsis",
             "label": "Sepsis vs Non-sepsis",
             "basis": "sepsis3_sofa2_event_module",
-            "_members": _bool_member_groups(
-                entity_ids,
-                sepsis_by_entity,
-                false_name="Non-sepsis",
-                true_name="Sepsis",
-            ),
+            "_members": [],
+            "blocked_reason": "Sepsis events may occur after the survival time origin; a verified baseline group or time-varying analysis is required.",
         },
         {
             "id": "age",
@@ -3100,7 +3217,13 @@ def _survival_group_options(
                 ),
             ],
         },
-        _survival_sofa_group(entity_ids, sofa_by_entity),
+        {
+            "id": "sofa2",
+            "label": "SOFA-2",
+            "basis": "whole_stay_maximum_not_baseline",
+            "_members": [],
+            "blocked_reason": "The whole-stay maximum SOFA-2 is not a verified baseline measurement at the survival time origin.",
+        },
     ]
     out: List[Dict[str, Any]] = []
     for row in raw_groups:
@@ -3110,7 +3233,7 @@ def _survival_group_options(
             (label, ids) for label, ids in row.get("_members", []) if label != "Unknown"
         ]
         nonempty = [(label, ids) for label, ids in members if ids]
-        status = "ready" if len(nonempty) >= 2 else "blocked"
+        status = "ready" if len(nonempty) >= 2 and not row.get("blocked_reason") else "blocked"
         out.append(
             {
                 **row,
@@ -3118,7 +3241,7 @@ def _survival_group_options(
                 "reason": (
                     None
                     if status == "ready"
-                    else "This split does not produce two non-empty groups in the current cohort."
+                    else row.get("blocked_reason") or "This split does not produce two non-empty groups in the current cohort."
                 ),
                 "groups": [
                     {"label": label, "count": len(ids)} for label, ids in members
@@ -3681,9 +3804,9 @@ def _sex_bucket(value: Any) -> str | None:
     if not clean:
         return None
     text = clean.strip().lower()
-    if text in {"f", "female", "woman"} or "female" in text:
+    if text in {"f", "female", "woman"}:
         return "female"
-    if text in {"m", "male", "man"} or text == "male":
+    if text in {"m", "male", "man"}:
         return "male"
     return None
 

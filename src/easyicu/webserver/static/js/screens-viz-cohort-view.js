@@ -56,6 +56,22 @@
   };
   function cohortText(value) {
     const raw = String(value == null ? '' : value);
+    if (/ · custom$/.test(raw) && !raw.includes(' by ') && state && state.customGroup) {
+      return `${customGroupFeatureLabel(state.customGroup)} · ${t('custom', '自定义')}`;
+    }
+    // These source fields use the experimental SOFA-2 sensitivity definition.
+    const sensitivityLabels = {
+      'Sepsis-3 +': ['SOFA-2 sensitivity definition positive', 'SOFA-2 敏感性定义阳性'],
+      'Sepsis-3 %': ['SOFA-2 sensitivity definition positive %', 'SOFA-2 敏感性定义阳性比例'],
+      'Sepsis vs Non-sepsis': ['SOFA-2 sensitivity definition: recorded positive vs no recorded positive', 'SOFA-2 敏感性定义：记录阳性 vs 未记录阳性'],
+      'Sepsis': ['SOFA-2 sensitivity definition positive', 'SOFA-2 敏感性定义阳性'],
+      'Non-sepsis': ['No recorded positive SOFA-2 sensitivity event', 'SOFA-2 敏感性定义未记录阳性'],
+      'Table one': ['Descriptive group summary', '描述性分组汇总'],
+      'Baseline characteristics comparison': ['Descriptive group comparison', '描述性分组对照'],
+      'Aggregate-only group characteristics': ['Descriptive group characteristics', '描述性分组特征'],
+      'Median SOFA-2': ['Median of stay-wide maximum SOFA-2', '入住期间最高 SOFA-2 的中位数'],
+    };
+    if (Object.prototype.hasOwnProperty.call(sensitivityLabels, raw)) return t(...sensitivityLabels[raw]);
     const map = {
       'Workspace': '工作区',
       'Local export': '本地导出',
@@ -116,6 +132,7 @@
       'Male': '男性',
       'Unknown': '未知',
       'Known': '已知',
+      'Other': '其他未选类别',
       'Short/median': '短住院/中位数以下',
       'Long': '长住院',
       'N': 'N',
@@ -301,6 +318,19 @@
     if (!flag || !zhOf(flag[1])) return '';
     return `${zhOf(flag[1])}${{ observed: ' 已观测', available: ' 可用', time: '时间' }[flag[2]]}`;
   }
+  function customGroupFeatureLabel(group) {
+    const id = String(group && group.feature_id || '');
+    const column = id.split(':')[1] || id;
+    const localized = cohortFeatureName(column);
+    if (localized) return localized;
+    if (column === 'age') return t('Age', '年龄');
+    if (column === 'sex') return t('Sex', '性别');
+    const review = cohortReview() || {};
+    const modules = (review.feature_catalog || {}).modules || [];
+    const feature = modules.flatMap(module => module.features || []).find(row => row.id === id);
+    const category = ((review.custom_group_options || {}).categories || []).find(row => row.feature_id === id);
+    return (feature && feature.label) || (category && category.label) || column;
+  }
   function cohortMetricText(row) {
     const metric = String((row && row.metric) || '');
     const name = row && row.feature_id ? cohortFeatureName(row.column) : '';
@@ -325,6 +355,10 @@
       'No outcome has both an event column and a time-to-event/censoring column in this export.': '此导出没有同时具备事件列与事件时间/删失时间列的结局。',
       'No supported two-group split is available for this cohort.': '此队列没有可用的双组分组。',
       'No survival curve could be computed from the available timed records.': '可用时间记录不足，无法计算生存曲线。',
+      'Custom KM grouping requires verified baseline age or sex and two non-empty groups.': '自定义 KM 分组需要生存时间起点已确认的年龄或性别，并且两组均非空。',
+      'Custom split does not produce two non-empty groups.': '自定义分组没有产生两个非空组，无法进行组间对照。',
+      'Sepsis events may occur after the survival time origin; a verified baseline group or time-varying analysis is required.': '脓毒症事件可能发生在生存时间起点之后；需要经核实的基线分组或时变分析。',
+      'The whole-stay maximum SOFA-2 is not a verified baseline measurement at the survival time origin.': '整个入住期间的最高 SOFA-2 并非生存时间起点经核实的基线测量。',
       'Current export is loaded, but the cohort is above the interactive KM preview limit; continue with an audited local analysis job on this same export.': '当前导出已加载，但队列超过交互式 KM 预览上限；请在同一个导出上继续运行本地审计分析任务。',
       'Outcome module is not present in the registered export.': '注册导出中没有结局模块。',
       'Fewer than two cohort entities have valid survival time values.': '有效生存时间值少于两个队列实体。',
@@ -804,6 +838,7 @@
 
   function cohortProfileLabel(row) {
     const item = row || {};
+    if (item.id === 'sepsis3') return t('SOFA-2 sensitivity definition positive', 'SOFA-2 敏感性定义阳性');
     if (window.EU_LANG === 'zh') return item.label_zh || item.zh || item.label || item.id || '';
     return item.label || item.label_en || item.label_zh || item.id || '';
   }
@@ -1029,11 +1064,12 @@
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${cohortText('Cohort size')}</div><div class="val">${fmtInt(s.cohort_size)}</div></div>
         <div class="stat"><div class="label">${cohortText('Median age')}</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div></div>
-        <div class="stat"><div class="label">${cohortText('Female')}</div><div class="val">${fmtPct(s.sex && s.sex.female_pct)}</div></div>
+        <div class="stat"><div class="label">${cohortText('Female')}</div><div class="val">${fmtPct(s.sex && s.sex.female_pct)}</div>${s.sex && s.sex.known_count != null ? `<small>${fmtInt(s.sex.female_count)} / ${fmtInt(s.sex.known_count)} ${t('known sex', '性别已知')} · ${fmtInt(s.sex.unknown_count)} ${t('unknown', '未知')}</small>` : ''}</div>
         <div class="stat"><div class="label">${cohortText('Sepsis-3 +')}</div><div class="val">${fmtPct(s.sepsis_pct)}</div></div>
         <div class="stat"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
-        <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
+        <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div>${s.mortality && s.mortality.known_count != null ? `<small>${fmtInt(s.mortality.deceased_count)} / ${fmtInt(s.mortality.known_count)} ${t('known outcomes', '结局已知')} · ${fmtInt(s.mortality.unknown_count)} ${t('unknown', '未知')}</small>` : ''}</div>
       </div>
+      <p class="muted">${t('The SOFA-2 sepsis measure is an experimental sensitivity definition, not standard Sepsis-3. Its recorded-positive fraction describes this event export; no recorded event does not establish a true negative or disease prevalence.', 'SOFA-2 脓毒症是实验性敏感性定义，并非标准 Sepsis-3。记录阳性比例描述当前事件导出；未记录事件不代表确证阴性，也不能视为患病率。')}</p>
       <div class="card pad mt-16">
         <div class="sec-stack mini"><div class="lbl">${t('Clinical phenotype', '临床画像')}</div><h3>${t('Interpretable cohort dimensions', '可解释的队列维度')}</h3></div>
         ${cohortClinicalProfile(s.clinical_profile)}
@@ -1151,6 +1187,51 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
 
+  // One local editor serves both group comparison and survival preview.
+  function customGroupEditor(review) {
+    if (!review || !review.summary) return '';
+    if (!review.custom_group_options || review.custom_group_options.version !== '1') {
+      return `<div class="note warn mt-12" role="status">${t('The current service has not loaded custom grouping. Restart the service to use it.', '当前服务版本尚未加载自定义分组，请重启服务后使用。')}</div>`;
+    }
+    const draft = state.customDraft || {};
+    const kind = draft.kind || 'numeric_threshold';
+    const categories = ((review.custom_group_options || {}).categories || []);
+    const features = ((review.feature_catalog || {}).modules || []).flatMap(module => (module.features || []));
+    const numeric = features.filter(feature => feature && feature.audience !== 'internal' && feature.kind === 'numeric' && feature.id);
+    const hasSex = features.some(feature => feature && feature.id === 'demographics:sex');
+    const featureId = draft.feature_id || (kind === 'categorical_values' ? (categories[0] || {}).feature_id : (numeric.find(f => f.id === 'demographics:age') || numeric[0] || {}).id) || '';
+    const category = categories.find(row => row.feature_id === featureId) || {};
+    const choices = category.values || [];
+    const selectedA = draft.value_a || '';
+    const selectedB = draft.value_b || '';
+    const option = (value, label, selected) => `<option value="${esc(value)}" ${selected ? 'selected' : ''}>${esc(label)}</option>`;
+    const choiceList = selected => option('', t('Choose a category', '选择类别'), !selected)
+      + choices.map(value => option(value, value, value === selected)).join('');
+    const applying = !!state.customBusy;
+    const committed = state.customGroup;
+    return `<section class="card pad mt-12" data-custom-group-editor>
+      <h2>${t('Custom grouping', '自定义分组')}</h2>
+      <p>${t('Applies only to this local preview. It does not change a research plan or run. Numeric groups compare each stay’s median over the available export window; survival requires a verified group at the time origin.', '只作用于本地预览，不改变科研计划或执行。数值分组使用导出可用时间范围内每次入住的中位数；生存分析要求分组在时间起点已确认。')}</p>
+      <div class="row wrap gap-10">
+        <label>${t('Grouping type', '分组方式')} <select data-custom-kind ${applying ? 'disabled' : ''}>
+          ${option('numeric_threshold', t('Numeric threshold', '数值阈值'), kind === 'numeric_threshold')}
+          ${hasSex ? option('sex', t('Recorded sex', '记录性别'), kind === 'sex') : ''}
+          ${categories.length ? option('categorical_values', t('Recorded category', '记录类别'), kind === 'categorical_values') : ''}
+        </select></label>
+        ${kind === 'sex' ? '' : `<label>${t('Field', '字段')} <select data-custom-feature ${applying ? 'disabled' : ''}>${kind === 'categorical_values'
+          ? categories.map(row => option(row.feature_id, cohortFeatureName(row.feature_id.split(':')[1]) || row.label || row.feature_id, row.feature_id === featureId)).join('')
+          : numeric.map(row => option(row.id, `${catalogModuleText(row.module, row.module)} · ${cohortFeatureName(row.column) || row.label || row.column}`, row.id === featureId)).join('')}</select></label>`}
+        ${kind === 'numeric_threshold' ? `<label>${t('Threshold', '阈值')} <input type="number" step="any" data-custom-threshold value="${esc(draft.threshold == null ? '' : draft.threshold)}" ${applying ? 'disabled' : ''}></label>` : ''}
+        ${kind === 'categorical_values' ? `<label>${t('First category', '类别一')} <select data-custom-value-a ${applying ? 'disabled' : ''}>${choiceList(selectedA)}</select></label><label>${t('Second category', '类别二')} <select data-custom-value-b ${applying ? 'disabled' : ''}>${choiceList(selectedB)}</select></label>` : ''}
+        <button type="button" class="btn primary" data-custom-apply ${applying ? 'disabled' : ''}>${applying ? t('Applying…', '正在计算…') : t('Apply to preview', '应用于预览')}</button>
+        ${committed ? `<button type="button" class="btn" data-custom-clear ${applying ? 'disabled' : ''}>${t('Clear grouping', '清除分组')}</button>` : ''}
+      </div>
+      <p class="muted">${t('Threshold groups are ≤ threshold and > threshold. Candidate numeric types are catalog hints; the server verifies actual values. Missing or other categories are reported separately.', '阈值分组为 ≤ 阈值和 > 阈值。数值字段来自目录类型提示，服务端会核验实际取值；缺失或其他类别单独列出。')}</p>
+      ${state.customError ? `<p role="alert">${esc(state.customError)}</p>` : ''}
+      ${committed ? `<p>${t('Active preview grouping', '当前预览分组')}：${esc(customGroupFeatureLabel(committed))} · ${committed.kind === 'numeric_threshold' ? `≤ ${esc(committed.threshold)} / > ${esc(committed.threshold)}` : committed.kind === 'sex' ? t('female / male', '女性 / 男性') : (committed.values || []).map(esc).join(' / ')}</p>` : ''}
+    </section>`;
+  }
+
   function cohortGroupsBody(reviewOverride) {
     const review = reviewOverride || cohortReview();
     if (review && review.summary) {
@@ -1163,7 +1244,7 @@
       const profileColumns = activeProfile.columns || [];
       const profileRows = activeProfile.rows || [];
       // An "unknown" group with no stays is not shown, as a card or a column.
-      const emptyGroup = g => !Number(g.count) && /unknown/i.test(String(g.id || g.label || ''));
+      const emptyGroup = g => active.id !== 'custom' && !Number(g.count) && /unknown/i.test(String(g.id || g.label || ''));
       const shownGroups = activeGroups.filter(g => !emptyGroup(g));
       const hiddenLabels = new Set(activeGroups.filter(emptyGroup).map(g => String(g.label)));
       const shownCols = profileColumns.map((col, i) => [col, i]).filter(([col]) => !hiddenLabels.has(String(col)));
@@ -1175,11 +1256,12 @@
       ${workspaceSamplingNote(s)}
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${cohortText('Cohort size')}</div><div class="val">${fmtInt(s.cohort_size)}</div></div>
-        <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
-        <div class="stat accent"><div class="label">${cohortText('Median age')}</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div></div>
-        <div class="stat accent"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
+        <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div>${s.mortality && s.mortality.known_count != null ? `<small>${fmtInt(s.mortality.deceased_count)} / ${fmtInt(s.mortality.known_count)} ${t('known outcomes', '结局已知')} · ${fmtInt(s.mortality.unknown_count)} ${t('unknown', '未知')}</small>` : ''}</div>
+        <div class="stat accent"><div class="label">${cohortText('Median age')}</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div>${s.age && s.age.count != null ? `<small>n=${fmtInt(s.age.count)}</small>` : ''}</div>
+        <div class="stat accent"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div>${s.sofa2 && s.sofa2.count != null ? `<small>n=${fmtInt(s.sofa2.count)}</small>` : ''}</div>
       </div>
 
+      <p class="muted">${t('The SOFA-2 sepsis measure is an experimental sensitivity definition, not standard Sepsis-3. Its recorded-positive fraction describes this event export; no recorded event does not establish a true negative or disease prevalence.', 'SOFA-2 脓毒症是实验性敏感性定义，并非标准 Sepsis-3。记录阳性比例描述当前事件导出；未记录事件不代表确证阴性，也不能视为患病率。')}</p>
       <div class="sec-stack"><h2>${cohortText('Select descriptive split')}</h2></div>
       <div class="radio-row">
         ${supported.map(row => radio(row)).join('')}
@@ -1190,7 +1272,9 @@
         ${shownGroups.map((g, i) => `<div class="stat ${i === 0 ? 'accent' : ''}"><div class="label">${esc(cohortText(g.label))}</div><div class="val">${fmtInt(g.count)}</div><div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${fmtPct(g.pct)}</div></div>`).join('')}
       </div>
 
+      ${active.status === 'blocked' ? `<p class="note warn" role="alert">${esc(cohortReason(active.reason || 'Custom split does not produce two non-empty groups.'))}</p>` : `
       <div class="sec-stack"><h2>${cohortText('Table one')}</h2></div>
+      <p class="muted">${t('Descriptive summaries use available values. SOFA-2 is the maximum during each stay; selected numeric features are each stay’s median over available observations. ICU length of stay is a follow-up measure. These are not baseline measurements, and differences alone do not establish confounding. Per-variable valid sample sizes are not provided; group N is not the denominator for every measure.', '描述性汇总使用已有观测。SOFA-2 为每次入住期间的最高值；所选连续特征先取每次入住可用观测的中位数。ICU 住院时长是随访期间指标。这些不是基线测量，组间差异本身也不能确定混杂。各指标的有效例数尚未提供，组 N 不代表每个指标的分母。')}</p>
       <div class="table-wrap table-scroll cohort-table-one" data-cohort-table-one>
         <table class="eu-table">
           <thead><tr><th>${cohortText('Metric')}</th>${shownCols.map(([col]) => `<th class="num">${esc(cohortText(col))}</th>`).join('')}</tr></thead>
@@ -1203,6 +1287,7 @@
         </table>
       </div>
       ${cohortRealFeaturePicker(review)}
+      `}
 `;
     }
     const ws = window.EU_VIZ_WORKSPACE;
@@ -1233,7 +1318,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 研究对话准备正式分析时需要处理它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Columns summarize observed values by group. Measurements may include the full stay; differences do not by themselves establish confounding.', '各列汇总组内已有观测，测量可能覆盖整个入住过程；组间差异本身不能确定混杂。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. P-values and manuscript claims are intentionally withheld from this UI preview.', '真实本地导出摘要。此 UI 预览不会直接给出 p 值或稿件声明。')}</p>`;
     }
     const comparisons = {
@@ -1356,7 +1441,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 研究对话准备正式分析时需要处理它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Columns summarize observed values by group. Measurements may include the full stay; differences do not by themselves establish confounding.', '各列汇总组内已有观测，测量可能覆盖整个入住过程；组间差异本身不能确定混杂。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
   function init(config) {
@@ -1389,6 +1474,7 @@
     sofaBody: cohortSofaBody,
     snapshotBody: cohortSnapshotBody,
     groupsBody: cohortGroupsBody,
+    customGroupEditor,
     hasSofaGranularity(value) { return !!SOFA_MATRIX_GRANULARITIES[value]; },
   };
 })();

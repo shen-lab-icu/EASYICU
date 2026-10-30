@@ -3140,13 +3140,11 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     sepsis = _filter_by_stay(frames.get("sepsis3_sofa2"), stay_ids)
     vitals = _filter_by_stay(frames.get("vitals"), stay_ids)
 
-    death_by_stay = _stay_bool(outcome, "death", missing_false=True)
+    death_by_stay = _stay_bool(outcome, "death")
     los_by_stay = _stay_numeric(outcome, "los_icu", "median")
     sofa_by_stay = _stay_numeric(sofa2, "sofa2", "max")
     sep_by_stay = _stay_bool(sepsis, "sep3_sofa2", missing_false=True)
     for sid in stay_ids:
-        if outcome is not None and not outcome.empty:
-            death_by_stay.setdefault(sid, False)
         if sepsis is not None and not sepsis.empty:
             sep_by_stay.setdefault(sid, False)
 
@@ -3198,6 +3196,8 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         "mean_age": _series_mean(demo.get("age")),
         "female_pct": _sex_pct(demo.get("sex"), "female"),
         "mortality": _bool_pct(list(death_by_stay.values())),
+        "mortality_known_count": len(death_by_stay),
+        "mortality_unknown_count": sampled_stays - len(death_by_stay),
         "median_los_icu": _median(list(los_by_stay.values())),
         "median_sofa2": _median(list(sofa_by_stay.values())),
         "sepsis_pct": _bool_pct(list(sep_by_stay.values())),

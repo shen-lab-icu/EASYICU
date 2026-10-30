@@ -336,11 +336,6 @@ def _group_payload(
         "supported": supported,
         "blocked": [
             {
-                "id": "custom_threshold",
-                "status": "blocked",
-                "reason": "Custom thresholds require audited row-level cohort construction.",
-            },
-            {
                 "id": "p_value_smd",
                 "status": "blocked",
                 "reason": "Inferential statistics are withheld until the numeric evidence audit gate.",
@@ -393,7 +388,7 @@ def _group_profile(
             bool(death_by_entity),
             "Mortality %",
             "percent",
-            [_bool_pct(members, death_by_entity) for members in member_sets],
+            [_bool_pct(members, death_by_entity, known_only=True) for members in member_sets],
             None,
         ),
         (
@@ -482,7 +477,10 @@ def _selected_feature_rows(
                     "module": module,
                     "column": feature.get("column"),
                     "kind": "percent",
-                    "values": [_bool_pct(members, mapping) for members in member_sets],
+                    "values": [
+                        _bool_pct(members, mapping, known_only=(module == "outcome" and str(feature.get("column") or "").lower() in owner._DEATH_COLUMNS))
+                        for members in member_sets
+                    ],
                     "status": "selected_feature",
                     "aggregation": feature.get("aggregation"),
                 }

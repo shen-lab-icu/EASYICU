@@ -540,10 +540,10 @@
       const rows = [
         [t('Entities', '病例数'), fmtInt(s.entities)],
         [t('Mean age', '平均年龄'), fmtNum(s.mean_age, 1)],
-        [t('Female', '女性'), fmtPct(s.female_pct)],
-        [t('Mortality', '病死率'), fmtPct(s.mortality)],
-        [t('Median SOFA-2', 'SOFA-2 中位数'), fmtNum(s.median_sofa2, 1)],
-        [t('Sepsis-3 positive', 'Sepsis-3 阳性'), fmtPct(s.sepsis_pct)],
+        [t('Female', '女性'), `${fmtPct(s.female_pct)}${s.female_known_count != null ? ` (${t('known', '已知')} ${fmtInt(s.female_known_count)} · ${t('unknown', '未知')} ${fmtInt(s.female_unknown_count)})` : ''}`],
+        [t('Mortality', '病死率'), `${fmtPct(s.mortality)}${s.mortality_known_count != null ? ` (${t('known', '结局已知')} ${fmtInt(s.mortality_known_count)} · ${t('unknown', '未知')} ${fmtInt(s.mortality_unknown_count)})` : ''}`],
+        [t('Median of stay-wide maximum SOFA-2', '入住期间最高 SOFA-2 的中位数'), fmtNum(s.median_sofa2, 1)],
+        [t('SOFA-2 sensitivity definition positive', 'SOFA-2 敏感性定义阳性'), fmtPct(s.sepsis_pct)],
       ];
       const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, 64);
       const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
@@ -595,6 +595,7 @@
       ${(activePreview && activePreview.truncated_columns) ? `<div class="mt-8" style="font-size:11.5px;color:var(--ink-4);">${t(`Showing ${fmtInt(previewColumns.length)} of ${fmtInt(activePreview.columns_total)} columns`, `显示 ${fmtInt(previewColumns.length)} / ${fmtInt(activePreview.columns_total)} 列`)}</div>` : ''}` : `
       <div class="empty mt-16"><div class="glyph">${icon('rows', 22)}</div><div class="t">${t('No table preview available', '暂无表格预览')}</div><div class="d">${t('This export has module metadata but no displayable table columns after identifier removal.', '这个导出有模块元数据，但去除标识符后没有可显示的表格列。')}</div></div>`}
       <div class="table-wrap table-scroll mt-16">
+        <p class="muted">${t(`Cohort size and static outcomes use all ${fmtInt(s.entities)} stays; SOFA-2 uses the ${fmtInt(s.review_entities)}-stay review sample. Age and sex use available values in the full cohort.`, `病例数和静态结局使用完整队列 ${fmtInt(s.entities)} 次入住；SOFA-2 使用本页审阅的 ${fmtInt(s.review_entities)} 次入住。年龄和性别使用完整队列中已有的值。`)} ${t('SOFA-2 sepsis is an experimental sensitivity definition, not standard Sepsis-3. Recorded positives describe this event export; no recorded event does not establish a true negative or disease prevalence.', 'SOFA-2 脓毒症为实验性敏感性定义，并非标准 Sepsis-3。记录阳性比例仅描述当前事件导出；未记录阳性不等于确证阴性或患病率。')}</p>
         <table class="eu-table">
           <thead><tr><th>${t('Cohort summary', '队列汇总')}</th><th class="num">${t('Value', '数值')}</th></tr></thead>
           <tbody>
@@ -1082,6 +1083,7 @@
           <button class="btn sm" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button>
           ${hostedServer() ? '' : `<button class="btn sm" data-patient-export>${icon('download', 13)} ${t('Export', '导出')}</button>`}
         </div>
+        ${drill && s && s.mortality_known_count == null ? `<div class="note warn mt-12" role="status">${t('The current service is still running the older statistics logic; mortality and related summaries have not been updated. Restart the service before relying on them.', '当前服务仍在运行旧统计逻辑，死亡率等尚未更新；请重启服务后再使用这些结果。')}</div>` : ''}
         ${guidedNote}
         <div class="mt-16">${patientTabs()}</div>
         <div id="ptbody">${patientTabBody()}</div>
