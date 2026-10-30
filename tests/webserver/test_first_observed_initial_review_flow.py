@@ -24,6 +24,25 @@ service.launch(); durable_research._SERVICE=service
 candidate=raw_preparation_candidate.create_candidate_for_review(run_id=run_id,study_context_id=study_id)
 assert candidate['status']=='pending' and candidate['analysis_authorized'] is False
 assert not (root/'source-reads.txt').exists()
+from easyicu.webserver.raw_preparation_projection import pending_preparation_projection
+preview=pending_preparation_projection({'run_id':run_id,'project_dir':str(run)},study_context_id=study_id)
+scope_preview=preview['candidate_preparation_preview']
+assert scope_preview['plan_sha256']==plan_sha
+assert scope_preview['population_needs'][0]['kind']=='first_observed_icu_single_hospital_adult'
+assert scope_preview['complete'] is False and scope_preview['preparation_authorized'] is False
+assert 'candidate_dependency_closure_unverified' in scope_preview['blockers']
+assert not (root/'source-reads.txt').exists()
+original_context=(run/'research_context.json').read_bytes()
+(run/'research_context.json').write_bytes(original_context+b' ')
+changed=pending_preparation_projection({'run_id':run_id,'project_dir':str(run)},study_context_id=study_id)
+assert 'candidate_preparation_preview' not in changed
+(run/'research_context.json').write_bytes(original_context)
+get_current_study=study_contexts.get_context
+study_contexts.get_context=lambda _: {**study, 'question': 'different study question'}
+changed_study=pending_preparation_projection({'run_id':run_id,'project_dir':str(run)},study_context_id=study_id)
+assert 'candidate_preparation_preview' not in changed_study
+study_contexts.get_context=get_current_study
+assert not (root/'source-reads.txt').exists()
 choice, checkpoint, scope, _=raw_preparation_candidate.available_host_review(run_id=run_id,study_context_id=study_id)
 action=HostActionRequest(session_id=session,project_id=project,action_code='review_raw_preparation',decision=choice)
 def submit(action, body, callback, **key_inputs):

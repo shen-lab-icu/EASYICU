@@ -93,7 +93,12 @@ def test_first_observed_review_ui_explains_private_preparation_and_no_analysis()
         analysis_authorized:false,not_lifetime_first_icu:true,read_outcome_columns:false,
         population_definition:'adult_first_observed_icu_in_single_visible_hospitalization',
         source_columns:['patientunitstayid','uniquepid','patienthealthsystemstayid','unitvisitnumber','unittype','age']}};
-      const workflow={{next_action_code:'plan_scientific_changes_required',raw_preparation:{{status:'awaiting_consumption_closure',scope}},
+      const preview={{schema_version:'easyicu.candidate-preparation-preview/1',complete:false,preparation_authorized:false,
+        analysis_authorized:false,step_inputs:[],context_windows:[],blockers:['candidate_dependency_closure_unverified'],
+        population_needs:[{{criterion_id:'c1',role:'include',kind:'first_observed_icu_single_hospital_adult',concepts:[]}},
+          {{criterion_id:'c2',role:'exclude',kind:'diagnosis_codes',concepts:[],diagnosis_system:'icd10',diagnosis_codes:['K92.2']}},
+          {{criterion_id:'c3',role:'include',kind:'measurement',concepts:['creat'],measurement_summary:'first',operator:'<=',value:4}}]}};
+      const workflow={{next_action_code:'plan_scientific_changes_required',raw_preparation:{{status:'awaiting_consumption_closure',scope,candidate_preparation_preview:preview}},
         host_decisions:{{raw_preparation_review:{{scope_sha256:'a'.repeat(64)}}}}}};
       const owner=window.EU_GUIDED_PI_CONFIRMATION.create({{tr:(en,zh)=>zh,esc:v=>String(v??''),iconHtml:()=>'',resourceButton:()=>'',
         sessionIsStale:()=>false,busy:()=>false,workflow:()=>workflow,session:()=>({{session_id:'session',archived_child_jobs:[]}})}});
@@ -112,6 +117,9 @@ def test_first_observed_review_ui_explains_private_preparation_and_no_analysis()
     assert "data-gpi-preparation-review=\"approved\"" in html
     assert "不读取结局" in html and "后续科研数据绑定尚未接通" in html
     assert "不能证明是终生首次 ICU" in html
+    assert "成年患者首次可核实 ICU" in html and "纳入" in html and "排除" in html
+    assert "诊断编码" in html and "K92.2" in html and "测量值阈值" in html
+    assert "尚未完整确认计划的全部依赖" in html and "批准私有坐标准备" in html
     assert "单独审阅的首次 ICU 准备仅生成私有坐标" in result['message']
     assert "私有首次 ICU 坐标已准备完成" in result['completed']
     assert "data-gpi-preparation-review" not in result['completed']

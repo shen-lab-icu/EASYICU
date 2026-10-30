@@ -8,7 +8,7 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -110,6 +110,131 @@ class ProducerDependencyDeclaration(BaseModel):
     implementation_sha256: str = Field(pattern=_SHA)
     requirements: tuple[SourceTableRequirement, ...] = Field(min_length=1)
     unresolved_dependencies: tuple[str, ...] = ()
+
+
+class CandidateStepInput(BaseModel):
+    """One plan-declared input and its context binding, if explicitly present."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    step_id: str = Field(min_length=1, max_length=160)
+    input_name: str = Field(min_length=1, max_length=200)
+    source_concept: str | None = Field(default=None, max_length=160)
+    context_window: str | None = Field(default=None, max_length=160)
+
+
+class CandidateWindow(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    name: str = Field(min_length=1, max_length=160)
+    anchor: str = Field(min_length=1, max_length=80)
+    start_hours: float
+    end_hours: float
+
+
+class CandidatePopulationNeed(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    criterion_id: str = Field(min_length=1, max_length=10)
+    kind: str = Field(min_length=1, max_length=80)
+    role: Literal["include", "exclude"]
+    concepts: tuple[str, ...] = Field(max_length=10)
+    window: CandidateWindow | None = None
+    diagnosis_system: str | None = Field(default=None, max_length=16)
+    diagnosis_codes: tuple[str, ...] = Field(default=(), max_length=64)
+    measurement_summary: str | None = Field(default=None, max_length=16)
+    operator: str | None = Field(default=None, max_length=4)
+    value: float | None = None
+    unit: str | None = Field(default=None, max_length=32)
+    missing_policy: str | None = Field(default=None, max_length=16)
+    min_years: float | None = None
+    max_years: float | None = None
+    min_hours: float | None = None
+    max_hours: float | None = None
+    hours: float | None = None
+
+
+class CandidatePreparationPreview(BaseModel):
+    """Read-only evidence, never an extraction or analysis grant."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_version: Literal["easyicu.candidate-preparation-preview/1"] = "easyicu.candidate-preparation-preview/1"
+    plan_sha256: str = Field(pattern=_SHA)
+    scientific_review_sha256: str = Field(pattern=_SHA)
+    context_sha256: str = Field(pattern=_SHA)
+    step_inputs: tuple[CandidateStepInput, ...] = Field(max_length=500)
+    population_needs: tuple[CandidatePopulationNeed, ...] = Field(max_length=8)
+    context_windows: tuple[CandidateWindow, ...] = Field(max_length=50)
+    blockers: tuple[str, ...]
+    complete: Literal[False] = False
+    preparation_authorized: Literal[False] = False
+    analysis_authorized: Literal[False] = False
+
+
+def first_observed_candidate_preparation_preview(*, run_dir: Path, pending, checkpoint) -> dict:
+    """Recheck the host-reviewed scope before projecting known plan coordinates.
+
+    The result names evidence already in the review, not the producer's full
+    dependency closure. Source identity verification opens and hashes the raw
+    table but does not decode or project its patient rows.
+    """
+    import hashlib
+    from easyicu.research_agent.planning.population_compile import population_spec_concepts
+    from easyicu.research_agent.planning.population_spec import PopulationSpec
+    from easyicu.research_agent.research_context.typed import parse_research_context_json
+    from easyicu.research_agent.schema import AnalysisPlan
+    from easyicu.webserver.first_observed_preparation import _SCOPE_KEY, proposed_first_observed_scope
+    from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
+    from easyicu.webserver.raw_preparation_candidate import _plan_authority
+
+    authority = _plan_authority(pending)
+    if checkpoint.request.payload.get("plan_review_authority") != authority.model_dump(mode="json"):
+        raise ValueError("candidate_preparation_plan_changed")
+    scope = checkpoint.request.payload.get(_SCOPE_KEY)
+    if not isinstance(scope, Mapping) or proposed_first_observed_scope(run_dir=run_dir, request=checkpoint.request) != dict(scope):
+        raise ValueError("candidate_preparation_scope_changed")
+    with AnchoredDirectory.open(run_dir) as directory:
+        raw = directory.read_bytes("research_context.json", max_bytes=5 * 1024 * 1024)
+        directory.assert_still_selected()
+    if hashlib.sha256(raw).hexdigest() != scope.get("context_sha256"):
+        raise ValueError("candidate_preparation_context_changed")
+    context = parse_research_context_json(raw.decode("utf-8"))
+    plan = AnalysisPlan.model_validate(authority.model_dump(mode="json")["plan_payload"])
+    population = reviewed_population_spec(run_dir=run_dir, pending=pending)
+    if not isinstance(population, dict) or population.get("plan_sha256") != authority.plan_sha256:
+        raise ValueError("candidate_preparation_population_changed")
+    spec = PopulationSpec.model_validate({"criteria": [item["criterion"] for item in population["criteria"]]})
+    variables = {variable.name: variable for variable in context.variables}
+    if len(variables) != len(context.variables):
+        raise ValueError("candidate_preparation_variable_ambiguous")
+    step_inputs = []
+    for step in plan.steps:
+        for name in step.inputs:
+            variable = variables.get(name)
+            step_inputs.append(CandidateStepInput(step_id=step.step_id, input_name=name,
+                source_concept=variable.source_concept if variable else None,
+                context_window=variable.analysis_window if variable else None))
+    windows = tuple(CandidateWindow(name=item.name, anchor=item.anchor, start_hours=item.start_hours,
+                                    end_hours=item.end_hours) for item in context.time_windows)
+    population_needs = []
+    for criterion in spec.criteria:
+        span = getattr(criterion, "window", None)
+        window = (CandidateWindow(name=criterion.id, anchor="icu_admission", start_hours=span.start_hours,
+                                  end_hours=span.end_hours) if span is not None else None)
+        one = PopulationSpec.model_validate({"criteria": [criterion.model_dump(mode="json")]})
+        population_needs.append(CandidatePopulationNeed(criterion_id=criterion.id, kind=criterion.kind,
+            role=criterion.role, concepts=population_spec_concepts(one), window=window,
+            diagnosis_system=getattr(criterion, "system", None),
+            diagnosis_codes=tuple(getattr(criterion, "codes", ())),
+            measurement_summary=getattr(criterion, "summary", None),
+            operator=getattr(criterion, "op", None), value=getattr(criterion, "value", None),
+            unit=getattr(criterion, "unit", None), missing_policy=getattr(criterion, "missing_policy", None),
+            min_years=getattr(criterion, "min_years", None), max_years=getattr(criterion, "max_years", None),
+            min_hours=getattr(criterion, "min_hours", None), max_hours=getattr(criterion, "max_hours", None),
+            hours=getattr(criterion, "hours", None)))
+    blockers = ["candidate_dependency_closure_unverified", "candidate_source_read_closure_unverified",
+                "candidate_extraction_window_unverified", "candidate_coordinate_export_binding_unavailable"]
+    if any(item.source_concept is None for item in step_inputs):
+        blockers.append("candidate_step_input_binding_unverified")
+    return CandidatePreparationPreview(plan_sha256=authority.plan_sha256,
+        scientific_review_sha256=scope["scientific_review_sha256"], context_sha256=scope["context_sha256"],
+        step_inputs=tuple(step_inputs), population_needs=tuple(population_needs),
+        context_windows=windows, blockers=tuple(blockers)).model_dump(mode="json")
 
 
 def declaration_from_provenance(*, plan: PlanReviewAuthority, context_sha256: str,

@@ -40,9 +40,33 @@ def pending_preparation_projection(run: Mapping[str, Any] | None, *, study_conte
         scope = [value for key, value in checkpoint.request.payload.items() if key != "plan_review_authority"]
         if len(scope) != 1 or not isinstance(scope[0], Mapping):
             return None
-        return {"run_id": str(run["run_id"]), "checkpoint_sha256": checkpoint.checkpoint_sha256,
-                "summary": str(checkpoint.request.summary)[:4000],
-                "scope": dict(scope[0]), "status": "awaiting_consumption_closure", "approvable": False}
+        result = {"run_id": str(run["run_id"]), "checkpoint_sha256": checkpoint.checkpoint_sha256,
+                  "summary": str(checkpoint.request.summary)[:4000],
+                  "scope": dict(scope[0]), "status": "awaiting_consumption_closure", "approvable": False}
+        if (study_context_id and scope[0].get("adapter_id")
+                == "eicu-demo-first-observed-single-hospital-adult/1"):
+            # This is informational only; the existing raw preparation
+            # decision continues to cover just the six source fields.
+            try:
+                from easyicu.webserver import agent_pipeline_runs, run_artifact_disclosure, study_contexts
+                from easyicu.webserver.raw_preparation_dependencies import first_observed_candidate_preparation_preview
+
+                pending, study = agent_pipeline_runs.raw_preparation_review_owner(run["run_id"], study_context_id)
+                if Path(pending.run_dir) != Path(str(run["project_dir"])):
+                    raise ValueError("candidate_preparation_owner_changed")
+                expected_study = study_contexts.scientific_configuration_sha256(study)
+                current_study = study_contexts.get_context(study_context_id)
+                if not current_study or study_contexts.scientific_configuration_sha256(current_study) != expected_study:
+                    raise ValueError("candidate_preparation_study_changed")
+                preview = first_observed_candidate_preparation_preview(
+                    run_dir=Path(pending.run_dir), pending=pending, checkpoint=checkpoint)
+                current_study = study_contexts.get_context(study_context_id)
+                if (current_study and study_contexts.scientific_configuration_sha256(current_study) == expected_study
+                        and run_artifact_disclosure.scan_browser_projection(preview).get("passed")):
+                    result["candidate_preparation_preview"] = preview
+            except (AuthorityFilesystemError, OSError, KeyError, ValueError, TypeError, RuntimeError):
+                pass  # An unverifiable preview is not a preparation grant.
+        return result
     except (AuthorityFilesystemError, OSError, ValidationError, ValueError, TypeError):
         return None
 
