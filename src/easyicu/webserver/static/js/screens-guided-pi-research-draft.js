@@ -93,6 +93,14 @@
       && !['error', 'aborted', 'cancelled', 'interrupted'].includes(String(row.stopReason || row.stop_reason || '')));
   }
 
+  function requestsDraftUpdate(text) {
+    const value = String(text || '');
+    if (/(?:不要|无需|不需要|别|停止)\s*(?:再\s*)?(?:更新|修改|修订|完善|重写|刷新)\s*(?:研究|讨论)?草案/i.test(value)
+      || /\b(?:do not|don't|no need to)\s+(?:update|revise|edit|rewrite)\s+(?:the\s+)?(?:discussion\s+|research\s+)?draft\b/i.test(value)) return false;
+    return /(?:更新|修改|修订|完善|重写|刷新)[\s\S]{0,30}(?:草案|讨论稿)|(?:草案|讨论稿)[\s\S]{0,30}(?:更新|修改|修订|完善|重写|刷新)/i.test(value)
+      || /\b(?:update|revise|edit|rewrite|refresh)\b[\s\S]{0,60}\bdraft\b|\bdraft\b[\s\S]{0,60}\b(?:update|revise|edit|rewrite|refresh)\b/i.test(value);
+  }
+
   function current(messages) {
     const rows = Array.isArray(messages) ? messages : [];
     const drafts = [];
@@ -108,8 +116,16 @@
     });
     const latest = drafts.at(-1);
     if (!latest) return null;
+    const later = rows.slice(latest.index + 1);
+    const lastUser = later.findLastIndex(row => row && row.role === 'user');
+    const afterUser = lastUser < 0 ? [] : later.slice(lastUser + 1);
+    const lastAssistant = afterUser.filter(row => row && row.role === 'assistant').at(-1);
+    const reason = String(lastAssistant?.stopReason || lastAssistant?.stop_reason || '');
+    const updateFailed = lastUser >= 0 && requestsDraftUpdate(later[lastUser].text)
+      && Boolean(lastAssistant && accepts(lastAssistant)) && !afterUser.some(isStreaming)
+      && !['toolUse', 'tool_use', 'tool_calls'].includes(reason);
     return { ...latest, history: drafts.slice(0, -1).slice(-5),
-      pendingUpdate: rows.slice(latest.index + 1).some(row => row && row.role === 'user') };
+      pendingUpdate: lastUser >= 0, updateFailed };
   }
 
   function render(snapshot, ctx) {
@@ -164,7 +180,8 @@
       <a href="https://www.sicdb.com/Documentation/Table%3A_Cases" target="_blank" rel="noopener noreferrer">${tr('SICdb field documentation', 'SICdb 字段说明')}</a>
     </section>` : '';
     return `<section class="gpi-research-draft" data-gpi-research-draft aria-label="${tr('Discussion draft', '研究讨论草案')}">
-      <div class="gpi-research-draft-status">${snapshot.pendingUpdate ? tr('Previous draft · awaiting an update', '上一份草案 · 待更新') : tr('Discussion draft · not approved', '讨论草案 · 未批准')}</div>
+      <div class="gpi-research-draft-status">${snapshot.updateFailed ? tr('Draft update not completed', '本轮未能更新草案') : snapshot.pendingUpdate ? tr('Previous draft · awaiting an update', '上一份草案 · 待更新') : tr('Discussion draft · not approved', '讨论草案 · 未批准')}</div>
+      ${snapshot.updateFailed ? `<p role="status">${tr('The assistant reply did not include a valid updated draft. The previous draft remains below; please ask to update it again.', '助手的回复没有生成有效的新草案。下方仍是上一份草案，请再次要求更新。')}</p>` : ''}
       <h3>${esc(draft.title)}</h3>
       <p class="gpi-research-draft-boundary">${tr('Assistant-authored discussion only; data and design are unverified. This does not approve preparation or analysis.', '助手整理的讨论记录，数据与设计尚未核验；不代表批准准备数据或执行分析。')}</p>
       ${sourceFactHtml}
