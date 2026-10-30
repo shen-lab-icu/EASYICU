@@ -102,3 +102,15 @@ test('hosted registry rows show the renamed demo badge without visible paths or 
     assert.doesNotMatch(html, /src-path|title="\/private\/|data-src-rename|data-src-remove|source_id/);
   }
 });
+
+test('a data-page selection is not presented as research authorization', async () => {
+  for (const hosted of [false, true]) {
+    const { helpers, select } = await setup({ hosted });
+    select(renamed);
+    const html = helpers.sourceRegistryBlock('single');
+    assert.match(html, /数据页已选择/);
+    assert.match(html, /研究对话中还需单独确认本次使用的数据来源/);
+    assert.doesNotMatch(html, /会同时用于各数据页面和研究对话/);
+    assert.doesNotMatch(helpers.sourceRegistryBlock('multi'), /数据页已选择/);
+  }
+});

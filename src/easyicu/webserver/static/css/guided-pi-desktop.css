@@ -375,3 +375,9 @@
  .gd-main.threecol.gpi-workspace.gpi-preview-open.gpi-preview-focus.gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr)}
  .gd-main.threecol.gpi-workspace.gpi-preview-open:not(.gpi-preview-focus):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:59px minmax(340px,.7fr) minmax(560px,1.3fr)}
 }
+/* A researcher can reveal the progress panel without leaving the empty entry. */
+@media(min-width:1181px){
+ .gd-main.threecol.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open):not(.gd-project-rail-collapsed){grid-template-columns:var(--gd-project-rail-width) minmax(0,1fr) var(--gd-context-aside-width)}
+ .gd-main.threecol.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr) var(--gd-context-aside-width)}
+ .gd-main.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:flex}
+}

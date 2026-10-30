@@ -253,7 +253,7 @@
     return `
       <div class="src-registry" data-src-mode="${multi ? 'multi' : 'single'}">
         <div class="src-head">
-          <div><div class="eyebrow">${title}</div>${multi || !hosted ? `<div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : t('The data picked here is used by every data page and the research conversation.', '这里选中的数据会同时用于各数据页面和研究对话。')}</div>` : ''}</div>
+          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports to compare.', '请选择至少两份数据进行对比。') : t('This selection is for data pages. Confirm the data source separately in each research conversation.', '这里选择的是数据页面的数据源；研究对话中还需单独确认本次使用的数据来源。')}</div></div>
           <button class="btn sm ghost" data-src-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="src-list">
@@ -272,7 +272,7 @@
                 <span class="src-body"><span class="src-name">${esc(label)}${kind.label ? ` <span class="pill src-kind" data-src-kind="${kind.kind}">${esc(kind.label)}</span>` : ''}</span><span class="src-meta">${esc(sourceLine(s))}</span>${pathLine}</span>
                 ${multi
                   ? `<button class="btn sm ${on ? '' : 'ghost'}" type="button" data-src-cross="${esc(s.path)}" aria-pressed="${on ? 'true' : 'false'}">${on ? t('selected', '已选择') : t('add', '添加')}</button>`
-                  : `<span class="pill ${on ? 'ok' : 'dashed'}" style="height:20px;">${on ? t('active', '当前') : t('use', '使用')}</span>`}
+                  : `<span class="pill ${on ? 'ok' : 'dashed'}" style="height:20px;">${on ? t('selected for data pages', '数据页已选择') : t('select', '选择')}</span>`}
                 ${hosted ? '' : `<span class="src-actions">
                   <button class="btn icon sm ghost" data-src-action data-src-rename="${esc(s.path)}" data-src-label="${esc(label)}" title="${esc(t('Rename source', '重命名来源'))}">${icon('edit', 12)}</button>
                   <button class="btn icon sm ghost" data-src-action data-src-remove="${esc(s.path)}" title="${esc(t('Remove registration only; files stay on disk', '仅移除注册记录；磁盘文件保留'))}">${icon('close', 12)}</button>

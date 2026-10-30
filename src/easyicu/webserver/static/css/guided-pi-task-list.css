@@ -8,6 +8,8 @@
 .gpi-conversation-item{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:start;column-gap:8px;row-gap:1px;min-height:32px;padding:5px 34px 5px 10px}
 .gpi-conversation-item .gpi-conversation-copy{display:block;grid-column:2;grid-row:1;min-width:0}
 .gpi-conversation-item .gpi-conversation-copy strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;max-height:40px;overflow:hidden;text-overflow:ellipsis;white-space:normal;overflow-wrap:anywhere;font-size:13.5px;line-height:20px}
+.gpi-conversation-item .gpi-conversation-meta{grid-column:2/-1;grid-row:2;display:flex;align-items:baseline;gap:7px;min-width:0;color:var(--skin-muted-2);font-size:11.5px;line-height:14px}
+.gpi-conversation-item .gpi-conversation-meta .gpi-conversation-kind{display:inline;overflow:visible;font-size:inherit;line-height:inherit;white-space:nowrap}
 .gpi-conversation-item time{grid-column:2/-1;grid-row:2;min-width:0;align-self:start;padding:0;color:var(--skin-muted-2);font-size:11.5px;line-height:14px}
 .gpi-conversation-item .gpi-attention-mark{grid-column:3;grid-row:1;align-self:start;margin:6px 0 0}
 .gpi-conversation-dot{grid-column:1;grid-row:1;align-self:start;box-sizing:border-box;width:7px;height:7px;margin-top:6px;border:1.5px solid var(--skin-muted-2);border-radius:50%}

@@ -506,6 +506,17 @@ assert.match(sessionRail.innerHTML, /is-complete/);
 assert.match(sessionRail.innerHTML, /Completed/);
 assert.match(sessionRail.innerHTML, /<time[^>]*>1d<\/time>/);
 assert.match(sessionRail.innerHTML, /data-gpi-rail-material="0"/);
+// The same user title may belong to two different kinds of conversation.
+// Label the kind without changing that title or the existing status/time.
+workspace.syncNavigation({ ...navigation, sessions: [
+  { session_id: 'research', title: 'Custom title', agent_mode: 'research', last_turn_status: 'done' },
+  { session_id: 'artifact', title: 'Custom title', agent_mode: 'workspace', last_turn_status: 'done' },
+] });
+assert.match(sessionRail.innerHTML, /<strong>Custom title<\/strong>.*?class="gpi-conversation-kind">Research conversation<\/span>/);
+assert.match(sessionRail.innerHTML, /<strong>Custom title<\/strong>.*?class="gpi-conversation-kind">Artifact task<\/span>/);
+assert.match(sessionRail.innerHTML, /title="Custom title · Research conversation · Completed"/);
+assert.match(sessionRail.innerHTML, /title="Custom title · Artifact task · Completed"/);
+assert.match(sessionRail.innerHTML, /<time[^>]*>1d<\/time>/);
 workspace.syncNavigation({ ...navigation, materialsInteractive: false });
 assert.match(sessionRail.innerHTML, /class="gpi-project-material-row"/);
 assert.doesNotMatch(sessionRail.innerHTML, /data-gpi-rail-material="0"/);

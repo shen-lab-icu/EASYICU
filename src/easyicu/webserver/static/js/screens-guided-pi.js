@@ -18,7 +18,7 @@
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     planConfigurationError: '',
-    source: null, childSource: null, childJobId: '', error: '', shell: 'pi', draft: '', setupSaving: false,
+    source: null, childSource: null, childJobId: '', error: '', composerErrorSessionId: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
     researchProvider: 'codex', researchModel: '', codexAuth: null,
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
@@ -1497,7 +1497,14 @@
     if (!state.session || state.projectLoading || state.childJobId || sessionIsStale()) return;
     const input = state.host.querySelector('[data-gpi-input]');
     const text = String((input && input.value) || state.draft || '').trim();
-    if (!text) return;
+    if (!text) {
+      state.composerErrorSessionId = state.session.session_id;
+      render();
+      const composer = state.host && state.host.querySelector('[data-gpi-input]');
+      if (composer) composer.focus();
+      return;
+    }
+    state.composerErrorSessionId = '';
     const followUp = state.followUpDraft;
     if (followUp) {
       // Editing a suggested question does not grant research approval or turn

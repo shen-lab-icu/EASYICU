@@ -99,7 +99,7 @@ function harness(language = 'zh') {
   });
   const type = text => {
     input.value = text;
-    callbacks.input({ target: { value: text, matches: selector => selector === '[data-gpi-input]' } });
+    callbacks.input({ target: { value: text, matches: selector => selector === '[data-gpi-input]', removeAttribute() {} } });
   };
   const resourceClick = descriptor => {
     const markup = resources.button(descriptor);
@@ -221,6 +221,34 @@ test('clearing a suggestion restores ordinary typed-message handling', async () 
   h.state.busy = true;
   await h.context.sendMessage();
   assert.deepEqual(h.queued, ['A new independently typed question']);
+});
+
+test('an empty send explains that a question is needed and clears when typing', async () => {
+  for (const language of ['zh', 'en']) {
+    for (const agentMode of ['research', 'workspace']) {
+      const h = harness(language);
+      h.state.session.agent_mode = agentMode;
+      h.context.STUDY_WORKSPACE.hasReference = () => true;
+      h.type('   ');
+      await h.context.sendMessage();
+      assert.equal(h.state.composerErrorSessionId, 'session-a');
+      assert.equal(h.sent.length, 0);
+      assert.equal(h.queued.length, 0);
+      assert.equal(h.context.STUDY_WORKSPACE.hasReference(), true);
+      h.type('Please explain this source.');
+      assert.equal(h.state.composerErrorSessionId, '');
+    }
+  }
+});
+
+test('a message with a reference remains sendable', async () => {
+  const h = harness();
+  h.context.agentMode = () => 'workspace';
+  h.context.STUDY_WORKSPACE.hasReference = () => true;
+  h.context.STUDY_WORKSPACE.decorateMessage = text => `${text}\nSelected synthetic source`;
+  h.type('Please explain this source.');
+  await h.context.sendMessage();
+  assert.equal(h.sent[0].message, 'Please explain this source.\nSelected synthetic source');
 });
 
 test('a new-task draft cannot land in another selection, project or a newly blocked session', async () => {
