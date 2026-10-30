@@ -816,3 +816,47 @@ def test_hospitalization_first_icu_proposal_refuses_explicit_each_patient_scope(
     result = proposal(study, requests)
     assert result["available"] is False
     assert "population_preparation_first_stay_scope_conflict" in result["blocker_codes"]
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "成人患者各自首次 ICU 入住",
+        "每位患者的首次 ICU 入住",
+        "每个病人第一次入住 ICU",
+        "each patient's first ICU stay",
+        "the first ICU stay per patient",
+        "every patient and their first ICU admission",
+    ],
+)
+def test_first_icu_per_patient_wording_is_not_projected_as_per_hospitalization(study, quote):
+    _, requests = reviewed_population(
+        {"kind": "first_icu_stay_per_hospitalization", "quote": quote, "source": "study_wording"},
+        question=quote,
+    )
+    result = proposal(study, requests)
+    assert result["available"] is False
+    assert result["status"] == "blocked"
+    assert result["blocker_codes"] == ["population_preparation_patient_hospitalization_scope_mismatch"]
+    assert result["changes"] == []
+    assert "cohort" not in result
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "每次住院的首次 ICU 入住",
+        "每位患者每次住院的首次 ICU 入住",
+        "the first ICU stay per hospitalization",
+        "each patient's first ICU stay within each hospital admission",
+        "first ICU stay",
+    ],
+)
+def test_hospitalization_wording_does_not_become_a_patient_scope_conflict(study, quote):
+    _, requests = reviewed_population(
+        {"kind": "first_icu_stay_per_hospitalization", "quote": quote, "source": "study_wording"},
+        question=quote,
+    )
+    result = proposal(study, requests)
+    assert result["available"] is True
+    assert result["cohort"]["first_icu_stay_per_hospitalization"] is True

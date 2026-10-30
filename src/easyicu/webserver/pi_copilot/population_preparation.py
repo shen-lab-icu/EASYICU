@@ -9,6 +9,8 @@ other criteria remain visible and prevent applying a partial remedy.
 from __future__ import annotations
 
 import math
+import re
+import unicodedata
 from typing import Any, Mapping, Sequence
 
 from easyicu.research_agent.canonical_json import canonical_sha256
@@ -27,6 +29,35 @@ from easyicu.webserver import primary_cohort, study_contexts
 STOP = "population_inclusion_requires_extraction"
 
 
+def _patient_first_wording_conflicts_with_hospitalization(quote: str) -> bool:
+    """Detect an explicit per-patient first-stay quote typed as per-hospitalization.
+
+    A patient's first ICU stay and the first ICU stay in every hospitalization
+    are different populations. This deliberately catches only explicit wording;
+    it does not derive a patient identity, a first-stay order, or a new criterion.
+    An explicit per-hospitalization qualifier remains a hospitalization rule.
+    """
+    text = unicodedata.normalize("NFKC", str(quote or "")).casefold()
+    hospital_scope = (
+        r"每(?:一)?(?:次|个)?(?:住院|入院|住院期间)",
+        r"(?:每|各)(?:次|个)?(?:医院)?住院",
+        r"\b(?:per|each|every|within each|within every)\s+"
+        r"(?:hospitali[sz]ation|hospital(?:\s+admission|\s+stay))s?\b",
+    )
+    if any(re.search(pattern, text) for pattern in hospital_scope):
+        return False
+    patient_scope = (
+        r"每(?:一)?(?:位|名|个)?(?:患者|病人)",
+        r"(?:患者|病人)(?:各自|分别|每人)",
+        r"每人",
+        r"\b(?:each|every)\s+patient(?:'s)?\b",
+        r"\bper\s+patient\b",
+        r"\bpatients?'\s+first\b",
+    )
+    first = r"(?:首次|第一次|首个|\bfirst\b)"
+    return bool(re.search(first, text) and any(re.search(pattern, text) for pattern in patient_scope))
+
+
 def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None:
     """Intersect one inclusion with existing admission axes, or name the gap."""
     if criterion.role != "include":
@@ -40,6 +71,8 @@ def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None
         cohort["exclude_readmissions"] = True
         return None
     if isinstance(criterion, FirstIcuStayPerHospitalization):
+        if _patient_first_wording_conflicts_with_hospitalization(criterion.quote):
+            return "population_preparation_patient_hospitalization_scope_mismatch"
         if current["exclude_readmissions"]:
             return "population_preparation_first_stay_scope_conflict"
         if "first_icu_stay_per_hospitalization" in cohort and not current["first_icu_stay_per_hospitalization"]:
