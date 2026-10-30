@@ -113,11 +113,11 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
             checkpoint = existing
         directory.assert_still_selected()
     partial = checkpoint.request.payload.get("raw_preparation_scope", {}).get("adapter_id") == "registered-csv-projection/1"
-    # The current shared UI does not yet render this scope's complete
-    # authorization details. A candidate can be previewed, but cannot be
-    # approved until the review surface has been updated and verified.
+    # The single-table executor is not yet restartable after consuming its
+    # one-time grant, and its delivery is not integrated into the workspace.
+    # Keep the review offer closed until both are available.
     return {"status": "pending", "checkpoint_sha256": checkpoint.checkpoint_sha256,
-            "approvable": False, "reason_code": "single_table_review_surface_unavailable" if partial else "producer_consumption_closure_unverified"}
+            "approvable": False, "reason_code": "single_table_recovery_delivery_unavailable" if partial else "producer_consumption_closure_unverified"}
 
 
 def available_host_review(*, run_id: str, study_context_id: str):
