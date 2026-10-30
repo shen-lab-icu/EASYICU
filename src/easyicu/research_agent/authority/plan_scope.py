@@ -284,6 +284,8 @@ _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "input_consumption_contracts",
         "table_one_spec",
         "trajectory_stability_spec",
+        "covariate_balance_spec",
+        "cluster_size_spec",
         "exposure_outcome_distribution_spec",
         "cohort_definition_spec",
         "measurement_audit_spec",
@@ -332,10 +334,16 @@ def _analysis_step_scientific_authority_payload(
             "AnalysisStep authority classification drift: "
             f"missing={missing!r}, unknown={unknown!r}, overlaps={sorted(overlaps)!r}"
         )
-    return step.model_dump(
+    payload = step.model_dump(
         mode="json",
         include=_ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
     )
+    # Older steps did not have these fields. Preserve their exact signature
+    # when absent, while binding every declared scientific parameter.
+    for field in ("covariate_balance_spec", "cluster_size_spec"):
+        if payload.get(field) is None:
+            payload.pop(field, None)
+    return payload
 
 
 def _normalise_scientific_text(value: Any) -> Optional[str]:
