@@ -59,7 +59,7 @@
 .ag-readiness-status,.ag-readiness-severity{display:inline-flex;flex:none;align-items:center;padding:4px 9px;border:1px solid var(--hair-2);border-radius:999px;background:var(--surface-2);color:var(--ink-2);font-size:12px;font-weight:650;line-height:1.35;white-space:normal}
 .ag-readiness-reader h3{margin:0 0 14px;font-size:15px;line-height:1.4}
 .ag-readiness-boundary,.ag-readiness-domains,.ag-readiness-findings{padding:22px 0;border-bottom:1px solid var(--hair)}
-.ag-readiness-boundary dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr));gap:12px;margin:0}
+.ag-readiness-boundary dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,135px),1fr));gap:12px;margin:0}
 .ag-readiness-boundary dl>div{min-width:0;padding:12px 14px;border:1px solid var(--hair);border-radius:10px;background:var(--surface-2)}
 .ag-readiness-boundary dt{color:var(--ink-4);font-size:12px}
 .ag-readiness-boundary dd{margin:5px 0 0;color:var(--ink);font-size:13px;font-weight:650;line-height:1.5;overflow-wrap:anywhere}
