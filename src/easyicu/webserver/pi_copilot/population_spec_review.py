@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -24,7 +25,8 @@ from easyicu.research_agent.planning.progressive_contract import (
 from easyicu.research_agent.planning.scientific_review import (
     plan_time_zero_hours, trajectory_representation_facts,
 )
-from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
+from easyicu.research_agent.research_context.typed import parse_research_context_json
+from easyicu.research_agent.schema import AnalysisPlan
 
 _MAX_FILE = 16 * 1024 * 1024
 _FILES = {
@@ -44,7 +46,8 @@ def _bytes(path: Path, digest: str) -> bytes:
     return data
 
 
-def reviewed_population_spec(*, run_dir: Path, pending: Any) -> dict[str, Any] | None:
+def reviewed_population_spec(*, run_dir: Path, pending: Any,
+                             study_context_id: str | None = None) -> dict[str, Any] | None:
     """Return only source criteria bound to this pending review's exact plan."""
     try:
         authorities = []
@@ -80,15 +83,21 @@ def reviewed_population_spec(*, run_dir: Path, pending: Any) -> dict[str, Any] |
         if raw_spec is None:
             return None
         spec = PopulationSpec.model_validate(raw_spec)
-        context = ResearchContext.model_validate_json(content["research_context"])
+        context = parse_research_context_json(content["research_context"].decode("utf-8"))
         with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
             plan = AnalysisPlan.model_validate(thaw_payload(review.plan_payload))
         if plan.cohort is None:
             return None
-        compiled = compile_population(
-            spec, context,
-            time_zero_hours=plan_time_zero_hours(context, trajectory_representation_facts(context, plan), None),
-        )
+        if study_context_id is not None:
+            from easyicu.webserver.first_observed_run_guard import host_first_observed_review_scope
+            scope = host_first_observed_review_scope(study_context_id=study_context_id)
+        else:
+            scope = nullcontext()
+        with scope:
+            compiled = compile_population(
+                spec, context,
+                time_zero_hours=plan_time_zero_hours(context, trajectory_representation_facts(context, plan), None),
+            )
         observed = compiled.cohort_definition().plan_dict()
         approved = plan.cohort.plan_dict()
         if {k: v for k, v in observed.items() if k != "name"} != {

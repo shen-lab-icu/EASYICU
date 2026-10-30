@@ -26,7 +26,8 @@ criterion; the verbatim contract strings are never parsed.  A criterion the
 source applied is not judged against time zero here: that check stays with
 the export's own eligibility owner (``eligibility_after_time_zero``).
 
-Compiling reads no patient row, calls no model and writes no file.
+Compiling calls no model and writes no file. When a trusted host verifies a
+first-observed ICU restriction, it also checks the actual input's stay IDs.
 """
 
 from __future__ import annotations
@@ -35,10 +36,12 @@ import hashlib
 import json
 import math
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
 from ..authority.declared_levels import closed_planning_levels_for
 from ..cohort.schema import (
@@ -59,6 +62,7 @@ from ..research_context.concept_population import (
 )
 from ..research_context.export_selection import (
     SelectionStep,
+    SourceIdentity,
     export_applied_selection,
     export_selection_counts,
 )
@@ -119,6 +123,7 @@ Disposition = Literal[
 ProofKind = Literal[
     "export_report_step", "recorded_study_contract", "host_first_icu_stay",
     "host_first_icu_stay_per_hospitalization",
+    "host_first_observed_icu_single_hospital_adult",
 ]
 Side = Literal["inclusion", "exclusion"]
 
@@ -179,6 +184,78 @@ _SUMMARY_TRANSFORMS = (
 )
 #: The export's recorded study contract (``source_selection.executed_cohort``).
 _EXECUTED_COHORT = "executed_cohort"
+
+
+@dataclass
+class _HostFirstObservedScope:
+    """A trusted host's non-serializable live verifier for one invocation."""
+
+    verify: Callable[[ResearchContext, FirstObservedIcuSingleHospitalAdult], Mapping[str, Any]]
+    active: bool = True
+
+
+_HOST_FIRST_OBSERVED: ContextVar[Optional[_HostFirstObservedScope]] = ContextVar(
+    "host_first_observed_population_verifier", default=None
+)
+_HOST_FIRST_OBSERVED_VERIFYING: ContextVar[bool] = ContextVar(
+    "host_first_observed_population_verifying", default=False
+)
+
+
+@contextmanager
+def host_first_observed_population_scope(
+    verify: Callable[[ResearchContext, FirstObservedIcuSingleHospitalAdult], Mapping[str, Any]],
+) -> Iterator[None]:
+    """Bind host code, never user-supplied context or a serialized proof.
+
+    Child contexts inherit a reference to the same revocable scope. A new
+    thread without explicit propagation has no verifier and fails closed.
+    """
+    if not callable(verify):
+        raise TypeError("host population verifier must be callable")
+    scope = _HostFirstObservedScope(verify=verify)
+    token = _HOST_FIRST_OBSERVED.set(scope)
+    try:
+        yield
+    finally:
+        scope.active = False
+        _HOST_FIRST_OBSERVED.reset(token)
+
+
+def _host_first_observed_proof(
+    criterion: FirstObservedIcuSingleHospitalAdult, context: ResearchContext,
+) -> Optional[SourceProof]:
+    scope = _HOST_FIRST_OBSERVED.get()
+    if scope is None or not scope.active or _HOST_FIRST_OBSERVED_VERIFYING.get():
+        return None
+    verification = _HOST_FIRST_OBSERVED_VERIFYING.set(True)
+    try:
+        parameters = scope.verify(context, criterion)
+    except Exception:
+        # A failed host check cannot authorize a broader or changed cohort.
+        return None
+    finally:
+        _HOST_FIRST_OBSERVED_VERIFYING.reset(verification)
+    if not scope.active or not isinstance(parameters, Mapping):
+        return None
+    from ..canonical_json import canonical_sha256
+
+    source = SourceIdentity.from_record(context_data_constraints(context).get("source_identity"))
+    digests = (
+        "cohort_authority_sha256", "coordinate_sha256", "preparation_checkpoint_sha256",
+        "source_identity_sha256", "criterion_sha256",
+    )
+    if (source is None or set(parameters) != {*digests, "preparation_run_id"}
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(parameters.get(key) or "")) is None for key in digests)
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,160}", str(parameters.get("preparation_run_id") or "")) is None
+            or parameters["source_identity_sha256"] != canonical_sha256(source.to_dict())
+            or parameters["criterion_sha256"] != canonical_sha256(criterion.model_dump(mode="json"))):
+        return None
+    return SourceProof(
+        kind="host_first_observed_icu_single_hospital_adult",
+        record_ref="host.verified_first_observed_population",
+        parameters=dict(parameters),
+    )
 
 
 @dataclass(frozen=True)
@@ -598,7 +675,10 @@ def _compile(criterion: PopulationCriterion, reading: _Input) -> CompiledCriteri
             )
         from easyicu.databases.research_substitutions import criterion_has_source_substitution
 
-        proof = None if criterion_has_source_substitution(reading.context, criterion) else _source_proof(criterion, reading.sources)
+        substituted = criterion_has_source_substitution(reading.context, criterion)
+        proof = None if substituted else _source_proof(criterion, reading.sources)
+        if not substituted and proof is None and isinstance(criterion, FirstObservedIcuSingleHospitalAdult):
+            proof = _host_first_observed_proof(criterion, reading.context)
         if proof is not None:
             return CompiledCriterion(
                 criterion=criterion,

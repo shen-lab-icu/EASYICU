@@ -241,7 +241,7 @@ def test_criteria_nested_under_their_kind_are_recorded_with_the_flat_shape() -> 
     adults, marked = (error["msg"] for error in audit["errors"])
     adult_shape = '{"kind": "age_years", "min_years": "...", "max_years": "..."}'
     marked_shape = (
-        '{"kind": "condition_present", "concepts_all_of": "...", "window": "..."}'
+        '{"kind": "condition_present", "concepts_all_of": "...", "window": "...", "missing_policy": "..."}'
     )
     assert f"write {adult_shape}" in adults
     assert f"write {marked_shape}" in marked

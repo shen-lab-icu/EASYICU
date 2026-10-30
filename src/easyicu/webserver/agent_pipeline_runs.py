@@ -5379,7 +5379,9 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             study=proposal_study, run_id=pending.run_id, requests=pending.requests,
         ) if proposal_study is not None else None,
         "population_acceptance": population_acceptance,
-        "reviewed_population_spec": reviewed_population_spec(run_dir=run_dir, pending=pending),
+        "reviewed_population_spec": reviewed_population_spec(
+            run_dir=run_dir, pending=pending, study_context_id=_clean_text(study.get("id"), 160)
+        ),
         "planning_coordinate_readings": planning_coordinate_readings.load_planning_coordinate_readings(
             wrapper_dir,
             context_columns=planning_coordinate_readings.planned_context_columns(run_dir),
@@ -8059,7 +8061,13 @@ def make_research_pipeline_run_runner(
                 run_arguments["user_preferences"] = sealed_preferences
             if grouped_continuation is not None:
                 run_arguments.update(grouped_continuation.run_arguments())
-            outcome = call_with_failure_location(pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
+            # The live verifier is server-owned and scoped to this study. It
+            # checks actual staged cohort bytes and signed preparation on each
+            # population compilation; no request-supplied proof is trusted.
+            from easyicu.webserver.first_observed_run_guard import host_first_observed_review_scope
+
+            with host_first_observed_review_scope(study_context_id=str(study["id"])):
+                outcome = call_with_failure_location(pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending
             ):
