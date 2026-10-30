@@ -8405,6 +8405,17 @@ def resume_research_pipeline(
                 "scientific_plan_review_changes_required",
                 "The current scientific review requires plan changes before approval.",
             )
+        # A first-observed ICU coordinate is constructible and is not a grant.
+        # Before this population can run, the selected actual input capsule
+        # must lead back to the signed, consumed preparation of that source.
+        from easyicu.webserver.first_observed_run_guard import verify_first_observed_execution_inputs
+        try:
+            verify_first_observed_execution_inputs(pending=entry.pending, study_context_id=study_context_id)
+        except Exception as exc:
+            raise ResearchPipelineRunError(
+                "research_pipeline_first_observed_input_binding_unavailable",
+                "The reviewed first-observed ICU population is not bound to a verified preparation and actual input; analysis cannot start.",
+            ) from exc
     if resolved == "approved":
         source = entry.study.get("data_source")
         source = source if isinstance(source, Mapping) else {}

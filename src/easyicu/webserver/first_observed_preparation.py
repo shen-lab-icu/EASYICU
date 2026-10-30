@@ -280,14 +280,15 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
         _publish_once(directory, binding.nonce + ".parquet", data)
         _publish_once(directory, binding.nonce + ".json", document)
         directory.assert_still_selected()
-    return _coordinate(root, binding.nonce, scope, checkpoint, body)
+    return _coordinate(root, binding, scope, checkpoint, body)
 
 
-def _coordinate(root: Path, nonce: str, scope: Mapping[str, Any], checkpoint: RawPreparationCheckpoint,
+def _coordinate(root: Path, binding: RawPreparationHostBinding, scope: Mapping[str, Any], checkpoint: RawPreparationCheckpoint,
                 body: Mapping[str, Any]) -> FirstObservedIcuCoordinate:
-    return FirstObservedIcuCoordinate(root / (nonce + ".parquet"), str(body["coordinate_sha256"]),
+    return FirstObservedIcuCoordinate(root / (binding.nonce + ".parquet"), str(body["coordinate_sha256"]),
         scope["archive_sha256"], scope["patient_table_sha256"], scope["export_manifest_sha256"],
-        scope["plan_sha256"], checkpoint.checkpoint_sha256)
+        scope["plan_sha256"], checkpoint.checkpoint_sha256, preparation_run_id=binding.run_id,
+        preparation_binding_sha256=canonical_sha256(binding.model_dump(mode="json")))
 
 
 def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
@@ -323,7 +324,7 @@ def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparatio
         expected_body["private_source_flow"] = flow
     if body != expected_body:
         raise ValueError("first_observed_attestation_binding_mismatch")
-    return _coordinate(root, binding.nonce, scope, checkpoint, body), flow
+    return _coordinate(root, binding, scope, checkpoint, body), flow
 
 
 def resolve_prepared_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,

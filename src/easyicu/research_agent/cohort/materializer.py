@@ -2976,6 +2976,11 @@ def materialize_to_parquet(
             'population_definition': 'adult_first_observed_icu_in_single_visible_hospitalization',
             'not_lifetime_first_icu': True,
         }
+        if first_observed_icu_coordinate.preparation_run_id is not None:
+            first_observed_restriction.update({
+                'preparation_run_id': first_observed_icu_coordinate.preparation_run_id,
+                'preparation_binding_sha256': first_observed_icu_coordinate.preparation_binding_sha256,
+            })
         provenance['n_stays_after_inclusion_exclusion'] = int(len(cohort))
         provenance['columns'] = list(cohort.columns)
         provenance['cohort_sha256'] = _hash_df(cohort.reset_index(drop=True))

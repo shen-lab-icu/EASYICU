@@ -39,6 +39,10 @@ class FirstObservedIcuCoordinate:
     export_manifest_sha256: str
     plan_sha256: str
     preparation_checkpoint_sha256: str
+    # Optional host origin coordinates make a real signed preparation
+    # discoverable later.  They are not themselves a host grant.
+    preparation_run_id: str | None = None
+    preparation_binding_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not Path(self.path).is_absolute():
@@ -46,6 +50,12 @@ class FirstObservedIcuCoordinate:
         for name in ("sha256", "archive_sha256", "patient_table_sha256", "export_manifest_sha256", "plan_sha256", "preparation_checkpoint_sha256"):
             if not isinstance(getattr(self, name), str) or not re.fullmatch(r"[0-9a-f]{64}", getattr(self, name)):
                 raise ValueError(f"invalid first-observed {name}")
+        if (self.preparation_run_id is None) != (self.preparation_binding_sha256 is None):
+            raise ValueError("first-observed preparation origin is incomplete")
+        if self.preparation_run_id is not None and (
+                not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", self.preparation_run_id)
+                or not re.fullmatch(r"[0-9a-f]{64}", self.preparation_binding_sha256 or "")):
+            raise ValueError("first-observed preparation origin is invalid")
         object.__setattr__(self, "path", Path(self.path))
 
 
