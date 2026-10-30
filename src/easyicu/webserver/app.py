@@ -45,6 +45,7 @@ from easyicu.webserver.agent_review_recovery import (
 )
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
+from easyicu.webserver.routes.non_executable_proposal import router as non_executable_proposal_router
 from easyicu.webserver.routes.attention import router as attention_router
 from easyicu.webserver.routes.clinician_skills import router as clinician_skills_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -338,6 +339,7 @@ app.include_router(demo_source_catalog_router)
 app.include_router(job_submission_router)
 app.include_router(demo_source_submission_router)
 app.include_router(agent_control_router)
+app.include_router(non_executable_proposal_router)
 app.include_router(guided_router)
 app.include_router(copilot_router)
 app.include_router(pi_copilot_router)
