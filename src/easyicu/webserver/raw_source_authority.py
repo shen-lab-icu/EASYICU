@@ -337,10 +337,52 @@ def _regular_descendant(root: Path, relative: str, *, label: str) -> Path:
     return current.resolve(strict=True)
 
 
-def _table_schema(path: Path, *, table: str) -> set[str]:
+def _table_schema_and_digest(
+    path: Path, *, table: str, expected_digest: Optional[str] = None,
+    database: Optional[str] = None,
+) -> tuple[set[str], str]:
+    """Bind the Parquet schema and SHA-256 to one stable open file.
+
+    This does not authorize later reads: the materializer must re-check the
+    returned digest when it actually consumes the table. The directory entry
+    check catches a replacement while this descriptor is being read.
+    """
     try:
-        return set(pq.read_schema(path).names)
-    except (OSError, ValueError, ImportError) as exc:
+        with AnchoredDirectory.open(path.parent) as directory:
+            with directory.open_regular(path.name) as handle:
+                before = os.fstat(handle.fileno())
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                actual = digest.hexdigest()
+                if expected_digest is not None and actual != expected_digest:
+                    raise RawSourceAuthorityError(
+                        "raw_source_authority_table_digest_mismatch",
+                        "A raw table no longer matches its source authority digest.",
+                        details={"object": table, "database": database},
+                    )
+                handle.seek(0)
+                columns = set(pq.read_schema(handle).names)
+                after = os.fstat(handle.fileno())
+                named = directory.stat(path.name)
+                coordinates = lambda value: (  # noqa: E731
+                    value.st_dev, value.st_ino, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns,
+                )
+                if (
+                    coordinates(before) != coordinates(after)
+                    or coordinates(after) != coordinates(named)
+                    or not stat.S_ISREG(named.st_mode)
+                ):
+                    raise RawSourceAuthorityError(
+                        "raw_source_authority_table_changed",
+                        "The raw table changed while its source binding was prepared.",
+                        details={"object": table},
+                    )
+                return columns, actual
+    except RawSourceAuthorityError:
+        raise
+    except (AuthorityFilesystemError, OSError, ValueError, ImportError) as exc:
         raise RawSourceAuthorityError(
             "raw_source_authority_table_schema_unreadable",
             "The raw table schema cannot be verified.",
@@ -348,10 +390,9 @@ def _table_schema(path: Path, *, table: str) -> set[str]:
         ) from exc
 
 
-def _verify_table_schema(path: Path, *, table: str) -> set[str]:
-    """Verify the minimal raw columns before issuing an authority."""
+def _require_table_schema(columns: set[str], *, table: str) -> set[str]:
+    """Verify the minimal raw columns on the exact schema already read."""
 
-    columns = _table_schema(path, table=table)
     missing = sorted(_REQUIRED_TABLE_COLUMNS[table] - columns)
     if missing:
         raise RawSourceAuthorityError(
@@ -905,8 +946,14 @@ def _hospital_followup_unsupported(database: str) -> RawSourceAuthorityError:
     )
 
 
-def _read_export_manifest(export_root: Path) -> Optional[tuple[str, Path, dict]]:
-    """Return the first canonical manifest of a registered export, if any."""
+def _read_export_manifest(export_root: Path) -> Optional[tuple[str, str, dict]]:
+    """Read and hash the same stable bytes of the first canonical manifest.
+
+    An anchored no-follow descriptor avoids reopening a different file to
+    calculate the digest. Re-reading the bounded bytes and checking both the
+    descriptor and directory entry detect ordinary in-place edits and atomic
+    replacement during the read.
+    """
 
     for name in _EXPORT_MANIFEST_NAMES:
         candidate = export_root / name
@@ -914,7 +961,27 @@ def _read_export_manifest(export_root: Path) -> Optional[tuple[str, Path, dict]]
             continue
         try:
             with AnchoredDirectory.open(export_root) as directory:
-                payload = directory.read_bytes(name, max_bytes=_MAX_EXPORT_MANIFEST_BYTES)
+                with directory.open_regular(name) as handle:
+                    before = os.fstat(handle.fileno())
+                    if before.st_size > _MAX_EXPORT_MANIFEST_BYTES:
+                        raise AuthorityFilesystemError("export manifest exceeds size limit")
+                    payload = handle.read(before.st_size + 1)
+                    handle.seek(0)
+                    confirmation = handle.read(before.st_size + 1)
+                    after = os.fstat(handle.fileno())
+                    named = directory.stat(name)
+                    coordinates = lambda value: (  # noqa: E731
+                        value.st_dev, value.st_ino, value.st_size,
+                        value.st_mtime_ns, value.st_ctime_ns,
+                    )
+                    if (
+                        len(payload) != before.st_size
+                        or payload != confirmation
+                        or coordinates(before) != coordinates(after)
+                        or coordinates(after) != coordinates(named)
+                        or not stat.S_ISREG(named.st_mode)
+                    ):
+                        raise AuthorityFilesystemError("export manifest changed while reading")
             manifest = json.loads(payload.decode("utf-8"))
         except (AuthorityFilesystemError, OSError, ValueError) as exc:
             raise RawSourceAuthorityError(
@@ -928,7 +995,7 @@ def _read_export_manifest(export_root: Path) -> Optional[tuple[str, Path, dict]]
                 "The registered export manifest is not a JSON object.",
                 details={"object": name},
             )
-        return name, candidate, manifest
+        return name, hashlib.sha256(payload).hexdigest(), manifest
     return None
 
 
@@ -954,7 +1021,7 @@ def resolve_manifest_raw_source_binding(
     found = _read_export_manifest(export_root)
     if found is None:
         return None
-    manifest_name, manifest_path, manifest = found
+    manifest_name, manifest_digest, manifest = found
     data_path = str(manifest.get("data_path") or "").strip()
     if not data_path:
         return None
@@ -977,16 +1044,23 @@ def resolve_manifest_raw_source_binding(
     columns: dict[str, tuple[str, ...]] = {}
     for table in dict.fromkeys((*hospital_tables, *identity_tables)):
         path = _regular_descendant(source_root, f"{table}.parquet", label=f"{table} table")
+        available, digest = _table_schema_and_digest(path, table=table)
         if table in hospital_tables:
-            available = _verify_table_schema(path, table=table)
+            _require_table_schema(available, table=table)
             read = set(_table_read_columns(table, available))
         else:
-            available = _table_schema(path, table=table)
             read = set()
         read |= _identity_read_columns(selected_database, table, available)
         paths[table] = path
-        digests[table] = _sha256_file(path)
+        digests[table] = digest
         columns[table] = tuple(sorted(read))
+    current = _read_export_manifest(export_root)
+    if current is None or current[0] != manifest_name or current[1] != manifest_digest:
+        raise RawSourceAuthorityError(
+            "raw_source_authority_export_manifest_changed",
+            "The registered export manifest changed while binding its raw source.",
+            details={"object": manifest_name},
+        )
     return RawHospitalSourceBinding(
         source_root=source_root,
         database=str(database or "").strip().lower(),
@@ -995,7 +1069,7 @@ def resolve_manifest_raw_source_binding(
         table_sha256=digests,
         table_columns=columns,
         export_manifest_file=manifest_name,
-        export_manifest_sha256=_sha256_file(manifest_path),
+        export_manifest_sha256=manifest_digest,
     )
 
 
@@ -1153,13 +1227,10 @@ def resolve_raw_mimic_iv_source_binding(
                 "The raw hospital-mortality source authority currently requires Parquet tables.",
                 details={"object": name},
             )
-        if _sha256_file(path) != expected:
-            raise RawSourceAuthorityError(
-                "raw_source_authority_table_digest_mismatch",
-                "A raw table no longer matches its source authority digest.",
-                details={"object": name, "database": selected_database},
-            )
-        columns[name] = frozenset(_verify_table_schema(path, table=name))
+        available, _ = _table_schema_and_digest(
+            path, table=name, expected_digest=expected, database=selected_database,
+        )
+        columns[name] = frozenset(_require_table_schema(available, table=name))
         paths[name] = path
         digests[name] = expected
 
