@@ -37,7 +37,7 @@ test('explicit draft revision reports missing or malformed updated output withou
   assert.equal(draftOwner.current([old, ask]).updateFailed, false);
   assert.equal(draftOwner.current([old, ask, { ...plain, complete: false }]).updateFailed, false);
   assert.equal(draftOwner.current([old, ask, { ...plain, stopReason: 'toolUse' }]).updateFailed, false);
-  assert.equal(draftOwner.current([old, ask, { ...plain, stopReason: 'error' }]).updateFailed, false);
+  assert.equal(draftOwner.current([old, ask, { ...plain, stopReason: 'error' }]).updateFailed, true);
   const revised = { ...plain, text: block(draft('已核对的字典声明')) };
   const updated = draftOwner.current([old, ask, revised]);
   assert.equal(updated.updateFailed, false);

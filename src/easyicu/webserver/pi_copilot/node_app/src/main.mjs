@@ -42,6 +42,7 @@ import { ShellUsageLedger } from "./shell-usage.mjs";
 import { normalizePreferences, preferenceAdvisory } from "./personal-preferences.mjs";
 import { ResearchContextMemory } from "./research-context.mjs";
 import { conversationModel, switchConversationModel } from "./conversation-model.mjs";
+import { repairDraftOnce } from "./draft-repair.mjs";
 import {
   DATA_SOURCE_CONFIRMED_MARKER,
   hostPostToolFinalization,
@@ -1414,6 +1415,7 @@ async function createSession(params) {
       sessionTokenBudget: config.sessionTokenBudget,
       maxTokens: config.maxTokens,
       lastAccessedAt: Date.now(),
+      abortRevision: 0,
     };
     const originalStreamFunction = session.agent.streamFunction;
     record.budgetGuard = new ShellBudgetGuard({
@@ -1433,7 +1435,7 @@ async function createSession(params) {
     session.agent.streamFunction = (model, context, options = {}) => lazyStream(
       model,
       async () => {
-        const hostFinalization = hostPostToolFinalization(model, context, record.language);
+        const hostFinalization = record.draftRepairActive ? null : hostPostToolFinalization(model, context, record.language);
         if (hostFinalization) return hostFinalization;
         const open = () => retryTransientProviderStream(async () => {
           const reservation = record.budgetGuard.authorize(context, options);
@@ -1450,7 +1452,7 @@ async function createSession(params) {
         }, { signal: options.signal, onRetry: emitSessionEvent });
         // The data-source transition's quick-answer offer: the model decides
         // whether to submit a reading; the host writes the reply.
-        const offerReply = quickAnswerOfferReply(context, record.language);
+        const offerReply = record.draftRepairActive ? null : quickAnswerOfferReply(context, record.language);
         return offerReply
           ? await settleQuickAnswerOffer(model, open, offerReply, options.signal)
           : await open();
@@ -1491,7 +1493,9 @@ async function promptSession(requestId, params) {
   sessionLifecycle.admit({ excludeSessionId: sessionId });
   sessionLifecycle.touch(sessionId);
   record.budgetGuard.beginMessage();
+  record.draftRepairAttempted = false;
   activeRequestBySession.set(sessionId, requestId);
+  const cancellationRevision = record.abortRevision;
   const activeTools = record.session.getActiveToolNames();
   try {
     if (intent === "confirm_formal_plan_generation") {
@@ -1520,6 +1524,7 @@ async function promptSession(requestId, params) {
       appendPromptOrigin(record, params.message_origin);
       await record.session.prompt(prompt);
     }
+    if (!intent) await repairDraftOnce(record, message, cancellationRevision);
     return sessionState(record);
   } finally {
     record.researchContext.endTurn();
@@ -1599,7 +1604,9 @@ async function regenerateSession(requestId, params) {
     throw Object.assign(new Error("regenerate message does not match the active transcript"), { code: "pi_regenerate_message_mismatch" });
   }
   record.budgetGuard.beginMessage();
+  record.draftRepairAttempted = false;
   activeRequestBySession.set(sessionId, requestId);
+  const cancellationRevision = record.abortRevision;
   const activeTools = record.session.getActiveToolNames();
   try {
     if (turnIntent === "confirm_formal_plan_generation") {
@@ -1625,6 +1632,7 @@ async function regenerateSession(requestId, params) {
       params.attached_skill_context,
       params.mentioned_objects,
     ));
+    if (!turnIntent) await repairDraftOnce(record, editedTurn ? supplied : target.message, cancellationRevision);
     return { ...sessionState(record), replaced_turn_index: target.turnIndex };
   } finally {
     record.researchContext.endTurn();
@@ -1809,6 +1817,7 @@ async function handleRequest(request) {
       assertExactKeys(params, new Set(["session_id"]), "pi_session_abort_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      record.abortRevision += 1;
       await record.session.abort();
       return { aborted: true, ...sessionState(record) };
     }
