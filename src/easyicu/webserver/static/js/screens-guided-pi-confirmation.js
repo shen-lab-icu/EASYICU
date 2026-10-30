@@ -753,9 +753,18 @@
       const preparation = (host.workflow() || {}).raw_preparation;
       const preparationOffer = ((host.workflow() || {}).host_decisions || {}).raw_preparation_review;
       const preparationReviewBusy = Boolean((host.workflow() || {}).raw_preparation_review_loading);
+      const preparationScope = preparation && preparation.scope || {};
+      const partialCsv = preparationScope.adapter_id === 'registered-csv-projection/1'
+        && preparationScope.purpose === 'prepare_single_table_only'
+        && preparationScope.source_identity && typeof preparationScope.source_identity.database === 'string'
+        && typeof preparationScope.source_identity.registration_id === 'string'
+        && typeof preparationScope.relative_file === 'string' && Array.isArray(preparationScope.columns)
+        && preparationScope.columns.length > 0 && preparationScope.columns.every(column => typeof column === 'string' && column);
       const preparationFiles = preparation && preparation.scope && preparation.scope.dependencies
         && Array.isArray(preparation.scope.dependencies.files) ? preparation.scope.dependencies.files : [];
       const preparationRows = preparationFiles.map(file => `<li>${esc(String(file.table || ''))} · ${esc(String(file.path || ''))} · ${esc((Array.isArray(file.columns) ? file.columns : []).join(', '))} · ${esc(String(file.window || ''))}</li>`).join('');
+      const partialCsvDetails = partialCsv ? `<p>${esc(tr('Registered source', '登记来源'))}: ${esc(preparationScope.source_identity.database)} / ${esc(preparationScope.source_identity.registration_id)}</p><p>${esc(tr('File', '文件'))}: ${esc(preparationScope.relative_file)}</p><p>${esc(tr('Output columns', '输出字段'))}: ${esc(preparationScope.columns.join(', '))}</p><p>${esc(tr('Preparation reads every row and every field of this file; only the listed columns are output. This is a single-table step, not a cohort or analysis.', '准备时会读取此文件的全部行和全部字段，仅输出上述字段。这只是单表步骤，不构成队列或研究分析。'))}</p>` : '';
+      const preparationCanReview = Boolean(preparationOffer && (partialCsv || preparationRows));
       const preparationRun = String((host.workflow() || {}).raw_preparation_candidate_run_id || '');
       const preparationAttempt = (host.workflow() || {}).raw_preparation_candidate_result;
       const preparationBlockers = Array.isArray(preparationAttempt && preparationAttempt.blocker_codes) ? preparationAttempt.blocker_codes : [];
@@ -785,13 +794,19 @@
             ? tr('The current plan and its scientific review no longer match.', '当前计划与科学审阅记录不一致。')
             : tr('The complete source files or their dependencies could not be verified yet. Preparation remains unavailable.', '尚无法核验完整来源文件或读取依赖，暂时不能开始准备。');
       const pendingPreparation = preparation && preparation.status === 'awaiting_consumption_closure'
-        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationOffer && preparationRows ? tr(
+        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? partialCsv ? tr(
+          'Approval starts this single-table preparation. Research analysis still requires separate approval.',
+          '批准后将开始这项单表数据准备，研究分析仍需另行批准。',
+        ) : tr(
           'Reviewing records this preparation scope only; analysis still requires separate approval.',
           '审阅只记录这份数据准备范围，研究分析仍需另行批准。',
+        ) : partialCsv ? tr(
+          'This single-table preparation is unavailable until interruption recovery and delivery are connected. Viewing the scope does not read data.',
+          '单表准备的中断恢复和结果交付尚未接通，暂不能开始；查看范围不会读取数据。',
         ) : tr(
           'This proposal still needs its actual data reads verified. Preparation is not available yet; no data is read by viewing this proposal.',
           '这份提议还需要核验实际读取的数据范围，暂时不能开始准备；查看提议不会读取数据。',
-        ))}</small>${preparationOffer && preparationRows ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
+        ))}</small>${preparationCanReview ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
         : preparationRun ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('Data preparation', '数据准备'))}</strong><small>${esc(preparationAttempt && ['blocked', 'error'].includes(preparationAttempt.status)
           ? preparationBlockedText
           : tr('Check the proposed source files and fields without reading patient rows.', '检查拟用的来源文件和字段，不读取患者数据。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
