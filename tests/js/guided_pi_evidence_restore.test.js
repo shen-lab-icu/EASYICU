@@ -46,11 +46,15 @@ test('reopening the same bound result recovers its value from the digest-pinned 
   assert.doesNotMatch(global.location.href, /0\.82/, 'scientific values do not enter the URL');
 });
 test('missing, stale or conflicting parent claims cannot certify the restored result', async () => {
-  for (const claims of [[], [claim(0.82, 'c'.repeat(64))], [claim(0.82), claim(0.91)], [{...claim(), status: 'superseded'}], [claim(true)]]) {
+  for (const claims of [[], [claim(0.82, 'c'.repeat(64))], [claim(0.82), claim(0.91)], [{...claim(), status: 'superseded'}], [claim(true)], [claim('0.82')], [claim(0.82), claim('0.82')], [claim(0.82), claim(null)]]) {
     const html = await reopen(claims);
     assert.doesNotMatch(html, /Source field and value match/);
     assert.match(html, /Cannot verify the selected number after reopening/);
   }
+});
+test('legacy source_value remains usable only when canonical_value is absent', async () => {
+  const html = await reopen([{...claim(), canonical_value: undefined, source_value: '0.82'}]);
+  assert.match(html, /Source field and value match/);
 });
 test('a changed result is still rejected after its parent claim is restored', async () => {
   const html = await reopen([claim()], 0.83);

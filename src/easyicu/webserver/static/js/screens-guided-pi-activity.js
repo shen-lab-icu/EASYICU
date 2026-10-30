@@ -1212,7 +1212,9 @@
       if (running) {
         const title = latest && latest.step === 'provider_transport_retry' && latest.status === 'running'
           ? stepLabel(latest) : row.runningTitle || (latest
-          ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
+          ? latest.status === 'complete'
+            ? tr('Waiting for the next update', '等待下一条进度') : stepLabel(latest)
+          : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
         const note = String(row.runningNote || '').trim() || tr(
           'Still running. You can wait here; EasyICU will ask when review or confirmation is needed.',
           '任务仍在进行。请在这里等待；需要审阅或确认时 EasyICU 会明确提示。',

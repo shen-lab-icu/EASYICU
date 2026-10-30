@@ -130,6 +130,10 @@
     return `<button class="btn${primary ? ' primary' : ''}" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr('Choose a data folder', '选择数据文件夹')}</button>`;
   }
 
+  function demoDirectoryHelp(ctx) {
+    return `<div class="gpi-data-consent-directory" role="status"><p>${ctx.tr('Open Patient Review and, under Official public demo data, check the download location and select Download here. If another dataset is open, first select Edit setup. Return to this conversation after preparation and choose the demo again.', '打开患者审阅，在“官方公开演示数据”中核对下载位置并点击“下载到这里”。如果已打开其他数据，请先点“编辑设置”。准备完成后返回本次对话，再选择该 Demo。')}</p><a class="btn" href="#patient">${ctx.tr('Open Patient Review data selection', '打开患者审阅的数据选择页')}</a></div>`;
+  }
+
   function render(session, ctx) {
     const current = authorization(session);
     const hasDraft = Boolean(ctx.discussionDraft);
@@ -185,15 +189,17 @@
     if (named && !hostedServer) {
       // The question already names this official demo: offer it directly.
       const verb = named.pending ? ctx.tr('Preparing…', '正在准备…')
+        : named.busy ? ctx.tr('Wait for the current response or task', '等待当前回复或任务结束')
         : named.prepared ? ctx.tr('Use it for this conversation', '用于本次会话')
           : ctx.tr('Prepare it and use it here', '准备并用于本次会话');
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.tr('Your question names this data', '你的问题指定了这份数据')}</strong>
         <p>${ctx.esc(exportFacts(named, ctx))}${named.prepared ? ctx.esc(ctx.tr(' · already prepared', ' · 已准备好')) : ''}</p>
         <div class="gpi-data-consent-actions">
-          <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(named.id)}" ${named.pending ? 'disabled' : ''}>${verb}</button>
+          <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(named.id)}" ${named.pending || named.busy ? 'disabled' : ''}>${verb}</button>
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
         </div>
+        ${named.directoryRequired ? demoDirectoryHelp(ctx) : ''}
         <small>${ctx.tr('Official demo data only; EasyICU registers it and confirms it as this conversation’s source, then proposes the plan. Confirming a source does not approve analysis.', '仅官方 Demo 数据；EasyICU 注册后将其确认为本次会话的数据源，再拟定研究计划。确认数据源不等于批准分析。')}</small>
       </div></section>`;
     }
@@ -245,13 +251,16 @@
         prepared: Boolean(demoOffer.recommended || demoOffer.choices.length) } });
     }
     if (database && demo && demo.id && !hostedServer) {
+      const waiting = database.demoBusy;
+      const pending = database.demoPending;
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.esc(ctx.tr(`EasyICU has no ${database.label} export`, `EasyICU 中还没有 ${database.label} 导出`))}</strong>
         <p>${ctx.tr('An official demo is available separately:', '可单独选择官方 Demo：')}${ctx.esc(exportFacts(demo, ctx))}</p>
         <div class="gpi-data-consent-actions">
-          <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(demo.id)}">${ctx.tr('Prepare this demo and use it here', '准备此 Demo 并用于本次会话')}</button>
+          <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(demo.id)}" ${waiting || pending ? 'disabled' : ''}>${pending ? ctx.tr('Preparing…', '正在准备…') : waiting ? ctx.tr('Wait for the current response or task', '等待当前回复或任务结束') : ctx.tr('Prepare this demo and use it here', '准备此 Demo 并用于本次会话')}</button>
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
         </div>
+        ${database.demoDirectoryRequired === demo.id ? demoDirectoryHelp(ctx) : ''}
         <small>${ctx.tr('Demo data only; results describe the demo. Confirming this source does not approve analysis.', '仅 Demo 数据；结果只代表此 Demo。确认数据源不等于批准分析。')}</small>
       </div></section>`;
     }

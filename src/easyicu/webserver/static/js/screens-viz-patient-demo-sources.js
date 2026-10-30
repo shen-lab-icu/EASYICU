@@ -413,8 +413,9 @@
     const registered = new Set(registeredSources(options.registryRows).map(row => row.source_id));
     const sources = ((state.catalog && state.catalog.sources) || []).filter(source => {
       if (!options.pendingOnly) return true;
-      const status = sourceStatus(source);
-      return !(status.state === 'prepared' && status.registered) && !registered.has(source.id);
+      // Keep the offer visible until the page's own registry has the row.
+      // The server may have registered the export while this tab is stale.
+      return !registered.has(source.id);
     });
     if (options.pendingOnly && !sources.length && !state.error) return '';
     return `
@@ -429,7 +430,7 @@
             ))}</p>
           </div>
         </div>
-        ${state.error ? `<div class="note warn"><div class="body"><div class="d">${hEsc(helpers, state.error)}</div></div><button class="btn sm" type="button" data-demo-source-retry>${hEsc(helpers, hT(helpers, 'Retry', '重试'))}</button></div>` : ''}
+        ${state.error ? `<div class="note warn"><div class="body"><div class="d">${hEsc(helpers, state.error === 'prepared_registry_refresh_failed' ? hT(helpers, 'Could not refresh prepared data. Use Refresh and try again.', '无法刷新已准备的数据，请点击刷新后重试。') : state.error)}</div></div><button class="btn sm" type="button" data-demo-source-retry>${hEsc(helpers, hT(helpers, 'Retry', '重试'))}</button></div>` : ''}
         <div class="official-demo-source-grid">
           ${sources.map(source => renderSource(source, helpers, options)).join('')}
         </div>
@@ -445,7 +446,9 @@
     }
     if (!force && state.catalog) return Promise.resolve(true);
     if (!force && state.error) return Promise.resolve(false);
-    if (state.promise) return state.promise;
+    if (state.promise) return callback
+      ? state.promise.then(result => { callback(result); return result; })
+      : state.promise;
     state.loading = true;
     state.error = null;
     state.promise = api.loadOfficialDemoSources()
@@ -503,12 +506,20 @@
       state.failure = succeeded ? null : failureFromJob(sourceId, snapshot && snapshot.error);
       state.catalog = null;
       if (config && config.refresh) config.refresh();
-      loadCatalog(() => {
+      let registryError = false;
+      const hydration = succeeded
+        ? Promise.resolve().then(() => {
+          if (typeof api.hydrateWorkspaceRegistry !== 'function') throw new Error('Registry API unavailable');
+          return api.hydrateWorkspaceRegistry();
+        }).catch(() => { registryError = true; })
+        : Promise.resolve();
+      hydration.then(() => loadCatalog(ok => {
+        if (registryError) state.error = 'prepared_registry_refresh_failed';
         if (config && config.refresh) config.refresh();
-        if (succeeded && openAfterPrepare && config && config.openPrepared) {
+        if (ok && !registryError && succeeded && openAfterPrepare && config && config.openPrepared) {
           config.openPrepared(sourceId);
         }
-      }, true);
+      }, true));
     }).catch(error => {
       state.error = String((error && error.message) || error);
       state.job = null;
@@ -601,6 +612,19 @@
     root.querySelectorAll('[data-demo-source-retry]').forEach(button => {
       button.addEventListener('click', event => {
         event.preventDefault();
+        if (state.error === 'prepared_registry_refresh_failed') {
+          button.disabled = true;
+          Promise.resolve().then(() => {
+            if (!window.EU_API || typeof window.EU_API.hydrateWorkspaceRegistry !== 'function') throw new Error('Registry API unavailable');
+            return window.EU_API.hydrateWorkspaceRegistry();
+          }).then(() => loadCatalog(() => {
+            if (config.refresh) config.refresh();
+          }, true)).catch(() => {
+            state.error = 'prepared_registry_refresh_failed';
+            if (config.refresh) config.refresh();
+          });
+          return;
+        }
         state.error = null;
         loadCatalog(() => {
           if (config.refresh) config.refresh();
