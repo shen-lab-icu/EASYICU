@@ -69,6 +69,8 @@ const catalogPayload = {
 let catalogLoads = 0;
 let jobSnapshotLoads = 0;
 let jobSnapshotMode = 'done';
+let registryLoads = 0;
+let registryFails = false;
 const prepareStarts = [];
 let dataModeContext = null;
 const localStorageValues = new Map();
@@ -93,6 +95,10 @@ const context = {
     dataModeContext = value;
   },
   EU_API: {
+    hydrateWorkspaceRegistry() {
+      registryLoads += 1;
+      return registryFails ? Promise.reject(new Error('registry unavailable')) : Promise.resolve({ sources: [] });
+    },
     loadOfficialDemoSources() {
       catalogLoads += 1;
       return Promise.resolve(catalogPayload);
@@ -195,6 +201,14 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.match(html, /Activate and open/);
   assert.doesNotMatch(html, /data-demo-source-open="eicu_demo_v2_0_1"/);
   assert.equal(owner.source('eicu_demo_v2_0_1').status.active, false);
+  const pendingWithoutRegistry = owner.render({ t: en => en, esc: value => String(value) }, { pendingOnly: true, registryRows: [] });
+  assert.match(pendingWithoutRegistry, /data-demo-source="eicu_demo_v2_0_1"/,
+    'a server-registered demo stays visible until this page can show its registry row');
+  const pendingWithRegistry = owner.render({ t: en => en, esc: value => String(value) }, {
+    pendingOnly: true,
+    registryRows: [{ ok: true, path: '/exports/eicu', source_kind: 'public_demo', source_id: 'eicu_demo_v2_0_1' }],
+  });
+  assert.doesNotMatch(pendingWithRegistry, /data-demo-source="eicu_demo_v2_0_1"/);
 
   const prepareClicks = new Map();
   const prepareButton = {
@@ -245,6 +259,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(jobSnapshotLoads, 1, 'terminal repaint must not restart the completed job');
   assert.equal(snapshot.error, null);
   assert(catalogLoads >= 2, 'successful preparation must refresh source status');
+  assert.equal(registryLoads, 1, 'successful preparation must refresh the prepared-data registry');
   assert.equal(
     localStorageValues.has('easyicu_patient_official_demo_job_v1'),
     false,
@@ -338,6 +353,52 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   await tick();
   await tick();
   await tick();
+
+  // A registration refresh failure must stay visible and not open a stale
+  // selection; the user can refresh the prepared-data list and try again.
+  registryFails = true;
+  let staleOpen = false;
+  const staleOpenButton = {
+    getAttribute(name) {
+      if (name === 'data-demo-source-prepare') return 'mimic_iv_demo_v2_2';
+      return name === 'data-demo-source-open-after-prepare' ? 'true' : null;
+    },
+    addEventListener(name, handler) { if (name === 'click') this.click = handler; },
+  };
+  owner.bind(
+    { querySelectorAll(selector) { return selector === '[data-demo-source-prepare]' ? [staleOpenButton] : []; } },
+    { refresh() {}, openPrepared() { staleOpen = true; } },
+  );
+  staleOpenButton.click({ preventDefault() {} });
+  await tick(); await tick(); await tick();
+  assert.equal(staleOpen, false, 'must not open using a stale prepared-data registry');
+  assert.match(owner.render({ t: (en, zh) => zh, esc: value => String(value) }), /无法刷新已准备的数据/);
+  registryFails = false;
+  let retryClick;
+  owner.bind({ querySelectorAll(selector) {
+    return selector === '[data-demo-source-retry]'
+      ? [{ addEventListener(name, handler) { if (name === 'click') retryClick = handler; } }]
+      : [];
+  } }, { refresh() {} });
+  const beforeRetry = registryLoads;
+  retryClick({ preventDefault() {} });
+  await tick(); await tick(); await tick();
+  assert.equal(registryLoads, beforeRetry + 1, 'retry refreshes the prepared-data registry');
+  assert.equal(owner.snapshot().error, null);
+
+  // Repainting while a terminal refresh is in progress starts a shared
+  // catalog request; both callers must receive its completion callback.
+  const normalLoadCatalog = context.EU_API.loadOfficialDemoSources;
+  let releaseCatalog;
+  context.EU_API.loadOfficialDemoSources = () => new Promise(resolve => { releaseCatalog = resolve; });
+  let sharedCallbackCount = 0;
+  const firstCatalog = owner.ensureLoaded(null, true);
+  const secondCatalog = owner.ensureLoaded(() => { sharedCallbackCount += 1; }, true);
+  releaseCatalog(catalogPayload);
+  await firstCatalog;
+  await secondCatalog;
+  assert.equal(sharedCallbackCount, 1, 'joining an in-flight refresh must still run its callback');
+  context.EU_API.loadOfficialDemoSources = normalLoadCatalog;
 
   catalogPayload.sources[1].status.active = true;
   const activeHtml = owner.render({ t: en => en, esc: value => String(value) });

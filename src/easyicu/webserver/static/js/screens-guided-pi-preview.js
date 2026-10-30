@@ -842,10 +842,16 @@
   function restoreEvidenceValues() {
     const payload = state.payload || {};
     const provenance = payload.manuscript_provenance || payload.reader || payload;
+    // A later reload can replace or remove the parent payload. Never retain a
+    // value established by an earlier parent when the current one is unclear.
+    state.evidenceTabs.forEach(item => {
+      if (item.locator.restored) item.locator.value = '';
+    });
     if (provenance.schema_version !== 'easyicu.manuscript-provenance/1' || !Array.isArray(provenance.claims)) return;
     state.evidenceTabs.forEach(item => {
       if (!item.locator.restored || !item.locator.pointer) return;
       const values = new Set();
+      let unverifiable = false;
       provenance.claims.forEach(row => {
         const evidence = row && row.evidence;
         if (!row || (row.status && row.status !== 'current') || !evidence
@@ -853,12 +859,19 @@
           || evidence.evidence_id !== item.evidenceId
           || String(evidence.sha256 || '').toLowerCase() !== item.sha256
           || row.source_json_pointer !== item.locator.pointer) return;
+        // Match the report reader: a present canonical value must be a real
+        // finite number. It cannot be rescued by a rounded source label.
         const raw = row.canonical_value == null ? row.source_value : row.canonical_value;
-        if ((typeof raw === 'number' || typeof raw === 'string')
-          && String(raw).trim() !== '' && Number.isFinite(Number(raw))) values.add(String(raw));
+        if ((row.canonical_value != null && typeof row.canonical_value !== 'number')
+          || !['number', 'string'].includes(typeof raw)
+          || String(raw).trim() === '' || !Number.isFinite(Number(raw))) {
+          unverifiable = true;
+          return;
+        }
+        values.add(String(raw));
       });
       // Reopen only from an unambiguous parent claim, never a URL-supplied value.
-      if (values.size === 1) item.locator.value = [...values][0];
+      if (!unverifiable && values.size === 1) item.locator.value = [...values][0];
     });
   }
   async function loadResource() {

@@ -333,6 +333,27 @@ test('workspace workflow traces use task wording while research keeps its scient
   }
 });
 
+test('a completed tool is retained in the trace but is not the current activity', () => {
+  for (const language of ['zh', 'en']) {
+    const { resources, context, esc } = owners(language);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+      '../../src/easyicu/webserver/static/js/screens-guided-pi-activity.js'), 'utf8'), context);
+    const activity = context.window.EasyICU.guidedPi.require('activity').create({
+      tr: (en, zh) => language === 'zh' ? zh : en, esc, iconHtml: () => '',
+      resourceName: resources.name, resourceKey: resources.key, resourceButton: resources.button,
+      agentMode: () => 'research',
+    });
+    const step = { kind: 'tool', toolName: 'easyicu_inspect_workflow', status: 'complete' };
+    const html = activity.render({ status: 'running', startedAt: Date.now(), steps: [step] });
+    assert.match(html, language === 'zh' ? /等待下一条进度/ : /Waiting for the next update/);
+    assert.match(html, language === 'zh' ? /已读取科研流程/ : /Read research workflow/);
+    const running = activity.render({ status: 'running', startedAt: Date.now(), steps: [{ ...step, status: 'running' }] });
+    assert.match(running, language === 'zh' ? /检查科研流程/ : /Inspect research workflow/);
+    const named = activity.render({ status: 'running', runningTitle: 'Explicit job title', startedAt: Date.now(), steps: [step] });
+    assert.match(named, /Explicit job title/);
+  }
+});
+
 test('failed tool details show the safe typed cause and never the successful no-file fallback', () => {
   for (const language of ['zh', 'en']) {
     const { resources, context, esc } = owners(language);

@@ -62,6 +62,7 @@
     const autoUse = new Set();
     const catalog = { rows: null, loading: false };
     let offerPending = false;
+    let directoryRequired = null;
 
     function sessionId() {
       return String(host.session() && host.session().session_id || '');
@@ -334,7 +335,10 @@
         database, offer,
         stays: demo.scope?.icu_stays,
         prepared: offer ? Boolean(offer.recommended || offer.choices.length) : status.export_ready === true,
-        pending: offerPending,
+        pending: offerPending, busy: Boolean(host.busy()),
+        directoryRequired: Boolean(directoryRequired && directoryRequired.session === sessionId()
+          && directoryRequired.project === String(host.projectId ? host.projectId() : '')
+          && directoryRequired.id === String(demo.id || '')),
       };
     }
 
@@ -394,7 +398,11 @@
       if (!label) return null;
       const pending = DATA_CONSENT.authorization
         ? DATA_CONSENT.authorization(host.session()).status === 'pending' : true;
-      return { key, label, offer: pending ? registeredOffer(key) : null };
+      return { key, label, offer: pending ? registeredOffer(key) : null,
+        demoPending: offerPending, demoBusy: Boolean(host.busy()),
+        demoDirectoryRequired: directoryRequired && directoryRequired.session === sessionId()
+          && directoryRequired.project === String(host.projectId ? host.projectId() : '')
+          ? directoryRequired.id : '' };
     }
 
     async function useNamedDemo(sourceId) {
@@ -406,7 +414,17 @@
       const database = namedDatabase();
       const offer = namedDemo() || (database && database.offer && database.offer.state === 'ready' ? database.offer.official_demo : null);
       const caller = api().startOfficialDemoSourcePrepare;
-      if (!offer || offer.id !== sourceId || offerPending || host.busy() || typeof caller !== 'function') return false;
+      if (!offer || offer.id !== sourceId || offerPending || typeof caller !== 'function') return false;
+      if (host.busy()) {
+        host.setError(tr('Wait for the current response or research task to finish, then choose the demo again.', '请等待当前回复或研究任务结束后，再选择 Demo 数据。'));
+        host.render();
+        return false;
+      }
+      const expectedSession = sessionId();
+      const expectedProject = String(host.projectId ? host.projectId() : '');
+      const current = () => sessionId() === expectedSession
+        && String(host.projectId ? host.projectId() : '') === expectedProject
+        && requiresConfirmation();
       offerPending = true;
       host.setError('');
       host.render();
@@ -414,12 +432,20 @@
         const payload = await caller(sourceId);
         const jobId = String(payload && payload.job_id || '');
         if (!jobId) throw new Error(tr('The official demo preparation did not start.', '官方 Demo 数据准备未能启动。'));
+        // A delayed start response from another conversation must not attach
+        // its auto-use decision to the conversation currently on screen.
+        if (!current()) { offerPending = false; host.render(); return false; }
+        directoryRequired = null;
         autoUse.add(jobId);
         watchDemoSourceJob(jobId);
         return true;
       } catch (error) {
         offerPending = false;
-        host.setError(host.errorText(error));
+        if (!current()) { host.render(); return false; }
+        if (error && error.code === 'data_directory_confirmation_required') {
+          directoryRequired = { session: expectedSession, project: expectedProject, id: sourceId };
+          host.setError(tr('Confirm the demo download location on the Patient Review data page before preparing it.', '请先在患者审阅的数据选择页确认 Demo 下载位置，再准备数据。'));
+        } else host.setError(host.errorText(error));
         host.render();
         return false;
       }
@@ -454,6 +480,7 @@
             'Confirm it as this conversation’s data source and EasyICU proposes the research plan next. Confirming a source does not approve analysis.',
             '确认为本次会话的数据源后，EasyICU 会接着拟定研究计划；确认数据源不等于批准分析。',
           ))}</p>
+          ${host.busy() && !row.pending ? `<p role="status">${esc(tr('Wait for the current response or research task to finish before confirming.', '请等待当前回复或研究任务结束后再确认。'))}</p>` : ''}
           <div class="gpi-host-notice-actions">
             <button class="btn primary sm" type="button" data-gpi-host-notice-action="use" ${disabled}>${esc(row.pending ? tr('Confirming…', '正在确认…') : tr('Use it for this conversation', '用于本次会话'))}</button>
             <button class="btn sm" type="button" data-gpi-host-notice-action="other" ${disabled}>${esc(tr('Choose another folder', '选择其他文件夹'))}</button>

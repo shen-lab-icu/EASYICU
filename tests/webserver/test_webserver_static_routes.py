@@ -2516,7 +2516,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
     assert "js/screens-viz-patient-series.js?v=20261027-nodemo1" in index_html
     assert (
-        "js/screens-viz-patient-demo-sources.js?v=20261028-prepfail1-cfg1"
+        "js/screens-viz-patient-demo-sources.js?v=20261030-demo-refresh1"
         in index_html
     )
     assert "css/official-demo-sources.css?v=20261028-prepfail1-cfg1" in index_html

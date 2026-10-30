@@ -120,13 +120,13 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261022-prose1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20261021-turn-layout1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261030-video2" in index
+    assert "js/screens-guided-pi-preview.js?v=20261030-video3" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
     assert "js/screens-guided-pi-result-append.js?v=20261026-followups1" in index
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
-    assert "js/screens-guided-pi-activity.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-activity.js?v=20261030-progress1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20261028-ux1"
         in index
@@ -137,9 +137,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261029-journey4" in index
-    assert "js/screens-guided-pi-events.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-events.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261029-followup1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261030-demo1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
     assert "js/screens-guided-pi-session-navigation.js?v=20261030-video2" in index
     assert "js/screens-guided-pi-session-view.js?v=20261030-video2" in index
@@ -155,7 +155,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261028-surv2" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261030-preparation1" in index
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
@@ -173,17 +173,17 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261028-surv1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261030-estimand1" in index
-    assert "js/screens-guided-pi.js?v=20261029-journey2" in index
+    assert "js/screens-guided-pi.js?v=20261030-preparation1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261029-freshfix6" in index
+    assert "js/api.js?v=20261030-preparation1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
