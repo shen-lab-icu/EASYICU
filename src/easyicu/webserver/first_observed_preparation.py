@@ -18,10 +18,14 @@ from typing import Any, Mapping
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pandas as pd
 
 from easyicu.databases.research_plan_requirements import _constraints
 from easyicu.research_agent.acquisition.first_observed_icu_coordinate import FirstObservedIcuCoordinate
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import REQUIRED_COLUMNS
+from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingError, exact_integer_series
+from easyicu.research_agent.acquisition.eicu_first_observed_candidate import (
+    FLAG_COLUMN, REASON_COLUMN, REQUIRED_COLUMNS, SCHEMA,
+)
 from easyicu.research_agent.authority.filesystem import AnchoredDirectory
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint, verify_raw_preparation_review
@@ -45,6 +49,72 @@ _SUMMARY = (
     "lifetime first ICU guarantee and does not authorize analysis."
 )
 _ADAPTER = "eicu-demo-first-observed-single-hospital-adult/1"
+_PATIENT_EXCLUSION_REASONS = frozenset({
+    "hospitalization_identifier_missing_or_invalid",
+    "hospitalization_identifier_shared_across_patients",
+    "multiple_observed_hospitalizations",
+    "first_icu_order_or_type_unverifiable",
+    "age_unknown_or_invalid",
+    "under_18",
+})
+
+
+def _private_source_flow(candidate: Any) -> dict[str, Any]:
+    """Keep only checked source-global counts, never a study-flow claim.
+
+    This private record is not a disclosure grant.  In particular, it does not
+    identify the eventual analysis population or permit unsuppressed counts to
+    be sent to a model, shown in the UI, or included in a publication.
+    """
+    receipt, frame = candidate.receipt, candidate.frame
+    if (not isinstance(receipt, Mapping) or not isinstance(frame, pd.DataFrame)
+            or receipt.get("schema_version") != SCHEMA
+            or receipt.get("source_global_table_required") is not True
+            or receipt.get("not_lifetime_first_icu") is not True
+            or receipt.get("outcome_columns_read") is not False
+            or receipt.get("receipt_contains_identifier_values") is not False
+            or receipt.get("research_execution_authorized") is not False
+            or set(frame.columns) != {"stay_id", FLAG_COLUMN, REASON_COLUMN}):
+        raise ValueError("first_observed_source_flow_invalid")
+    source_stays, source_patients, eligible = (
+        receipt.get(name) for name in ("source_stays", "source_patients", "eligible_patients")
+    )
+    if any(type(value) is not int or value < 0 for value in (source_stays, source_patients, eligible)):
+        raise ValueError("first_observed_source_flow_invalid")
+    patients, stays = (receipt.get(name) for name in
+                       ("excluded_patients_by_reason", "excluded_stays_by_reason"))
+    for counts, allowed in ((patients, _PATIENT_EXCLUSION_REASONS),
+                            (stays, _PATIENT_EXCLUSION_REASONS | {"non_selected_unit"})):
+        if (not isinstance(counts, Mapping) or not set(counts).issubset(allowed)
+                or any(type(value) is not int or value <= 0 for value in counts.values())):
+            raise ValueError("first_observed_source_flow_invalid")
+    if (not pd.api.types.is_bool_dtype(frame[FLAG_COLUMN]) or frame[FLAG_COLUMN].isna().any()
+            or not frame[REASON_COLUMN].isin(_PATIENT_EXCLUSION_REASONS | {"kept", "non_selected_unit"}).all()
+            or not frame[FLAG_COLUMN].eq(frame[REASON_COLUMN].eq("kept")).all()):
+        raise ValueError("first_observed_source_flow_invalid")
+    actual_stays = {str(key): int(value) for key, value in
+                    frame.loc[~frame[FLAG_COLUMN], REASON_COLUMN].value_counts().items()}
+    try:
+        identities = exact_integer_series(frame["stay_id"], label="coordinate stay")
+    except PatientGroupingError as exc:
+        raise ValueError("first_observed_source_flow_invalid") from exc
+    if (source_stays != len(frame) or eligible != int(frame[FLAG_COLUMN].sum())
+            or source_patients != eligible + sum(patients.values())
+            or identities.isna().any() or identities.le(0).any() or identities.duplicated().any()
+            or any(count > actual_stays.get(reason, 0) for reason, count in patients.items())
+            or actual_stays != dict(stays)):
+        raise ValueError("first_observed_source_flow_invalid")
+    return {
+        "schema_version": "easyicu.first-observed-private-source-flow/1",
+        "scope": "complete_source_before_other_study_filters",
+        "not_lifetime_first_icu": True,
+        "source_stays": source_stays,
+        "source_patients": source_patients,
+        "eligible_patients": eligible,
+        "excluded_patients_by_reason": dict(sorted(patients.items())),
+        "excluded_stays_by_reason": dict(sorted(stays.items())),
+        "public_projection_authorized": False,
+    }
 
 
 def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
@@ -142,14 +212,15 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
         or proof.get("patient_table_sha256") != scope["patient_table_sha256"]
         or proof.get("export_manifest_sha256") != scope["export_manifest_sha256"]):
         raise ValueError("first_observed_preparation_source_proof_mismatch")
+    source_flow = _private_source_flow(candidate)
     buffer = io.BytesIO()
     pq.write_table(pa.Table.from_pandas(candidate.frame, preserve_index=False), buffer)
     data = buffer.getvalue()
-    body = {"schema_version": "easyicu.first-observed-coordinate-attestation/1",
+    body = {"schema_version": "easyicu.first-observed-coordinate-attestation/2",
             "scope_sha256": canonical_sha256(scope), "checkpoint_sha256": checkpoint.checkpoint_sha256,
             "binding_sha256": canonical_sha256(binding.model_dump(mode="json")),
             "coordinate_sha256": hashlib.sha256(data).hexdigest(), "source_complete_six_columns": True,
-            "analysis_authorized": False}
+            "analysis_authorized": False, "private_source_flow": source_flow}
     document = canonical_json({"body": body, "signature": _signature(body)}).encode()
     root = _private_root(create=True)
     with AnchoredDirectory.open(root) as directory:
@@ -166,10 +237,10 @@ def _coordinate(root: Path, nonce: str, scope: Mapping[str, Any], checkpoint: Ra
         scope["plan_sha256"], checkpoint.checkpoint_sha256)
 
 
-def resolve_prepared_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
-                                               binding: RawPreparationHostBinding,
-                                               scope: Mapping[str, Any]) -> FirstObservedIcuCoordinate:
-    """Reverify the host decision, reviewed scope, signed result and exact bytes."""
+def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
+                                     binding: RawPreparationHostBinding,
+                                     scope: Mapping[str, Any]) -> tuple[FirstObservedIcuCoordinate, dict[str, Any] | None]:
+    """Reverify host decision, exact scope, signed result and coordinate bytes."""
     expected, _ = _host_inputs(run_dir=run_dir, request=checkpoint.request)
     scope = dict(scope)
     if scope != expected or checkpoint.request.payload.get(_SCOPE_KEY) != scope:
@@ -184,9 +255,43 @@ def resolve_prepared_first_observed_coordinate(*, run_dir: Path, checkpoint: Raw
     body, signature = document["body"], document["signature"]
     if not isinstance(signature, str) or not hmac.compare_digest(signature, _signature(body)):
         raise ValueError("first_observed_attestation_invalid")
-    if body != {"schema_version": "easyicu.first-observed-coordinate-attestation/1",
-                "scope_sha256": canonical_sha256(scope), "checkpoint_sha256": checkpoint.checkpoint_sha256,
-                "binding_sha256": canonical_sha256(binding.model_dump(mode="json")), "coordinate_sha256": digest,
-                "source_complete_six_columns": True, "analysis_authorized": False}:
+    version = body.get("schema_version")
+    if version not in {"easyicu.first-observed-coordinate-attestation/1",
+                       "easyicu.first-observed-coordinate-attestation/2"}:
         raise ValueError("first_observed_attestation_binding_mismatch")
-    return _coordinate(root, binding.nonce, scope, checkpoint, body)
+    expected_body = {"schema_version": version,
+                     "scope_sha256": canonical_sha256(scope), "checkpoint_sha256": checkpoint.checkpoint_sha256,
+                     "binding_sha256": canonical_sha256(binding.model_dump(mode="json")), "coordinate_sha256": digest,
+                     "source_complete_six_columns": True, "analysis_authorized": False}
+    flow = body.get("private_source_flow") if version.endswith("/2") else None
+    if version.endswith("/2"):
+        if not isinstance(flow, dict):
+            raise ValueError("first_observed_attestation_binding_mismatch")
+        expected_body["private_source_flow"] = flow
+    if body != expected_body:
+        raise ValueError("first_observed_attestation_binding_mismatch")
+    return _coordinate(root, binding.nonce, scope, checkpoint, body), flow
+
+
+def resolve_prepared_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
+                                               binding: RawPreparationHostBinding,
+                                               scope: Mapping[str, Any]) -> FirstObservedIcuCoordinate:
+    """Reverify the host decision, reviewed scope, signed result and exact bytes."""
+    coordinate, _ = _resolve_prepared_first_observed(
+        run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
+    return coordinate
+
+
+def resolve_private_first_observed_source_flow(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
+                                               binding: RawPreparationHostBinding,
+                                               scope: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the signed source-global counts privately, never a public flow table.
+
+    Older signed coordinates remain usable, but lack this record; they cannot
+    supply a source-flow report without repeating preparation under a new grant.
+    """
+    _, flow = _resolve_prepared_first_observed(
+        run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
+    if flow is None:
+        raise ValueError("first_observed_source_flow_unavailable")
+    return flow

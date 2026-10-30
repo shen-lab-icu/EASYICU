@@ -1,6 +1,7 @@
 """The unregistered first-observed producer must not read rows before review."""
 from pathlib import Path
 from types import SimpleNamespace
+import json
 
 import pandas as pd
 import pytest
@@ -99,7 +100,15 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
                                          "archive_sha256": scope["archive_sha256"]}}
     # Source proof is deliberately mocked: these rows are entirely synthetic.
     candidate = SimpleNamespace(frame=pd.DataFrame({"stay_id": [1, 2], FLAG_COLUMN: [True, False],
-        REASON_COLUMN: ["kept", "multiple_observed_hospitalizations"]}), receipt={"source_binding": proof})
+        REASON_COLUMN: ["kept", "multiple_observed_hospitalizations"]}), receipt={
+            "source_binding": proof,
+            "schema_version": owner.SCHEMA, "source_global_table_required": True,
+            "not_lifetime_first_icu": True, "outcome_columns_read": False,
+            "receipt_contains_identifier_values": False, "research_execution_authorized": False,
+            "source_stays": 2, "source_patients": 2, "eligible_patients": 1,
+            "excluded_patients_by_reason": {"multiple_observed_hospitalizations": 1},
+            "excluded_stays_by_reason": {"multiple_observed_hospitalizations": 1},
+        })
     calls = []
     monkeypatch.setattr(owner, "derive_from_verified_eicu_demo", lambda _: calls.append(1) or candidate)
     coordinate = owner.prepare_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
@@ -108,15 +117,70 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
     resolved = owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
                                                                binding=binding, scope=scope)
     assert resolved == coordinate
+    flow = owner.resolve_private_first_observed_source_flow(run_dir=tmp_path, checkpoint=checkpoint,
+                                                            binding=binding, scope=scope)
+    assert flow == {"schema_version": "easyicu.first-observed-private-source-flow/1",
+                    "scope": "complete_source_before_other_study_filters", "not_lifetime_first_icu": True,
+                    "source_stays": 2, "source_patients": 2, "eligible_patients": 1,
+                    "excluded_patients_by_reason": {"multiple_observed_hospitalizations": 1},
+                    "excluded_stays_by_reason": {"multiple_observed_hospitalizations": 1},
+                    "public_projection_authorized": False}
+    with pytest.raises(ValueError, match="binding_mismatch"):
+        owner.resolve_private_first_observed_source_flow(
+            run_dir=tmp_path, checkpoint=checkpoint,
+            binding=binding.model_copy(update={"session_id": "other-session"}), scope=scope)
+    with pytest.raises(ValueError, match="scope_mismatch"):
+        owner.resolve_private_first_observed_source_flow(
+            run_dir=tmp_path, checkpoint=checkpoint, binding=binding,
+            scope={**scope, "archive_sha256": "0" * 64})
     result = restrict_to_first_observed_icu(pd.DataFrame({"stay_id": [1, 2]}), coordinate=resolved)
     assert result["stay_id"].tolist() == [1]
     with pytest.raises(ValueError, match="nonce_replayed"):
         owner.prepare_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint, binding=binding, scope=scope)
     assert calls == [1]
+    attestation = coordinate.path.with_suffix(".json")
+    original = attestation.read_text()
+    document = json.loads(original)
+    legacy_body = {**document["body"], "schema_version": "easyicu.first-observed-coordinate-attestation/1"}
+    legacy_body.pop("private_source_flow")
+    attestation.write_text(json.dumps({"body": legacy_body, "signature": owner._signature(legacy_body)}))
+    assert owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
+                                                            binding=binding, scope=scope) == coordinate
+    with pytest.raises(ValueError, match="source_flow_unavailable"):
+        owner.resolve_private_first_observed_source_flow(run_dir=tmp_path, checkpoint=checkpoint,
+                                                         binding=binding, scope=scope)
+    attestation.write_text(original)
+    document["body"]["private_source_flow"]["eligible_patients"] = 2
+    attestation.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="attestation_invalid"):
+        owner.resolve_private_first_observed_source_flow(run_dir=tmp_path, checkpoint=checkpoint,
+                                                         binding=binding, scope=scope)
+    attestation.write_text(original)
     coordinate.path.write_bytes(coordinate.path.read_bytes() + b"tampered")
     with pytest.raises(ValueError, match="attestation_binding_mismatch"):
         owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
                                                          binding=binding, scope=scope)
+
+
+def test_source_flow_rejects_invalid_or_sensitive_content():
+    valid = {"schema_version": owner.SCHEMA, "source_global_table_required": True,
+             "not_lifetime_first_icu": True, "outcome_columns_read": False,
+             "receipt_contains_identifier_values": False, "research_execution_authorized": False,
+             "source_stays": 2, "source_patients": 2, "eligible_patients": 1,
+             "excluded_patients_by_reason": {"multiple_observed_hospitalizations": 1},
+             "excluded_stays_by_reason": {"multiple_observed_hospitalizations": 1}}
+    frame = pd.DataFrame({"stay_id": [1, 2], FLAG_COLUMN: [True, False],
+                          REASON_COLUMN: ["kept", "multiple_observed_hospitalizations"]})
+    for changes in ({"eligible_patients": 2}, {"source_patients": True},
+                    {"excluded_patients_by_reason": {"patient-123": 1}},
+                    {"excluded_stays_by_reason": {"under_18": 1}},
+                    {"outcome_columns_read": True}):
+        with pytest.raises(ValueError, match="source_flow_invalid"):
+            owner._private_source_flow(SimpleNamespace(frame=frame, receipt={**valid, **changes}))
+    repeated = frame.copy()
+    repeated["stay_id"] = [1, 1]
+    with pytest.raises(ValueError, match="source_flow_invalid"):
+        owner._private_source_flow(SimpleNamespace(frame=repeated, receipt=valid))
 
 
 def test_crashed_source_read_cannot_replay_the_consumed_grant(tmp_path, monkeypatch):
