@@ -8,6 +8,8 @@ import json
 from typing import Any
 
 from easyicu.databases.profiles import get_database_profile
+from easyicu.config import load_src_cfg
+from easyicu.research_agent.canonical_json import canonical_sha256
 
 
 @lru_cache(maxsize=1)
@@ -41,6 +43,12 @@ def source_concept_reference(concept_id: str, database: str) -> dict[str, Any] |
     raw = item["sources"].get(key)
     if not isinstance(raw, list) or not raw:
         return None
+    try:
+        config = load_src_cfg(key)
+        config_digest = canonical_sha256(config.model_dump(mode="json"))
+    except (KeyError, OSError, ValueError, TypeError):
+        config = None
+        config_digest = None
     mappings = []
     for entry in raw[:20]:
         if not isinstance(entry, dict):
@@ -57,6 +65,14 @@ def source_concept_reference(concept_id: str, database: str) -> dict[str, Any] |
             mapping["ids_truncated"] = len(ids) > 100
         if entry.get("callback") or entry.get("regex") or entry.get("params"):
             mapping["additional_rules_present"] = True
+        table = config.tables.get(entry.get("table")) if config and isinstance(entry.get("table"), str) else None
+        defaults = getattr(table, "defaults", None)
+        if defaults is not None:
+            names = {name: getattr(defaults, name, None) for name in ("id_var", "index_var", "val_var", "unit_var")}
+            mapping["source_table_defaults"] = {
+                name: value[:120] for name, value in names.items()
+                if isinstance(value, str) and value.strip()
+            }
         if mapping:
             mappings.append(mapping)
     if not mappings:
@@ -65,6 +81,6 @@ def source_concept_reference(concept_id: str, database: str) -> dict[str, Any] |
     units = [unit] if isinstance(unit, str) and unit.strip() else []
     if isinstance(unit, list):
         units = [u[:80] for u in unit[:20] if isinstance(u, str) and u.strip()]
-    return {"database": key, "dictionary_sha256": digest, "declared_units": units,
+    return {"database": key, "dictionary_sha256": digest, "source_config_sha256": config_digest, "declared_units": units,
             "declared_mappings": mappings, "scope": "packaged_dictionary_reference_only",
             "actual_source_reads_verified": False, "record_units_verified": False}
