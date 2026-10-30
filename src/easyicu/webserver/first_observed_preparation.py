@@ -27,9 +27,12 @@ from easyicu.research_agent.acquisition.eicu_first_observed_candidate import (
     FLAG_COLUMN, REASON_COLUMN, REQUIRED_COLUMNS, SCHEMA,
 )
 from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint, verify_raw_preparation_review
+from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.canonical_json import canonical_json, canonical_sha256
+from easyicu.research_agent.planning.scientific_review import PlanScientificReview
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.webserver import sources, state_paths
@@ -117,6 +120,27 @@ def _private_source_flow(candidate: Any) -> dict[str, Any]:
     }
 
 
+def _verified_scientific_review(*, run_dir: Path, authority: PlanReviewAuthority, context: Any) -> str:
+    """Revalidate the persisted review, not just the digest supplied in a request."""
+    expected = authority.evidence_sha256.get("scientific_plan_review")
+    if not expected or not (run_dir / "evidence").is_dir():
+        raise ValueError("first_observed_preparation_scientific_review_missing")
+    record = EvidenceStore(run_dir).get("scientific_plan_review")
+    path = verified_run_evidence_path(run_dir, record) if record is not None else None
+    if path is None or record.sha256 != expected:
+        raise ValueError("first_observed_preparation_scientific_review_missing")
+    with AnchoredDirectory.open(path.parent) as directory:
+        raw = directory.read_bytes(path.name, max_bytes=5 * 1024 * 1024)
+        directory.assert_still_selected()
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError("first_observed_preparation_scientific_review_mismatch")
+    scientific_review = PlanScientificReview.model_validate_json(raw)
+    if (scientific_review.plan_sha256 != authority.plan_sha256
+            or scientific_review.context_sha256 != canonical_sha256(context.model_dump(mode="json"))):
+        raise ValueError("first_observed_preparation_scientific_review_mismatch")
+    return expected
+
+
 def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
     """Construct scope from bound plan, registered source, and metadata only."""
     raw = request.payload.get("plan_review_authority")
@@ -138,6 +162,7 @@ def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
     if review.evidence_sha256.get("research_context") != context_sha:
         raise ValueError("first_observed_preparation_context_mismatch")
     context = parse_research_context_json(raw_context.decode("utf-8"))
+    scientific_sha = _verified_scientific_review(run_dir=run_dir, authority=review, context=context)
     identity = SourceIdentity.from_record(_constraints(context).get("source_identity"))
     if identity is None or identity.database != "eicu_demo":
         raise ValueError("first_observed_preparation_source_unavailable")
@@ -155,9 +180,6 @@ def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
         raise ValueError("first_observed_preparation_source_unavailable")
     if identity.archive_sha256 != source.archive_sha256:
         raise ValueError("first_observed_preparation_source_mismatch")
-    scientific_sha = review.evidence_sha256.get("scientific_plan_review")
-    if not scientific_sha:
-        raise ValueError("first_observed_preparation_scientific_review_missing")
     return ({"adapter_id": _ADAPTER, "purpose": "prepare_only", "analysis_authorized": False,
              "database": "eicu_demo", "source_identity_sha256": canonical_sha256(identity.to_dict()),
              "plan_sha256": review.plan_sha256, "context_sha256": context_sha,
