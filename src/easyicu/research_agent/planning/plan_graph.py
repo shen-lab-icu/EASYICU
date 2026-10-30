@@ -108,6 +108,29 @@ def _typed_plan_dependency_graph(
                 continue
             producers.setdefault(product, []).append(step.step_id)
 
+    # A product is also a deliverable even when no later step consumes it.
+    # Two distinct steps claiming the same typed product would otherwise make
+    # the published result depend on execution/alias registration order. Do
+    # not choose a winner: the plan must give the products distinct names.
+    for product, step_ids in sorted(producers.items()):
+        owner_ids = sorted(set(step_ids))
+        if len(owner_ids) > 1:
+            findings.append(
+                ValidationFinding(
+                    validator="plan_typed_dag",
+                    severity="error",
+                    message=(
+                        "Multiple steps declare the same typed output; the "
+                        "plan must distinguish the products before execution."
+                    ),
+                    detail={
+                        "reason": "typed_output_producer_ambiguous",
+                        "typed_product": f"{product[0]}:{product[1]}",
+                        "producer_step_ids": owner_ids,
+                    },
+                )
+            )
+
     dependencies: Dict[str, Set[str]] = {step.step_id: set() for step in steps}
     for step in steps:
         for raw_input in step.inputs or []:
