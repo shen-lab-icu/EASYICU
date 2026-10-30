@@ -20,6 +20,7 @@ from easyicu.research_agent.planning.non_executable_proposal import (
     build_non_executable_proposal,
 )
 from easyicu.webserver import run_artifact_disclosure, run_step_trace, study_contexts
+from easyicu.webserver.candidate_pubmed import register_pubmed_candidate
 from easyicu.webserver.pi_copilot.run_authority import list_bound_run_history, research_pipeline_project_root
 
 
@@ -30,6 +31,7 @@ class _LiteratureDecisionReference(BaseModel):
     citation_key: str = Field(min_length=1, max_length=200)
     source_evidence_id: str = Field(min_length=1, max_length=200)
     verbatim_excerpt: str = Field(min_length=12, max_length=240)
+    evidence_scope: str | None = Field(default=None, max_length=500)
 
 
 class _LiteratureDecisionReferences(BaseModel):
@@ -46,11 +48,19 @@ class CandidateLiteratureReference(BaseModel):
     citation_key: str = Field(min_length=1, max_length=200)
     source_evidence_id: str = Field(min_length=1, max_length=200)
     verbatim_excerpt: str = Field(min_length=12, max_length=240)
+    evidence_scope: str | None = Field(default=None, max_length=500)
 
 
 def _candidate_evidence_root(study_id: str, session_id: str, run_id: str) -> Path:
     scope = canonical_sha256({'session_id': session_id, 'run_id': run_id})
     return research_pipeline_project_root(study_id) / 'candidate_evidence' / scope
+
+
+def _proposed_reference(citation_key: str, source_evidence_id: str, excerpt: str, scope: str | None) -> ProposedReference:
+    external = source_evidence_id.startswith('candidate_pubmed_')
+    return ProposedReference(evidence_id=source_evidence_id if external else 'preplan_literature_bundle',
+        kind='literature_candidate' if external else 'literature', citation_key=citation_key,
+        source_evidence_id=source_evidence_id, verbatim_excerpt=excerpt, evidence_scope=scope)
 
 
 def _register_pubmed_abstract(*, bundle: LiteratureBundle, citation_key: str, root: Path) -> tuple[str, str]:
@@ -128,7 +138,7 @@ def save_candidate_reference(*, service: Any, project_id: str, session_id: str, 
             'decision_id': proposed.decision_id,
             'decision_text_sha256': hashlib.sha256(decision['text'].encode('utf-8')).hexdigest(),
             'citation_key': proposed.citation_key, 'source_evidence_id': proposed.source_evidence_id,
-            'verbatim_excerpt': proposed.verbatim_excerpt}]}
+            'verbatim_excerpt': proposed.verbatim_excerpt, 'evidence_scope': proposed.evidence_scope}]}
     text = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
     eid = 'candidate_literature_binding_' + hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
     EvidenceStore(_candidate_evidence_root(study_id, session_id, run_id)).register_text(
@@ -183,7 +193,8 @@ def _literature_projection(bundle: LiteratureBundle, *, evidence_id: str, sha256
 
 def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: str,
                      proposed: CandidateLiteratureReference | None = None,
-                     collect_citation_key: str | None = None) -> dict:
+                     collect_citation_key: str | None = None,
+                     collect_pmid: str | None = None) -> dict:
     """Resolve every coordinate from host owners; accept no client evidence or text."""
     project_id, session_id, run_id = (str(x or "").strip() for x in (project_id, session_id, run_id))
     study_id = service.project_store.resolve(project_id)
@@ -282,10 +293,8 @@ def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: 
             if (not decision or hashlib.sha256(decision.text.encode("utf-8")).hexdigest()
                     != ref.decision_text_sha256):
                 raise ValueError("proposal_binding_manifest_decision_mismatch")
-            groups.setdefault(ref.decision_id, []).append(ProposedReference(
-                evidence_id="preplan_literature_bundle", kind="literature",
-                citation_key=ref.citation_key, source_evidence_id=ref.source_evidence_id,
-                verbatim_excerpt=ref.verbatim_excerpt))
+            groups.setdefault(ref.decision_id, []).append(_proposed_reference(
+                ref.citation_key, ref.source_evidence_id, ref.verbatim_excerpt, ref.evidence_scope))
     if groups:
         decisions = [decision.model_copy(update={"references": tuple(groups.get(decision.decision_id, ()))})
                      for decision in decisions]
@@ -294,9 +303,8 @@ def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: 
         target = next((item for item in decisions if item.decision_id == proposed.decision_id), None)
         if target is None:
             raise ValueError("proposal_candidate_decision_not_found")
-        ref = ProposedReference(evidence_id="preplan_literature_bundle", kind="literature",
-            citation_key=proposed.citation_key, source_evidence_id=proposed.source_evidence_id,
-            verbatim_excerpt=proposed.verbatim_excerpt)
+        ref = _proposed_reference(proposed.citation_key, proposed.source_evidence_id, proposed.verbatim_excerpt,
+                                  proposed.evidence_scope)
         decisions = [item.model_copy(update={"references": (*item.references, ref)}) if item is target else item
                      for item in decisions]
     proposal = build_non_executable_proposal(store=store, configuration=study,
@@ -343,12 +351,20 @@ def project_proposal(*, service: Any, project_id: str, session_id: str, run_id: 
         if literature is None:
             raise ValueError('proposal_literature_bundle_missing')
         collected = _register_pubmed_abstract(bundle=bundle, citation_key=collect_citation_key, root=candidate_root)
+    candidate_paper = None
+    if collect_pmid is not None:
+        candidate_paper = register_pubmed_candidate(pmid=collect_pmid, root=candidate_root)
     payload = {"run_id": run_id, "scientific_configuration_sha256": scientific_sha,
                "proposal": proposal.model_dump(mode="json"), "literature_candidates": literature}
     if collected:
         payload['candidate_abstract_evidence_id'] = collected[0]
         payload['candidate_abstract_excerpt'] = collected[1]
         payload['candidate_abstract_citation_key'] = collect_citation_key
+    if candidate_paper:
+        payload['candidate_abstract_evidence_id'] = candidate_paper[0]
+        payload['candidate_abstract_citation_key'] = candidate_paper[1]['citation_key']
+        payload['candidate_pubmed_title'] = candidate_paper[1]['title']
+        payload['candidate_pubmed_abstract'] = candidate_paper[1]['abstract']
     if not run_artifact_disclosure.scan_browser_projection(payload).get("passed"):
         raise ValueError("proposal_privacy_scan_failed")
     return payload

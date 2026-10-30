@@ -317,3 +317,63 @@ def test_concurrent_authority_change_fails_closed(monkeypatch, tmp_path, changed
         monkeypatch.setattr(view.study_contexts, 'scientific_configuration_sha256', lambda _: next(digests))
     with pytest.raises(ValueError, match='changed'):
         view.project_proposal(service=service, project_id='project1', session_id='session1', run_id='run1')
+
+
+def test_external_pubmed_candidate_is_scoped_and_never_screened_or_approved(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    from easyicu.webserver import candidate_pubmed
+    from easyicu.webserver.routes import non_executable_proposal as route
+    from fastapi import FastAPI
+    abstract = 'A candidate abstract describes lactate and intensive care outcomes.'
+    xml = (b'<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>12345</PMID>'
+           b'<Article><ArticleTitle>A public article</ArticleTitle><Abstract><AbstractText>'
+           + abstract.encode() + b'</AbstractText></Abstract></Article></MedlineCitation>'
+           b'<PubmedData><ArticleIdList><ArticleId IdType="doi">10.1234/example</ArticleId></ArticleIdList></PubmedData>'
+           b'</PubmedArticle></PubmedArticleSet>')
+    monkeypatch.setattr(candidate_pubmed.PubMedLiteratureClient, '_http_get', lambda self, path, params: xml)
+    monkeypatch.setattr(route, 'get_pi_copilot_service', lambda: Service())
+    app = FastAPI()
+    app.include_router(route.router)
+    client = TestClient(app)
+    endpoint = '/api/pi/proposal/project1/session1/run1/pubmed-candidate'
+    assert client.post(endpoint, data={'pmid':'12345'}).status_code == 403
+    result = client.post(endpoint, headers={'Origin':'http://testserver'}, data={'pmid':'12345'})
+    assert result.status_code == 200
+    assert 'A public article' in result.text and '尚未经过本次筛选' in result.text
+    root = view._candidate_evidence_root('study1', 'session1', 'run1')
+    evidence = next(row for row in view.ReadOnlyEvidenceRegistry(root).records
+                    if row.evidence_id.startswith('candidate_pubmed_'))
+    assert EvidenceStore(tmp_path).get(evidence.evidence_id) is None
+    fields = {'decision_id':'outcome', 'citation_key':'pmid:12345',
+              'source_evidence_id':evidence.evidence_id, 'verbatim_excerpt':'describes lactate and intensive care',
+              'evidence_scope': '讨论 ICU 结局；不能证明病例关闭时长。'}
+    path = '/api/pi/proposal/project1/session1/run1/candidate/save'
+    saved = client.post(path, headers={'Origin':'http://testserver'}, data=fields)
+    assert saved.status_code == 200
+    proposal = view.project_proposal(service=Service(), project_id='project1', session_id='session1', run_id='run1')
+    row = next(row for row in proposal['proposal']['decisions'] if row['decision_id'] == 'outcome')
+    assert row['bindings'][0]['kind'] == 'literature_candidate'
+    assert row['bindings'][0]['literature_role'] == 'unscreened'
+    assert row['bindings'][0]['applicability_verified'] is False
+    assert 'literature' in row['unbound_evidence']
+    assert proposal['proposal']['review_approved'] is False
+    assert '尚未纳入本次筛选' in saved.text
+    assert '不能证明病例关闭时长' in saved.text
+    assert 'href="https://pubmed.ncbi.nlm.nih.gov/12345/"' in saved.text
+    assert client.post(path, headers={'Origin':'http://testserver'},
+                       data={**fields, 'evidence_scope':''}).status_code == 409
+    # A historical citation key can itself use the PMID spelling; routing is
+    # determined by the host source identity, not just that key's syntax.
+    assert view._proposed_reference('pmid:12345', 'abstract1', abstract[:40], None).kind == 'literature'
+    assert client.post(path, headers={'Origin':'http://testserver'},
+                       data={**fields, 'verbatim_excerpt':'a fabricated excerpt'}).status_code == 409
+    wrong_session = client.post('/api/pi/proposal/project1/other/run1/pubmed-candidate',
+                                headers={'Origin':'http://testserver'}, data={'pmid':'12345'})
+    assert wrong_session.status_code == 409
+    monkeypatch.setattr(candidate_pubmed.PubMedLiteratureClient, '_http_get',
+                        lambda self, path, params: xml.replace(b'12345', b'99999'))
+    assert client.post(endpoint, headers={'Origin':'http://testserver'}, data={'pmid':'12345'}).status_code == 409
+    assert client.post(endpoint, headers={'Origin':'http://testserver'}, data={'pmid':'https://example.com'}).status_code == 409
+    (root / evidence.relative_path).write_text('tampered')
+    with pytest.raises(ValueError, match='integrity_failed'):
+        view.project_proposal(service=Service(), project_id='project1', session_id='session1', run_id='run1')
