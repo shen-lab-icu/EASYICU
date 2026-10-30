@@ -61,6 +61,7 @@ def test_explicit_uncertainty_cannot_be_replaced_by_counts_only(question):
     "Report mortality, no 95% CI",
     "Confidence intervals are not needed",
     "置信区间不需要",
+    "不再报告 95% 置信区间",
     "Report the cardiac index (CI) by sex",
     "请提供不确定性",
     "不确定性用标准误",
@@ -119,6 +120,15 @@ def test_later_message_can_replace_multiple_levels():
         "报告 90% 置信区间和 95% 置信区间", "改为 99% 置信区间",
     )
     assert value.confidence_levels == (0.99,)
+
+
+@pytest.mark.parametrize("amendment", [
+    "另外请报告 90% 置信区间",
+    "Also report 90% confidence intervals",
+])
+def test_explicit_addition_keeps_the_previous_level(amendment):
+    value = requested_uncertainty("请报告 95% 置信区间", amendment)
+    assert value.confidence_levels == (0.9, 0.95)
 
 
 @pytest.mark.parametrize("question", [

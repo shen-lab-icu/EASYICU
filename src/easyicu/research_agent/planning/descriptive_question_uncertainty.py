@@ -22,7 +22,7 @@ _INTERVAL = re.compile(
     re.IGNORECASE,
 )
 _NEGATION = re.compile(
-    r"(?:不(?:需要|要求|提供|计算|报告|包含|展示|给出)|无需|不要|无须|不做)\s*$|"
+    r"(?:不(?:再)?(?:需要|要求|提供|计算|报告|包含|展示|给出)|无需|不要|无须|不做)\s*$|"
     r"(?:\bno|\bwithout|\b(?:do\s+not|don't)\s+(?:need|report|calculate|provide|include)|"
     r"\bdoes\s+not\s+(?:need|require)|\bnot\s+requiring|\bneed\s+not\s+report)"
     r"\s*(?:an?\s+|the\s+)?$",
@@ -35,6 +35,10 @@ _JOINED_PERCENT_BEFORE = re.compile(
 )
 _PERCENT_JOINER_BEFORE = re.compile(
     r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*%\s*(?:、|和|及|与|and)\s*$",
+    re.IGNORECASE,
+)
+_ADDITIVE_LEVEL = re.compile(
+    r"另外|额外|同时|也|新增|(?<!不)再|\b(?:add|also|additionally|in\s+addition)\b",
     re.IGNORECASE,
 )
 _PERCENT_AFTER = re.compile(
@@ -125,7 +129,10 @@ def requested_uncertainty(*texts: str) -> UncertaintyRequirement:
                 level = float(raw_level) / 100.0
                 if 0 < level < 1:
                     if not saw_level:
-                        levels.clear()
+                        if _ADDITIVE_LEVEL.search(before):
+                            stated_levels.update(levels)
+                        else:
+                            levels.clear()
                         saw_level = True
                     stated_levels.add(level)
                     levels = set(stated_levels)
