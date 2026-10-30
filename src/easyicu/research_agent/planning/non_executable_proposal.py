@@ -6,6 +6,8 @@ It has no product route. Evidence integrity is distinct from clinical relevance.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -64,19 +66,22 @@ class CandidateEvidenceRegistry:
 class ProposedReference(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     evidence_id: str = Field(min_length=1, max_length=200)
-    kind: Literal["source", "literature"]
+    kind: Literal["source", "literature", "literature_candidate"]
     citation_key: str | None = None
     source_evidence_id: str | None = None
     verbatim_excerpt: str | None = Field(default=None, min_length=12, max_length=240)
+    evidence_scope: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def check_key(self):
-        if (self.kind == "literature") != bool(self.citation_key):
+        if (self.kind in {"literature", "literature_candidate"}) != bool(self.citation_key):
             raise ValueError("literature references require an exact citation key")
-        if self.kind == "literature" and not (self.source_evidence_id and self.verbatim_excerpt):
+        if self.kind in {"literature", "literature_candidate"} and not (self.source_evidence_id and self.verbatim_excerpt):
             raise ValueError("literature references require registered original text and an exact excerpt")
         if self.kind == "source" and (self.source_evidence_id or self.verbatim_excerpt):
             raise ValueError("source references cannot carry literature card fields")
+        if self.kind == 'literature_candidate' and not (self.evidence_scope and self.evidence_scope.strip()):
+            raise ValueError('unscreened candidate references require a scope note')
         return self
 
 
@@ -92,13 +97,14 @@ class EvidenceBinding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     evidence_id: str
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    kind: Literal["source", "literature"]
+    kind: Literal["source", "literature", "literature_candidate"]
     citation_key: str | None = None
     source_evidence_id: str | None = None
     source_evidence_sha256: str | None = None
     verbatim_excerpt: str | None = None
     literature_role: str | None = None
     literature_access_mode: str | None = None
+    evidence_scope: str | None = None
     applicability_verified: Literal[False] = False
 
 
@@ -144,7 +150,34 @@ def _bound_record(store: EvidenceStore, reference: ProposedReference) -> Evidenc
     if path is None:
         raise ValueError("proposal_evidence_integrity_failed")
     role = access_mode = None
-    if reference.kind == "literature":
+    if reference.kind == "literature_candidate":
+        # Later, independently fetched literature is kept outside the historical
+        # run. It is a candidate only and cannot become a screened plan binding.
+        candidate = getattr(store, 'candidate', None)
+        if (candidate is None or candidate.get(reference.evidence_id) != record
+                or store.run.get(reference.evidence_id) is not None
+                or not reference.evidence_id.startswith('candidate_pubmed_')
+                or reference.source_evidence_id != reference.evidence_id):
+            raise ValueError('proposal_candidate_source_unavailable')
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != record.sha256:
+            raise ValueError('proposal_evidence_integrity_failed')
+        try:
+            source = json.loads(data)
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError('proposal_original_text_invalid') from exc
+        pmid = source.get('pmid') if isinstance(source, dict) else None
+        if (not isinstance(pmid, str) or not re.fullmatch(r'[0-9]{1,12}', pmid, flags=re.ASCII)
+                or source.get('schema_version') != 'easyicu.pubmed-unscreened-candidate/1'
+                or reference.citation_key != f'pmid:{pmid}' or source.get('citation_key') != reference.citation_key
+                or source.get('source_url') != f'https://pubmed.ncbi.nlm.nih.gov/{pmid}/'
+                or source.get('screening') != 'not_screened' or source.get('applicability_verified') is not False
+                or not isinstance(source.get('title'), str) or not source['title'].strip()
+                or not isinstance(source.get('abstract'), str)
+                or reference.verbatim_excerpt not in source['abstract']):
+            raise ValueError('proposal_candidate_source_invalid')
+        source_record, role, access_mode = record, 'unscreened', 'abstract'
+    elif reference.kind == "literature":
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != record.sha256:
             raise ValueError("proposal_evidence_integrity_failed")
@@ -169,7 +202,6 @@ def _bound_record(store: EvidenceStore, reference: ProposedReference) -> Evidenc
         source_path = store.path(source_record)
         if source_path is None:
             raise ValueError("proposal_original_text_integrity_failed")
-        import json
         source_bytes = source_path.read_bytes()
         if hashlib.sha256(source_bytes).hexdigest() != source_record.sha256:
             raise ValueError("proposal_original_text_integrity_failed")
@@ -202,7 +234,8 @@ def _bound_record(store: EvidenceStore, reference: ProposedReference) -> Evidenc
                            source_evidence_id=reference.source_evidence_id,
                            source_evidence_sha256=source_record.sha256 if source_record else None,
                            verbatim_excerpt=reference.verbatim_excerpt,
-                           literature_role=role, literature_access_mode=access_mode)
+                           literature_role=role, literature_access_mode=access_mode,
+                           evidence_scope=reference.evidence_scope)
 
 
 def build_non_executable_proposal(*, store: EvidenceStore, configuration: Mapping[str, Any],
@@ -251,6 +284,6 @@ def verify_proposal(*, store: EvidenceStore, proposal: NonExecutableProposal,
             current = _bound_record(store, ProposedReference(evidence_id=binding.evidence_id,
                 kind=binding.kind, citation_key=binding.citation_key,
                 source_evidence_id=binding.source_evidence_id,
-                verbatim_excerpt=binding.verbatim_excerpt))
+                verbatim_excerpt=binding.verbatim_excerpt, evidence_scope=binding.evidence_scope))
             if current != binding:
                 raise ValueError("proposal_evidence_integrity_failed")

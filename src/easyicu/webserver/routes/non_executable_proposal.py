@@ -24,6 +24,7 @@ _ROLE_LABELS = {
     'direct_comparator': '直接对照候选', 'design_analogue': '设计类比',
     'definition': '定义', 'method': '方法背景', 'database': '数据库',
     'related_context': '相关背景',
+    'unscreened': '未筛选候选',
 }
 
 
@@ -80,14 +81,22 @@ def _binding_status(row: dict | None) -> str:
     bindings = (row or {}).get('bindings') or []
     parts = []
     for binding in bindings:
-        if binding.get('kind') == 'literature':
+        if binding.get('kind') in {'literature', 'literature_candidate'}:
             role = _ROLE_LABELS.get(binding.get('literature_role'), '未标记角色')
-            parts.append('<p>候选绑定：已登记摘要原文与筛选记录，'
+            provenance = ('已登记摘要原文，尚未纳入本次筛选' if binding.get('kind') == 'literature_candidate'
+                          else '已登记摘要原文与筛选记录')
+            parts.append(f'<p>候选绑定：{provenance}，'
                          f'{escape(str(binding.get("citation_key") or ""))} · {escape(role)}；'
                          '该片段对本决定的适用性尚未核验。</p>'
                          f'<p>摘要证据 ID：{escape(str(binding.get("source_evidence_id") or ""))} · '
                          f'SHA-256：{escape(str(binding.get("source_evidence_sha256") or ""))}</p>'
                          f'<blockquote>{escape(str(binding.get("verbatim_excerpt") or ""))}</blockquote>')
+            if binding.get('evidence_scope'):
+                parts.append(f'<p>候选支持范围与限制：{escape(str(binding["evidence_scope"]))}（待审核）</p>')
+            key = str(binding.get('citation_key') or '')
+            if re.fullmatch(r'pmid:[0-9]{1,12}', key, flags=re.ASCII):
+                pmid = key.removeprefix('pmid:')
+                parts.append(f'<p><a href="https://pubmed.ncbi.nlm.nih.gov/{pmid}/">查看 PubMed 原文摘要（PMID {pmid}）</a></p>')
     if not parts:
         parts.append('<p>文献：尚未逐项绑定</p>')
     if not any(binding.get('kind') == 'source' for binding in bindings):
@@ -114,8 +123,9 @@ async def preview_candidate_reference(project_id: str, session_id: str, run_id: 
     if len(body) > 4096:
         raise HTTPException(status_code=413, detail='候选绑定内容过长。')
     try:
-        fields = parse_qs(body.decode('utf-8'), keep_blank_values=True, strict_parsing=True, max_num_fields=4)
-        if set(fields) != {'decision_id', 'citation_key', 'source_evidence_id', 'verbatim_excerpt'} or any(
+        fields = parse_qs(body.decode('utf-8'), keep_blank_values=True, strict_parsing=True, max_num_fields=5)
+        required = {'decision_id', 'citation_key', 'source_evidence_id', 'verbatim_excerpt'}
+        if not required <= set(fields) or set(fields) - required - {'evidence_scope'} or any(
                 len(values) != 1 for values in fields.values()):
             raise ValueError('invalid_candidate_fields')
         suggestion = CandidateLiteratureReference.model_validate({key: values[0] for key, values in fields.items()})
@@ -136,8 +146,9 @@ async def save_candidate(project_id: str, session_id: str, run_id: str, request:
     if len(body) > 4096:
         raise HTTPException(status_code=413, detail='候选绑定内容过长。')
     try:
-        fields = parse_qs(body.decode('utf-8'), keep_blank_values=True, strict_parsing=True, max_num_fields=4)
-        if set(fields) != {'decision_id', 'citation_key', 'source_evidence_id', 'verbatim_excerpt'} or any(
+        fields = parse_qs(body.decode('utf-8'), keep_blank_values=True, strict_parsing=True, max_num_fields=5)
+        required = {'decision_id', 'citation_key', 'source_evidence_id', 'verbatim_excerpt'}
+        if not required <= set(fields) or set(fields) - required - {'evidence_scope'} or any(
                 len(values) != 1 for values in fields.values()):
             raise ValueError('invalid_candidate_fields')
         suggestion = CandidateLiteratureReference.model_validate({key: values[0] for key, values in fields.items()})
@@ -171,6 +182,27 @@ async def collect_pubmed_abstract(project_id: str, session_id: str, run_id: str,
     return _render_proposal(payload, project_id, session_id, run_id)
 
 
+@router.post('/api/pi/proposal/{project_id}/{session_id}/{run_id}/pubmed-candidate', response_class=HTMLResponse)
+async def collect_pubmed_candidate(project_id: str, session_id: str, run_id: str, request: Request):
+    """Fetch one public article into the separate unscreened candidate store."""
+    if request.headers.get('origin') != f'{request.url.scheme}://{request.url.netloc}':
+        raise HTTPException(status_code=403, detail='请从当前页面登记候选。')
+    if request.headers.get('content-type', '').split(';', 1)[0] != 'application/x-www-form-urlencoded':
+        raise HTTPException(status_code=415, detail='请使用页面表单获取候选。')
+    body = await request.body()
+    if len(body) > 256:
+        raise HTTPException(status_code=413, detail='文献标识过长。')
+    try:
+        fields = parse_qs(body.decode('utf-8'), keep_blank_values=True, strict_parsing=True, max_num_fields=1)
+        if set(fields) != {'pmid'} or len(fields['pmid']) != 1:
+            raise ValueError('invalid_candidate')
+        payload = project_proposal(service=get_pi_copilot_service(), project_id=project_id,
+            session_id=session_id, run_id=run_id, collect_pmid=fields['pmid'][0].strip())
+    except (ValueError, UnicodeError, PiCopilotError) as exc:
+        raise HTTPException(status_code=409, detail='无法登记候选，请核对 PMID 与网络连接。') from exc
+    return _render_proposal(payload, project_id, session_id, run_id)
+
+
 def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: str, *, transient: bool = False):
     proposal = payload["proposal"]
     selected = {row['decision_id']: row for row in proposal['decisions']}
@@ -199,6 +231,7 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
     candidate_href = '/api/pi/proposal/' + '/'.join(quote(value, safe='') for value in
         (project_id, session_id, run_id)) + '/candidate'
     collect_href = candidate_href.removesuffix('/candidate') + '/pubmed-abstract'
+    external_href = candidate_href.removesuffix('/candidate') + '/pubmed-candidate'
     options = ''.join(f'<option value="{escape(key, quote=True)}">{escape(label)}</option>'
                       for key, label in _FIELD_LABELS.items() if key in selected)
     default_key = escape(str(payload.get('candidate_abstract_citation_key') or ''), quote=True)
@@ -209,6 +242,7 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
             f'<label>文献标识 <input name="citation_key" value="{default_key}" required maxlength="200"></label>'
             f'<label>已登记原摘要证据 ID <input name="source_evidence_id" value="{default_evidence}" required maxlength="200"></label>'
             f'<label>原摘要逐字片段 <textarea name="verbatim_excerpt" required minlength="12" maxlength="240">{default_excerpt}</textarea></label>'
+            '<label>支持范围与限制（未筛选候选必填）<textarea name="evidence_scope" maxlength="500"></textarea></label>'
             '<button type="submit">核验候选绑定</button> '
             f'<button type="submit" formaction="{escape(candidate_href + "/save", quote=True)}">保存待审候选</button></form>') if options else ''
     preview = '<p>当前是临时候选预览，未保存、未审核，也不授权执行。</p>' if transient else ''
@@ -220,8 +254,17 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
     collect_form = (f'<form method="post" action="{escape(collect_href, quote=True)}">'
         '<label>已纳入的 PubMed 文献标识 <input name="citation_key" required maxlength="200"></label>'
         '<button type="submit">获取并登记原摘要</button></form>')
+    external_paper = ''
+    if payload.get('candidate_pubmed_abstract'):
+        external_paper = ('<p>刚登记的未筛选候选：' + escape(payload['candidate_pubmed_title']) + '</p>'
+                          '<p>请从以下摘要选取逐字片段，填写到候选绑定中。该来源尚未经过本次筛选或适用性审阅。</p>'
+                          '<blockquote>' + escape(payload['candidate_pubmed_abstract']) + '</blockquote>')
+    external_form = (f'<form method="post" action="{escape(external_href, quote=True)}">'
+        '<label>PubMed PMID <input name="pmid" inputmode="numeric" pattern="[0-9]{1,12}" required></label>'
+        '<button type="submit">登记未筛选候选摘要</button></form>')
     evidence_count = len(candidates['retained_citation_keys']) if candidates else 0
     collect_open = ' open' if collected else ''
+    external_open = ' open' if external_paper else ''
     form_open = ' open' if collected or transient else ''
     return HTMLResponse('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -285,6 +328,9 @@ def _render_proposal(payload: dict, project_id: str, session_id: str, run_id: st
         f'<details class="panel"{collect_open}><summary>登记 PubMed 原摘要</summary><div class="panel-body">'
         f'<p>仅支持本次已纳入且身份可核验的 PubMed 文献；摘要另存为当前会话的候选证据，不修改原运行。</p>'
         f'{collected_note}{collect_form}</div></details>'
+        f'<details class="panel"{external_open}><summary>补充 PubMed 候选</summary><div class="panel-body">'
+        '<p>从 PubMed 获取公开摘要，保存为本会话未筛选候选；不改变原运行的检索或筛选记录。</p>'
+        f'{external_form}{external_paper}</div></details>'
         f'<details class="panel"{form_open}><summary>提出候选绑定</summary><div class="panel-body">'
         f'<p>填写已登记原摘要证据和逐字片段，核验仅供预览；适用性仍需审核。'
         f'当前没有已登记的原摘要时，请先取得并登记原始来源。</p>{form}</div></details>'
