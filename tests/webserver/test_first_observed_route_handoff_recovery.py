@@ -47,6 +47,52 @@ accepted=route.raw_preparation_review(body)
 assert accepted['job_id']=='job' and accepted['reused'] and accepted['preparation_status']=='preparing'
 assert not accepted['analysis_authorized']
 ''' + tail
+    script = script.replace('assert service.close()', '''
+from concurrent.futures import ThreadPoolExecutor
+before=service.store.get('job')
+service._dispatch=lambda *_: (_ for _ in ()).throw(AssertionError('unexpected redispatch'))
+with ThreadPoolExecutor(max_workers=4) as pool:
+    repeated=list(pool.map(lambda _: route.raw_preparation_review(body), range(4)))
+assert all(item['job_id']=='job' and item['job_status']=='done' and item['preparation_status']=='complete' and item['reused'] for item in repeated)
+after=service.store.get('job')
+assert before==after
+assert (root/'source-reads.txt').read_text().splitlines()==['read']
+from easyicu import state_paths
+claim=state_paths.state_root()/'private-preparation-decisions'/(binding.nonce+'.host-job.json')
+original=claim.read_bytes()
+claim.write_bytes(original.replace(b'job',b'bad',1))
+try:
+    route.raw_preparation_review(body)
+except HTTPException as exc:
+    assert exc.status_code==409
+else:
+    raise AssertionError('tampered signed claim accepted')
+claim.write_bytes(original)
+producer.verified_public_demo_raw=lambda _: None
+try:
+    route.raw_preparation_review(body)
+except HTTPException as exc:
+    assert exc.status_code==409
+else:
+    raise AssertionError('changed source after completion accepted')
+producer.verified_public_demo_raw=original_source
+coordinate=state_paths.state_root()/'private-first-observed'/(binding.nonce+'.parquet')
+original_coordinate=coordinate.read_bytes()
+coordinate.write_bytes(original_coordinate+b'bad')
+try:
+    route.raw_preparation_review(body)
+except HTTPException as exc:
+    assert exc.status_code==409
+else:
+    raise AssertionError('changed coordinate accepted')
+coordinate.write_bytes(original_coordinate)
+from easyicu.webserver.raw_preparation_durable import recover_preparation_with_sealed_snapshot
+reused=recover_preparation_with_sealed_snapshot(job_id='job',job=job,timeout=30)
+assert reused==coordinate
+assert (root/'source-reads.txt').read_text().splitlines()==['read']
+assert service.store.get('job')==after
+assert service.close()
+''')
     second = subprocess.run([sys.executable, '-c', script, str(tmp_path)], env=env,
                             capture_output=True, text=True, timeout=90)
     assert second.returncode == 0, second.stderr

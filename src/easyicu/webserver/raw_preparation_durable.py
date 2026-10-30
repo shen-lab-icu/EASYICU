@@ -417,3 +417,156 @@ def _recover_preparation(*, job_id: str, job: Any, timeout: float, sealed_recove
     finally:
         for remove in unregister:
             remove()
+
+
+def inspect_admitted_first_observed(*, job_id: str, job: Any, checkpoint: RawPreparationCheckpoint,
+        binding: RawPreparationHostBinding, scope: Mapping[str, Any], command: Mapping[str, Any],
+        store_path: Path, journal_path: Path) -> dict[str, Any]:
+    """Read an existing outbox's status after rechecking its signed owner.
+
+    This cannot admit, dispatch, consume a decision, reset attempts, or read
+    patient rows. An uncertain or changed binding is refused.
+    """
+    import hashlib
+    import os
+    import stat
+    from easyicu import state_paths
+    from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+    from easyicu.webserver.host_action_contracts import RawPreparationReviewDecision, decision_key
+    from easyicu.webserver.first_observed_preparation import _private_root
+
+    if (scope.get('adapter_id') != 'eicu-demo-first-observed-single-hospital-adult/1'
+            or not _JOB.fullmatch(job_id) or job is None or job.id != job_id
+            or job.kind != 'raw-preparation-review' or checkpoint.state != 'approved'
+            or not _scope_matches(checkpoint, scope)):
+        raise ValueError('preparation_admitted_binding_invalid')
+    root = state_paths.state_root() / 'private-preparation-decisions'
+    with AnchoredDirectory.open(root) as directory:
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+            raise ValueError('preparation_admitted_directory_invalid')
+        with directory.open_regular('host.key') as handle:
+            info = os.fstat(handle.fileno())
+            if info.st_mode & 0o077 or info.st_uid != os.getuid():
+                raise ValueError('preparation_admitted_key_invalid')
+            key = handle.read(33)
+        if len(key) != 32:
+            raise ValueError('preparation_admitted_key_invalid')
+        def signed(name: str) -> dict:
+            value = json.loads(directory.read_bytes(name, max_bytes=4 * 1024 * 1024))
+            if not isinstance(value, dict):
+                raise ValueError('preparation_admitted_record_invalid')
+            signature = value.pop('signature', None)
+            digest = hmac.new(key, canonical_json(value).encode(), hashlib.sha256).hexdigest()
+            if not isinstance(signature, str) or not hmac.compare_digest(signature, digest):
+                raise ValueError('preparation_admitted_record_invalid')
+            return value
+        receipt = signed(binding.nonce + '.json')
+        pending_claim = signed(binding.nonce + '.host-job-pending.json')
+        claim = signed(binding.nonce + '.host-job.json')
+        intent = signed(job_id + '.preparation-intent.json')
+        handoff = signed(job_id + '.preparation-handoff.json')
+        consumed = not directory.is_absent(binding.nonce + '.used')
+        if consumed:
+            marker = json.loads(directory.read_bytes(binding.nonce + '.used', max_bytes=64 * 1024))
+            if marker != {'decision_sha256': canonical_sha256(receipt), 'nonce': binding.nonce}:
+                raise ValueError('preparation_admitted_consumption_invalid')
+        directory.assert_still_selected()
+    pending_body = checkpoint.model_dump(mode='json', exclude={'checkpoint_sha256'})
+    pending_body.update(state='pending', decision=None)
+    pending_sha = canonical_sha256(pending_body)
+    choice = RawPreparationReviewDecision(run_id=binding.run_id,
+        scientific_configuration_sha256=receipt.get('scientific_configuration_sha256'),
+        checkpoint_sha256=pending_sha, scope_sha256=canonical_sha256(dict(scope)),
+        review_authority_sha256=checkpoint.request.authority_sha256, nonce=binding.nonce)
+    decision = decision_key(choice, review_decision='approved')
+    expected_receipt = {'schema_version': 'easyicu.raw-preparation-host-decision/1', 'actor': 'host_user',
+        'decision': 'approved', **binding.model_dump(mode='python'), 'job_id': job_id,
+        'scope_sha256': canonical_sha256(dict(scope)), 'pending_checkpoint_sha256': pending_sha,
+        'decided_checkpoint_sha256': checkpoint.checkpoint_sha256,
+        'request_authority_sha256': checkpoint.request.authority_sha256,
+        'decided_review': checkpoint.decision.model_dump(mode='json'), 'decision_key': decision}
+    if any(receipt.get(k) != v for k, v in expected_receipt.items()):
+        raise ValueError('preparation_admitted_receipt_changed')
+    expected_pending = {'schema_version': 'easyicu.raw-preparation-host-job-pending/1',
+        'nonce': binding.nonce, 'study_context_id': binding.study_context_id,
+        'project_id': binding.project_id, 'session_id': binding.session_id,
+        'action_code': 'review_raw_preparation', 'decision_key': decision}
+    expected_claim = {**expected_pending, 'schema_version': 'easyicu.raw-preparation-host-job/1',
+                      'job_id': job_id, 'pending_sha256': canonical_sha256(expected_pending)}
+    if pending_claim != expected_pending or claim != expected_claim:
+        raise ValueError('preparation_admitted_claim_changed')
+    owner_root = _owner(binding, receipt, job_id)
+    with AnchoredDirectory.open(owner_root) as directory:
+        saved = RawPreparationCheckpoint.model_validate_json(directory.read_bytes(
+            'raw_preparation_checkpoint.json', max_bytes=1024 * 1024))
+        directory.assert_still_selected()
+    if saved != checkpoint:
+        raise ValueError('preparation_admitted_checkpoint_changed')
+    pending, _ = agent_pipeline_runs.raw_preparation_review_owner(binding.run_id, binding.study_context_id)
+    expected_plan = PlanReviewAuthority.model_validate(checkpoint.request.payload['plan_review_authority'])
+    authorities = [PlanReviewAuthority.model_validate(item.payload['plan_review_authority'])
+        for item in pending.requests if isinstance(item.payload.get('plan_review_authority'), Mapping)]
+    if not authorities or any(item != expected_plan for item in authorities):
+        raise ValueError('preparation_admitted_plan_changed')
+    _validate_current_scope(root=owner_root, checkpoint=checkpoint, scope=scope)
+    runtime = runtime_digest()
+    expected_intent = {'schema_version': 'easyicu.preparation-intent/1', 'job_id': job_id,
+        'binding': binding.model_dump(mode='json'), 'checkpoint': checkpoint.model_dump(mode='json'),
+        'scope': json.loads(canonical_json(dict(scope))), 'root': str(owner_root),
+        'scientific_configuration_sha256': receipt['scientific_configuration_sha256'],
+        'decision_key': decision, 'runtime_sha256': runtime}
+    timeout = handoff.get('timeout_seconds')
+    if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or not math.isfinite(timeout) or not 0 < timeout <= 86400):
+        raise ValueError('preparation_admitted_handoff_invalid')
+    expected_handoff = {'schema_version': 'easyicu.preparation-handoff/1', 'job_id': job_id,
+        'intent_sha256': canonical_sha256(intent), 'runtime_sha256': runtime,
+        'study_context_id': binding.study_context_id, 'timeout_seconds': timeout,
+        'command_schema': 'easyicu.durable-preparation/3', 'store_path': str(store_path),
+        'journal_path': str(journal_path), 'job_created': job.created}
+    expected_command = {'schema_version': 'easyicu.durable-preparation/3',
+        'study_context_id': binding.study_context_id, 'timeout_seconds': timeout,
+        'handoff_sha256': canonical_sha256(handoff)}
+    payload = command.get('payload')
+    if (intent != expected_intent or handoff != expected_handoff or command.get('id') != job_id
+            or command.get('code_sha256') != runtime or command.get('status') not in {'active', 'terminal'}
+            or not isinstance(payload, dict) or
+            {k: v for k, v in payload.items() if k not in {'_resume_attempt', '_cancel_requested'}} != expected_command):
+        raise ValueError('preparation_admitted_command_changed')
+    state = job.snapshot()
+    status = state.get('status')
+    if status not in {'running', 'done', 'failed', 'cancelled'}:
+        raise ValueError('preparation_admitted_job_invalid')
+    if status == 'done':
+        if not consumed:
+            raise ValueError('preparation_admitted_result_unconsumed')
+        with AnchoredDirectory.open(_private_root(create=False)) as directory:
+            document = json.loads(directory.read_bytes(binding.nonce + '.json', max_bytes=64 * 1024))
+            with directory.open_regular(binding.nonce + '.parquet') as handle:
+                coordinate_digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+            directory.assert_still_selected()
+        if not isinstance(document, dict) or set(document) != {'body', 'signature'}:
+            raise ValueError('preparation_admitted_result_invalid')
+        body, signature = document['body'], document['signature']
+        if not isinstance(body, dict) or not isinstance(signature, str) or not hmac.compare_digest(
+                signature, hmac.new(key, canonical_json(body).encode(), hashlib.sha256).hexdigest()):
+            raise ValueError('preparation_admitted_result_invalid')
+        version = body.get('schema_version')
+        if version not in {'easyicu.first-observed-coordinate-attestation/1',
+                           'easyicu.first-observed-coordinate-attestation/2'}:
+            raise ValueError('preparation_admitted_result_invalid')
+        expected_result = {'schema_version': version, 'scope_sha256': canonical_sha256(dict(scope)),
+            'checkpoint_sha256': checkpoint.checkpoint_sha256,
+            'binding_sha256': canonical_sha256(binding.model_dump(mode='json')),
+            'coordinate_sha256': coordinate_digest, 'source_complete_six_columns': True,
+            'analysis_authorized': False}
+        if version.endswith('/2'):
+            flow = body.get('private_source_flow')
+            if not isinstance(flow, dict):
+                raise ValueError('preparation_admitted_result_invalid')
+            expected_result['private_source_flow'] = flow
+        if body != expected_result:
+            raise ValueError('preparation_admitted_result_invalid')
+    result = 'complete' if status == 'done' else 'preparing' if status == 'running' else 'stopped'
+    return {'job_id': job_id, 'preparation_status': result, 'job_status': status, 'analysis_authorized': False}
