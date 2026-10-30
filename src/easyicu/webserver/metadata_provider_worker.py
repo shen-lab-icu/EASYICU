@@ -24,11 +24,34 @@ from easyicu.runtime.host_execution_lease import (
     claim_host_execution,
     complete_host_worker_cleanup,
     prepare_host_execution,
+    read_host_execution_receipt,
     request_host_execution_stop,
     verify_host_worker,
 )
 
 _MAX_MESSAGE = 2 * 1024 * 1024
+
+
+class MetadataProviderWorkerTimeout(RuntimeError):
+    """The local worker timed out; remote usage and completion are unknown.
+
+    This is deliberately not a TimeoutError: the remote call may still have
+    consumed resources and must not acquire automatic recovery authority.
+    """
+
+
+class MetadataProviderWorkerResponseError(RuntimeError):
+    """The supervised worker did not return a valid IPC response."""
+
+
+def _decode_worker_response(output: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(output)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise MetadataProviderWorkerResponseError("metadata_provider_worker_response_invalid") from None
+    if not isinstance(value, dict):
+        raise MetadataProviderWorkerResponseError("metadata_provider_worker_response_invalid")
+    return value
 
 
 def identity() -> str:
@@ -198,14 +221,14 @@ def guarded_call(lease_dir: Path, request: Mapping[str, Any], *, timeout: float,
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-            raise
+            raise MetadataProviderWorkerTimeout("metadata_provider_supervisor_timeout") from None
         assert_host_execution_quiescent(lease.path, allow_missing=False, allow_current_parent=True, wait_timeout=2)
+        receipt = read_host_execution_receipt(lease.path)
+        if receipt is not None and receipt.get("nonce") == lease.nonce and receipt.get("reason") == "timeout":
+            raise MetadataProviderWorkerTimeout("metadata_provider_worker_timeout")
         if len(output) > _MAX_MESSAGE:
             raise ValueError("provider_response_too_large")
-        value = json.loads(output)
-        if not isinstance(value, dict):
-            raise ValueError("provider_response_invalid")
-        return value
+        return _decode_worker_response(output)
     finally:
         if not spawned:
             try:

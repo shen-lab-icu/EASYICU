@@ -82,6 +82,88 @@ def test_guarded_one_request_uses_loopback_only_and_cleans_worker(tmp_path):
         server.server_close()
 
 
+def test_worker_timeout_preserves_unknown_usage_without_automatic_recovery(tmp_path, monkeypatch):
+    import easyicu.research_agent.providers.llm  # noqa: F401
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+    from easyicu.webserver import metadata_provider_client as client_owner
+    from easyicu.webserver import metadata_provider_concurrency as slots, provider_adapter
+    from easyicu.webserver.agent_pipeline_runs import _pipeline_failure_category, _record_pipeline_failure
+    from easyicu.webserver.metadata_provider_client import MetadataProviderClient
+    from easyicu.webserver.metadata_provider_worker import MetadataProviderWorkerTimeout
+    from easyicu.webserver.provider_job_recovery import transient_provider_cause
+
+    calls = []
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            calls.append(1)
+            self.rfile.read(int(self.headers["Content-Length"]))
+            release.wait(30)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setattr(slots.state_paths, "state_root", lambda: tmp_path / "state")
+        real_guarded_call = client_owner.guarded_call
+
+        def slow_transport(lease_dir, request, **kwargs):
+            # The guardian deadline fires while the synthetic SDK call is
+            # still pending, so this tests the actual process timeout path.
+            return real_guarded_call(lease_dir, {**request, "timeout": 30}, **kwargs)
+
+        monkeypatch.setattr(client_owner, "guarded_call", slow_transport)
+        environment = {"OPENAI_API_KEY": "synthetic-secret", "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+                       "OPENAI_MODEL": "synthetic", "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
+                       "EASYICU_PROVIDER_DATA_HANDLING": "user_accepted_external"}
+        provider = {"provider": "openai", "external": True}
+        client, public = provider_adapter.build_research_agent_provider_client(provider, environ=environment, request_timeout=10)
+        book = ProviderHardStopLedger(path=tmp_path / "budget.json", task_ids=("task",),
+            limits=provider_adapter.web_research_agent_hard_stop_limits("planner_canary"),
+            batch_id="task", declaration_sha256="a" * 64)
+        task = book.start_task("task")
+        supervised = MetadataProviderClient(inner=client, task=task, provider=provider, environment=environment, public=public, timeout=8)
+        wrapped = HardStopClient(supervised, role="planner", task=task)
+        with pytest.raises(MetadataProviderWorkerTimeout) as caught:
+            wrapped.complete([LLMMessage(role="user", content="synthetic metadata")])
+        assert calls == [1]
+        rows = book.snapshot()["tasks"][0]["calls"]
+        assert len(rows) == 1 and rows[0]["state"] == "failed_usage_unknown"
+        assert slots.get(rows[0]["attempt_id"]) is not None
+        assert _pipeline_failure_category(caught.value) == "timeout"
+        assert transient_provider_cause(caught.value) is None
+        diagnostic = _record_pipeline_failure(wrapper_dir=tmp_path, study={"id": "synthetic"}, provider={},
+            exc=caught.value, code="research_pipeline_execution_failed", execution_retry_id=None)
+        recorded = json.loads((tmp_path / diagnostic).read_text())
+        assert recorded["failure_type"] == "timeout"
+        assert recorded["exception_types"] == ["MetadataProviderWorkerTimeout"]
+        receipt = read_host_execution_receipt(tmp_path / ".metadata-provider-execution" / rows[0]["attempt_id"])
+        assert receipt["state"] == "quiesced" and receipt["reason"] == "timeout"
+    finally:
+        release.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("output", [b"", b"{", b"[]", b"\xff"])
+def test_bad_worker_ipc_is_not_reported_as_model_output_parse_error(output):
+    from easyicu.webserver.metadata_provider_worker import _decode_worker_response, MetadataProviderWorkerResponseError
+    from easyicu.research_agent.providers.structured_retry import safe_provider_error_category
+    from easyicu.webserver.provider_job_recovery import transient_provider_cause
+
+    with pytest.raises(MetadataProviderWorkerResponseError) as caught:
+        _decode_worker_response(output)
+    assert safe_provider_error_category(caught.value) == "error"
+    assert transient_provider_cause(caught.value) is None
+
+
 @pytest.mark.parametrize("first_status", [200, 500])
 def test_budgeted_metadata_client_uses_durable_slots(tmp_path, monkeypatch, first_status):
     import easyicu.research_agent.providers.llm  # noqa: F401
