@@ -8,6 +8,7 @@ calls, repair orchestration, and scientific design remain outside this layer.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -2164,9 +2165,9 @@ class TypedBindingResolver:
 
     The caller retains the Planner-owned plan and passes its current revision to
     each resolution. This component owns no scientific choice, provider call,
-    checkpoint mutation, or evidence promotion. The shared record lock preserves
-    the execute loop's original per-input snapshot semantics under parallel
-    auxiliary steps.
+    checkpoint mutation, or evidence promotion. Each call uses one checkpoint
+    and evidence index view for all requested names. This alone does not make
+    workers or their run directory safe for parallel execution.
     """
 
     evidence_store: Any
@@ -2178,7 +2179,7 @@ class TypedBindingResolver:
 
     def _records_snapshot(self) -> List[Mapping[str, Any]]:
         with self.records_lock:
-            return list(self.per_step_records)
+            return copy.deepcopy(list(self.per_step_records))
 
     def resolve_names(
         self,
@@ -2197,6 +2198,9 @@ class TypedBindingResolver:
         ):
             raise ValueError("unpublished evidence requires its current step owner and attempt evidence IDs")
         attempt_ids = set(unpublished_evidence_ids or ())
+        records_snapshot = self._records_snapshot()
+        read_view = getattr(self.evidence_store, "read_view", None)
+        evidence_view = read_view() if callable(read_view) else self.evidence_store
         refs: List[EvidenceRef] = []
         typed_evidence_ids: List[str] = []
         typed_bindings: Dict[str, Dict[str, Any]] = {}
@@ -2205,8 +2209,7 @@ class TypedBindingResolver:
         for name in names:
             value = str(name)
             if _typed_input_product(value) is not None:
-                records_snapshot = self._records_snapshot()
-                evidence_snapshot = self.evidence_store.records()
+                evidence_snapshot = evidence_view.records()
                 ref, failure = _resolve_typed_input_evidence(
                     input_name=value,
                     plan=plan,
@@ -2276,7 +2279,7 @@ class TypedBindingResolver:
                             typed_evidence_ids.append(projected_evidence_id)
                 continue
 
-            direct_record = self.evidence_store.get(value)
+            direct_record = evidence_view.get(value)
             if (
                 allow_unpublished_direct_ids
                 and direct_record is not None
@@ -2295,9 +2298,9 @@ class TypedBindingResolver:
                 ) else None
             else:
                 record = _current_verified_evidence_record(
-                    self.evidence_store,
+                    evidence_view,
                     value,
-                    self._records_snapshot(),
+                    records_snapshot,
                 )
             if record is not None and record.evidence_id not in seen:
                 refs.append(
