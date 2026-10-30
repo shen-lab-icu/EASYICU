@@ -619,9 +619,10 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
             with AnchoredDirectory.open(run_dir) as directory:
                 latest = RawPreparationCheckpoint.model_validate_json(directory.read_bytes(
                     "raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
-                if latest.checkpoint_sha256 != checkpoint.checkpoint_sha256:
+                if latest.checkpoint_sha256 == checkpoint.checkpoint_sha256:
+                    directory.replace_bytes("raw_preparation_checkpoint.json", decided.model_dump_json().encode())
+                elif latest.checkpoint_sha256 != decided.checkpoint_sha256:
                     raise ValueError("raw_preparation_pending_stale")
-                directory.replace_bytes("raw_preparation_checkpoint.json", decided.model_dump_json().encode())
                 directory.assert_still_selected()
         except Exception:
             def failed(_job):
