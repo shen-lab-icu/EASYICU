@@ -29,6 +29,14 @@ _NEGATION = re.compile(
     re.IGNORECASE,
 )
 _PERCENT_BEFORE = re.compile(r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*%\s*$")
+_JOINED_PERCENT_BEFORE = re.compile(
+    r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*%\s*(?:、|和|及|与|and)\s*"
+    r"(\d{1,2}(?:\.\d+)?)\s*%\s*$", re.IGNORECASE,
+)
+_PERCENT_JOINER_BEFORE = re.compile(
+    r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*%\s*(?:、|和|及|与|and)\s*$",
+    re.IGNORECASE,
+)
 _PERCENT_AFTER = re.compile(
     r"^\s*(?:(?:of|at|to|改为|设为|为)\s*)?[(（]?\s*(\d{1,2}(?:\.\d+)?)\s*%",
     re.IGNORECASE,
@@ -84,23 +92,43 @@ def requested_uncertainty(*texts: str) -> UncertaintyRequirement:
     levels: set[float] = set()
     for text in texts:
         normalized = unicodedata.normalize("NFKC", str(text or ""))
+        # Separate user messages can amend a previously stated level, while
+        # two levels named in the same message are both requirements.
+        stated_levels: set[float] = set()
+        saw_level = False
         for match in _INTERVAL.finditer(normalized):
             before = normalized[max(0, match.start() - 35):match.start()]
             after = normalized[match.end():match.end() + 45]
             # Ignore an adjacent level when testing the negation itself.
-            negation_prefix = re.sub(r"\d{1,2}(?:\.\d+)?\s*%\s*$", "", before)
+            joined = _JOINED_PERCENT_BEFORE.search(before)
+            embedded = re.match(r"(\d{1,2}(?:\.\d+)?)\s*%", match.group())
+            prefix = _PERCENT_JOINER_BEFORE.search(before) if embedded else None
+            if joined or prefix:
+                negation_prefix = before[:(joined or prefix).start()]
+            else:
+                negation_prefix = re.sub(r"\d{1,2}(?:\.\d+)?\s*%\s*$", "", before)
             if _NEGATION.search(negation_prefix) or _NEGATIVE_SUFFIX.match(after):
                 requested = False
                 levels.clear()
+                stated_levels.clear()
+                saw_level = False
                 continue
             requested = True
-            value = re.match(r"(\d{1,2}(?:\.\d+)?)\s*%", match.group()) or _PERCENT_BEFORE.search(before) or _PERCENT_AFTER.search(
-                after
-            )
-            if value is not None:
-                level = float(value.group(1)) / 100.0
+            value = embedded or _PERCENT_BEFORE.search(before) or _PERCENT_AFTER.search(after)
+            if joined:
+                values = joined.groups()
+            elif prefix and value:
+                values = (prefix.group(1), value.group(1))
+            else:
+                values = (value.group(1),) if value else ()
+            for raw_level in values:
+                level = float(raw_level) / 100.0
                 if 0 < level < 1:
-                    levels = {level}
+                    if not saw_level:
+                        levels.clear()
+                        saw_level = True
+                    stated_levels.add(level)
+                    levels = set(stated_levels)
     return UncertaintyRequirement(requested=requested, confidence_levels=tuple(sorted(levels)))
 
 

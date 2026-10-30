@@ -97,6 +97,48 @@ def test_later_explicit_negative_mention_overrides_a_positive_mention():
     assert not value.requested
 
 
+def test_two_levels_in_one_question_are_not_silently_replaced():
+    question = "请给出 90% 置信区间和 95% 置信区间"
+    assert requested_uncertainty(question).confidence_levels == (0.9, 0.95)
+    plan = _plan()
+    steps = [
+        step.model_copy(update={"exposure_outcome_distribution_spec":
+            step.exposure_outcome_distribution_spec.model_copy(update={
+                "interval_method": "wilson", "confidence_level": 0.95,
+            })}) if step.exposure_outcome_distribution_spec is not None else step
+        for step in plan.steps
+    ]
+    review = _review(question, plan=plan.model_copy(update={"steps": steps}))
+    assert not review.approval_allowed
+    assert any(f.code == "QUESTION_DESCRIPTIVE_UNCERTAINTY_NOT_MET" for f in review.findings)
+    assert review.facts["requested_descriptive_uncertainty"]["requested_confidence_levels"] == [0.9, 0.95]
+
+
+def test_later_message_can_replace_multiple_levels():
+    value = requested_uncertainty(
+        "报告 90% 置信区间和 95% 置信区间", "改为 99% 置信区间",
+    )
+    assert value.confidence_levels == (0.99,)
+
+
+@pytest.mark.parametrize("question", [
+    "请报告 90% 和 95% 置信区间",
+    "Report 90% and 95% confidence intervals",
+    "Report 90% and 95% CI",
+])
+def test_joined_levels_are_both_retained(question):
+    assert requested_uncertainty(question).confidence_levels == (0.9, 0.95)
+
+
+@pytest.mark.parametrize("question", [
+    "不需要 90% 和 95% 置信区间",
+    "Do not report 90% and 95% confidence intervals",
+    "Do not report 90% and 95% CI",
+])
+def test_negated_joined_levels_are_not_requested(question):
+    assert not requested_uncertainty(question).requested
+
+
 def test_only_the_actual_amendment_not_a_historical_plan_is_a_user_request():
     contract = _contract("请只修正文献引用", reference="请给出 95% 置信区间")
     assert amendment_user_messages(contract) == ("请只修正文献引用",)
