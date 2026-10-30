@@ -12,7 +12,7 @@
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
       loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
-      setShell, openStudySetupInConversation, createSession, startEntry,
+      setShell, openStudySetupInConversation, createSession, startEntry, loadWorkflow,
       previewApprovedPlanDataPackage, confirmWorkflowAction,
       retryFailedExecution,
       rejectWorkflowAction, editWorkflow, confirmCohortEligibility,
@@ -21,7 +21,7 @@
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
       HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL, HELP, MESSAGE_QUEUE, QUICK_ANSWERS, MULTI_DATABASE,
-      ACCESS, turnGrants,
+      ACCESS, turnGrants, authorizeCandidatePlan,
     } = options;
     const slash = window.EasyICU.guidedPi.optional('slashMenu')?.create({ state, projectId, render });
 
@@ -337,6 +337,7 @@
         })) return;
         if (ACCESS && ACCESS.handleClick(event, {
           busy: () => Boolean(state.busy || state.childJobId),
+          ...authorizeCandidatePlan,
           setMode: mode => { state.accessMode = mode; },
           grants: turnGrants,
           send: (text, grants) => sendText(text, grants, undefined, true, 'host_prompt'),
@@ -462,6 +463,65 @@
         );
         return;
       }
+        const preparationReview = event.target.closest('[data-gpi-preparation-review]');
+        if (preparationReview) {
+          const decision = String(preparationReview.dataset.gpiPreparationReview || '');
+          const session = state.session || {};
+          const expectedProject = projectId();
+          const expectedSession = String(session.session_id || '');
+          const studyId = String((session.binding || {}).study_context_id || '');
+          const offer = ((state.workflow || {}).host_decisions || {}).raw_preparation_review;
+          if (!['approved', 'rejected'].includes(decision) || !expectedProject || !expectedSession || !studyId
+            || !offer || state.workflow.raw_preparation_review_loading || !api().reviewRawPreparation) return;
+          state.workflow.raw_preparation_review_loading = true;
+          render();
+          void (async () => {
+            try {
+              await api().reviewRawPreparation({study_context_id: studyId, decision,
+                host_action: {session_id: expectedSession, project_id: expectedProject,
+                  action_code: 'review_raw_preparation', decision: offer}});
+              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession && loadWorkflow) await loadWorkflow();
+            } catch (_) {
+              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession) {
+                if (state.workflow) state.workflow.raw_preparation_review_loading = false;
+                state.error = tr('The preparation review could not be recorded. Refresh and review the current scope.', '准备范围审阅未能记录，请刷新并重新核对当前范围。');
+              }
+            }
+            render();
+          })();
+          return;
+        }
+        const preparationPreview = event.target.closest('[data-gpi-preparation-preview]');
+        if (preparationPreview) {
+          const session = state.session || {};
+          const binding = session.binding || {};
+          const runId = String(preparationPreview.dataset.gpiPreparationPreview || '');
+          const expectedProject = projectId();
+          const expectedSession = String(session.session_id || '');
+          const studyId = String(binding.study_context_id || '');
+          if (!runId || !expectedProject || !expectedSession || !studyId || !state.workflow
+            || runId !== String(state.workflow.raw_preparation_candidate_run_id || '')
+            || !api().previewRawPreparation) return;
+          state.workflow.raw_preparation_candidate_result = { status: 'loading' };
+          render();
+          void (async () => {
+            try {
+              const result = await api().previewRawPreparation({run_id: runId, study_context_id: studyId,
+                session_id: expectedSession, project_id: expectedProject});
+              if (projectId() !== expectedProject || String((state.session || {}).session_id || '') !== expectedSession) return;
+              if (result && result.status === 'pending' && loadWorkflow) await loadWorkflow();
+              else if (state.workflow) state.workflow.raw_preparation_candidate_result = {
+                status: 'blocked', blocker_codes: Array.isArray(result && result.blocker_codes) ? result.blocker_codes : [],
+              };
+            } catch (_) {
+              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession && state.workflow) {
+                state.workflow.raw_preparation_candidate_result = { status: 'error' };
+              }
+            }
+            render();
+          })();
+          return;
+        }
         const previewPlanData = event.target.closest('[data-gpi-confirm-preview-data]');
         if (previewPlanData) { previewApprovedPlanDataPackage(previewPlanData); return; }
         const previewAnalysisData = event.target.closest('[data-gpi-run-outcome-data]');

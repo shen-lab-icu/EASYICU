@@ -704,6 +704,51 @@
             '请先打开下方审阅详情，核对未解决的要求。重复生成计划不能补足数据或独立证据，分析保持暂停。',
           ))}</p>` : ''}</div>`
         : '';
+      const preparation = (host.workflow() || {}).raw_preparation;
+      const preparationOffer = ((host.workflow() || {}).host_decisions || {}).raw_preparation_review;
+      const preparationReviewBusy = Boolean((host.workflow() || {}).raw_preparation_review_loading);
+      const preparationFiles = preparation && preparation.scope && preparation.scope.dependencies
+        && Array.isArray(preparation.scope.dependencies.files) ? preparation.scope.dependencies.files : [];
+      const preparationRows = preparationFiles.map(file => `<li>${esc(String(file.table || ''))} · ${esc(String(file.path || ''))} · ${esc((Array.isArray(file.columns) ? file.columns : []).join(', '))} · ${esc(String(file.window || ''))}</li>`).join('');
+      const preparationRun = String((host.workflow() || {}).raw_preparation_candidate_run_id || '');
+      const preparationAttempt = (host.workflow() || {}).raw_preparation_candidate_result;
+      const preparationBlockers = Array.isArray(preparationAttempt && preparationAttempt.blocker_codes) ? preparationAttempt.blocker_codes : [];
+      const preparationReasons = {
+        dependency_cohort_inputs_unknown: tr('The tables used to select patients have not been fully identified.', '尚未完整识别筛选患者所需的来源表。'),
+        dependency_cohort_filters_unknown: tr('The inputs used by cohort filters have not been fully identified.', '尚未完整识别队列筛选所需的输入。'),
+        dependency_partition_roster_unknown: tr('The complete set of source partitions is not known.', '尚未确认全部来源分区文件。'),
+        dependency_schema_unavailable: tr('A declared source file or its schema could not be read.', '无法读取声明的来源文件或其字段结构。'),
+        dependency_columns_missing: tr('A declared source file lacks required fields.', '声明的来源文件缺少所需字段。'),
+        dependency_columns_unknown: tr('The required fields for a source table are not known.', '尚未确认来源表需要哪些字段。'),
+        dependency_source_table_unknown: tr('A concept does not identify a configured source table.', '有概念尚未对应到配置中的来源表。'),
+        dependency_partition_assigned_twice: tr('A source partition was declared more than once.', '同一来源分区被重复声明，需要先核对。'),
+        dependency_source_callback_unknown: tr('A source callback may read additional inputs.', '来源回调可能还需要其他输入。'),
+        dependency_derivation_callback_unknown: tr('A derived feature may read additional inputs.', '派生特征可能还需要其他输入。'),
+        dependency_concept_unrecorded: tr('A requested concept has no recorded source mapping.', '有请求的概念缺少已记录的来源映射。'),
+        dependency_context_concepts_unrecorded: tr('The source mapping does not cover every variable in the research context.', '来源映射尚未覆盖研究上下文中的全部变量。'),
+        dependency_reviewed_window_missing: tr('The reviewed observation window is missing.', '科学审阅中缺少可核对的观察时间窗口。'),
+        dependency_reviewed_window_too_large: tr('The reviewed observation window cannot yet be represented for this check.', '这次审阅的时间窗口暂无法用于准备范围检查。'),
+      };
+      const preparationReasonRows = [...new Set(preparationBlockers.map(code => Object.prototype.hasOwnProperty.call(preparationReasons, code) ? preparationReasons[code] : '').filter(Boolean))]
+        .map(reason => `<li>${esc(reason)}</li>`).join('');
+      const preparationBlockedText = preparationAttempt && preparationAttempt.status === 'error'
+        ? tr('The check could not complete. Please retry.', '检查未能完成，请重试。')
+        : preparationBlockers.includes('raw_preparation_source_unavailable') || preparationBlockers.includes('dependency_source_provenance_mismatch')
+          ? tr('The registered source could not be confirmed for this review.', '无法确认这次审阅绑定的登记数据源。')
+          : preparationBlockers.includes('dependency_scientific_review_missing') || preparationBlockers.includes('dependency_scientific_review_mismatch')
+            ? tr('The current plan and its scientific review no longer match.', '当前计划与科学审阅记录不一致。')
+            : tr('The complete source files or their dependencies could not be verified yet. Preparation remains unavailable.', '尚无法核验完整来源文件或读取依赖，暂时不能开始准备。');
+      const pendingPreparation = preparation && preparation.status === 'awaiting_consumption_closure'
+        ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationOffer && preparationRows ? tr(
+          'Reviewing records this preparation scope only; analysis still requires separate approval.',
+          '审阅只记录这份数据准备范围，研究分析仍需另行批准。',
+        ) : tr(
+          'This proposal still needs its actual data reads verified. Preparation is not available yet; no data is read by viewing this proposal.',
+          '这份提议还需要核验实际读取的数据范围，暂时不能开始准备；查看提议不会读取数据。',
+        ))}</small>${preparationOffer && preparationRows ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Approve preparation scope', '批准准备范围'))}</button><button type="button" class="btn sm" data-gpi-preparation-review="rejected"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Reject preparation scope', '拒绝准备范围'))}</button>` : ''}</details>`
+        : preparationRun ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('Data preparation', '数据准备'))}</strong><small>${esc(preparationAttempt && ['blocked', 'error'].includes(preparationAttempt.status)
+          ? preparationBlockedText
+          : tr('Check the proposed source files and fields without reading patient rows.', '检查拟用的来源文件和字段，不读取患者数据。'))}</small>${preparationReasonRows ? `<ul>${preparationReasonRows}</ul>` : ''}<button type="button" class="btn sm" data-gpi-preparation-preview="${esc(preparationRun)}"${preparationAttempt && preparationAttempt.status === 'loading' ? ' disabled' : ''}>${esc(preparationAttempt && preparationAttempt.status === 'loading' ? tr('Checking…', '正在检查…') : tr('Check preparation scope', '检查准备范围'))}</button></div>` : '';
       const trialOwner = confirmation.trialCard ? window.EasyICU.guidedPi.optional('targetTrial') : null;
       const trialBody = trialOwner ? trialOwner.bodyHtml(host.workflow(), { tr, esc }) : '';
       const studyReadingsOwner = window.EasyICU.guidedPi.optional('studyReadings');
@@ -787,7 +832,7 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}

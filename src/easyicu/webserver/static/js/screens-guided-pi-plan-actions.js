@@ -351,6 +351,10 @@
             : 'generate_plan',
           'plan_transition',
         );
+        if (options.requireConfirmedDecision
+          && (!decision || JSON.stringify(decision.decision) !== options.confirmedDecision)) {
+          throw new Error('plan_configuration_changed_after_confirmation');
+        }
         const payload = await api.startAgentRun({
           path: sourcePath,
           study_id: studyContextId,

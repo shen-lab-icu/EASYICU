@@ -548,6 +548,12 @@
   function loadPiCopilotProjectWorkflow(projectId) {
     return getJSON('/api/copilot/pi/projects/' + encodeURIComponent(projectId || '') + '/workflow');
   }
+  function previewRawPreparation(body) {
+    return postJSON('/api/jobs/raw-preparation-candidate', body || {});
+  }
+  function reviewRawPreparation(body) {
+    return postJSON('/api/jobs/raw-preparation-review', body || {});
+  }
   function loadPiCopilotLiteratureSource(pmid) {
     return getJSON('/api/copilot/pi/literature/sources/' + encodeURIComponent(pmid || ''));
   }
@@ -1050,6 +1056,8 @@
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;
+  window.EU_API.previewRawPreparation = previewRawPreparation;
+  window.EU_API.reviewRawPreparation = reviewRawPreparation;
   window.EU_API.loadPiCopilotLiteratureSource = loadPiCopilotLiteratureSource;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
