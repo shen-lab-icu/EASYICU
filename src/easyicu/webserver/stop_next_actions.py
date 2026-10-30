@@ -153,6 +153,9 @@ _EDIT_CODES = frozenset(
         "accepted_baseline_source_unresolved",
         "bound_literature_schema_invalid",
         "candidate_plan_materialization_authority_invalid",
+        # The reviewed time origin no longer matches its source. A newly
+        # reviewed candidate is required; retry cannot repair the binding.
+        "candidate_plan_time_origin_binding_invalid",
         "candidate_plan_seed_too_large",
         "coverage_gate_failed",
         "human_plan_review_rejected",
@@ -369,6 +372,10 @@ STOP_POLICIES = {
     # An occupied request may still be using the remote service; neither a
     # plan edit nor retry establishes that its capacity is available.
     "research_pipeline_metadata_provider_capacity_unavailable": "none",
+    # These are pending researcher decisions, not permission to generate a
+    # replacement plan or silently keep the study's previous outcome.
+    "case_duration_plan_approval_required": "none",
+    "study_primary_outcome_confirmation_required": "none",
     **dict.fromkeys(_EDIT_CODES, "edit_plan"),
     **dict.fromkeys(_RETRY_CODES, "retry"),
     **dict.fromkeys(_REPAIR_CODES, "repair"),
