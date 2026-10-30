@@ -62,7 +62,7 @@ def test_changed_scope_refuses_before_review_or_data(tmp_path, monkeypatch):
 
 
 def _approved(tmp_path, monkeypatch):
-    from easyicu.webserver import jobs, agent_pipeline_runs
+    from easyicu.webserver import jobs, agent_pipeline_runs, study_contexts
     from easyicu.webserver.pi_copilot import service
 
     monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "host"))
@@ -86,8 +86,43 @@ def _approved(tmp_path, monkeypatch):
     checkpoint = record_host_review(host_action=action, pending=pending, decision="approved",
         study_context_id=binding.study_context_id, job_id="job", run_id=binding.run_id,
         scientific_configuration_sha256="2" * 64)
+    monkeypatch.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda *_: (
+        SimpleNamespace(run_dir=str(tmp_path), requests=[pending.request]), {"id": binding.study_context_id}))
+    monkeypatch.setattr(study_contexts, "get_context", lambda _: {"id": binding.study_context_id})
+    monkeypatch.setattr(study_contexts, "scientific_configuration_sha256", lambda _: "2" * 64)
     monkeypatch.setattr(owner, "_host_inputs", lambda **_: (scope, tmp_path))
     return scope, checkpoint, binding
+
+
+@pytest.mark.parametrize("changed", ["study", "session", "plan", "run_directory"])
+def test_consumed_grant_refuses_changed_owner_before_patient_read(tmp_path, monkeypatch, changed):
+    from easyicu.webserver import agent_pipeline_runs, study_contexts
+    from easyicu.webserver.pi_copilot import service
+
+    scope, checkpoint, binding = _approved(tmp_path, monkeypatch)
+    if changed == "study":
+        monkeypatch.setattr(study_contexts, "scientific_configuration_sha256", lambda _: "0" * 64)
+    elif changed == "session":
+        def unavailable(*args, **kwargs):
+            raise ValueError("session_changed")
+        monkeypatch.setattr(service, "get_pi_copilot_service", lambda: SimpleNamespace(
+            host_action_session=unavailable, host_action_child_job=lambda *a, **k: {"child_job_id": "job"}))
+    elif changed == "plan":
+        other = AnalysisPlan(research_question="Other study", steps=[AnalysisStep(step_id="two", intent="Describe")])
+        authority = PlanReviewAuthority.create(plan=other)
+        monkeypatch.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda *_: (
+            SimpleNamespace(run_dir=str(tmp_path), requests=[SimpleNamespace(
+                payload={"plan_review_authority": authority.model_dump(mode="json")})]), {"id": "study"}))
+    else:
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        monkeypatch.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda *_: (
+            SimpleNamespace(run_dir=str(other_dir), requests=[checkpoint.request]), {"id": "study"}))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("patient rows accessed after owner changed")
+    monkeypatch.setattr(owner, "derive_from_verified_eicu_demo", forbidden)
+    with pytest.raises(ValueError):
+        owner.prepare_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint, binding=binding, scope=scope)
 
 
 def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_path, monkeypatch):
@@ -117,6 +152,30 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
     resolved = owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
                                                                binding=binding, scope=scope)
     assert resolved == coordinate
+    from easyicu.webserver import agent_pipeline_runs, study_contexts
+    from easyicu.webserver.pi_copilot import service
+    with monkeypatch.context() as changed:
+        changed.setattr(study_contexts, "scientific_configuration_sha256", lambda _: "0" * 64)
+        with pytest.raises(ValueError, match="configuration_changed"):
+            owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
+                                                             binding=binding, scope=scope)
+    with monkeypatch.context() as changed:
+        def unavailable(*args, **kwargs):
+            raise ValueError("session_changed")
+        changed.setattr(service, "get_pi_copilot_service", lambda: SimpleNamespace(
+            host_action_session=unavailable, host_action_child_job=lambda *a, **k: {"child_job_id": "job"}))
+        with pytest.raises(ValueError, match="session_changed"):
+            owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
+                                                             binding=binding, scope=scope)
+    with monkeypatch.context() as changed:
+        other = AnalysisPlan(research_question="Other study", steps=[AnalysisStep(step_id="two", intent="Describe")])
+        authority = PlanReviewAuthority.create(plan=other)
+        changed.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda *_: (
+            SimpleNamespace(run_dir=str(tmp_path), requests=[SimpleNamespace(
+                payload={"plan_review_authority": authority.model_dump(mode="json")})]), {"id": "study"}))
+        with pytest.raises(ValueError, match="plan_owner_changed"):
+            owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
+                                                             binding=binding, scope=scope)
     flow = owner.resolve_private_first_observed_source_flow(run_dir=tmp_path, checkpoint=checkpoint,
                                                             binding=binding, scope=scope)
     assert flow == {"schema_version": "easyicu.first-observed-private-source-flow/1",

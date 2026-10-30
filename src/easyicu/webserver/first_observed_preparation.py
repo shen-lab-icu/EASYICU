@@ -211,6 +211,27 @@ def _private_root(*, create: bool) -> Path:
     return root
 
 
+def _verify_consumed_owner(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
+                           binding: RawPreparationHostBinding, scope: Mapping[str, Any]) -> None:
+    """Keep a consumed preparation decision attached to its live study owner."""
+    receipt = verify_consumed_host_review(checkpoint=checkpoint, binding=binding, scope=scope)
+    # These are host-layer imports, deliberately kept out of the research
+    # materializer: a constructible coordinate is never a preparation grant.
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.raw_preparation_durable import _owner
+
+    root = _owner(binding, receipt, str(receipt.get("job_id") or ""))
+    if Path(root).absolute() != Path(run_dir).absolute():
+        raise ValueError("first_observed_preparation_run_owner_changed")
+    pending, _ = agent_pipeline_runs.raw_preparation_review_owner(binding.run_id, binding.study_context_id)
+    expected = PlanReviewAuthority.model_validate(checkpoint.request.payload.get("plan_review_authority"))
+    authorities = [PlanReviewAuthority.model_validate(request.payload["plan_review_authority"])
+                   for request in pending.requests
+                   if isinstance(request.payload.get("plan_review_authority"), Mapping)]
+    if not authorities or any(authority != expected for authority in authorities):
+        raise ValueError("first_observed_preparation_plan_owner_changed")
+
+
 def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
                                       binding: RawPreparationHostBinding,
                                       scope: Mapping[str, Any]) -> FirstObservedIcuCoordinate:
@@ -224,6 +245,7 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
         registered_identity_sha256=scope["source_identity_sha256"], plan_sha256=scope["plan_sha256"],
         context_sha256=scope["context_sha256"], scientific_review_sha256=scope["scientific_review_sha256"])
     consume_host_review(checkpoint=checkpoint, scope=scope, **binding.model_dump(mode="python"))
+    _verify_consumed_owner(run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
     candidate = derive_from_verified_eicu_demo(export)
     proof = candidate.receipt.get("source_binding", {})
     completeness = proof.get("complete_patient_source", {})
@@ -249,7 +271,7 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
     current_scope, current_export = _host_inputs(run_dir=run_dir, request=checkpoint.request)
     if current_scope != scope or current_export != export:
         raise ValueError("first_observed_preparation_scope_changed_before_publication")
-    verify_consumed_host_review(checkpoint=checkpoint, binding=binding, scope=scope)
+    _verify_consumed_owner(run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
     document = canonical_json({"body": body, "signature": _signature(body)}).encode()
     root = _private_root(create=True)
     with AnchoredDirectory.open(root) as directory:
@@ -274,7 +296,7 @@ def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparatio
     scope = dict(scope)
     if scope != expected or checkpoint.request.payload.get(_SCOPE_KEY) != scope:
         raise ValueError("first_observed_preparation_scope_mismatch")
-    verify_consumed_host_review(checkpoint=checkpoint, binding=binding, scope=scope)
+    _verify_consumed_owner(run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
     root = _private_root(create=False)
     with AnchoredDirectory.open(root) as directory:
         document = json.loads(directory.read_bytes(binding.nonce + ".json", max_bytes=64 * 1024))
