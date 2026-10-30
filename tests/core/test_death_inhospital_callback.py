@@ -115,6 +115,23 @@ def test_sic_death_without_icu_offset_fails_closed():
         )
 
 
+@pytest.mark.parametrize("origin", [None, float("nan"), float("inf"), float("-inf"), -1])
+def test_sic_death_with_unusable_care_transfer_origin_fails_closed(origin):
+    frame = pd.DataFrame({"CaseID": [1, 2], "death": [7200, None],
+                          "HospitalDischargeType": [2028, 2026], "ICUOffset": [origin, 0]})
+    with pytest.raises(ValueError, match="ICUOffset"):
+        _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
+
+
+def test_sic_death_nonfinite_death_offset_stays_untimed():
+    frame = pd.DataFrame({"CaseID": [1, 2], "death": [float("inf"), 7200],
+                          "HospitalDischargeType": [2028, 2028], "ICUOffset": [3600, 3600]})
+    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
+    assert bool(out.loc[0, "death"])
+    assert pd.isna(out.loc[0, "charttime"])
+    assert out.loc[1, "charttime"] == 1.0
+
+
 def test_sic_death_loads_icu_offset_from_cases_when_absent():
     frame = pd.DataFrame(
         {

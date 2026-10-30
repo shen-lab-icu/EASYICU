@@ -43,14 +43,19 @@ def bind_execution_cohort_authority(
     analysis_path: Path,
     plan: Any,
     context: Any,
+    approved_case_duration_binding: Any = None,
 ) -> ExecutionCohortAuthority:
     """Verify and select the exact cohort bytes available to step execution."""
 
     universe_path = Path(universe_path)
     analysis_path = Path(analysis_path)
     universe = load_verified_materialized_cohort_authority(universe_path)
+    if approved_case_duration_binding is not None and universe is None:
+        raise MaterializedMetadataError("approved landmark universe is missing its sealed authority")
     analysis = None
     selected_path = universe_path
+    if approved_case_duration_binding is not None and not analysis_path.exists():
+        raise MaterializedMetadataError("approved landmark cohort is missing")
     if analysis_path.exists():
         analysis = load_verified_materialized_cohort_authority(analysis_path)
         if universe is not None:
@@ -61,6 +66,15 @@ def bind_execution_cohort_authority(
             if analysis.authority.parent_authority_sha256 != universe.reference.sha256:
                 raise MaterializedMetadataError(
                     "typed analysis cohort does not descend from the selected universe"
+                )
+            if approved_case_duration_binding is not None:
+                _verify_case_duration_landmark_cohort(
+                    universe_path=universe_path, universe=universe, analysis=analysis,
+                    plan=plan, context=context, approved=approved_case_duration_binding,
+                )
+                return ExecutionCohortAuthority(
+                    selected_path=analysis_path, universe_path=universe_path,
+                    universe_authority=universe, analysis_authority=analysis,
                 )
             expected = analysis_cohort_authority_coordinates(
                 plan=plan,
@@ -119,6 +133,46 @@ def bind_execution_cohort_authority(
         universe_authority=universe,
         analysis_authority=analysis,
     )
+
+
+def _verify_case_duration_landmark_cohort(*, universe_path, universe, analysis, plan, context, approved):
+    from easyicu.databases.research_approval import ApprovedCaseDurationBinding
+    from easyicu.databases.research_substitutions import case_duration_selection, time_origin_selection
+    from easyicu.research_agent.authority.case_duration_landmark import apply_case_duration_landmark
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.intake.materialized_metadata import _ordered_positions_sha256
+
+    if not isinstance(approved, ApprovedCaseDurationBinding):
+        raise MaterializedMetadataError("landmark cohort requires the approved binding")
+    authority, axis = approved.authority, approved.source_axis
+    authority.validate_plan(plan)
+    from easyicu.research_agent.cohort.case_duration_exposure import require_case_duration_exposure_materialization
+    require_case_duration_exposure_materialization(universe, authority)
+    authority.validate_source_selections(time_origin_selection(context), case_duration_selection(context))
+    axis_record = {"source_identity_sha256": axis.source_identity_sha256,
+                   "export_authority_sha256": axis.export_authority_sha256,
+                   "manifest_sha256": axis.manifest_sha256, "selected_origin": axis.selected_origin}
+    provenance = analysis.authority.semantic_provenance
+    implementation_paths = (
+        Path(__file__).resolve().parents[1] / "cohort" / "schema.py",
+        Path(__file__).resolve().parents[1] / "cohort" / "case_duration_exposure.py",
+        Path(__file__).resolve().parents[1] / "authority" / "case_duration_landmark.py",
+        Path(__file__).resolve().parents[1] / "authority" / "care_unit_landmark.py",
+    )
+    if (universe.authority.semantic_provenance.get("source_time_axis") != axis_record
+            or provenance.get("source_time_axis") != axis_record
+            or provenance.get("plan_sha256") != canonical_sha256(plan.model_dump(mode="json"))
+            or provenance.get("landmark_contract_sha256") != authority.execution_contract_sha256
+            or analysis.authority.producer != "analysis_cohort_ordered_subset"
+            or analysis.authority.producer_implementation_sha256 != implementation_bundle_sha256(implementation_paths)):
+        raise MaterializedMetadataError("landmark cohort binding differs from the signed plan")
+    primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
+    frame = read_verified_materialized_cohort_table(universe_path, verified=universe).to_pandas().reset_index(drop=True)
+    selected, counts = apply_case_duration_landmark(frame, authority=authority, source_axis=axis, primary_step=primary)
+    parameters = analysis.authority.producer_parameters
+    if (parameters.get("selected_row_positions_sha256") != _ordered_positions_sha256(tuple(int(i) for i in selected.index))
+            or dict(provenance.get("counts") or {}) != counts):
+        raise MaterializedMetadataError("landmark cohort rows differ from the approved risk rule")
 
 
 __all__ = [

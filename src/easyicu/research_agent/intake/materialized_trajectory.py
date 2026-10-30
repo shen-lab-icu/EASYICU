@@ -254,6 +254,7 @@ class TrajectoryWindow:
     inclusive: bool = True
 
     def __post_init__(self) -> None:
+        from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN
         object.__setattr__(
             self, "start_hours", _finite(self.start_hours, label="window start")
         )
@@ -263,9 +264,9 @@ class TrajectoryWindow:
         if self.start_hours > self.end_hours:
             raise MaterializedTrajectoryError("window start must not exceed end")
         if (
-            self.origin != "icu_admission"
+            self.origin not in {"icu_admission", SIC_CARE_UNIT_ORIGIN}
             or self.unit != "h"
-            or self.inclusive is not True
+            or self.inclusive is not (self.origin == "icu_admission")
         ):
             raise MaterializedTrajectoryError("unsupported trajectory time window")
 
@@ -417,10 +418,13 @@ class MaterializedTrajectoryAuthority:
                 "trajectory columns do not match the canonical long schema"
             )
         object.__setattr__(self, "trajectory_columns", columns)
+        from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN
+        if self.time_origin not in {"icu_admission", SIC_CARE_UNIT_ORIGIN}:
+            raise MaterializedTrajectoryError("unsupported trajectory time origin")
         expected_roles = {
             "identity_column": "stay_id",
             "time_column": "charttime",
-            "time_origin": "icu_admission",
+            "time_origin": self.time_origin,
             "time_unit": "h",
             "concept_column": "concept",
             "numeric_value_column": "value_num",
@@ -502,6 +506,8 @@ class MaterializedTrajectoryAuthority:
         object.__setattr__(self, "unavailable_concepts", unavailable)
         if self.window is not None and not isinstance(self.window, TrajectoryWindow):
             raise MaterializedTrajectoryError("trajectory window is invalid")
+        if self.window is not None and self.window.origin != self.time_origin:
+            raise MaterializedTrajectoryError("trajectory window origin does not match its coordinate")
         object.__setattr__(
             self,
             "producer",
@@ -513,6 +519,16 @@ class MaterializedTrajectoryAuthority:
         provenance = _canonical_mapping(
             self.semantic_provenance, label="trajectory semantic provenance"
         )
+        if self.time_origin == SIC_CARE_UNIT_ORIGIN:
+            axis = provenance.get("source_time_axis")
+            if (not isinstance(axis, Mapping) or axis.get("selected_origin") != self.time_origin
+                    or axis.get("export_authority_sha256") != self.source_export_authority_sha256):
+                raise MaterializedTrajectoryError("trajectory lacks its bound source time axis")
+            from easyicu.databases.time_origin import SourceTimeAxisBinding
+            try:
+                SourceTimeAxisBinding(**dict(axis))
+            except (TypeError, ValueError) as exc:
+                raise MaterializedTrajectoryError("trajectory source time axis is invalid") from exc
         if canonical_parameters_sha256(parameters) != self.producer_parameters_sha256:
             raise MaterializedTrajectoryError(
                 "trajectory producer parameters digest mismatch"
@@ -1273,6 +1289,7 @@ def _validate_initial_producer_receipts(
     if (
         authority.producer != "cohort_materializer"
         or not receipt_valid
+        or provenance.get("source_time_axis") != universe.authority.semantic_provenance.get("source_time_axis")
         or authority.concept_bindings != expected_bindings
         or authority.producer_parameters != expected_parameters
         or provenance.get("n_rows") != authority.trajectory_rows
@@ -1317,6 +1334,18 @@ def publish_materialized_trajectory_authority(
     )
     if selected_universe is None:
         raise MaterializedTrajectoryError("bound trajectory universe lost authority")
+    from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN
+    axis = semantic_provenance.get("source_time_axis")
+    universe_axis = selected_universe.authority.semantic_provenance.get("source_time_axis")
+    if axis is not None or universe_axis is not None:
+        if (not isinstance(axis, Mapping) or not isinstance(universe_axis, Mapping)
+                or dict(axis) != dict(universe_axis)
+                or axis.get("selected_origin") != SIC_CARE_UNIT_ORIGIN
+                or axis.get("export_authority_sha256") != selected_universe.authority.source_export_authority_sha256):
+            raise MaterializedTrajectoryError("trajectory and universe source time axes do not match")
+        trajectory_origin = SIC_CARE_UNIT_ORIGIN
+    else:
+        trajectory_origin = "icu_admission"
     table = _canonical_frame(frame)
     requested = _canonical_strings(
         tuple(requested_concepts), label="requested trajectory concept"
@@ -1332,7 +1361,8 @@ def publish_materialized_trajectory_authority(
         tuple(unavailable_concepts), label="unavailable trajectory concept"
     )
     trajectory_window = (
-        TrajectoryWindow(start_hours=window[0], end_hours=window[1])
+        TrajectoryWindow(start_hours=window[0], end_hours=window[1], origin=trajectory_origin,
+                         inclusive=trajectory_origin == "icu_admission")
         if window is not None
         else None
     )
@@ -1353,7 +1383,8 @@ def publish_materialized_trajectory_authority(
         )
     if trajectory_window is not None and any(
         float(value) < trajectory_window.start_hours
-        or float(value) > trajectory_window.end_hours
+        or (float(value) > trajectory_window.end_hours if trajectory_window.inclusive
+            else float(value) >= trajectory_window.end_hours)
         for value in table.column("charttime").combine_chunks().to_pylist()
     ):
         raise MaterializedTrajectoryError(
@@ -1416,7 +1447,7 @@ def publish_materialized_trajectory_authority(
                     ).hexdigest(),
                     identity_column="stay_id",
                     time_column="charttime",
-                    time_origin="icu_admission",
+                    time_origin=trajectory_origin,
                     time_unit="h",
                     concept_column="concept",
                     numeric_value_column="value_num",

@@ -24,6 +24,7 @@ from .landmark_continuous_survival_runtime import (
 )
 from .rmst_runtime import RmstRuntimeAuthority
 from .baseline_association_runtime import BaselineAssociationRuntimeAuthority
+from .case_duration_landmark import CaseDurationLandmarkAuthority
 from .target_trial_runtime import TargetTrialRuntimeAuthority
 from .time_varying_runtime import TimeVaryingRuntimeAuthority
 
@@ -3021,6 +3022,7 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
 CurrentCaseScientificRuntimeAuthority = Annotated[
     Union[
         BaselineAssociationRuntimeAuthority,
+        CaseDurationLandmarkAuthority,
         AssociationModelGridRuntimeAuthority,
         LandmarkCategoricalAssociationRuntimeAuthority,
         LandmarkSplineRuntimeAuthority,
@@ -3055,6 +3057,7 @@ def load_current_case_scientific_runtime_authority(
         value,
         (
             BaselineAssociationRuntimeAuthority,
+            CaseDurationLandmarkAuthority,
             AssociationModelGridRuntimeAuthority,
             LandmarkCategoricalAssociationRuntimeAuthority,
             LandmarkSplineRuntimeAuthority,

@@ -387,6 +387,13 @@ def _build_availability_record(
     )
 
 
+def _is_nullable_status_source(concept_name: str, source: ConceptSource) -> bool:
+    """Only source-bound dense statuses retain explicit unknown rows."""
+    return source.callback in DENSE_STATUS_BINDINGS or (
+        concept_name == "death_during_case" and source.callback == "sic_case_landmark_fields"
+    )
+
+
 def _normalize_patient_ids_for_cache(patient_ids: Optional[Iterable[object]]) -> Optional[object]:
     """Normalize patient identifiers for stable cache keys."""
     if patient_ids is None:
@@ -4736,7 +4743,7 @@ class ConceptResolver:
             # 删除无效的NaN
             if concept_name in frame.columns:
                 # 检查是否在merge模式（通过kwargs传递）
-                keep_na_rows = kwargs.get('_keep_na_rows', False) or source.callback in DENSE_STATUS_BINDINGS
+                keep_na_rows = kwargs.get('_keep_na_rows', False) or _is_nullable_status_source(concept_name, source)
                 if not keep_na_rows:
                     _before_dropna = len(frame)
                     # 只在非merge模式下删除NaN（单独加载概念时）
@@ -5464,7 +5471,7 @@ class ConceptResolver:
                         col_dtype = combined[concept_name].dtype
                         if pd.api.types.is_bool_dtype(col_dtype):
                             agg_method = 'max' if any(
-                                src.callback in DENSE_STATUS_BINDINGS for src in sources
+                                _is_nullable_status_source(concept_name, src) for src in sources
                             ) else 'any'
                         elif pd.api.types.is_numeric_dtype(col_dtype):
                             agg_method = 'median'  # R ricu: numeric -> "median"
@@ -7552,7 +7559,7 @@ class ConceptResolver:
                 if value_col and value_col in result.data.columns:
                     if pd.api.types.is_bool_dtype(result.data[value_col]):
                         agg_method = 'max' if any(
-                            src.callback in DENSE_STATUS_BINDINGS
+                            _is_nullable_status_source(concept_name, src)
                             for src in definition.for_data_source(data_source.config)
                         ) else 'any'
                     elif pd.api.types.is_numeric_dtype(result.data[value_col]):
@@ -7808,6 +7815,33 @@ class ConceptResolver:
             # 🚀 性能优化：传递 target 类型，对于 id_tbl 不生成时间网格
             target_type = definition.target if hasattr(definition, 'target') else None
             raw = self._load_fun_item_los(concept_name, source, data_source, patient_ids, target_type=target_type)
+        elif callback == "sic_case_landmark_fields":
+            from .sic_landmark import SIC_CASE_LANDMARK_COLUMNS, SIC_CASE_SOURCE_COLUMNS, sic_case_landmark_fields
+
+            if (data_source.config.name or "").lower() != "sic" or concept_name not in SIC_CASE_LANDMARK_COLUMNS:
+                raise ValueError("SIC case landmark callback requires a registered SIC field")
+            if isinstance(patient_ids, Mapping):
+                # The public API supplies database-specific identifiers as a
+                # mapping. Iterating that mapping would select its key (the
+                # literal string "CaseID") instead of the patient IDs.
+                case_keys = [key for key in patient_ids if str(key).lower() == "caseid"]
+                if len(case_keys) != 1:
+                    raise ValueError("SIC case landmark requires one CaseID identifier list")
+                values = patient_ids[case_keys[0]]
+                if values is None or isinstance(values, (str, bytes, Mapping)):
+                    raise ValueError("SIC case landmark requires one CaseID identifier list")
+                selected_ids = list(values)
+            else:
+                selected_ids = list(patient_ids) if patient_ids is not None else None
+            filters = [FilterSpec(column="CaseID", op=FilterOp.IN, value=selected_ids)] if selected_ids is not None else None
+            cases = data_source.load_table("cases", columns=list(SIC_CASE_SOURCE_COLUMNS), filters=filters).data
+            if selected_ids is not None:
+                cases = cases.loc[cases["CaseID"].isin(selected_ids)]
+            derived = sic_case_landmark_fields(cases)
+            raw = ICUTable(
+                data=derived[["CaseID", concept_name]], id_columns=["CaseID"],
+                index_column=None, value_column=concept_name,
+            )
         elif "fwd_concept" in callback:
             raw = self._load_fun_item_forward(
                 concept_name,
@@ -7821,6 +7855,12 @@ class ConceptResolver:
             )
 
         agg_value = aggregator
+        if callback == "sic_case_landmark_fields":
+            if aggregator not in (None, False, "auto"):
+                raise ValueError("SIC case landmark fields cannot be re-aggregated")
+            # The callback already proves one row per CaseID. Pandas any()
+            # would turn a single unknown Boolean into False here.
+            agg_value = False
         if agg_value in (None, "auto") and definition.aggregate is not None:
             agg_value = definition.aggregate
 
@@ -9090,7 +9130,7 @@ class ConceptResolver:
                         col_dtype = df[value_col].dtype
                         if pd.api.types.is_bool_dtype(col_dtype):
                             agg_func = 'max' if any(
-                                src.callback in DENSE_STATUS_BINDINGS
+                                _is_nullable_status_source(concept_name, src)
                                 for src in definition.for_data_source(data_source.config)
                             ) else 'any'
                         elif pd.api.types.is_numeric_dtype(col_dtype):
@@ -9841,7 +9881,7 @@ class ConceptResolver:
             dense_status_columns={
                 name for name in concept_data if data_source is not None
                 and (definition := self.dictionary.get(name)) is not None
-                and any(src.callback in DENSE_STATUS_BINDINGS
+                and any(_is_nullable_status_source(name, src)
                         for src in definition.for_data_source(data_source.config))
             },
         )

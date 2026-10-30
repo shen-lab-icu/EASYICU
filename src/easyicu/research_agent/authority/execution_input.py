@@ -45,6 +45,7 @@ class ExecutionInputAuthorityState:
     trajectory_binding: Optional[StagedTrajectoryBinding]
     run_dir: Path
     legacy_trajectory_verifier: Optional[Callable[..., None]] = None
+    approved_case_duration_binding: Optional[Any] = None
     development_sample: Optional[Any] = None
     trajectory_bound_cohort_authority_ref: Optional[MaterializedCohortAuthorityRef] = (
         None
@@ -64,6 +65,7 @@ class ExecutionInputAuthorityState:
         plan: Any,
         context: Any,
         development_sample: Optional[Any] = None,
+        approved_case_duration_binding: Optional[Any] = None,
     ) -> "ExecutionInputAuthorityState":
         universe_path = Path(universe_path)
         analysis_path = Path(analysis_path)
@@ -72,6 +74,7 @@ class ExecutionInputAuthorityState:
             analysis_path=analysis_path,
             plan=plan,
             context=context,
+            approved_case_duration_binding=approved_case_duration_binding,
         )
         state = cls(
             universe_path=universe_path,
@@ -80,6 +83,7 @@ class ExecutionInputAuthorityState:
             trajectory_binding=trajectory_binding,
             run_dir=Path(run_dir),
             legacy_trajectory_verifier=legacy_trajectory_verifier,
+            approved_case_duration_binding=approved_case_duration_binding,
         )
         if development_sample is not None:
             state.apply_development_sample(development_sample)
@@ -150,6 +154,7 @@ class ExecutionInputAuthorityState:
             analysis_path=self.analysis_path,
             plan=plan,
             context=context,
+            approved_case_duration_binding=self.approved_case_duration_binding,
         )
         if self.development_sample is not None:
             if rebound.selected_path != Path(

@@ -94,7 +94,7 @@ def test_descriptor_omits_credentials_plan_and_review_inputs(bound):
     assert all(value not in serialized for value in ("TOKEN", "secret", "private plan", "private person", "private review", "provider_environment"))
 
 
-def test_planner_uses_new_wrapper_and_original_unknown_attempt_reservation(bound, monkeypatch):
+def test_planner_uses_new_wrapper_and_original_ended_attempt_reservation(bound, monkeypatch):
     from easyicu.webserver import agent_pipeline_runs, research_launch_resume
     from easyicu.webserver.research_job_recovery import existing_provider_task
     from easyicu.webserver.run_record import RunDirectory
@@ -102,6 +102,9 @@ def test_planner_uses_new_wrapper_and_original_unknown_attempt_reservation(bound
     monkeypatch.setattr(research_launch_resume, "development_resume_checkpoint", lambda **kw: {"checkpoint_sha256": "c" * 64})
     monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (object(), dict(bound.seed.provider_public)))
     captured = {}
+    attempt = bound.ledger.snapshot()["tasks"][0]["calls"][0]["attempt_id"]
+    bound.ledger.finish_transport_attempt(task_id=bound.task.task_id, attempt_id=attempt,
+                                          usage=None, error_type="InternalServerError")
     before = bound.ledger.snapshot()["totals"]
 
     def make_runner(**kwargs):
@@ -112,7 +115,7 @@ def test_planner_uses_new_wrapper_and_original_unknown_attempt_reservation(bound
             assert task.task_id == bound.task.task_id
             assert task.ledger.path == bound.ledger.path
             assert task.ledger.snapshot()["totals"] == before
-            assert task.ledger.snapshot()["tasks"][0]["calls"][0]["state"] == "in_progress"
+            assert task.ledger.snapshot()["tasks"][0]["calls"][0]["state"] == "failed_usage_unknown"
             target = RunDirectory.create(Path(kwargs["project_root"]), bound.study["id"], job.id)
             assert target.path != bound.wrapper
             assert job.id == "original-restart-2"
@@ -125,6 +128,26 @@ def test_planner_uses_new_wrapper_and_original_unknown_attempt_reservation(bound
     assert captured["development_resume_source_job_id"] == "original"
     assert "execution_resume_source_run_id" not in captured
     assert captured["literature_search_authorized"] is False
+
+
+def test_planner_unknown_inflight_without_guard_is_never_replayed(bound, monkeypatch):
+    from easyicu.webserver import agent_pipeline_runs, research_launch_resume
+
+    monkeypatch.setattr(agent_pipeline_runs, "make_research_pipeline_run_runner", lambda **kw: pytest.fail("unsafe replay"))
+    monkeypatch.setattr(research_launch_resume, "development_resume_checkpoint", lambda **kw: {"checkpoint_sha256": "c" * 64})
+    with pytest.raises(ResearchPipelineRunError) as error:
+        recovery.recover_runner(bound.descriptor, bound.job)
+    assert error.value.code == "research_auto_resume_planner_provider_worker_unverified"
+    assert bound.ledger.snapshot()["tasks"][0]["calls"][0]["state"] == "in_progress"
+
+
+def test_probe_unknown_inflight_without_guard_is_never_replayed(bound):
+    row = bound.ledger.snapshot()["tasks"][0]
+    row["calls"][0]["role"] = "provider_recovery_probe"
+    with pytest.raises(ResearchPipelineRunError) as error:
+        recovery._verify_guarded_planner_inflight(bound.seed, row)
+    assert error.value.code == "research_auto_resume_planner_provider_worker_unverified"
+    assert bound.ledger.snapshot()["tasks"][0]["calls"][0]["state"] == "in_progress"
 
 
 @pytest.mark.parametrize("state", ["approved_pending_execution", "executing"])
@@ -189,6 +212,9 @@ def test_provider_identity_drift_preserves_original_accounting(bound, monkeypatc
 
     monkeypatch.setattr(research_launch_resume, "development_resume_checkpoint", lambda **kw: {"checkpoint_sha256": "c" * 64})
     monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (object(), {"provider": "openai", "model": "different"}))
+    attempt = bound.ledger.snapshot()["tasks"][0]["calls"][0]["attempt_id"]
+    bound.ledger.finish_transport_attempt(task_id=bound.task.task_id, attempt_id=attempt,
+                                          usage=None, error_type="InternalServerError")
     before = bound.ledger.path.read_bytes()
     with pytest.raises(ResearchPipelineRunError) as raised:
         recovery.recover_runner(bound.descriptor, bound.job)

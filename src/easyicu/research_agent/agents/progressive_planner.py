@@ -1151,6 +1151,14 @@ class ProgressivePlannerAgent:
                 context, variable_names=variables
             )["variables"]
         }
+        # Registry coordinates sometimes describe a broader case episode than
+        # the requested ICU-only stay. Offer the documented source facts for
+        # scientific discussion, never as a selected/executable replacement.
+        from easyicu.databases.research_substitutions import registered_source_profile
+        from easyicu.databases.research_requirements import review_only_time_origin
+
+        source_profile = registered_source_profile(context.cohort.database)
+        time_origin_candidate = review_only_time_origin(source_profile) if source_profile is not None else None
         measurement_columns = table_one_measurement_columns(context)
         cards = []
         for variable in context.variables:
@@ -1171,6 +1179,24 @@ class ProgressivePlannerAgent:
                     "analysis_window_role",
                 }
             }
+            if source_profile is not None and source_profile.care_unit_admission_proxy is not None:
+                concept = variable.source_concept or variable.name
+                if concept == "los_icu" and source_profile.case_close_proxy is not None:
+                    card["source_boundary_review"] = {
+                        "status": "review_only_not_selected_or_executable",
+                        "requested": "ICU-only length of stay",
+                        "potential_alternative": "time from first intensive or intermediate care transfer to case closure",
+                        "start": source_profile.care_unit_admission_proxy.model_dump(mode="json"),
+                        "end": source_profile.case_close_proxy.model_dump(mode="json"),
+                        "time_origin_candidate": (
+                            time_origin_candidate.model_dump(mode="json") if time_origin_candidate else None
+                        ),
+                        "limitation": (
+                            "This broader case duration is not a verified continuous ICU stay; "
+                            "reopened cases can include normal ward time. Any changed endpoint "
+                            "needs a revised reviewed plan and executable source authority."
+                        ),
+                    }
             if variable.name in measurement_columns:
                 card["table_one_restriction"] = (
                     "measurement_audit_only_unless_question_anchor"
@@ -3780,6 +3806,7 @@ class ProgressivePlannerAgent:
         checkpoint_authorities: Any,
         checkpoint_emitter: ProgressivePlannerCheckpointEmitter,
         progress_callback: Optional[Callable[[Any], None]],
+        outline_retry_journal: Mapping[str, Any] | None,
     ) -> AnalysisPlan:
         """Delegate the family-spec attempt while keeping host binders in-module.
 
@@ -3845,8 +3872,24 @@ class ProgressivePlannerAgent:
                 enforce_article_contract=enforce_article_contract,
             )
 
+        family_llm = self.llm
+        if outline_retry_journal is not None:
+            from ..planning.outline_retry_journal import OutlineRetryJournal
+
+            dependency = checkpoint_authorities.resume_dependency_authority_sha256
+            if not dependency:
+                raise ValueError("metadata family-spec journal requires dependency authority")
+            family_llm = OutlineRetryJournal(
+                inner=self.llm, task=outline_retry_journal["task"],
+                run_dir=outline_retry_journal["run_dir"],
+                request_sha256=dependency, dependency_sha256=dependency,
+                literature_sha256=outline_retry_journal["literature_sha256"],
+                source_path=outline_retry_journal.get("source_path"),
+                source_sha256=outline_retry_journal.get("source_sha256"),
+                stage="family_spec", parse_attempt_limit=_MAX_STEP_PARSE_RETRIES + 1,
+            )
         return run_family_spec_attempt(
-            llm=self.llm,
+            llm=family_llm,
             attempt=self._attempt,
             context=context,
             article_context=article_context,
@@ -3936,6 +3979,7 @@ class ProgressivePlannerAgent:
         required_primary_cohort_selection_mode: str | None = None,
         stop_after_outline: bool = False,
         planner_strategy: str = "progressive_v2",
+        outline_retry_journal: Mapping[str, Any] | None = None,
     ) -> AnalysisPlan | ProgressivePlanOutline:
         self._attempt.resume_validated = False
         enforce_article_contract = enforce_article_contract and tier_from_planning_contract(planning_contract_context) == "article"
@@ -4164,6 +4208,7 @@ class ProgressivePlannerAgent:
                 checkpoint_authorities=checkpoint_authorities,
                 checkpoint_emitter=checkpoint_emitter,
                 progress_callback=progress_callback,
+                outline_retry_journal=outline_retry_journal,
             )
         resolved_planning_contract_context = ""
         foundation_planning_contract_context = ""
@@ -4418,8 +4463,23 @@ class ProgressivePlannerAgent:
                     self.scientific_authorities.check_planner_outline(parsed)
                 return parsed
 
+            outline_llm = self.llm
+            if outline_retry_journal is not None:
+                from ..planning.outline_retry_journal import OutlineRetryJournal
+
+                dependency = checkpoint_authorities.resume_dependency_authority_sha256
+                if not dependency:
+                    raise ValueError("metadata outline journal requires dependency authority")
+                outline_llm = OutlineRetryJournal(
+                    inner=self.llm, task=outline_retry_journal["task"],
+                    run_dir=outline_retry_journal["run_dir"],
+                    request_sha256=dependency, dependency_sha256=dependency,
+                    literature_sha256=outline_retry_journal["literature_sha256"],
+                    source_path=outline_retry_journal.get("source_path"),
+                    source_sha256=outline_retry_journal.get("source_sha256"),
+                )
             outline = call_llm_with_structured_retry(
-                self.llm,
+                outline_llm,
                 messages,
                 parser=parse_outline,
                 retryable_parse_error=(self.scientific_authorities.planner_retryable_error if self.scientific_authorities else None),

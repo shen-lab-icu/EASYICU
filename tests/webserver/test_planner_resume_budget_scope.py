@@ -232,6 +232,18 @@ def test_shared_submission_restores_scope_before_runner_and_authorization(submit
         assert events[0] == "source"
 
 
+def test_explicit_fresh_submission_disables_environment_checkpoint_seed(submit_source, monkeypatch):
+    _, save, submit, events = submit_source
+    save("planner_canary")
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID", "prior")
+    receipt = submit(start="fresh")
+    runner = next(event[1] for event in events if isinstance(event, tuple))
+    assert receipt.planner_start_mode == "fresh"
+    assert receipt.resume_source_job_id is None
+    assert "development_resume_source_job_id" not in runner
+    assert runner["allow_environment_resume"] is False
+
+
 @pytest.mark.parametrize("mutation", ["missing", "corrupt", "stale"])
 def test_invalid_scope_consumes_no_grant_or_job(submit_source, mutation):
     study, save, submit, events = submit_source

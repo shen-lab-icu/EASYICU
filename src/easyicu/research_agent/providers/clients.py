@@ -32,7 +32,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from ..authority.provider_budget import (
     consume_active_transport_attempt,
 )
-from ..authority.provider_hard_stop import record_active_provider_transport_failure
+from ..authority.provider_hard_stop import (
+    record_active_provider_retry_wait, record_active_provider_transport_failure,
+)
 from easyicu.model_request_metadata import provider_name
 from ..authority.secret_redaction import (
     debug_capture_enabled,
@@ -1025,6 +1027,7 @@ class OpenAIClient:
             # to happen regardless -- i.e. to hammer a failing endpoint
             # hardest exactly when the step was nearly out of budget.
             if attempt_index + 1 < manual_attempts:
+                record_active_provider_retry_wait(seconds)
                 _time.sleep(seconds)
 
         for attempt in range(manual_attempts):
@@ -1071,6 +1074,7 @@ class OpenAIClient:
                     if getattr(self, transport_attribute) is old_transport:
                         raise
                     recovery_reasons = (PLANNING_EMPTY_RESPONSE_RETRY,)
+                    record_active_provider_retry_wait(wait)
                     _time.sleep(wait)
                     continue
                 msg = str(exc).lower()
@@ -1101,6 +1105,7 @@ class OpenAIClient:
                         if wait is None:
                             mark_retry_exhausted(exc, stopped)
                             raise
+                        record_active_provider_retry_wait(wait)
                         _time.sleep(wait)
                         continue
                     # Respect provider-supplied Retry-After (e.g. Venice's
@@ -1649,6 +1654,7 @@ class AnthropicMessagesClient:
                     if wait is None:
                         mark_retry_exhausted(exc, stopped)
                         raise
+                    record_active_provider_retry_wait(wait)
                     _time.sleep(wait)
                     continue
                 if attempt + 1 >= attempts:
@@ -1658,6 +1664,7 @@ class AnthropicMessagesClient:
                     if retry_after is not None
                     else min(2.0 * (attempt + 1) ** 2, 30.0)
                 )
+                record_active_provider_retry_wait(backoff)
                 _time.sleep(backoff)
         else:  # pragma: no cover - loop either breaks or raises
             if last_exc is not None:

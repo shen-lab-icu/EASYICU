@@ -294,6 +294,18 @@ def record_unset_family_design(
         if family not in _PREPARED_FROM_DESIGN:
             return study
         patch = {"analysis_design": family_design_for(study, family)}
+    # Inferring a missing family must not replace the researcher's existing
+    # design. In particular, a source-derived variance default is not a
+    # substitute for an explicitly recorded cluster policy. If either part
+    # was stated, keep precisely what was stated; validation will surface a
+    # missing or conflicting counterpart rather than inventing one.
+    existing_design = study.get("analysis_design")
+    if isinstance(existing_design, Mapping) and existing_design:
+        proposed_design = dict(patch["analysis_design"])
+        if "variance_estimator" in existing_design or "cluster_unit" in existing_design:
+            proposed_design.pop("variance_estimator", None)
+            proposed_design.pop("cluster_unit", None)
+        patch["analysis_design"] = {**proposed_design, **existing_design}
     try:
         saved = study_contexts.upsert_context(
             {"id": str(study.get("id") or ""), **patch},

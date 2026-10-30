@@ -410,7 +410,7 @@ def test_icu_survival_reviews_its_discharge_proxy_before_approval(tmp_path, monk
     ("eicu", "substitution", "substitution", "icu_death", "icu_discharge_proxy"),
     ("hirid", "refusal", "refusal", "icu_death", "last_observation_proxy"),
     ("aumc", "substitution", "substitution", "icu_death", "icu_discharge_proxy"),
-    ("sic", "exact", "substitution", "mort_28d", "followup_days_28d"),
+    ("sic", "refusal", "refusal", None, None),
 ])
 @pytest.mark.parametrize("outcome", ["icu_death", "death"])
 def test_survival_question_scope_and_review_agree_for_each_mortality(
@@ -430,6 +430,14 @@ def test_survival_question_scope_and_review_agree_for_each_mortality(
     assert decision["status"] == expected
     gap = study_family_database_gap(study, question=question, database=database)
     if expected == "refusal":
+        if database == "sic":
+            assert [(item["capability"], item["code"]) for item in decision["missing"]] == [
+                ("time_zero", "time_zero_unavailable"),
+                ("censor_time", "censor_time_unavailable"),
+            ]
+            assert gap["missing_capabilities"] == decision["missing"]
+            assert not review.approval_allowed
+            return
         capability = "event_time" if database == "eicu" else "censor_time"
         assert [(item["capability"], item["code"]) for item in decision["missing"]] == [
             (capability, capability + "_unavailable")]
@@ -458,6 +466,18 @@ def test_default_survival_offer_requires_applied_endpoint_and_digest_bound_appro
     context, plan = _case(database)
     plan = plan.model_copy(update={"analysis_type": "survival"})
     unbound_review = _review(context, plan)
+    if database == "sic":
+        # A fixed-horizon outcome does not turn SICdb's ICU-or-intermediate
+        # entry into an exact ICU-only time zero or its case closure into a
+        # verified ICU exit. A plan cannot be approved on that basis.
+        decision = unbound_review.facts["database_capability_review"]["decision"]
+        assert decision["status"] == "refusal"
+        assert {item["capability"] for item in decision["missing"]} == {"time_zero", "censor_time"}
+        assert not unbound_review.approval_allowed
+        result = SimpleNamespace(context=context, plan=plan, evidence=EvidenceStore(tmp_path))
+        with pytest.raises(CapabilityApprovalError):
+            require_approved_database_capabilities(result, tmp_path)
+        return
     assert unbound_review.facts["database_capability_review"]["decision"]["status"] == "substitution"
     assert not unbound_review.approval_allowed
     result = SimpleNamespace(context=context, plan=plan, evidence=EvidenceStore(tmp_path))

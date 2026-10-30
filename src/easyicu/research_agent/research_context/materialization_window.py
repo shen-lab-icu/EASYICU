@@ -273,12 +273,12 @@ def context_column_windows(context: Any) -> dict[str, ColumnWindow]:
     return windows
 
 
-def host_column_window(start_hours: float, end_hours: float) -> ColumnWindow:
+def host_column_window(start_hours: float, end_hours: float, *, origin: str = "icu_admission") -> ColumnWindow:
     """The window the host summarized a column over, from ICU admission."""
 
     return ColumnWindow(
-        label=f"icu_admission[{start_hours:g},{end_hours:g}]h",
-        anchor="icu_admission",
+        label=f"{origin}[{start_hours:g},{end_hours:g}]h",
+        anchor=origin,
         start_hours=float(start_hours),
         end_hours=float(end_hours),
         source="host",

@@ -54,6 +54,10 @@ class _RuntimePlanCompilerSpec:
 
 
 _CURRENT_CASE_PLAN_COMPILERS: Mapping[str, _RuntimePlanCompilerSpec] = {
+    "case_duration_landmark_ols": _RuntimePlanCompilerSpec(
+        message="Validated the explicitly selected case-duration landmark OLS contract.",
+        reason_code="case_duration_landmark_ols_host_validated", analysis_only=True,
+    ),
     "baseline_adjusted_association": _RuntimePlanCompilerSpec(
         message="Bound the baseline association and primary-population risk to the reviewed model.",
         reason_code="baseline_association_host_compiled",

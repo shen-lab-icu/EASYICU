@@ -567,6 +567,59 @@ def test_denied_retry_closes_prior_attempt_without_masking_limit(tmp_path):
     assert call["error_type"] == "TransportRetry"
 
 
+def test_attempt_observer_tracks_one_call_without_changing_ledger(tmp_path):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        TaskProviderHardStop, consume_active_provider_hard_stop_attempt,
+        provider_hard_stop_call_scope, record_active_provider_retry_wait,
+        record_active_provider_transport_failure,
+    )
+
+    ledger = _ledger(tmp_path)
+    original = ledger.start_task("E1")
+    events = []
+    task = TaskProviderHardStop(original.ledger, original.task_id, observer=events.append)
+    with provider_hard_stop_call_scope(task=task, role="acquisition", model="secret-model",
+                                      messages=_message("private prompt"), max_tokens=8) as call:
+        consume_active_provider_hard_stop_attempt()
+        record_active_provider_transport_failure("PrivateError")
+        record_active_provider_retry_wait(2.5)
+        consume_active_provider_hard_stop_attempt()
+        call.complete({"total_tokens": 3})
+    assert [event["phase"] for event in events] == ["failed", "waiting", "started", "continued"]
+    assert [event["attempt"] for event in events] == [1, 1, 2, 2]
+    assert events[1]["wait_seconds"] == 2.5
+    assert len({event["call_id"] for event in events}) == 1
+    assert all(set(event) <= {"phase", "call_id", "attempt", "wait_seconds"} for event in events)
+    assert [call["state"] for call in ledger.snapshot()["tasks"][0]["calls"]] == [
+        "failed_usage_unknown", "completed",
+    ]
+
+
+def test_attempt_observer_cannot_grant_denied_retry_or_break_accounting(tmp_path):
+    from easyicu.research_agent.authority.provider_hard_stop import (
+        ProviderHardStopExceeded, TaskProviderHardStop,
+        consume_active_provider_hard_stop_attempt, provider_hard_stop_call_scope,
+        record_active_provider_transport_failure,
+    )
+
+    ledger = _ledger(tmp_path, limits=_limits(max_provider_attempts_per_run=1,
+                                             max_provider_attempts_per_batch=1))
+    original = ledger.start_task("E1")
+    events = []
+    def observer(event):
+        events.append(event)
+        raise RuntimeError("observer failure")
+    task = TaskProviderHardStop(original.ledger, original.task_id, observer=observer)
+    with provider_hard_stop_call_scope(task=task, role="acquisition", model="test",
+                                      messages=_message(), max_tokens=8):
+        consume_active_provider_hard_stop_attempt()
+        record_active_provider_transport_failure("InternalServerError")
+        with pytest.raises(ProviderHardStopExceeded):
+            consume_active_provider_hard_stop_attempt()
+    assert [event["phase"] for event in events] == ["failed"]
+    assert len(ledger.snapshot()["tasks"][0]["calls"]) == 1
+
+
 def test_failed_attempt_remains_conservatively_accounted(tmp_path):
     from easyicu.research_agent.providers.hard_stop import HardStopClient
     from easyicu.research_agent.providers.mocks import (

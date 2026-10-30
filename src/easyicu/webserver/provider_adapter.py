@@ -393,6 +393,8 @@ def build_research_agent_provider_client(
     request_timeout: Optional[float] = None,
     request_hard_timeout: Optional[float] = None,
     environ: Optional[Mapping[str, str]] = None,
+    single_transport_attempt: bool = False,
+    supports_strict_json_schema: bool = False,
 ) -> tuple[Any, Dict[str, Any]]:
     """Construct the governed Research Agent client without exposing a key.
 
@@ -535,10 +537,12 @@ def build_research_agent_provider_client(
             TransportRetrySchedule,
         )
 
-        retry_schedule = TransportRetrySchedule(
-            delays_seconds=_WEB_RESEARCH_AGENT_RETRY_DELAYS_SECONDS,
-            jitter_fraction=_WEB_RESEARCH_AGENT_RETRY_JITTER_FRACTION,
-            window_seconds=_WEB_RESEARCH_AGENT_RETRY_WINDOW_SECONDS,
+        retry_schedule = (
+            None if single_transport_attempt else TransportRetrySchedule(
+                delays_seconds=_WEB_RESEARCH_AGENT_RETRY_DELAYS_SECONDS,
+                jitter_fraction=_WEB_RESEARCH_AGENT_RETRY_JITTER_FRACTION,
+                window_seconds=_WEB_RESEARCH_AGENT_RETRY_WINDOW_SECONDS,
+            )
         )
 
         loopback = bool(
@@ -577,11 +581,12 @@ def build_research_agent_provider_client(
             # reviewed bound.  This allowlist is the whole Web retry policy:
             # non-HTTP failures and other status codes fail closed without a
             # transport replay.
-            max_retries=retry_schedule.max_retries,
+            max_retries=retry_schedule.max_retries if retry_schedule is not None else 0,
             retryable_http_status_codes=(
                 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
             ),
             allow_environment_overrides=False,
+            supports_strict_json_schema=supports_strict_json_schema,
             retry_schedule=retry_schedule,
         )
     except Exception as exc:
@@ -605,8 +610,8 @@ def build_research_agent_provider_client(
             "client_constructed": True,
             "provider_gate": "research_agent_provider_ready",
             "request_timeout_seconds": effective_timeout,
-            "transport_max_attempts": 1 + retry_schedule.max_retries,
-            **retry_schedule.policy_fields(),
+            "transport_max_attempts": 1 + retry_schedule.max_retries if retry_schedule is not None else 1,
+            **(retry_schedule.policy_fields() if retry_schedule is not None else {}),
             "strict_json_schema_enabled": bool(
                 getattr(client, "supports_strict_json_schema", False)
             ),

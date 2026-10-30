@@ -1334,7 +1334,9 @@ def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
     result = outcomes.load_outcomes("sic").set_index("CaseID")
 
     assert "icu_free_days_28" not in result.columns
-    assert bool(result.loc[1, "mort_365d"]) is False
+    # One-year registry follow-up is bounded from primary admission, not the
+    # later intensive-or-intermediate care transfer.
+    assert pd.isna(result.loc[1, "mort_365d"])
     assert pd.isna(result.loc[2, "mort_365d"])
     assert bool(result.loc[2, "mort_90d"]) is False
     assert bool(result.loc[3, "mort_365d"]) is True

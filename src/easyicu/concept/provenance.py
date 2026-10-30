@@ -190,14 +190,23 @@ def _conversions(callback: str | None) -> tuple[UnitConversionProvenance, ...]:
 
 
 def resolver_implementation_digest() -> str:
-    """Hash executable owners, without exposing any installation paths."""
+    """Hash the extraction implementation bundle without installation paths.
+
+    This binds executable source, not the bytes actually consumed from a raw
+    database. In particular, it is not a producer receipt or a raw data digest.
+    """
     root = Path(__file__).resolve().parents[1]
-    members = [*sorted((root / "concept").glob("*.py")),
-               root / "utils" / "unit_conversion.py", root / "api" / "concepts.py",
-               root / "base.py", root / "config.py", root / "clinical_contracts.py"]
+    # The resolver delegates to these owners for actual table reads, timing,
+    # callbacks and derived scores. Omitting them would allow meaningful
+    # extraction changes without changing the recorded implementation digest.
+    packages = ("concept", "api", "table", "io", "scores", "utils")
+    members = [path for package in packages for path in (root / package).rglob("*.py")]
+    members.extend(root / name for name in (
+        "base.py", "config.py", "clinical_contracts.py", "datasource.py", "load_concepts.py",
+    ))
     return metadata_digest({
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in members
+        for path in sorted(members)
     })
 
 
@@ -229,12 +238,20 @@ def capture_data_provenance(
     cohort_filters: Sequence[CohortFilterProvenance] = (),
     resource_inputs_sha256: str | None = None,
     source_config_sha256: str | None = None,
+    source_config: DataSourceConfig | None = None,
     resolver_parameters: Mapping[str, object] | None = None,
 ) -> DataProvenanceSnapshot:
     """Freeze selected resolver inputs, including dependencies, before extraction."""
     from easyicu.clinical_contracts import load_clinical_contracts
 
     database = source_database.strip().lower()
+    # These are resolver configuration coordinates, not evidence that any
+    # particular patient row was extracted or transformed. Never substitute
+    # packaged defaults for a run's possibly customized source configuration.
+    if source_config is not None:
+        actual_sha = metadata_digest(source_config.model_dump(mode="json"))
+        if source_config.name.strip().lower() != database or source_config_sha256 != actual_sha:
+            raise ValueError("data provenance source configuration identity mismatch")
     prefixes = tuple(value.strip().lower() for value in class_prefixes)
     dictionary_payload = {
         key: _json_metadata(asdict(definition)) for key, definition in dictionary.items()
@@ -259,6 +276,28 @@ def capture_data_provenance(
         )
         sources = []
         for source in definition.sources.get(metadata.dictionary_source_database, ()):
+            if (database == "sic" and source.callback == "sic_case_landmark_fields"
+                    and source_config is not None):
+                from .sic_landmark import SIC_CASE_LANDMARK_COLUMNS, SIC_CASE_SOURCE_COLUMNS
+
+                table = source_config.tables.get("cases")
+                columns = table.columns if table is not None else None
+                configured_names = {
+                    str(value.get("name")) for value in (columns or {}).values()
+                    if isinstance(value, dict) and value.get("name")
+                }
+                if concept in SIC_CASE_LANDMARK_COLUMNS and set(SIC_CASE_SOURCE_COLUMNS) <= configured_names:
+                    # These are the callback's registered inputs, not a claim that
+                    # any particular raw row was extracted or validated.
+                    sources.extend(SourceProvenance(
+                        table="cases", value_variable=column, callback=source.callback,
+                    ) for column in SIC_CASE_SOURCE_COLUMNS)
+                    continue
+            table_config = (
+                source_config.tables.get(source.table)
+                if source_config is not None and source.table else None
+            )
+            defaults = table_config.defaults if table_config is not None else None
             descriptions = source.params.get("code_descriptions") or {}
             codes = ()
             if re.search(r"icd|(?:^|_)code$", source.sub_var or "", re.I):
@@ -269,9 +308,11 @@ def capture_data_provenance(
             sources.append(SourceProvenance(
                 table=source.table, selector_variable=source.sub_var,
                 selector_regex=source.regex, item_ids=tuple(source.ids or ()),
-                value_variable=source.value_var, unit_variable=source.unit_var,
-                time_variable=source.index_var, callback=source.callback,
-                duration_variable=source.dur_var,
+                value_variable=source.value_var or (defaults.val_var if defaults else None),
+                unit_variable=source.unit_var or (defaults.unit_var if defaults else None),
+                time_variable=source.index_var or (defaults.index_var if defaults else None),
+                callback=source.callback,
+                duration_variable=source.dur_var or (defaults.dur_var if defaults else None),
                 interval=source.interval.isoformat() if source.interval is not None else None,
                 codes=codes, unit_conversions=_conversions(source.callback),
             ))

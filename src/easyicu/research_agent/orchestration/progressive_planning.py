@@ -12,6 +12,7 @@ from ..agents.progressive_planner import (
     progressive_planner_failure_facts,
 )
 from ..authority.evidence_store import sha256_of_file
+from ..canonical_json import canonical_sha256
 from ..planning.progressive_artifacts import (
     ProgressiveEvidenceRegistrar,
     ProgressivePlannerCheckpointRecorder,
@@ -165,6 +166,7 @@ def run_pipeline_progressive_planner(
     know_how_binding: PlannerKnowHowBinding,
     planning_contract_context: str,
     finding_sink: Callable[[ValidationFinding], None],
+    metadata_outline_journal_task: Any = None,
 ) -> ProgressivePlannerRunResult | ProgressiveDesignCanaryDraft:
     """Bind pipeline-owned inputs to the narrow Progressive Planner contract."""
 
@@ -190,6 +192,11 @@ def run_pipeline_progressive_planner(
         planning_contract_context=planning_contract_context,
         finding_sink=finding_sink,
         stop_after_outline=stop_after_outline,
+        metadata_outline_journal_task=metadata_outline_journal_task,
+        metadata_outline_literature_sha256=(
+            canonical_sha256(preplan_literature.model_dump(mode="json") if preplan_literature is not None else None)
+            if metadata_outline_journal_task is not None else None
+        ),
     )
 
 
@@ -493,15 +500,26 @@ def run_progressive_planner(
     planning_contract_context: str,
     finding_sink: Callable[[ValidationFinding], None],
     stop_after_outline: bool = False,
+    metadata_outline_journal_task: Any = None,
+    metadata_outline_literature_sha256: str | None = None,
 ) -> ProgressivePlannerRunResult | ProgressiveDesignCanaryDraft:
     """Run Progressive v2 while importing only a host-validated Dev chain."""
 
+    from ..planning.outline_retry_journal import FILE_NAME as OUTLINE_RETRY_FILE
+
+    retry_source = (
+        Path(resume_checkpoint_path).expanduser()
+        if resume_checkpoint_path is not None
+        and Path(resume_checkpoint_path).name == OUTLINE_RETRY_FILE else None
+    )
+    if retry_source is not None and metadata_outline_journal_task is None:
+        raise ValueError("metadata outline recovery requires its original Provider task")
     source_chain = (
         load_progressive_planner_checkpoint_chain(
             last_checkpoint_path=Path(resume_checkpoint_path).expanduser(),
             expected_artifact_sha256=str(resume_checkpoint_sha256 or ""),
         )
-        if resume_checkpoint_path is not None
+        if resume_checkpoint_path is not None and retry_source is None
         else ()
     )
     recorder = ProgressivePlannerCheckpointRecorder(
@@ -514,6 +532,7 @@ def run_progressive_planner(
         "checkpoint_callback",
         "resume_checkpoint",
         "resume_dependency_context",
+        "outline_retry_journal",
     }
     overlap = sorted(reserved & set(planner_kwargs))
     if overlap:
@@ -532,6 +551,12 @@ def run_progressive_planner(
                 "llm_signature": llm_signature,
                 "prompt_version": prompt_pack_version,
             },
+            outline_retry_journal=(
+                {"task": metadata_outline_journal_task, "run_dir": run_dir,
+                 "literature_sha256": metadata_outline_literature_sha256,
+                 "source_path": retry_source, "source_sha256": resume_checkpoint_sha256}
+                if metadata_outline_journal_task is not None else None
+            ),
             stop_after_outline=stop_after_outline,
         )
     except BaseException as error:

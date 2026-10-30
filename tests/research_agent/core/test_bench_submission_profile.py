@@ -876,13 +876,14 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
 ])
 def test_age_reseal_adds_coordinates_without_rewriting_frozen_profiles(name, old_version):
     from dataclasses import asdict
-    from easyicu.research_agent.concept_dict_audit import compute_concept_dict_fingerprint
     from easyicu.research_agent.orchestration.profiles import get_submission_profile
 
     old = get_submission_profile(f"{name}/{old_version}")
     new = get_submission_profile(f"{name}/20261026")
     assert old.expected_concept_dict_sha == FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260921"]
-    assert new.expected_concept_dict_sha == compute_concept_dict_fingerprint().concept_dict_sha
+    # 20261026 remains bound to the published v6 foundation even when a
+    # later, separate development dictionary is present in the checkout.
+    assert new.expected_concept_dict_sha == "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532"
     previous, current = asdict(old), asdict(new)
     assert {key for key in previous if previous[key] != current[key]} == {
         "version", "locked_at", "expected_concept_dict_sha",

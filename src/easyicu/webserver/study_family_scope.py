@@ -37,6 +37,18 @@ STUDY_FAMILY_DATABASE_OUT_OF_SCOPE = "study_family_database_out_of_scope"
 STUDY_FAMILY_GAP_FIELD = "study_family_gap"
 
 
+def metadata_only_sic_definition_gap(database: str, scope_gap: Mapping[str, Any] | None) -> bool:
+    """A narrowly reviewable SIC definition gap, never execution authority."""
+    missing = scope_gap.get("missing_capabilities", ()) if scope_gap else ()
+    return bool(
+        database == "sic" and scope_gap
+        and scope_gap.get("code") == STUDY_FAMILY_DATABASE_OUT_OF_SCOPE
+        and scope_gap.get("family") == "association_study" and missing
+        and {item.get("capability") for item in missing} <= {"icu_los", "time_zero"}
+        and all(item.get("code") in {"icu_los_unavailable", "time_zero_unavailable"} for item in missing)
+    )
+
+
 def v1_scope_description(
     *, reason_code: str, detail: Mapping[str, Any], database: Optional[str] = None,
 ) -> Dict[str, Any]:

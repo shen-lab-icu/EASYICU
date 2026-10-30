@@ -194,6 +194,30 @@ class AnchoredDirectory:
                 ) from exc
         raise AuthorityFilesystemError("cannot allocate temporary authority object")
 
+    def create_private_directory(self, name: str) -> None:
+        """Create one child under the pinned directory without following links.
+
+        Windows lacks the dir-fd primitive used here; callers needing this
+        operation must fail closed until an equivalent platform owner exists.
+        """
+        self._require_open()
+        name = _component(name)
+        if self._directory.fd is None:
+            raise AuthorityFilesystemError("anchored directory creation unavailable")
+        os.mkdir(name, mode=0o700, dir_fd=self._directory.fd)
+        self._directory.fsync()
+
+    def publish_temporary_no_clobber(self, temporary_name: str, target_name: str) -> None:
+        """Atomically publish a new file without replacing an existing target."""
+        self._require_open()
+        try:
+            self._directory.publish(_component(temporary_name), _component(target_name))
+            self._directory.fsync()
+        except FileExistsError:
+            raise
+        except OSError as exc:
+            raise AuthorityFilesystemError("cannot publish new authority object") from exc
+
     def unlink(self, name: str, *, missing_ok: bool = True) -> None:
         self._require_open()
         try:

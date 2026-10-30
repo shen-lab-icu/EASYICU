@@ -105,6 +105,13 @@ EXTRACT_MODULE_ORDER: List[str] = [
     if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
+# Internal opt-in only: landmark source fields may be read only when the
+# calling workflow explicitly includes this module in its authorized scope.
+# Keeping it out of EXTRACT_MODULE_ORDER preserves the default full export.
+EXTRACT_MODULES["sic_case_landmark"] = [
+    "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
+]
+
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.
 ONESHOT_MAX_PATIENTS = 150_000
@@ -5931,7 +5938,7 @@ def _native_export_time_window_authority(
     required: bool,
 ) -> Dict[str, object]:
     """Describe the shared publication policy, refusing an unbounded claim."""
-    longitudinal = [m for m in modules if m not in {"demographics", "outcome"}]
+    longitudinal = [m for m in modules if m not in {"demographics", "outcome", "sic_case_landmark"}]
     if required and longitudinal and not stay_time_upper_bounds:
         raise ValueError(
             "native_export_v2 requires outcome.los_icu time bounds before "
@@ -6743,6 +6750,10 @@ def _publish_native_export_v2(
         )
         for module in modules
     }
+    from ..databases.time_origin import SIC_CARE_UNIT_ORIGIN, native_export_time_origin
+
+    export_time_origin = native_export_time_origin(normalized_database)
+    sic_source_clock = export_time_origin == SIC_CARE_UNIT_ORIGIN
     manifest = {
         "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
         "contract_revision": "native_v2_clinical_contract_provenance_20260812",
@@ -6755,15 +6766,27 @@ def _publish_native_export_v2(
         "canonical_physical_schema": {
             "identity_column": "stay_id",
             "time_column": "charttime",
-            "time_origin": "icu_admission",
+            "time_origin": export_time_origin,
             "time_unit": "h",
+            **({"clinical_scope_note": (
+                "SICdb stay_id is CaseID; the time origin is the first intensive "
+                "or intermediate care transfer. Row-grain tokens describe "
+                "physical keys and do not certify a contiguous ICU-only episode."
+            )} if sic_source_clock else {}),
             "time_window_policy": (
-                "longitudinal modules: ICU episode with 24h pre/post allowance "
-                "bound by outcome.los_icu; outcome: stay-level at ICU admission"
+                ("longitudinal modules: source care-unit interval with 24h pre/post allowance "
+                 "bound by outcome.los_icu; outcome: stay-level at first intensive or "
+                 "intermediate care transfer" if sic_source_clock else
+                 "longitudinal modules: ICU episode with 24h pre/post allowance "
+                 "bound by outcome.los_icu; outcome: stay-level at ICU admission")
                 if stay_time_upper_bounds
-                else "longitudinal modules: 24h pre-admission and 366-day safety "
-                "fallback without outcome.los_icu authority; outcome: stay-level "
-                "at ICU admission"
+                else ("longitudinal modules: 24h before source care-unit transfer and "
+                      "366-day safety fallback without outcome.los_icu authority; outcome: "
+                      "stay-level at first intensive or intermediate care transfer"
+                      if sic_source_clock else
+                      "longitudinal modules: 24h pre-admission and 366-day safety "
+                      "fallback without outcome.los_icu authority; outcome: stay-level "
+                      "at ICU admission")
             ),
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",

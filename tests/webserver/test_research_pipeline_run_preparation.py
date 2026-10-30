@@ -70,6 +70,30 @@ def _scientific() -> PreparedScientificLaunch:
     )
 
 
+def test_explicit_fresh_plan_runs_scientific_guards_even_with_developer_seed(monkeypatch):
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID", "prior")
+    def stop(*_args, **_kwargs):
+        raise RuntimeError("fresh-scientific-guard")
+    monkeypatch.setattr(owner, "stop_undistinguished_named_levels", stop)
+    with pytest.raises(RuntimeError, match="fresh-scientific-guard"):
+        owner._prepare_scientific_launch(replace(_request(), allow_environment_resume=False))
+
+
+def test_explicit_fresh_plan_does_not_open_environment_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID", "prior")
+    monkeypatch.setattr(owner, "_development_progressive_resume_binding",
+                        lambda **_kwargs: pytest.fail("fresh plan cannot open an inherited checkpoint"))
+    monkeypatch.setattr(owner, "_require_profile_dictionaries", lambda **_kwargs: None)
+    monkeypatch.setattr(owner, "_require_execution_runtime", lambda **_kwargs: "synthetic")
+    from easyicu.webserver import plan_change_requirements
+    monkeypatch.setattr(plan_change_requirements, "compiled_configuration_plan_change", lambda **_kwargs: None)
+    request = replace(_request(), project_root=str(tmp_path), allow_environment_resume=False)
+    _, execution = owner._prepare_launch_execution(request, _scientific(), owner._authorize_launch_provider(request))
+    assert execution.development_resume_binding is None
+    assert execution.development_resume_scope is None
+    assert execution.development_resume_literature is None
+
+
 def test_a_requested_summary_cannot_read_a_different_materialization_window(monkeypatch, tmp_path):
     from easyicu.webserver import research_pipeline_run_preparation as preparation
 
@@ -628,3 +652,18 @@ def test_planning_restart_spends_the_existing_automatic_resume_budget(source, re
     resumes = [event for event in events if event.get("step") == "provider_auto_resume"]
     assert len(resumes) == 2
     assert all(event["restart_stage"] == "metadata_planning" for event in resumes)
+
+
+def test_sic_los_metadata_only_discussion_keeps_execution_scope_closed():
+    from easyicu.webserver.study_family_scope import study_family_database_gap
+
+    study = {"analysis_design": {"analysis_family": "association_study"},
+             "execution_concepts": {"outcome": "los_icu", "primary_exposure": "lact"}}
+    gap = study_family_database_gap(study, question="Association between first-day lactate and ICU length of stay", database="sic")
+    request = _request()
+    assert owner._metadata_only_sic_definition_gap(request, "sic", gap)
+    assert not owner._metadata_only_sic_definition_gap(replace(request, budget_mode="full_reviewed"), "sic", gap)
+    assert not owner._metadata_only_sic_definition_gap(request, "eicu", gap)
+    assert not owner._metadata_only_sic_definition_gap(request, "sic", {**gap, "family": "survival"})
+    assert not owner._metadata_only_sic_definition_gap(request, "sic", {**gap, "missing_capabilities": [
+        *gap["missing_capabilities"], {"capability": "concept:lact", "code": "required_concept_unmapped"}]})

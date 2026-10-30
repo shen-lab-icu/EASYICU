@@ -913,6 +913,23 @@ def test_grouped_output_is_sealed_without_accessing_the_raw_data_path(
         assert set(package.concept_index) == {"age"}
 
 
+def test_sic_native_manifest_uses_source_care_transfer_origin(tmp_path, monkeypatch):
+    from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN
+
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"demographics": ["age"]})
+    pd.DataFrame({"stay_id": [1, 2], "age": [50, 55]}).to_parquet(
+        tmp_path / "demographics.parquet", index=False,
+    )
+    api._publish_native_export_v2(
+        database="sic", data_path="/unused/synthetic-source", output_dir=str(tmp_path),
+        modules=["demographics"], max_patients=None, result=_completed_result(),
+    )
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    schema = manifest["canonical_physical_schema"]
+    assert schema["time_origin"] == SIC_CARE_UNIT_ORIGIN
+    assert "do not certify a contiguous ICU-only episode" in schema["clinical_scope_note"]
+
+
 def test_grouped_output_never_publishes_native_manifest_without_primary_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

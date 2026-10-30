@@ -7825,6 +7825,27 @@
    ]
   }
  },
+ "care_unit_to_case_closure_days": {
+  "unit": "days",
+  "target": "id_tbl",
+  "description": "(cases.TimeOfStay - cases.ICUOffset) / 86400 days; first intensive or intermediate care transfer to case closure, not ICU-only length of stay",
+  "category": "outcome",
+  "sources": {"sic": [{"callback": "sic_case_landmark_fields", "class_name": "fun_itm"}]}
+ },
+ "death_time_during_case_hours": {
+  "unit": "hours",
+  "target": "id_tbl",
+  "description": "(cases.OffsetOfDeath - cases.ICUOffset) / 3600 hours when death is known within the case interval; unknown otherwise",
+  "category": "outcome",
+  "sources": {"sic": [{"callback": "sic_case_landmark_fields", "class_name": "fun_itm"}]}
+ },
+ "death_during_case": {
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "description": "Nullable death within the SICdb case interval, using recorded death offset and hospital disposition",
+  "category": "outcome",
+  "sources": {"sic": [{"callback": "sic_case_landmark_fields", "class_name": "fun_itm"}]}
+ },
  "los_icu": {
   "unit": "days",
   "min": 0,

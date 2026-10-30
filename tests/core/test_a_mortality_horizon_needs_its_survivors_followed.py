@@ -102,6 +102,49 @@ def test_a_survivor_with_followup_keeps_the_horizon(monkeypatch) -> None:
     assert pd.isna(result.loc[3, "mort_28d"])
 
 
+@pytest.mark.parametrize("origin", [None, float("nan"), float("inf"), -1])
+def test_sic_unknown_care_transfer_origin_never_becomes_an_event_or_survivor(monkeypatch, origin) -> None:
+    cases = pd.DataFrame({
+        "CaseID": [1, 2, 3, 4, 5],
+        "ICUOffset": [origin, origin, 3600, 3600, 0],
+        "TimeOfStay": [90000] * 5,
+        "OffsetOfDeath": [5 * 86400, None, None, float("inf"), 5 * 86400],
+        "EstimatedSurvivalObservationTime": [3077] * 5,
+    }, index=[11, 12, 13, 14, 15])
+    monkeypatch.setattr(outcomes, "_raw_table", lambda *_: cases)
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert base.loc[[1, 2], ["days_to_death", "los_days", "followup_days"]].isna().all().all()
+    assert pd.isna(base.loc[4, "days_to_death"])
+    assert pd.isna(base.loc[4, "followup_days"])
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+    for patient in (1, 2, 4):
+        assert pd.isna(result.loc[patient, "mort_28d"])
+        assert pd.isna(result.loc[patient, "followup_days_28d"])
+    assert not bool(result.loc[3, "mort_28d"])
+    assert bool(result.loc[5, "mort_28d"])
+    assert result.loc[5, "followup_days_28d"] == 5.0
+
+
+def test_sic_followup_uses_conservative_admission_clock_bound(monkeypatch) -> None:
+    cases = pd.DataFrame({
+        "CaseID": [1, 2, 3, 4, 5], "ICUOffset": [0, 3600, 0, 3600, 181 * 86400],
+        "TimeOfStay": [90000, 90000, 90000, 90000, 182 * 86400],
+        "OffsetOfDeath": [None] * 5,
+        "EstimatedSurvivalObservationTime": [3077, 3077, 3076, 3076, 3076],
+    })
+    monkeypatch.setattr(outcomes, "_raw_table", lambda *_: cases)
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert base.loc[1, "followup_days"] == 365
+    assert base.loc[2, "followup_days"] == pytest.approx(365 - 1 / 24)
+    assert base.loc[3, "followup_days"] == 180
+    assert base.loc[4, "followup_days"] == pytest.approx(180 - 1 / 24)
+    assert pd.isna(base.loc[5, "followup_days"])
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+    assert bool(result.loc[1, "mort_365d"]) is False
+    assert pd.isna(result.loc[2, "mort_365d"])
+    assert result.loc[2, "followup_days_90d"] == 90
+
+
 @pytest.mark.parametrize("database", _FOLLOWED)
 def test_databases_that_follow_their_survivors_keep_the_horizons(
     database: str,

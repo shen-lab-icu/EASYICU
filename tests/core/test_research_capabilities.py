@@ -13,7 +13,7 @@ def test_every_database_has_evidenced_units_and_concepts(database):
     profile = research_capability_profile(database)
     assert profile.database == database
     assert "icu_stay" in profile.analysis_units
-    assert profile.icu_admission.source
+    assert (profile.icu_admission or profile.care_unit_admission_proxy).source
     assert profile.concept("hr").mapped
     assert profile.concept("hr").defined
     assert profile.concept("weight").mapped
@@ -52,7 +52,10 @@ def test_mortality_meanings_and_clocks_do_not_inherit_the_dictionary_label():
     assert profiles["aumc"].hospital_discharge is None
     assert profiles["sic"].mortality.status.column == "HospitalDischargeType"
     assert profiles["sic"].mortality.event_time.column == "OffsetOfDeath"
-    assert profiles["sic"].icu_admission.column == "ICUOffset"
+    assert profiles["sic"].icu_admission is None
+    assert profiles["sic"].care_unit_admission_proxy.column == "ICUOffset"
+    assert profiles["sic"].icu_discharge is None
+    assert profiles["sic"].case_close_proxy.column == "TimeOfStay"
     assert profiles["sic"].hospital_discharge is None
 
 
@@ -76,7 +79,7 @@ def test_binned_and_capped_measurements_remain_distinct_from_exact_values():
     for key in ("miiv", "mimic", "eicu"):
         assert research_capability_profile(key).age.kind == "capped_or_shifted"
         assert research_capability_profile(key).age.exact_through == 89
-    for database in ("hirid", "sic"):
+    for database in ("hirid",):
         profile = research_capability_profile(database)
         assert profile.age.kind == profile.weight.kind == "binned"
         assert profile.age.bin_width == profile.weight.bin_width == 5
@@ -87,6 +90,14 @@ def test_binned_and_capped_measurements_remain_distinct_from_exact_values():
         assert profile.age.bin_labels[-1] == "90+"
         assert profile.weight.bin_values == tuple(range(0, 501, 5))
     assert research_capability_profile("hirid").weight.field.column == "value"
+    sic = research_capability_profile("sic")
+    for numeric in (sic.age, sic.weight):
+        assert numeric.kind == "approximate"
+        assert numeric.bin_edges == numeric.bin_labels == numeric.bin_values == ()
+        assert numeric.bin_width is None
+        assert "exact intervals" in numeric.field.interpretation
+    assert sic.age.top_code == 90
+    assert sic.weight.top_code is None
 
 
 def test_los_and_admission_type_require_their_actual_source():
@@ -205,4 +216,22 @@ def test_default_icu_mortality_uses_the_same_proxy_rule_as_named_mortality(monke
 ])
 def test_source_clocks_and_icu_origins_remain_distinct(database, clock, anchor):
     profile = research_capability_profile(database)
-    assert (profile.time_representation, profile.icu_admission.column) == (clock, anchor)
+    origin = profile.icu_admission or profile.care_unit_admission_proxy
+    assert (profile.time_representation, origin.column) == (clock, anchor)
+
+
+def test_sic_case_boundaries_are_candidates_not_exact_icu_stay_authority():
+    from easyicu.databases.research_requirements import StudyRequirements, assess_study
+
+    profile = research_capability_profile("sic")
+    assert profile.icu_admission is profile.icu_discharge is None
+    assert not profile.icu_los
+    assert "intermediate" in profile.care_unit_admission_proxy.interpretation
+    assert "reopened" in profile.case_close_proxy.interpretation
+    decision = assess_study(profile, StudyRequirements(
+        family="association", outcome="los_icu", concepts=("lact",)))
+    assert decision.status == "refusal"
+    assert any(item.capability == "icu_los" for item in decision.missing)
+    # The same underlying columns remain reviewable but are not exact ICU LOS.
+    assert (profile.care_unit_admission_proxy.column, profile.case_close_proxy.column) == (
+        "ICUOffset", "TimeOfStay")

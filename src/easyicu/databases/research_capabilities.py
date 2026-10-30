@@ -35,7 +35,7 @@ class AnalysisUnit(Fact):
 
 
 class NumericRepresentation(Fact):
-    kind: Literal["exact", "binned", "capped_or_shifted", "unavailable"]
+    kind: Literal["exact", "binned", "approximate", "capped_or_shifted", "unavailable"]
     source: str
     field: SourceField | None = None
     bin_edges: tuple[float, ...] = ()
@@ -92,6 +92,11 @@ class ResearchCapabilityProfile(Fact):
     weight: NumericRepresentation
     icu_admission: SourceField | None
     icu_discharge: SourceField | None
+    # A source may expose a related episode coordinate without proving the
+    # exact ICU boundary. These facts are candidates for a reviewed design;
+    # they are not executable ICU admission or censoring authority.
+    care_unit_admission_proxy: SourceField | None = None
+    case_close_proxy: SourceField | None = None
     hospital_discharge: SourceField | None
     time_representation: Literal["shifted_timestamp", "icu_offset_minutes", "global_offset_milliseconds", "admission_offset_seconds"]
     time_source: str
@@ -224,7 +229,24 @@ def _numeric(config, name: str) -> NumericRepresentation:
             "privacy top code and remains 91, not an exact age. "
             "Owner: easyicu.concept.callbacks.miiv_age."
         )})
-    if config.name in {"hirid", "sic"}:
+    if config.name == "sic":
+        # SICdb documents rounded values but does not define the interval
+        # represented by each stored code. A code is not evidence for a
+        # particular lower/upper edge or an exact threshold substitution.
+        # https://www.sicdb.com/Documentation/Table%3A_Cases
+        # https://pmc.ncbi.nlm.nih.gov/articles/PMC11102905/
+        if field is not None:
+            units = "years" if name == "age" else "kg"
+            field = field.model_copy(update={"interpretation": (
+                f"SICdb documents rounding to +/-5 {units}; exact intervals and "
+                "threshold boundaries are not specified."
+                + (" Ages over 90 are set to 90." if name == "age" else "")
+            )})
+        return NumericRepresentation(
+            kind="approximate", source=source, field=field,
+            top_code=90 if name == "age" else None,
+        )
+    if config.name == "hirid":
         # Public release deidentification groups age/weight in five-year/kg
         # bands; the age band 90 includes all older ages. Stored numbers are
         # band codes, not exact measurements. Weight has no declared top code;
@@ -316,6 +338,23 @@ def research_capability_profile(database: str) -> ResearchCapabilityProfile:
                   for name, item in config.id_configs.items() if name in unit_names)
     start = _identifier_field(config, "icustay", "start")
     icu_end = _identifier_field(config, "icustay", "end")
+    care_unit_admission_proxy = case_close_proxy = None
+    if parent == "sic":
+        # SICdb's own documentation says ICUOffset is the first transfer to
+        # an intensive OR intermediate care ward. TimeOfStay is the case
+        # closing time and can include normal-ward time when a case reopens.
+        # Their difference must not become an exact ICU LOS or landmark risk
+        # set merely because the loader registers these as id_cfg bounds.
+        # https://www.sicdb.com/Documentation/Table%3A_Cases
+        if start is not None:
+            care_unit_admission_proxy = start.model_copy(update={
+                "interpretation": "First transfer to intensive or intermediate care; not a verified ICU-only admission."
+            })
+        if icu_end is not None:
+            case_close_proxy = icu_end.model_copy(update={
+                "interpretation": "Case closure; reopened cases can include normal-ward time, not a verified ICU-only discharge."
+            })
+        start = icu_end = None
     hospital_end = _identifier_field(config, "hadm", "end")
     mortality = _mortality(config)
     if mortality is not None:
@@ -350,6 +389,7 @@ def research_capability_profile(database: str) -> ResearchCapabilityProfile:
         source_registered=registered, units=units, mortality=mortality, mortality_outcomes=tuple(outcomes),
         age=_numeric(config, "age"), weight=_numeric(config, "weight"),
         icu_admission=start, icu_discharge=icu_end, hospital_discharge=hospital_end,
+        care_unit_admission_proxy=care_unit_admission_proxy, case_close_proxy=case_close_proxy,
         time_representation=clocks.get(parent, "shifted_timestamp"),
         time_source=f"data-sources.json#/{config.name}/id_cfg/icustay;easyicu.database_config.TIME_IS_OFFSET",
         hospital_los="los_hosp" in mapped and hospital_end is not None,

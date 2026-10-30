@@ -128,6 +128,7 @@ def _export_identity_and_time_coordinates(
 
     from easyicu.concept.metadata_sidecar import TimeCoordinate
     from easyicu.config import load_src_cfg
+    from easyicu.databases.time_origin import native_export_time_origin
     from easyicu.database_config import (
         END_TIME_COLUMNS,
         START_TIME_COLUMNS,
@@ -179,7 +180,7 @@ def _export_identity_and_time_coordinates(
         dict.fromkeys(c for c in ("charttime", "time") if c in columns)
     )
     coordinates = tuple(
-        TimeCoordinate(column=column, origin="icu_admission", unit="h")
+        TimeCoordinate(column=column, origin=native_export_time_origin(database), unit="h")
         for column in time_candidates
     )
     structural_ids = {candidate for candidate in preferred_ids if candidate in columns}
@@ -187,7 +188,8 @@ def _export_identity_and_time_coordinates(
 
 
 def _companion_projection(
-    *, concept: str, column: str, series: Any, logical_concept: bool
+    *, concept: str, column: str, series: Any, logical_concept: bool,
+    time_origin: str = "icu_admission",
 ) -> Optional[tuple[Any, Optional[Any], Optional[str]]]:
     """Apply the producer-owned, closed companion-output contract."""
 
@@ -207,7 +209,7 @@ def _companion_projection(
     kind, raw_window = match.groups()
     window = (
         DerivationWindow(
-            origin="icu_admission", start_hours=0.0, end_hours=float(raw_window[:-1])
+            origin=time_origin, start_hours=0.0, end_hours=float(raw_window[:-1])
         )
         if raw_window is not None
         else None
@@ -352,6 +354,9 @@ def build_export_file_metadata_binding(
     """Bind a producer-owned physical output to typed metadata exactly once."""
 
     import pandas as pd
+    from easyicu.databases.time_origin import native_export_time_origin
+
+    time_origin = native_export_time_origin(database)
 
     from easyicu.concept.metadata_projection import (
         ColumnProjectionSpec,
@@ -424,6 +429,7 @@ def build_export_file_metadata_binding(
                 column=column,
                 series=frame[column],
                 logical_concept=concept_declares_event_status(concept, definition),
+                time_origin=time_origin,
             )
             if projected is None:
                 continue
@@ -459,7 +465,7 @@ def build_export_file_metadata_binding(
             ConceptColumnRole.LAST_OBSERVATION_TIME,
             ConceptColumnRole.EVENT_TIME,
         }:
-            spec_kwargs.update(time_origin="icu_admission", time_unit="h")
+            spec_kwargs.update(time_origin=time_origin, time_unit="h")
         metadata = project_concept_column_metadata(
             definition,
             spec=ColumnProjectionSpec(

@@ -114,6 +114,17 @@ class ResearchPipelineLaunchRequest:
     budget_mode: str
     runner_image: Optional[str]
     plan_change_request: Optional[PlanChangeRequest] = None
+    allow_environment_resume: bool = True
+
+
+def _development_resume_source(request: ResearchPipelineLaunchRequest) -> str:
+    """A fresh-plan launch must not inherit a developer resume coordinate."""
+
+    return _clean_text(
+        request.development_resume_source_job_id
+        or (os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV) if request.allow_environment_resume else ""),
+        80,
+    )
 
 
 @dataclass(frozen=True)
@@ -216,6 +227,14 @@ def _approved_trial(study: Mapping[str, Any]) -> Optional[_StatedTrial]:
     return _StatedTrial(confirmed.spec, confirmed.population_spec)
 
 
+def _metadata_only_sic_definition_gap(request, database: str, scope_gap: Mapping[str, Any] | None) -> bool:
+    """Admit only a review-only discussion, never an executable launch."""
+    from easyicu.webserver.study_family_scope import metadata_only_sic_definition_gap
+
+    return (str(request.budget_mode or "").strip().lower() == "planner_canary"
+            and metadata_only_sic_definition_gap(database, scope_gap))
+
+
 def _prepare_scientific_launch(
     request: ResearchPipelineLaunchRequest,
     *,
@@ -251,8 +270,7 @@ def _prepare_scientific_launch(
 
     if not (
         request.execution_resume_source_run_id
-        or request.development_resume_source_job_id
-        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+        or _development_resume_source(request)
     ):
         # A question that names a kind of a concept the analysis data do not
         # separate (invasive ventilation) is never planned on every kind
@@ -273,7 +291,17 @@ def _prepare_scientific_launch(
         study = dict(record_unset_family_design(study, question=question))
         # A family v1 does not offer on the bound database is refused here,
         # on the family the plan would use (``study_family_scope``).
-        stop_family_out_of_scope(study, question=question, database=database)
+        from easyicu.webserver.study_family_scope import study_family_database_gap
+
+        scope_gap = study_family_database_gap(study, question=question, database=database)
+        # A canary can discuss this specific unresolved SIC definition using
+        # metadata.  It cannot grant execution or choose a substitute: the
+        # full-review launch and the downstream scientific review still gate it.
+        discuss_only = _metadata_only_sic_definition_gap(request, database, scope_gap)
+        if discuss_only:
+            study["metadata_only_unresolved_capability_gap"] = scope_gap
+        else:
+            stop_family_out_of_scope(study, question=question, database=database)
         # A variable the question states that the conversation has not
         # recorded stops a new plan instead of leaving it out silently
         # (``unread_stated_variables``).
@@ -291,8 +319,7 @@ def _prepare_scientific_launch(
         study,
         configured_primary_exposure,
     )
-    if not (request.execution_resume_source_run_id or request.development_resume_source_job_id
-            or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)):
+    if not (request.execution_resume_source_run_id or _development_resume_source(request)):
         from .research_launch_population import prepare_source_population
 
         study = prepare_source_population(study)
@@ -317,8 +344,7 @@ def _prepare_scientific_launch(
     )
     if not (
         request.execution_resume_source_run_id
-        or request.development_resume_source_job_id
-        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+        or _development_resume_source(request)
     ):
         from easyicu.webserver.pi_copilot.plan_decisions import record_post_baseline_landmark
 
@@ -631,11 +657,7 @@ def _prepare_launch_execution(
     budget_mode = str(request.budget_mode or "").strip().lower()
 
     development_resume_binding: tuple[Path, str] | None = None
-    selected_resume_source = _clean_text(
-        request.development_resume_source_job_id
-        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
-        80,
-    )
+    selected_resume_source = _development_resume_source(request)
     if request.plan_change_request is not None and (
         not scientific.metadata_only_planning
         or selected_resume_source
@@ -705,6 +727,8 @@ def _prepare_launch_execution(
     except ResearchPipelineRunError as exc:
         if (
             exc.code != "research_pipeline_development_resume_acquisition_missing"
+            or (development_resume_binding is not None
+                and development_resume_binding[0].name == "metadata_outline_retry.json")
             or not scientific.metadata_only_planning
             or budget_mode != "planner_canary"
             or not metadata_planning_restart_allowed(
@@ -714,6 +738,15 @@ def _prepare_launch_execution(
             raise
         development_resume_acquisition = None
         restart_metadata_planning = True
+    if (development_resume_binding is not None
+            and development_resume_binding[0].name == "metadata_outline_retry.json"
+            and (not scientific.metadata_only_planning or development_resume_scope.prepared_grouping is not None
+                 or development_resume_acquisition is None
+                 or development_resume_acquisition.kind != "metadata_only_planning_catalog")):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_mismatch",
+            "Private outline recovery requires the original metadata-only planning catalog.",
+        )
     development_resume_literature = (
         _development_resume_literature_bundle(
             checkpoint_path=development_resume_binding[0]
@@ -776,6 +809,8 @@ def _prepare_launch_execution(
         runner_image=selected_runner_image,
         project_root=request.project_root,
     )
+    if selected_runner_kind == "host":
+        _require_profile_dictionaries(budget_mode=budget_mode, runner_kind=selected_runner_kind)
     if not scientific.metadata_only_planning and any(
         spec.strategy == "time_varying" for spec in scientific.sensitivity_specs
     ):
@@ -835,8 +870,7 @@ def prepare_research_pipeline_run(
     )
     if revision is not None:
         if (
-            request.development_resume_source_job_id
-            or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+            _development_resume_source(request)
             or request.execution_resume_source_run_id
             or request.plan_change_request is not None
         ):

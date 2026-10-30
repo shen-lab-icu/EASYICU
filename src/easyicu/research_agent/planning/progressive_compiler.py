@@ -108,6 +108,11 @@ from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordered_trend_binding
 from .population_compile import CompiledPopulation, compile_population
+from .population_question_completeness import (
+    adult_age_source_unverified,
+    adult_population_accounted_for,
+    explicit_adult_population,
+)
 from .population_spec import (
     PopulationSpec,
     PopulationSpecRefused,
@@ -792,11 +797,32 @@ def validate_progressive_foundation(
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
-    if _stated_population_spec(foundation.cohort, context=context) is None:
+    population_spec = _stated_population_spec(foundation.cohort, context=context)
+    if population_spec is None:
         # Without a spec, the Planner's own predicates select the rows.
         _validate_progressive_cohort_intent(foundation.cohort, context=context)
         _refuse_identity_predicates(foundation.cohort, context=context)
         _require_stated_population_applied(foundation.cohort, context=context)
+    adult_words = explicit_adult_population(context.research_question)
+    if adult_words:
+        if not adult_population_accounted_for(context, foundation.cohort, population_spec):
+            raise _fail(
+                "progressive_stated_adult_population_missing",
+                f"The question states {adult_words!r}, but the candidate cohort does not "
+                "account for that population. State the criterion and how it is "
+                "applied, or explicitly record that it cannot be applied; do not "
+                "treat a cohort label as a filter or invent an age threshold.",
+                path="cohort.population_spec",
+            )
+        if adult_age_source_unverified(context):
+            raise _fail(
+                "progressive_adult_age_source_unverified",
+                f"The question states {adult_words!r}, but this source's age coding "
+                "is approximate and its exact boundary is unverified. An age "
+                "predicate alone cannot establish the requested adult population; "
+                "resolve the source limitation for scientific review.",
+                path="cohort.population_spec",
+            )
     labels = {
         str(item.key or "").strip(): " ".join(str(item.value or "").split())
         for item in foundation.display_labels

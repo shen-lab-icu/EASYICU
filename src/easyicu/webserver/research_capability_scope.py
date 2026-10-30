@@ -26,8 +26,12 @@ def study_requirements(study: Mapping, *, family: str, question: str = "") -> St
     unit = {"hospital_admission": "hospitalization", "row": "icu_stay"}.get(unit, unit)
     thresholds = []
     cohort = study.get("cohort") or {}
+    from .primary_cohort import ADULT_AGE_FLOOR_YEARS, ADULT_COHORT_PRESETS
+
     for field, operator in (("age_min", ">="), ("age_max", "<=")):
         value = cohort.get(field)
+        if field == "age_min" and cohort.get("preset") in ADULT_COHORT_PRESETS:
+            value = max(ADULT_AGE_FLOOR_YEARS, float(value or 0))
         if value is not None and 0 < float(value):
             thresholds.append(ThresholdRequirement(concept="age", operator=operator, value=value))
     population = study.get("population_spec") or {}

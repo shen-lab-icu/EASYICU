@@ -261,7 +261,7 @@ class TimeWindow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., description="Short, stable identifier, e.g. 'first_24h'.")
-    anchor: Literal["icu_admission", "hospital_admission", "event_onset"] = (
+    anchor: Literal["icu_admission", "hospital_admission", "event_onset", "first_intensive_or_intermediate_care_transfer"] = (
         "icu_admission"
     )
     start_hours: float = 0.0

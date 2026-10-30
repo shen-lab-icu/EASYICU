@@ -65,7 +65,7 @@ def test_template_cannot_silently_omit_a_reviewed_additional_step():
         compile_same_study(replace(original, plan=changed), original.context)
 
 
-@pytest.mark.parametrize("database", ["aumc", "sic", "hirid"])
+@pytest.mark.parametrize("database", ["aumc", "hirid"])
 def test_a_binned_covariate_is_recompiled_not_treated_as_measured_years(database):
     original = source()
     target = original.context.model_copy(deep=True)
@@ -76,6 +76,19 @@ def test_a_binned_covariate_is_recompiled_not_treated_as_measured_years(database
     assert age.coding == "categorical"
     assert canonical_sha256(plan.model_dump(mode="json")) != canonical_sha256(original.plan.model_dump(mode="json"))
     assert context.cohort.provenance["database_capability_binding"]["binned_covariates"]
+
+
+def test_sic_approximate_age_stays_approximate_and_requires_source_review():
+    from easyicu.databases.research_substitutions import approximate_variables_used
+
+    original = source()
+    target = original.context.model_copy(deep=True)
+    target.cohort.database = "sic"
+    context, plan, _ = compile_same_study(original, target)
+    binding = context.cohort.provenance["database_capability_binding"]
+    assert "age" in binding["approximate_covariates"]
+    assert "age" not in binding["binned_covariates"]
+    assert "age" in approximate_variables_used(context, plan)
 
 
 def test_fu1_owner_uses_the_same_real_compiler_without_source_observations(monkeypatch):

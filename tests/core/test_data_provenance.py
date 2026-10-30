@@ -6,9 +6,38 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
+from pathlib import Path
 
 from easyicu.concept.schema import ConceptDictionary, ConceptDefinition
 from tests.support.data_provenance import synthetic_dictionary
+
+
+@pytest.mark.parametrize("relative", [
+    "datasource.py", "load_concepts.py", "table/__init__.py", "api/extraction.py",
+    "io/ts_utils.py", "scores/outcomes.py",
+])
+def test_extraction_owner_change_changes_new_provenance_digest(monkeypatch, relative):
+    from easyicu.concept.provenance import (
+        DataProvenanceSnapshot, capture_data_provenance, resolver_implementation_digest,
+    )
+
+    original_read = Path.read_bytes
+    expected = resolver_implementation_digest()
+    historic = capture_data_provenance(
+        synthetic_dictionary(), concepts=["lab_signal"], source_database="miiv",
+    ).model_dump(mode="json")
+    root = Path(__import__("easyicu").__file__).resolve().parent
+    target = root / relative
+    assert target.is_file()
+
+    def changed_read(path):
+        data = original_read(path)
+        return data + b"\n# changed extraction owner\n" if path == target else data
+
+    monkeypatch.setattr(Path, "read_bytes", changed_read)
+    assert resolver_implementation_digest() != expected
+    # Existing frozen evidence remains readable with its original identity.
+    assert DataProvenanceSnapshot.model_validate(historic).implementation_sha256 == expected
 
 
 def test_source_conversion_codes_and_unknown_are_recorded_without_guessing():
@@ -167,6 +196,69 @@ def test_capture_refuses_dictionary_or_implementation_drift(monkeypatch):
     monkeypatch.setattr(capture, "_input_identity", lambda: "changed")
     with pytest.raises(ValueError, match="inputs changed"):
         capture.finish()
+
+
+def test_bound_runtime_table_defaults_supply_resolver_coordinates_only():
+    from easyicu.concept.provenance import DataProvenanceSnapshot, capture_data_provenance
+    from easyicu.concept.provenance_capture import ExtractionProvenanceCapture
+    from easyicu.config import load_src_cfg
+    from easyicu.resources import load_dictionary
+
+    dictionary, config = load_dictionary(), load_src_cfg("sic")
+    # The older v1 snapshot with unresolved coordinates is still valid and is
+    # not rewritten based on a different, present-day source configuration.
+    old = capture_data_provenance(dictionary, concepts=["lact"], source_database="sic")
+    old_payload = old.model_dump(mode="json")
+    assert old.concepts[0].sources[0].value_variable is None
+    capture = ExtractionProvenanceCapture()
+    capture.record(dictionary=dictionary, source_config=config, concepts=["lact"], cohort_contract={})
+    actual = DataProvenanceSnapshot.model_validate(capture.finish()["snapshots"][0])
+    source = actual.concepts[0].sources[0]
+    assert source.table == "laboratory"
+    assert source.selector_variable == "LaboratoryID"
+    assert set(source.item_ids) == {454, 465, 657}
+    assert source.value_variable == "LaboratoryValue"
+    assert source.time_variable == "Offset"
+    assert source.unit_variable is None
+    assert actual.source_config_sha256 is not None
+    assert DataProvenanceSnapshot.model_validate(old_payload).snapshot_sha256 == old.snapshot_sha256
+
+
+def test_runtime_defaults_require_exact_identity_and_never_invent_derived_inputs():
+    from easyicu.concept.provenance import capture_data_provenance, metadata_digest
+    from easyicu.config import DataSourceConfig
+
+    dictionary = synthetic_dictionary()
+    dictionary.update(ConceptDictionary({"derived_signal": ConceptDefinition(
+        name="derived_signal", sources={}, sub_concepts=["lab_signal"], callback="synthetic_derive",
+    )}))
+    config = DataSourceConfig(name="miiv", tables={
+        "synthetic_labs": {"defaults": {"val_var": "fallback", "index_var": "observed_at"}},
+    })
+    sha = metadata_digest(config.model_dump(mode="json"))
+    snapshot = capture_data_provenance(
+        dictionary, concepts=["derived_signal"], source_database="miiv",
+        source_config_sha256=sha, source_config=config,
+    )
+    derived, lab = snapshot.concepts
+    assert derived.sources == () and derived.derivation_inputs == ("lab_signal",)
+    # Explicit concept fields override table defaults and remain bound to the
+    # callback; a missing duration default remains unknown.
+    assert lab.sources[0].value_variable == "value"
+    assert lab.sources[0].unit_variable == "unit"
+    assert lab.sources[0].time_variable == "observed_at"
+    assert lab.sources[0].duration_variable is None
+    assert lab.sources[0].callback.startswith("convert_unit(")
+    with pytest.raises(ValueError, match="identity mismatch"):
+        capture_data_provenance(
+            dictionary, concepts=["lab_signal"], source_database="miiv",
+            source_config_sha256="a" * 64, source_config=config,
+        )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        capture_data_provenance(
+            dictionary, concepts=["lab_signal"], source_database="sic",
+            source_config_sha256=sha, source_config=config,
+        )
 
 
 def test_native_api_records_the_selected_cached_resolver_before_any_read(tmp_path, monkeypatch):

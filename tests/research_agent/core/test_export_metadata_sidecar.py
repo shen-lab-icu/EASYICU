@@ -96,6 +96,28 @@ def test_native_metadata_binds_death_time_as_typed_event_time() -> None:
     assert death_time.representation_transform == "source_event_time"
 
 
+def test_sic_native_metadata_states_care_transfer_not_pure_icu_origin() -> None:
+    from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN
+
+    frame = pd.DataFrame({
+        "stay_id": [1, 2], "charttime": [0.0, 12.0],
+        "lact": [1.2, 2.1], "lact_max_24h": [1.2, 2.1],
+        "lact_first_time_24h": [0.0, 12.0],
+    })
+    binding = build_export_file_metadata_binding(
+        relative_path="blood_gas.parquet", module="blood_gas", frame=frame,
+        concept_ids=("lact",), database="sic", database_class_prefixes=(),
+        dictionary=load_dictionary(include_sofa2=True),
+    )
+    assert binding.time_coordinates[0].origin == SIC_CARE_UNIT_ORIGIN
+    windowed = binding.columns["lact_max_24h"]
+    assert windowed.derivation_window.origin == SIC_CARE_UNIT_ORIGIN
+    first_time = binding.columns["lact_first_time_24h"]
+    assert first_time.derivation_window.origin == SIC_CARE_UNIT_ORIGIN
+    assert first_time.metadata.time_origin == SIC_CARE_UNIT_ORIGIN
+    assert first_time.metadata.time_unit == "h"
+
+
 def _write_frame(path: Path, frame: pd.DataFrame, export_format: str) -> None:
     if export_format == "parquet":
         frame.to_parquet(path, index=False)
