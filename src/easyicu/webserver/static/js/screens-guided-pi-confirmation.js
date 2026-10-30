@@ -577,6 +577,7 @@
       if (!preparation) return '';
       const reasons = {
         population_preparation_all_stays_conflict: tr('Conflicts with your choice to retain all stays.', '与已选择的保留全部入住冲突。'),
+        population_preparation_patient_hospitalization_scope_mismatch: tr('The question asks for each patient’s first ICU stay; the first ICU stay per hospitalization is different. Revise the plan and verify patient ordering before preparation.', '原问题要求每位患者首次 ICU 入住；每次住院首次 ICU 不是同一人群。请先修订计划并核实患者入住顺序。'),
         population_preparation_bound_unrepresentable: tr('Extraction cannot preserve these exact bounds.', '提取无法保留这组精确界限。'),
         population_preparation_empty_age_range: tr('Conflicts with the current age range.', '与当前年龄范围冲突。'),
         population_determined_after_time_zero: tr('This condition is determined after time zero.', '该条件在研究起点之后才能确定。'),

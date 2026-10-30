@@ -114,6 +114,18 @@ def test_an_unsupported_projection_explains_each_criterion_without_an_action():
     assert "无法保留这组精确界限" in card["html"]
 
 
+def test_patient_first_and_hospital_first_mismatch_is_explained_without_approval():
+    preparation = {
+        "available": False, "status": "blocked",
+        "criteria": [{"quote": "每位患者首次 ICU 入住", "disposition": "requires_extraction",
+                      "reason": "population_preparation_patient_hospitalization_scope_mismatch"}],
+    }
+    card = _card(REQUIRES_EXTRACTION, preparation=preparation)
+    assert card["execute"] is False
+    assert "每次住院首次 ICU 不是同一人群" in card["html"]
+    assert "核实患者入住顺序" in card["html"]
+
+
 @pytest.mark.parametrize("kind,code", [("preparation", REQUIRES_EXTRACTION), ("acceptance", NOT_APPLIED)])
 @pytest.mark.parametrize("language,system,interpretation,setting", [
     ("en", "System proposal", "Words from the question, system interpretation", "Study setting"),
