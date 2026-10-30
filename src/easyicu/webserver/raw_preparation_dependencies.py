@@ -48,6 +48,33 @@ def reviewed_plan_provenance_concepts(*, context, plan) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
+def reviewed_population_provenance_concepts(*, projection: dict | None,
+                                            plan_sha256: str) -> tuple[str, ...]:
+    """Name concepts in a host-verified population, including unapplied ones.
+
+    ``projection`` must come from ``reviewed_population_spec`` for the same
+    paused plan. These are metadata-discovery candidates, not proof that the
+    criterion is executable, a complete input declaration, or a data grant.
+    """
+    from easyicu.research_agent.planning.population_compile import population_spec_concepts
+    from easyicu.research_agent.planning.population_spec import PopulationSpec
+
+    if projection is None:
+        return ()
+    if (not isinstance(projection, dict)
+            or projection.get("schema_version") != "easyicu.reviewed_population_spec_projection/1"
+            or projection.get("plan_sha256") != plan_sha256
+            or not isinstance(projection.get("criteria"), list)):
+        raise ValueError("dependency_population_projection_mismatch")
+    try:
+        spec = PopulationSpec.model_validate(
+            {"criteria": [item["criterion"] for item in projection["criteria"]]}
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("dependency_population_projection_invalid") from exc
+    return population_spec_concepts(spec)
+
+
 class SourceTableRequirement(BaseModel):
     """Explicit dependencies provided by a database adapter, not guessed by AI."""
     model_config = ConfigDict(extra="forbid", frozen=True)
