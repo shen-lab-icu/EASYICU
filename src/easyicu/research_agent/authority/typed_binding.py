@@ -2176,6 +2176,7 @@ class TypedBindingResolver:
     run_dir: Path
     authoritative_cohort_path: Path
     development_sample: Optional[Any] = None
+    unpublished_evidence_store: Optional[Any] = None
 
     def _records_snapshot(self) -> List[Mapping[str, Any]]:
         with self.records_lock:
@@ -2280,6 +2281,22 @@ class TypedBindingResolver:
                 continue
 
             direct_record = evidence_view.get(value)
+            if (
+                allow_unpublished_direct_ids
+                and value in attempt_ids
+                and self.unpublished_evidence_store is not None
+            ):
+                # A pre-dispatch view cannot contain this worker's later
+                # outputs. Only its host-supplied exact attempt IDs may use
+                # the live store; no peer ID or alias is admitted here.
+                own_record = self.unpublished_evidence_store.get(value)
+                if (
+                    own_record is not None
+                    and _evidence_record_field(own_record, "evidence_id") == value
+                    and _evidence_record_field(own_record, "produced_by_step")
+                    == consumer_step.step_id
+                ):
+                    direct_record = own_record
             if (
                 allow_unpublished_direct_ids
                 and direct_record is not None

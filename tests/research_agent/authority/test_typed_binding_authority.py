@@ -306,6 +306,45 @@ def test_evidence_read_view_copies_records_and_preserves_lookup_rules(tmp_path) 
     assert view.current_verified_records(checkpoint) == []
 
 
+def test_wave_binding_reads_only_its_own_current_attempt_from_live_store(tmp_path) -> None:
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    store = EvidenceStore(tmp_path)
+    wave_view = store.read_view()
+    own = store.register_text(
+        kind="table", description="own", text="a\n1\n", filename="own.csv",
+        evidence_id="own_attempt", produced_by_step="own", publish_aliases=False,
+    )
+    peer = store.register_text(
+        kind="table", description="peer", text="a\n2\n", filename="peer.csv",
+        evidence_id="peer_attempt", produced_by_step="peer", publish_aliases=False,
+    )
+    resolver = typed_binding.TypedBindingResolver(
+        evidence_store=wave_view, per_step_records=[], records_lock=threading.Lock(),
+        run_dir=tmp_path, authoritative_cohort_path=tmp_path / "cohort.parquet",
+        unpublished_evidence_store=store,
+    )
+    plan = AnalysisPlan(research_question="Review own attempt.", steps=[])
+    step = AnalysisStep(step_id="own", intent="Review this step.")
+    refs, _, _ = resolver.resolve_names(
+        [own.evidence_id, peer.evidence_id], plan=plan, consumer_step=step,
+        allow_unpublished_direct_ids=True,
+        unpublished_evidence_ids=[own.evidence_id, peer.evidence_id],
+    )
+    assert [ref.evidence_id for ref in refs] == [own.evidence_id]
+    refs, _, _ = resolver.resolve_names(
+        [own.evidence_id], plan=plan, consumer_step=step,
+        allow_unpublished_direct_ids=True, unpublished_evidence_ids=[],
+    )
+    assert refs == []
+    (tmp_path / own.relative_path).write_text("damaged", encoding="utf-8")
+    refs, _, _ = resolver.resolve_names(
+        [own.evidence_id], plan=plan, consumer_step=step,
+        allow_unpublished_direct_ids=True, unpublished_evidence_ids=[own.evidence_id],
+    )
+    assert refs == []
+
+
 def test_resolver_uses_the_current_plan_on_every_call(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

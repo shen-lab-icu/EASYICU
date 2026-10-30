@@ -104,3 +104,50 @@ def test_pipeline_passes_frozen_state_to_parallel_workers(ra, synthetic_cohort, 
     assert all(state.reflection_memory[:len(base.reflection_memory)] == base.reflection_memory for _, state in states)
     expected_count = len(base.reflection_memory) + sum(len(state.reflection_memory) - len(base.reflection_memory) for _, state in states)
     assert len(result.reflection_memory) == expected_count
+
+
+@pytest.mark.integration
+def test_pipeline_captures_one_evidence_view_before_parallel_dispatch(
+    ra, synthetic_cohort, tmp_path, monkeypatch,
+):
+    """Exercise the disabled branch only for the snapshot wiring contract."""
+    from easyicu.research_agent.execution import phase
+
+    real_parallel = phase.RunCoordinator.run_parallel
+    real_execute = phase._execute_step
+    observed = []
+    observed_lock = Lock()
+
+    def after_capture_before_dispatch(self, **kwargs):
+        partial = kwargs["execute_step"]
+        resolver = partial.keywords["batch_binding_resolver"]
+        store = resolver.unpublished_evidence_store
+        record = store.register_text(
+            kind="statistic", description="late peer", text="42", filename="late.json",
+            evidence_id="late_peer_result", produced_by_step="late_peer",
+        )
+        store.register_numeric_claim(
+            value="42", canonical=42, evidence_id=record.evidence_id,
+            step_id="late_peer", source_field="estimate",
+        )
+        return real_parallel(self, **kwargs)
+
+    def inspect_worker(step, **kwargs):
+        resolver = kwargs["typed_binding_resolver"]
+        with observed_lock:
+            observed.append((
+                resolver,
+                resolver.evidence_store.get("late_peer_result"),
+                [claim for claim in kwargs["batch_numeric_claims"]
+                 if claim.evidence_id == "late_peer_result"],
+            ))
+        return real_execute(step, **kwargs)
+
+    monkeypatch.setattr(phase.RunCoordinator, "run_parallel", after_capture_before_dispatch)
+    monkeypatch.setattr(phase, "_execute_step", inspect_worker)
+    test_pipeline_passes_frozen_state_to_parallel_workers(
+        ra, synthetic_cohort, tmp_path, monkeypatch,
+    )
+    assert len(observed) >= 2
+    assert len({id(resolver) for resolver, _, _ in observed}) == 1
+    assert all(record is None and claims == [] for _, record, claims in observed)

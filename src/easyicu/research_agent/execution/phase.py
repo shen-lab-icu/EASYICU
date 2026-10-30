@@ -44,7 +44,7 @@ import tempfile
 import threading
 import traceback
 from contextvars import copy_context
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass, field as dataclass_field, replace
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -1885,6 +1885,7 @@ def run_execute_phase(
 
     def _execute_one_step(
         step: AnalysisStep, *, batch_base: Any = None,
+        batch_binding_resolver: Any = None, batch_numeric_claims: Any = None,
     ) -> Dict[str, Any]:
         nonlocal runtime_state
         step_runtime, step_record = _execute_step(
@@ -1921,6 +1922,7 @@ def run_execute_phase(
             llm_signature=llm_signature,
             pattern_auditor=pattern_auditor,
             per_step_records=per_step_records,
+            batch_numeric_claims=batch_numeric_claims,
             pipeline=pipeline,
             plan=plan,
             plan_result=plan_result,
@@ -1946,7 +1948,10 @@ def run_execute_phase(
             step_summary_integrity_validator=step_summary_integrity_validator,
             supervisor=supervisor,
             total_steps=total_steps,
-            typed_binding_resolver=typed_binding_resolver,
+            typed_binding_resolver=(
+                typed_binding_resolver if batch_binding_resolver is None
+                else batch_binding_resolver
+            ),
             universe_path=universe_path,
             usage_auditor=usage_auditor,
         )
@@ -2150,10 +2155,30 @@ def run_execute_phase(
         # All independent workers receive the same frozen state. After joining,
         # merge their append-only reflections in plan order, not completion order.
         batch_base = runtime_state
+        # Capture once before submitting any worker. This pins the binding
+        # index, checkpoint ledger and numeric source claims to the same wave.
+        # Other evidence reads, writes and run-root files are still shared;
+        # this snapshot does not authorize the currently disabled path.
+        with shared_lock:
+            batch_step_records = copy.deepcopy(per_step_records)
+        batch_evidence = evidence.read_view()
+        batch_numeric_claims = batch_evidence.authoritative_numeric_claims(
+            batch_step_records
+        )
+        batch_binding_resolver = replace(
+            typed_binding_resolver,
+            evidence_store=batch_evidence,
+            per_step_records=batch_step_records,
+            unpublished_evidence_store=evidence,
+        )
         run_coordinator.run_parallel(
             steps=steps_to_run,
             max_workers=pipeline._max_concurrent_steps,
-            execute_step=functools.partial(_execute_one_step, batch_base=batch_base),
+            execute_step=functools.partial(
+                _execute_one_step, batch_base=batch_base,
+                batch_binding_resolver=batch_binding_resolver,
+                batch_numeric_claims=batch_numeric_claims,
+            ),
             submit_step=_submit_in_current_context,
             on_worker_error=functools.partial(_record_step_exception, parallel=True),
         )
@@ -3972,6 +3997,7 @@ def _execute_step(
     llm_signature: Any,
     pattern_auditor: Any,
     per_step_records: Any,
+    batch_numeric_claims: Any,
     pipeline: Any,
     plan: Any,
     plan_result: Any,
@@ -4004,12 +4030,14 @@ def _execute_step(
     # Freeze the current successful claim view before a worker runs. This is a
     # partial isolation boundary, not permission to run workers concurrently:
     # a parallel scheduler must capture one view before dispatching the wave.
-    with shared_lock:
-        prior_claim_records = copy.deepcopy(per_step_records)
+    if batch_numeric_claims is None:
+        with shared_lock:
+            prior_claim_records = copy.deepcopy(per_step_records)
+        prior_claims = evidence.authoritative_numeric_claims(prior_claim_records)
+    else:
+        prior_claims = batch_numeric_claims
     prior_numeric_claims = [
-        copy.deepcopy(claim)
-        for claim in evidence.authoritative_numeric_claims(prior_claim_records)
-        if claim.step_id != step.step_id
+        copy.deepcopy(claim) for claim in prior_claims if claim.step_id != step.step_id
     ]
     attempt_bootstrap = prepare_step_attempt_bootstrap(
         resume_state=plan_result.resume_state,
