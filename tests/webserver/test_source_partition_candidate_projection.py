@@ -173,7 +173,7 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
       const esc=v=>String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
       const workflow={{next_action_code:'starting',starting:{{action_code:'prepare_analysis_data'}},
         raw_preparation_candidate_run_id:'run',raw_preparation_candidate_result:{{status:'blocked',partial_multitable_projection:{{partial_projection_only:true}},
-          blocker_codes:['dependency_cohort_inputs_unknown'],source_partition_candidate:{{
+          blocker_codes:['dependency_cohort_inputs_unknown','dependency_cohort_concepts_unrecorded'],source_partition_candidate:{{
             files:[{{table:'<table>',path:'<file>',columns:['id','<value>']}}],
             unmapped_variables:['<missing>'],identifier_candidates:[{{variable:'<id>',table:'<table>',column:'<column>'}},{{variable:null,table:'cases',column:'CaseID'}}]}}}}}};
       const owner=window.EU_GUIDED_PI_CONFIRMATION.create({{tr:(en,zh)=>zh,esc,iconHtml:()=>'',resourceButton:()=>'',
@@ -187,6 +187,7 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
     assert '&lt;id>' in html and '&lt;column>' in html and '未验证实际记录、表间关联或派生标识' in html
     assert '未绑定研究变量' in html and '不代表研究变量已绑定' in html
     assert '不筛选队列、不关联表、不计算派生特征' in html and '暂不可审批或执行' in html
+    assert '来源映射尚未覆盖已审阅人群条件使用的全部概念' in html
     assert '<file>' not in html and '不授权数据准备或分析' in html
     assert 'data-gpi-preparation-review' not in html
 

@@ -116,3 +116,67 @@ def test_verified_scientific_review_to_real_snapshot_stays_blocked_if_inputs_unk
         candidate_from_scientific_review(plan_result=result,
             plan_authority=PlanReviewAuthority.create(plan=result.plan), run_dir=tmp_path,
             source_root=source_root, snapshot=snapshot, source_config=config)
+
+
+def test_reviewed_cohort_predicates_enter_source_discovery_but_never_claim_closure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from easyicu.concept.loader import load_dictionary
+    from easyicu.concept.provenance import capture_data_provenance, metadata_digest
+    from easyicu.config import load_src_cfg
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.orchestration.scientific_plan_review_gate import persist_or_validate_scientific_plan_review
+    from easyicu.research_agent.planning.cohort_contract import CohortDefinition, ConceptPredicate, TimeWindow
+    from easyicu.webserver.raw_preparation_dependencies import reviewed_plan_provenance_concepts
+    from tests.research_agent.planning.test_time_origin_review_binding import _review
+    from tests.webserver.test_sic_raw_preparation_grant import _case
+
+    original, source_root, _, _ = _case(tmp_path, monkeypatch, approved=False)
+    context = original.context.model_copy(update={
+        'variables': [v for v in original.context.variables if v.name != 'age']})
+    predicate = ConceptPredicate(concept_id='age', time_window=TimeWindow(
+        anchor='icu_admission', start_offset_hours=0, end_offset_hours=24),
+        aggregation='first', op='>=', value=18)
+    plan = original.plan.model_copy(update={'cohort': CohortDefinition(name='typed', inclusion=(predicate,))})
+    run = tmp_path / 'reviewed'; run.mkdir()
+    evidence = EvidenceStore(run)
+    persist_or_validate_scientific_plan_review(run_dir=run, evidence=evidence, current_review=_review(context, plan))
+    record = evidence.get('scientific_plan_review')
+    authority = PlanReviewAuthority.create(plan=plan, evidence_sha256={'scientific_plan_review': record.sha256})
+    config = load_src_cfg('sic')
+    def capture(concepts):
+        return capture_data_provenance(load_dictionary(include_sofa2=True), concepts=concepts,
+            source_database='sic', class_prefixes=tuple(config.class_prefix), source_config=config,
+            source_config_sha256=metadata_digest(config.model_dump(mode='json')))
+    result = SimpleNamespace(context=context, plan=plan, evidence=evidence)
+    legacy = capture([str(item.source_concept or item.name) for item in context.variables])
+    missing = candidate_from_scientific_review(plan_result=result, plan_authority=authority,
+        run_dir=run, source_root=source_root, snapshot=legacy, source_config=config)
+    assert 'dependency_cohort_concepts_unrecorded' in missing['dependencies']['blocker_codes']
+
+    requested = reviewed_plan_provenance_concepts(context=context, plan=plan)
+    assert 'age' in requested
+    snapshot = capture(requested)
+    resolved = candidate_from_scientific_review(plan_result=result, plan_authority=authority,
+        run_dir=run, source_root=source_root, snapshot=snapshot, source_config=config)
+    declaration = resolved['dependencies']['declaration']
+    assert any(item['table'] == 'cases' and 'AgeOnAdmission' in item['columns']
+               for item in declaration['requirements'])
+    assert 'dependency_cohort_concepts_unrecorded' not in resolved['dependencies']['blocker_codes']
+    assert 'dependency_cohort_inputs_unknown' in resolved['dependencies']['blocker_codes']
+    assert resolved['status'] == 'blocked' and resolved['pending'] is None
+    assert resolved['dependencies']['producer_read_closure_verified'] is False
+
+
+def test_cohort_concepts_use_only_explicit_source_bindings_and_reject_conflicts():
+    from types import SimpleNamespace
+    from easyicu.webserver.raw_preparation_dependencies import reviewed_plan_cohort_concepts
+
+    variable = SimpleNamespace(name='custom_age', source_concept='age')
+    plan = SimpleNamespace(cohort=SimpleNamespace(
+        inclusion=[SimpleNamespace(concept_id='custom_age')],
+        exclusion=[SimpleNamespace(concept_id='lact')]))
+    assert reviewed_plan_cohort_concepts(context=SimpleNamespace(variables=[variable]), plan=plan) == ('age', 'lact')
+    conflict = SimpleNamespace(name='custom_age', source_concept='sex')
+    with pytest.raises(ValueError, match='dependency_variable_source_ambiguous'):
+        reviewed_plan_cohort_concepts(context=SimpleNamespace(variables=[variable, conflict]), plan=plan)

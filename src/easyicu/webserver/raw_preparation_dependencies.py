@@ -21,6 +21,33 @@ from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
 _SHA = r"^[0-9a-f]{64}$"
 
 
+def reviewed_plan_cohort_concepts(*, context, plan) -> tuple[str, ...]:
+    """List typed cohort-predicate concepts using explicit variable bindings."""
+    variables = {}
+    for item in context.variables:
+        name, concept = str(item.name), str(item.source_concept or item.name)
+        if name in variables and variables[name] != concept:
+            raise ValueError("dependency_variable_source_ambiguous")
+        variables[name] = concept
+    cohort = plan.cohort
+    if cohort is None:
+        return ()
+    return tuple(dict.fromkeys(variables.get(str(predicate.concept_id), str(predicate.concept_id))
+                               for predicate in (*cohort.inclusion, *cohort.exclusion)))
+
+
+def reviewed_plan_provenance_concepts(*, context, plan) -> tuple[str, ...]:
+    """List exact declared variable and typed cohort-predicate concepts.
+
+    A cohort predicate can depend on a concept absent from the analysis
+    variable list. Include it in metadata discovery; do not infer additional
+    population rules, identity mappings, or producer read closure.
+    """
+    names = [str(item.source_concept or item.name) for item in context.variables]
+    names.extend(reviewed_plan_cohort_concepts(context=context, plan=plan))
+    return tuple(dict.fromkeys(names))
+
+
 class SourceTableRequirement(BaseModel):
     """Explicit dependencies provided by a database adapter, not guessed by AI."""
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -266,6 +293,9 @@ def candidate_from_scientific_review(*, plan_result, plan_authority: PlanReviewA
     if not requested.issubset(recorded):
         declaration = declaration.model_copy(update={"unresolved_dependencies": (
             *declaration.unresolved_dependencies, "dependency_context_concepts_unrecorded")})
+    if not set(reviewed_plan_cohort_concepts(context=context, plan=plan_result.plan)).issubset(recorded):
+        declaration = declaration.model_copy(update={"unresolved_dependencies": (
+            *declaration.unresolved_dependencies, "dependency_cohort_concepts_unrecorded")})
     dependencies = compile_producer_dependencies(source_root=source_root, declaration=declaration)
     if dependencies["blocker_codes"]:
         return {"status": "blocked", "dependencies": dependencies, "pending": None}
