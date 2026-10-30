@@ -533,6 +533,7 @@ def run_progressive_planner(
         "resume_checkpoint",
         "resume_dependency_context",
         "outline_retry_journal",
+        "resume_outline_validated_callback",
     }
     overlap = sorted(reserved & set(planner_kwargs))
     if overlap:
@@ -546,6 +547,13 @@ def run_progressive_planner(
             **dict(planner_kwargs),
             checkpoint_callback=recorder.record,
             resume_checkpoint=source_chain[-1] if source_chain else None,
+            resume_outline_validated_callback=(
+                recorder.persist_validated_outline
+                if (source_chain and len(source_chain) == 1
+                    and source_chain[0].stage == "outline"
+                    and metadata_outline_journal_task is not None)
+                else None
+            ),
             resume_dependency_context={
                 "cohort_file_sha256": sha256_of_file(cohort_path),
                 "llm_signature": llm_signature,
@@ -554,7 +562,10 @@ def run_progressive_planner(
             outline_retry_journal=(
                 {"task": metadata_outline_journal_task, "run_dir": run_dir,
                  "literature_sha256": metadata_outline_literature_sha256,
-                 "source_path": retry_source, "source_sha256": resume_checkpoint_sha256}
+                 "source_path": retry_source, "source_sha256": resume_checkpoint_sha256,
+                 "accepted_checkpoint_path": (
+                     Path(resume_checkpoint_path).expanduser() if source_chain else None
+                 )}
                 if metadata_outline_journal_task is not None else None
             ),
             stop_after_outline=stop_after_outline,

@@ -3980,6 +3980,7 @@ class ProgressivePlannerAgent:
         stop_after_outline: bool = False,
         planner_strategy: str = "progressive_v2",
         outline_retry_journal: Mapping[str, Any] | None = None,
+        resume_outline_validated_callback: Callable[[], None] | None = None,
     ) -> AnalysisPlan | ProgressivePlanOutline:
         self._attempt.resume_validated = False
         enforce_article_contract = enforce_article_contract and tier_from_planning_contract(planning_contract_context) == "article"
@@ -4602,6 +4603,13 @@ class ProgressivePlannerAgent:
             self.capture_efficiency_metrics()
             return outline
 
+        # This callback only carries an existing accepted outline into the
+        # continuation after its runtime dependencies and outline were checked.
+        # It does not accept or authorize a new research plan.
+        if (resume_checkpoint is not None and resume_checkpoint.stage == "outline"
+                and resume_outline_validated_callback is not None):
+            resume_outline_validated_callback()
+
         require_robustness_intent = bool(
             enforce_article_contract
             and "robustness"
@@ -4732,8 +4740,31 @@ class ProgressivePlannerAgent:
                 return parsed
 
             reminder_concept_ids = progressive_population_concept_ids(context, variables)
+            foundation_llm = self.llm
+            if outline_retry_journal is not None:
+                from ..planning.outline_retry_journal import (
+                    OutlineRetryJournal, foundation_retry_source,
+                )
+
+                dependency = checkpoint_authorities.resume_dependency_authority_sha256
+                if not dependency:
+                    raise ValueError("metadata foundation journal requires dependency authority")
+                accepted_source = outline_retry_journal.get("accepted_checkpoint_path")
+                retry_source = foundation_retry_source(accepted_source) if accepted_source else None
+                foundation_llm = OutlineRetryJournal(
+                    inner=self.llm, task=outline_retry_journal["task"],
+                    run_dir=outline_retry_journal["run_dir"],
+                    request_sha256=canonical_sha256({
+                        "dependency_sha256": dependency, "outline_sha256": outline_sha256,
+                    }),
+                    dependency_sha256=dependency,
+                    literature_sha256=outline_retry_journal["literature_sha256"],
+                    source_path=retry_source[0] if retry_source else None,
+                    source_sha256=retry_source[1] if retry_source else None,
+                    stage="foundation", parse_attempt_limit=2,
+                )
             foundation_materialization = call_llm_with_structured_retry(
-                self.llm,
+                foundation_llm,
                 foundation_messages,
                 parser=parse_foundation,
                 role="progressive_planner_foundation",

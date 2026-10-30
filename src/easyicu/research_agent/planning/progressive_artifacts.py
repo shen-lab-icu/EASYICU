@@ -341,6 +341,7 @@ class ProgressivePlannerCheckpointRecorder:
     source_chain: tuple[ProgressivePlannerCheckpoint, ...] = ()
     _pending: list[ProgressivePlannerCheckpoint] = field(default_factory=list)
     _persisted: bool = False
+    _validated_outline_persisted: bool = False
     _latest_checkpoint: ProgressivePlannerCheckpoint | None = field(
         init=False,
         default=None,
@@ -380,7 +381,8 @@ class ProgressivePlannerCheckpointRecorder:
             )
         terminal = self.source_chain[-1]
         if not self._persisted:
-            for checkpoint in (*self.source_chain, *self._pending):
+            source = () if self._validated_outline_persisted else self.source_chain
+            for checkpoint in (*source, *self._pending):
                 persist_progressive_planner_checkpoint(
                     run_dir=self.run_dir,
                     evidence=self.evidence,
@@ -394,6 +396,24 @@ class ProgressivePlannerCheckpointRecorder:
             reused_materialization_count=len(terminal.materializations),
             new_checkpoint_count=len(self._pending),
         )
+
+    def persist_validated_outline(self) -> None:
+        """Carry an already accepted outline across another interruption.
+
+        Only the source outline is copied, after runtime and outline authority
+        have been revalidated. No unverified suffix or new approval is created.
+        """
+        if (len(self.source_chain) != 1 or self.source_chain[0].stage != "outline"
+                or self._persisted or self._validated_outline_persisted):
+            raise ProgressivePlanningArtifactError(
+                "progressive_resume_outline_persistence_invalid",
+                "only one validated source outline may be persisted early",
+            )
+        persist_progressive_planner_checkpoint(
+            run_dir=self.run_dir, evidence=self.evidence,
+            checkpoint=self.source_chain[0], prompt_pack_version=self.prompt_pack_version,
+        )
+        self._validated_outline_persisted = True
 
 
 class ProgressivePlanningStepAuthority(BaseModel):
