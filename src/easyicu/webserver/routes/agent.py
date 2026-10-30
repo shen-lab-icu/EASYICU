@@ -579,8 +579,18 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
             or not study_id or decision not in {"approved", "rejected"}):
         raise HTTPException(status_code=400, detail={"error": "raw_preparation_review_request_invalid"})
     try:
-        current, checkpoint, preparation_scope, run_dir = available_host_review(
-            run_id=action.decision.run_id, study_context_id=study_id)
+        try:
+            current, checkpoint, preparation_scope, run_dir = available_host_review(
+                run_id=action.decision.run_id, study_context_id=study_id)
+        except ValueError:
+            # Only an already approved, host-signed first-observed request can
+            # enter this recovery path. It does not expose a new review offer.
+            if decision != "approved":
+                raise
+            recovered = _recover_approved_first_observed_handoff(action=action, study_id=study_id)
+            if recovered is None:
+                raise
+            return recovered
         if current != action.decision:
             raise ValueError("raw_preparation_pending_stale")
         receipt = _submit_host_decision(action, body,
@@ -662,6 +672,51 @@ def raw_preparation_review(body: Dict[str, Any]) -> dict:
         if not reason.startswith("raw_preparation_") or len(reason) > 120:
             reason = "raw_preparation_review_unavailable"
         raise HTTPException(status_code=409, detail={"error": reason}) from exc
+
+
+def _recover_approved_first_observed_handoff(*, action: HostActionRequest, study_id: str) -> dict | None:
+    """Resume one existing host decision, never accept a fresh approval."""
+    from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+    from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.webserver.durable_research import current_service
+    from easyicu.webserver.first_observed_preparation import _ADAPTER, _SCOPE_KEY
+    from easyicu.webserver.host_action_contracts import decision_key
+    from easyicu.webserver.pi_copilot.service import get_pi_copilot_service
+    from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding
+
+    pending, _ = agent_pipeline_runs.raw_preparation_review_owner(action.decision.run_id, study_id)
+    run_dir = Path(pending.run_dir)
+    with AnchoredDirectory.open(run_dir) as directory:
+        if directory.is_absent("raw_preparation_checkpoint.json"):
+            return None
+        checkpoint = RawPreparationCheckpoint.model_validate_json(directory.read_bytes(
+            "raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+        directory.assert_still_selected()
+    scope = checkpoint.request.payload.get(_SCOPE_KEY)
+    if checkpoint.state != "approved" or not isinstance(scope, Mapping) or scope.get("adapter_id") != _ADAPTER:
+        return None
+    original = checkpoint.model_dump(mode="json", exclude={"checkpoint_sha256"})
+    original.update(state="pending", decision=None)
+    if (canonical_sha256(original) != action.decision.checkpoint_sha256
+            or checkpoint.request.authority_sha256 != action.decision.review_authority_sha256
+            or canonical_sha256(dict(scope)) != action.decision.scope_sha256):
+        raise ValueError("raw_preparation_recovery_action_mismatch")
+    owner = get_pi_copilot_service()
+    owner.host_action_session(action.session_id, project_id=action.project_id, study_context_id=study_id)
+    key = decision_key(action.decision, review_decision="approved")
+    row = owner.host_action_child_job(action.session_id, project_id=action.project_id, action_key=key)
+    job_id = str((row or {}).get("child_job_id") or "")
+    if not job_id:
+        raise ValueError("raw_preparation_recovery_job_missing")
+    service = current_service()
+    if service is None:
+        raise ValueError("raw_preparation_recovery_service_unavailable")
+    binding = RawPreparationHostBinding(project_id=action.project_id, session_id=action.session_id,
+        study_context_id=study_id, run_id=action.decision.run_id, nonce=action.decision.nonce)
+    result = service.recover_approved_preparation_handoff(job_id, checkpoint=checkpoint, binding=binding,
+                                                           scope=dict(scope), timeout=300.0)
+    return {**result, "reused": True, "decision": "approved", "analysis_authorized": False}
 
 
 @control_router.post("/api/jobs/raw-preparation-projection-download")
