@@ -12,6 +12,10 @@ def test_reference_is_database_specific_and_does_not_claim_actual_reads():
     assert sic["declared_units"] == ["mmol/L"]
     assert sic["declared_mappings"][0]["table"] == "laboratory"
     assert set(sic["declared_mappings"][0]["ids"]) == {454, 465, 657}
+    assert sic["declared_mappings"][0]["source_table_defaults"] == {
+        "id_var": "CaseID", "index_var": "Offset", "val_var": "LaboratoryValue"
+    }
+    assert len(sic["source_config_sha256"]) == 64
     assert sic["actual_source_reads_verified"] is False
     assert sic["record_units_verified"] is False
     assert source_concept_reference("lact", "eicu")["declared_mappings"][0]["table"] == "lab"
