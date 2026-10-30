@@ -154,6 +154,9 @@ def record_host_review(*, host_action: HostActionRequest, pending: RawPreparatio
             "nonce": selected.nonce, "scope_sha256": selected.scope_sha256,
             "pending_checkpoint_sha256": pending.checkpoint_sha256,
             "decided_checkpoint_sha256": result.checkpoint_sha256,
+            # Bind the exact timestamp and reviewer as well as the resulting
+            # checkpoint so a crash before checkpoint publication is recoverable.
+            "decided_review": decided.model_dump(mode="json"),
             "request_authority_sha256": pending.request.authority_sha256,
             "decision_key": key, "job_id": job_id, "expires_at": pending.expires_at}
     receipt = {**body, "signature": _signature(body)}
@@ -162,6 +165,57 @@ def record_host_review(*, host_action: HostActionRequest, pending: RawPreparatio
             _publish_once(directory, selected.nonce + ".json", canonical_json(receipt).encode())
         except FileExistsError as exc:
             raise ValueError("raw_preparation_host_nonce_replayed") from exc
+    return result
+
+
+def recover_host_review(*, pending: RawPreparationCheckpoint, binding: RawPreparationHostBinding,
+                        scope: Mapping[str, Any], job_id: str, run_dir: Path) -> RawPreparationCheckpoint:
+    """Reconstruct only the already signed, still-unconsumed host decision.
+
+    This never creates a decision, starts work, extends its lifetime, or
+    substitutes for the durable preparation handoff. Legacy receipts without
+    the exact decision cannot be reconstructed.
+    """
+    if pending.state != "pending":
+        raise ValueError("raw_preparation_recovery_pending_required")
+    try:
+        with AnchoredDirectory.open(_private_directory()) as directory:
+            receipt = json.loads(directory.read_bytes(binding.nonce + ".json", max_bytes=64 * 1024))
+            directory.assert_still_selected()
+        if not isinstance(receipt, dict):
+            raise ValueError
+        signature = receipt.pop("signature")
+        if not isinstance(signature, str) or not hmac.compare_digest(_signature(receipt), signature):
+            raise ValueError
+        expected = {"schema_version": "easyicu.raw-preparation-host-decision/1", "actor": "host_user",
+                    "decision": "approved", **binding.model_dump(mode="python"), "job_id": job_id,
+                    "scope_sha256": canonical_sha256(dict(scope)),
+                    "pending_checkpoint_sha256": pending.checkpoint_sha256,
+                    "request_authority_sha256": pending.request.authority_sha256}
+        if any(receipt.get(key) != value for key, value in expected.items()):
+            raise ValueError
+        decision = HumanReviewDecision.model_validate(receipt["decided_review"])
+        result = pending.decide(decision)
+        if result.state != "approved" or result.checkpoint_sha256 != receipt.get("decided_checkpoint_sha256"):
+            raise ValueError
+    except (AuthorityFilesystemError, OSError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError("raw_preparation_recovery_receipt_invalid") from exc
+    verified = verify_host_review(checkpoint=result, scope=scope, **binding.model_dump(mode="python"))
+    # Same live session, recorded host child job, current study and run owner.
+    from easyicu.webserver.raw_preparation_durable import _owner
+    if Path(_owner(binding, verified, job_id)).absolute() != Path(run_dir).absolute():
+        raise ValueError("raw_preparation_recovery_run_owner_changed")
+    raw_plan = pending.request.payload.get("plan_review_authority")
+    if raw_plan is not None:
+        from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+        from easyicu.webserver import agent_pipeline_runs
+        expected_plan = PlanReviewAuthority.model_validate(raw_plan)
+        current, _ = agent_pipeline_runs.raw_preparation_review_owner(binding.run_id, binding.study_context_id)
+        authorities = [PlanReviewAuthority.model_validate(request.payload["plan_review_authority"])
+                       for request in current.requests
+                       if isinstance(request.payload.get("plan_review_authority"), Mapping)]
+        if not authorities or any(authority != expected_plan for authority in authorities):
+            raise ValueError("raw_preparation_recovery_plan_owner_changed")
     return result
 
 
