@@ -37,6 +37,7 @@ from easyicu.research_agent.research_context.export_selection import SourceIdent
 from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.webserver import sources, state_paths
 from easyicu.webserver.demo_source_storage import verified_public_demo_raw
+from easyicu.webserver.durable_research_store import runtime_digest
 from easyicu.webserver.eicu_first_observed_source import derive_from_verified_eicu_demo
 from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
 from easyicu.webserver.raw_preparation_decisions import (
@@ -181,6 +182,7 @@ def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
     if identity.archive_sha256 != source.archive_sha256:
         raise ValueError("first_observed_preparation_source_mismatch")
     return ({"adapter_id": _ADAPTER, "purpose": "prepare_only", "analysis_authorized": False,
+             "producer_runtime_sha256": runtime_digest(),
              "database": "eicu_demo", "source_identity_sha256": canonical_sha256(identity.to_dict()),
              "plan_sha256": review.plan_sha256, "context_sha256": context_sha,
              "scientific_review_sha256": scientific_sha, "criterion": matches[0],
