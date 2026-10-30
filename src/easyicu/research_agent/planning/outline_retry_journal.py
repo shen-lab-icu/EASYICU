@@ -234,7 +234,19 @@ class OutlineRetryJournal:
                 raise ValueError("retry_journal_source_digest_missing")
             value = load_retry_journal(source_path, expected_sha256=source_sha256)
             if value.get("binding") != binding:
-                raise ValueError("retry_journal_authority_mismatch")
+                prior = value.get("binding")
+                changed = sorted(
+                    key for key in binding
+                    if not isinstance(prior, dict) or prior.get(key) != binding[key]
+                )
+                if isinstance(prior, dict) and any(key not in binding for key in prior):
+                    # Do not display unknown field names from persisted input.
+                    changed.append("unexpected_fields")
+                # Only disclose field names, never the credential, path, or
+                # digest values. Refusal remains unchanged.
+                raise ValueError(
+                    "retry_journal_authority_mismatch: " + ", ".join(changed)
+                )
             self._data = value
             pending = self._data.get("pending")
             current = _planner_calls(task)
