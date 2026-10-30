@@ -21,10 +21,13 @@ _SERVICE: DurableResearchService | None = None
 _LOG = logging.getLogger(__name__)
 
 _PREPARATION_SCHEMA = "easyicu.durable-preparation/1"
+_SEALED_PREPARATION_SCHEMA = "easyicu.durable-preparation/2"
 
 
 def _command_kind(payload: dict[str, Any]) -> str:
-    return "raw-preparation-review" if payload.get("schema_version") == _PREPARATION_SCHEMA else "agent-run"
+    return "raw-preparation-review" if payload.get("schema_version") in {
+        _PREPARATION_SCHEMA, _SEALED_PREPARATION_SCHEMA,
+    } else "agent-run"
 
 
 class DurableResearchService:
@@ -88,7 +91,7 @@ class DurableResearchService:
         return job
 
     def activate_preparation(self, job_id: str, *, checkpoint: Any, binding: Any, scope: dict[str, Any],
-                             timeout: float) -> None:
+                             timeout: float, sealed_recovery: bool = False) -> None:
         """Register a host-approved preparation with the existing DBOS owner.
 
         Admission must be called after the conversation host action and
@@ -96,21 +99,24 @@ class DurableResearchService:
         A crash before command activation remains unstarted, not auto-approved.
         """
         from easyicu.webserver.raw_preparation_durable import (
-            admit_preparation_intent, recover_preparation_before_consumption,
+            admit_preparation_intent, recover_preparation_before_consumption, recover_preparation_with_sealed_snapshot,
         )
         job = self.manager.get(job_id)
         import math
         if (job is None or job.kind != "raw-preparation-review" or job.is_cancel_requested()
+                or type(sealed_recovery) is not bool
                 or not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
                 or not math.isfinite(timeout) or timeout <= 0 or timeout > 86400):
             raise DurableResearchError("preparation_command_job_invalid")
         admit_preparation_intent(job_id=job_id, checkpoint=checkpoint, binding=binding, scope=scope)
-        payload = {"schema_version": _PREPARATION_SCHEMA, "study_context_id": binding.study_context_id,
+        payload = {"schema_version": _SEALED_PREPARATION_SCHEMA if sealed_recovery else _PREPARATION_SCHEMA,
+                   "study_context_id": binding.study_context_id,
                    "timeout_seconds": timeout}
         self.store.prepare(job_id, payload)
 
         def run(bound_job: jobs.Job) -> dict[str, Any]:
-            recover_preparation_before_consumption(job_id=job_id, job=bound_job, timeout=timeout)
+            recover = recover_preparation_with_sealed_snapshot if sealed_recovery else recover_preparation_before_consumption
+            recover(job_id=job_id, job=bound_job, timeout=timeout)
             return {"preparation_status": "multi_table_projection_complete",
                     "cohort_complete": False, "analysis_authorized": False}
 
@@ -236,10 +242,14 @@ class DurableResearchService:
                 if command["code_sha256"] != runtime_digest():
                     raise DurableResearchError("research_auto_resume_runtime_changed")
                 if _command_kind(payload) == "raw-preparation-review":
-                    from easyicu.webserver.raw_preparation_durable import recover_preparation_before_consumption
+                    from easyicu.webserver.raw_preparation_durable import (
+                        recover_preparation_before_consumption, recover_preparation_with_sealed_snapshot,
+                    )
                     try:
-                        recover_preparation_before_consumption(
-                            job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
+                        recover = (recover_preparation_with_sealed_snapshot
+                                   if payload.get("schema_version") == _SEALED_PREPARATION_SCHEMA
+                                   else recover_preparation_before_consumption)
+                        recover(job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
                     except Exception as exc:
                         raise DurableResearchError("preparation_auto_resume_refused") from exc
                     return {"preparation_status": "multi_table_projection_complete",
