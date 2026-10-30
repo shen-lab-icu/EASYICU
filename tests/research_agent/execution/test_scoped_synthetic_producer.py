@@ -1,6 +1,9 @@
 """Host-authenticated sandbox integration using only regenerated synthetic data."""
 from pathlib import Path
+import json
+import os
 import shutil
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -72,5 +75,50 @@ def test_host_receipt_consumed_before_real_exporter_runs(tmp_path, monkeypatch):
     assert not lactate.empty and "lact" in lactate.columns
     assert not outcome.empty and "care_unit_to_case_closure_days" in outcome.columns
     assert receipt.public_receipt()["actual_consumption_verified"] is False
+    verified = producer.verify_reviewed_snapshot_output(root=output.parent, scope=scope,
+        checkpoint_sha256=checkpoint.checkpoint_sha256, binding=binding)
+    assert not verified["actual_consumption_verified"] and not verified["analysis_authorized"]
+    receipt_text = (output.parent / "producer-attestation.json").read_text()
+    key_bytes = (tmp_path / "host" / ".easyicu" / "private-preparation-attestations" / "host.key").read_bytes()
+    assert key_bytes.hex() not in receipt_text and choice.nonce not in receipt_text
+
+    # A fresh interpreter has no in-memory signing state or adapter registration.
+    code = '''
+import json, sys
+from pathlib import Path
+from easyicu.webserver import reviewed_snapshot_producer as p
+from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding
+from tests.support.scoped_synthetic_producer import SyntheticAdapter
+root, source, scope_json, sha, nonce, source_code = sys.argv[1:]
+scope = json.loads(scope_json)
+p._CLOSED_ADAPTERS["synthetic-test-only"] = SyntheticAdapter(source, Path(sys.executable), [Path(sys.prefix), Path(sys.base_prefix), Path(source_code)])
+b = RawPreparationHostBinding(project_id="project", session_id="session", study_context_id="study", run_id="run", nonce=nonce)
+p.verify_reviewed_snapshot_output(root=Path(root), checkpoint_sha256=sha, binding=b, scope=scope)
+'''
+    completed = subprocess.run([sys.executable, "-c", code, str(output.parent), str(source), json.dumps(scope),
+        checkpoint.checkpoint_sha256, choice.nonce, str(source_code)], env=os.environ.copy(), capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    verify_kwargs = dict(root=output.parent, scope=scope, checkpoint_sha256=checkpoint.checkpoint_sha256, binding=binding)
+    with pytest.raises(ValueError, match="binding_mismatch"):
+        producer.verify_reviewed_snapshot_output(**{**verify_kwargs, "binding": binding.model_copy(update={"run_id": "other"})})
+    with pytest.raises(ValueError, match="binding_mismatch"):
+        producer.verify_reviewed_snapshot_output(**{**verify_kwargs, "checkpoint_sha256": "f" * 64})
+    changed_output = output / "README.md"
+    original_output = changed_output.read_bytes()
+    changed_output.write_bytes(original_output + b"modified")
+    with pytest.raises(ValueError, match="bytes_changed"):
+        producer.verify_reviewed_snapshot_output(**verify_kwargs)
+    changed_output.write_bytes(original_output)
+    (output / "extra").mkdir()
+    with pytest.raises(ValueError, match="bytes_changed"):
+        producer.verify_reviewed_snapshot_output(**verify_kwargs)
+    (output / "extra").rmdir()
+    changed_input = output.parent / "snapshot" / receipt.files[0].relative_path
+    original_input = changed_input.read_bytes()
+    changed_input.write_bytes(original_input + b"modified")
+    with pytest.raises(ValueError, match="staged_bytes_changed"):
+        producer.verify_reviewed_snapshot_output(**verify_kwargs)
+    changed_input.write_bytes(original_input)
+    producer.verify_reviewed_snapshot_output(**verify_kwargs)
     with pytest.raises(ValueError, match="nonce_replayed"):
         run_reviewed_snapshot_producer(**kwargs)

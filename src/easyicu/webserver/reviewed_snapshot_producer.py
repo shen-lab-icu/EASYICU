@@ -17,6 +17,9 @@ from easyicu.research_agent.canonical_json import canonical_json
 from easyicu.research_agent.execution.raw_snapshot_sandbox import run_snapshot_worker
 from easyicu.webserver.raw_case_snapshot import stage_reviewed_source_files, verify_staged_source_files
 from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding, consume_host_review, verify_host_review
+from easyicu.webserver.raw_preparation_attestation import (
+    implementation_identity, publish_attestation, verify_attestation,
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,28 @@ def require_reviewable_scope(scope: Mapping[str, Any]) -> ClosedWorkerSpec:
     return adapter.validate_scope(checked)
 
 
+def verify_reviewed_snapshot_output(
+    *, root: Path, checkpoint_sha256: str, binding: RawPreparationHostBinding,
+    scope: Mapping[str, Any],
+) -> dict:
+    """Recheck a retained output under the host's current adapter registry.
+
+    This rechecks approved coordinates and persisted bytes; it does not mint a
+    grant or establish atomic source state, complete reads, or clinical validity.
+    """
+    checked = json.loads(canonical_json(dict(scope)))
+    spec = require_reviewable_scope(checked)
+    adapter = _CLOSED_ADAPTERS[checked["adapter_id"]]
+    body = verify_attestation(root=Path(root), scope=checked,
+                              checkpoint_sha256=checkpoint_sha256,
+                              binding=binding, adapter=adapter, worker=spec.worker)
+    snapshot = body["snapshot"]
+    if (snapshot["source_identity_sha256"] != spec.source_identity_sha256
+            or sorted(item["relative_path"] for item in snapshot["files"]) != sorted(spec.files)):
+        raise ValueError("raw_output_source_binding_mismatch")
+    return body
+
+
 def run_reviewed_snapshot_producer(
     *, checkpoint: RawPreparationCheckpoint, binding: RawPreparationHostBinding,
     scope: Mapping[str, Any], host_work_root: Path, timeout: float = 120,
@@ -78,6 +103,7 @@ def run_reviewed_snapshot_producer(
     coordinates = binding.model_dump(mode="python")
     verify_host_review(checkpoint=checkpoint, scope=scope, **coordinates)
     spec = require_reviewable_scope(scope)
+    implementation = implementation_identity(adapter, spec.worker)
     consume_host_review(checkpoint=checkpoint, scope=scope, **coordinates)
     adapter.verify_source(scope, spec)
     root = Path(tempfile.mkdtemp(prefix="reviewed-producer-", dir=host_work_root))
@@ -96,4 +122,12 @@ def run_reviewed_snapshot_producer(
     if result.returncode:
         raise ValueError("raw_preparation_worker_failed")
     adapter.verify_output(scope, spec, output)
+    if implementation_identity(adapter, spec.worker) != implementation:
+        raise ValueError("raw_preparation_implementation_changed")
+    verify_staged_source_files(snapshot, receipt)
+    publish_attestation(root=root, snapshot=receipt, scope=scope,
+                        checkpoint_sha256=checkpoint.checkpoint_sha256,
+                        binding=binding, implementation=implementation)
+    verify_attestation(root=root, scope=scope, checkpoint_sha256=checkpoint.checkpoint_sha256,
+                       binding=binding, adapter=adapter, worker=spec.worker)
     return result, receipt, output
