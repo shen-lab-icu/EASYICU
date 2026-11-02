@@ -331,6 +331,7 @@ def test_ci_workflow_runs_supported_python_matrix() -> None:
         "release",
         "formal_experiment",
         "explicit_user_request",
+        "nightly",
     ]
     assert dispatch_inputs["expected_head_sha"]["required"] is True
     assert parsed["concurrency"]["cancel-in-progress"] is True

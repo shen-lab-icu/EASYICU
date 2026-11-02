@@ -79,6 +79,7 @@ left in control.
 | `run_openrouter_fullflow_validation.py` | Real-provider full-flow validation for OpenRouter-compatible models. |
 | `evaluate_concept_usage_auditor.py` | Helper for checking concept-usage audit behavior. |
 | `fetch_baselines.py` | Fetches external baseline systems into ignored local checkout directories. |
+| `dispatch_nightly_ci.sh` | Dispatches the full CI checkpoint (reason `nightly`) for a branch head once per new commit; run it from launchd/cron, since GitHub schedules only fire on the default branch. |
 
 Before publishing an export, an administrator can run:
 

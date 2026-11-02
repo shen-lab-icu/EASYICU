@@ -22,7 +22,9 @@ evidence, the release remains blocked or its scope and claims must be reduced.
       or exported result. Focused tests do not satisfy this gate.
 - [ ] Dev9 final aggregate: batch in-scope merges first, then dispatch CI once
       with `checkpoint_reason: final_aggregate_merge` for the exact aggregate
-      SHA, and retain that run URL in the release record.
+      SHA, and retain that run URL in the release record. A green `nightly`
+      checkpoint (`tools/dispatch_nightly_ci.sh`) on that exact SHA satisfies
+      this item; do not dispatch it again.
 - [ ] Build wheel and sdist, install each in a clean environment, and verify
       package data and console entry points.
 - [ ] Rebuild and smoke-test the digest-bound Docker runner when its image,
