@@ -25,7 +25,8 @@ test('the plan step offers the proposed outcome as the one choice to confirm', (
   const zh = owner(workflow, 'zh').workflowConfirmation();
   // The message designates the exact label, which the study update accepts.
   assert.equal(zh.message, '主要结局：院内死亡');
-  assert.deepEqual([...zh.grants], []);
+  // The click saves the outcome, so it carries the one-time configure grant.
+  assert.deepEqual([...zh.grants], ['configure']);
   assert.equal(zh.nonApprovable, false);
   assert.match(zh.title, /院内死亡/);
   assert.equal(zh.editLabel, '改用其他结局');
@@ -35,4 +36,5 @@ test('the plan step offers the proposed outcome as the one choice to confirm', (
   const unlabeled = owner({ next_action_code: 'study_primary_outcome_confirmation_required' }, 'zh').workflowConfirmation();
   assert.equal(unlabeled.nonApprovable, true);
   assert.equal(unlabeled.message, '');
+  assert.deepEqual([...unlabeled.grants], []);
 });

@@ -163,10 +163,11 @@
       // The conversation proposed an outcome it may not save on its own: the
       // researcher confirms that exact label (the message designates it, which
       // study_context_update accepts) or names another in the conversation.
+      // The click is the one-time grant to save it to the study.
       if (code === 'study_primary_outcome_confirmation_required') {
         const label = String(workflow.unconfirmed_outcome || '').trim();
         return {
-          code, grants: [], nonApprovable: !label,
+          code, grants: label ? ['configure'] : [], nonApprovable: !label,
           message: label ? tr(`Primary outcome: ${label}`, `主要结局：${label}`) : '',
           title: label
             ? tr(`Use “${label}” as the primary outcome?`, `将“${label}”作为主要结局？`)
