@@ -339,6 +339,7 @@
         directoryRequired: Boolean(directoryRequired && directoryRequired.session === sessionId()
           && directoryRequired.project === String(host.projectId ? host.projectId() : '')
           && directoryRequired.id === String(demo.id || '')),
+        directoryDestination: directoryRequired ? directoryRequired.destination : '',
       };
     }
 
@@ -402,7 +403,8 @@
         demoPending: offerPending, demoBusy: Boolean(host.busy()),
         demoDirectoryRequired: directoryRequired && directoryRequired.session === sessionId()
           && directoryRequired.project === String(host.projectId ? host.projectId() : '')
-          ? directoryRequired.id : '' };
+          ? directoryRequired.id : '',
+        demoDirectoryDestination: directoryRequired ? directoryRequired.destination : '' };
     }
 
     async function useNamedDemo(sourceId) {
@@ -443,12 +445,33 @@
         offerPending = false;
         if (!current()) { host.render(); return false; }
         if (error && error.code === 'data_directory_confirmation_required') {
-          directoryRequired = { session: expectedSession, project: expectedProject, id: sourceId };
-          host.setError(tr('Confirm the demo download location on the Patient Review data page before preparing it.', '请先在患者审阅的数据选择页确认 Demo 下载位置，再准备数据。'));
+          // The card asks for the location in place; no detour, no error line.
+          const destination = String(error.detail && error.detail.destination || '');
+          directoryRequired = { session: expectedSession, project: expectedProject, id: sourceId, destination };
         } else host.setError(host.errorText(error));
         host.render();
         return false;
       }
+    }
+
+    /* The researcher confirms the shown download location from the card,
+       then the same preparation starts again. */
+    async function confirmDemoDirectory(sourceId) {
+      const save = api().saveSettings;
+      if (!directoryRequired || directoryRequired.id !== sourceId || typeof save !== 'function') return false;
+      offerPending = true;
+      host.render();
+      try {
+        await save({ data_dir_confirmed: true });
+      } catch (error) {
+        offerPending = false;
+        host.setError(host.errorText(error));
+        host.render();
+        return false;
+      }
+      offerPending = false;
+      directoryRequired = null;
+      return useNamedDemo(sourceId);
     }
 
     async function handleAction(action, id) {
@@ -489,7 +512,7 @@
       </article>`;
     }
 
-    return Object.freeze({ handleAction, namedDatabase, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });
+    return Object.freeze({ confirmDemoDirectory, handleAction, namedDatabase, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });
   }
 
   window.EasyICU.guidedPi.declare('hostJobs', { create });

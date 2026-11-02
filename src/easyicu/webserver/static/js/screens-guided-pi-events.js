@@ -571,6 +571,8 @@
           });
           return;
         }
+        const directoryConfirm = event.target.closest('[data-gpi-demo-directory-confirm]');
+        if (directoryConfirm && HOST_JOBS && typeof HOST_JOBS.confirmDemoDirectory === 'function') { void HOST_JOBS.confirmDemoDirectory(directoryConfirm.dataset.gpiDemoDirectoryConfirm); return; }
         const namedDemo = event.target.closest('[data-gpi-named-demo]');
         if (namedDemo && HOST_JOBS && typeof HOST_JOBS.useNamedDemo === 'function') { void HOST_JOBS.useNamedDemo(namedDemo.dataset.gpiNamedDemo); return; }
         const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);

@@ -104,7 +104,11 @@ def validate_prepare_destination(source: DemoSourceSpec, paths: DemoSourcePaths)
     """Fail before submitting work, without changing integrity or resume rules."""
     if export_ready(paths, source):
         return
-    if not os.getenv(CACHE_ENV) and not storage_locations.data_directory_confirmed():
+    # The confirmation guards where a download lands. Data already on disk is
+    # re-exported in place (source_paths keeps its folder), so nothing new is
+    # written into an unconfirmed directory.
+    on_disk = raw_ready(paths, source) or archive_ready(paths, source)
+    if not os.getenv(CACHE_ENV) and not on_disk and not storage_locations.data_directory_confirmed():
         raise DemoSourceError("Confirm the data directory before downloading.",
                               code="data_directory_confirmation_required",
                               detail={"destination": str(cache_root())})

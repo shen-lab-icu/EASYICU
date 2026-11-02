@@ -180,7 +180,8 @@ test('pending source offers draft discussion without adding any grant; actual so
   assert.doesNotMatch(owner.render(pending, { tr, esc, icon: () => '', namedDatabase: named }), /继续讨论草案/);
   const drafted = owner.render(pending, { tr, esc, icon: () => '', namedDatabase: named, discussionDraft: {} });
   assert.doesNotMatch(drafted, /继续讨论草案|data-gpi-next-choice=/);
-  assert.match(drafted, /选择用于核验的数据 · 可稍后/);
+  // A source the question names stays the visible next step after a draft.
+  assert.doesNotMatch(drafted, /可稍后/);
   assert.match(drafted, /data-gpi-data-source-action="begin_local_selection"/);
   assert.doesNotMatch(drafted, /data-gpi-(?:grants|run|configure|approve)/);
   const projectSource = { data_source_authorization: { status: 'pending', reason: 'project_source_confirmation_required',

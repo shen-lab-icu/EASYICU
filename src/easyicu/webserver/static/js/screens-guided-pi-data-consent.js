@@ -130,14 +130,16 @@
     return `<button class="btn${primary ? ' primary' : ''}" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr('Choose a data folder', '选择数据文件夹')}</button>`;
   }
 
-  function demoDirectoryHelp(ctx) {
-    return `<div class="gpi-data-consent-directory" role="status"><p>${ctx.tr('Open Patient Review and, under Official public demo data, check the download location and select Download here. If another dataset is open, first select Edit setup. Return to this conversation after preparation and choose the demo again.', '打开患者审阅，在“官方公开演示数据”中核对下载位置并点击“下载到这里”。如果已打开其他数据，请先点“编辑设置”。准备完成后返回本次对话，再选择该 Demo。')}</p><a class="btn" href="#patient">${ctx.tr('Open Patient Review data selection', '打开患者审阅的数据选择页')}</a></div>`;
+  function demoDirectoryHelp(ctx, id, destination) {
+    return `<div class="gpi-data-consent-directory" role="status"><p>${ctx.tr('The demo is downloaded here:', 'Demo 数据将下载到：')}</p>${destination ? `<code>${ctx.esc(destination)}</code>` : ''}<div class="gpi-data-consent-actions"><button class="btn primary" type="button" data-gpi-demo-directory-confirm="${ctx.esc(id)}">${ctx.tr('Download here and prepare', '下载到这里并准备')}</button><a class="btn" href="#settings">${ctx.tr('Change the location in Settings', '在设置中更改位置')}</a></div></div>`;
   }
 
   function render(session, ctx) {
     const current = authorization(session);
     const hasDraft = Boolean(ctx.discussionDraft);
-    if (current.status !== 'pending' || (!hasDraft && (ctx.namedDemo || ctx.namedDatabase || current.source))) {
+    // A source the question names stays the visible next step even after a
+    // draft appears: the reply points at this card.
+    if (current.status !== 'pending' || ctx.namedDemo || ctx.namedDatabase || (!hasDraft && current.source)) {
       return renderSourceOptions(session, ctx);
     }
     // Once a draft is visible, the existing next-step choices and composer
@@ -199,7 +201,7 @@
           <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(named.id)}" ${named.pending || named.busy ? 'disabled' : ''}>${verb}</button>
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
         </div>
-        ${named.directoryRequired ? demoDirectoryHelp(ctx) : ''}
+        ${named.directoryRequired ? demoDirectoryHelp(ctx, named.id, named.directoryDestination) : ''}
         <small>${ctx.tr('Official demo data only; EasyICU registers it and confirms it as this conversation’s source, then proposes the plan. Confirming a source does not approve analysis.', '仅官方 Demo 数据；EasyICU 注册后将其确认为本次会话的数据源，再拟定研究计划。确认数据源不等于批准分析。')}</small>
       </div></section>`;
     }
@@ -260,7 +262,7 @@
           <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(demo.id)}" ${waiting || pending ? 'disabled' : ''}>${pending ? ctx.tr('Preparing…', '正在准备…') : waiting ? ctx.tr('Wait for the current response or task', '等待当前回复或任务结束') : ctx.tr('Prepare this demo and use it here', '准备此 Demo 并用于本次会话')}</button>
           <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
         </div>
-        ${database.demoDirectoryRequired === demo.id ? demoDirectoryHelp(ctx) : ''}
+        ${database.demoDirectoryRequired === demo.id ? demoDirectoryHelp(ctx, demo.id, database.demoDirectoryDestination) : ''}
         <small>${ctx.tr('Demo data only; results describe the demo. Confirming this source does not approve analysis.', '仅 Demo 数据；结果只代表此 Demo。确认数据源不等于批准分析。')}</small>
       </div></section>`;
     }
