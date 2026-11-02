@@ -267,3 +267,23 @@ def test_the_blocked_plan_step_and_a_refused_launch_read_in_chinese() -> None:
     ):
         branch = head.split(f"error.code === '{code}'", 1)[1].split("if (error.code", 1)[0]
         assert phrase in branch
+
+
+def test_an_unsaved_proposed_outcome_is_asked_before_the_plan(tmp_path: Path) -> None:
+    # The launch refuses a study whose proposed outcome was not saved
+    # (study_primary_outcome_confirmation_required), so the plan step asks
+    # for that outcome instead of offering a plan.
+    study = _planning_study(tmp_path / "export")
+    assert _snapshot(study, None).next_action_code == "provider_ready_to_generate_plan"
+
+    proposed = {**study, "unconfirmed_outcome": "院内死亡"}
+    snapshot = _snapshot(proposed, None)
+    assert snapshot.next_action_code == "study_primary_outcome_confirmation_required"
+    assert snapshot.current_stage == "plan"
+    assert _plan_stage(snapshot).status == "blocked"
+    assert snapshot.unconfirmed_outcome == "院内死亡"
+    assert snapshot.planning_prerequisites_missing == ["outcome_confirmation"]
+
+    # Without a question the study is not one outcome away from its plan.
+    unasked = {key: value for key, value in proposed.items() if key != "question"}
+    assert _snapshot(unasked, None).next_action_code != "study_primary_outcome_confirmation_required"

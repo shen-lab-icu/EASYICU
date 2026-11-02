@@ -160,6 +160,25 @@
         flowCurrent: tr('Current: waiting to generate the candidate plan', '当前：等待生成候选计划'),
         approve: tr('Generate candidate plan', '生成候选计划'),
       };
+      // The conversation proposed an outcome it may not save on its own: the
+      // researcher confirms that exact label (the message designates it, which
+      // study_context_update accepts) or names another in the conversation.
+      if (code === 'study_primary_outcome_confirmation_required') {
+        const label = String(workflow.unconfirmed_outcome || '').trim();
+        return {
+          code, grants: [], nonApprovable: !label,
+          message: label ? tr(`Primary outcome: ${label}`, `主要结局：${label}`) : '',
+          title: label
+            ? tr(`Use “${label}” as the primary outcome?`, `将“${label}”作为主要结局？`)
+            : tr('Confirm the primary outcome first', '先确认主要结局'),
+          note: tr(
+            'Your question mentions this outcome. Once confirmed, it is saved as the study outcome and the candidate plan can be generated; nothing has been analysed.',
+            '你的问题提到了这个结局。确认后它会保存为本研究的主要结局，随后即可生成候选计划；尚未分析任何数据。',
+          ),
+          approve: tr('Confirm outcome', '确认结局'),
+          editLabel: tr('Use another outcome', '改用其他结局'),
+        };
+      }
       if (code === 'plan_icd_source_unverified') return {
         code, grants: [], nonApprovable: true, showPlanPreview: true,
         title: tr('Configured diagnosis-code population cannot be verified', '已配置的诊断编码人群无法核验'),

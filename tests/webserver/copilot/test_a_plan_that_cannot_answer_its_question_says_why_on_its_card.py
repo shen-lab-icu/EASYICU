@@ -94,7 +94,7 @@ def _aside_entry(code: str) -> str:
 
 
 def test_population_stop_aside_is_loaded_with_current_version() -> None:
-    assert "js/screens-guided-pi-aside.js?v=20261030-population1" in (STATIC / "index.html").read_text()
+    assert "js/screens-guided-pi-aside.js?v=20261102-outcome1" in (STATIC / "index.html").read_text()
 
 
 def test_an_analysis_no_step_answers_offers_a_fresh_candidate_plan() -> None:

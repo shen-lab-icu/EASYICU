@@ -356,6 +356,15 @@ def submit_research_run(
     )
     if readiness.planning_prerequisites_missing:
         missing = list(readiness.planning_prerequisites_missing)
+        if missing == ["outcome_confirmation"]:
+            _reject({
+                "error": "study_primary_outcome_confirmation_required",
+                "message": "Confirm the proposed primary outcome, or name another, before generating the candidate plan.",
+                "owner": "easyicu.webserver.study_contexts",
+                "next_action_code": readiness.next_action_code,
+                "planning_prerequisites_missing": missing,
+                "details": {"field": "outcome"},
+            })
         eligibility_required = "cohort_eligibility" in missing
         _reject(
             {
