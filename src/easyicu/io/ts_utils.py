@@ -63,11 +63,28 @@ def _fast_groupby_agg(df: pd.DataFrame, group_cols: list, agg_dict: dict) -> pd.
         if len(df) == 0:
             return df
 
+        # Integer packing is lossless only for integral, representable keys.
+        # In particular 30-minute bins 8.0 and 8.5 must not both become 8.
+        key_min, key_max = -(1 << 63), (1 << 63) - 1
+        packable = all(
+            np.equal(values, np.floor(values)).all()
+            and key_min <= values.min().item() <= key_max
+            and key_min <= values.max().item() <= key_max
+            for values in (g0, g1)
+        )
+        if not packable:
+            return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+        time_span = int(g1.max()) - int(g1.min())
+        stride = time_span + 2
+        if (time_span > key_max or stride > key_max
+                or int(g0.min()) * stride < key_min
+                or int(g0.max()) * stride + time_span > key_max):
+            return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+
         # Compute combined int64 key: pid * stride + (time - time_min)
         g1_int = g1.astype(np.int64)
         g1_min = int(g1_int.min())
         g1_offset = g1_int - g1_min
-        stride = int(g1_offset.max()) + 2
         combined_key = g0.astype(np.int64) * stride + g1_offset
 
         # Add group cols to agg_dict so they survive groupby
@@ -1227,12 +1244,23 @@ def fill_gaps(
                             # Use pd.Series for vectorized .map() — O(N) hash lookup
                             _id_offset_map = pd.Series(_offset_arr, index=_ids_arr)
                             _id_start_map = pd.Series(_start_arr, index=_ids_arr)
+                            _id_count_map = pd.Series(counts, index=_ids_arr)
 
                             _offsets_raw = _id_offset_map.reindex(_data_id).values
                             _starts_per_row = _id_start_map.reindex(_data_id).values
+                            _counts_per_row = _id_count_map.reindex(_data_id).values
 
                             # NaN in offsets means ID not in limits → skip those rows
                             _known = ~np.isnan(_offsets_raw) & ~np.isnan(_starts_per_row)
+                            if not _known.all():
+                                # The per-group path infers an observation range
+                                # for IDs absent from limits. Invalid *supplied*
+                                # limits, however, omit that group in both paths;
+                                # they must not force every valid group into the
+                                # much slower per-patient implementation.
+                                unknown_ids = pd.unique(_data_id[~_known])
+                                if any(key not in limits_lookup for key in unknown_ids):
+                                    raise _OffGridFallback
                             _within_f = (_data_time - _starts_per_row) / step_hours
                             # Off-grid observations must not be silently
                             # rounded onto the grid: the per-group path
@@ -1248,10 +1276,17 @@ def fill_gaps(
                             _offsets_i = np.where(_known, _offsets_raw, 0).astype(np.int64)
                             _global_pos = _offsets_i + _within
 
-                            # Filter valid positions
+                            # A global array bound alone is insufficient: an
+                            # observation beyond this patient's grid can land
+                            # inside the NEXT patient's slice. Keep the local
+                            # bound and retain outside observations separately,
+                            # matching the per-group union/reindex contract.
+                            _outside = _known & (
+                                (_within < 0) | (_within >= _counts_per_row)
+                            )
                             _valid = (
                                 _known &
-                                (_within >= 0) & 
+                                ~_outside &
                                 (_global_pos >= 0) & (_global_pos < total_rows)
                             )
                             _gpos_valid = _global_pos[_valid].astype(np.int64)
@@ -1275,7 +1310,19 @@ def fill_gaps(
                                 # Last-write-wins for duplicates (same as drop_duplicates keep='last')
                                 arr[_gpos_valid] = src[_valid]
                                 result_dict[col] = arr
-                            return pd.DataFrame(result_dict)
+                            result = pd.DataFrame(result_dict)
+                            if _outside.any():
+                                extra = data.loc[
+                                    _outside, merge_cols + data_cols
+                                ].drop_duplicates(merge_cols, keep="last").copy()
+                                for col in data_cols:
+                                    extra[col] = pd.to_numeric(
+                                        extra[col], errors="coerce"
+                                    ).astype(target_value_dtype)
+                                result = pd.concat(
+                                    [result, extra], ignore_index=True
+                                ).sort_values(merge_cols, ignore_index=True)
+                            return result
                         except _OffGridFallback:
                             raise
                         except Exception:
@@ -1293,8 +1340,8 @@ def fill_gaps(
                     if data_cols:
                         result = full_grid.merge(
                             data[merge_cols + data_cols].drop_duplicates(subset=merge_cols),
-                            on=merge_cols, how='left'
-                        )
+                            on=merge_cols, how='outer'
+                        ).sort_values(merge_cols, ignore_index=True)
                     else:
                         result = full_grid
                     return result

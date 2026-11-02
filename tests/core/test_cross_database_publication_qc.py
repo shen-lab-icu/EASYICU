@@ -649,7 +649,11 @@ def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(
         database_root = export_root / database
         database_root.mkdir(parents=True)
         sidecar = database_root / "column_metadata.json"
-        sidecar.write_text("{}\n", encoding="utf-8")
+        sidecar.write_text(json.dumps({"files": [
+            {"module": name, "relative_path": f"{name}.parquet", "columns": {
+                "value": {"metadata": {"column_name": "value", "source_concept": "value", "role": "value"}}
+            }} for name in modules
+        ]}), encoding="utf-8")
         sidecar_sha256 = hashlib.sha256(sidecar.read_bytes()).hexdigest()
         entries = []
         for module_name in modules:

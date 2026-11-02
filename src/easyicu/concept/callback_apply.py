@@ -1527,6 +1527,103 @@ def _apply_callback(
         frame.loc[:, concept_name] = result
         return frame
 
+    if re.fullmatch(r"transform_fun\(extract_leading_number\)", expr):
+        frame = frame.copy()
+        val_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if val_col in frame.columns:
+            extracted = (
+                frame[val_col]
+                .astype("string")
+                .str.extract(r"^\s*(-?\d+(?:\.\d+)?)", expand=False)
+            )
+            frame[val_col] = pd.to_numeric(extracted, errors="coerce")
+        return frame
+
+    if expr in {"community_vent_mode_control", "community_vent_mode_seq"}:
+        frame = frame.copy()
+        val_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if val_col not in frame.columns:
+            return frame
+
+        native = (
+            frame[val_col]
+            .astype("string")
+            .str.strip()
+            .str.upper()
+            .str.replace("\\", "/", regex=False)
+            .str.replace("—", "-", regex=False)
+        )
+        high_flow = native.str.contains("高流|HIGH.?FLOW", regex=True, na=False)
+        standby = native.str.contains("STANDBY|STAND BY", regex=True, na=False)
+        if expr.endswith("control"):
+            mapped = pd.Series("unspecified", index=frame.index, dtype="string")
+            mapped.loc[native.str.contains("PRVC|APV|ASV", regex=True, na=False)] = (
+                "dual_adaptive"
+            )
+            mapped.loc[
+                native.str.contains(
+                    r"(?:^|[^A-Z])(?:VC|V/C|VOL|IPPV|VCV)(?:[^A-Z]|$)",
+                    regex=True,
+                    na=False,
+                )
+            ] = "volume"
+            mapped.loc[
+                native.str.contains(
+                    r"(?:^|[^A-Z])(?:PC|P/C|PCV|CPAP|BIPAP|PS|IPAP|S/T)(?:[^A-Z]|$)",
+                    regex=True,
+                    na=False,
+                )
+            ] = "pressure"
+            mapped.loc[standby] = "standby"
+        else:
+            mapped = pd.Series(pd.NA, index=frame.index, dtype="string")
+            mapped.loc[
+                native.str.contains("CMV|IPPV", regex=True, na=False)
+            ] = "controlled"
+            mapped.loc[
+                native.str.fullmatch(r"(PC|PCV|VC|VCV|V/C)", na=False)
+            ] = "controlled"
+            mapped.loc[
+                native.str.contains(
+                    r"A/C|ASSIST|(?:^|[-/])AC(?:$|[-/])", regex=True, na=False
+                )
+            ] = "assisted"
+            mapped.loc[native.str.contains("SIMV", regex=False, na=False)] = "simv"
+            mapped.loc[
+                native.str.contains("BIPAP|S/T|BILEVEL", regex=True, na=False)
+            ] = "simv"
+            mapped.loc[
+                native.str.contains(
+                    r"CPAP|SPONT|(?:^|[-/])PS(?:$|[-/])", regex=True, na=False
+                )
+            ] = "spontaneous"
+            mapped.loc[standby] = "standby"
+        mapped.loc[high_flow | native.isna()] = pd.NA
+        frame[val_col] = mapped
+        return frame
+
+    if expr == "community_jinhua_mech_vent":
+        frame = frame.copy()
+        val_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if val_col in frame.columns:
+            labels = frame[val_col].astype("string")
+            frame[val_col] = labels.str.contains(
+                "non-invasive", case=False, regex=False, na=False
+            ).map({True: "noninvasive", False: "invasive"})
+        return frame
+
     match = re.fullmatch(r"transform_fun\(set_val\((.+)\)\)", expr, flags=re.DOTALL)
     if match:
         value = _parse_literal(match.group(1))
@@ -2786,6 +2883,17 @@ def _apply_callback(
             rate_var = source.params.get("rate_var")
         unit_var = source.unit_var or unit_column
         val_var = source.value_var or concept_name
+
+        required_unit = source.params.get("required_volume_unit")
+        if required_unit is not None:
+            if not unit_var or unit_var not in frame.columns:
+                raise ValueError("aumc_rate requires its declared volume-unit column")
+            compatible = frame[unit_var].astype("string").str.strip().str.casefold().eq(
+                str(required_unit).strip().casefold()
+            ).fillna(False)
+            if (~compatible).any():
+                logger.warning("aumc_rate excluded %d rows without the required volume unit", int((~compatible).sum()))
+            frame = frame.loc[compatible].copy()
         
         if rate_var and rate_var in frame.columns:
             frame = frame.copy()
@@ -3409,8 +3517,16 @@ def _apply_callback(
                 axis=1,
             ).max(axis=1, skipna=True)
 
+        # Some source values are already volumes in mL even when the table's
+        # default unit column describes a different quantity. AmsterdamUMCdb
+        # drugitems.fluidin is mL; drugitems.doseunit is the prescribed dose
+        # unit (often mg), so applying it to fluidin silently drops fluids.
+        # https://github.com/AmsterdamUMC/AmsterdamUMCdb/wiki/drugitems
+        value_unit = params.get("value_unit")
+        if value_unit not in (None, "mL"):
+            raise ValueError(f"Unsupported volume value_unit: {value_unit!r}")
         volume_unit_col = source.unit_var or unit_column
-        native_aumc_volume = (
+        native_aumc_volume = value_unit == "mL" or (
             db_name == "aumc" and source.table == "drugitems"
             and source.value_var in {"fluidin", "solutionadministered"}
         )
@@ -3496,7 +3612,7 @@ def _apply_callback(
             duration_col = end_col
         
         if not duration_col or duration_col not in frame.columns:
-            return frame
+            raise ValueError("mimv_rate requires a source duration column")
         # 🔧 FIX: amount_col 应优先使用 'amount' 列（inputevents 表的默认列）
         # R ricu mimv_rate 使用 amount 列来计算 rate = amount / duration
         # concept_name (如 'dex') 在回调执行时还不存在
@@ -3512,7 +3628,7 @@ def _apply_callback(
             elif concept_name in frame.columns:
                 amount_col = concept_name
         if not amount_col or amount_col not in frame.columns:
-            return frame
+            raise ValueError("mimv_rate requires a source amount column")
         unit_col = unit_column or source.unit_var
         if not unit_col:
             if "rateuom" in frame.columns:
@@ -3540,6 +3656,7 @@ def _apply_callback(
             dur_var=duration_col,
             amount_var=amount_col,
             auom_var=auom_col,
+            status_var=str(source.params.get("status_var", "statusdescription")),
         )
 
     match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)

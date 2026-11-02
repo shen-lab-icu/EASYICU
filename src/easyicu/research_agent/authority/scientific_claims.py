@@ -77,6 +77,10 @@ def _level_label(key: str, level: str, labels: Mapping[str, str]) -> str | None:
     return label
 
 
+# A variable key that may be named inside a host phrase coordinate.
+_PHRASE_KEY_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*")
+
+
 def _reader_coordinate(
     coordinate: str, labels: Mapping[str, str] | None = None
 ) -> str:
@@ -98,6 +102,17 @@ def _reader_coordinate(
     if "=" not in coordinate:
         if labels and coordinate in labels:
             return labels[coordinate]
+        if labels:
+            # A host phrase names its variable inside ("<key> at 5 versus 2
+            # mmHg", "a 1 mmHg increase in <key>"); only a whole labelled key
+            # is replaced, so the levels, unit, and contrast order stay.
+            keys = sorted(
+                (key for key in labels if _PHRASE_KEY_RE.fullmatch(key)),
+                key=len, reverse=True,
+            )
+            if keys:
+                pattern = r"(?<![\w])(" + "|".join(map(re.escape, keys)) + r")(?![\w])"
+                coordinate = re.sub(pattern, lambda match: labels[match.group(1)], coordinate)
         return coordinate.replace("_", " ")
     parts = _coordinate_parts(coordinate)
     if parts is None:

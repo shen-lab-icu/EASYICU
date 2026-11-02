@@ -1,0 +1,53 @@
+{
+  "schema": "miiv_scoped_support_synthetic_validation_v1",
+  "status": "PASS",
+  "parent_git": "af5b5d6b1c5a778c9f7d402ec422fc6a39089578",
+  "clinical_reads": 0,
+  "real_extractions": 0,
+  "model_fits": 0,
+  "current_modified": false,
+  "bindings": {
+    "src/easyicu/io/scoped_support_events.py": "1f26a27e305d9d1feaadde81fc59668d55ccd3d9ef71421fec251b623c7babfa",
+    "tests/core/test_scoped_support_events.py": "ac924cd31bf959717e00ffc6f51faa7aed30f90c91c5e3c3ef9ae0001f801280",
+    "tests/core/test_scoped_support_events_root.py": "aad7b89da5b540208099c071a5e0c12eb5f20d565afcf11464970db2e1802332",
+    "docs/validation/miiv_scoped_support_events.md": "62c392775ab8dad717a7f36e33d81a224218c54fdee2c93e0e3a6346ae6c7f9d"
+  },
+  "unchanged_sources": {
+    "src/easyicu/io/source_events.py": {
+      "sha256": "eb0fdbe72021b54b8e3f8fb12038d6f5f1a219c04aa85a02ff42add72d9355ac",
+      "matches_parent": true
+    },
+    "src/easyicu/io/arterial_blood_gas.py": {
+      "sha256": "34eeb35b4656a53ed9b539c0dad8020adc10f2f86115b1b6d95dbec841370a5c",
+      "matches_parent": true
+    },
+    "src/easyicu/io/scoped_measurements.py": {
+      "sha256": "c374d12c08494ed7a9ed03e2cf70eab8e2b8bcaf68cde69d1bd5574bc326ffef",
+      "matches_parent": true
+    },
+    "src/easyicu/data/concept-dict.json": {
+      "sha256": "3c0ebd9b5fe92223a3b674ab0f68a03c4c50e52f1043784b1c7223d1a159dcaf",
+      "matches_parent": true
+    }
+  },
+  "test_command": "python -m pytest tests/core/test_scoped_support_events.py tests/core/test_scoped_support_events_root.py tests/core/test_scoped_source_events.py tests/core/test_arterial_blood_gas.py tests/core/test_arterial_blood_gas_root.py tests/core/test_scoped_measurements.py tests/core/test_scoped_measurements_root.py -q",
+  "suite": {
+    "passed": 145,
+    "warnings": 4072,
+    "seconds": 14.79
+  },
+  "independent_root_test": {
+    "synthetic_rows": 160,
+    "windows": 5,
+    "scalar_and_future_perturbation_assertions": 4810,
+    "real_data_reads": 0
+  },
+  "ruff": "PASS targeted new three Python files",
+  "limitations": [
+    "single store snapshot does not certify version history",
+    "no support absence inferred",
+    "no mode or sequence sources",
+    "no formal real-time eligibility certification"
+  ],
+  "next_stage": "Subsequent real producer requires separately frozen identity and output contract; not executed by this validation."
+}

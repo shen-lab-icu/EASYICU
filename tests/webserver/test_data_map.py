@@ -82,6 +82,15 @@ def test_catalog_hospital_death_label_keeps_the_actual_source_meaning(database):
     profile = research_capability_profile(database)
     expected = assess_study(profile, StudyRequirements(family="descriptive_epidemiology", outcome="hospital_death"))
     cell = build(database=database, concept="death")["databases"][0]["concepts"][0]
+    # A mapping-only community source has no typed mortality meaning, so the
+    # requirement owner refuses a hospital-death study there; the map still
+    # reports only whether the dictionary maps death, never a substitute.
+    if expected.status == "refusal":
+        assert [item.code for item in expected.missing] == ["mortality_status_unavailable"]
+        assert profile.mortality is None
+        assert cell["status"] == ("available" if profile.concept("death").mapped else "missing")
+        assert cell["substitute"] is None
+        return
     assert cell["status"] == ("substituted" if expected.substitutions else "available")
     if expected.substitutions:
         assert cell["substitute"] == profile.mortality.model_dump(mode="json")
