@@ -13,10 +13,14 @@ use uuid::Uuid;
 #[cfg(windows)]
 mod windows;
 
+mod runtime_config;
+
 const DESKTOP_TOKEN_ENV: &str = "EASYICU_DESKTOP_SESSION_TOKEN";
+const DOCKER_CONFIG_ERROR_JS: &str = "if (typeof window.easyicuDesktopStatus === 'function') { window.easyicuDesktopStatus('error', 'Docker 运行配置无效或不可读取，请检查 EasyICU 的 runtime/docker-runner.conf 后重新启动。'); }";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 struct BackendProcess(Mutex<Option<CommandChild>>);
+struct DockerConfigError;
 
 fn available_loopback_port() -> Result<u16, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -130,6 +134,19 @@ fn start_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&state_dir)?;
     fs::create_dir_all(&runtime_dir)?;
     fs::create_dir_all(&log_dir)?;
+    let docker_runtime = match runtime_config::load(&runtime_dir) {
+        Ok(value) => value,
+        Err(code) => {
+            eprintln!("EasyICU desktop runtime configuration error: {code}");
+            app.manage(DockerConfigError);
+            // Covers the case where the page finished before this state existed;
+            // the on_page_load handler covers the opposite ordering.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(DOCKER_CONFIG_ERROR_JS);
+            }
+            return Ok(());
+        }
+    };
     let resource_dir = app.path().resource_dir()?;
     let node = node_binary(&resource_dir)?;
     let backend = backend_binary(&resource_dir)?;
@@ -150,6 +167,14 @@ fn start_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             node.to_string_lossy().into_owned(),
         ])
         .env(DESKTOP_TOKEN_ENV, &token);
+    let command = if let Some(runtime) = docker_runtime {
+        command.env_clear().envs(runtime_config::child_environment(
+            &runtime,
+            std::env::vars_os(),
+        )).env(DESKTOP_TOKEN_ENV, &token)
+    } else {
+        command
+    };
     #[cfg(windows)]
     let command = command.env("PYTHONDONTWRITEBYTECODE", "1");
     let (receiver, child) = command.spawn()?;
@@ -206,6 +231,13 @@ pub fn run() {
     windows::configure_webview_data().expect("cannot create the Windows WebView data directory");
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && webview.try_state::<DockerConfigError>().is_some()
+            {
+                let _ = webview.eval(DOCKER_CONFIG_ERROR_JS);
+            }
+        })
         .setup(|app| {
             start_backend(app)?;
             Ok(())
