@@ -1,0 +1,5 @@
+# Packaged sources, data and benchmark scorers are identified by their exact
+# committed bytes (the SIC case overlay pin, kernel and scorer identities), so a
+# Windows checkout must not rewrite their line endings.
+src/easyicu/** -text
+benchmarks/** -text
