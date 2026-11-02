@@ -20,6 +20,7 @@ on:
           - release
           - formal_experiment
           - explicit_user_request
+          - nightly
       expected_head_sha:
         description: Exact 40-character commit SHA being certified
         required: true
@@ -80,7 +81,7 @@ jobs:
           pytest -q -m "" tests/core/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
 
   test:
-    name: tests (py${{ matrix.python-version }})
+    name: tests (py${{ matrix.python-version }}, ${{ matrix.shard }}/5)
     needs: checkpoint
     runs-on: ubuntu-latest
     strategy:
@@ -89,6 +90,9 @@ jobs:
         # Same reasoning as portability: PRs prove the change on 3.11, and the
         # 3.12 ceiling is proven on main and before a freeze.
         python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.11"]') || fromJSON('["3.11","3.12"]') }}
+        # The suite is split by file across five machines (tests/support/ci_shard.py);
+        # every shard runs its share unfiltered. Whole-tree gates run on shard 1.
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,12 +119,15 @@ jobs:
           pip install "lifelines>=0.27" "shap>=0.44" "xgboost>=2.0"
 
       - name: Compile Python source and tests
+        if: ${{ matrix.shard == 1 }}
         run: python -m compileall -q src tests
 
       - name: Run lint gate
+        if: ${{ matrix.shard == 1 }}
         run: ruff check src tests
 
       - name: Enforce architecture and dependency boundaries
+        if: ${{ matrix.shard == 1 }}
         run: |
           # Deptry's configured DEP002 exception means this proves missing,
           # transitive and misplaced dependency hygiene; intentionally unused
@@ -129,6 +136,7 @@ jobs:
           python -m deptry src/easyicu --no-ansi
 
       - name: Report high-confidence dead-code candidates
+        if: ${{ matrix.shard == 1 }}
         run: |
           # Vulture exit code 3 means it found reportable candidates. This is
           # intentionally report-only until each dynamic registration is
@@ -137,6 +145,7 @@ jobs:
             || test "$?" -eq 3
 
       - name: Collect full test suite
+        if: ${{ matrix.shard == 1 }}
         run: |
           mkdir -p ci-receipts
           git rev-parse HEAD > ci-receipts/commit-sha.txt
@@ -146,11 +155,17 @@ jobs:
           python -m pytest --collect-only -q -m "" -p tests.support.figure2_versioned_ci --figure2-current-v4 --figure2-collection-receipt=ci-receipts/current-figure2-collection.json > ci-receipts/collected-tests.txt
           tail -n 1 ci-receipts/collected-tests.txt
 
-      - name: Run test suite
+      - name: Run serial runner-selection tests
+        if: ${{ matrix.shard == 1 }}
         run: |
           # Exercise fail-closed backend selection without development overrides.
           # Kept serial and unfiltered: it asserts on runner selection itself.
+          mkdir -p ci-receipts
           pytest tests/research_agent/execution/test_runner.py -q -m "" --junitxml=ci-receipts/runner-results.xml
+
+      - name: Run test suite shard
+        run: |
+          mkdir -p ci-receipts
           # Remaining offline integration tests may use the ephemeral Actions host.
           # -m "" cancels the pytest.ini dev default (-m "not slow"): CI always
           # runs the slow/integration tier. -n auto spreads it over the runner's
@@ -159,6 +174,7 @@ jobs:
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             python -m pytest -q -m "" -n auto --dist loadfile \
               --ignore=tests/research_agent/execution/test_runner.py \
+              -p tests.support.ci_shard --ci-shard=${{ matrix.shard }}/5 \
               -p tests.support.figure2_versioned_ci --figure2-current-v4 \
               --figure2-collection-receipt=ci-receipts/current-figure2-execution-collection.json \
               --junitxml=ci-receipts/results.xml
@@ -167,7 +183,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-receipts-py${{ matrix.python-version }}-${{ github.sha }}
+          name: ci-receipts-py${{ matrix.python-version }}-shard${{ matrix.shard }}-${{ github.sha }}
           path: ci-receipts/
           retention-days: 30
 

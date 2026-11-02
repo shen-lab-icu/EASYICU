@@ -37,7 +37,11 @@ def pytest_collection_finish(session):
     if not config.getoption("--figure2-current-v4"):
         return
     declaration = policy()
-    nodeids = {item.nodeid for item in session.items}
+    # A sharded run checks the mapping against the whole collection; each
+    # shard still verifies the namespace of the V4 nodes it executes.
+    from tests.support.ci_shard import FULL_COLLECTION_ATTR
+
+    nodeids = set(getattr(config, FULL_COLLECTION_ATTR, None) or {item.nodeid for item in session.items})
     expected = set(declaration["expected_successor_nodes"])
     missing = sorted(expected - nodeids)
     wrappers = {row["successor_test"] for row in declaration["test_sources"].values()}
