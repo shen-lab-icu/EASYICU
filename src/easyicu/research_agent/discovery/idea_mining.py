@@ -3190,8 +3190,7 @@ def _build_concept_lookup(
         lookup[canonical] = canonical
         for key in keys:
             _add_lookup_key_variants(lookup, key, canonical)
-    # A concept's own name names it: another concept's stripped variant
-    # ("peep_total" -> "peep") must not take it over.
+    # A concept's own name names it; another's stripped variant (peep_total -> peep) must not.
     lookup.update((canonical, canonical) for canonical in canonicals)
     if concept_aliases:
         for target, aliases in concept_aliases.items():

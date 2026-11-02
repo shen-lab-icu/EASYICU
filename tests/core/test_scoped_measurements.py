@@ -218,7 +218,10 @@ def test_subset_does_not_require_unused_lab_table(tmp_path):
 
 
 def test_all_clinical_fetches_sql_restricted(tmp_path, monkeypatch):
-    original = api.duckdb.connect
+    import duckdb
+
+    # Engines open through runtime.duckdb_spill, which calls duckdb.connect.
+    original = duckdb.connect
     queries = []
 
     class Wrapped:
@@ -241,7 +244,7 @@ def test_all_clinical_fetches_sql_restricted(tmp_path, monkeypatch):
             return getattr(self.c, n)
 
     monkeypatch.setattr(
-        api.duckdb, "connect", lambda *a, **kw: Wrapped(original(*a, **kw))
+        duckdb, "connect", lambda *a, **kw: Wrapped(original(*a, **kw))
     )
     r = extract(
         tmp_path,
