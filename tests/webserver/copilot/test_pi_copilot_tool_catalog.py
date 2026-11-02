@@ -300,10 +300,19 @@ def test_pi_validates_a_statement_against_the_catalog_schema() -> None:
         "population_spec": target_trial_population().model_dump(mode="json"),
     }
     schema = TOOL_MODEL_SCHEMAS[target_trial_setup.TARGET_TRIAL_STATE_TOOL]
+    # The copy the agent loop validates tool calls with: Node resolves pi-ai from
+    # pi-coding-agent's own node_modules first, then the hoisted one `npm ci` leaves.
+    packages = app_dir / "node_modules" / "@earendil-works"
+    pi_ai = next(
+        root for root in (
+            packages / "pi-coding-agent" / "node_modules" / "@earendil-works" / "pi-ai",
+            packages / "pi-ai",
+        ) if root.is_dir()
+    )
+    validation = (pi_ai / "dist" / "utils" / "validation.js").as_uri()
     script = f"""
 import {{ Type }} from "typebox";
-// The copy the agent loop validates tool calls with.
-import {{ validateToolArguments }} from "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/validation.js";
+import {{ validateToolArguments }} from {json.dumps(validation)};
 const tool = {{ name: "t", description: "t", parameters: Type.Unsafe({json.dumps(schema)}) }};
 const statement = {json.dumps(statement)};
 const call = (args) => ({{ type: "toolCall", id: "c", name: "t", arguments: args }});
