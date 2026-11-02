@@ -274,8 +274,18 @@ def selection_options_for_study(study: Any) -> List[Dict[str, Any]]:
     """Return exact full-contract previews for host-rendered choices."""
 
     options: List[Dict[str, Any]] = []
+    source = study.get("data_source") if isinstance(study, Mapping) else None
+    from easyicu.webserver.raw_source_authority import patient_first_icu_stay_substitutes
+
+    # A source that cannot order one patient's stays offers no per-patient
+    # first-stay option (study_first_icu_stay_per_patient_unavailable).
+    per_patient_unavailable = bool(patient_first_icu_stay_substitutes(
+        str(source.get("database") or "") if isinstance(source, Mapping) else ""
+    ))
     for static in ELIGIBILITY_OPTIONS:
         target = selection_cohort_for_option(study, static["id"])
+        if per_patient_unavailable and primary_cohort.first_icu_stay_only(target):
+            continue
         scope = _scope_for_cohort(target)
         options.append(
             {

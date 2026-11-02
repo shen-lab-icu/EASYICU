@@ -652,6 +652,20 @@ def _merge_nested_study_patch(
     return merged
 
 
+#: How the model offers each substitute for a per-patient first ICU stay
+#: (raw_source_authority.patient_first_icu_stay_substitutes).
+_FIRST_STAY_SUBSTITUTE_WORDING = {
+    "first_icu_stay_per_hospitalization": (
+        "the first ICU stay within each hospitalization (cohort."
+        "first_icu_stay_per_hospitalization=true; one patient can contribute "
+        "several hospitalizations, so uncertainty is clustered by patient)"
+    ),
+    "all_icu_stays": (
+        "every eligible ICU stay (cohort.exclude_readmissions=false), with "
+        "uncertainty clustered by patient where the source links stays"
+    ),
+}
+
 _GATED_SLOT_OMISSION_CODES = {
     "cohort": "study_cohort_preset_confirmation_required",
     "outcome": "study_primary_outcome_confirmation_required",
@@ -1493,6 +1507,37 @@ def update_study_context(
                     refusal = axis_exc
             else:
                 refusal = exc
+        newly_first_per_patient = (
+            refusal is None
+            and primary_cohort.first_icu_stay_only(merged_cohort)
+            and not primary_cohort.first_icu_stay_only((current or {}).get("cohort"))
+        )
+        if newly_first_per_patient:
+            # A source that cannot order one patient's ICU stays cannot select
+            # each patient's first; say so before saving rather than after a
+            # plan, an export and an extraction each refuse it.
+            bound = patch.get("data_source") if isinstance(patch.get("data_source"), Mapping) \
+                else (current or {}).get("data_source")
+            database = str(bound.get("database") or "") if isinstance(bound, Mapping) else ""
+            from easyicu.webserver.raw_source_authority import patient_first_icu_stay_substitutes
+
+            substitutes = patient_first_icu_stay_substitutes(database)
+            if substitutes:
+                return _result(
+                    context,
+                    status="blocked",
+                    code="study_first_icu_stay_per_patient_unavailable",
+                    summary=(
+                        f"{database} cannot establish each patient's first ICU stay: it does not "
+                        "order one patient's ICU stays across separate hospitalizations. Nothing "
+                        "was saved. Tell the researcher this and offer exactly these "
+                        "populations instead, without choosing one: "
+                        + "; ".join(_FIRST_STAY_SUBSTITUTE_WORDING[name] for name in substitutes)
+                        + "."
+                    ),
+                    owner="easyicu.webserver.raw_source_authority",
+                    details={"field": "cohort", "database": database, "substitutes": list(substitutes)},
+                )
         if refusal is not None:
             # Any other refusal is the cohort owner's answer about this
             # population; return it, not an untyped host-tool failure.

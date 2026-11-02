@@ -55,7 +55,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
 
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-markdown.js?v=20261029-opt1" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20261102-dedupe1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261029-opt2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-starters.js?v=20261102-ui1" in index
@@ -73,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-demo-walkthrough.css?v=20261026-demo3" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
-        "js/screens-guided-pi-evidence-preview.js?v=20261101-s12-method1" in index
+        "js/screens-guided-pi-evidence-preview.js?v=20261102-contrast1" in index
     )
     assert (
         "js/screens-guided-pi-technical-report.js?v=20261022-plain3"
@@ -85,8 +85,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-preview.js?v=20261030-video3" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20261026-review1" in index
-    assert "js/screens-guided-pi-result-append.js?v=20261026-followups1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20261102-firststay1" in index
+    assert "js/screens-guided-pi-result-append.js?v=20261102-plain1" in index
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "js/screens-guided-pi-activity.js?v=20261030-progress3" in index
     assert (
@@ -118,7 +118,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-confirmation.js")
     )
     assert "js/screens-guided-pi-confirmation-data.js?v=20261101-scope1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20261102-outcome2" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261102-firststay1" in index
     assert index.index("js/screens-guided-pi-confirmation-data.js") < index.index("js/screens-guided-pi-confirmation.js")
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index

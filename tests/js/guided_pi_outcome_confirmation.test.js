@@ -38,3 +38,20 @@ test('the plan step offers the proposed outcome as the one choice to confirm', (
   assert.equal(unlabeled.message, '');
   assert.deepEqual([...unlabeled.grants], []);
 });
+
+test('a per-hospitalization first stay says why when the source cannot order a patient', () => {
+  const preparation = {
+    available: true, status: 'available', criteria: [{ id: 'c2', quote: '首次入 ICU', disposition: 'requires_extraction' }],
+    changes: [{ field: 'first_icu_stay_per_hospitalization', before: false, after: true }],
+  };
+  const workflow = substitutes => ({
+    next_action_code: 'population_inclusion_requires_extraction',
+    plan_review_summary: { population_preparation: preparation },
+    ...(substitutes ? { patient_first_stay_substitutes: substitutes } : {}),
+  });
+  const eicu = owner(workflow(['first_icu_stay_per_hospitalization', 'all_icu_stays']), 'zh').workflowConfirmationHtml();
+  assert.match(eicu, /仅保留每次住院的首次 ICU 入住：否 → 是/);
+  assert.doesNotMatch(eicu, /first_icu_stay_per_hospitalization/);
+  assert.match(eicu, /无法确定同一患者跨不同住院的首次 ICU 入住/);
+  assert.doesNotMatch(owner(workflow(null), 'zh').workflowConfirmationHtml(), /无法确定同一患者/);
+});

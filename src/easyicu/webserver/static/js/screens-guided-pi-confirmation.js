@@ -687,12 +687,22 @@
       const labels = {
         age_min: tr('Minimum age', '最低年龄'), age_max: tr('Maximum age', '最高年龄'),
         min_icu_los_hours: tr('Minimum ICU stay (hours)', '最短 ICU 时长（小时）'),
-        exclude_readmissions: tr('Keep first ICU stays only', '仅保留首次 ICU 入住'),
+        exclude_readmissions: tr('Keep each patient’s first ICU stay only', '仅保留每位患者的首次 ICU 入住'),
+        first_icu_stay_per_hospitalization: tr('Keep the first ICU stay within each hospitalization', '仅保留每次住院的首次 ICU 入住'),
       };
       const value = item => typeof item === 'boolean' ? (item ? tr('Yes', '是') : tr('No', '否')) : String(item);
       const changes = (preparation.changes || []).map(row =>
         `<li>${esc(labels[row.field] || row.field)}：${esc(value(row.before))} → ${esc(value(row.after))}</li>`).join('');
-      return `<div class="gpi-population-preparation"><ul>${rows}</ul>${changes ? `<strong>${esc(tr('Settings to apply', '将应用的设置'))}</strong><ul>${changes}</ul>` : ''}</div>`;
+      // The source cannot order one patient's stays across hospitalizations
+      // (workflow.patient_first_stay_substitutes): say why the scope is the
+      // hospitalization, not the patient.
+      const substitutes = (host.workflow() || {}).patient_first_stay_substitutes;
+      const perHospitalization = (preparation.changes || []).some(row => row.field === 'first_icu_stay_per_hospitalization' && row.after === true);
+      const scopeNote = perHospitalization && Array.isArray(substitutes) && substitutes.length ? `<p>${esc(tr(
+        'This database cannot tell which ICU stay was a patient’s first across separate hospitalizations, so the first ICU stay within each hospitalization is used; one patient can contribute several hospitalizations.',
+        '这个数据库无法确定同一患者跨不同住院的首次 ICU 入住，因此按每次住院的首次 ICU 入住；同一患者可能贡献多次住院。',
+      ))}</p>` : '';
+      return `<div class="gpi-population-preparation"><ul>${rows}</ul>${changes ? `<strong>${esc(tr('Settings to apply', '将应用的设置'))}</strong><ul>${changes}</ul>${scopeNote}` : ''}</div>`;
     }
 
     function populationAcceptanceHtml(proposal) {

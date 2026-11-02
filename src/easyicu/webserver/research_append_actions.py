@@ -33,7 +33,10 @@ def append_options(service, *, project_id, run_id):
     try:
         source, predecessor = resolve_result_source(Path(row["project_dir"]), run_id=run_id, study_id=row["study_id"])
     except (ValueError, OSError, KeyError):
-        return dict(run_id=run_id, source_run_sha256=None, options=[_option(kind) for kind in LABELS], followups=followups)
+        # Only sealed baseline-association results accept additions; others
+        # get one plain reason instead of a roster of options that cannot run.
+        return dict(run_id=run_id, source_run_sha256=None, options=[], unavailable_reason="result_append_source_unavailable",
+                    followups=followups)
     study = study_contexts.get_context(source.seal["study_id"]) or {}
     options = []
     for kind in LABELS:

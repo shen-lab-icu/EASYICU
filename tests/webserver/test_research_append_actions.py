@@ -51,13 +51,14 @@ def test_result_actions_are_bound_to_source_and_only_propose(source, monkeypatch
                                  run_id=source.seal["run_id"], kind="subgroup", expected_source_sha256="a" * 64)
 
 
-def test_missing_source_seal_shows_status_and_owner_entry(tmp_path):
+def test_missing_source_seal_offers_no_dead_options(tmp_path):
     from easyicu.webserver.research_append_actions import append_options
 
     service = SimpleNamespace(_research_run_row=lambda *args: {"project_dir": str(tmp_path), "study_id": "study"})
     result = append_options(service, project_id="project", run_id="old_run")
-    assert len(result["options"]) == 4
-    assert all(not row["available"] and row["owner"] and row["status_zh"] for row in result["options"])
+    assert result["options"] == []
+    assert result["unavailable_reason"] == "result_append_source_unavailable"
+    assert result["source_run_sha256"] is None
 
 
 @pytest.mark.parametrize("case", ["unfinished", "rejected"])

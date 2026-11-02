@@ -47,6 +47,17 @@ const owner = window.EasyICU.guidedPi.require('resultAppend').create({
   assert.equal(await owner.propose('sensitivity'), false);
   project = 'different';
   assert.doesNotMatch(owner.render({ run_id: 'source' }), /data-gpi-result-append=/);
+  // A result without an append source shows one plain line, not dead rows.
+  const plain = window.EasyICU.guidedPi.require('resultAppend').create({
+    tr: (en, zh) => zh, esc: window.EU_HTML.esc, projectId: () => 'project', canPreview: () => true, host: () => null,
+    session: () => ({ session_id: 'session' }), onError: String, errorText: String,
+    api: () => ({ loadPiCopilotAppendOptions: async () => ({ run_id: 'other', source_run_sha256: null, options: [],
+      unavailable_reason: 'result_append_source_unavailable' }) }),
+  });
+  await plain.load({ run_id: 'other' });
+  const plainHtml = plain.render({ run_id: 'other' });
+  assert.match(plainHtml, /暂不支持一键追加分析/);
+  assert.doesNotMatch(plainHtml, /data-gpi-append-owner|继续这项研究|尚不支持此项追加/);
   const resultRun = { run_id: 'addition', artifact_refs: ['agent_plan.json', 'result_tables.json'].map(artifact => ({
     run_id: 'addition', artifact, sha256: 'b'.repeat(64),
   })) };

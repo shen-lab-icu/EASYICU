@@ -258,6 +258,22 @@ const missingFacts = selectionOnly({...model,value:{analysis_family:'association
 for (const label of ['Group', 'Reference group', 'Denominator / sample', 'Unit', 'Time window / anchor', 'Adjustment']) {
   assert.ok(missingFacts.includes(`<span>${label}</span><strong>Not recorded</strong>`), label);
 }
+// A robustness summary describes its primary value through the typed
+// contrast report; a sensitivity variant's estimate is not borrowed.
+const robust = {...selectedPayload,value:{
+  analysis_family:'robustness_sensitivity', primary_effect_scale:'OR', primary_or:3.41, primary_or_ci:[2.12,5.48],
+  variable_display_binding:{column:'peak_marker',label:'Peak marker in 24 h',unit:'mmol/L'},
+  reportable_model_contrasts:{schema_version:'easyicu.model_contrast_reporting/1',exposure:'peak_marker',exposure_unit:'mmol/L',
+    n:380,landmark_hours:24,adjustment_columns:['age','sex'],contrasts:[
+      {kind:'spline_point',estimate:0.45,value:0.9,reference:1.8},{kind:'spline_point',estimate:3.41,value:5.02,reference:1.8}]},
+}};
+const robustSelection = selectionOnly(robust, '/primary_or', 3.41);
+assert.match(robustSelection, /<span>Group<\/span><strong>Peak marker in 24 h = 5.02 mmol\/L<\/strong>/);
+assert.match(robustSelection, /<span>Reference group<\/span><strong>Peak marker in 24 h = 1.8 mmol\/L<\/strong>/);
+for (const fact of ['Odds ratio', '380', 'Exposure: mmol/L', 'Landmark: 24 hours', 'age, sex']) assert.ok(robustSelection.includes(fact), fact);
+assert.match(selectionOnly(robust, '/primary_or_ci/0', 2.12), /lower bound/);
+const robustUnmatched = {...robust,value:{...robust.value,primary_or:9.9}};
+assert.match(selectionOnly(robustUnmatched, '/primary_or', 9.9), /Selected metric<\/span><strong>Not recorded/);
 const risk = {...selectedPayload,value:{
   analysis_family:'absolute_risk_context',n_total:24,
   reportable_descriptive_results:{schema_version:'easyicu.absolute_risk_reporting/1',

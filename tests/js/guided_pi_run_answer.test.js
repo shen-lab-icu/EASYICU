@@ -408,6 +408,9 @@ const outcome = modules.require('runOutcome').create({
   const named = await reread({ ...plan, steps: plan.steps.concat([{ step_id: 'first_icu_stay_note', method: 'descriptive',
     intent: "Describe strategy 'first_stay'.", inputs: ['first_icu_stay'] }]) });
   assert.ok(named.followUps.some(text => text.includes('只保留每位患者的首次 ICU 入住')));
+  // A source that cannot order one patient's stays (eICU) is not asked to.
+  assert.ok(outcome.followUps(latest, { ...workflow, patient_first_stay_substitutes: ['first_icu_stay_per_hospitalization', 'all_icu_stays'] })
+    .every(text => !text.includes('首次 ICU 入住')));
   // A prediction study answers only with the host's typed block for its
   // primary model. Without the block nothing is shown, even beside a result
   // table with an `auroc` column.

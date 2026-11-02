@@ -194,6 +194,25 @@ _FIRST_ICU_STAY_PROFILES = {
 _PROFILE_COLUMN_KEYS = ("stay_column", "patient_column", "order_column")
 
 
+# Families that cannot select each patient's first ICU stay by any owner: no
+# recipe above and no PatientFilter column. eICU orders units only within one
+# hospitalization (unitvisitnumber) and cannot order a patient's separate
+# hospitalizations; HiRID exposes no patient linkage. The value is what a
+# study can use instead, in the order offered.
+_PATIENT_FIRST_STAY_SUBSTITUTES = {
+    "eicu": ("first_icu_stay_per_hospitalization", "all_icu_stays"),
+    "hirid": ("all_icu_stays",),
+}
+
+
+def patient_first_icu_stay_substitutes(database: str) -> Optional[tuple[str, ...]]:
+    """The substitutes when ``database`` cannot select each patient's first ICU
+    stay; None when it can, or when the family is not declared here."""
+
+    family = _DATABASE_ALIASES.get(str(database or "").strip().casefold())
+    return _PATIENT_FIRST_STAY_SUBSTITUTES.get(family)
+
+
 def source_identity_capability_profiles(database: str) -> dict[str, Any]:
     """Declared identity recipes only; do not resolve or inspect a raw source.
 

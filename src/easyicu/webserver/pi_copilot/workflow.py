@@ -158,6 +158,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: The outcome the conversation proposed but did not save; planning waits
     #: until the researcher confirms this exact label or names another.
     unconfirmed_outcome: Optional[str] = None
+    #: What the bound source offers instead of each patient's first ICU stay,
+    #: when it cannot select it (raw_source_authority); None when it can.
+    patient_first_stay_substitutes: Optional[List[str]] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -396,6 +399,15 @@ def _identified_data_source(study: Mapping[str, Any]) -> bool:
     if not isinstance(source, Mapping):
         return False
     return bool(str(source.get("database") or "").strip())
+
+
+def _patient_first_stay_substitutes(study: Mapping[str, Any]) -> Optional[List[str]]:
+    from easyicu.webserver.raw_source_authority import patient_first_icu_stay_substitutes
+
+    source = study.get("data_source")
+    database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
+    substitutes = patient_first_icu_stay_substitutes(database)
+    return list(substitutes) if substitutes else None
 
 
 def build_research_workflow_snapshot(
@@ -1352,6 +1364,7 @@ def build_research_workflow_snapshot(
         unconfirmed_outcome=(
             str(study_row.get("unconfirmed_outcome") or "").strip()[:160] or None
         ),
+        patient_first_stay_substitutes=_patient_first_stay_substitutes(study_row),
         stages=stages,
         completed_required_stages=completed,
         study_setup_receipt=project_study_setup_receipt(study_row),

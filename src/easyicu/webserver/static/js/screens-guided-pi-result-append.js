@@ -48,6 +48,9 @@
       const rows = offered.filter(row => !picks.some(pick => pick.delta.kind === row.kind));
       const notice = valid && current.source_run_sha256
         ? tr('Additions use the same data version as this result.', '追加分析沿用这次结果的数据版本。') : '';
+      if (valid && !offered.length && current.unavailable_reason === 'result_append_source_unavailable') {
+        return `<div class="gpi-result-append" data-append-run="${esc(run.run_id)}"><p>${esc(tr('This kind of result cannot take one-click additions; ask for a new analysis in the conversation.', '这类结果暂不支持一键追加分析；可以在对话里提出新的分析。'))}</p></div>`;
+      }
       return `<div class="gpi-result-append" data-append-run="${esc(run.run_id)}">${offered.length ? `<strong>${esc(tr('Continue this study', '继续这项研究'))}</strong><p>${esc(notice)}</p>` : ''}${picks.length ? `<ul class="gpi-result-followups">${picks.map(suggestionHtml).join('')}</ul>` : ''}${rows.map(row => {
         const label = esc(tr(row.label_en, row.label_zh));
         return row.available
