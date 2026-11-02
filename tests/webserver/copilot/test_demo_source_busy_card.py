@@ -118,7 +118,7 @@ def test_late_demo_start_does_not_auto_use_in_another_session() -> None:
 @pytest.mark.requires_node
 @pytest.mark.usefixtures('_load_guided_pi_module_harness')
 @pytest.mark.parametrize('fallback', [False, True])
-def test_directory_confirmation_error_links_to_the_existing_data_page(fallback: bool) -> None:
+def test_directory_confirmation_is_asked_in_the_card(fallback: bool) -> None:
     node = shutil.which('node')
     if node is None:
         pytest.skip('Node is not installed')
@@ -132,15 +132,15 @@ def test_directory_confirmation_error_links_to_the_existing_data_page(fallback: 
       const consent=window.EasyICU.guidedPi.require('dataConsent');
       const demo={{id:'eicu-demo',database:'eicu_demo',title:'eICU Demo',status:{{export_ready:false}}}};
       let session={{session_id:'s1',data_source_authorization:{{status:'pending'}}}}, project='p1', errors=[];
-      let saves=0;
+      let saves=0, prepares=0;
       const host={{tr:(en,zh)=>zh,dataConsent:consent,session:()=>session,projectId:()=>project,
         messages:()=>[{{role:'user',text:{json.dumps('在 eICU 数据里研究乳酸' if fallback else '在 eICU Demo 数据里研究乳酸')}}}],
         busy:()=>false,render(){{}},workflowReceipts:()=>[],setWorkflowReceipts(){{}},
         setError:x=>errors.push(x),errorText:e=>String(e),
         api:()=>({{loadOfficialDemoSources:async()=>({{sources:[demo]}}),
           loadPiCopilotRegisteredSourceOffer:async()=>({{choices:[],official_demo:demo}}),
-          startOfficialDemoSourcePrepare:async()=>{{throw Object.assign(new Error('x'),{{code:'data_directory_confirmation_required'}})}},
-          saveSettings:async()=>{{saves++}},
+          startOfficialDemoSourcePrepare:async()=>{{prepares++;throw Object.assign(new Error('x'),{{code:'data_directory_confirmation_required',detail:{{destination:'/data/EasyICU'}}}})}},
+          saveSettings:async patch=>{{saves+=patch.data_dir_confirmed===true?1:100}},
         }}),
       }};
       const owner=window.EasyICU.guidedPi.require('hostJobs').create(host);
@@ -151,20 +151,27 @@ def test_directory_confirmation_error_links_to_the_existing_data_page(fallback: 
         const before=consent.render(session,ctx());
         const result=await owner.useNamedDemo('eicu-demo');
         const help=consent.render(session,ctx());
+        const savesBefore=saves;
+        await owner.confirmDemoDirectory('eicu-demo');
         session={{session_id:'s2',data_source_authorization:{{status:'pending'}}}};project='p2';
         ctx();await tick();
         const other=consent.render(session,ctx());
         owner.stopAll();
-        process.stdout.write(JSON.stringify({{before,result,help,other,errors,saves}}));
+        process.stdout.write(JSON.stringify({{before,result,help,other,errors,saves,savesBefore,prepares}}));
       }})().catch(err=>{{console.error(err);process.exitCode=1}});
     """
     result = json.loads(run_node(node, script, check=True).stdout)
-    assert 'href="#patient"' not in result['before']
+    confirm = 'data-gpi-demo-directory-confirm="eicu-demo"'
+    assert confirm not in result['before']
     assert result['result'] is False
-    assert 'href="#patient"' in result['help']
-    assert '下载到这里' in result['help']
-    assert '编辑设置' in result['help']
-    assert '返回本次对话' in result['help']
-    assert 'href="#patient"' not in result['other']
-    assert '请先在患者审阅的数据选择页确认 Demo 下载位置' in result['errors'][-1]
-    assert result['saves'] == 0
+    # The card shows where the download lands and confirms it in place: no
+    # detour to another page and no error line under the composer.
+    assert confirm in result['help']
+    assert '/data/EasyICU' in result['help']
+    assert '下载到这里并准备' in result['help']
+    assert 'href="#patient"' not in result['help']
+    assert confirm not in result['other']
+    assert not any(result['errors'])
+    assert result['savesBefore'] == 0
+    assert result['saves'] == 1
+    assert result['prepares'] == 2

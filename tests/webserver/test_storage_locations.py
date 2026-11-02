@@ -93,6 +93,23 @@ def test_first_download_requires_confirmation_before_job_creation(isolated, monk
     assert not (isolated / "old-cache").exists()
 
 
+def test_data_already_on_disk_is_reexported_without_location_confirmation(isolated, monkeypatch):
+    """The confirmation guards where a download lands; a re-export of raw data
+    already on disk writes nothing into the unconfirmed directory."""
+    from easyicu.official_demo_sources import get_source
+    from easyicu.webserver import demo_source_storage as storage
+
+    source = get_source("mimic_iv_demo_v2_2")
+    paths = storage.source_paths(source)
+    monkeypatch.setattr(storage, "raw_ready", lambda *_: True)
+    monkeypatch.setattr(storage.storage_locations, "validate_directory", lambda *_args, **_kwargs: None)
+    storage.validate_prepare_destination(source, paths)
+    monkeypatch.setattr(storage, "raw_ready", lambda *_: False)
+    monkeypatch.setattr(storage, "archive_ready", lambda *_: False)
+    with pytest.raises(storage.DemoSourceError) as error:
+        storage.validate_prepare_destination(source, paths)
+    assert error.value.code == "data_directory_confirmation_required"
+
 def test_insufficient_space_is_rejected_before_download(isolated, monkeypatch):
     from easyicu.webserver import storage_locations
 

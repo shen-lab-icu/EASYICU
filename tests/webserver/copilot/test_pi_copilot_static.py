@@ -99,9 +99,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261102-ui1" in index
-    assert "js/screens-guided-pi-events.js?v=20261102-ui1" in index
+    assert "js/screens-guided-pi-events.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261030-demo1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
     assert "js/screens-guided-pi-session-navigation.js?v=20261030-video2" in index
     assert "js/screens-guided-pi-session-view.js?v=20261102-ui1" in index
@@ -147,7 +147,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261030-preparation1" in index
+    assert "js/api.js?v=20261102-demo2" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
