@@ -1,0 +1,76 @@
+{
+  "schema": "miiv_arterial_blood_gas_implementation_v1",
+  "status": "PASS_SOURCE_AND_FINITE_SYNTHETIC_VALIDATION_NO_CLINICAL_EXTRACTION",
+  "starting_git": "905b1e7e17cc70a029f62309967e8353beab27d9",
+  "sources": {
+    "src/easyicu/io/arterial_blood_gas.py": "34eeb35b4656a53ed9b539c0dad8020adc10f2f86115b1b6d95dbec841370a5c",
+    "tests/core/test_arterial_blood_gas.py": "163a68b821f84c60421c9da8a94e31dbef9ef994d65fd1ec73b46f9419d29344",
+    "tests/core/test_arterial_blood_gas_root.py": "1f9a9b75654ff8758a4274577668967c61a871366c37d85232f1dff900d8874f",
+    "docs/validation/miiv_arterial_blood_gas.md": "ac4668c3cccf550e4f20952bc7ffdb85d7a5dd78ee10aaaca48c3bd9119fb092"
+  },
+  "reused_sources": {
+    "src/easyicu/io/source_events.py": "eb0fdbe72021b54b8e3f8fb12038d6f5f1a219c04aa85a02ff42add72d9355ac",
+    "src/easyicu/data/concept-dict.json": "3c0ebd9b5fe92223a3b674ab0f68a03c4c50e52f1043784b1c7223d1a159dcaf",
+    "src/easyicu/utils/callback_utils.py": "472c60ca5d950ce5a6e3bf72ebad59c5d5d2939377e1ba2a99e8117223d6bf00"
+  },
+  "existing_source_and_dictionary_vs_parent_git": "identical",
+  "api": "easyicu.io.arterial_blood_gas.extract_miiv_arterial_blood_gas(data_source, *, allowed_stay_ids)",
+  "output_fields": [
+    "events",
+    "po2",
+    "pairs",
+    "clock_context",
+    "receipt"
+  ],
+  "real_patient_events_read": 0,
+  "real_routes_read": 0,
+  "clinical_exports_created": 0,
+  "model_fits": 0,
+  "current_pointer_changed": false,
+  "sealed_modified": false,
+  "verification": {
+    "full_related_passed": 140,
+    "seconds": 12.26,
+    "warnings": 2406,
+    "new_source_tests": 28,
+    "root_authored_independent_combination_tests": 1,
+    "prior_related_tests": 111,
+    "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONPATH=src python -m pytest -q --disable-warnings -m '' tests/core/test_arterial_blood_gas.py tests/core/test_arterial_blood_gas_root.py tests/core/test_scoped_source_events.py tests/core/test_respiratory_source_channels.py tests/core/test_community_databases.py tests/core/test_concept_catalog_consistency.py tests/governance/test_catalog_manifest.py",
+    "log_sha256": "6ea21e381d61b2251044731cc3d16bc788adcdf4215a9d1ff634042e4b10a1e7",
+    "ruff": "PASS",
+    "broad_fast_suite_run": false,
+    "independent_scope": "root constructed 13-event/3-PO2 scenario and asserted ratios/ties/late/missing/negative store/type conflict; only synthetic writer reused"
+  },
+  "official_reading": {
+    "mimic_code_commit": "303d26c623dcc9c49cc0f204468d4acc2f063797",
+    "paths": [
+      "mimic-iv/concepts/measurement/bg.sql",
+      "mimic-iv/concepts/firstday/first_day_bg_art.sql"
+    ],
+    "mimic_website_commit": "81822278432bc33e101116427e05fa4f69265a01",
+    "documentation": "docs/iv/modules/hosp/labevents.md",
+    "level": "full fixed SQL and labevents definitions read, not search abstract"
+  },
+  "policy": {
+    "lab_items": [
+      50821,
+      52033,
+      50816
+    ],
+    "chart_items": [
+      223835
+    ],
+    "arterial_direct_token": "ART. after whitespace/case normalization",
+    "unknown_type_inference": false,
+    "specimen_audit": "metadata and type-row completeness over selected three lab-item sources, no unallowed clinical-value fetch",
+    "chart_window_hours": 4.0,
+    "chart_window_interpretation": "fixed official comparison, not physiological validity",
+    "chart_identity": "subject/hadm/assigned stay",
+    "pairs": "all physical ties and same-specimen crossproducts; never choose MAX or collapse duplicate events",
+    "available_at": "unknown for any required storetime missing/invalid/before chart; original event and retrospective ratio retained",
+    "numeric_bounds": "reuse existing dictionary, not exact official bg.sql cutoff replication",
+    "missing_units": "explicit dictionary assumption",
+    "scaling": "indexed specimen groups, sorted per-stay chart arrays and binary search; output preserves genuine Cartesian products"
+  },
+  "preserved_history": "No edits to source_events.py, old six-channel candidate, failed a, v1/v2 receipts, concept dictionary or sealed outputs; previous interrupted broad tests not replaced by this finite suite."
+}

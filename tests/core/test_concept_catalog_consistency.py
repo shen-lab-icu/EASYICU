@@ -170,7 +170,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-10-26: +icu_death, native ICU mortality (db6g). 325 -> 326.
     # 2026-10-28: +icu_stay_is_readmission, the readmitted-stay attribute
     # the repeat-stay restriction reads. 326 -> 327.
-    assert len(CONCEPT_DICTIONARY) == 327
+    # 2026-10-08 (main): four explicit MIIV/MIMIC respiratory source
+    # channels. 327 -> 331.
+    assert len(CONCEPT_DICTIONARY) == 331
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

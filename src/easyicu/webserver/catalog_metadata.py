@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from easyicu.concept import catalog as cc
 from easyicu.concept import loader
 from easyicu.concept_output_sources import COMPOSITE_LOADER_SUPPORT
+from easyicu.io.community_databases import COMMUNITY_DATABASES
 from easyicu.outcome_availability import OUTCOME_CONCEPT_SUPPORTED_DATABASES
 from easyicu.resources import package_path
 
@@ -101,14 +102,17 @@ def concept_audience(concept_id: str, definition: Mapping[str, Any]) -> str:
 def catalog_definitions() -> dict[str, Any]:
     """Cache base/overlay facts once; catalog requests do not reopen assets."""
     definitions = dict(loader.load_concept_dict_cached())
-    with package_path("sofa2-dict.json") as path:
-        overlay = json.loads(path.read_text(encoding="utf-8"))
-    for key, patch in overlay.items():
-        base = definitions.get(key, {})
-        definitions[key] = {
-            **base, **patch,
-            "sources": {**base.get("sources", {}), **patch.get("sources", {})},
-        }
+    # The same overlays load_dictionary applies: the community sources' own
+    # mappings, then the SOFA-2 definitions.
+    for name in ("community-concept-sources.json", "sofa2-dict.json"):
+        with package_path(name) as path:
+            overlay = json.loads(path.read_text(encoding="utf-8"))
+        for key, patch in overlay.items():
+            base = definitions.get(key, {})
+            definitions[key] = {
+                **base, **patch,
+                "sources": {**base.get("sources", {}), **patch.get("sources", {})},
+            }
     return definitions
 
 
@@ -136,10 +140,13 @@ def concept_databases(
         support = COMPOSITE_LOADER_SUPPORT.get(source)
         if support is None:
             return set()
+        # The provenance loaders read the six full-concept databases' own
+        # tables; the mapping-only community sources carry none of them.
         databases = {
             key
             for database in cc.SUPPORTED_DB_KEYS
             if database not in support.no_source_databases
+            and database not in COMMUNITY_DATABASES
             for key in (database, database + "_demo")
         }
         for required in support.required_concepts:

@@ -1430,7 +1430,7 @@ class ConceptResolver:
         
         # 🚀 批量加载优化：检测是否可以使用DuckDB批量加载
         # 宽表如vitalperiodic有多个值列，可以一次性加载并聚合
-        WIDE_TABLES = {'vitalperiodic', 'vitalaperiodic'}
+        WIDE_TABLES = {'vitalperiodic', 'vitalaperiodic', 'dtnursingchart'}
         wide_table_batch_results = {}  # {concept_name: DataFrame}
         wide_table_merged_df = None  # 🚀 保存批量加载的合并结果，避免重复合并
         wide_table_covered_names = set()
@@ -1469,10 +1469,31 @@ class ConceptResolver:
             # 🚀 优化：对于单个概念也使用批量加载，因为DuckDB聚合比pandas快10倍
             # 🔧 FIX: 排除使用非默认聚合的概念（如sofa_cardio的MAP需要min而非median）
             # 这些概念需要精确控制聚合函数，必须走正常加载路径
+            def _wide_batch_callback_safe(name: str) -> bool:
+                """Keep raw string/categorical callbacks out of numeric batching."""
+
+                definition = self.dictionary.get(name)
+                if definition is None:
+                    return True
+                for candidate in definition.for_data_source(data_source.config):
+                    if candidate.table != shared_table or not candidate.callback:
+                        continue
+                    callback = candidate.callback.strip()
+                    if callback in {
+                        "community_vent_mode_control",
+                        "community_vent_mode_seq",
+                        "community_jinhua_mech_vent",
+                        "transform_fun(extract_leading_number)",
+                        "transform_fun(set_val(TRUE))",
+                    }:
+                        return False
+                return True
+
             concepts_info_filtered = [
                 (name, val_var) for name, val_var in concepts_info
                 if aggregators.get(name) in (None, False, 'auto', 'median')
                 and name not in multi_source_concepts
+                and _wide_batch_callback_safe(name)
             ]
             # ⚡ PERF: 跳过已在 _raw_concept_cache 中的概念，避免重复读取宽表
             if self._keep_cache_between_calls and concepts_info_filtered:
@@ -2298,6 +2319,18 @@ class ConceptResolver:
                 value_column=concept_name,
             )
 
+        # GU irrigant input is a signed summand, not a negative urine volume.
+        # Bounds belong to the combined patient/time total in both loaders.
+        signed_sum_bounds = any(
+            source.callback == "mimic_urine_output" for source in sources
+        )
+        if signed_sum_bounds:
+            signed_aggregator = self._coerce_final_aggregator(aggregator)
+            if signed_aggregator in (None, "auto"):
+                signed_aggregator = self._coerce_final_aggregator(definition.aggregate)
+            if signed_aggregator != "sum":
+                raise ValueError("Signed irrigation volumes require sum aggregation")
+
         frames: List[pd.DataFrame] = []
         id_columns: List[str] = []
         index_column: Optional[str] = None
@@ -2491,11 +2524,11 @@ class ConceptResolver:
                             
                             # 🔧 FIX 2026-02-08: 同时支持 MIMIC-III 和 MIMIC-IV
                             # MIMIC-IV 使用 stay_id，MIMIC-III 使用 icustay_id
-                            if (db_name in ['miiv', 'mimic_demo', 'mimic'] and 
+                            if (db_name in ['miiv', 'mimic_demo', 'mimic', 'nwicu'] and
                                 source.table in hospital_tables and 
                                 effective_id_var == 'subject_id'):
                                 # 确定目标 ID 列名
-                                target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                                target_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                                 if target_id_col in expanded_patient_ids:
                                     original_stay_ids = expanded_patient_ids.get(target_id_col)
                                     if original_stay_ids:
@@ -2774,6 +2807,9 @@ class ConceptResolver:
                         # 让 change_interval 做一次性跨源 MEDIAN（匹配 R ricu 的 pooled 行为）
                         if _block_duckdb_same_table or _block_duckdb_multi_numeric:
                             _can_inline_callback = False
+                        if signed_sum_bounds and interval is None:
+                            # Preserve native timestamps when no grid is requested.
+                            _can_inline_callback = False
                         # 🚀 id_tbl DuckDB 快速路径：per-patient 聚合（MEDIAN）代替全表加载
                         # 例如 height/weight 从 chartevents(5.7GB) 只需 ≤500 行
                         if has_sub_var and _can_inline_callback and _effective_ids and _target == 'id_tbl' and not _skip_db_duckdb:
@@ -2925,7 +2961,8 @@ class ConceptResolver:
                                             table = ICUTable(
                                                 data=frame,
                                                 id_columns=[_idtbl_id_col],
-                                                index_column=_idtbl_id_col,
+                                                # Static aggregates have no event-time axis.
+                                                index_column=None,
                                                 value_column=concept_name,
                                             )
                                             table._pre_aggregated = True
@@ -3006,8 +3043,13 @@ class ConceptResolver:
                             table_cfg = data_source.config.get_table(source.table)
                             value_col = table_cfg.defaults.val_var or 'value'
                         
-                        interval = kwargs.get('interval', pd.Timedelta(hours=1))
-                        interval_minutes = interval.total_seconds() / 60.0 if isinstance(interval, pd.Timedelta) else 60.0
+                        duckdb_interval = (
+                            interval if signed_sum_bounds
+                            else kwargs.get('interval', pd.Timedelta(hours=1))
+                        )
+                        if not signed_sum_bounds:
+                            interval = duckdb_interval
+                        interval_minutes = duckdb_interval.total_seconds() / 60.0 if isinstance(duckdb_interval, pd.Timedelta) else 60.0
                         
                         # 🔧 获取患者ID列表 (关键: 处理dict和list两种格式)
                         # patient_ids 可能是 dict 格式 {'patientid': [1,2,3]} 或 list 格式 [1,2,3]
@@ -3100,8 +3142,8 @@ class ConceptResolver:
                             # R ricu 流程: load_id → callback → filter_bounds → change_interval → aggregate
                             # 对于 value_transform 内联回调，min/max 应用于转换后的值（在聚合表达式内部）
                             # 对于无回调概念，min/max 直接在 WHERE 子句过滤 raw value
-                            value_min=definition.minimum,
-                            value_max=definition.maximum,
+                            value_min=None if signed_sum_bounds else definition.minimum,
+                            value_max=None if signed_sum_bounds else definition.maximum,
                             include_unit=False,  # unit 不再通过 ANY_VALUE 获取
                             # 🚀 convert_unit 内联参数：在DuckDB中直接做单位转换
                             convert_unit_op=_convert_unit_op if _convert_unit_callback_for_duckdb else None,
@@ -3136,8 +3178,18 @@ class ConceptResolver:
                         elif db_name in ('eicu', 'eicu_demo'):
                             _duckdb_id_col = 'patientunitstayid'
                             _duckdb_time_col = 'charttime'
-                        else:
+                        elif db_name in ('miiv', 'nwicu'):
+                            # The DuckDB loader already maps MIIV laboratory
+                            # subject/hospital IDs onto ICU stays. Wrapping its
+                            # output with the raw table's subject_id loses that
+                            # identity for a standalone laboratory concept.
                             _duckdb_id_col = 'stay_id'
+                            _duckdb_time_col = 'charttime'
+                        else:
+                            _table_cfg = data_source.config.get_table(source.table)
+                            _duckdb_id_col = (
+                                _table_cfg.defaults.id_var or 'stay_id'
+                            )
                             _duckdb_time_col = 'charttime'
                         
                         table = ICUTable(
@@ -3491,17 +3543,22 @@ class ConceptResolver:
                     # - aumc_rate_kg: 先median再/kg ≠ 先/kg再median
                     # 🔧 FIX 2026-02: 对所有有callback的源都跳过预降采样
                     has_callback = getattr(source, 'callback', None) is not None
-                    # AUMC tidal_vol must obey its raw pooled/bounds contract.
+                    # AUMC tidal_vol, fio2 and po2 obey pooled/bounds contracts.
                     # Otherwise crossing 1,000
                     # source rows changes results: [0, 2849] becomes 1424.5
                     # before the 2,000-mL upper bound can reject the outlier.
                     # Per-source medians also cannot be pooled into a median.
+                    # FiO2 additionally requires admission-relative binning;
+                    # absolute-hour preaggregation shifts non-hour admissions.
+                    # PO2 can already arrive on an ICU-relative DuckDB grid.
+                    # Rounding that grid again on the absolute clock shifts it
+                    # backwards for non-hour admissions and corrupts P/F pairs.
                     # Keep this repair scoped to the independently reproduced
                     # source contract; do not silently reprofile other modules
                     # by changing every high-frequency fallback here.
                     skip_resample = (
                         has_callback
-                        or (db_name == "aumc" and concept_name == "tidal_vol")
+                        or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2", "po2"})
                     )
                     
                     if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
@@ -3798,7 +3855,7 @@ class ConceptResolver:
             if source.table in ['labevents', 'microbiologyevents', 'inputevents'] and 'subject_id' in frame.columns and not has_stay_id:
                 # 确定目标 ID 列名
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                target_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                 if DEBUG_MODE: print(f"   ➡️  进入 MIMIC 特殊处理: {source.table} (db={db_name}, target_id={target_id_col})")
                 try:
                     # 仅加载相关stay的icustays，并携带intime/outtime用于窗口过滤
@@ -4106,7 +4163,7 @@ class ConceptResolver:
                     
                     # 🔧 FIX 2026-02: 支持 MIMIC-III (icustay_id) 和 MIMIC-IV (stay_id)
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                    target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                    target_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                     icu_cols = ['subject_id', 'hadm_id', target_id_col, 'intime']
                     icu_cols = [c for c in icu_cols if c in (icustays.data.columns if hasattr(icustays, 'data') else icustays.columns)]
                     
@@ -4253,7 +4310,7 @@ class ConceptResolver:
             should_detect_id = not table.id_columns
             
             # 🔧 MIMIC-III 特殊处理：labevents 配置了 hadm_id，但实际需要用 icustay_id
-            if db_name == 'mimic' and 'icustay_id' in frame.columns:
+            if db_name in ('mimic', 'mimic_demo') and 'icustay_id' in frame.columns:
                 # 如果数据中有 icustay_id，强制使用它
                 should_detect_id = True
             
@@ -4269,7 +4326,7 @@ class ConceptResolver:
                     common_id_cols = ['patientunitstayid', 'patientid']
                 elif db_name in ['hirid']:
                     common_id_cols = ['patientid']
-                elif db_name == 'mimic':
+                elif db_name in ('mimic', 'mimic_demo'):
                     # 🔧 FIX 2026-02-05: MIMIC-III 使用 icustay_id（不是 stay_id）
                     common_id_cols = ['icustay_id', 'hadm_id', 'subject_id']
                 else:
@@ -5730,7 +5787,7 @@ class ConceptResolver:
             # easyicu's change_interval DOES aggregate, so filter_bounds must go BEFORE it.
             # Previously filter_bounds was incorrectly placed AFTER change_interval, causing
             # outlier values to participate in median aggregation (e.g. SIC epi_rate 1.9% error).
-            if concept_name in combined.columns:
+            if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
                 if definition.minimum is not None:
@@ -5814,7 +5871,23 @@ class ConceptResolver:
                 ),
             )
         
-        # NOTE: filter_bounds已移至change_interval之前（见上方FIX 2026-03-10注释）
+        if signed_sum_bounds and concept_name in combined.columns:
+            from .signed_volume import bound_signed_total
+
+            if interval is None:
+                # Native-time requests still net simultaneous channels before
+                # assessing urine bounds; do not return individual signed terms.
+                keys = [*id_columns, index_column]
+                if not index_column or any(key not in combined for key in keys):
+                    raise ValueError("Signed irrigation sum requires patient and time keys")
+                combined = combined.groupby(keys, as_index=False, dropna=False)[
+                    concept_name
+                ].sum(min_count=1)
+            combined = bound_signed_total(
+                combined, concept_name, definition.minimum, definition.maximum
+            )
+
+        # Other numeric concepts retain pre-aggregation bounds.
         
         # 🔧 NOTE: 不过滤负时间（入ICU前的数据），ricu 保留这些数据
         # 例如：AUMC esr measuredat=-2 表示入院前2小时的数据，ricu 也保留
@@ -5972,6 +6045,79 @@ class ConceptResolver:
         # AUMC times are ABSOLUTE timestamps in MINUTES (converted from ms in datasource.py).
         # For AUMC, we need to subtract admittedat to get relative time since ICU admission.
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+        if db_name in {"zhejiang_eicu", "jinhua", "zigong"}:
+            if data.empty or not index_column or index_column not in data.columns:
+                return data
+            # The DuckDB producer already emits canonical relative hours.
+            if index_column == "charttime":
+                _normalize_duration_to_hours(data)
+                return data
+            primary_id = next(
+                (column for column in id_columns if column in data.columns), None
+            )
+            if primary_id is None or index_column in id_columns:
+                return data
+            icustay_cfg = data_source.config.id_configs.get("icustay")
+            if (
+                icustay_cfg is None
+                or not icustay_cfg.table
+                or not icustay_cfg.start
+            ):
+                raise ConceptError(
+                    f"{db_name} time alignment requires a declared stay origin"
+                )
+            origin_column = icustay_cfg.start
+            frame = data.copy()
+            source_contains_origin = origin_column in frame.columns
+            if not source_contains_origin:
+                try:
+                    origins = data_source.load_table(
+                        icustay_cfg.table,
+                        columns=[primary_id, origin_column],
+                        verbose=False,
+                    )
+                    origin_frame = origins.data if hasattr(origins, "data") else origins
+                    origin_frame = origin_frame[
+                        [primary_id, origin_column]
+                    ].drop_duplicates(subset=[primary_id], keep="last")
+                    frame = frame.merge(
+                        origin_frame,
+                        on=primary_id,
+                        how="left",
+                        validate="many_to_one",
+                    )
+                except Exception as exc:
+                    raise ConceptError(
+                        f"{db_name} time alignment failed while loading "
+                        f"{icustay_cfg.table}.{origin_column}: {exc!r}"
+                    ) from exc
+            origin = pd.to_numeric(frame[origin_column], errors="coerce")
+            if origin.notna().sum() == 0:
+                raise ConceptError(
+                    f"{db_name} time alignment found no usable stay origins"
+                )
+            scale = {
+                "zhejiang_eicu": 24.0,
+                "jinhua": 1.0 / 60.0,
+                "zigong": 1.0,
+            }[db_name]
+            columns_to_convert = {index_column}
+            if time_columns:
+                columns_to_convert.update(
+                    column for column in time_columns if column in frame.columns
+                )
+            for column in columns_to_convert:
+                if column in frame.columns and pd.api.types.is_numeric_dtype(
+                    frame[column]
+                ):
+                    frame[column] = (
+                        pd.to_numeric(frame[column], errors="coerce") * scale
+                    ) - origin
+            if not source_contains_origin and index_column != origin_column:
+                frame = frame.drop(columns=[origin_column])
+            _normalize_duration_to_hours(frame)
+            return frame
+
         if db_name in ['eicu', 'eicu_demo']:
             # eICU时间列是相对于入院时间的offset,单位是分钟
             # 转换为小时以与其他数据库保持一致
@@ -6583,9 +6729,21 @@ class ConceptResolver:
         if index_column in id_columns:
             return data
         
-        # 🔧 FIX: 确定数据库特定的 stay-level ID 列名
-        # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
-        db_stay_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
+        # Resolve the stay key and origin table from the profile. Legacy
+        # MIMIC defaults remain as fallbacks, while community databases can
+        # retain their native encounter identifiers.
+        id_configs = getattr(data_source.config, 'id_configs', {})
+        icustay_cfg = id_configs.get('icustay')
+        db_stay_id_col = (
+            icustay_cfg.id
+            if icustay_cfg is not None and icustay_cfg.id
+            else ('icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id')
+        )
+        stay_origin_table = (
+            icustay_cfg.table
+            if icustay_cfg is not None and icustay_cfg.table
+            else 'icustays'
+        )
         
         # 特殊处理：如果primary_id不是stay_id/icustay_id，需要先join icustays获取
         # 这对于labevents（使用subject_id）很重要
@@ -6600,7 +6758,7 @@ class ConceptResolver:
                     cols_to_load.append(db_stay_id_col)
                 
                 if self._icustays_cache is None or cache_key not in str(self._icustays_cache.columns.tolist()):
-                    icustays_temp = data_source.load_table('icustays', columns=cols_to_load, verbose=False)
+                    icustays_temp = data_source.load_table(stay_origin_table, columns=cols_to_load, verbose=False)
                     if hasattr(icustays_temp, 'data'):
                         icustays_temp_df = icustays_temp.data
                     else:
@@ -6649,7 +6807,7 @@ class ConceptResolver:
                 if self._icustays_cache is not None and 'intime' in self._icustays_cache.columns and primary_id in self._icustays_cache.columns:
                     icustays_temp_df = self._icustays_cache
                 else:
-                    icustays_temp = data_source.load_table('icustays', columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
+                    icustays_temp = data_source.load_table(stay_origin_table, columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
                     if hasattr(icustays_temp, 'data'):
                         icustays_temp_df = icustays_temp.data
                     else:
@@ -6735,7 +6893,7 @@ class ConceptResolver:
             if need_warm_cache:
                 try:
                     icu_cols = [primary_id, 'intime', 'outtime', 'los']
-                    icustays_table = data_source.load_table('icustays', columns=icu_cols, verbose=False)
+                    icustays_table = data_source.load_table(stay_origin_table, columns=icu_cols, verbose=False)
                     icu_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
                     icu_df = icu_df.copy()
                     icu_df['intime'] = pd.to_datetime(icu_df['intime'], errors='coerce', utc=True).dt.tz_localize(None)
@@ -6842,7 +7000,7 @@ class ConceptResolver:
                     icustays_df = self._icustays_cache.copy()
                 else:
                     # Load icustays table to get admission times
-                    icustays_table = data_source.load_table('icustays', columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
+                    icustays_table = data_source.load_table(stay_origin_table, columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
                     if hasattr(icustays_table, 'data'):
                         icustays_df = icustays_table.data
                     else:

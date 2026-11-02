@@ -111,7 +111,10 @@ def _events(database, config, concepts, p):
                 record.update(registeredat=time, updatedat=time, stop=time + 3_600_000,
                               duration=60, tag="+", unit={"map": "mmHg", "lact": "mmol/l", "hgb": "mmol/l",
                               "crea": "umol/l", "k": "mmol/l", "urine": "ml", "etco2": "Geen"}.get(name, ""), registeredby="synthetic",
-                              dose=.1, doseunit="mg", doserateunit="uur", doserateperkg=False,
+                              # A source that declares its volume unit (dextrose
+                              # rates) is exported in that unit, not as a dose.
+                              dose=.1, doseunit=source.get("required_volume_unit") or "mg",
+                              doserateunit="uur", doserateperkg=False,
                               doseunitid="10", doserateunitid="4", iscontinuous=True,
                               orderid=np.arange(count) + 1, islabresult=True,
                               fluidin=50., solutionadministered=50.)

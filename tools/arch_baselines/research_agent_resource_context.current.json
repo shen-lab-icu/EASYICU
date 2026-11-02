@@ -1,9 +1,19 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/plan_payload.py"
+      "src/easyicu/data/concept-dict.json",
+      "src/easyicu/resources.py"
     ],
-    "summary_changes": {}
+    "summary_changes": {
+      "max_planner_with_resources_bytes": {
+        "now": 63365,
+        "was": 63309
+      },
+      "max_planner_without_resources_bytes": {
+        "now": 58957,
+        "was": 58901
+      }
+    }
   },
   "baseline_history": [
     {
@@ -88,9 +98,26 @@
         "src/easyicu/research_agent/agents/plan_payload.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "User-approved 2026-11-02 reseal: merge main's community profiles and respiratory channels; the merged concept dictionary adds four concepts to the planner vocabulary",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json",
+        "src/easyicu/resources.py"
+      ],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 63365,
+          "was": 63309
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 58957,
+          "was": 58901
+        }
+      }
     }
   ],
-  "baseline_reason": "Record planner wire v2 source identity after equivalent transport compaction; preserve legacy consumer schema and all historical ceilings",
+  "baseline_reason": "User-approved 2026-11-02 reseal: merge main's community profiles and respiratory channels; the merged concept dictionary adds four concepts to the planner vocabulary",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -101,7 +128,7 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532",
+    "src/easyicu/data/concept-dict.json": "40945cb67e00c09ed5e4aed0fae71360b2bb45d7557fe8cacc2ba527ff2e0c5c",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
     "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
@@ -132,14 +159,14 @@
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
     "src/easyicu/research_agent/schema.py": "4bfcee83665863afbe4c22ca98e5f37eadb92f323f75d25e641afbd1d7e61ea4",
-    "src/easyicu/resources.py": "6274402cb42e53ba1cee79cdfd9c8142388f2c73a5b7d22d6a5ffde70a07c715",
+    "src/easyicu/resources.py": "7959ef19d818e93b7403c11b6ec7a8cc51e83cc6d1cd736bf39da1e7d43ac579",
     "tools/research_agent_resource_baseline.py": "643dd67bf97f51cf8ad87179404c6b29fbee7dffbb986fd7c1c15801b8d380e4"
   },
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 63309,
-    "max_planner_without_resources_bytes": 58901,
+    "max_planner_with_resources_bytes": 63365,
+    "max_planner_without_resources_bytes": 58957,
     "max_resource_added_bytes": 4565,
     "selected_resource_count": 7,
     "task_count": 9
@@ -730,15 +757,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15828,
+        "approx_input_tokens": 15842,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 50457,
+            "bytes": 50513,
             "included": true,
             "required": true,
-            "sha256": "83c175c0c2974ba548f499f5d9a85340c18514f7dfc34b83f15c4e1269d9654d"
+            "sha256": "dcc4b1233e13fb23bb6c2db001b4db7c4992efbfa9fb9334b936d6ad18176ba0"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -749,27 +776,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 63309,
+        "total_bytes": 63365,
         "truncated_strings": false,
-        "user_bytes": 54865
+        "user_bytes": 54921
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14726,
+        "approx_input_tokens": 14740,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 50457,
+            "bytes": 50513,
             "included": true,
             "required": true,
-            "sha256": "83c175c0c2974ba548f499f5d9a85340c18514f7dfc34b83f15c4e1269d9654d"
+            "sha256": "dcc4b1233e13fb23bb6c2db001b4db7c4992efbfa9fb9334b936d6ad18176ba0"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 58901,
+        "total_bytes": 58957,
         "truncated_strings": false,
-        "user_bytes": 50457
+        "user_bytes": 50513
       },
       "planning_contract_bytes": 6797,
       "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",

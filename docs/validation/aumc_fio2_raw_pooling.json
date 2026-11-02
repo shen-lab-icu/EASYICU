@@ -1,0 +1,37 @@
+{
+  "base_commit": "06c7303291b0b43d7ac82c548185d640b8602129",
+  "files": {
+    "src/easyicu/concept/__init__.py": "a984bbbe4a78614ae16cd22be09b360e9b6663aaecd2082901ddda103c452805",
+    "tests/core/test_high_frequency_raw_pooling.py": "febf63e412118db77425aacfde9f06cee373635ddc4b8cc0f85b6976336f5c39"
+  },
+  "targeted": {
+    "passed": 7
+  },
+  "core_suite": {
+    "passed": 2504,
+    "skipped": 52,
+    "deselected": 1,
+    "seconds": 120.19,
+    "note": "Completed before one additional max regression case; final targeted run covers it."
+  },
+  "global_suite": {
+    "status": "INTERRUPTED_ON_WRAP_UP",
+    "passed": 1902,
+    "skipped": 63,
+    "deselected": 373,
+    "seconds": 529.48
+  },
+  "lint": {
+    "changed_files": "PASS",
+    "existing_findings": 16,
+    "unchanged_files": [
+      "scripts/complete_mined_ideas_demo.py",
+      "scripts/launch_easyicu.py",
+      "scripts/obesity_paradox_crossdb.py",
+      "scripts/r4_crossdb_sofa2_extract.py",
+      "scripts/r4_fig4_nature.py"
+    ]
+  },
+  "source_scope": "AUMC FiO2 premature fallback resampling only",
+  "scientific_promotion": false
+}

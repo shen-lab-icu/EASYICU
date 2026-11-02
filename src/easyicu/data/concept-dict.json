@@ -3247,6 +3247,8 @@
      "sub_var": "itemid",
      "dur_var": "stop",
      "rate_var": "doserateunit",
+     "required_volume_unit": "ml",
+     "extra_vars": ["doseunit", "doserateunit"],
      "callback": "combine_callbacks(\n                           aumc_rate,\n                           dex_to_10(list(7255L, 7256L, c(8940L, 9571L)),\n                                     c(2, 3, 4))\n                         )"
     }
    ],
@@ -3319,6 +3321,8 @@
      "dur_var": "endtime",
      "amount_var": "amount",
      "auom_var": "amountuom",
+     "status_var": "statusdescription",
+     "extra_vars": ["statusdescription"],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
     }
    ],
@@ -3334,6 +3338,8 @@
      "dur_var": "endtime",
      "amount_var": "amount",
      "auom_var": "amountuom",
+     "status_var": "statusdescription",
+     "extra_vars": ["statusdescription"],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
     },
     {
@@ -3363,6 +3369,8 @@
      "dur_var": "endtime",
      "amount_var": "amount",
      "auom_var": "amountuom",
+     "status_var": "statusdescription",
+     "extra_vars": ["statusdescription"],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
     },
     {
@@ -5899,6 +5907,108 @@
      "sub_var": "LaboratoryID",
      "callback": "transform_fun(percent_as_numeric)",
      "_comment": "2026-07-03 semantic coverage review: SIC 684 = FiO2 (BGA), %, observed range 0-100 with mode 21; added as lab FiO2 analogue."
+    }
+   ]
+  }
+ },
+ "fio2_chart": {
+  "unit": "%",
+  "min": 21,
+  "max": 100,
+  "description": "Inspired oxygen fraction from bedside chart records; may include set and analyzed chart channels",
+  "category": "respiratory",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 223835,
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "callback": "transform_fun(percent_as_numeric)"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      189,
+      190,
+      191,
+      727,
+      1040,
+      1206,
+      1863,
+      2518,
+      2981,
+      3420,
+      3422,
+      5955,
+      7041,
+      7570,
+      223835
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III CareVue/respiratory FiO2 channels; percent_as_numeric handles 0.21-1 and 21-100 encodings."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      189,
+      190,
+      191,
+      727,
+      1040,
+      1206,
+      1863,
+      2518,
+      2981,
+      3420,
+      3422,
+      5955,
+      7041,
+      7570,
+      223835
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III CareVue/respiratory FiO2 channels; percent_as_numeric handles 0.21-1 and 21-100 encodings."
+    }
+   ]
+  }
+ },
+ "fio2_lab": {
+  "unit": "%",
+  "min": 21,
+  "max": 100,
+  "description": "Inspired oxygen fraction documented with blood gas laboratory records",
+  "category": "respiratory",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 50816,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "callback": "transform_fun(percent_as_numeric)"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 50816,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 50816,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)"
     }
    ]
   }
@@ -10752,11 +10862,11 @@
     {
      "ids": [
       220277,
-      226253,
       220227
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-10-08: exclude 226253 SpO2 Desat Limit (alarm setting), not measured oxygen saturation; historical exports require separate review."
     },
     {
      "ids": 50817,
@@ -10771,12 +10881,11 @@
       6719,
       834,
       220227,
-      220277,
-      226253
+      220277
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 full dictionary audit: 50817 is d_labitems Oxygen Saturation and is kept only in labevents; semantic coverage review added 6719 SpO2-L and 220227 Arterial O2 Saturation."
+     "_comment": "2026-07-03 full dictionary audit: 50817 is d_labitems Oxygen Saturation and is kept only in labevents; semantic coverage review added 6719 SpO2-L and 220227 Arterial O2 Saturation. 2026-10-08: exclude 226253 SpO2 Desat Limit (alarm setting), not measured oxygen saturation; historical exports require separate review."
     },
     {
      "ids": 50817,
@@ -10791,12 +10900,11 @@
       6719,
       834,
       220227,
-      220277,
-      226253
+      220277
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 full dictionary audit: 50817 is d_labitems Oxygen Saturation and is kept only in labevents; semantic coverage review added 6719 SpO2-L and 220227 Arterial O2 Saturation."
+     "_comment": "2026-07-03 full dictionary audit: 50817 is d_labitems Oxygen Saturation and is kept only in labevents; semantic coverage review added 6719 SpO2-L and 220227 Arterial O2 Saturation. 2026-10-08: exclude 226253 SpO2 Desat Limit (alarm setting), not measured oxygen saturation; historical exports require separate review."
     },
     {
      "ids": 50817,
@@ -11329,6 +11437,86 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "_comment": "2026-05-27 audit fix: removed [535, 543] (wrong concept); added [505, 506]"
+    }
+   ]
+  }
+ },
+ "peep_set": {
+  "unit": "cmH2O",
+  "min": 0,
+  "max": 40,
+  "description": "Set positive end-expiratory pressure; excludes total PEEP",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      220339
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      506,
+      220339
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      506,
+      220339
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ]
+  }
+ },
+ "peep_total": {
+  "unit": "cmH2O",
+  "min": 0,
+  "max": 40,
+  "description": "Total positive end-expiratory pressure; separate from ventilator setting",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224700
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      224700
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      224700
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
     }
    ]
   }
@@ -12086,7 +12274,9 @@
       21214
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$')",
+     "_comment": "AUMC official legacy pO2_FiO2_estimated.sql converts kPa (unitid 152) to mmHg before evaluation. Convert labelled kPa rows before bounds and pooling; preserve labelled mmHg values. This changes the loader, not sealed historical exports."
     }
    ],
    "eicu": [
@@ -14122,12 +14312,12 @@
    "miiv": [
     {
      "ids": [
-      220277,
-      226253
+      220277
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-10-08: exclude 226253 SpO2 Desat Limit (alarm setting), not measured oxygen saturation; historical exports require separate review."
     }
    ],
    "mimic": [
@@ -14135,12 +14325,11 @@
      "ids": [
       646,
       6719,
-      220277,
-      226253
+      220277
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 semantic coverage review: added MIMIC-III CareVue SpO2-L; arterial/lab/PA-line oxygen saturation remains in o2sat, not spo2."
+     "_comment": "2026-07-03 semantic coverage review: added MIMIC-III CareVue SpO2-L; arterial/lab/PA-line oxygen saturation remains in o2sat, not spo2. 2026-10-08: exclude 226253 SpO2 Desat Limit (alarm setting), not measured oxygen saturation; historical exports require separate review."
     }
    ],
    "mimic_demo": [
@@ -14148,12 +14337,11 @@
      "ids": [
       646,
       6719,
-      220277,
-      226253
+      220277
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 semantic coverage review: added MIMIC-III CareVue SpO2-L; arterial/lab/PA-line oxygen saturation remains in o2sat, not spo2."
+     "_comment": "2026-07-03 semantic coverage review: added MIMIC-III CareVue SpO2-L; arterial/lab/PA-line oxygen saturation remains in o2sat, not spo2. 2026-10-08: exclude 226253 SpO2 Desat Limit (alarm setting), not measured oxygen saturation; historical exports require separate review."
     }
    ],
    "sic": [
@@ -15295,11 +15483,10 @@
      "val_var": "fluidin",
      "index_var": "start",
      "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
      "end_var": "stop",
-     "alternate_value_var": "solutionadministered",
      "extra_vars": [
-      "stop",
-      "solutionadministered"
+      "stop"
      ]
     }
    ],
@@ -16001,6 +16188,8 @@
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
+     "bounds_stage": "post_sum",
+     "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
      "_comment": "Exact MIT-LCP/mimic-code mimic-iv/concepts/measurement/urine_output.sql item IDs. The pre-aggregation callback negates positive 227488 GU irrigant-in and sums it with 227489 urine/irrigant-out."
     }
    ],
@@ -16052,6 +16241,8 @@
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
+     "bounds_stage": "post_sum",
+     "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
      "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
     }
    ],
@@ -16103,6 +16294,8 @@
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
+     "bounds_stage": "post_sum",
+     "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
      "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
     }
    ],

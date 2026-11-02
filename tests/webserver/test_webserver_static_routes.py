@@ -195,7 +195,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261102-ui1" in index_html
+    assert "js/screens-extraction.js?v=20261102-merge1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -1979,7 +1979,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage(monk
     assert catalog["conceptCoverage"]["hr"]["data_audit_databases"] == 6
     assert catalog["conceptCoverage"]["abx"]["declared_databases"] == supported
     assert "data_audit_databases" not in catalog["conceptCoverage"]["abx"]
-    assert catalog["conceptCoverage"]["icu_unit_type"]["declared_databases"] == ["eicu"]
+    assert catalog["conceptCoverage"]["icu_unit_type"]["declared_databases"] == ["eicu", "nwicu"]
     assert catalog["conceptCoverage"]["sofa2_resp"]["kind"] == "derived"
     assert catalog["conceptCoverage"]["sofa2_resp"]["declared_databases"]
     # An outcome the outcome owner supports in no database is not supported

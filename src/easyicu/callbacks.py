@@ -2025,7 +2025,7 @@ def _urine_window_avg(
 
     # Determine ID and time columns
     # 🔧 FIX 2025-01-31: Include CaseID (uppercase) for SICdb support
-    id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']]
+    id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'patient_SN', 'INP_NO']]
     
     # 不同数据库使用不同的时间列名
     if 'charttime' in urine.columns:
@@ -2055,7 +2055,7 @@ def _urine_window_avg(
     
     # 如果没有找到ID列，尝试常见的ID列名
     if not id_cols:
-        for potential_id in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID']:
+        for potential_id in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID', 'patient_SN', 'INP_NO']:
             if potential_id in urine.columns:
                 id_cols = [potential_id]
                 break
@@ -2163,7 +2163,8 @@ def _urine_window_avg_multi(
     # Reuse _urine_window_avg's column detection logic for the first call
     # Then share the merged+sorted data for subsequent windows
     id_cols = [col for col in urine.columns if col.endswith('_id') or col in [
-        'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']]
+        'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid',
+        'CaseID', 'patient_SN', 'INP_NO']]
     
     time_col = None
     for candidate in ['charttime', 'measuredat', 'measuredat_minutes', 'nursingchartoffset',
@@ -2184,7 +2185,7 @@ def _urine_window_avg_multi(
             }
     
     if not id_cols:
-        for pid in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID']:
+        for pid in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID', 'patient_SN', 'INP_NO']:
             if pid in urine.columns:
                 id_cols = [pid]
                 break

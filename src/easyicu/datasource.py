@@ -25,6 +25,12 @@ def _duckdb_path(p) -> str:
     return str(p).replace('\\', '/')
 
 
+def _duckdb_identifier(value: object) -> str:
+    """Quote an internal DuckDB identifier, including translated source labels."""
+
+    return '"' + str(value).replace('"', '""') + '"'
+
+
 def _duckdb_sql_literal(value: Any) -> str:
     """Return one safely quoted scalar for an internal DuckDB predicate."""
 
@@ -783,11 +789,11 @@ class ICUDataSource:
         # 🔧 FIX 2026-02-07: 添加 mimic (MIMIC-III) 支持，使用 icustay_id
         hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services']
         original_stay_ids = None
-        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo', 'mimic']:
+        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo', 'mimic', 'nwicu']:
             if filters:
                 for spec in filters:
                     # 🔧 FIX: MIMIC-III 使用 icustay_id
-                    id_col_to_check = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+                    id_col_to_check = 'icustay_id' if self.config.name in ('mimic', 'mimic_demo') else 'stay_id'
                     if spec.column == id_col_to_check and spec.op == FilterOp.IN:
                         original_stay_ids = set(spec.value)  # 保存原始目标 stay_ids
                         print(f"💾 [{table_name}] 保存原始 {id_col_to_check} 过滤器: {len(original_stay_ids)} 个患者")
@@ -975,7 +981,7 @@ class ICUDataSource:
                         
                         # 特殊处理：如果表是 hospital table 且过滤器是 stay_id 或 icustay_id
                         # 🔧 FIX 2026-01-26: 添加 mimic (MIMIC-III) 支持，使用 icustay_id
-                        is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic']
+                        is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic', 'nwicu']
                         is_id_filter = spec.column in ['stay_id', 'icustay_id']
                         if table_name in hospital_tables and is_mimic_db and is_id_filter:
                             try:
@@ -984,7 +990,7 @@ class ICUDataSource:
                                 
                                 # 加载 icustays 获取映射
                                 # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
-                                id_col = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+                                id_col = 'icustay_id' if self.config.name in ('mimic', 'mimic_demo') else 'stay_id'
                                 icustays_map = self.load_table(
                                     'icustays', 
                                     columns=[id_col, 'hadm_id'], 
@@ -1104,7 +1110,22 @@ class ICUDataSource:
             # 只有当列存在且不是numeric类型时才转换
             # 如果已经是numeric，可能是已经对齐过的小时数
             if column in frame.columns:
-                frame[column] = _coerce_datetime(frame[column])
+                values = frame[column]
+                # Jinhua stores relative minute offsets.  A single blank token
+                # makes Arrow infer some columns (notably orders.endtime_base)
+                # as strings; parsing those strings as calendar datetimes turns
+                # every valid duration into NaT.  Preserve the documented
+                # relative-time axis when all non-blank values are numeric.
+                if self.config.name == "jinhua" and not pd.api.types.is_numeric_dtype(
+                    values
+                ):
+                    stripped = values.astype("string").str.strip()
+                    populated = stripped.notna() & stripped.ne("")
+                    numeric = pd.to_numeric(stripped.mask(~populated), errors="coerce")
+                    if populated.any() and numeric.loc[populated].notna().all():
+                        frame[column] = numeric
+                        continue
+                frame[column] = _coerce_datetime(values)
 
         # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
         # MIMIC-III 的 id 列是 icustay_id，需要补全
@@ -1117,7 +1138,7 @@ class ICUDataSource:
             # 解决方案：在函数开始时已保存 original_stay_ids，join 后再过滤
             # 🔧 FIX 2026-02-07: 添加 services 表（用于 adm 概念）
             hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services']
-            is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic']
+            is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic', 'nwicu']
             if table_name in hospital_tables and is_mimic_db:
                 try:
                     # 🔍 提取当前的患者ID过滤器（stay_id/icustay_id 或 subject_id）
@@ -3210,9 +3231,21 @@ def load_bucketed_table_aggregated(
     if bucket_dir is None and flat_parquet_dir is None:
         raise ValueError(f"Cannot find bucketed or flat parquet directory for {table_name}")
     
-    # 确定ID列和时间列
+    table_cfg = None
+    try:
+        table_cfg = data_source.config.get_table(table_name)
+    except Exception:
+        table_cfg = None
+
+    # Prefer the registered table key. This keeps community profiles with
+    # native string encounter identifiers out of legacy stay_id assumptions.
     if id_col is None:
-        if db_name == 'aumc':
+        configured_id_col = getattr(
+            getattr(table_cfg, "defaults", None), "id_var", None
+        )
+        if db_name in {"zhejiang_eicu", "jinhua", "zigong"} and configured_id_col:
+            id_col = configured_id_col
+        elif db_name == 'aumc':
             id_col = 'admissionid'
         elif db_name == 'hirid':
             id_col = 'patientid'
@@ -3225,14 +3258,13 @@ def load_bucketed_table_aggregated(
         else:
             id_col = 'stay_id'
     
-    table_cfg = None
-    try:
-        table_cfg = data_source.config.get_table(table_name)
-    except Exception:
-        table_cfg = None
-
     if time_col is None:
-        if db_name == 'aumc':
+        configured_time_col = getattr(
+            getattr(table_cfg, "defaults", None), "index_var", None
+        )
+        if db_name in {"zhejiang_eicu", "jinhua", "zigong"} and configured_time_col:
+            time_col = configured_time_col
+        elif db_name == 'aumc':
             # AUMC: most tables use 'measuredat', but drugitems uses 'start'
             if table_name == 'drugitems':
                 time_col = 'start'
@@ -3357,7 +3389,7 @@ def load_bucketed_table_aggregated(
 
     hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
     if (
-        db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo')
+        db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo', 'nwicu')
         and table_name in hospital_tables
         and id_col not in raw_columns_lower
         and 'hadm_id' in raw_columns_lower
@@ -3391,7 +3423,7 @@ def load_bucketed_table_aggregated(
     # itemid过滤 (handle both numeric and string itemids)
     _is_string_ids = any(isinstance(x, str) for x in itemids)
     if _is_string_ids:
-        ids_str = ", ".join(f"'{x}'" for x in itemids)
+        ids_str = ", ".join(_duckdb_sql_literal(x) for x in itemids)
     else:
         ids_str = ", ".join(str(x) for x in itemids)
     where_conditions.append(f"{itemid_col} IN ({ids_str})")
@@ -3399,7 +3431,9 @@ def load_bucketed_table_aggregated(
     
     # 患者过滤
     if patient_filter_values:
-        patient_str = ", ".join(str(x) for x in patient_filter_values)
+        patient_str = ", ".join(
+            _duckdb_sql_literal(x) for x in patient_filter_values
+        )
         where_conditions.append(f"{patient_filter_col} IN ({patient_str})")
     
     # 🔧 FIX 2026-02: 在DuckDB层过滤原始值范围（匹配R ricu的行为）
@@ -3492,10 +3526,10 @@ def load_bucketed_table_aggregated(
         if convert_unit_filter:
             # 有单位过滤：只对匹配的行做转换
             # 使用 DuckDB regexp_matches 进行正则匹配（case-insensitive）
-            _value_expr = f"CASE WHEN regexp_matches(CAST({_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN {value_column} {_op_sql} {convert_unit_factor} ELSE {value_column} END"
+            _value_expr = f"CASE WHEN regexp_matches(CAST({_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN {_value_col_numeric} {_op_sql} {convert_unit_factor} ELSE {_value_col_numeric} END"
         else:
             # 无单位过滤：转换所有行
-            _value_expr = f"{value_column} {_op_sql} {convert_unit_factor}"
+            _value_expr = f"{_value_col_numeric} {_op_sql} {convert_unit_factor}"
         _agg_value_expr, _bounded_agg, _unbounded_agg = _aggregate_select(_value_expr)
     elif value_transform:
         # 🚀 通用值转换表达式（percent_as_numeric, set_val_na, fahr_to_cels）
@@ -3644,7 +3678,7 @@ def load_bucketed_table_aggregated(
         GROUP BY o.{id_col}, {time_round_expr}{_hirid_group_itemid}
         ORDER BY o.{id_col}, 2{_hirid_order_itemid}
         """
-    elif db_name in ("miiv", "miiv_demo", "mimic", "mimic_demo"):
+    elif db_name in ("miiv", "miiv_demo", "mimic", "mimic_demo", "nwicu"):
         # MIIV/MIMIC: charttime is absolute datetime, need JOIN with icustays to compute relative hours
         # Find icustays parquet
         icustays_path = base_path / "icustays.parquet"
@@ -3660,7 +3694,7 @@ def load_bucketed_table_aggregated(
 
         # Compute hours from admission: FLOOR(EPOCH(charttime - intime) / 3600)
         _interval_hours = interval_minutes / 60.0
-        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        time_round_expr = f"FLOOR(EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
         output_time_expr = f"{time_round_expr} as charttime"
 
         # Alias value references for JOIN query
@@ -3860,6 +3894,76 @@ def load_bucketed_table_aggregated(
             GROUP BY a.{output_id_col}, {time_round_expr}
             ORDER BY a.{output_id_col}, 2
             """
+    elif db_name in {"zhejiang_eicu", "jinhua", "zigong"}:
+        # Community releases publish deidentified numeric offsets rather than
+        # calendar timestamps: Zhejiang uses days, Jinhua minutes, and Zigong
+        # hours. Convert to hours, subtract the generated stay origin, and
+        # preserve the native encounter key.
+        stays_path = base_path / "stays.parquet"
+        _interval_hours = interval_minutes / 60.0
+        source_scale = {
+            "zhejiang_eicu": 24.0,
+            "jinhua": 1.0 / 60.0,
+            "zigong": 1.0,
+        }[db_name]
+        time_round_expr = (
+            f"FLOOR(((TRY_CAST(o.{time_col} AS DOUBLE) * {source_scale}) "
+            f"- a.intime) / {_interval_hours}) * {_interval_hours}"
+        )
+        if _has_inline_convert:
+            _op_sql = {"*": "*", "/": "/", "+": "+", "-": "-"}.get(
+                convert_unit_op, "*"
+            )
+            _community_value_base = (
+                f"TRY_CAST(o.{value_column} AS DOUBLE)"
+                if _value_col_is_string
+                else f"o.{value_column}"
+            )
+            if convert_unit_filter:
+                _community_value_expr = (
+                    "CASE WHEN regexp_matches(CAST("
+                    f"o.{_unit_col_name} AS VARCHAR), "
+                    f"'(?i){convert_unit_filter}') THEN {_community_value_base} "
+                    f"{_op_sql} {convert_unit_factor} ELSE {_community_value_base} END"
+                )
+            else:
+                _community_value_expr = (
+                    f"{_community_value_base} {_op_sql} {convert_unit_factor}"
+                )
+        elif value_transform:
+            _community_value_expr = value_transform.replace(
+                f'"{value_column}"', f'o."{value_column}"'
+            )
+        else:
+            _community_value_expr = (
+                f"TRY_CAST(o.{value_column} AS DOUBLE)"
+                if _value_col_is_string
+                else f"o.{value_column}"
+            )
+        _community_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+            _aggregate_select(_community_value_expr)
+        )
+        community_where = where_clause.replace(
+            f"{itemid_col}", f"o.{itemid_col}"
+        )
+        community_where = community_where.replace(
+            f"{patient_filter_col} IN", f"o.{patient_filter_col} IN"
+        )
+        community_where = community_where.replace(
+            f"{value_column} IS NOT NULL", f"o.{value_column} IS NOT NULL"
+        )
+        query = f"""
+        SELECT
+            o.{id_col} AS {id_col},
+            {time_round_expr} AS charttime,
+            {_community_agg_expr}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN read_parquet('{_duckdb_path(stays_path)}') a
+          ON o.{id_col} = a.{id_col}
+        {community_where}
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
+        """
     elif db_name in ("sic", "sic_demo"):
         # SICdb Offset is relative to the primary PDMS admission, not ICU
         # admission. Anchor every bucket to cases.ICUOffset. See the official
@@ -4071,6 +4175,7 @@ def load_bucketed_table_multi_aggregated(
         'hirid': {'id_col': 'patientid',         'time_col': 'datetime',         'itemid_col': 'variableid'},
         'sic':   {'id_col': 'CaseID',            'time_col': 'Offset',           'itemid_col': 'DataID'},
         'eicu':  {'id_col': 'patientunitstayid', 'time_col': 'labresultoffset',  'itemid_col': 'labname'},
+        'nwicu': {'id_col': 'stay_id',           'time_col': 'charttime',        'itemid_col': 'itemid'},
     }
     defaults = _db_defaults.get(_base_db, {})
     if id_col is None:
@@ -4150,12 +4255,13 @@ def load_bucketed_table_multi_aggregated(
     def _patient_clause(filter_col, values):
         if not values:
             return ""
-        return f" AND o.{filter_col} IN ({', '.join(str(x) for x in values)})"
+        literals = ", ".join(_duckdb_sql_literal(x) for x in values)
+        return f" AND o.{filter_col} IN ({literals})"
 
     non_null_clause = f" AND o.{value_column} IS NOT NULL"
 
     # ── DB-specific query construction ─────────────────────
-    if _base_db in ('miiv', 'mimic'):
+    if _base_db in ('miiv', 'mimic', 'nwicu'):
         stay_col = 'icustay_id' if _base_db == 'mimic' else 'stay_id'
         icustays_path = base_path / 'icustays.parquet'
         if not icustays_path.exists():
@@ -4628,16 +4734,67 @@ def load_wide_table_aggregated(
     # union_by_name=true if the fast path raises a schema-mismatch error.
     # The direct wide-result path publishes these rows without another sort.
     # Match the chunked path's key order, regardless of GROUP BY scheduling.
-    _wide_query_tpl = (
-        "SELECT\n"
-        f"    {id_col},\n"
-        f"    FLOOR({time_col} / {interval_hours * 60.0}) as charttime,\n"
-        f"    {agg_exprs}\n"
-        "FROM {read_expr}\n"
-        f"{where_clause}\n"
-        f"GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})\n"
-        f"ORDER BY {id_col}, charttime\n"
-    )
+    db_name = getattr(data_source.config, "name", "")
+    if db_name in {"zhejiang_eicu", "jinhua", "zigong"}:
+        source_scale = {
+            "zhejiang_eicu": 24.0,
+            "jinhua": 1.0 / 60.0,
+            "zigong": 1.0,
+        }[db_name]
+        quoted_time = _duckdb_identifier(time_col)
+        quoted_id = _duckdb_identifier(id_col)
+        time_expression = (
+            f"FLOOR(((TRY_CAST(o.{quoted_time} AS DOUBLE) * {source_scale}) "
+            f"- a.intime) / {interval_hours}) * {interval_hours}"
+        )
+        community_where = where_clause.replace(
+            f"WHERE {id_col}", f"WHERE o.{id_col}"
+        )
+        community_agg_parts = []
+        for column in value_columns:
+            quoted_column = _duckdb_identifier(column)
+            numeric_column = f"TRY_CAST(o.{quoted_column} AS DOUBLE)"
+            bounds = (column_bounds or {}).get(column)
+            if bounds:
+                lower, upper = bounds
+                conditions = []
+                if lower is not None:
+                    conditions.append(f"{numeric_column} >= {lower}")
+                if upper is not None:
+                    conditions.append(f"{numeric_column} <= {upper}")
+                condition = " AND ".join(conditions)
+                community_agg_parts.append(
+                    f"{duckdb_agg}(CASE WHEN {condition} THEN {numeric_column} END) "
+                    f"AS {quoted_column}"
+                )
+            else:
+                community_agg_parts.append(
+                    f"{duckdb_agg}({numeric_column}) AS {quoted_column}"
+                )
+        community_agg_exprs = ", ".join(community_agg_parts)
+        _wide_query_tpl = (
+            "SELECT\n"
+            f"    o.{quoted_id} AS {quoted_id},\n"
+            f"    {time_expression} AS charttime,\n"
+            f"    {community_agg_exprs}\n"
+            "FROM {read_expr} o\n"
+            f"JOIN read_parquet('{_duckdb_path(data_source.base_path / 'stays.parquet')}') a "
+            f"ON o.{quoted_id} = a.{quoted_id}\n"
+            f"{community_where}\n"
+            f"GROUP BY o.{quoted_id}, {time_expression}\n"
+            f"ORDER BY o.{quoted_id}, charttime\n"
+        )
+    else:
+        _wide_query_tpl = (
+            "SELECT\n"
+            f"    {id_col},\n"
+            f"    FLOOR({time_col} / {interval_hours * 60.0}) as charttime,\n"
+            f"    {agg_exprs}\n"
+            "FROM {read_expr}\n"
+            f"{where_clause}\n"
+            f"GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})\n"
+            f"ORDER BY {id_col}, charttime\n"
+        )
     _wide_read_fast = f"read_parquet('{glob_pattern}')"
     _wide_read_safe = f"read_parquet('{glob_pattern}', union_by_name=true)"
 

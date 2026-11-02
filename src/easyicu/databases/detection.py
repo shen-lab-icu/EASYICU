@@ -8,6 +8,7 @@ the evidence ordering.
 from __future__ import annotations
 
 import logging
+import json
 import os
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -180,6 +181,14 @@ def _path_candidate(path: Path) -> Optional[str]:
 
     name = path.name.casefold()
     compact = name.replace("-", "").replace("_", "")
+    if "nwicu" in compact or "northwesternicu" in compact:
+        return "nwicu"
+    if "zhejangeicu" in compact or "zhejiangeicu" in compact:
+        return "zhejiang_eicu"
+    if "jinhua" in compact:
+        return "jinhua"
+    if "zigong" in compact:
+        return "zigong"
     if "miiv" in compact or "mimiciv" in compact or "mimic4" in compact:
         return "miiv"
     if "mimiciii" in compact or "mimic3" in compact or "miii" in compact:
@@ -213,6 +222,50 @@ def _content_candidates(path: Path) -> set[str]:
     }
 
 
+def _community_identity(path: Path) -> Optional[str]:
+    """Resolve explicit receipts and distinctive raw layouts for new sources."""
+
+    receipt = path / "community_preparation_manifest.json"
+    if receipt.is_file():
+        try:
+            payload = json.loads(receipt.read_text(encoding="utf-8"))
+            database = normalize_database_key(str(payload.get("database", "")))
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise DatabaseDetectionError(
+                "database_detection_identity_receipt_invalid",
+                f"Community database identity receipt is invalid in {path}: {exc}",
+                data_path=path,
+            ) from exc
+        if database not in {"nwicu", "zhejiang_eicu", "jinhua", "zigong"}:
+            raise DatabaseDetectionError(
+                "database_detection_identity_receipt_invalid",
+                f"Community database identity receipt names unsupported source {database!r}.",
+                data_path=path,
+            )
+        return database
+
+    def exists(*relative_paths: str) -> bool:
+        return any((path / relative).exists() for relative in relative_paths)
+
+    candidates: set[str] = set()
+    if exists("data/nw_icu/icustays.csv.gz", "data/nw_icu/icustays.csv"):
+        candidates.add("nwicu")
+    if exists("OMIX005817-01.zip", "DataTable2/PtAdmiTable.csv"):
+        candidates.add("zhejiang_eicu")
+    if any(path.glob("OMIX007493-*.zip")):
+        candidates.add("jinhua")
+    if exists("DataTables/dtBaseline.csv", "DataTables.zip"):
+        candidates.add("zigong")
+    if len(candidates) > 1:
+        raise DatabaseDetectionError(
+            "database_detection_ambiguous",
+            f"Conflicting community database layouts in {path}: {sorted(candidates)}.",
+            data_path=path,
+            candidates=candidates,
+        )
+    return next(iter(candidates), None)
+
+
 def detect_database_identity(
     data_path: Optional[Union[str, Path]] = None,
     *,
@@ -231,6 +284,9 @@ def detect_database_identity(
     path = Path(data_path) if data_path is not None else None
     if path is not None:
         if path.is_dir():
+            community_identity = _community_identity(path)
+            if community_identity is not None:
+                return community_identity
             schema_identity = _schema_identity(path)
             candidates = _content_candidates(path)
             if schema_identity is not None:
@@ -261,6 +317,10 @@ def detect_database_identity(
             "hirid": ("HIRID_PATH",),
             "aumc": ("AUMC_PATH",),
             "sic": ("SIC_PATH", "SICDB_PATH"),
+            "nwicu": ("NWICU_PATH",),
+            "zhejiang_eicu": ("ZHEJIANG_EICU_PATH",),
+            "jinhua": ("JINHUA_PATH",),
+            "zigong": ("ZIGONG_PATH",),
         }
         candidates = {
             name

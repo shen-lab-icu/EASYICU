@@ -19,7 +19,18 @@ from .concept.schema import ConceptDictionary
 
 
 _CONTRACT_PATH = Path(__file__).resolve().parent / "data" / "clinical-contracts.json"
-_DATABASES = ("mimic", "miiv", "eicu", "aumc", "hirid", "sic")
+_DATABASES = (
+    "mimic",
+    "miiv",
+    "eicu",
+    "aumc",
+    "hirid",
+    "sic",
+    "nwicu",
+    "zhejiang_eicu",
+    "jinhua",
+    "zigong",
+)
 _CONFORMANCE_LEVELS = {"not_assessed", "mapping_only", "algorithm_golden"}
 _CLINICAL_STATUS_RANK = {
     "experimental": 0,

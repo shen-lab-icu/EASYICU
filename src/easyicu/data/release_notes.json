@@ -2,6 +2,52 @@
   "schema_version": "easyicu.release-notes/1",
   "entries": [
     {
+      "version": "0.1.2",
+      "date": "2026-11-02",
+      "changes": [
+        {
+          "code": "outcome_confirmation",
+          "zh": "生成计划前先请你确认系统提议的主要结局；确认卡直接保存你确认的结局。",
+          "en": "Before the plan is drafted, you confirm the proposed primary outcome; the card saves the outcome you confirm."
+        },
+        {
+          "code": "first_stay_scope",
+          "zh": "eICU、HiRID 无法确定同一患者跨住院的首次 ICU 入住时，会先说明并给出替代口径（每次住院的首次入住，或全部入住按患者聚类），人群卡写明口径。",
+          "en": "When eICU or HiRID cannot order a patient's stays across hospitalizations, a per-patient first-stay request is answered up front with alternatives (first stay per hospitalization, or all stays clustered by patient), and the population card states the scope."
+        },
+        {
+          "code": "single_first_plan",
+          "zh": "数据能按患者分组时，第一版计划直接按患者聚类处理重复入住，不再连跑两次计划。",
+          "en": "When the data groups stays by patient, the first plan already clusters repeated stays by patient, so a second plan no longer follows."
+        },
+        {
+          "code": "number_trace",
+          "zh": "点结果数字可看到对比组、参照组、样本量、单位、时间界标和调整变量。",
+          "en": "Tracing a result number shows its contrast, reference, sample, unit, landmark and adjustment."
+        },
+        {
+          "code": "reader_names",
+          "zh": "论文正文按变量名称书写对比（如 lactate），不再出现 lact max 这类内部列名。",
+          "en": "Article sentences name variables by their labels (for example lactate) instead of internal column names such as lact max."
+        },
+        {
+          "code": "result_actions",
+          "zh": "不支持一键追加的结果只显示一行说明，不再列出点不了的选项；下一步建议去重。",
+          "en": "Results that cannot take one-click additions show one line instead of options that cannot run; next-step choices are deduplicated."
+        },
+        {
+          "code": "gap_fill_patient_boundary",
+          "zh": "修正时间网格补齐时观测越界写入下一位患者的问题，少量 SOFA 总分随之更正。",
+          "en": "Gap filling no longer writes an observation past one patient's grid into the next patient; a few SOFA totals change accordingly."
+        },
+        {
+          "code": "community_databases",
+          "zh": "新增 NWICU、浙江 eICU、金华、自贡四个社区 ICU 数据源（仅映射）；修正 MIMIC-III/IV 与 AUMC 的葡萄糖、血氧、氧分压、尿量和入量取数，新增 FiO2/PEEP 来源通道。",
+          "en": "Adds four community ICU sources (NWICU, Zhejiang eICU, Jinhua, Zigong; mapping only); corrects dextrose, oxygen saturation, PaO2, urine and fluid-input mappings for MIMIC-III/IV and AUMC, and adds FiO2/PEEP source channels."
+        }
+      ]
+    },
+    {
       "version": "0.1.1",
       "date": "2026-10-29",
       "changes": [

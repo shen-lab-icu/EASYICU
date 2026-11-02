@@ -1,0 +1,167 @@
+{
+  "schema": "miiv_scoped_measurements_implementation_v1",
+  "status": "PASS_SOURCE_AND_FINITE_SYNTHETIC_VALIDATION_NO_CLINICAL_EXTRACTION",
+  "starting_git": "9df2a1b70d65ab71d88c6ec4879b5ac1fba9f52c",
+  "sources": {
+    "src/easyicu/io/scoped_measurements.py": "c374d12c08494ed7a9ed03e2cf70eab8e2b8bcaf68cde69d1bd5574bc326ffef",
+    "tests/core/test_scoped_measurements.py": "5643b3edd6088c1e404c2a080a2d58168016c01c90ecde15cb2aa424fb7c1a59",
+    "tests/core/test_scoped_measurements_root.py": "fd802fc50b55faae606eefd4ecff4e79bf0f61d0b91e7901ba3e549930b92477",
+    "docs/validation/miiv_scoped_measurements.md": "681a45644a93d01ea0d4c4507652f0cc6ae46dd4a6d989a16d95229f51746249"
+  },
+  "reused_unchanged_git_sources": {
+    "src/easyicu/io/source_events.py": "eb0fdbe72021b54b8e3f8fb12038d6f5f1a219c04aa85a02ff42add72d9355ac",
+    "src/easyicu/io/arterial_blood_gas.py": "34eeb35b4656a53ed9b539c0dad8020adc10f2f86115b1b6d95dbec841370a5c",
+    "src/easyicu/data/concept-dict.json": "3c0ebd9b5fe92223a3b674ab0f68a03c4c50e52f1043784b1c7223d1a159dcaf",
+    "tests/core/test_arterial_blood_gas.py": "163a68b821f84c60421c9da8a94e31dbef9ef994d65fd1ec73b46f9419d29344"
+  },
+  "legacy_dictionary_git": "97f508c6c94751a596481efafe68b41232e6bf42",
+  "legacy_miiv_sources_equal": {
+    "crea": true,
+    "map": true,
+    "cvp": true
+  },
+  "nonpatient_dictionary_metadata": [
+    {
+      "path": "/home/zhuhb/workspace/databases/mimiciv/d_items.parquet",
+      "sha256": "48f79107d9ccd2070911b1654b45901d574d60f7a9e00dce6a6f2a0c1a5f9bef",
+      "rows": [
+        {
+          "itemid": 220052,
+          "label": "Arterial Blood Pressure mean",
+          "abbreviation": "ABPm",
+          "linksto": "chartevents",
+          "category": "Routine Vital Signs",
+          "unitname": "mmHg",
+          "param_type": "Numeric",
+          "lownormalvalue": null,
+          "highnormalvalue": null
+        },
+        {
+          "itemid": 220074,
+          "label": "Central Venous Pressure",
+          "abbreviation": "CVP",
+          "linksto": "chartevents",
+          "category": "Hemodynamics",
+          "unitname": "mmHg",
+          "param_type": "Numeric",
+          "lownormalvalue": null,
+          "highnormalvalue": null
+        },
+        {
+          "itemid": 220181,
+          "label": "Non Invasive Blood Pressure mean",
+          "abbreviation": "NBPm",
+          "linksto": "chartevents",
+          "category": "Routine Vital Signs",
+          "unitname": "mmHg",
+          "param_type": "Numeric",
+          "lownormalvalue": null,
+          "highnormalvalue": null
+        },
+        {
+          "itemid": 220615,
+          "label": "Creatinine (serum)",
+          "abbreviation": "Creatinine (serum)",
+          "linksto": "chartevents",
+          "category": "Labs",
+          "unitname": null,
+          "param_type": "Numeric",
+          "lownormalvalue": null,
+          "highnormalvalue": null
+        },
+        {
+          "itemid": 225312,
+          "label": "ART BP Mean",
+          "abbreviation": "ART BP Mean",
+          "linksto": "chartevents",
+          "category": "Routine Vital Signs",
+          "unitname": "mmHg",
+          "param_type": "Numeric",
+          "lownormalvalue": null,
+          "highnormalvalue": null
+        },
+        {
+          "itemid": 229761,
+          "label": "Creatinine (whole blood)",
+          "abbreviation": "Creatinine (whole blood)",
+          "linksto": "chartevents",
+          "category": "Labs",
+          "unitname": null,
+          "param_type": "Numeric",
+          "lownormalvalue": null,
+          "highnormalvalue": null
+        }
+      ]
+    },
+    {
+      "path": "/home/zhuhb/workspace/databases/mimiciv/d_labitems.parquet",
+      "sha256": "ad1524b10c6560ab28be751dd8baa08609499176fa44d4c7364105ca5efc12c0",
+      "rows": [
+        {
+          "itemid": 50912,
+          "label": "Creatinine",
+          "fluid": "Blood",
+          "category": "Chemistry"
+        },
+        {
+          "itemid": 52024,
+          "label": "Creatinine, Whole Blood",
+          "fluid": "Blood",
+          "category": "Blood Gas"
+        },
+        {
+          "itemid": 52546,
+          "label": "Creatinine",
+          "fluid": "Blood",
+          "category": "Chemistry"
+        }
+      ]
+    }
+  ],
+  "api": "easyicu.io.scoped_measurements.extract_miiv_measurement_events(data_source, *, allowed_stay_ids, concepts=(crea,map,cvp))",
+  "outputs": [
+    "events",
+    "clock_context",
+    "receipt"
+  ],
+  "verification": {
+    "passed": 173,
+    "seconds": 15.72,
+    "warnings": 3131,
+    "new_tests": 32,
+    "root_independent_tests": 1,
+    "prior_related_tests": 140,
+    "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONPATH=src python -m pytest -q --disable-warnings -m '' tests/core/test_scoped_measurements.py tests/core/test_scoped_measurements_root.py tests/core/test_arterial_blood_gas.py tests/core/test_arterial_blood_gas_root.py tests/core/test_scoped_source_events.py tests/core/test_respiratory_source_channels.py tests/core/test_community_databases.py tests/core/test_concept_catalog_consistency.py tests/governance/test_catalog_manifest.py",
+    "log_sha256": "e7102286ca92aa4b3c30d07a7c5894f50710302e26c5cfe7d497e43c878f763a",
+    "ruff": "PASS",
+    "broad_fast_suite": false
+  },
+  "failures_preserved": [
+    {
+      "stage": "initial test collection",
+      "reason": "fixture module not importable by bare test name; explicit file loader used",
+      "log_sha256": "aebc4fb5e417b4f82907e2d738924de88a0e43efb52e2cc64187a794f19b0fac",
+      "clinical_run": false
+    }
+  ],
+  "official_reading": {
+    "website_commit": "81822278432bc33e101116427e05fa4f69265a01",
+    "paths": [
+      "docs/iv/modules/icu/chartevents.md",
+      "docs/iv/modules/hosp/labevents.md"
+    ],
+    "code_commit": "303d26c623dcc9c49cc0f204468d4acc2f063797",
+    "sql": "mimic-iv/concepts/measurement/vitalsign.sql",
+    "read_level": "full fixed official documentation and SQL",
+    "failed_access": [
+      "mimic.mit.edu/docs/iv/modules/icu/chartevents/",
+      "mimic.mit.edu/docs/iv/modules/hosp/labevents/"
+    ],
+    "fallback": "successful pinned raw GitHub content"
+  },
+  "real_patient_events_read": 0,
+  "real_routes_read": 0,
+  "clinical_exports": 0,
+  "model_fits": 0,
+  "scope": "MIIV creatinine/MAP/CVP only; no hourly pooling or as-of/risk-set certification; no old source edits or clinical input replacement"
+}

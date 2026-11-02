@@ -289,3 +289,21 @@ def test_every_production_caller_names_its_claim_labels() -> None:
                 unlabelled.append(f"{path.relative_to(root)}:{node.lineno} {name}")
 
     assert unlabelled == []
+
+
+def test_a_contrast_phrase_reads_its_variable_by_name() -> None:
+    # A model-contrast claim names its exposure inside a phrase; the reader
+    # sees the variable's name while the levels, unit and order stay.
+    claim = _claim().model_copy(update={
+        "exposure": "lactate_peak at 5.02 versus 1.8 mmol/L",
+    })
+    labels = {"lactate_peak": "peak lactate", "age": "patient age"}
+    text = claim.render_reader_text(labels=labels)
+    assert "peak lactate at 5.02 versus 1.8 mmol/L" in text
+    assert "lactate peak" not in text and "lactate_peak" not in text
+    increase = claim.model_copy(update={"exposure": "a 1 mmol/L increase in lactate_peak"})
+    assert "a 1 mmol/L increase in peak lactate" in increase.render_reader_text(labels=labels)
+    # A plain word that merely matches a key is not a coordinate.
+    assert "age at 5" in claim.model_copy(update={"exposure": "age at 5 versus 2 years"}).render_reader_text(labels={"age": "patient age"})
+    # The machine sentence keeps the coordinate.
+    assert "lactate_peak at 5.02" in claim.render_text()

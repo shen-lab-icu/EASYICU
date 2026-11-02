@@ -2816,10 +2816,10 @@ def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
 # 实际的 fwd_concept 处理逻辑在 concept.py 的 _load_fwd_concept 方法中
 
 def dex_to_10(id_list: list, factor_list: list) -> Callable:
-    """Create callback to convert dexmedetomidine concentrations (R ricu dex_to_10).
+    """Convert dextrose rates to a D10-equivalent rate (R ricu dex_to_10).
     
-    Converts drug concentrations from various forms (e.g., 4 mcg/ml) to a 
-    standard concentration (e.g., 10 mcg/ml equivalent).
+    For example, multiply a D50 volume rate by five. This is glucose,
+    not dexmedetomidine; it does not allocate administered volume to hours.
     
     Args:
         id_list: List of item IDs or sub_var values to match
@@ -2829,10 +2829,10 @@ def dex_to_10(id_list: list, factor_list: list) -> Callable:
         Callback function
         
     Examples:
-        >>> # Convert 4 mcg/ml dex to 10 mcg/ml equivalent: multiply by 4/10
+        >>> # MIMIC D50 volume rate -> D10-equivalent volume rate
         >>> dex_cb = dex_to_10(
-        ...     id_list=[[221668]],  # Item ID for 4 mcg/ml
-        ...     factor_list=[0.4]    # 4/10 = 0.4
+        ...     id_list=[[220952]],
+        ...     factor_list=[5]
         ... )
     """
     if len(id_list) != len(factor_list):
@@ -2879,6 +2879,7 @@ def mimv_rate(
     dur_var: str = 'duration',
     amount_var: str = 'amount',
     auom_var: str = 'amountuom',
+    status_var: str = 'statusdescription',
     **kwargs
 ) -> pd.DataFrame:
     """MIMIC MetaVision rate calculation callback (R ricu mimv_rate).
@@ -2886,8 +2887,9 @@ def mimv_rate(
     For MIMIC-III/IV MetaVision inputevents, extracts the infusion rate from
     the `rate` column, falling back to amount/duration when rate is 0 or NA.
     
-    This mirrors R ricu's mimv_rate which reads the `rate` column directly
-    from inputevents and fills missing values by computing amount/duration.
+    Rewritten rows describe erroneous, undelivered amounts/rates and are
+    removed before either calculation. The source must retain its status
+    column, declared by the concept dictionary's ``extra_vars``.
     
     Args:
         data: Input DataFrame (must contain a 'rate' column from inputevents)
@@ -2896,12 +2898,18 @@ def mimv_rate(
         dur_var: Duration column
         amount_var: Amount column (fallback when rate is 0/NA)
         auom_var: Amount unit of measure column
+        status_var: Recorded delivery status; Rewritten is excluded
         **kwargs: Additional arguments
         
     Returns:
         DataFrame with val_col set to the infusion rate (mL/hr or drug/hr)
     """
-    data = data.copy()
+    if status_var not in data.columns:
+        raise ValueError(f"mimv_rate requires delivery-status column {status_var!r}")
+    rewritten = data[status_var].astype("string").str.strip().str.casefold().eq("rewritten").fillna(False)
+    if rewritten.any():
+        logger.warning("mimv_rate excluded %d Rewritten source rows", int(rewritten.sum()))
+    data = data.loc[~rewritten].copy()
 
     # Step 1: if the table has a dedicated 'rate' column (MIMIC inputevents),
     # copy it into val_col. This is the primary source of truth.

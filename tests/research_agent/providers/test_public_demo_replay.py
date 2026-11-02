@@ -32,14 +32,18 @@ def public_scope(tmp_path, monkeypatch, **overrides):
 
 
 def test_replay_allowlist_tracks_the_current_profile_and_rejects_its_frozen_predecessor(tmp_path, monkeypatch):
-    from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE_2026_10_25
+    from easyicu.research_agent.orchestration.profiles import (
+        PUBLIC_DEMO_ACCEPTANCE_2026_10_25,
+        PUBLIC_DEMO_ACCEPTANCE_2026_10_26,
+    )
     from easyicu.research_agent.providers.client_trust import ACCEPTANCE_PROFILE_REF
     from easyicu.research_agent.providers.protocol import ReplayError
 
     assert ACCEPTANCE_PROFILE_REF == PUBLIC_DEMO_ACCEPTANCE.ref
-    with pytest.raises(ReplayError, match="model_replay_profile_forbidden"):
-        with public_scope(tmp_path, monkeypatch, profile_ref=PUBLIC_DEMO_ACCEPTANCE_2026_10_25.ref):
-            pytest.fail("a frozen profile must not authorize current replay")
+    for frozen in (PUBLIC_DEMO_ACCEPTANCE_2026_10_25, PUBLIC_DEMO_ACCEPTANCE_2026_10_26):
+        with pytest.raises(ReplayError, match="model_replay_profile_forbidden"):
+            with public_scope(tmp_path, monkeypatch, profile_ref=frozen.ref):
+                pytest.fail("a frozen profile must not authorize current replay")
 
 
 def recorded(scope, **options):
