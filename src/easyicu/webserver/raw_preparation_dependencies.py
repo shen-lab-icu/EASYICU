@@ -309,7 +309,14 @@ def native_planning_metadata(*, export_path: Path, database: str | None = None):
             expected_manifest_sha256=hashlib.sha256(raw).hexdigest(), expected_database=name)
         declared = _declared_typed_export_columns(export_path=root, inventory=inventory)
         files = declared.get("files")
-        if not files or any(item.get("identity_column") != "stay_id" for item in files):
+        # One ICU-stay identity across files. The exporter keeps ``stay_id`` when
+        # present, else the source's own ICU-stay key (eICU: patientunitstayid);
+        # see concept.export_metadata._export_identity_and_time_coordinates.
+        from easyicu.config import load_src_cfg
+        icu_identifier = load_src_cfg(name.lower()).id_configs.get("icustay")
+        stay_identities = {"stay_id", *((icu_identifier.id,) if icu_identifier is not None else ())}
+        identities = {item.get("identity_column") for item in files or ()}
+        if not files or len(identities) != 1 or not identities <= stay_identities:
             raise ValueError("native metadata identity mismatch")
         for item in files:
             member = root

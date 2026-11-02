@@ -639,3 +639,28 @@ def test_declared_native_identity_invalid_fails_before_planner(tmp_path, monkeyp
             question='Describe mortality.', llm=llm, output_dir=tmp_path / 'catalog')
     assert exc.value.code == 'research_pipeline_planning_native_metadata_invalid'
     assert not (tmp_path / 'catalog').exists()
+
+
+@pytest.mark.parametrize('identity, accepted', [
+    ('patientunitstayid', True),  # eICU's own ICU-stay key, as the exporter writes it
+    ('uniquepid', False),         # a patient key is not a stay identity
+])
+def test_native_metadata_accepts_the_exporters_stay_identity(tmp_path, monkeypatch, identity, accepted):
+    from easyicu.webserver import raw_preparation_dependencies
+    from tests.support.typed_export import typed_export
+
+    source = typed_export(tmp_path / 'synthetic-export', database='eicu_demo')
+    real = raw_preparation_dependencies._declared_typed_export_columns
+    def renamed(**kwargs):
+        result = real(**kwargs)
+        for item in result['files']:
+            item['identity_column'] = identity
+        return result
+    monkeypatch.setattr(raw_preparation_dependencies, '_declared_typed_export_columns', renamed)
+    if accepted:
+        native = raw_preparation_dependencies.native_planning_metadata(export_path=source)
+        assert {item['identity_column'] for item in native['files']} == {identity}
+    else:
+        with pytest.raises(ResearchPipelineRunError) as exc:
+            raw_preparation_dependencies.native_planning_metadata(export_path=source)
+        assert exc.value.code == 'research_pipeline_planning_native_metadata_invalid'
