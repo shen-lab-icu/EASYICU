@@ -159,10 +159,23 @@
 
   // A press outside closes on the way down, like a native menu; the press
   // still reaches whatever was pressed. Focus leaving (Tab) closes as well.
-  function onPointerDown(event) { closeOutside(event.target); }
-  function onFocusIn(event) { closeOutside(event.target); }
+  let pressedTarget = null;
+  function onPointerDown(event) {
+    pressedTarget = event.target;
+    closeOutside(event.target);
+  }
+  function onPointerEnd() { pressedTarget = null; }
+  function onFocusIn(event) {
+    // WebKit can focus a button's focusable ancestor instead of the button
+    // during a mouse press. Closing here hides the button before its click
+    // arrives. Only preserve that press's ancestor focus; an actual move to
+    // another control, or focus after the press ends, still dismisses menus.
+    if (pressedTarget && contains(event.target, pressedTarget)) return;
+    closeOutside(event.target);
+  }
 
   function onKeyDown(event) {
+    onPointerEnd();
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (closeAll({ focusSummary: true })) event.preventDefault();
   }
@@ -172,8 +185,12 @@
     if (!doc || typeof doc.addEventListener !== 'function') return false;
     doc.addEventListener('toggle', onToggle, true);
     doc.addEventListener('pointerdown', onPointerDown, true);
+    doc.addEventListener('pointerup', onPointerEnd, true);
+    doc.addEventListener('pointercancel', onPointerEnd, true);
     doc.addEventListener('focusin', onFocusIn, true);
     doc.addEventListener('keydown', onKeyDown);
+    const view = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (view && typeof view.addEventListener === 'function') view.addEventListener('blur', onPointerEnd);
     return true;
   }
 
