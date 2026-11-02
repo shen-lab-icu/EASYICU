@@ -647,6 +647,8 @@ def _merge_nested_study_patch(
         proposed = merged.get(field)
         if isinstance(existing, Mapping) and isinstance(proposed, Mapping):
             merged[field] = merge(existing, proposed)
+            if field == "cohort":
+                merged[field] = primary_cohort.replace_first_stay_scope(merged[field], proposed)
     return merged
 
 
@@ -1474,6 +1476,7 @@ def update_study_context(
         ) if requires_icd else ()
         empty_icd = requires_icd and not include and not exclude
         unsupported_preset = False
+        refusal: Optional[primary_cohort.PrimaryCohortContractError] = None
         try:
             primary_cohort.normalize_execution_cohort(merged_cohort)
         except primary_cohort.PrimaryCohortContractError as exc:
@@ -1484,9 +1487,27 @@ def update_study_context(
                 # A legacy label cannot bypass validation of the independent
                 # axes. Substitute only for validation; preserve the stored
                 # preset and keep execution's unsupported-preset refusal.
-                primary_cohort.normalize_execution_cohort({**merged_cohort, "preset": "all_icu"})
+                try:
+                    primary_cohort.normalize_execution_cohort({**merged_cohort, "preset": "all_icu"})
+                except primary_cohort.PrimaryCohortContractError as axis_exc:
+                    refusal = axis_exc
             else:
-                raise
+                refusal = exc
+        if refusal is not None:
+            # Any other refusal is the cohort owner's answer about this
+            # population; return it, not an untyped host-tool failure.
+            return _result(
+                context,
+                status="blocked",
+                code="study_cohort_contract_invalid",
+                summary=(
+                    "The proposed cohort is not an executable population "
+                    f"({refusal.code}); nothing was saved. Restate the population, "
+                    "changing one admission rule at a time."
+                ),
+                owner="easyicu.webserver.primary_cohort",
+                details={"field": "cohort", "reason": refusal.code},
+            )
         if empty_icd:
             return _result(
                 context,

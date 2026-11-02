@@ -180,6 +180,37 @@ def icd_source_proof_required(cohort: Any) -> bool:
         ))
 
 
+def replace_first_stay_scope(merged: Mapping[str, Any], proposed: Mapping[str, Any]) -> Dict[str, Any]:
+    """Let a newly stated first-ICU-stay scope replace the saved one.
+
+    First stay per patient (``exclude_readmissions``, the ``adult_first``
+    default) and first stay per hospitalization are one choice: a patch that
+    states one keeps a saved value of the other only by merging, which
+    ``normalize_execution_cohort`` refuses as conflicting. A patch stating both
+    is left to that refusal.
+    """
+
+    def per_patient(cohort: Mapping[str, Any]) -> bool:
+        if "exclude_readmissions" in cohort:
+            return parse_bool(cohort.get("exclude_readmissions"), default=False)
+        return str(cohort.get("preset") or "").strip().lower() == "adult_first"
+
+    def per_hospitalization(cohort: Mapping[str, Any]) -> bool:
+        return parse_bool(cohort.get("first_icu_stay_per_hospitalization"), default=False)
+
+    result = dict(merged)
+    try:
+        if (per_patient(proposed) and "first_icu_stay_per_hospitalization" not in proposed
+                and per_hospitalization(result)):
+            result["first_icu_stay_per_hospitalization"] = False
+        elif (per_hospitalization(proposed) and "exclude_readmissions" not in proposed
+                and per_patient(result)):
+            result["exclude_readmissions"] = False
+    except ValueError:
+        return dict(merged)
+    return result
+
+
 def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
     """Return the flat cohort contract consumed by Data Extraction."""
 
