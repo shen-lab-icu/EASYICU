@@ -76,26 +76,25 @@ def test_user_requested_valid_icd_codes_are_not_blocked_as_empty(make_context):
       "first_icu_stay_per_hospitalization": True}, "conflicting_first_icu_stay_scope"),
 ])
 def test_other_executable_cohort_contracts_remain_strict(make_context, cohort, code):
-    from easyicu.webserver.primary_cohort import PrimaryCohortContractError
-
     study, context = make_context({}, "请纳入指定人群")
     before = copy.deepcopy(study_contexts.get_context(study["id"]))
-    with pytest.raises(PrimaryCohortContractError, match=code):
-        update_study_context(context, {"cohort": cohort})
+    # The owner's refusal reaches the conversation typed, never as an
+    # untyped host-tool failure the model has to explain on its own.
+    result = update_study_context(context, {"cohort": cohort})
+    assert (result["status"], result["code"]) == ("blocked", "study_cohort_contract_invalid")
+    assert result["details"] == {"field": "cohort", "reason": code}
     assert study_contexts.get_context(study["id"]) == before
     assert context.grant.consume_once("configure") == "granted"
 
 
 def test_legacy_preset_cannot_bypass_first_stay_conflict_before_update_or_grant(make_context):
-    from easyicu.webserver.primary_cohort import PrimaryCohortContractError
-
     prior = {"preset": "legacy_unrecognized", "label": "Preserve this label"}
     study, context = make_context(prior, "研究 ICU 患者")
     before = copy.deepcopy(study_contexts.get_context(study["id"]))
-    with pytest.raises(PrimaryCohortContractError, match="conflicting_first_icu_stay_scope"):
-        update_study_context(context, {"cohort": {
-            "exclude_readmissions": True, "first_icu_stay_per_hospitalization": True,
-        }})
+    result = update_study_context(context, {"cohort": {
+        "exclude_readmissions": True, "first_icu_stay_per_hospitalization": True,
+    }})
+    assert result["details"]["reason"] == "conflicting_first_icu_stay_scope"
     assert study_contexts.get_context(study["id"]) == before
     assert context.grant.consume_once("configure") == "granted"
 
@@ -134,3 +133,20 @@ def test_legacy_preset_never_changes_population_axes_or_consumes_grant(make_cont
     assert result["code"] == "unsupported_cohort_preset"
     assert study_contexts.get_context(study["id"]) == before
     assert context.grant.consume_once("configure") == "granted"
+
+
+@pytest.mark.parametrize(("prior", "proposal", "question", "replaced"), [
+    # eICU main line 11-02: the plan applied first stay per hospitalization,
+    # then the researcher chose first stay per patient.
+    ({"first_icu_stay_per_hospitalization": True}, {"preset": "adult_first"},
+     "只研究每位患者的首次 ICU 入住（按患者，不按住院）", {"first_icu_stay_per_hospitalization": False}),
+    ({"preset": "adult_all", "exclude_readmissions": True}, {"first_icu_stay_per_hospitalization": True},
+     "改为每次住院只纳入首次 ICU 入住", {"exclude_readmissions": False}),
+])
+def test_a_newly_chosen_first_stay_scope_replaces_the_saved_one(make_context, prior, proposal, question, replaced):
+    study, context = make_context(prior, question)
+    result = update_study_context(context, {"cohort": proposal})
+    assert result["code"] == "study_context_updated", result
+    saved = study_contexts.get_context(study["id"])["cohort"]
+    assert {key: saved.get(key) for key in replaced} == replaced
+    assert {key: saved.get(key) for key in proposal} == proposal
