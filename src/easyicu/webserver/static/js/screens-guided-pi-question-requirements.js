@@ -89,8 +89,10 @@
           const category = vocab && typeof vocab.category === 'function' ? vocab.category(row.category) : '';
           const evidence = clip(row.evidence, QUOTE_LIMIT);
           lines.push(tr(
-            `${role}: ${name}${category ? ` (${category})` : ''} — read by EasyICU from the question${evidence ? ` “${evidence}”` : ''}; not a separate choice you confirmed. Check it before approving the plan; request changes in the conversation if needed.`,
-            `${role}：${name}${category ? `（${category}）` : ''}——EasyICU 从题面${evidence ? `“${evidence}”` : ''}读到，未经你单独确认。批准计划前请核对；需要修改时在对话里说明。`,
+            // The measure is EasyICU's pick for the words; the words may be
+            // the researcher's confirmed label, the measure is not.
+            `${role}: ${name}${category ? ` (${category})` : ''} — the measure EasyICU chose for${evidence ? ` “${evidence}”` : ' the question'}. Check it is the definition you mean before approving the plan; request changes in the conversation if not.`,
+            `${role}：${name}${category ? `（${category}）` : ''}——EasyICU 为题面${evidence ? `“${evidence}”` : ''}选定的指标。批准计划前请核对这是否是你要的定义；不是的话在对话里说明。`,
           ));
         });
     }

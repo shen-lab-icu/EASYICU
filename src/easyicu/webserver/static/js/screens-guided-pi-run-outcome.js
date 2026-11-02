@@ -324,7 +324,7 @@
     }
 
     function followUps(latestRun, workflow) {
-      const specific = ANSWER ? ANSWER.followUps(latestRun) : null;
+      const specific = ANSWER ? ANSWER.followUps(latestRun, workflow) : null;
       if (specific && specific.length) return specific;
       const available = new Set(collection(latestRun, workflow).map(row => row.artifact));
       const suggestions = [];

@@ -293,6 +293,39 @@ def _submit_job(kind: str, runner: Any) -> Any:
         ) from exc
 
 
+def _with_repeated_stays_default(study: Dict[str, Any], *, path: str) -> Dict[str, Any]:
+    """Draft a first plan with the repeated-stay route its review would compile.
+
+    Without it, the first plan is reviewed as lacking patient identity and the
+    compiler starts a second plan with patient-clustered inference.  The route
+    stays the system's default on the plan card; a refused write leaves that
+    review-then-compile path as it was.
+    """
+
+    from easyicu.webserver import source_identity_authority
+    from easyicu.webserver.pi_copilot import plan_decisions
+
+    source = study.get("data_source")
+    database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
+    try:
+        grouping = source_identity_authority.resolve_study_patient_grouping(export_path=path, database=database)
+    except source_identity_authority.PatientGroupingAuthorityError:
+        grouping = None
+    patch = plan_decisions.repeated_stays_planning_default(study, source_groups_stays=grouping is not None)
+    if patch is None:
+        return study
+    try:
+        return context_store.upsert_context(
+            {"id": study["id"], **patch},
+            expected_revision=int(study.get("revision") or 0),
+            require_revision=True,
+            lifecycle_write=False,
+        )
+    except context_store.StudyContextError as exc:
+        _LOG.info("repeated-stay planning default not applied: %s", exc.detail.get("error"))
+        return study
+
+
 def submit_research_run(
     request: ResearchRunSubmissionRequest,
     *,
@@ -390,6 +423,11 @@ def submit_research_run(
         )
 
     clock.mark("readiness")
+    if (_deferred_binding is None and _controlled_candidate is None
+            and request.intent == "candidate_plan" and request.planner_start_mode == "fresh"
+            and request.plan_change_request is None
+            and not request.plan_revision_source_run_id and not request.execution_resume_source_run_id):
+        study_context = _with_repeated_stays_default(study_context, path=path)
     database = source.get("database") if isinstance(source, Mapping) else None
     prepared_manifest = dataio.prepared_export_manifest_path(Path(path).expanduser())
     budget_mode = research_pipeline_budget_mode_for_source(

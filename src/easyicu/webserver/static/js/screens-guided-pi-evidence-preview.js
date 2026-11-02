@@ -204,6 +204,35 @@
         // adjustment roster, or time anchor from elsewhere in the file.
       }
     }
+    const contrasts = value.reportable_model_contrasts;
+    const robustField = /^\/(primary_or|primary_estimate|primary_effect|primary_ci_low|primary_ci_high|primary_or_ci\/[01]|primary_estimate_interval\/[01])$/.exec(pointer);
+    if (value.analysis_family === 'robustness_sensitivity' && robustField && contrasts
+      && contrasts.schema_version === 'easyicu.model_contrast_reporting/1' && Array.isArray(contrasts.contrasts)) {
+      // Only the reported contrast whose estimate is the summary's primary
+      // value describes this field; other rows are sensitivity variants.
+      const estimate = typeof value.primary_or === 'number' ? value.primary_or : value.primary_estimate;
+      const row = contrasts.contrasts.find(item => item && typeof item.estimate === 'number' && item.estimate === estimate);
+      const field = robustField[1];
+      const scale = {OR:tr('Odds ratio', '优势比（OR）'),RR:tr('Risk ratio', '风险比（RR）'),HR:tr('Hazard ratio', '风险率比（HR）')}[value.primary_effect_scale];
+      if (row && scale) {
+        const binding = value.variable_display_binding || {};
+        const name = binding.column === contrasts.exposure && recorded(binding.label) ? recorded(binding.label) : recorded(contrasts.exposure);
+        const unit = recorded(contrasts.exposure_unit);
+        const level = number => (typeof number === 'number' && Number.isFinite(number) ? scalar(number) + (unit ? ' ' + unit : '') : '');
+        context.metric = scale + (/low$|\/0$/.test(field) ? tr(' — interval lower bound', '：区间下限') : /high$|\/1$/.test(field) ? tr(' — interval upper bound', '：区间上限') : '');
+        if (name && level(row.value)) context.group = `${name} = ${level(row.value)}`;
+        if (name && level(row.reference)) context.reference = `${name} = ${level(row.reference)}`;
+        context.denominator = contrasts.n;
+        context.unit = unit ? tr('Exposure: ', '暴露：') + unit : '';
+        if (typeof contrasts.landmark_hours === 'number' && Number.isFinite(contrasts.landmark_hours) && contrasts.landmark_hours >= 0) {
+          context.window = tr('Landmark: ', '界标：') + contrasts.landmark_hours + tr(' hours', ' 小时');
+        }
+        const covariates = contrasts.adjustment_columns;
+        if (Array.isArray(covariates) && covariates.every(item => typeof item === 'string' && item.trim())) {
+          context.adjustment = covariates.length ? covariates.map(item => text(item, 100)).join(', ') : tr('Unadjusted', '未调整');
+        }
+      }
+    }
     const report = value.reportable_descriptive_results;
     if (report && report.schema_version === 'easyicu.absolute_risk_reporting/1') {
       if (value.analysis_family === 'absolute_risk_context' && pointer === '/n_total') {

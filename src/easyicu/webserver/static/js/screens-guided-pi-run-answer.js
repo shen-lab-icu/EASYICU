@@ -826,7 +826,7 @@
     // Next questions a researcher would ask of this result, phrased from the
     // plan's own labels and variables. Null until the run's answer is read,
     // so the card can fall back to its artifact-based suggestions.
-    function followUps(latestRun) {
+    function followUps(latestRun, workflow) {
       const view = projectionFor(latestRun);
       // A prediction study reports no group or estimate facts to build
       // them from, so its card keeps the artifact-based suggestions.
@@ -858,8 +858,12 @@
           `按年龄分层后，${groupsOf}各组的${outcome}有什么差别？`,
         ));
       }
-      // A plan that already re-estimates on first stays has its answer.
-      if (!view.firstStay) {
+      // A plan that already re-estimates on first stays has its answer; a
+      // source that cannot order one patient's stays cannot give one
+      // (workflow.patient_first_stay_substitutes, raw_source_authority).
+      const firstStayUnavailable = Boolean(workflow && Array.isArray(workflow.patient_first_stay_substitutes)
+        && workflow.patient_first_stay_substitutes.length);
+      if (!view.firstStay && !firstStayUnavailable) {
         list.push(tr(
           `Keep only each patient’s first ICU stay and recompute these results.`,
           '只保留每位患者的首次 ICU 入住，重新计算这些结果。',

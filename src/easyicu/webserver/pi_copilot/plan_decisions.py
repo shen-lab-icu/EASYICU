@@ -855,6 +855,50 @@ def _declared_family_executes_patient_clustering(study: Mapping[str, Any]) -> bo
     return True
 
 
+def repeated_stays_planning_default(
+    study: Mapping[str, Any], *, source_groups_stays: bool
+) -> Dict[str, Any] | None:
+    """The patient-clustered default a first candidate plan is drafted with.
+
+    A plan drafted before the study handles repeated stays is reviewed as
+    lacking patient identity, and the compiler then persists this same route
+    from it and starts a second plan.  When the bound source already groups
+    stays by patient and nobody has chosen the handling, the first plan uses
+    the route directly.  ``None`` leaves the study unchanged: a researcher's
+    choice, a one-stay population, another analysis unit, or a family that
+    cannot run clustered inference.
+    """
+
+    from easyicu.webserver import study_contexts
+
+    confirmations = study.get("confirmations")
+    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
+    design = study.get("analysis_design")
+    design = design if isinstance(design, Mapping) else {}
+    cohort = study.get("cohort")
+    cohort = cohort if isinstance(cohort, Mapping) else {}
+    if (
+        not source_groups_stays
+        or confirmations.get(REPEATED_STAYS_SYSTEM_DEFAULT) is False
+        or "plan_repeated_stays_clustered" in confirmations
+        or "plan_repeated_stays_first" in confirmations
+        or study_contexts.analysis_design_reads_patient_grouping(design)
+        or cohort.get("exclude_readmissions") is True
+        or _first_stay_restriction_bound(study)
+        or str(design.get("analysis_unit") or "icu_stay") != "icu_stay"
+        or not _declared_family_executes_patient_clustering(study)
+    ):
+        return None
+    merged = ScientificConfiguration.inspect(study).merge_confirmations(
+        plan_repeated_stays_first=False, plan_repeated_stays_clustered=True,
+    )
+    merged[REPEATED_STAYS_SYSTEM_DEFAULT] = True
+    return {
+        "analysis_design": {**dict(design), **_PATIENT_CLUSTERED_DESIGN},
+        "confirmations": merged,
+    }
+
+
 def _one_stay_population_patch(study: Mapping[str, Any]) -> Dict[str, Any]:
     """Keep each patient's first ICU stay; the plan's own steps stay unchanged."""
 
@@ -2074,6 +2118,7 @@ __all__ = [
     "CompiledPlanDecision",
     "PlanDecisionError",
     "REPEATED_STAYS_SYSTEM_DEFAULT",
+    "repeated_stays_planning_default",
     "agent_plan_configuration_available",
     "compile_agent_plan_configuration",
     "compile_plan_decision",

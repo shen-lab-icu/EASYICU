@@ -38,7 +38,9 @@ for (const language of ['zh', 'en']) {
   );
   assert.ok(coordinate.includes(language === 'zh' ? '乳酸' : 'Lactate'));
   assert.ok(coordinate.includes(language === 'zh' ? '血气检验' : 'blood gas'));
-  assert.ok(coordinate.includes(language === 'zh' ? '未经你单独确认' : 'not a separate choice you confirmed'));
+  // It names the measure EasyICU picked, not the researcher's label as unconfirmed.
+  assert.ok(coordinate.includes(language === 'zh' ? '选定的指标' : 'the measure EasyICU chose'));
+  assert.equal(coordinate.includes(language === 'zh' ? '未经你单独确认' : 'not a separate choice you confirmed'), false);
   assert.equal(coordinate.includes('<button'), false);
   const unavailable = modules.questionRequirements.notesHtml(
     { coordinate_readings: { status: 'unavailable', items: [] } }, helpers,

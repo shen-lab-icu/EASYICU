@@ -380,9 +380,17 @@
           <button type="submit" ${disabled ? 'disabled' : ''}><span>${customSend}</span></button>
         </div>
       </form>`;
-    const controls = choices.length
-      ? choices.map((choice) => {
-          const action = choiceAction(choice, language);
+    // Two worded choices can map to one host action ("下载并准备 eICU Demo"):
+    // offer that action once.
+    const seenActions = new Set();
+    const choiceActions = choices.map(choice => choiceAction(choice, language)).filter((action) => {
+      const key = `${action.label}\u0000${action.message}`;
+      if (seenActions.has(key)) return false;
+      seenActions.add(key);
+      return true;
+    });
+    const controls = choiceActions.length
+      ? choiceActions.map((action) => {
           const grants = action.grants.length ? ` data-gpi-next-grants="${esc(action.grants.join(','))}"` : '';
           const localSource = action.localDatabase
             ? ` data-gpi-next-local-database="${esc(action.localDatabase)}"`
