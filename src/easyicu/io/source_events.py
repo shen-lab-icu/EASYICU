@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Sequence
 
 import duckdb
+from easyicu.runtime import duckdb_spill
 import numpy as np
 import pandas as pd
 import pyarrow as pa
@@ -317,7 +318,7 @@ def extract_miiv_respiratory_events(
                for table in sorted({s['table'] for s in specs})}
     files = [("icustays", p) for p in clock_paths] + [(table, p) for table, paths in sources.items() for p in paths]
     hashes = {str(p): _sha(p) for _, p in files}
-    conn = duckdb.connect(":memory:", config={"threads": 1, "temp_directory": ""})
+    conn = duckdb_spill.connect(":memory:", config={"threads": 1})
     try:
         _prepare_clocks(conn, clock_paths, allowed)
         clock_context = conn.execute("""SELECT subject_id, hadm_id, stay_id, intime, outtime,

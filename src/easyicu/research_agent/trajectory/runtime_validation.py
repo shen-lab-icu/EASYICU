@@ -95,18 +95,20 @@ def signed_trajectory_stay_identities(database: str | None = None) -> frozenset[
     key is that stay, and no other identity of that source, an admission's,
     a hospital stay's or a patient's, joins the frozen labels.
 
-    Without the database, any registered source's ICU-stay key is admitted.
-    That union is structural only: one source's stay key can be another's
-    patient key (HiRID keys its stays by ``patientid``, which in
+    Without the database, any research-scope source's ICU-stay key is
+    admitted; community sources are mapped for extraction only and never run
+    this suite.  That union is structural only: one source's stay key can be
+    another's patient key (HiRID keys its stays by ``patientid``, which in
     AmsterdamUMCdb names the patient).  Every check that knows the run's
     source passes it: ``bind_plan``, the plan review, and the executor, which
     requires the labels' identity in the run cohort's own id columns.
     """
 
-    from easyicu.databases.profiles import get_database_profile, iter_database_profiles
+    from easyicu.databases.profiles import get_database_profile
+    from easyicu.databases.research_capabilities import research_scope_database_keys
 
     if database is None:
-        keys = {profile.stay_id_col for profile in iter_database_profiles()}
+        keys = {get_database_profile(key).stay_id_col for key in research_scope_database_keys()}
     else:
         keys = set()
         # A demo release keys its stays as its parent does.

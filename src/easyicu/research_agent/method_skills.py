@@ -17,8 +17,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal, Tuple
 
-from easyicu.databases.profiles import get_database_profile, public_database_keys
-from easyicu.databases.research_capabilities import research_capability_profile
+from easyicu.databases.profiles import get_database_profile
+from easyicu.databases.research_capabilities import research_capability_profile, research_scope_database_keys
 from easyicu.databases.research_requirements import StudyRequirements, ThresholdRequirement, assess_study
 
 from .planning.capability_registry import CAPABILITY_REGISTRY
@@ -1497,7 +1497,7 @@ def package_database_notes(row: dict[str, Any]) -> list[dict[str, Any]]:
     requirements = _workflow_guide(row).requirements
     return [dict(display_name="eICU-CRD" if key == "eicu" else get_database_profile(key).display_name,
                  decision=assess_study(research_capability_profile(key), requirements).model_dump(mode="json"),
-                 real_data_acceptance="not_verified") for key in public_database_keys()]
+                 real_data_acceptance="not_verified") for key in research_scope_database_keys()]
 
 
 _DATABASE_TERMS = {
