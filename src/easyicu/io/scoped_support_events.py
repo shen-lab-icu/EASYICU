@@ -14,6 +14,7 @@ import re
 from typing import Sequence
 
 import duckdb
+from easyicu.runtime import duckdb_spill
 import numpy as np
 import pandas as pd
 
@@ -270,7 +271,7 @@ def extract_miiv_support_events(
         ("procedureevents", p) for p in event_files
     ]
     hashes = {str(p): scoped._sha(p) for _, p in files}
-    conn = duckdb.connect(":memory:", config={"threads": 1, "temp_directory": ""})
+    conn = duckdb_spill.connect(":memory:", config={"threads": 1})
     try:
         context = _prepare_native_clocks(conn, clock_files, allowed)
         optional = ",".join(

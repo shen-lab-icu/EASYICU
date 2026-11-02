@@ -13,7 +13,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from .profiles import get_database_profile, get_packaged_registry
+from easyicu.io.community_databases import COMMUNITY_DATABASES
+
+from .profiles import get_database_profile, get_packaged_registry, public_database_keys
 
 
 class Fact(BaseModel):
@@ -325,6 +327,11 @@ def _icu_death_timing(mortality: MortalityCapability, icu_end: SourceField | Non
     if mortality.meaning == "icu_death" and mortality.event_time is None and icu_end is not None:
         return mortality.model_copy(update={"event_time": icu_end, "time_kind": "icu_discharge_proxy"})
     return mortality
+
+
+def research_scope_database_keys() -> tuple[str, ...]:
+    """Public sources inside research scope; community sources are mapped for extraction only."""
+    return tuple(key for key in public_database_keys() if key not in COMMUNITY_DATABASES)
 
 
 @lru_cache(maxsize=32)

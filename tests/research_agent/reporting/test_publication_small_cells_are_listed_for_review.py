@@ -106,8 +106,15 @@ def _tiny_table_one(run_dir):
 
 
 def test_every_registered_source_follows_a_declared_licence():
+    from easyicu.io.community_databases import COMMUNITY_DATABASES
+
     for profile in iter_database_profiles():
         disclosure = source_disclosure(profile.key)
+        if profile.key in COMMUNITY_DATABASES:
+            # Mapped for extraction only; no licence is declared on its behalf,
+            # and an undeclared source never reports without review.
+            assert disclosure.profile is not Profile.REPORT, profile.key
+            continue
         assert disclosure.profile is Profile.REPORT_WITH_REVIEW, profile.key
         assert disclosure.licence not in {"", "undeclared"}
 

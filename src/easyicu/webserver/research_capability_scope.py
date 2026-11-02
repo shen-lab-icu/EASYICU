@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from easyicu.databases.profiles import get_database_profile, public_database_keys
-from easyicu.databases.research_capabilities import research_capability_profile
+from easyicu.databases.profiles import get_database_profile
+from easyicu.databases.research_capabilities import research_capability_profile, research_scope_database_keys
 from easyicu.databases.research_requirements import (
     StudyRequirements, ThresholdRequirement, assess_study,
 )
@@ -53,7 +53,7 @@ def eligible_family_databases(family: str, *, requirements: StudyRequirements | 
     # alternatives. A supplied study keeps its named endpoint and requirements.
     requirements = requirements or StudyRequirements(family=family, outcome="hospital_death")
     eligible = []
-    for key in public_database_keys():
+    for key in research_scope_database_keys():
         try:
             profile = research_capability_profile(key)
         except KeyError:

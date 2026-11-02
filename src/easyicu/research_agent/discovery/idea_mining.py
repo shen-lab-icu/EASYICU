@@ -3177,6 +3177,7 @@ def _build_concept_lookup(
     concept_aliases: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> Dict[str, str]:
     lookup: Dict[str, str] = {}
+    canonicals: List[str] = []
     for item in available_concepts:
         if isinstance(item, ConceptDescriptor):
             canonical = normalize_concept_name(item.source_concept or item.name)
@@ -3185,9 +3186,13 @@ def _build_concept_lookup(
         else:
             canonical = normalize_concept_name(str(item))
             keys = [str(item)]
+        canonicals.append(canonical)
         lookup[canonical] = canonical
         for key in keys:
             _add_lookup_key_variants(lookup, key, canonical)
+    # A concept's own name names it: another concept's stripped variant
+    # ("peep_total" -> "peep") must not take it over.
+    lookup.update((canonical, canonical) for canonical in canonicals)
     if concept_aliases:
         for target, aliases in concept_aliases.items():
             canonical = _resolve_concept(str(target), lookup)
@@ -3195,6 +3200,7 @@ def _build_concept_lookup(
                 continue
             for alias in aliases:
                 _add_lookup_key_variants(lookup, alias, canonical)
+        lookup.update((canonical, canonical) for canonical in canonicals)
     return lookup
 
 

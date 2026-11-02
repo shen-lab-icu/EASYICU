@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 from typing import Sequence
 
-import duckdb
+from easyicu.runtime import duckdb_spill
 import numpy as np
 import pandas as pd
 
@@ -294,7 +294,7 @@ def extract_miiv_measurement_events(
         (t, p) for t, paths in sources.items() for p in paths
     ]
     hashes = {str(p): scoped._sha(p) for _, p in files}
-    conn = duckdb.connect(":memory:", config={"threads": 1, "temp_directory": ""})
+    conn = duckdb_spill.connect(":memory:", config={"threads": 1})
     try:
         scoped._prepare_clocks(conn, clocks, allowed)
         context = conn.execute("""SELECT subject_id,hadm_id,stay_id,intime,outtime,outtime_status,

@@ -115,7 +115,7 @@ def test_a_bound_public_source_without_capability_metadata_reports_the_missing_p
 
 
 def test_source_suggestions_keep_assessable_sources_when_one_profile_is_unavailable(monkeypatch):
-    from easyicu.databases.profiles import public_database_keys
+    from easyicu.databases.research_capabilities import research_scope_database_keys
     from easyicu.webserver import research_capability_scope as scope
 
     profile = scope.research_capability_profile
@@ -128,8 +128,9 @@ def test_source_suggestions_keep_assessable_sources_when_one_profile_is_unavaila
     monkeypatch.setattr(scope, "research_capability_profile", without_eicu)
     gap = target_trial_database_gap({"data_source": {"database": "eicu"}})
     assert gap["missing_capabilities"][0]["code"] == "source_profile_unavailable"
-    assert tuple(gap["supported_databases"]) == tuple(key for key in public_database_keys() if key not in {"eicu", "sic"})
+    assert tuple(gap["supported_databases"]) == tuple(key for key in research_scope_database_keys() if key not in {"eicu", "sic"})
     assert "sic" not in gap["supported_databases"]  # Its ICU time zero is not established.
+    assert "nwicu" not in gap["supported_databases"]  # Community sources are mapped for extraction only.
 
 
 def test_invalid_scientific_bindings_are_left_to_the_existing_validation_order():
