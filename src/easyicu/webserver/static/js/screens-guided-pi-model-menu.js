@@ -26,7 +26,7 @@
       .map(row => row.model);
   }
 
-  const state = { key: '', models: [], current: '', loading: false, switching: false, error: '', request: 0 };
+  const state = { key: '', models: [], current: '', loading: false, switching: false, error: '', errorAction: '', request: 0 };
   let context = null;
 
   // Only the public, saved connection selects an owner. A printed label and
@@ -64,7 +64,7 @@
     const missing = !state.loading && !state.error && state.current && !state.models.includes(state.current);
     const status = state.loading ? tr('Reading models…', '正在读取模型…') : state.error || (missing
       ? tr(`The saved model (${state.current}) is not listed by this connection. Choose an available model or check the connection.`, `当前模型（${state.current}）未出现在此连接的列表中。请选择可用模型，或检查连接。`) : '');
-    const message = status ? `<p class="gpi-model-note${state.error ? ' is-error' : ''}" role="status">${esc(status)}</p>${state.error ? `<button type="button" data-gpi-refresh-status>${tr('Refresh conversation', '刷新对话')}</button>` : ''}` : '';
+    const message = status ? `<p class="gpi-model-note${state.error ? ' is-error' : ''}" role="status">${esc(status)}</p>${state.error ? (state.errorAction === 'new' ? `<button type="button" data-gpi-new>${tr('New conversation', '新建对话')}</button>` : `<button type="button" data-gpi-refresh-status>${tr('Refresh conversation', '刷新对话')}</button>`) : ''}` : '';
     if (!state.models.length) return message || `<p class="gpi-model-note">${esc(tr('No models available.', '暂无可用模型。'))}</p>`;
     return message + state.models.map(model => `<button type="button" data-gpi-pick-model="${esc(model)}" role="menuitemradio" aria-checked="${model === state.current}" ${state.switching ? 'disabled' : ''}><span>${esc(model)}</span><span aria-hidden="true">${model === state.current ? '✓' : ''}</span></button>`).join('');
   }
@@ -87,14 +87,15 @@
     const kind = connectionKind(session && session.model_connection);
     const request = ++state.request;
     state.key = key; state.models = []; state.current = clean(session && session.model_connection && session.model_connection.model);
-    state.loading = false; state.error = '';
+    state.loading = false; state.error = ''; state.errorAction = '';
     if (context.locked()) {
       state.error = tr('Wait for the current task or refresh this conversation before viewing models.', '请等待当前任务结束，或刷新对话后查看模型。');
       paint(control); return;
     }
     if (session && session.model_connection && session.model && session.model.id
       && session.model.id !== session.model_connection.model) {
-      state.error = tr('The conversation and analysis models differ. Check the connection before starting a new conversation.', '对话和分析的模型不一致，请核对连接后新建对话。');
+      state.error = tr('This older conversation pinned different conversation and analysis models, so its model cannot change here. A new conversation uses the current connection.', '这条旧对话的对话模型和分析模型不一致，不能在这里切换。新建对话会使用当前连接的模型。');
+      state.errorAction = 'new';
       paint(control); return;
     }
     if (!kind || !session.session_id || !project || session.project_id !== project) { paint(control); return; }

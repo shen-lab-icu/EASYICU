@@ -620,9 +620,8 @@
       </div>
       ${settingsNotice ? `<div class="note ok mt-12" data-settings-notice><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${T('Settings updated', '设置已更新')}</div><div class="d">${h(settingsNotice)}</div></div></div>` : ''}
 
-      ${capabilityManager()}
-      ${storageSection()}
       ${rememberedKeysSection()}
+      ${storageSection()}
 
       <div class="sec-stack" id="set-workspace"><div class="lbl">${T('Workspace', '工作区')}</div><h2>${T('Local paths', '本地路径')}</h2></div>
       <div class="card pad">
@@ -639,11 +638,13 @@
       <div class="sec-stack" id="set-research-agent"><div class="lbl">${T('Research Agent', '研究代理')}</div><h2>${T('Run behavior', '运行行为')}</h2></div>
       <div class="card pad">
         ${row(T('Where run behavior is set', '运行行为在哪里设置'), T('Provider, model, output budget, and confirmations are chosen per run inside Guided Copilot and recorded in that run’s ledger — not as hidden global defaults that could make an unexpected external call.', '模型提供方、模型、输出预算与确认项都在「研究引导」中按次运行选择，并记录在该次运行的账本中 —— 不设隐藏的全局默认值，以免造成意外的外部调用。'),
-          `<button class="btn sm" data-settings-open="guided">${icon('spark', 12)} ${T('Open Guided Copilot', '打开研究引导')}</button>`)}
+          `<button class="btn sm" data-settings-open="guided">${icon('spark', 12)} ${T('Open research conversation', '打开研究对话')}</button>`)}
       </div>
 
       ${personalSection()}
       ${languageSection()}
+
+      ${capabilityManager()}
 
       ${aboutSection(false)}
       </div>`;

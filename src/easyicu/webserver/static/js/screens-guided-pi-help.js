@@ -1,4 +1,4 @@
-/* Owner: Guided Pi "遇到问题" menu in the conversation header. */
+/* Owner: Guided Pi "遇到问题" action in the conversation header. */
 /* A clinician who hits a problem needs two things: a reference the
    administrator can look up, and whom to ask. The reference names the
    project, conversation, run and job by their ids, with the version and time;
@@ -67,8 +67,11 @@
       return hosted ? hosted.supportContact() : '';
     }
 
+    // A local build has no administrator to name, so the one action sits in
+    // the header's More menu instead of a menu of its own.
     function render() {
       const who = contact();
+      if (!who) return `<button type="button" role="menuitem" data-gpi-help data-gpi-help-copy>${esc(tr('Copy problem reference', '复制问题编号'))}</button>`;
       return `<details class="gpi-help-control" data-popover-menu data-gpi-help>
         <summary>${esc(tr('Having a problem?', '遇到问题'))}</summary>
         <div class="gpi-help-menu" role="menu">

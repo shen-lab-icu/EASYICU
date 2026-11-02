@@ -436,11 +436,11 @@
           : ctx.sessions.length ? (() => {
             const rendered = ctx.sessions.map(row => {
             const status = typeof ctx.status === 'function' ? ctx.status(row)
-              : (row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究'));
+              : (row.agent_mode === 'workspace' ? tr('File task', '文件任务') : tr('Research', '研究'));
             const time = typeof ctx.time === 'function' ? ctx.time(row) : '';
             const stateClass = (railState(row) || { cls: '' }).cls;
             const title = ctx.title(row);
-            const kind = row.agent_mode === 'workspace' ? tr('Artifact task', '产物任务')
+            const kind = row.agent_mode === 'workspace' ? tr('File task', '文件任务')
               : row.agent_mode === 'research' ? tr('Research conversation', '研究对话') : '';
             // Titles use up to two lines; the dot carries the state, while
             // the tooltip and screen-reader text carry its words.

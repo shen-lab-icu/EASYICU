@@ -513,9 +513,9 @@ workspace.syncNavigation({ ...navigation, sessions: [
   { session_id: 'artifact', title: 'Custom title', agent_mode: 'workspace', last_turn_status: 'done' },
 ] });
 assert.match(sessionRail.innerHTML, /<strong>Custom title<\/strong>.*?class="gpi-conversation-kind">Research conversation<\/span>/);
-assert.match(sessionRail.innerHTML, /<strong>Custom title<\/strong>.*?class="gpi-conversation-kind">Artifact task<\/span>/);
+assert.match(sessionRail.innerHTML, /<strong>Custom title<\/strong>.*?class="gpi-conversation-kind">File task<\/span>/);
 assert.match(sessionRail.innerHTML, /title="Custom title · Research conversation · Completed"/);
-assert.match(sessionRail.innerHTML, /title="Custom title · Artifact task · Completed"/);
+assert.match(sessionRail.innerHTML, /title="Custom title · File task · Completed"/);
 assert.match(sessionRail.innerHTML, /<time[^>]*>1d<\/time>/);
 workspace.syncNavigation({ ...navigation, materialsInteractive: false });
 assert.match(sessionRail.innerHTML, /class="gpi-project-material-row"/);

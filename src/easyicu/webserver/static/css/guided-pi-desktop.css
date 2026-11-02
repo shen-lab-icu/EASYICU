@@ -384,6 +384,8 @@
 }
 @media(max-width:1180px){
  .gd-main.gpi-empty-session-focus:not(.gpi-empty-aside-open):not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside-restore{display:grid!important}
+ /* The rail is a top bar here; keep its create button clear of the restore button. */
+ .gd-main.gpi-empty-session-focus:not(.gpi-empty-aside-open):not(.gpi-preview-open):not(.gpi-source-open)>.gd-rail{padding-right:52px}
  .gd-main.threecol.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:flex;position:fixed;z-index:30;top:0;right:0;width:min(430px,90vw);height:100dvh;max-height:100dvh;box-shadow:var(--shadow-2)}
  .gd-main.gpi-empty-session-focus.gpi-empty-aside-open .gpi-aside-section[data-gpi-aside-section="progress"]{max-height:none}
  .gd-main.gpi-empty-session-focus.gpi-empty-aside-open .gpi-aside-section textarea{box-sizing:border-box;width:100%;min-height:80px}

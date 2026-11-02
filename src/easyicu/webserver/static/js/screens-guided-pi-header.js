@@ -20,7 +20,7 @@
     const { tr, esc, icon } = options;
     // The host owns model selection within this conversation’s saved connection.
     // Carry its identity independently of the translated, truncated label.
-    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Choose conversation model', '选择对话模型'))}" aria-label="${esc(tr('Model connection', '模型连接'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Model connection', '模型连接'))}" data-gpi-model-popover data-gpi-model-key="${esc(options.modelBindingKey || '')}">${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
+    return `<details class="gpi-model-control" data-popover-menu><summary class="gpi-model-binding" title="${esc(tr('Choose conversation model', '选择对话模型'))}" aria-label="${esc(tr('Model connection', '模型连接'))}"><span title="${esc(options.connectionDetail || options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Model connection', '模型连接'))}" data-gpi-model-popover data-gpi-model-key="${esc(options.modelBindingKey || '')}">${options.hosted ? '' : `<button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button>`}</div></details>`;
   }
 
   /* While a server job runs the top bar says so with its elapsed time; the
@@ -41,7 +41,7 @@
       <div class="gpi-head-title"><span class="gpi-kicker" title="${esc(kickerText(options))}">${esc(kickerText(options))}</span><span class="gpi-head-separator" aria-hidden="true">/</span><span class="gpi-title" title="${esc(options.sessionTitle)}"><span class="gpi-session-title-text">${esc(options.sessionTitle)}</span></span>${liveStatus(options)}</div>
       <div class="gpi-head-meta">
         <button class="gpi-head-new" type="button" data-gpi-new>${icon('plus', 13)} ${tr('New conversation', '新对话')}</button>
-        <button class="gpi-head-new gpi-head-artifact-task" type="button" data-gpi-new-workspace ${options.busy ? 'disabled' : ''}>${icon('file', 13)} ${tr('New artifact task', '新建产物任务')}</button>
+        ${options.hosted ? `<button class="gpi-head-new gpi-head-artifact-task" type="button" data-gpi-new-workspace ${options.busy ? 'disabled' : ''}>${icon('file', 13)} ${tr('New file task', '新建文件任务')}</button>` : ''}
         <details class="gpi-layout-control" data-popover-menu>
           <summary>${icon('grid', 13)} ${tr('Layout', '布局')}</summary>
           <div class="gpi-layout-popover" role="group" aria-label="${tr('Visible workspace panels', '工作区显示面板')}">
@@ -53,15 +53,17 @@
             ].map(([key, label]) => `<button type="button" data-gpi-layout-toggle="${key}" aria-label="${esc(label)}" aria-pressed="${Boolean(options.layout && options.layout[key])}"><span>${esc(label)}</span><span aria-hidden="true">${options.layout && options.layout[key] ? '✓' : ''}</span></button>`).join('')}
           </div>
         </details>
-        ${options.helpHtml || ''}
+        ${options.hosted ? (options.helpHtml || '') : ''}
         ${options.hosted ? '' : `<details class="gpi-head-overflow" data-popover-menu>
           <summary>${tr('More', '更多')}<span aria-hidden="true">⌄</span></summary>
           <div class="gpi-head-overflow-menu" role="menu">
             <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
               <button type="button" data-gpi-mode-switch="research" aria-pressed="${!options.workspace}">${tr('Research', '研究')}</button>
-              <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${options.workspace}">${tr('Workspace', '工作区')}</button>
+              <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${options.workspace}">${tr('File task', '文件任务')}</button>
             </div>
+            <button type="button" role="menuitem" data-gpi-new-workspace ${options.busy ? 'disabled' : ''}>${tr('New file task', '新建文件任务')}</button>
             <button type="button" role="menuitem" data-gpi-study-setup>${tr('Study setup', '研究配置')}</button>
+            ${options.helpHtml || ''}
           </div>
         </details>`}
       </div>

@@ -19,7 +19,7 @@
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     planConfigurationError: '',
     source: null, childSource: null, childJobId: '', error: '', composerErrorSessionId: '', shell: 'pi', draft: '', setupSaving: false,
-    showSetup: false, availableModels: [], project: null,
+    showSetup: false, availableModels: [], project: null, firstQuestion: null,
     researchProvider: 'codex', researchModel: '', codexAuth: null,
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
     projectInitialization: null, projectIssue: '', workflow: null, latestRun: null, workflowError: '',
@@ -606,10 +606,11 @@
     const setupFocused = !restoring && state.shell !== 'legacy'
       && !state.demoMode
       && (CONNECT.pageRequired() || state.projectIssue === 'pi_project_study_context_missing');
+    // The first screen before any project is the same composer-first page.
     const emptySessionFocused = !restoring && !setupFocused && state.shell !== 'legacy'
-      && !state.demoMode && Boolean(state.session) && agentMode() !== 'workspace'
+      && !state.demoMode && (!projectId() || (Boolean(state.session) && agentMode() !== 'workspace'
       && !state.taskDraft
-      && state.messages.length === 0 && state.workflowReceipts.length === 0;
+      && state.messages.length === 0 && state.workflowReceipts.length === 0));
     const main = state.host.closest('.gd-main');
     if (main) {
       main.classList.toggle('gpi-workspace', state.shell !== 'legacy');
@@ -1104,6 +1105,26 @@
     return pendingPromise;
   }
 
+  // A question asked on the first screen, before any project existed, becomes
+  // the first message of the project created for it (screens-guided.js). It
+  // expires so a failed creation cannot send it into a project opened later.
+  const FIRST_QUESTION_MS = 120000;
+  function queueFirstQuestion(text) {
+    const question = String(text || '').trim();
+    state.firstQuestion = question && !projectId() ? { text: question, at: Date.now() } : null;
+    return Boolean(state.firstQuestion);
+  }
+  async function askFirstQuestion(expectedId) {
+    const queued = state.firstQuestion;
+    state.firstQuestion = null;
+    if (!queued || Date.now() - queued.at > FIRST_QUESTION_MS || projectId() !== expectedId) return;
+    await startEntry();
+    if (projectId() !== expectedId || !state.session) return;
+    state.draft = queued.text;
+    render();
+    await sendMessage();
+  }
+
   function bindProject(project) {
     const next = project && String(project.id || '').trim()
       ? {
@@ -1192,6 +1213,7 @@
           state.projectLoading = false;
           render();
           openHostedConversation();
+          void askFirstQuestion(next.id);
         });
     }
     state.projectLoading = false;
@@ -1780,6 +1802,7 @@
     setShell,
     startEntry,
     bindProject,
+    queueFirstQuestion,
     isActive,
     rebind,
     notifyExtractionHandoff,

@@ -2763,6 +2763,25 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const hosted = window.EasyICU && window.EasyICU.guidedPi ? window.EasyICU.guidedPi.optional('hosted') : null;
     return !!(hosted && hosted.active());
   }
+  // The first-screen question names a new project and becomes its first
+  // message once that project's conversation is ready (screens-guided-pi.js).
+  function startProjectFromQuestion(button) {
+    const panel = button.closest('.gpi-first-question');
+    const input = panel && panel.querySelector('[data-gpi-first-question]');
+    const question = String((input && input.value) || '').trim();
+    if (!question) { if (input) input.focus(); return; }
+    const copilot = window.EasyICU && window.EasyICU.guidedPi ? window.EasyICU.guidedPi.optional('shell') : null;
+    if (!copilot || !copilot.queueFirstQuestion || !copilot.queueFirstQuestion(question)) return;
+    const title = question.replace(/\s+/g, ' ').slice(0, 40);
+    if (hostedInstance()) { openGuidedFolderDialog('new', title); return; }
+    button.disabled = true;
+    if (input) input.readOnly = true;
+    void Promise.resolve(createLocalGuidedDraft(title)).finally(() => {
+      if (!button.isConnected) return;
+      button.disabled = false;
+      if (input) input.readOnly = false;
+    });
+  }
   // A new local project is named in the project list (one field, default
   // folder); only a hosted instance asks for its name in a dialog.
   function startGuidedProjectNaming(seedTitle) {
@@ -3272,7 +3291,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedInitialRender = initializeGuidedState();
       return `
       <div class="gd-shell">
-        <h1 class="shell-sr-only" tabindex="-1">${t('Guided Copilot', '研究引导')}</h1>
+        <h1 class="shell-sr-only" tabindex="-1">${t('Research workspace', '研究工作区')}</h1>
         <div class="gd-main threecol ${guidedProjectRailClass()} ${guidedContextAsideClass()} ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'gd-startup-active' : ''}" ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'aria-busy="true"' : ''}>
           ${guidedProjectRenderer('renderShellRail')}
           <div class="gd-conv">
@@ -3427,6 +3446,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
       const shell = root.querySelector('.gd-shell');
       shell.addEventListener('click', (e) => {
+        const fromQuestion = e.target.closest('[data-project-from-question]');
+        if (fromQuestion) {
+          startProjectFromQuestion(fromQuestion);
+          return;
+        }
         if (e.target.closest('[data-project-new]')) {
           startGuidedProjectNaming();
           return;

@@ -82,9 +82,10 @@
     </nav>${options.aside || ''}`;
     if (active === 'settings') return `<nav class="euh-context-nav" aria-label="${tr('Settings sections', '设置分区')}">
       ${[
-        ['set-capabilities', 'layers', 'Capabilities', '能力'], ['set-workspace', 'folder', 'Workspace', '工作区'],
-        ['set-data-mode', 'flask', 'Data mode', '数据模式'], ['set-privacy', 'shield', 'Privacy', '隐私'],
+        // Everyday settings first; the capability manager is for advanced users.
+        ['set-workspace', 'folder', 'Workspace', '工作区'], ['set-privacy', 'shield', 'Privacy', '隐私'],
         ['set-research-agent', 'agent', 'Research Agent', '研究代理'], ['set-language', 'globe', 'Language', '语言'],
+        ['set-capabilities', 'layers', 'Capabilities', '能力'],
         ['set-account', 'lock', 'Account', '账号'], ['set-about', 'help', 'About', '关于'],
       // A hosted settings page holds only the clinician's display, sign-out and
       // About (screens-settings.js hostedRender); the other sections are the
