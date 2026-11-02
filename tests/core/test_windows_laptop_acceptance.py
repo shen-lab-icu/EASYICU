@@ -69,7 +69,7 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
 @pytest.mark.parametrize("docker_reason", ["docker_executable_missing", "docker_daemon_unreachable"])
 def test_desktop_boundary_uses_host_profile_and_never_claims_a_result(tmp_path, monkeypatch, docker_reason):
     from easyicu.research_agent.execution import runner
-    from easyicu.research_agent.orchestration.profiles import DESKTOP_FIRST_RESULT
+    from easyicu.research_agent.orchestration.profiles import WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY
     from easyicu.webserver import dataio
 
     probes, bindings = [], []
@@ -88,7 +88,7 @@ def test_desktop_boundary_uses_host_profile_and_never_claims_a_result(tmp_path, 
     result = acceptance.probe_desktop_first_result([tmp_path / "miiv", tmp_path / "eicu", tmp_path / "mimic_demo"])
     assert probes == ["docker", "docker", "host"]
     assert bindings == [(str(tmp_path / "eicu"), {"database": "eicu_demo"})]
-    assert result["profile_ref"] == DESKTOP_FIRST_RESULT.ref
+    assert result["profile_ref"] == WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY.ref
     assert result["runner_kind"] == "host"
     assert result["docker_reason_code"] == docker_reason
     assert result["deterministic_analysis_without_docker"] == "yes"
@@ -114,6 +114,19 @@ def test_desktop_boundary_rejects_a_docker_run_and_a_missing_demo(tmp_path, monk
     monkeypatch.setattr(research_launch_runtime, "_require_execution_runtime", lambda **kw: "host")
     with pytest.raises(acceptance.AcceptanceFailure, match="demo_exports_unavailable_for_research"):
         acceptance.probe_desktop_first_result([])
+
+
+def test_desktop_boundary_rejects_stale_profile_before_source_validation(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution import runner
+    from easyicu.research_agent.orchestration import profiles
+    from easyicu.webserver import dataio, research_launch_runtime
+
+    monkeypatch.setattr(runner, "probe_runner_availability", lambda *a, **kw: SimpleNamespace(reason_code=""))
+    monkeypatch.setattr(research_launch_runtime, "_require_execution_runtime", lambda **kw: "host")
+    monkeypatch.setattr(profiles, "get_submission_profile", lambda _: profiles.DESKTOP_FIRST_RESULT)
+    monkeypatch.setattr(dataio, "validate_research_pipeline_source", lambda *a, **kw: pytest.fail("source read before profile verification"))
+    with pytest.raises(acceptance.AcceptanceFailure, match="desktop_first_result_profile_mismatch"):
+        acceptance.probe_desktop_first_result([tmp_path / "a", tmp_path / "b", tmp_path / "c"])
 
 
 @pytest.mark.parametrize("elapsed,within", [(30, True), (901, False)])
@@ -341,9 +354,13 @@ def test_receipt_drops_rows_ids_paths_and_exception_text(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("path", ["plain", "with space", "数据"])
-def test_acceptance_requires_a_space_and_chinese_path(tmp_path: Path, path: str) -> None:
+def test_acceptance_requires_a_space_and_chinese_path(path: str) -> None:
     with pytest.raises(acceptance.AcceptanceFailure, match="laptop_path_required"):
-        acceptance.validate_work_dir(tmp_path / path)
+        acceptance.validate_work_dir(Path("synthetic-root") / path)
+
+
+def test_acceptance_accepts_a_space_and_chinese_path() -> None:
+    acceptance.validate_work_dir(Path("synthetic-root") / "数据 with space")
 
 
 def test_read_failures_are_recorded_without_response_bodies(tmp_path: Path) -> None:

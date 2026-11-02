@@ -197,7 +197,7 @@ def test_signed_synthetic_plan_materializes_and_recovers_bound_cohort(tmp_path):
     from easyicu.databases.research_substitutions import time_origin_selection
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.webserver.time_origin_source_authority import RegisteredExportTimeOrigin
-    from tests.research_agent.planning.test_time_origin_review_binding import _review
+    from tests.support.source_substitutions import _review
     from tests.support.signed_time_origin import signed_origin_case
     from tests.support.source_substitutions import _approve
 

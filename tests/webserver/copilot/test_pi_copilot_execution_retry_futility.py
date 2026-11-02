@@ -99,7 +99,7 @@ def test_an_assessment_never_reaches_a_run_that_is_not_a_failed_execution() -> N
 def _project(monkeypatch: pytest.MonkeyPatch, row: dict, answer: Any) -> Any:
     from easyicu.webserver.pi_copilot import workflow as owner
 
-    monkeypatch.setattr(owner.sources, "load_registry", lambda: {})
+    monkeypatch.setattr(owner.sources, "load_registry", lambda **_kwargs: {})
     monkeypatch.setattr(owner, "registered_export_matches_study", lambda *_args: True)
     monkeypatch.setattr(owner, "list_bound_run_history", lambda **_kwargs: [row])
     monkeypatch.setattr(owner.agent_pipeline_runs, "pending_review", lambda _run_id: None)
@@ -156,6 +156,7 @@ def _node() -> str:
 def test_the_futile_card_explains_the_spent_budget_and_offers_only_a_fresh_plan() -> None:
     script = f"""
       global.window = {{}};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read("js/screens-guided-pi-confirmation.js")!r});
       const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({{
         tr: (en, zh) => zh || en, esc: value => String(value), iconHtml: () => '',
@@ -193,6 +194,7 @@ def test_a_futile_retry_of_a_named_stop_says_the_stop_repeats() -> None:
     }
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read("js/screens-guided-pi-confirmation.js")!r});
       eval({_read("js/screens-guided-pi-error-text.js")!r});
       const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({{

@@ -19,7 +19,7 @@ import re
 import hashlib
 from functools import partial
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..agents.core import CriticAgent, ManuscriptAgent
@@ -588,7 +588,9 @@ def _persist_manuscript_critique(
     """Persist the critique contract on success, failure, and skipped writes."""
 
     critique_path = run_dir / "manuscript_critique.json"
-    critique_path.write_text(critique.model_dump_json(indent=2), encoding="utf-8")
+    from ..authority.evidence_store import _atomic_write_text
+
+    _atomic_write_text(critique_path, critique.model_dump_json(indent=2), expected_root=run_dir)
     evidence.register_file(
         kind="log",
         description=(
@@ -790,6 +792,8 @@ class _BindingStageResult:
     bound_path: Path
     manuscript_critique: CritiqueReport
     primary_result_facts: tuple[Any, ...] = ()
+    numeric_binding_map: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    untraced_numerics: tuple[str, ...] = ()
 
 
 def _activate_publication_figure(
@@ -1731,6 +1735,9 @@ def _draft_manuscript(
     section_repair: tuple[str, dict[str, tuple[str, ...]]] | None = None,
 ) -> _DraftStageResult:
     """Generate and minimally repair the evidence-aware manuscript scaffold."""
+    # Late host-local counts cannot return to a model on a resumed draft.
+    if evidence.get("first_observed_source_flow") is not None:
+        raise RuntimeError("first_observed_source_flow_already_sealed_for_local_report")
     _rehydrate_step_numeric_authority(
         pipeline=pipeline,
         evidence=evidence,
@@ -2832,7 +2839,123 @@ def _bind_and_review_manuscript(
         bound_path=bound_path,
         manuscript_critique=manuscript_critique,
         primary_result_facts=tuple(primary_result_facts),
+        numeric_binding_map=numeric_binding_map,
+        untraced_numerics=tuple(untraced_numerics),
     )
+
+
+def _bind_pdf_receipt_to_bound_manuscript(*, receipt_path: Path, bound_path: Path,
+                                          bound: str, run_dir: Path) -> None:
+    """Bind a newly rendered PDF receipt to the exact current draft."""
+    from ..authority.evidence_store import _atomic_write_text
+
+    expected = bound.encode("utf-8")
+    if bound_path.read_bytes() != expected:
+        raise ValueError("manuscript_bound_changed_during_pdf_render")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if not isinstance(receipt, dict) or receipt.get("schema_version") != "easyicu.manuscript_pdf_receipt.v1":
+        raise ValueError("manuscript_pdf_receipt_invalid")
+    receipt["bound_manuscript_sha256"] = hashlib.sha256(expected).hexdigest()
+    _atomic_write_text(receipt_path, json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n", expected_root=run_dir)
+
+
+def _causal_delivery_blockers(*, bound: str, evidence_records: Sequence[Any], run_dir: Path,
+                              numeric_binding_map: Optional[Mapping[str, Any]] = None) -> list[Any]:
+    """Detect a causal assertion linked to a current associational result."""
+    import re
+    from ..review.causal_audit import CausalLanguageHit, _EVIDENCE_ID_RE, _iter_sentences
+
+    text = re.sub(r"(?m)^\s*\[\^[^\]]+\]:.*$", " ", bound)
+    for footnote, claim in (numeric_binding_map or {}).items():
+        evidence_id = str(getattr(claim, "evidence_id", "") or "")
+        if evidence_id:
+            text = text.replace(f"[^{footnote}]", "{evidence:" + evidence_id + "}")
+    sentences = []
+    for sentence in _iter_sentences(text):
+        # A bare negative is not a causal assertion; never remove it across a
+        # contrast, where the second clause may assert another cause.
+        if not re.search(r"\b(?:but|however|rather|instead)\b|但|而是|却|反而", sentence, re.I):
+            sentence = re.sub(r"\b(?:not|never)\s+(?:(?:directly|necessarily)\s+)?(?:cause[sd]?|caused|causing|reduce[sd]?|led to|leads to)\b", " ", sentence, flags=re.I)
+            sentence = re.sub(r"(?:未|不|没有|并非|不能)(?:直接|显著|明显)?(?:导致|造成|引起|致使|降低|减少|提高|增加)", " ", sentence)
+        sentences.append(sentence)
+    text = "\n".join(sentences)
+    audit = run_causal_audit(evidence_records=evidence_records, run_dir=run_dir, bound_manuscript=text)
+    hits = [hit for hit in audit.language_hits if "associational" in hit.linked_effect_labels]
+    labels = {item.evidence_id: item.label for item in audit.effect_labels}
+    for sentence in sentences:
+        ids = [a or b for a, b in _EVIDENCE_ID_RE.findall(sentence)]
+        assoc = [eid for eid in ids if labels.get(eid) == "associational"]
+        if assoc and re.search(r"导致|造成|引起|致使|(?:降低|减少|提高|增加).{0,24}(?:死亡|风险|发生率|病死率)", sentence):
+            hits.append(CausalLanguageHit(sentence=sentence, pattern="Chinese causal assertion",
+                strength="strong", severity="warning", linked_evidence_ids=assoc,
+                linked_effect_labels=["associational"] * len(assoc)))
+    return hits
+
+
+def _append_deferred_source_flow(
+    pipeline: Any, *, binding: _BindingStageResult, draft: _DraftStageResult,
+    context: Any, plan: AnalysisPlan, evidence: Any, run_dir: Path,
+    findings: List[ValidationFinding], literature: Optional[LiteratureBundle],
+    per_step_records: Sequence[Dict[str, Any]], language: str,
+) -> _BindingStageResult:
+    """Publish private source counts only after all manuscript model calls.
+
+    Re-entry with this evidence is stopped by the execution and writer owners.
+    This suffix uses local readers/auditors only and grants no new execution.
+    """
+    from ..orchestration.human_review_checkpoint import load_checkpoint
+    from ..canonical_json import canonical_sha256
+    from .writer_evidence import render_local_first_observed_source_flow
+    from .descriptive_report_facts import render_local_outcome_missingness
+    from .manuscript_provenance import verified_evidence_json
+
+    recipe_path = run_dir / "first_observed_deferred_recipe.json"
+    if not recipe_path.exists() and not recipe_path.is_symlink():
+        return binding
+    if "[^source_flow_" in binding.bound:
+        raise ValueError("first_observed_local_report_marker_collision")
+    checkpoint = load_checkpoint(run_dir / "human_review_checkpoint.json", require_pending=False)
+    plan_sha = canonical_sha256(plan.model_dump(mode="json"))
+    decision_sha = checkpoint.consumed_decision_sha256
+    pipeline._services.publish_deferred_source_flow(
+        run_dir=run_dir, evidence=evidence, approved_plan_sha256=plan_sha,
+        decision_set_sha256=decision_sha,
+    )
+    section, new_claims = render_local_first_observed_source_flow(
+        evidence=evidence, approved_plan_sha256=plan_sha,
+        decision_set_sha256=decision_sha, language=language,
+    )
+    recipe = verified_evidence_json(evidence, "first_observed_deferred_recipe", exact_evidence_id=True)
+    outcome_section, outcome_claims = "", {}
+    if recipe.get("source_flow_report", {}).get("unknown_outcome_count_required") is True:
+        outcome_section, outcome_claims = render_local_outcome_missingness(
+            plan=plan, records=per_step_records, evidence=evidence, language=language,
+        )
+    bound = binding.bound.rstrip() + section + outcome_section
+    claims = {**binding.numeric_binding_map, **new_claims, **outcome_claims}
+    current_records = evidence.current_verified_records(per_step_records)
+    # Raise on a broken link before replacing any reader-facing manuscript.
+    build_manuscript_reader(manuscript=bound, evidence=evidence, binding_map=claims,
+        plan=plan, literature=literature, evidence_records=current_records,
+        untraced_numerics=binding.untraced_numerics)
+    bound = write_report(binding.bound_path, bound, context.cohort.provenance)
+    record = evidence.register_file(kind="log", description="Manuscript with locally verified source-population counts.",
+        source_path=binding.bound_path, evidence_id="manuscript_scaffold_bound", producer="pipeline",
+        generation_mode="system", on_sha_change="new_id")
+    record_result_facts(bound, binding.primary_result_facts, run_dir=run_dir, evidence=evidence)
+    _persist_reader_artifacts(bound=bound, numeric_binding_map=claims, run_dir=run_dir,
+        evidence=evidence, findings=findings, context=context, plan=plan, literature=literature,
+        evidence_records=current_records, untraced_numerics=binding.untraced_numerics)
+    _persist_manuscript_quality_artifacts(bound=bound, bound_evidence_id=record.evidence_id,
+        run_dir=run_dir, evidence=evidence, findings=findings, analysis_plan=plan,
+        expected_primary_result_facts=binding.primary_result_facts,
+        expected_display_labels=expected_manuscript_display_labels(draft.current_evidence_names, draft.reader_tables),
+        reader_display_labels=dict(plan.display_labels or {}),
+        expected_baseline_mentions=baseline_reporting_mentions(context, plan.display_labels))
+    findings.append(ValidationFinding(validator="first_observed_local_report", severity="info",
+        message="Source population counts were bound locally after model review; no model reviewed or received this host-generated section.",
+        evidence_ids=["first_observed_source_flow", record.evidence_id]))
+    return replace(binding, bound=bound, numeric_binding_map=claims)
 
 
 def _publish_and_audit_manuscript(
@@ -2946,6 +3069,10 @@ def _publish_and_audit_manuscript(
                     draft_watermark=pipeline._latex_draft_watermark,
                 )
                 if pdf_result.success and pdf_result.pdf_path is not None:
+                    if pdf_result.receipt_path is None:
+                        raise ValueError("manuscript_pdf_receipt_missing")
+                    _bind_pdf_receipt_to_bound_manuscript(receipt_path=pdf_result.receipt_path,
+                        bound_path=bound_path, bound=bound, run_dir=run_dir)
                     if evidence.get("manuscript_scaffold_pdf") is None:
                         evidence.register_file(
                             kind="log",
@@ -3888,7 +4015,30 @@ def run_write_phase(
         writer_probe_mode=writer_probe_mode, writer_probe_failed_steps=writer_probe_failed_steps,
         emit_progress=emit_progress,
     )
-    current_verified_evidence_records = draft.current_verified_evidence_records
+    causal_blockers = _causal_delivery_blockers(
+        bound=binding.bound,
+        evidence_records=evidence.current_verified_records(per_step_records),
+        run_dir=run_dir, numeric_binding_map=binding.numeric_binding_map,
+    )
+    if causal_blockers:
+        findings.append(ValidationFinding(
+            validator="causal_delivery_gate", severity="error",
+            message="The draft asserts causation for a linked associational result; revise the claim before delivery.",
+            evidence_ids=sorted({eid for hit in causal_blockers for eid in hit.linked_evidence_ids}),
+            detail={"reportability_allowed": False, "hits": [hit.to_json() for hit in causal_blockers]},
+        ))
+        return blocked_write_result(binding.bound_path, "Revise causal wording linked to an associational result before delivery.")
+
+    local_binding = _append_deferred_source_flow(
+        pipeline, binding=binding, draft=draft, context=context, plan=execute_result.plan,
+        evidence=evidence, run_dir=run_dir, findings=findings, literature=literature,
+        per_step_records=per_step_records, language=run_language,
+    )
+    current_verified_evidence_records = (
+        evidence.current_verified_records(per_step_records)
+        if local_binding is not binding else draft.current_verified_evidence_records
+    )
+    binding = local_binding
     manuscript_packet = draft.manuscript_packet
     bound_path = binding.bound_path
     manuscript_critique = binding.manuscript_critique

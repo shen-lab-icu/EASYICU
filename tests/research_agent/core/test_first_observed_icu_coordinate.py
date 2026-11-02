@@ -4,8 +4,8 @@ import hashlib
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import FLAG_COLUMN, REASON_COLUMN
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import (
+from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
+from easyicu.research_agent.acquisition.first_icu_stay import (
     FirstObservedCoordinateError, FirstObservedIcuCoordinate, restrict_to_first_observed_icu,
 )
 

@@ -73,7 +73,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
 | Stabilised-IPTW marginal odds ratio | primary | LLM-coded ⚠️ | agent-declared causal effect table + target-trial/identification protocol | `causal_emulation` |
-| Covariate balance (SMD love plot, before vs after weighting) | standard_supporting | deterministic ✅ | covariate_balance.csv (covariate, smd_before, smd_after) + love-plot panel | `causal_emulation` |
+| Covariate balance before and after weighting | standard_supporting | deterministic ✅ | covariate_balance.csv and source-bound covariate_balance_receipt.json | `covariate_balance` |
 | Positivity / overlap (propensity distribution + trimming) | standard_supporting | LLM-coded ⚠️ | propensity distribution + trimming report | — |
 | Propensity-score matching / stabilised weighting diagnostics | standard_supporting | LLM-coded ⚠️ | propensity scores + matched pairs or stabilised weights + SMD balance table | — |
 | E-value (sensitivity to unmeasured confounding) | standard_supporting | deterministic ✅ | e_values.csv (term, odds_ratio, ci, e_value, e_value_lower_bound) | `sensitivity` |
@@ -112,7 +112,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Decision-curve analysis / net benefit (DCA) | standard_supporting | LLM-coded ⚠️ | decision_curve.csv (threshold, net_benefit, net_benefit_all) | — |
 | Sensitivity/specificity/PPV/NPV at clinical thresholds | standard_supporting | LLM-coded ⚠️ | threshold_metrics.csv; confusion matrix at chosen thresholds | — |
 | Feature attribution (SHAP / permutation importance) | standard_supporting | LLM-coded ⚠️ | feature_importance.csv; beeswarm/bar summary | — |
-| Subgroup / fairness performance | standard_supporting | deterministic ✅ | per-subgroup performance table | `fairness` |
+| Subgroup prediction performance | standard_supporting | deterministic ✅ | per-subgroup performance table | `prediction_subgroup_performance` |
 | Internal validation (bootstrap optimism / cross-validation) | standard_supporting | LLM-coded ⚠️ | internal-validation performance table | — |
 | Conformal prediction intervals | exploratory | LLM-coded ⚠️ | conformal coverage table | — |
 | External / cross-database validation | standard_supporting | deterministic ✅ | per-database external performance, spline calibration figure, decision curve, case mix and TRIPOD map; separate recalibration | `prediction_external_validation` |
@@ -127,7 +127,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Number-of-clusters selection (silhouette / gap / BIC) | standard_supporting | LLM-coded ⚠️ | k-selection criterion curve | — |
 | Stability / reproducibility (bootstrap, consensus, adjusted Rand) | standard_supporting | LLM-coded ⚠️ | stability report | — |
 | Typed trajectory-cluster stability refits | standard_supporting | deterministic ✅ | digest-bound stability specification, refit ledger, adjusted-Rand table, aligned assignments, and freeze/report decision | `trajectory_cluster_stability` |
-| Cluster sizes + degenerate-cluster flag | standard_supporting | deterministic ✅ | cluster_sizes.csv; figure panel | `phenotyping` |
+| Cluster sizes + degenerate-cluster flag | standard_supporting | deterministic ✅ | cluster_sizes.csv and source-bound cluster_sizes_receipt.json | `cluster_sizes` |
 | Outcome-by-cluster descriptive comparison | standard_supporting | deterministic ✅ | outcome_by_cluster.csv with clinical/outcome rows, observed denominators and missing counts | `phenotype_comparison` |
 | Trajectory-feature clustering | primary | LLM-coded ⚠️ | agent-declared feature representation + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | `phenotyping` |
 | Early-feature assignment to frozen trajectory subtypes | exploratory | LLM-coded ⚠️ | held-out subtype probabilities + balanced accuracy/macro-F1/log-loss/multiclass-Brier + calibration/confusion/coefficient tables | — |

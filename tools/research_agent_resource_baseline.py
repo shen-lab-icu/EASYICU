@@ -14,6 +14,8 @@ Usage::
         tools/arch_baselines/research_agent_resource_context.json
     python tools/research_agent_resource_baseline.py --diff \
         tools/arch_baselines/research_agent_resource_context.json
+    python tools/research_agent_resource_baseline.py --verify-current \
+        tools/arch_baselines/research_agent_resource_context.current.json
 """
 
 from __future__ import annotations
@@ -44,10 +46,12 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
-TOOL_VERSION = "2.3.0"
+TOOL_VERSION = "2.4.0"
 SCHEMA_VERSION = "easyicu.research_agent_resource_baseline/2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_CREATED_AT = datetime(2026, 7, 22, tzinfo=timezone.utc)
+HISTORICAL_BASELINE_PATH = REPO_ROOT / "tools/arch_baselines/research_agent_resource_context.json"
+HISTORICAL_BASELINE_SHA256 = "05fbff4e905d0fd3e15fdb894cd3bd3d65c12a12a600fcbb102bccc02fee00e2"
 
 # These are offline architecture fixtures for the nine A-task families.  They
 # are intentionally small and case-neutral beyond each task's public question.
@@ -123,15 +127,19 @@ TASK_FIXTURES: tuple[dict[str, Any], ...] = (
 SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/agents/core.py",
     "src/easyicu/research_agent/agents/planner.py",
+    "src/easyicu/research_agent/agents/plan_payload.py",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt",
     "src/easyicu/research_agent/research_context/outbound.py",
     "src/easyicu/research_agent/know_how/registry.py",
     "src/easyicu/research_agent/planning/analysis_types.py",
+    "src/easyicu/research_agent/planning/analysis_method_suite.py",
     "src/easyicu/research_agent/planning/analysis_blueprint.py",
     "src/easyicu/research_agent/planning/cohort_contract.py",
     "src/easyicu/research_agent/planning/figure_strategy.py",
     "src/easyicu/research_agent/planning/study_design.py",
     "src/easyicu/research_agent/planning/study_design_playbook.py",
+    "src/easyicu/research_agent/planning/scientific_action_catalog.py",
+    "src/easyicu/research_agent/planning/method_adapter_catalog.py",
     "src/easyicu/research_agent/reporting/article_contract.py",
     "src/easyicu/research_agent/resources/schema.py",
     "src/easyicu/research_agent/resources/catalog.py",
@@ -144,7 +152,11 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/learning/runtime.py",
     "src/easyicu/research_agent/graph.py",
     "src/easyicu/research_agent/schema.py",
+    "src/easyicu/research_agent/concept_catalog.py",
+    "src/easyicu/concept/loader.py",
+    "src/easyicu/resources.py",
     "src/easyicu/data/concept-dict.json",
+    "src/easyicu/data/sic-case-duration-overlay.v1.json",
     "src/easyicu/data/sofa2-dict.json",
 )
 
@@ -371,6 +383,94 @@ def diff(baseline: dict[str, Any], current: dict[str, Any]) -> int:
     return 0
 
 
+_RESOURCE_CEILING_KEYS = frozenset({
+    "max_planner_without_resources_bytes", "max_planner_with_resources_bytes",
+    "max_resource_added_bytes", "max_coder_resource_prompt_bytes",
+    "know_how_prompt_bytes", "planning_contract_bytes", "resource_added_bytes",
+    "prompt_bytes", "system_bytes", "user_bytes", "total_bytes",
+    "approx_input_tokens", "bytes",
+})
+
+
+def historical_ceiling_errors(
+    historical: dict[str, Any], current: dict[str, Any],
+) -> list[str]:
+    """Keep the original resource limits and decisions, without hiding drift.
+
+    The current snapshot is compared separately and exactly by ``diff``.
+    Only source identities and the changed planner-context segment digest can
+    differ here; their current values must still match that exact snapshot.
+    """
+    errors: list[str] = []
+
+    def check(old: Any, new: Any, path: tuple[str, ...]) -> None:
+        name = "/".join(path) or "<root>"
+        if path == ("source_sha256",):
+            # The old snapshot's entire source roster stays mandatory. Current
+            # hashes may differ, but only the exact current snapshot can bind
+            # them; a new snapshot may not silently drop an old source.
+            if not isinstance(old, dict) or not isinstance(new, dict):
+                errors.append(f"{name}: source roster is invalid")
+            elif not old.keys() <= new.keys():
+                errors.append(f"{name}: historical sources were removed")
+            return
+        if path == ("tool_version",):
+            if old != "2.3.0" or new != TOOL_VERSION:
+                errors.append(f"{name}: unexpected measurement tool version")
+            return
+        if (
+            len(path) >= 3 and path[-3:] == (
+                "segments", "planner_contract_and_typed_context", "sha256",
+            )
+        ):
+            return  # The exact current snapshot binds the changed prompt.
+        if type(old) is not type(new):
+            errors.append(f"{name}: type changed")
+        elif isinstance(old, dict):
+            if old.keys() != new.keys():
+                errors.append(f"{name}: keys changed")
+                return
+            for key in old:
+                check(old[key], new[key], (*path, key))
+        elif isinstance(old, list):
+            if len(old) != len(new):
+                errors.append(f"{name}: length changed")
+                return
+            for index, (left, right) in enumerate(zip(old, new)):
+                check(left, right, (*path, str(index)))
+        elif isinstance(old, (int, float)) and not isinstance(old, bool):
+            if path and path[-1] in _RESOURCE_CEILING_KEYS:
+                if new > old:
+                    errors.append(f"{name}: {new} exceeds historical {old}")
+            elif old != new:
+                errors.append(f"{name}: {old!r} changed to {new!r}")
+        elif old != new:
+            errors.append(f"{name}: value changed")
+
+    check(_measurement_payload(historical), _measurement_payload(current), ())
+    return errors
+
+
+def verify_current_snapshot(
+    current_path: Path,
+    *,
+    historical_path: Path = HISTORICAL_BASELINE_PATH,
+    measured: dict[str, Any] | None = None,
+) -> int:
+    """Require exact current identity and every immutable historical ceiling."""
+    if _sha256(historical_path) != HISTORICAL_BASELINE_SHA256:
+        print("FAIL: historical resource baseline identity changed", flush=True)
+        return 1
+    historical = json.loads(historical_path.read_text(encoding="utf-8"))
+    recorded = json.loads(current_path.read_text(encoding="utf-8"))
+    live = measure() if measured is None else measured
+    exact = diff(recorded, live)
+    errors = historical_ceiling_errors(historical, live)
+    for error in errors:
+        print(f"FAIL: historical resource ceiling: {error}", flush=True)
+    return int(bool(exact or errors))
+
+
 def _change_summary(
     previous: dict[str, Any], current: dict[str, Any]
 ) -> dict[str, Any]:
@@ -426,6 +526,7 @@ def _parser() -> argparse.ArgumentParser:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--emit", type=Path)
     group.add_argument("--diff", dest="diff_path", type=Path)
+    group.add_argument("--verify-current", dest="current_path", type=Path)
     parser.add_argument(
         "--reason",
         help="why an intentional resource/context baseline move is accepted",
@@ -449,6 +550,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.diff_path:
         baseline = json.loads(args.diff_path.read_text(encoding="utf-8"))
         return diff(baseline, current)
+    if args.current_path:
+        return verify_current_snapshot(args.current_path, measured=current)
     print(json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

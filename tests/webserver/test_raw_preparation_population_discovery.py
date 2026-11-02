@@ -16,7 +16,7 @@ from easyicu.research_agent.planning.progressive_contract import ProgressivePlan
 from easyicu.webserver import agent_pipeline_runs, raw_preparation_candidate, sources
 from tests.research_agent.planning.progressive_planner_fixtures import _payload
 from tests.support.source_substitutions import _review
-from tests.webserver.test_sic_raw_preparation_grant import _case
+from tests.support.sic_raw_preparation import _case
 
 
 def _pending_with_unapplied_creatinine(tmp_path, result):
@@ -88,7 +88,7 @@ def test_unapplied_chinese_threshold_reaches_existing_metadata_discovery(tmp_pat
     result, source_root, _, _ = _case(source_fixture, monkeypatch, approved=False)
     pending, plan = _pending_with_unapplied_creatinine(run_dir, result)
     monkeypatch.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda *_: (pending, {"id": "study"}))
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [{"path": str(source_root)}]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [{"path": str(source_root)}]})
     observed = []
     capture = raw_preparation_candidate.capture_data_provenance
 

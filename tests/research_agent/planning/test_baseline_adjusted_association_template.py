@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent, FAMILY_SPEC_STRATEGY
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
@@ -207,7 +208,7 @@ def test_first_result_template_has_no_article_steps(monkeypatch):
     from easyicu.research_agent.pipeline import _shape_fresh_plan
 
     shaped = _shape_fresh_plan(
-        SimpleNamespace(_scientific_runtime_authorities=runtime, _enable_publication_figure_skill=True, _max_total_steps=8),
+        SimpleNamespace(_scientific_runtime_authorities=runtime, _services=PipelineServices(), _enable_publication_figure_skill=True, _max_total_steps=8),
         plan=attempt.output, context=context, agent_context=context, long_trajectory_bound=False, findings=[],
     )
     assert [step.step_id for step in shaped.steps] == [step.step_id for step in attempt.output.steps]

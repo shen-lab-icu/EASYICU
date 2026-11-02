@@ -16,7 +16,7 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
     select_deterministic_result_renderers,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
-from tests.research_agent.core.test_cross_sectional_phenotyping_executor import _binding, _context
+from tests.support.phenotyping_fixtures import _binding, _context
 
 
 def _plan() -> AnalysisPlan:

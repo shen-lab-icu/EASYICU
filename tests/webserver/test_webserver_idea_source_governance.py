@@ -82,6 +82,13 @@ def test_provider_config_route_writes_private_env_without_returning_secret(
     env_path = tmp_path / "provider.env"
     settings_path = tmp_path / "settings.json"
     monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
+    # Read only the synthetic file under test even if the suite disables env files.
+    monkeypatch.delenv("EASYICU_DISABLE_PROVIDER_ENV_FILE", raising=False)
+    monkeypatch.setenv("EASYICU_LLM_ENV_FILE", str(env_path))
+    for name in (*provider_adapter._api_key_env_names("openai"),
+                 *provider_adapter._base_url_env_names("openai"),
+                 *provider_adapter._model_env_names("openai")):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
     monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
 

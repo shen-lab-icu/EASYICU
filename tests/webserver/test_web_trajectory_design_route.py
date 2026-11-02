@@ -255,32 +255,33 @@ def test_a_design_concept_outside_the_modules_is_refused_before_materialization(
 
 
 def _export(root: Path) -> Path:
+    from easyicu.concept.metadata_projection import ConceptColumnRole
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE, ColumnMetadataFileBinding, ColumnMetadataSidecar,
+        write_content_addressed_sidecar,
+    )
+    from tests.support.typed_export import metadata_binding
+
     root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
         root / "demographics.parquet", index=False
     )
+    sidecar = ColumnMetadataSidecar(
+        source_database="miiv", source_database_class_prefixes=(), scope=EXPORT_PHYSICAL_SCOPE,
+        files=(ColumnMetadataFileBinding(
+            relative_path="demographics.parquet", module="demographics", identity_column="stay_id",
+            time_coordinates=(), columns={"age": metadata_binding("age", "age", ConceptColumnRole.VALUE)},
+        ),),
+    )
+    reference = write_content_addressed_sidecar(root, sidecar)
     (root / "_manifest.json").write_text(
-        json.dumps(
-            {
-                "database": "miiv",
-                "format": "parquet",
-                "concept_selection": {
-                    "mode": "explicit",
-                    "modules": {"demographics": ["age"]},
-                },
-                "feature_definitions": {"included": False},
-                "files": [
-                    {
-                        "file": "demographics.parquet",
-                        "module": "demographics",
-                        "concepts": 1,
-                        "concept_ids": ["age"],
-                        "rows": 1,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+        json.dumps({
+            "schema_version": "easyicu_native_export_v2", "database": "miiv", "format": "parquet",
+            "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
+            "feature_definitions": {"included": False}, "column_metadata": reference.to_dict(),
+            "files": [{"file": "demographics.parquet", "module": "demographics", "concepts": 1,
+                       "concept_ids": ["age"], "column_metadata_columns": ["age"], "rows": 1}],
+        }), encoding="utf-8",
     )
     return root
 

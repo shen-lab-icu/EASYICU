@@ -12,6 +12,8 @@ function confirmation(review) {
   vm.runInContext(fs.readFileSync(path.resolve(__dirname,
     '../../src/easyicu/webserver/static/js/screens-guided-pi-modules.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+    '../../src/easyicu/webserver/static/js/screens-guided-pi-confirmation-data.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname,
     '../../src/easyicu/webserver/static/js/screens-guided-pi-confirmation.js'), 'utf8'), context);
   return context.window.EasyICU.guidedPi.require('confirmation').create({
     workflow: () => ({ next_action_code: 'plan_scientific_changes_required', plan_review_summary: review }),
@@ -24,7 +26,7 @@ function confirmation(review) {
 function confirmationOwner(workflow, language = 'en') {
   const context = { window: {} };
   vm.createContext(context);
-  for (const name of ['modules', 'confirmation']) {
+  for (const name of ['modules', 'confirmation-data', 'confirmation']) {
     vm.runInContext(fs.readFileSync(path.resolve(__dirname,
       `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
   }
@@ -39,7 +41,7 @@ function confirmationOwner(workflow, language = 'en') {
 function confirmationWithFailureText(workflow, session) {
   const context = { window: {} };
   vm.createContext(context);
-  for (const name of ['modules', 'confirmation']) {
+  for (const name of ['modules', 'confirmation-data', 'confirmation']) {
     vm.runInContext(fs.readFileSync(path.resolve(__dirname,
       `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
   }
@@ -337,7 +339,7 @@ test('failure notice cannot drift onto another reviewed candidate', () => {
 test('a held quick-answer card hides the plan-generation card beside it', () => {
   const context = { window: {} };
   vm.createContext(context);
-  for (const name of ['modules', 'quick-answers', 'confirmation']) {
+  for (const name of ['modules', 'quick-answers', 'confirmation-data', 'confirmation']) {
     vm.runInContext(fs.readFileSync(path.resolve(__dirname,
       `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
   }

@@ -27,9 +27,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from tests.support.literature_fixtures import synthetic_reviewed_literature
 
 import easyicu.research_agent.orchestration.progressive_planning as _progressive_planning
 import easyicu.research_agent.pipeline as _pipeline
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.agents.family_spec_planner import FAMILY_SPEC_STRATEGY
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
@@ -50,9 +52,6 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 )
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
-)
 from easyicu.research_agent.planning.family_spec import (
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
     build_family_spec_request,
@@ -242,14 +241,13 @@ def _plan_on_the_suite(context: ResearchContext, requirements: list[dict], tmp_p
     findings: list = []
     plan = _pipeline._shape_fresh_plan(
         pipeline=SimpleNamespace(
-            _scientific_runtime_authorities=authorities,
+            _scientific_runtime_authorities=authorities, _services=PipelineServices(),
             _enable_publication_figure_skill=True,
             _max_total_steps=24,
         ),
         plan=draft, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, bind_findings = authorities.bind_plan(plan, context=context)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, findings)
     authorities.validate_plan(bound)
@@ -262,7 +260,8 @@ def _plan_on_the_suite(context: ResearchContext, requirements: list[dict], tmp_p
 
 def _review(context: ResearchContext, plan: AnalysisPlan):
     return build_plan_scientific_review(
-        context=context, plan=plan, literature=None, runtime_authority=None
+        context=context, plan=plan, literature=synthetic_reviewed_literature(context.research_question),
+        runtime_authority=None
     )
 
 
@@ -311,6 +310,12 @@ def test_a_trajectory_question_with_an_outcome_by_class_plans_whole(language, tm
     review = _review(context, planned.bound)
     codes = {finding.code for finding in review.findings}
     assert review.approval_allowed, sorted(codes)
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
+    without_sources = build_plan_scientific_review(context=context, plan=planned.bound)
+    assert not without_sources.approval_allowed
+    assert "LITERATURE_SOURCE_INTEGRITY_INVALID" in {
+        finding.code for finding in without_sources.findings if finding.severity == "blocker"
+    }
     assert not codes & {
         "PHENOTYPING_OUTCOME_COMPARISON_INCOMPLETE",
         "PHENOTYPING_COMPARISON_CONTRACT_INVALID",

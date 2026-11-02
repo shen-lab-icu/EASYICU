@@ -11,36 +11,16 @@ from easyicu.research_agent.contracts.prediction_subgroup import (
     PREDICTION_SUBGROUP_ACTION, PREDICTION_SUBGROUP_OUTPUTS, PredictionSubgroupError,
     prediction_subgroup_method,
 )
-from easyicu.research_agent.contracts.prediction_subgroup_output import prediction_subgroup_output_findings
+from easyicu.research_agent.gates.step_contract import prediction_subgroup_output_findings
 from easyicu.research_agent.execution.runners.prediction_subgroup_executor import (
     bind_subgroup_membership, prediction_subgroup_executor_code, run_prediction_subgroup_step,
 )
 from easyicu.research_agent.execution.runners.typed_input_binding import TypedInputBindingError
-from tests.research_agent.core.test_prediction_subgroup import _frame, _spec
+from tests.support.prediction_subgroup import _binding, _fixture, _gate_fixture, _frame, _spec
 
 
-def _binding(key, path, frame, root):
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    kind, _, product = key.partition(":")
-    identity = dict(input_key=key, declared_kind=kind, product=product, sha256=digest,
-                    evidence_id=product, produced_by_step="synthetic_intake")
-    return {**identity, "identity_row": identity, "evidence_kind": "table",
-            "relative_path": str(path.relative_to(root)),
-            "product_contract": {"columns": list(frame), "row_count": len(frame)},
-            "consumption_contract": {"input_key": key, "mode": "all_rows", "artifact_sha256": digest}}
 
 
-def _fixture(root):
-    frame = _frame()
-    scores = frame.drop(columns="group")
-    members = frame[["unit_id", "group"]].rename(columns={"unit_id": "row_id"}).iloc[::-1]
-    inputs = {}
-    for key, name, data in (("table:prediction_scores", "scores.csv", scores),
-                            ("artifact:analysis_cohort", "members.csv", members)):
-        path = root / name
-        data.to_csv(path, index=False)
-        inputs[key] = _binding(key, path, data, root)
-    return {"step_id": "subgroups", "inputs": inputs}
 
 
 def test_digest_bound_runner_joins_by_key_and_exports_only_aggregates(tmp_path):
@@ -142,12 +122,6 @@ def _step(spec=None):
     )
 
 
-def _gate_fixture(root):
-    manifest = _fixture(root)
-    output = root / "steps/subgroups/outputs"
-    summary = run_prediction_subgroup_step(spec=_spec(), run_dir=root, resolved_inputs=manifest,
-                                           step_id="subgroups", out_dir=output)
-    return manifest, output, summary
 
 
 def test_output_gate_recomputes_from_trusted_bindings_and_normal_pipeline_summary(tmp_path):

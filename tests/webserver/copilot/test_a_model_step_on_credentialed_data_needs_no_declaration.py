@@ -33,18 +33,14 @@ _HARNESS = r"""
 const path = require('path');
 const [jsDir, lang, input] = process.argv.slice(1, 4);
 global.window = { EU_LANG: lang };
-const registry = {};
-window.EasyICU = { guidedPi: {
-  declare: (name, api) => { registry[name] = api; },
-  optional: name => registry[name] || null,
-  require: name => { if (!registry[name]) throw new Error('missing owner ' + name); return registry[name]; },
-} };
+require(path.join(jsDir, 'screens-guided-pi-modules.js'));
 require(path.join(jsDir, 'html-escape.js'));
+require(path.join(jsDir, 'screens-guided-pi-confirmation-data.js'));
 require(path.join(jsDir, 'screens-guided-pi-confirmation.js'));
 const tr = (en, zh) => (lang === 'zh' ? zh : en) || en;
 const INPUT = JSON.parse(input);
 const session = { session_id: 'session-1', binding: { study_context_id: 'study-1', study_revision: 2 } };
-const owner = registry.confirmation.create({
+const owner = window.EasyICU.guidedPi.require('confirmation').create({
   tr, esc: window.EU_HTML.esc, iconHtml: () => '', resourceButton: () => '',
   sessionIsStale: () => false, busy: () => false,
   session: () => session, workflow: () => ({ next_action_code: INPUT.code }),

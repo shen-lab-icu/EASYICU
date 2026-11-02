@@ -33,6 +33,9 @@ def _functions(relative, names, **bindings):
 
 @pytest.fixture
 def private_engines(monkeypatch, tmp_path):
+    from easyicu import datasource
+
+    datasource._close_duckdb_connections()
     paths = []
     original = duckdb_spill.connect
 
@@ -49,6 +52,7 @@ def private_engines(monkeypatch, tmp_path):
     monkeypatch.delenv("EASYICU_DUCKDB_TEMP_DIR", raising=False)
     monkeypatch.setattr(duckdb_spill, "connect", record)
     yield paths
+    datasource._close_duckdb_connections()
     duckdb_spill._cleanup()
     assert paths and all(not path.exists() for path in paths)
 

@@ -32,17 +32,17 @@ def _card(code: str, *, run_id: str = "run_population_1", preparation=None, acce
     if node is None:
         pytest.skip("Node.js is unavailable")
     script = r"""
-let declared = null;
-global.window = {
-  EU_LANG: process.argv[6],
-  EasyICU: { guidedPi: { declare: (_name, api) => { declared = api; }, optional: () => null } },
-};
+global.window = { EU_LANG: process.argv[6] };
+const path = require('node:path');
+const ownerDir = path.dirname(process.argv[1]);
+require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
+require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const code = process.argv[2];
 const runId = process.argv[3];
 const preparation = JSON.parse(process.argv[4]);
 const acceptance = JSON.parse(process.argv[5]);
-const owner = declared.create({
+const owner = window.EasyICU.guidedPi.require('confirmation').create({
   tr: (en, zh) => process.argv[6] === 'en' ? en : zh || en,
   esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
   iconHtml: () => '',
@@ -239,3 +239,19 @@ def test_an_invalid_omission_record_has_no_acceptance_action():
     assert card["execute"] is False
     assert card["grants"] == []
     assert "已保存的选择无法核验" in card["html"]
+
+
+def test_reviewed_population_distinguishes_typed_conditions_with_shared_source_wording():
+    quote = "Adults with a single observed hospitalization and reliable first ICU"
+    proposal = {"schema_version": "easyicu.reviewed_population_spec_projection/1", "criteria": [
+        {"criterion": {"kind": "age_years", "role": "include", "min_years": 18, "max_years": None, "quote": quote},
+         "disposition": "requires_extraction"},
+        {"criterion": {"kind": "first_observed_icu_single_hospital_adult", "role": "include", "quote": quote},
+         "disposition": "not_applied"},
+    ]}
+    card = _card("population_criterion_decision_unconfirmed", reviewed_population=proposal)
+    assert "年龄 ≥ 18 岁" in card["html"]
+    assert "成年患者、仅一次可见住院且首次 ICU 可核实" in card["html"]
+    assert card["html"].count(quote) == 1
+    assert "需要数据准备" in card["html"] and "尚未施加" in card["html"]
+    assert card["execute"] is False

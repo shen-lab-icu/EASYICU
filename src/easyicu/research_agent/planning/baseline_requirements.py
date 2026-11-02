@@ -17,7 +17,7 @@ from easyicu.concept_output_sources import resolve_composite_concept_output
 
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
 from ..contracts.cohort_summary import declared_summary_columns
-from ..contracts.cohort_summary_products import (
+from ..contracts.cohort_summary import (
     auxiliary_summary_product,
     is_descriptive_summary_product_step,
 )

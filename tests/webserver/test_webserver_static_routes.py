@@ -130,7 +130,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "saveSetting('data_mode'" not in i18n_js
     assert "js/i18n.js?v=20261027-nodemo1" in index_html
-    assert "js/api.js?v=20261029-freshfix6" in index_html
+    assert "js/api.js?v=20261030-preparation1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -287,7 +287,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261029-freshfix6" in index_html
+    assert "js/api.js?v=20261030-preparation1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -443,7 +443,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261027-old1" in index_html
     assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261029-freshfix6" in index_html
+    assert "js/api.js?v=20261030-preparation1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261029-journey1" in index_html
     )
@@ -728,7 +728,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
     # Reader vocabulary (review findings, column and table names) is read by
     # the renderer at call time, so it must be defined before it.
-    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261028-ux1")
+    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261031-confidence-question1")
     assert fixtures_pos < vocab_pos < render_pos
     assert "js/screens-agent-report-reader.js?v=20261030-video1" in index_html
     assert "js/screens-agent-render.js?v=20261026-run-files1" in index_html
@@ -1954,7 +1954,13 @@ def test_native_dictionary_and_states_reference_controls_are_stateful() -> None:
     assert "matchedRows()" in dict_js
 
 
-def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() -> None:
+def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage(monkeypatch) -> None:
+    from easyicu.webserver import catalog as catalog_owner
+
+    def unexpected_coverage_read(*_args, **_kwargs):
+        raise AssertionError("Automatic dictionary loading must not scan patient coverage")
+
+    monkeypatch.setattr(catalog_owner, "_active_export_coverage", unexpected_coverage_read)
     catalog = TestClient(app).get("/api/catalog").json()
     dict_js = _static_js("screens-dict.js")
     api_js = _static_js("api.js")
@@ -1993,12 +1999,11 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     )
     assert summary["unmapped"] < 10
     assert "notAudited" not in summary
-    assert catalog["activeExportCoverage"]["payload_scope"] == "aggregate_only_no_rows"
-    assert catalog["activeExportCoverage"]["status"] in {
-        "ready",
-        "no_active_source",
-        "invalid_active_source",
-        "unavailable",
+    assert catalog["activeExportCoverage"] == {
+        "payload_scope": "metadata_only_no_rows",
+        "status": "not_computed",
+        "concepts": {},
+        "summary": {},
     }
 
     assert "conceptCoverage = real.conceptCoverage" in api_js
@@ -2025,7 +2030,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261028-readm1" in index_html
-    assert "api.js?v=20261029-freshfix6" in index_html
+    assert "api.js?v=20261030-preparation1" in index_html
     assert "screens-dict.js?v=20261030-video2" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
@@ -2321,7 +2326,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261029-freshfix6" in index_html
+    assert "api.js?v=20261030-preparation1" in index_html
     assert "screens-guided-projects.js?v=20261029-journey1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -3271,9 +3276,9 @@ def test_result_charts_carry_reading_captions() -> None:
         + cohort_survival_js.count('class="viz-cap"')
     ) >= 4
     assert crossdb_results_js.count('class="viz-cap"') >= 2
-    assert "曲线每下降一格代表一次事件" in cohort_survival_js  # KM
+    assert "曲线下降表示该时点发生了事件，同一时点可能有多例" in cohort_survival_js  # KM
     assert "对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者" in cohort_view_js  # SOFA matrix
-    assert "每行是一个基线特征" in cohort_view_js  # group comparison tables
+    assert "测量可能覆盖整个入住过程；组间差异本身不能确定混杂" in cohort_view_js  # group comparison tables
     assert "曲线重叠表示聚合测量分布较一致" in crossdb_results_js
     assert "不是结局结果" in crossdb_results_js
     app_css = _static_css("app.css")

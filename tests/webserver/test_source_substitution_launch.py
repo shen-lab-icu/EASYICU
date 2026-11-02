@@ -48,7 +48,7 @@ def test_preparing_a_candidate_twice_does_not_lose_original_unit_or_outcome():
     assert prepare_source_population(candidate) == candidate
 
 
-@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "icu_death"), ("sic", "mort_28d")])
+@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "icu_death")])
 def test_survival_preparation_retains_the_default_request_and_proposes_the_supported_endpoint(database, endpoint):
     original = study(database)
     original["analysis_design"] = {"analysis_family": "survival", "analysis_unit": "icu_stay"}
@@ -62,6 +62,19 @@ def test_survival_preparation_retains_the_default_request_and_proposes_the_suppo
     candidate["execution_concepts"]["outcome"] = "death"
     with pytest.raises(ValueError, match="capability_substitution_binding_drift"):
         prepare_source_population(candidate)
+
+
+def test_sic_survival_does_not_propose_an_endpoint_without_a_proven_time_axis():
+    from easyicu.databases.research_substitutions import registered_source_profile, source_decision
+    from easyicu.webserver.research_capability_scope import study_requirements
+
+    original = study("sic")
+    original["analysis_design"] = {"analysis_family": "survival", "analysis_unit": "icu_stay"}
+    requirements = study_requirements(original, family="survival", question=original["question"])
+    decision = source_decision(registered_source_profile("sic"), requirements)
+    assert decision.status == "refusal"
+    assert "time_zero_unavailable" in {item.code for item in decision.missing}
+    assert prepare_source_population(original) == original
 
 
 @pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])

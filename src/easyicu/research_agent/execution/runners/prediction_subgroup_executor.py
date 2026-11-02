@@ -14,8 +14,10 @@ from ...contracts.prediction_subgroup import (
     PREDICTION_SUBGROUP_ACTION, PREDICTION_SUBGROUP_PRODUCT, PredictionSubgroupError,
     PredictionSubgroupSpec, prediction_subgroup_spec_for_step, prediction_subgroup_step_matches,
 )
-from ...contracts.prediction_subgroup_output import subgroup_performance_frame, subgroup_provenance
-from ...methods.prediction_subgroup import bind_subgroup_membership, evaluate_prediction_subgroups
+from ...methods.prediction_validation import (
+    bind_subgroup_membership, evaluate_prediction_subgroups,
+    subgroup_performance_frame, subgroup_provenance,
+)
 from ..step_executor_registry import StepExecutor
 from .typed_input_binding import load_typed_input
 

@@ -7,7 +7,7 @@ import sys
 
 from easyicu.research_agent.intake.export_package import open_export_package
 from tests.support.typed_export import typed_export
-from tests.webserver.test_first_observed_guarded_process import _PROCESS, _SOURCE_STUB
+from tests.support.first_observed_process import _PROCESS, _SOURCE_STUB
 
 
 def test_host_scope_verifies_the_cohort_in_each_population_compiler(tmp_path):

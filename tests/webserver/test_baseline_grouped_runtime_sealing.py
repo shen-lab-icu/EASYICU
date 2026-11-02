@@ -16,6 +16,7 @@ from easyicu.research_agent.authority.baseline_association_runtime import build_
 from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
 from easyicu.research_agent.orchestration.exposure_grouping_phase import planning_run_groupings
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.planning.dependence_authority import bind_context_dependence_authority, context_dependence_authority
 from easyicu.research_agent.planning.family_spec import build_family_spec_request
 from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime, grouped_case
@@ -136,8 +137,9 @@ def test_pipeline_binds_patient_dependence_before_the_first_roster_seal(tmp_path
         assert runtime.seal_for_plan(plan).current_case.dependence == dependence
         raise ReachedSeal
     monkeypatch.setattr(owner, "seal_plan_tier", lambda plan, *_args, **_kwargs: plan)
-    pipeline = SimpleNamespace(_config=None, _services=SimpleNamespace(validate_plan_revision=lambda **_kwargs: None),
-                               _scientific_runtime_authorities=SimpleNamespace(seal_for_plan=seal))
+    pipeline = SimpleNamespace(_config=None, _services=PipelineServices(),
+                               _scientific_runtime_authorities=SimpleNamespace(
+                                   seal_for_plan=seal, current_case=runtime.current_case, trajectory=runtime.trajectory))
     generation = SimpleNamespace(plan=plan, reused_prior_plan=False, reused_plan_path=None, migrated_plan_path=None,
                                  plan_generation_mode="synthetic", used_mock_llm=True, planner_prompt_metrics=None)
     arguments = {name: None for name in inspect.signature(owner.ResearchAgentPipeline._validate_and_persist_plan).parameters if name != "self"}

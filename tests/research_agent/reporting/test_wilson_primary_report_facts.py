@@ -10,7 +10,7 @@ from easyicu.research_agent.reporting.descriptive_report_facts import (
     compile_counts_only_report_facts,
     writer_question_coverage,
 )
-from tests.research_agent.reporting.test_descriptive_report_facts import _inputs
+from tests.support.descriptive_report import _inputs
 
 
 def _wilson():
@@ -47,7 +47,7 @@ def test_reviewed_intervals_and_known_outcome_denominators_reach_result_coverage
 
 
 def test_explicit_95_percent_request_is_reviewed_and_its_report_cannot_omit_interval():
-    from tests.research_agent.planning.test_descriptive_question_uncertainty import _review
+    from tests.support.descriptive_review import _review
     from tests.support.descriptive_plan import _plan
 
     question = "报告各组院内死亡人数、比例及 95% 置信区间"

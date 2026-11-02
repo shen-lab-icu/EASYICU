@@ -75,7 +75,10 @@ spending an LLM call.
 The image pins:
 
 * Python 3.11-slim, pinned by multi-platform OCI digest
-The direct scientific stack is pinned in `requirements.lock`. It includes the
+The current direct scientific stack is pinned in `requirements-pydantic-core-v1.lock`.
+The earlier `requirements.lock` remains available as the recorded rollback
+coordinate. Rebuild and validate the runner image after changing its lock; an
+existing image cannot prove the new kernel identity. The current lock includes the
 baseline numpy/pandas/pyarrow/scipy/statsmodels/scikit-learn/matplotlib stack and
 the curated optional method packages declared in
 `contracts/method_packages.py`. DockerRunner records the fully resolved

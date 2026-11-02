@@ -149,6 +149,7 @@
       if (event.type === 'end') {
         const endedAt = typeof ACTIVITY.pipelineTime === 'function' ? ACTIVITY.pipelineTime(event.timestamp) : null;
         completeRunningPipelineSteps(activity, endedAt, ['failed', 'cancelled'].includes(event.status) ? 'error' : 'complete');
+        const expectedSession = String((host.session() || {}).session_id || '');
         const gate = event.result && event.result.gate;
         const pending = Boolean(event.result && event.result.human_review_pending);
         const replayOwner = window.EasyICU.guidedPi.require('replay');
@@ -201,6 +202,20 @@
           .then(async () => {
             if (host.session() && sessionIsStale()) await rebind();
             await loadWorkflow();
+            const deferred = event.result && event.result.deferred_review;
+            if (String((host.session() || {}).session_id || '') !== expectedSession) return;
+            if (event.status === 'done' && deferred && deferred.status === 'preparing_review' && deferred.job_id) {
+              watchChildJob(String(deferred.job_id), 'easyicu_full_run_submitted');
+              return;
+            }
+            if (deferred && deferred.status === 'blocked') {
+              upsertActivityStep(activity, {
+                id: 'deferred-review-blocked', kind: 'pipeline', step: 'terminal',
+                label: tr('The complete plan review could not be prepared.', '完整计划审核未能准备完成。'),
+                status: 'error', at: Date.now(), code: String(deferred.reason || 'deferred_review_blocked'),
+              });
+              activity.status = 'error'; render(); return;
+            }
             // Successful plan stages may advance automatically. A failed or
             // cancelled background job must stop here: immediately replaying
             // the same transition hides the failure and can consume provider

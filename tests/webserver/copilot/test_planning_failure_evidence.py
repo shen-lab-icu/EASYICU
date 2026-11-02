@@ -20,6 +20,11 @@ def test_contract_failure_keeps_its_typed_reason_and_only_existing_materials(his
     script = r"""
 global.window = {};
 require(process.argv[3]);
+if (window.EasyICU) delete window.EasyICU.guidedPi;
+const path = require('node:path');
+const ownerDir = path.dirname(process.argv[1]);
+require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
+require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 require(process.argv[4]);
 const previous = process.argv[2] === 'true' ? [{

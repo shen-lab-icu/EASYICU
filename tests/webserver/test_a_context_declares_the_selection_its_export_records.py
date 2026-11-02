@@ -64,8 +64,7 @@ from tests.webserver.copilot.research_workflow_fixtures import (
 )
 
 _FIRST_STAY = (
-    "each patient's later ICU stays: the host keeps only the first ICU stay "
-    "per patient across the bound source, before planning"
+    "each patient's later ICU stays across the bound source"
 )
 
 
@@ -212,7 +211,7 @@ def test_the_source_selection_reaches_the_planner_context() -> None:
             inclusion_criteria=_inclusion_criteria(study, export_recorded=recorded),
             exclusion_criteria=_exclusion_criteria(study, export_recorded=recorded),
             user_preferences=_research_user_preferences(
-                study, cohort_study=study, source_selection_basis=basis
+                study, cohort_study=study, source_selection_basis=basis, host_applied_verified=True
             ),
         )
         payload = outbound_safe_context_payload(context)
@@ -250,6 +249,15 @@ def test_the_source_selection_reaches_the_planner_context() -> None:
     assert "source_selection" not in json.loads(
         _research_user_preferences(study)["data_constraints"]
     )
+
+
+def test_requested_first_stay_is_not_declared_applied_without_materialization() -> None:
+    study = _study(preset="adult_first", label="Adults")
+    stated = json.loads(_research_user_preferences(
+        study, cohort_study=study, source_selection_basis="unrecorded"
+    )["data_constraints"])
+    assert stated["source_selection"] == {"basis": "unrecorded", "host_applied": []}
+    assert _FIRST_STAY in _exclusion_criteria(study, export_recorded=False)
 
 
 def test_a_concept_population_keeps_the_window_its_export_executed() -> None:
@@ -372,6 +380,28 @@ def test_the_web_runner_declares_what_its_bound_export_records(
             else {}
         ),
     )
+    # This launch reaches the native metadata-only boundary; preserve the
+    # recorded cohort selection while binding the same single age column.
+    from easyicu.concept.metadata_projection import ConceptColumnRole
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE, ColumnMetadataFileBinding, ColumnMetadataSidecar,
+        write_content_addressed_sidecar,
+    )
+    from tests.support.typed_export import metadata_binding
+
+    sidecar = ColumnMetadataSidecar(
+        source_database="miiv", source_database_class_prefixes=(), scope=EXPORT_PHYSICAL_SCOPE,
+        files=(ColumnMetadataFileBinding(
+            relative_path="demographics.parquet", module="demographics", identity_column="stay_id",
+            time_coordinates=(), columns={"age": metadata_binding("age", "age", ConceptColumnRole.VALUE)},
+        ),),
+    )
+    manifest_path = export / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = "easyicu_native_export_v2"
+    manifest["column_metadata"] = write_content_addressed_sidecar(export, sidecar).to_dict()
+    manifest["files"][0]["column_metadata_columns"] = ["age"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export),
         study_context=study,

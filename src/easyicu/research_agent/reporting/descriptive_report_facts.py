@@ -1236,3 +1236,137 @@ def writer_question_coverage(manuscript, *, plan, facts, evidence):
                         "product_id": product, "outcome": part},
             ))
     return findings
+
+
+def render_local_outcome_missingness(*, plan: Any, records: Sequence[Mapping[str, Any]],
+                                     evidence: Any, language: str) -> tuple[str, dict[str, NumericClaim]]:
+    """Copy full-cohort outcome availability from a sealed distribution product.
+
+    Called after model work. No patient rows are opened; the new local JSON
+    records the two overall cells and their exact step/product dependencies.
+    """
+    from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
+    from ..authority.run_input import verified_deferred_input_capsule_digest
+
+    actual_capsule_sha = verified_deferred_input_capsule_digest(run_dir=evidence.root, evidence_store=evidence)
+    if actual_capsule_sha is None:
+        raise ValueError("outcome_missing_actual_input_missing")
+    steps = [step for step in getattr(plan, "steps", ())
+             if getattr(step, "planned_analysis_role", None) == "primary"
+             and getattr(step, "exposure_outcome_distribution_spec", None) is not None]
+    if len(steps) != 1:
+        raise ValueError("outcome_missing_primary_distribution_invalid")
+    step = steps[0]
+    current = current_successful_step_records(records)
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(current, evidence_store=evidence)
+    matches = [row for row in projected if row.get("step_id") == step.step_id and row.get("status") == "ok"]
+    if len(matches) != 1:
+        raise ValueError("outcome_missing_distribution_not_current")
+    row = matches[0]
+    if row.get("run_input_capsule_sha256") != actual_capsule_sha:
+        raise ValueError("outcome_missing_actual_input_mismatch")
+    summary_id = str(row.get("step_summary_evidence_id") or "")
+    source = evidence.get(summary_id)
+    summary = _verified_evidence_json(evidence, summary_id, exact_evidence_id=True, expected_kind="statistic")
+    if (source is None or source.produced_by_step != step.step_id
+            or not exposure_outcome_distribution_result_receipt_valid(summary)
+            or summary.get("exposure") != step.exposure_outcome_distribution_spec.exposure
+            or summary.get("outcome") != "death"
+            or summary.get("outcome") != step.exposure_outcome_distribution_spec.outcome
+            or summary.get("denominator_policy") != "observed_outcome_rows"
+            or step.exposure_outcome_distribution_spec.denominator_policy != "observed_outcome_rows"):
+        raise ValueError("outcome_missing_distribution_authority_invalid")
+    reconciliation = summary.get("source_row_count_reconciliation") or {}
+    cohort_n = _count(summary.get("cohort_n"))
+    if (reconciliation.get("source_rows") != cohort_n
+            or reconciliation.get("analyzed_rows") != cohort_n
+            or reconciliation.get("excluded_missing_exposure_rows") != 0
+            or reconciliation.get("filtering_performed") is not False):
+        raise ValueError("outcome_missing_full_cohort_unavailable")
+    binding = (row.get("writer_artifact_bindings") or {}).get("table:exposure_outcome_distribution")
+    if not isinstance(binding, Mapping):
+        raise ValueError("outcome_missing_distribution_table_missing")
+    table = evidence.get(binding.get("evidence_id"))
+    if (table is None or table.kind != "table" or table.produced_by_step != step.step_id
+            or table.sha256 != binding.get("sha256")):
+        raise ValueError("outcome_missing_distribution_table_invalid")
+    path = verified_run_evidence_path(evidence.root, table)
+    if path is None:
+        raise ValueError("outcome_missing_distribution_table_invalid")
+    with path.open(encoding="utf-8", newline="") as handle:
+        table_rows = list(csv.DictReader(handle))
+    overall_rows = [item for item in table_rows if item.get("row_role") == "overall"]
+    if len(overall_rows) != 1:
+        raise ValueError("outcome_missing_full_cohort_unavailable")
+    overall = overall_rows[0]
+    def cell(name: str) -> int:
+        value = overall.get(name, "")
+        if not re.fullmatch(r"0|[1-9][0-9]*", value):
+            raise ValueError("outcome_missing_distribution_count_invalid")
+        return int(value)
+    missing, known, total = cell("outcome_missing_n"), cell("outcome_observed_n"), cell("n_rows")
+    if total != cohort_n or known + missing != total or cell("outcome_denominator") != known:
+        raise ValueError("outcome_missing_distribution_count_invalid")
+    claims = evidence.authoritative_numeric_claims(records)
+    risks = summary["descriptive_estimates"]["outcome_absolute_risks"]
+    if not isinstance(risks, list) or not risks:
+        raise ValueError("outcome_missing_distribution_count_invalid")
+    level_rows = [item for item in table_rows if item.get("row_role") == "exposure_level"]
+    if len(level_rows) != len(risks):
+        raise ValueError("outcome_missing_distribution_count_invalid")
+    levels = {}
+    for item in level_rows:
+        value = item.get("exposure_level_index", "")
+        if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.0+)?", value):
+            raise ValueError("outcome_missing_distribution_count_invalid")
+        levels[int(float(value))] = item
+    if len(levels) != len(level_rows):
+        raise ValueError("outcome_missing_distribution_count_invalid")
+    sums = {"missing_n": 0, "denominator": 0}
+    for index, risk in enumerate(risks):
+        level = levels.get(_count(risk.get("level_index")))
+        if level is None:
+            raise ValueError("outcome_missing_distribution_count_invalid")
+        for key, table_key in (("missing_n", "outcome_missing_n"),
+                               ("denominator", "outcome_observed_n")):
+            value = level.get(table_key, "")
+            if not re.fullmatch(r"0|[1-9][0-9]*", value) or int(value) != risk.get(key):
+                raise ValueError("outcome_missing_distribution_count_invalid")
+        for key in sums:
+            value = _count(risk.get(key))
+            field = f"descriptive_estimates.outcome_absolute_risks[{index}].{key}"
+            found = [claim for claim in claims if claim.step_id == step.step_id
+                     and claim.evidence_id == summary_id and claim.source_field == field]
+            if len(found) != 1 or found[0].canonical != value:
+                raise ValueError("outcome_missing_distribution_claim_invalid")
+            sums[key] += value
+    if sums != {"missing_n": missing, "denominator": known}:
+        raise ValueError("outcome_missing_distribution_count_invalid")
+    payload = {"schema_version": "easyicu.local-outcome-missingness/1", "outcome_missing_n": missing,
+               "outcome_observed_n": known, "cohort_n": total, "step_id": step.step_id,
+               "summary_evidence_id": summary_id, "summary_sha256": source.sha256,
+               "table_evidence_id": table.evidence_id, "table_sha256": table.sha256,
+               "result_envelope_evidence_id": row["writer_result_envelope_evidence_id"],
+               "actual_capsule_sha256": actual_capsule_sha}
+    local = evidence.register_json(kind="statistic", description="Local verified full-cohort outcome availability",
+        payload=payload, filename="outcome_missing_local.json", evidence_id="outcome_missing_local",
+        inputs=[summary_id, table.evidence_id, row["writer_result_envelope_evidence_id"]],
+        producer="host", generation_mode="system")
+    local_claims = {}
+    for suffix, field, value in (("missing", "outcome_missing_n", missing), ("known", "outcome_observed_n", known)):
+        evidence.register_numeric_claim(value=str(value), canonical=float(value), evidence_id=local.evidence_id,
+            step_id=local.evidence_id, source_field=field, tolerance=0.0)
+        matching = [claim for claim in evidence.numeric_claims() if claim.evidence_id == local.evidence_id
+                    and claim.step_id == local.evidence_id and claim.source_field == field]
+        if len(matching) != 1 or matching[0].canonical != value:
+            raise ValueError("outcome_missing_local_claim_invalid")
+        local_claims[f"outcome_missing_{suffix}"] = matching[0]
+    zh = str(language).lower().startswith("zh")
+    text = (f"\n\n结局未知人数为 {missing}[^outcome_missing_missing]；结局已知人数为 {known}[^outcome_missing_known]，"
+            "死亡率的分母为结局已知人数。\n" if zh else
+            f"\n\nThe outcome was unknown for {missing}[^outcome_missing_missing] participants; "
+            f"{known}[^outcome_missing_known] had a known outcome and formed the mortality denominator.\n")
+    for label, claim in local_claims.items():
+        text += (f"\n[^{label}]: value={claim.value}; step={claim.step_id}; "
+                 f"field={claim.source_field}; evidence={claim.evidence_id}; sha256={local.sha256}\n")
+    return text, local_claims

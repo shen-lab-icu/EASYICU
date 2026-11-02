@@ -799,6 +799,8 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
             "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
+    if artifact_path.name == "manuscript_pdf_receipt.json" and not _current_manuscript_projection_matches(run_dir, artifact_path.name, raw):
+        return {"ok": False, "error": "manuscript_current_projection_unavailable", "artifact": artifact_name}
     decoded = _scanned_json_artifact(artifact_path, raw)
     if not decoded.get("ok"):
         return decoded
@@ -873,6 +875,43 @@ def read_run_evidence_preview(
     }
 
 
+def _current_manuscript_projection_matches(run_dir: Path, name: str, raw: bytes) -> bool:
+    """Recheck a cached wrapper manuscript against its current pipeline owner."""
+    pipeline = run_dir / "pipeline"
+    try:
+        pipeline_info = pipeline.lstat()
+    except FileNotFoundError:
+        return True  # Legacy/non-pipeline run wrappers retain their old behavior.
+    except OSError:
+        return False
+    if not stat.S_ISDIR(pipeline_info.st_mode) or stat.S_ISLNK(pipeline_info.st_mode):
+        return False
+    _, context_raw, error = _read_safe_artifact_bytes(run_dir, "run_context.json")
+    if error or context_raw is None:
+        return False
+    from .research_pipeline_run_errors import ResearchPipelineRunError
+    try:
+        context = json.loads(context_raw)
+        run_id = str(context.get("run_id") or "") if isinstance(context, dict) else ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", run_id):
+            return False
+        owner = pipeline / run_id
+        info = owner.lstat()
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            return False
+        if owner.resolve(strict=True).parent != pipeline.resolve(strict=True):
+            return False
+        from .agent_pipeline_runs import _validated_manuscript_documents
+        receipt, documents = _validated_manuscript_documents(owner)
+        if receipt is None:
+            return False
+        if name == "manuscript_pdf_receipt.json":
+            return json.loads(raw) == receipt
+        return any(item.get("name") == name and item.get("content") == raw for item in documents)
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, ResearchPipelineRunError):
+        return False
+
+
 def read_run_artifact_bytes(
     project_dir: str, artifact_name: str, *, figure_export: Any = _NO_FIGURE_EXPORT,
 ) -> Dict[str, Any]:
@@ -888,6 +927,10 @@ def read_run_artifact_bytes(
             "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
+    if artifact_path.name in {"manuscript_scaffold.pdf", "manuscript_scaffold.tex",
+                              "manuscript_scaffold.bib", "manuscript_pdf_receipt.json"}:
+        if not _current_manuscript_projection_matches(run_dir, artifact_path.name, raw):
+            return {"ok": False, "error": "manuscript_current_projection_unavailable", "artifact": artifact_name}
     if artifact_path.name in _RUN_ARTIFACT_NAMES:
         decoded = _scanned_json_artifact(artifact_path, raw)
         if not decoded.get("ok"):
@@ -1387,6 +1430,8 @@ def _run_artifacts(run_dir: Path) -> List[Dict[str, Any]]:
     for name in [*_RUN_ARTIFACT_NAMES, *_RUN_DOCUMENT_SPECS]:
         path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
         if path is not None and raw is not None:
+            if name in {"manuscript_scaffold.pdf", "manuscript_scaffold.tex", "manuscript_scaffold.bib", "manuscript_pdf_receipt.json"} and not _current_manuscript_projection_matches(run_dir, name, raw):
+                continue
             artifacts.append(_artifact_from_raw(path, run_dir, raw))
     return artifacts
 
@@ -1410,6 +1455,8 @@ def _load_run_artifacts(run_dir: Path) -> Dict[str, Any]:
             continue
         if path is None or raw is None:
             return {"ok": False, "error": path_error, "artifact": name}
+        if name in {"manuscript_scaffold.pdf", "manuscript_scaffold.tex", "manuscript_scaffold.bib", "manuscript_pdf_receipt.json"} and not _current_manuscript_projection_matches(run_dir, name, raw):
+            continue
         artifacts.append(_artifact_from_raw(path, run_dir, raw))
         if name not in _RUN_ARTIFACT_NAMES:
             continue

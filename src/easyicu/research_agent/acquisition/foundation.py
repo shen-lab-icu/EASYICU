@@ -36,7 +36,7 @@ from .catalog import (
     assess_coverage,
     build_available_catalog,
 )
-from .first_observed_icu_coordinate import FirstObservedIcuCoordinate
+from .first_icu_stay import FirstObservedIcuCoordinate
 from .first_icu_stay import FirstIcuStayBinding
 from .first_icu_stay import FirstIcuStayPerHospitalizationBinding
 from .patient_grouping import PatientGroupingBinding
@@ -464,6 +464,25 @@ def acquire_universe_for_question(
         )
         sel_usage, sel_cost, sel_model = _selection_cost(llm)
     coverage = selection.coverage
+    if first_observed_icu_coordinate is not None:
+        # This path must not silently discard required static or derivation
+        # inputs when a typed export lacks them. Coverage is checked before
+        # materialization; the Web host still separately authorizes all I/O.
+        exact_inputs = list(dict.fromkeys([
+            *static_concepts, *required_feature_concepts, *outcome_concepts,
+            *(source for name in requested_derivations
+              for source in host_derivation(name).source_concepts),
+        ]))
+        exact_coverage = assess_coverage(exact_inputs, catalog)
+        if not exact_coverage.sufficient:
+            return AcquisitionResult(
+                universe_path=None, provenance_path=None, selection=selection,
+                materialized_concepts=[], coverage=exact_coverage, blocked=True,
+                blocked_reason_code="required_concepts_unavailable",
+                missing_concepts=tuple(exact_coverage.missing),
+                note=f"Required host-exact inputs are unavailable: {list(exact_coverage.missing)}",
+                selection_usage=sel_usage, selection_cost_usd=sel_cost, selection_model=sel_model,
+            )
     if not selection.selection_succeeded:
         return AcquisitionResult(
             universe_path=None,

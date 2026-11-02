@@ -132,14 +132,50 @@ def test_every_example_asks_only_what_its_database_records():
 
     rows = [(example, *row) for example, row in _EXAMPLE_REQUIREMENTS.items()]
     rows += [(example, *row) for example, targets in _REPLICATION_EXAMPLES.items() for row in targets]
+    reviewed_limits = {
+        "example-ventilation-rmst": {"time_zero_unavailable"},
+        "example-creatinine-competing": {"time_zero_unavailable", "censor_time_unavailable"},
+    }
     for example, database, family, fields in rows:
         profile = research_capability_profile(database)
         decision = assess_study(profile, StudyRequirements(family=family, **fields))
-        # Exact: no substituted endpoint, unit, timing or threshold to approve.
-        assert decision.status == "exact", (example, decision.substitutions, decision.missing)
+        if example in reviewed_limits:
+            assert decision.status == "refusal" and not decision.substitutions
+            assert {item.code for item in decision.missing} == reviewed_limits[example]
+        else:
+            # Exact: no substituted endpoint, unit, timing or threshold to approve.
+            assert decision.status == "exact", (example, decision.substitutions, decision.missing)
         for concept in (*fields.get("concepts", ()), *fields.get("treatment_concepts", ())):
             availability = profile.concept(concept)
             assert availability.mapped and availability.derivation_status in (None, "full"), (example, concept)
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_every_example_names_outputs_as_possible_not_guaranteed(lang):
+    html = _render(lang)
+    cards = html.split('data-gpi-starter-example=')[1:]
+    assert len(cards) == len(_EXAMPLE_REQUIREMENTS) + len(_REPLICATION_EXAMPLES)
+    for card in cards:
+        card = card.split("</button>", 1)[0]
+        assert ("可能的产出" if lang == "zh" else "Possible outputs") in card
+        assert ("会得到" if lang == "zh" else "You get") not in card
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_sic_survival_examples_disclose_the_missing_time_authority(lang):
+    html = _render(lang)
+    for example in ("example-ventilation-rmst", "example-creatinine-competing"):
+        card = html.split(f'data-gpi-starter-example="{example}"', 1)[1].split("</button>", 1)[0]
+        assert "gpi-starter-scope" in card
+        assert ("无法按" if lang == "zh" else "cannot run") in card
+        assert ("时间起点" if lang == "zh" else "time origin") in card
+        assert ("可能的产出" if lang == "zh" else "Possible outputs") in card
+        prompt = html_text.unescape(re.search(r'data-gpi-starter-compose="([^"]*)"', card).group(1))
+        assert ("SICdb" in prompt and ("机械通气" if example.endswith("rmst") else "肌酐") in prompt
+                if lang == "zh" else
+                "SICdb" in prompt and ("ventilat" if example.endswith("rmst") else "creatinine") in prompt.lower())
+    competing = html.split('data-gpi-starter-example="example-creatinine-competing"', 1)[1].split("</button>", 1)[0]
+    assert ("删失时间" if lang == "zh" else "censoring time") in competing
 
 
 def test_a_group_comparison_on_repeated_patients_asks_for_each_patients_first_stay():

@@ -300,7 +300,7 @@ def concept_records_one_value_per_stay(concept: str) -> bool:
 
     from easyicu.resources import load_dictionary
 
-    definition = load_dictionary(include_sofa2=True).get(normalize_concept_name(concept))
+    definition = load_dictionary(include_sofa2=True, source_name="sic").get(normalize_concept_name(concept))
     return getattr(definition, "target", None) == "id_tbl"
 
 
@@ -318,7 +318,7 @@ def stay_level_concept_category(concept: str) -> Optional[str]:
 
     from easyicu.resources import load_dictionary
 
-    definition = load_dictionary(include_sofa2=True).get(normalize_concept_name(concept))
+    definition = load_dictionary(include_sofa2=True, source_name="sic").get(normalize_concept_name(concept))
     if getattr(definition, "target", None) != "id_tbl":
         return None
     return str(getattr(definition, "category", None) or "").strip().casefold()
@@ -593,7 +593,7 @@ def _explain_concept_availability_cached(
             reason=(unavailable.reason_code if unavailable else "derived_outcome_supported"),
             structural_unavailable=unavailable is not None,
         )
-    dictionary = load_dictionary(include_sofa2=True)
+    dictionary = load_dictionary(include_sofa2=True, source_name=db)
     registry = load_data_sources()
     definition = dictionary.get(canonical)
     if definition is None:

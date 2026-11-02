@@ -214,6 +214,21 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/projects/{project_id}/workspace/runtime-qa",
+        "begin_pi_copilot_workspace_runtime_qa",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/projects/{project_id}/workspace/runtime-qa",
+        "get_pi_copilot_workspace_runtime_qa",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/projects/{project_id}/workspace/runtime-qa/report",
+        "post_pi_copilot_workspace_runtime_qa_report",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/projects/{project_id}/workspace/download-csv",
         "post_pi_copilot_workspace_csv_download",
     ),
@@ -317,6 +332,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "POST",
         "/api/copilot/pi/sessions/{session_id}/population-preparation",
         "post_pi_copilot_population_preparation",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/continue-reply",
+        "post_pi_copilot_continue_reply",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/retry-unstarted",
+        "post_pi_copilot_retry_unstarted",
     ),
     (
         "POST",
@@ -513,6 +538,9 @@ EXPECTED_JOB_LIFECYCLE_ROUTES = [
 
 EXPECTED_AGENT_CONTROL_ROUTES = [
     ("POST", "/api/jobs/agent-run", "jobs_agent_run"),
+    ("POST", "/api/jobs/raw-preparation-candidate", "raw_preparation_candidate"),
+    ("POST", "/api/jobs/raw-preparation-review", "raw_preparation_review"),
+    ("POST", "/api/jobs/raw-preparation-projection-download", "raw_preparation_projection_download"),
     ("POST", "/api/jobs/agent-run-review", "jobs_agent_run_review"),
     (
         "GET",

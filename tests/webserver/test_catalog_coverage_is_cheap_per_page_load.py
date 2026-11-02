@@ -48,7 +48,7 @@ def test_row_coverage_is_read_once_until_a_file_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     export = _write_export(tmp_path / "export")
-    monkeypatch.setattr(source_store, "load_registry", lambda: {"active_path": str(export)})
+    monkeypatch.setattr(source_store, "load_registry", lambda **_kwargs: {"active_path": str(export)})
     reads: list[str] = []
     real = catalog_module._file_concept_coverage
 
@@ -92,7 +92,7 @@ def test_an_excel_export_is_covered_by_its_schema_without_reading_rows(
     def no_row_reads(*args, **kwargs):
         raise AssertionError("an Excel export's catalog coverage must not read rows")
 
-    monkeypatch.setattr(source_store, "load_registry", lambda: {"active_path": str(export)})
+    monkeypatch.setattr(source_store, "load_registry", lambda **_kwargs: {"active_path": str(export)})
     monkeypatch.setattr(dataio, "describe_export_source", lambda _path: desc)
     monkeypatch.setattr(dataio, "_fast_stay_ids", no_row_reads)
     monkeypatch.setattr(catalog_module, "_file_concept_coverage", no_row_reads)

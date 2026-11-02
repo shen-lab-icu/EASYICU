@@ -11,7 +11,7 @@ from easyicu.research_agent.research_context.export_selection import SourceIdent
 from easyicu.webserver import non_executable_proposal_view as view
 from easyicu.webserver import source_partition_candidates as discovery
 from tests.support.signed_case_duration import signed_case_duration_case
-from tests.webserver.test_non_executable_proposal_view import Service, setup
+from tests.support.proposal_view import Service, setup
 from tests.webserver.copilot.pi_copilot_static_fixtures import _load_guided_pi_module_harness  # noqa: F401
 
 
@@ -137,14 +137,14 @@ def test_candidate_view_escapes_manifest_data_and_marks_all_boundaries(monkeypat
 def test_blocked_preparation_exposes_metadata_without_approving(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from easyicu.webserver import agent_pipeline_runs, raw_preparation_candidate, sources, study_contexts
-    from tests.webserver.test_sic_raw_preparation_grant import _case
+    from tests.support.sic_raw_preparation import _case
 
     result, source_root, _, checkpoint = _case(tmp_path, monkeypatch, approved=False)
     (tmp_path / 'research_context.json').write_text(result.context.model_dump_json())
     pending = SimpleNamespace(run_id='run', run_dir=str(tmp_path), requests=(checkpoint.request,))
     study = {'id': 'study', 'revision': 1}
     monkeypatch.setattr(agent_pipeline_runs, 'raw_preparation_review_owner', lambda *args: (pending, study))
-    monkeypatch.setattr(sources, 'load_registry', lambda: {'sources': [{'path': str(source_root)}]})
+    monkeypatch.setattr(sources, 'load_registry', lambda **_kwargs: {'sources': [{'path': str(source_root)}]})
     monkeypatch.setattr(discovery, 'candidate_from_bound_research_context', lambda **kw: {
         'files': [{'table': 'observations', 'path': 'observations/1.parquet', 'columns': ['value']}],
         'analysis_authorized': False, 'outcome_and_cohort_dependencies_complete': False})
@@ -169,6 +169,7 @@ def test_blocked_preparation_preview_escapes_sources_and_never_offers_approval()
         pytest.skip('Node unavailable')
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       const esc=v=>String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
       const workflow={{next_action_code:'starting',starting:{{action_code:'prepare_analysis_data'}},

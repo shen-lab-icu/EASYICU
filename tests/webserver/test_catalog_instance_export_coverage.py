@@ -24,7 +24,7 @@ def instance(monkeypatch):
         "other_signal": {"sources": {"miiv": [{}]}},
     })
     registry = {"sources": [], "active_path": None}
-    monkeypatch.setattr(sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: registry)
 
     def no_rows(*args, **kwargs):
         raise AssertionError("instance coverage must not read data rows or schemas")

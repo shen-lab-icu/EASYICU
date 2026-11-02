@@ -150,7 +150,9 @@ class CodexAppServerRuntime:
             )
             try:
                 process = subprocess.Popen(
-                    [executable, "app-server", "--stdio"],
+                    # App Server uses stdio by default. Recent Codex versions
+                    # reject the older, undocumented --stdio argument.
+                    [executable, "app-server"],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -240,6 +242,8 @@ class CodexAppServerRuntime:
         finally:
             with self._state:
                 self._pending.pop(request_id, None)
+        if response.get("_transport_exited") is True:
+            raise CodexAppServerError("codex_auth_app_server_exited", self._safe_stderr())
         error = response.get("error")
         if error is not None:
             code = "codex_auth_app_server_request_failed"
@@ -318,6 +322,8 @@ class CodexAppServerRuntime:
             self._process = None
             if process is None:
                 return
+            with self._state:
+                self._wake_pending_after_exit()
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -380,7 +386,18 @@ class CodexAppServerRuntime:
                         self._notification_offset += 512
                     self._state.notify_all()
         with self._state:
-            self._state.notify_all()
+            # Ignore a delayed EOF from an earlier process after a restart.
+            if self._process is process:
+                self._wake_pending_after_exit()
+
+    def _wake_pending_after_exit(self) -> None:
+        """Wake callers while holding ``_state`` when this process exits."""
+        for mailbox in self._pending.values():
+            try:
+                mailbox.put_nowait({"_transport_exited": True})
+            except queue.Full:
+                pass
+        self._state.notify_all()
 
     def _read_stderr(self) -> None:
         process = self._process

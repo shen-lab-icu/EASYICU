@@ -20,6 +20,7 @@ from ..planning.cohort_contract import (
     sealed_cohort_concept_ids,
 )
 from ..schema import AnalysisPlan, ResearchContext
+from ..contracts.runtime import ValidationFinding
 
 
 def _read_locked_plan(path: Path, context: ResearchContext) -> AnalysisPlan:
@@ -66,6 +67,61 @@ def read_development_locked_plan(
     if plan.research_question != context.research_question:
         raise ValueError("development locked analysis plan research question mismatch")
     return plan, observed_digest
+
+
+def bind_development_plan_capability(plan, findings):
+    """Bind a locked plan to its already-declared single primary capability."""
+    primary_steps = [
+        step for step in plan.steps if step.planned_analysis_role == "primary"
+    ]
+    if len(primary_steps) == 1 and primary_steps[0].scientific_capability:
+        from ..planning.analysis_types import (
+            get_analysis_type,
+            optional_analysis_type_for_capability,
+        )
+        from ..planning.capability_registry import get_capability_by_id
+
+        current_type = get_analysis_type(plan.analysis_type)
+        declared_capability = get_capability_by_id(
+            primary_steps[0].scientific_capability
+        )
+        expected_capability = get_capability_by_id(current_type.capability_id)
+        rebound_type = None
+        if (
+            declared_capability is not None
+            and expected_capability is not None
+            and declared_capability.family == expected_capability.family
+            and declared_capability.capability_id
+            != expected_capability.capability_id
+        ):
+            rebound_type = optional_analysis_type_for_capability(
+                declared_capability.capability_id
+            )
+        if rebound_type is not None:
+            findings.append(
+                ValidationFinding(
+                    validator="scientific_capability",
+                    severity="warning",
+                    message=(
+                        "Rebound a locked development plan's analysis "
+                        "subtype to the capability declared by its sole "
+                        "primary owner; no estimator or result changed."
+                    ),
+                    detail={
+                        "reason_code": (
+                            "development_locked_plan_primary_capability_rebound"
+                        ),
+                        "source_analysis_type": plan.analysis_type,
+                        "rebound_analysis_type": rebound_type.key,
+                        "primary_step_id": primary_steps[0].step_id,
+                        "primary_capability_id": (
+                            declared_capability.capability_id
+                        ),
+                    },
+                )
+            )
+            plan = plan.model_copy(update={"analysis_type": rebound_type.key})
+    return plan
 
 
 __all__ = ["read_development_locked_plan"]

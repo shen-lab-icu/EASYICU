@@ -617,6 +617,7 @@ def _base_planner_user_prompt(
     "second headline; change it to primary only when it is the plan's sole "
     "headline estimand. Across the complete plan, at most one step is "
     "primary.\n"
+    + _payload.compact_static_planner_example(
     "{\n"
     '  "research_question": "<copy from context>",\n'
     '  "display_labels": {"<exact variable or spec id>": "<human-facing label>"},\n'
@@ -772,6 +773,7 @@ def _base_planner_user_prompt(
     '  "subgroup_analysis_spec": null,\n'
     '  "rationale": "<one paragraph>"\n'
     "}\n\n"
+    )
     + _payload.planner_endpoint_and_optional_science_guidance()
     +
     "RESEARCH CONTEXT:\n"

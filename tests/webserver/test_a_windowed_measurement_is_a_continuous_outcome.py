@@ -77,7 +77,7 @@ def owners(monkeypatch):
         catalog.CatalogConcept(concept_id=name, description=definition.description or "")
         for name, definition in definitions.items()
     ])
-    monkeypatch.setattr(loader, "load_dictionary", lambda: definitions)
+    monkeypatch.setattr(loader, "load_dictionary", lambda **_kwargs: definitions)
     monkeypatch.setattr(catalog, "build_database_capability_catalog", lambda db: menu)
     monkeypatch.setattr(builder, "_concept_info_for_wide_column", lambda col:
                         ({"name": col, "description": definitions[col].description}, col)
@@ -607,6 +607,8 @@ def test_no_lead_copy_placeholder_remains_in_source():
         str(path.relative_to(source))
         for path in source.rglob("*")
         if path.suffix in {".py", ".js", ".mjs", ".json", ".md", ".txt"}
+        and path.is_file()
+        and "node_modules" not in path.parts
         and "meta_generalization" not in path.parts
         and b"TODO(lead copy)" in path.read_bytes()
     ]

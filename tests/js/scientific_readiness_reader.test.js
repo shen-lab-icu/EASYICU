@@ -84,3 +84,16 @@ test('known review statements have faithful Chinese copy; unknown text stays int
   assert.match(html, /已有来源记录，但研究人群的范围尚未完全明确/);
   assert.match(html, /Unrecognised source statement\./);
 });
+
+test('ICD source blocker is visible outside collapsed automatic work in both languages', () => {
+  for (const lang of ['zh', 'en']) {
+    const html = renderer(lang).artifactStructuredView('scientific_plan_review.json', {
+      approval_allowed: false,
+      findings: [{ code: 'HOST_ICD_SOURCE_UNVERIFIED', severity: 'blocker', remediation_route: 'runtime_capability' }],
+    });
+    const notice = lang === 'zh' ? '已配置的诊断编码人群无法核验' : 'Configured diagnosis-code population cannot be verified';
+    const details = lang === 'zh' ? 'EasyICU 会自动处理' : 'EasyICU will handle';
+    assert.ok(html.includes(notice));
+    assert.ok(html.indexOf(notice) < html.indexOf(details), 'the user sees this before the collapsed automatic section');
+  }
+});

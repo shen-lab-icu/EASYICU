@@ -83,7 +83,7 @@ def test_catalog_marks_audience_without_removing_concepts(
     monkeypatch.setattr(cc, "CONCEPT_DICTIONARY", {concept: ("Synthetic", "测试", "")})
     monkeypatch.setattr(cc, "CONCEPT_GROUPS_INTERNAL", {"synthetic": [concept]})
     monkeypatch.setattr(loader, "load_concept_dict_cached", lambda: {concept: definition})
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [], "active_path": None})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [], "active_path": None})
 
     body = catalog.build_catalog()
     assert body["conceptCoverage"][concept]["audience"] == audience
@@ -103,7 +103,7 @@ def test_catalog_uses_registered_instance_databases(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {"id": "synthetic_miiv", "database": "miiv", "ok": True},
                 {"id": "synthetic_eicu", "database": "eicu", "ok": True},
@@ -253,7 +253,7 @@ def test_support_follows_declared_inputs_and_loader_constraints(
 def test_packaged_metadata_is_cached_and_response_metadata_is_fresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [], "active_path": None})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [], "active_path": None})
     first = catalog.build_catalog()
 
     def no_asset_reads(*args, **kwargs):
@@ -314,5 +314,5 @@ def test_aki_reads_as_one_entry_with_its_definitions_folded_under_it(
     assert cc.CONCEPT_DICTIONARY["aki_stage_reference"][1] == "AKI 分期（KDIGO）"
     assert not any("口径" in cc.CONCEPT_DICTIONARY[column][1] for column in loose)
 
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [], "active_path": None})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [], "active_path": None})
     assert catalog.build_catalog()["variants"] == {"aki_stage_reference": list(variants)}

@@ -16,7 +16,7 @@ from easyicu.research_agent.planning.progressive_contract import ProgressivePlan
 from easyicu.research_agent.schema import AnalysisPlan, ConceptDescriptor, VariableRole
 from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
 from tests.research_agent.planning.progressive_planner_fixtures import _payload
-from tests.research_agent.planning.test_a_population_spec_compiles_to_the_cohort_it_states import _ctx
+from tests.support.population_context import _ctx
 
 
 @pytest.fixture

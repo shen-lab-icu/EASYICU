@@ -46,15 +46,15 @@ def _card(code: str, *, run_id: str = "run_question_1") -> dict:
     if node is None:
         pytest.skip("Node.js is unavailable")
     script = r"""
-let declared = null;
-global.window = {
-  EU_LANG: 'zh',
-  EasyICU: { guidedPi: { declare: (_name, api) => { declared = api; }, optional: () => null } },
-};
+global.window = { EU_LANG: 'zh' };
+const path = require('node:path');
+const ownerDir = path.dirname(process.argv[1]);
+require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
+require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const code = process.argv[2];
 const runId = process.argv[3];
-const owner = declared.create({
+const owner = window.EasyICU.guidedPi.require('confirmation').create({
   tr: (en, zh) => zh || en,
   esc: value => String(value),
   iconHtml: () => '',
@@ -91,6 +91,10 @@ def _aside_entry(code: str) -> str:
     ]
     assert len(entries) == 1, code
     return entries[0]
+
+
+def test_population_stop_aside_is_loaded_with_current_version() -> None:
+    assert "js/screens-guided-pi-aside.js?v=20261030-population1" in (STATIC / "index.html").read_text()
 
 
 def test_an_analysis_no_step_answers_offers_a_fresh_candidate_plan() -> None:
@@ -199,7 +203,12 @@ def test_every_plan_approval_stop_has_a_card_and_an_aside_line(code: str) -> Non
 
     assert card["code"] == code
     assert card["title"]
-    assert "不能批准" in card["note"]
+    if code == "population_criterion_decision_unconfirmed":
+        assert card["nonApprovable"] is True and card["grants"] == []
+        assert card["execute"] is False
+        assert "数值缺失或无法判定" in card["note"] and "分析尚未开始" in card["note"]
+    else:
+        assert "不能批准" in card["note"]
     # Which plan "Generate fresh plan" makes is the route's choice for the
     # study, so no card promises one.
     assert "只读元数据" not in card["note"]

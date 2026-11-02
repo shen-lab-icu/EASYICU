@@ -35,6 +35,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 from threading import Lock
@@ -877,13 +878,85 @@ class ProviderHardStopLedger:
             self._task_active_started_at.pop(normalized, None)
             self._persist_locked()
 
-    def resume_task(self, task_id: str) -> None:
+    def claim_preprovider_successor(self, task_id: str, *, failed_job_id: str,
+                                    successor_job_id: str, expected_calls_sha256: str, expected_task_sha256: str) -> None:
+        """Atomically reopen one explicitly authorized pre-Provider UAT failure."""
+        from easyicu.research_agent.canonical_json import canonical_sha256
+
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", failed_job_id)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", successor_job_id)
+                or failed_job_id == successor_job_id
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_calls_sha256)
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_task_sha256)):
+            raise ProviderHardStopLedgerError("Invalid successor binding")
+        with self._durable_transaction():
+            task = self._task_locked(task_id)
+            calls = task.get("calls")
+            if (task.get("status") != "failed"
+                    or task.get("controlled_candidate_job_id") != failed_job_id
+                    or task.get("preprovider_successor_job_id") is not None
+                    or task.get("deferred_stage_job_id") is not None
+                    or not isinstance(calls, list) or not calls
+                    or any(not isinstance(call, Mapping) or call.get("state") == "in_progress" for call in calls)
+                    or canonical_sha256(calls) != expected_calls_sha256
+                    or canonical_sha256(task) != expected_task_sha256):
+                raise ProviderHardStopLedgerError("Successor claim refused")
+            prior = float(task.get("elapsed_seconds") or 0.0)
+            totals = self._totals_locked()
+            task_totals = self._task_totals_locked(task)
+            if (not math.isfinite(prior) or prior < 0
+                    or prior >= self.limits.max_wall_clock_seconds_per_task
+                    or len(calls) >= self.limits.max_provider_attempts_per_run
+                    or totals["provider_attempts"] >= self.limits.max_provider_attempts_per_batch
+                    or task_totals["tokens"] >= self.limits.max_total_tokens_per_run
+                    or totals["accounted_tokens"] >= self.limits.max_total_tokens_per_batch
+                    or totals["accounted_estimated_cost_usd"] >= self.limits.max_estimated_cost_usd_per_batch):
+                raise ProviderHardStopLedgerError("Successor budget unavailable")
+            attempts = task.setdefault("terminal_attempts", [])
+            if not isinstance(attempts, list) or any(not isinstance(x, Mapping) for x in attempts):
+                raise ProviderHardStopLedgerError("Invalid terminal attempt history")
+            attempts.append({"status": "failed", "started_at": task.get("started_at"),
+                "finished_at": task.get("finished_at"), "elapsed_seconds": prior,
+                "error": task.get("error"), "score_summary": task.get("score_summary"),
+                "controlled_candidate_job_id": failed_job_id})
+            task["resume_count"] = len(attempts)
+            task["controlled_candidate_job_id"] = successor_job_id
+            task["preprovider_successor_job_id"] = successor_job_id
+            task["status"] = "running"
+            task["finished_at"] = None
+            task["elapsed_seconds"] = prior
+            task["error"] = None
+            task["blocked_by"] = None
+            task["score_summary"] = {}
+            task["active_started_at"] = _utc_now()
+            task["paused_active_started_at"] = None
+            task["review_checkpoint_at"] = None
+            self._task_started_monotonic[task_id] = time.monotonic() - prior
+            self._task_active_started_at[task_id] = str(task["active_started_at"])
+            self._persist_locked()
+
+    def resume_task(self, task_id: str, *, controlled_candidate_job_id: Optional[str] = None,
+                    deferred_stage_job_id: Optional[str] = None,
+                    expected_candidate_job_id: Optional[str] = None) -> None:
         """Resume a paused task under its cumulative active-time ceiling."""
 
         normalized = str(task_id).strip()
         with self._durable_transaction():
             task = self._task_locked(normalized)
-            if task.get("status") == "running":
+            if deferred_stage_job_id is not None:
+                if (not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", deferred_stage_job_id)
+                        or not isinstance(expected_candidate_job_id, str)
+                        or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", expected_candidate_job_id)
+                        or task.get("controlled_candidate_job_id") != expected_candidate_job_id
+                        or task.get("deferred_stage_job_id") is not None
+                        or task.get("status") != "paused"):
+                    raise ProviderHardStopLedgerError("Deferred review stage already claimed or unavailable")
+            elif controlled_candidate_job_id is not None:
+                if (not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", controlled_candidate_job_id)
+                        or task.get("controlled_candidate_job_id") is not None
+                        or task.get("status") != "paused"):
+                    raise ProviderHardStopLedgerError("Controlled candidate task already claimed or unavailable")
+            elif task.get("status") == "running":
                 return
             if task.get("status") != "paused":
                 raise ProviderHardStopLedgerError(
@@ -916,6 +989,11 @@ class ProviderHardStopLedger:
                     ),
                 )
             task["status"] = "running"
+            if controlled_candidate_job_id is not None:
+                task["controlled_candidate_job_id"] = controlled_candidate_job_id
+            if deferred_stage_job_id is not None:
+                task["deferred_stage_job_id"] = deferred_stage_job_id
+                task["deferred_stage_no_send"] = True
             task["paused_at"] = None
             task["elapsed_seconds"] = prior_elapsed
             task["active_started_at"] = _utc_now()
@@ -991,6 +1069,22 @@ class ProviderHardStopLedger:
             ),
         }
 
+    def release_deferred_review_transport(self, task_id: str, *, decision_sha256: str,
+                                          receipt_sha256: str) -> None:
+        """Record the reviewed materialization boundary before permitting transport."""
+        if any(not re.fullmatch(r"[a-f0-9]{64}", value or "")
+               for value in (decision_sha256, receipt_sha256)):
+            raise ProviderHardStopLedgerError("Deferred review release digests are invalid")
+        with self._durable_transaction():
+            task = self._task_locked(task_id)
+            if (task.get("status") != "running" or not task.get("deferred_stage_job_id")
+                    or task.get("deferred_stage_no_send") is not True):
+                raise ProviderHardStopLedgerError("Deferred review transport gate is unavailable")
+            task["deferred_stage_decision_sha256"] = decision_sha256
+            task["deferred_stage_receipt_sha256"] = receipt_sha256
+            task["deferred_stage_no_send"] = False
+            self._persist_locked()
+
     def reserve_transport_attempt(
         self,
         *,
@@ -1038,6 +1132,8 @@ class ProviderHardStopLedger:
         with self._durable_transaction():
             self._assert_task_active_locked(task_id)
             task = self._task_locked(task_id)
+            if task.get("deferred_stage_no_send") is True:
+                raise ProviderHardStopLedgerError("Deferred review planning cannot send Provider requests")
             calls = task.get("calls")
             if not isinstance(calls, list):
                 raise ProviderHardStopLedgerError(
@@ -1500,6 +1596,20 @@ class TaskProviderHardStop:
 
         self.ledger.resume_task(self.task_id)
 
+    def claim_controlled_candidate(self, job_id: str) -> None:
+        """Atomically claim the sole controlled candidate on this paused task."""
+        self.ledger.resume_task(self.task_id, controlled_candidate_job_id=job_id)
+
+    def claim_deferred_review_stage(self, job_id: str, *, expected_candidate_job_id: str) -> None:
+        """Claim one no-send stage without replacing this task or its budget."""
+        self.ledger.resume_task(self.task_id, deferred_stage_job_id=job_id,
+                                expected_candidate_job_id=expected_candidate_job_id)
+
+    def release_deferred_review_transport(self, *, decision_sha256: str, receipt_sha256: str) -> None:
+        self.ledger.release_deferred_review_transport(
+            self.task_id, decision_sha256=decision_sha256, receipt_sha256=receipt_sha256,
+        )
+
     def reconcile_review_pause(self, *, paused_at: str) -> None:
         """Recover the exact active-time boundary from a durable checkpoint."""
 
@@ -1679,6 +1789,22 @@ def consume_active_provider_hard_stop_attempt(*, provider: Optional[str] = None)
     return None
 
 
+def current_metadata_provider_reservation(task: TaskProviderHardStop) -> tuple[str, str]:
+    """Return this call's still-active reservation, never another thread's row."""
+    state = _ACTIVE_HARD_STOP_CALL.get()
+    if (state is None or state.task.ledger is not task.ledger
+            or state.task.task_id != task.task_id
+            or not isinstance(state._active_attempt_id, str)
+            or state.role not in {"acquisition", "planner", "provider_recovery_probe"}):
+        raise ProviderHardStopLedgerError("metadata_provider_reservation_missing")
+    attempt_id = state._active_attempt_id
+    rows = [row for row in task.ledger.snapshot()["tasks"] if row.get("task_id") == task.task_id]
+    calls = [call for call in rows[0]["calls"] if call.get("attempt_id") == attempt_id] if len(rows) == 1 else []
+    if len(calls) != 1 or calls[0].get("state") != "in_progress" or calls[0].get("role") != state.role:
+        raise ProviderHardStopLedgerError("metadata_provider_reservation_missing")
+    return attempt_id, state.role
+
+
 def record_active_metadata_capacity_rejection() -> None:
     """Seal only the local slot owner's pre-transport capacity rejection."""
     state = _ACTIVE_HARD_STOP_CALL.get()
@@ -1726,6 +1852,7 @@ __all__ = [
     "ProviderHardStopLimits",
     "TaskProviderHardStop",
     "consume_active_provider_hard_stop_attempt",
+    "current_metadata_provider_reservation",
     "is_pre_transport_capacity_rejection",
     "is_pre_transport_coordination_rejection",
     "load_provider_hard_stop_ledger",

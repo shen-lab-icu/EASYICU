@@ -41,7 +41,7 @@ def test_the_warm_up_runs_once_per_process_in_the_background(monkeypatch):
 
 
 def test_every_valid_export_is_summarized_active_first_and_a_failure_is_not_fatal(monkeypatch, caplog):
-    monkeypatch.setattr(source_store, "load_registry", lambda: {
+    monkeypatch.setattr(source_store, "load_registry", lambda **_kwargs: {
         "active_path": "/data/b",
         "sources": [
             {"id": "a", "path": "/data/a", "ok": True},

@@ -171,7 +171,7 @@ def test_mortality_meaning_changes_remain_an_unapplied_substitution(host):
 def test_database_mentions_need_no_data_handling_declaration(host, monkeypatch, tmp_path, source):
     service, sid, study_id = host
     registry = {"sources": [{"id": "synthetic-source", "ok": True, "database": "miiv", "path": str(tmp_path / "synthetic-export")} ]}
-    monkeypatch.setattr(sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: registry)
     item = resolve(service, sid, kind="database", id="miiv" if source == "database" else "synthetic-source", source=source)
     # A declaration is recorded, not required (owner decision 2026-10-27).
     monkeypatch.setattr(service, "_data_handling_for_session", lambda record: "unspecified")
@@ -182,7 +182,7 @@ def test_database_mentions_need_no_data_handling_declaration(host, monkeypatch, 
 def test_a_registered_source_mention_binds_only_that_registration(host, monkeypatch, tmp_path):
     service, sid, study_id = host
     selected = {"id": "synthetic-source", "ok": True, "database": "miiv", "path": str(tmp_path / "synthetic-export"), "label": "Synthetic export"}
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [selected]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [selected]})
     item = resolve(service, sid, kind="database", id=selected["id"], source="registered_source")
     assert str(tmp_path) not in json.dumps(item)
     send(service, sid, mentions=[item["reference"]])
@@ -209,7 +209,7 @@ def test_a_database_id_guides_source_selection_and_refuses_a_different_database(
 def test_source_registration_changes_refuse_the_old_digest(host, monkeypatch, tmp_path):
     service, sid, _ = host
     row = {"id": "synthetic-source", "ok": True, "database": "miiv", "path": str(tmp_path / "synthetic-export")}
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [row]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [row]})
     item = resolve(service, sid, kind="database", id=row["id"], source="registered_source")
     row["path"] = str(tmp_path / "replacement")
     with pytest.raises(PiCopilotError) as error:
@@ -421,7 +421,7 @@ def test_skill_mentions_and_legacy_attachments_share_one_budget(host):
 def test_unknown_mention_precedes_source_mutation_in_the_same_message(host, monkeypatch, tmp_path):
     service, sid, study_id = host
     source = {"id": "synthetic-source", "ok": True, "database": "miiv", "path": str(tmp_path / "synthetic-export")}
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [source]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [source]})
     before = REAL_GET_CONTEXT(study_id)
     with pytest.raises(PiCopilotError) as error:
         service.send_message(sid, project_id="synthetic-project", message=f"Use {source['path']}",

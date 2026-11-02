@@ -2712,7 +2712,7 @@ def make_export_runner(
         definition_files: List[Dict[str, Any]] = []
         definition_payload: Optional[Dict[str, Any]] = None
         metadata_database = str(database).strip().lower()
-        metadata_dictionary = load_dictionary(include_sofa2=True)
+        metadata_dictionary = load_dictionary(include_sofa2=True, source_name=metadata_database)
         metadata_source_config = load_src_cfg(metadata_database)
         metadata_class_prefixes = tuple(
             str(value).strip().lower()
@@ -3541,7 +3541,7 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     }
 
 
-def describe_source_tables(raw_path: str) -> Dict[str, Any]:
+def describe_source_tables(raw_path: str, *, planning_metadata_only: bool = False) -> Dict[str, Any]:
     """The tables and modules of a source folder, reading no table's rows.
 
     A run start needs only that the bound folder still holds tables, and its
@@ -3561,12 +3561,34 @@ def describe_source_tables(raw_path: str) -> Dict[str, Any]:
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
-    from easyicu.synthetic_source_provenance import source_description
-    synthetic = source_description(path)
-    if synthetic is not None:
-        return synthetic
+    # Native planning needs only the manifest and its digest-bound column
+    # sidecar. Do not inspect Parquet footers or snapshot patient-bearing files.
+    if os.path.lexists(path / "_manifest.json"):
+        from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
+        try:
+            native = native_planning_metadata(export_path=path)
+            if native is None:
+                raise ValueError("native metadata unavailable")
+            files = [{"file": item["file"], "module": item["module"],
+                      "columns": list(dict.fromkeys((item["identity_column"], *item["time_columns"],
+                          *(column["column"] for column in item["declared_columns"]))))}
+                     for item in native["files"]]
+            return {"ok": True, "path": str(path), "label": native["database"].upper(),
+                    "database": native["database"], "modules": sorted({item["module"] for item in files}),
+                    "files": files}
+        except ExportCohortError as exc:
+            return {"ok": False, **exc.detail, "files": []}
+        except (OSError, ValueError, RuntimeError) as exc:
+            return {"ok": False, "path": str(path),
+                    "error": getattr(exc, "code", "research_pipeline_planning_native_metadata_invalid"), "files": []}
+
+    if not planning_metadata_only:
+        from easyicu.synthetic_source_provenance import source_description
+        synthetic = source_description(path)
+        if synthetic is not None:
+            return synthetic
     manifest = _read_export_manifest(path)
-    files = _export_file_inventory(path, manifest, count_rows=False)
+    files = _export_file_inventory(path, manifest, count_rows=False, read_columns=False)
     if not files:
         return {"ok": False, "error": "no_export_files", "path": str(path), "files": []}
     return {
@@ -3866,7 +3888,7 @@ def _positive_int(value: Any) -> Optional[int]:
 
 
 def _export_file_inventory(
-    path: Path, manifest: Dict[str, Any], *, count_rows: bool = True
+    path: Path, manifest: Dict[str, Any], *, count_rows: bool = True, read_columns: bool = True
 ) -> List[Dict[str, Any]]:
     from easyicu.webserver.hosted import require_path
 
@@ -3892,7 +3914,7 @@ def _export_file_inventory(
             meta["module"] = _infer_export_module(f)
         if "rows" not in meta and count_rows:
             meta["rows"] = _count_rows(f)
-        meta["columns"] = _read_columns(f)
+        meta["columns"] = _read_columns(f) if read_columns else []
         out.append(meta)
     return out
 

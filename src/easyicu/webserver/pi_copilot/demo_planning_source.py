@@ -113,12 +113,18 @@ def bind_demo_planning_source(
         )
     confirmations = dict(study.get("confirmations") or {})
     confirmations["extraction_completed"] = False
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from .demo_planning_authority import publish_choice
+
+    new_source = {"path": resolved.raw_path, "database": resolved.database, "label": resolved.label}
     try:
+        authority_ref = publish_choice(study=study, new_source=new_source, confirmations=confirmations,
+                                       offer_sha256=offer_sha256)
         return study_contexts.upsert_context(
-            {"id": study["id"], "data_source": {
-                "path": resolved.raw_path, "database": resolved.database, "label": resolved.label,
-            }, "confirmations": confirmations},
+            {"id": study["id"], "data_source": new_source, "confirmations": confirmations,
+             "demo_planning_authority_ref": authority_ref},
             expected_revision=expected_revision, require_revision=True, lifecycle_write=False,
+            _server_demo_planning_authority_write=True,
         )
     except study_contexts.StudyContextError as exc:
         raise PiCopilotError(
@@ -126,3 +132,6 @@ def bind_demo_planning_source(
             "The study changed before its source could be saved. Refresh and choose again.",
             status_code=409,
         ) from exc
+    except (ValueError, OSError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
+        raise PiCopilotError("pi_demo_planning_source_unavailable",
+                             "The exact selected Demo source could not be verified.", status_code=409) from exc

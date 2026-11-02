@@ -21,7 +21,7 @@ def test_verified_synthetic_flag_survives_persistence_without_a_second_scan(regi
     path, _ = registry
     sources.register_source(str(path))
     assert json.loads(sources._CONFIG_PATH.read_text())["sources"][0]["source_kind"] == "synthetic"
-    monkeypatch.setattr(sources, "load_registry", lambda: pytest.fail("rescanned registry"))
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: pytest.fail("rescanned registry"))
     monkeypatch.setattr(sources.dataio, "describe_export_source", lambda *a: pytest.fail("read export"))
     record, = sources.stored_registration_metadata()
     assert record["source_kind"] == "synthetic"

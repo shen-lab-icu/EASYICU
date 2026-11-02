@@ -67,6 +67,43 @@ class StructuredOutputRequest:
     name: str
     schema_json: str
     strict: bool = True
+    wire_schema_json: str | None = None
+    wire_schema_version: str = "legacy/1"
+
+    def __post_init__(self) -> None:
+        # Public dataclass construction and dataclasses.replace must obey the
+        # same wire identity as the factory and the supervised worker.
+        if self.wire_schema_version == "legacy/1":
+            if self.wire_schema_json is not None:
+                raise ValueError("legacy structured output cannot carry a wire schema")
+            return
+        if self.wire_schema_version != "easyicu.planner-wire/2":
+            raise ValueError("unknown wire schema version")
+        if (not isinstance(self.name, str) or not self.name or len(self.name) > 64
+                or self.name != self.name.strip()
+                or not all(char.isalnum() or char in {"_", "-"} for char in self.name)):
+            raise ValueError("invalid planner structured-output name")
+        if type(self.strict) is not bool:
+            raise ValueError("planner structured-output strict must be a boolean")
+        from .strict_json_schema import compact_planner_wire_schema
+
+        try:
+            decoded = json.loads(self.schema_json)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid planner schema JSON") from exc
+        if not isinstance(decoded, dict) or decoded.get("type") != "object":
+            raise ValueError("planner root schema must be an object")
+        canonical = json.dumps(decoded, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        if canonical != self.schema_json:
+            raise ValueError("planner schema JSON must be canonical")
+        expected = json.dumps(compact_planner_wire_schema(decoded), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        if self.wire_schema_json != expected:
+            raise ValueError("planner wire schema does not match its version and source")
+
+    @property
+    def transport_schema_json(self) -> str:
+        """Exact schema sent to every provider; schema_json remains legacy."""
+        return self.wire_schema_json if self.wire_schema_json is not None else self.schema_json
 
     @classmethod
     def from_schema(
@@ -75,6 +112,7 @@ class StructuredOutputRequest:
         name: str,
         schema: Mapping[str, Any],
         strict: bool = True,
+        wire_schema_version: str = "legacy/1",
     ) -> "StructuredOutputRequest":
         normalized_name = str(name or "").strip()
         if not normalized_name or len(normalized_name) > 64 or not all(
@@ -95,10 +133,20 @@ class StructuredOutputRequest:
         decoded = json.loads(schema_json)
         if not isinstance(decoded, dict) or decoded.get("type") != "object":
             raise ValueError("structured-output root schema must be an object")
+        if wire_schema_version not in {"legacy/1", "easyicu.planner-wire/2"}:
+            raise ValueError("unknown wire schema version")
+        wire_json = None
+        if wire_schema_version == "easyicu.planner-wire/2":
+            from .strict_json_schema import compact_planner_wire_schema
+
+            wire = compact_planner_wire_schema(dict(schema))
+            wire_json = json.dumps(wire, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
         return cls(
             name=normalized_name,
             schema_json=schema_json,
             strict=bool(strict),
+            wire_schema_json=wire_json,
+            wire_schema_version=wire_schema_version,
         )
 
     @property
@@ -127,7 +175,7 @@ class StructuredOutputRequest:
             "json_schema": {
                 "name": self.name,
                 "strict": self.strict,
-                "schema": json.loads(self.schema_json),
+                "schema": json.loads(self.transport_schema_json),
             },
         }
 

@@ -30,6 +30,7 @@ from ..concept_dict_audit import (
     CONCEPT_DICT_PACKAGE_PATH,
     SOFA2_DICT_PACKAGE_PATH,
     compute_concept_dict_fingerprint,
+    sealed_run_dictionary_manifest_fields,
 )
 from ..contracts.runtime import (
     ValidationFinding,
@@ -82,8 +83,14 @@ def _code_version_manifest_fields() -> Dict[str, Any]:
     return {"code_version": capture_code_version()}
 
 
-def _concept_dictionary_manifest_fields() -> Dict[str, Any]:
+def _concept_dictionary_manifest_fields(run_dir: Optional[Path] = None,
+                                        evidence: Optional[EvidenceStore] = None) -> Dict[str, Any]:
     """Return the concept dictionary identity for run manifests."""
+
+    if run_dir is not None and evidence is not None:
+        return sealed_run_dictionary_manifest_fields(run_dir, evidence)
+    if run_dir is not None or evidence is not None:
+        raise ValueError("run directory and evidence must be provided together")
 
     try:
         fingerprint = compute_concept_dict_fingerprint()
@@ -1320,7 +1327,7 @@ def finalise_success(
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
-        **_concept_dictionary_manifest_fields(),
+        **_concept_dictionary_manifest_fields(run_dir, evidence),
         **_code_version_manifest_fields(),
         readiness=readiness,
         artifact_paths=artifact_paths,
@@ -1513,7 +1520,7 @@ def finalise_aborted(
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
-        **_concept_dictionary_manifest_fields(),
+        **_concept_dictionary_manifest_fields(run_dir, evidence),
         **_code_version_manifest_fields(),
         report_path=str(report_path.relative_to(run_dir)),
         readiness=readiness,

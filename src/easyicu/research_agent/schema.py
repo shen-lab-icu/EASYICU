@@ -39,8 +39,8 @@ from .contracts.capability_declaration import (
     validate_scientific_capability_id,
 )
 from .contracts.claim_ceiling import DescriptiveClaimContract
-from .contracts.covariate_balance import BALANCE_ACTION as BALANCE_ACTION, BALANCE_OUTPUTS as BALANCE_OUTPUTS, CovariateBalanceSpec, validate_descriptive_auxiliary_steps
-from .contracts.cluster_sizes import CLUSTER_SIZE_ACTION as CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS as CLUSTER_SIZE_OUTPUTS, ClusterSizeSpec
+from .contracts.diagnostic_specs import BALANCE_ACTION as BALANCE_ACTION, BALANCE_OUTPUTS as BALANCE_OUTPUTS, CovariateBalanceSpec, validate_descriptive_auxiliary_steps
+from .contracts.diagnostic_specs import CLUSTER_SIZE_ACTION as CLUSTER_SIZE_ACTION, CLUSTER_SIZE_OUTPUTS as CLUSTER_SIZE_OUTPUTS, ClusterSizeSpec
 from .contracts.closed_levels import (
     validate_closed_scalar_levels,
 )

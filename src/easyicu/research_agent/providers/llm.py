@@ -774,7 +774,7 @@ class CLIAgentLLMClient:
             if structured_output is not None:
                 schema_path = Path(cwd) / "final-output.schema.json"
                 schema_path.write_text(
-                    structured_output.schema_json,
+                    structured_output.transport_schema_json,
                     encoding="utf-8",
                 )
                 schema_path.chmod(0o600)
@@ -1055,7 +1055,7 @@ class CodexAppServerLLMClient:
                     turn_params["effort"] = self._reasoning_effort
                 if structured_output is not None:
                     turn_params["outputSchema"] = json.loads(
-                        structured_output.schema_json
+                        structured_output.transport_schema_json
                     )
                 notification_start = runtime.notification_count
                 attempt_started = time.monotonic()

@@ -236,7 +236,7 @@ def test_capabilities_count_only_validated_registered_full_sources(monkeypatch):
     from easyicu.webserver import demo_sources
 
     demo = demo_sources.get_source(demo_sources.allowed_source_ids()[0])
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [
         {"ok": True, "id": str(i), "database": "eicu", "path": f"/tmp/private/{i}", "label": "Private"}
         for i in range(43)
     ] + [
@@ -262,7 +262,7 @@ def test_capabilities_expose_only_the_explicit_hosted_instance_flag(monkeypatch,
         monkeypatch.delenv("EASYICU_HOSTED", raising=False)
     else:
         monkeypatch.setenv("EASYICU_HOSTED", value)
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": []})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": []})
     monkeypatch.setattr(capabilities, "zotero_status", lambda *a: {})
     body = TestClient(app).get("/api/capabilities").json()
     assert body["deployment"]["hosted"] is hosted

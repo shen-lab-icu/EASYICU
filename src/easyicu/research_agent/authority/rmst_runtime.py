@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_sha256
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
-from ..contracts.rmst import RMSTSpec
+from ..contracts.survival import RMSTSpec
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
 from ..schema import AnalysisPlan, AnalysisStep
 

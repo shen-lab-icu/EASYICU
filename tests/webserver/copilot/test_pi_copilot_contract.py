@@ -261,7 +261,7 @@ def test_project_workflow_projects_active_job_for_session_timeline(
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {"active_path": None},
+        lambda **_kwargs: {"active_path": None},
     )
     monkeypatch.setattr(
         service_module.agent_runs,
@@ -402,7 +402,7 @@ def test_project_workflow_prefers_newer_project_pipeline_run(
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {"active_path": None},
+        lambda **_kwargs: {"active_path": None},
     )
 
     def history(**kwargs: Any) -> dict[str, Any]:
@@ -478,7 +478,7 @@ def test_project_workflow_exposes_validated_analysis_results_when_publication_is
         ],
     }
     monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _: study)
-    monkeypatch.setattr(service_module.sources, "load_registry", lambda: {"active_path": None})
+    monkeypatch.setattr(service_module.sources, "load_registry", lambda **_kwargs: {"active_path": None})
     monkeypatch.setattr(
         workflow_module,
         "list_bound_run_history",
@@ -798,7 +798,7 @@ def test_exact_registered_path_in_message_binds_source_before_provider(
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {"active_path": source["path"], "sources": [source]},
+        lambda **_kwargs: {"active_path": source["path"], "sources": [source]},
     )
     gateway = FakeGateway()
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
@@ -1301,7 +1301,7 @@ def test_explicit_prepared_source_reference_preserves_agent_default_scope(
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {
                     "id": "src_prepared",
@@ -1354,7 +1354,7 @@ def test_prepared_project_source_is_available_in_the_same_provider_turn(
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {
                     "id": "src_prepared",
@@ -1402,7 +1402,7 @@ def test_database_mention_in_question_does_not_confirm_a_source(
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {
                     "id": "src_prepared",
@@ -3734,7 +3734,7 @@ def test_current_plan_restarts_only_with_current_user_amendments(
     )
     monkeypatch.setattr(
         tool_module.sources, "load_registry",
-        lambda: {"sources": [{"ok": True, "path": "/private/export", "label": "MIIV"}]},
+        lambda **_kwargs: {"sources": [{"ok": True, "path": "/private/export", "label": "MIIV"}]},
     )
     context = ToolExecutionContext(data_handling="zero_retention_declared",
         session=PiSessionRecord(
@@ -3799,7 +3799,7 @@ def test_registered_data_source_choices_are_path_free(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": "/private/full-export",
             "sources": [
                 {
@@ -5162,7 +5162,7 @@ def test_source_concept_choices_are_exact_module_scoped_and_path_free(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {
                     "id": "src_demo",
@@ -5272,7 +5272,7 @@ def test_source_concepts_resolve_bound_source_display_alias(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {"sources": [source]},
+        lambda **_kwargs: {"sources": [source]},
     )
     monkeypatch.setattr(
         tool_module.study_contexts,
@@ -5514,7 +5514,7 @@ def test_conversational_setup_merges_partial_nested_scientific_patch(
         "question": "Is an ICU phenotype associated with mortality?",
         "active_job_id": None,
         "cohort": {
-            "preset": "adult_icu_stays",
+            "preset": "adult_all",
             "label": "All eligible adult ICU stays",
             "age_min": 18,
             "exclude_readmissions": False,
@@ -5553,7 +5553,7 @@ def test_conversational_setup_merges_partial_nested_scientific_patch(
 
     assert result["code"] == "study_context_updated"
     assert writes[0]["cohort"] == {
-        "preset": "adult_icu_stays",
+        "preset": "adult_all",
         "label": "All eligible adult ICU stays",
         "age_min": 18,
         "exclude_readmissions": True,
@@ -5766,7 +5766,7 @@ def test_conversational_setup_binds_exact_registered_source_id(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": "/private/full-export",
             "sources": [
                 {
@@ -5836,7 +5836,7 @@ def test_confirmed_conversation_source_is_not_silently_rebound(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": "/private/model-recommended-source",
             "sources": [
                 {

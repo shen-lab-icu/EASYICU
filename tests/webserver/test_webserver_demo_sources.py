@@ -40,7 +40,7 @@ def test_demo_catalog_is_fixed_safe_and_exposes_local_destination(
     monkeypatch.setattr(
         demo_sources.source_store,
         "load_registry",
-        lambda: {"ok": True, "sources": [], "active_path": None},
+        lambda **_kwargs: {"ok": True, "sources": [], "active_path": None},
     )
 
     payload = demo_sources.demo_sources_catalog()
@@ -103,7 +103,7 @@ def test_demo_catalog_status_does_not_rescan_every_registered_export(
     monkeypatch.setattr(
         demo_source_storage.source_store,
         "load_registry",
-        lambda: pytest.fail("catalog status must not trigger a full registry rescan"),
+        lambda **_kwargs: pytest.fail("catalog status must not trigger a full registry rescan"),
     )
 
     payload = demo_sources.demo_sources_catalog()

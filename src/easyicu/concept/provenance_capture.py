@@ -11,7 +11,7 @@ from easyicu.concept.provenance import (
 )
 from easyicu.concept.schema import ConceptDictionary
 from easyicu.config import DataSourceConfig
-from easyicu.resources import package_path
+from easyicu.resources import SIC_CASE_OVERLAY_FILE, package_path
 
 
 class ExtractionProvenanceCapture:
@@ -27,7 +27,7 @@ class ExtractionProvenanceCapture:
         import hashlib
 
         digests = {}
-        for name in ("concept-dict.json", "sofa2-dict.json", "data-sources.json", "clinical-contracts.json"):
+        for name in ("concept-dict.json", SIC_CASE_OVERLAY_FILE, "sofa2-dict.json", "data-sources.json", "clinical-contracts.json"):
             with package_path(name) as path:
                 digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
         return metadata_digest([digests, resolver_implementation_digest()])

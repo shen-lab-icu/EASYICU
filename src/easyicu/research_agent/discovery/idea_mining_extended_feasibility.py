@@ -322,17 +322,24 @@ class ExtendedFeasibilityIndex:
         from .idea_mining import _build_concept_lookup  # lazy: avoid import cycle
         from .idea_mining import normalize_concept_name
 
+        use_packaged_dictionary = data_dir is None
         if data_dir is None:
             import easyicu
 
             data_dir = Path(easyicu.__file__).resolve().parent / "data"
 
         concept_db_map: Dict[str, FrozenSet[str]] = {}
-        for fname in ("concept-dict.json", "sofa2-dict.json"):
+        names = ["concept-dict.json", "sofa2-dict.json"]
+        packaged_overlay = None
+        if use_packaged_dictionary:
+            from easyicu.resources import SIC_CASE_OVERLAY_FILE, _sic_case_overlay
+            packaged_overlay = _sic_case_overlay()
+            names.append(SIC_CASE_OVERLAY_FILE)
+        for fname in names:
             fp = Path(data_dir) / fname
             if not fp.exists():
                 continue
-            raw = json.loads(fp.read_text(encoding="utf-8"))
+            raw = packaged_overlay if use_packaged_dictionary and fname == SIC_CASE_OVERLAY_FILE else json.loads(fp.read_text(encoding="utf-8"))
             for name, defn in raw.items():
                 if not isinstance(defn, dict):
                     continue

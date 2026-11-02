@@ -21,13 +21,15 @@ import pyarrow.parquet as pq
 import pandas as pd
 
 from easyicu.databases.research_plan_requirements import _constraints
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import FirstObservedIcuCoordinate
+from easyicu.research_agent.acquisition.first_icu_stay import FirstObservedIcuCoordinate
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingError, exact_integer_series
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import (
-    FLAG_COLUMN, REASON_COLUMN, REQUIRED_COLUMNS, SCHEMA,
+from easyicu.research_agent.acquisition.first_icu_stay import (
+    FLAG_COLUMN, REASON_COLUMN, REQUIRED_COLUMNS, EICU_FIRST_OBSERVED_CANDIDATE_SCHEMA as SCHEMA,
 )
 from easyicu.research_agent.authority.filesystem import AnchoredDirectory
-from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import NumericClaim, _lookup_evidence_record
+from easyicu.research_agent.authority.evidence_snapshot import load_current_evidence_snapshot
+from easyicu.research_agent.schema import EvidenceRecord
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint, verify_raw_preparation_review
 from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
@@ -49,8 +51,11 @@ _SCOPE_KEY = "first_observed_icu_preparation_scope"
 _SUMMARY = (
     "Prepare the source-visible adult first ICU subset from the complete eICU Demo patient table. "
     "Read patient, hospitalization, unit order, unit type and age fields; exclude people with "
-    "multiple visible hospitalizations or unverified identity, order or age. This is not a "
-    "lifetime first ICU guarantee and does not authorize analysis."
+    "multiple visible hospitalizations or unverified identity, order or age. Completeness verification "
+    "may repeatedly read and hash the complete official archive and patient Parquet bytes, and streams the "
+    "decompressed patient CSV; these files may contain other information including outcomes. "
+    "Only the six named fields are selected for comparison and cohort calculation. This is not a "
+    "lifetime first ICU guarantee and does not authorize outcome analysis or research execution."
 )
 _ADAPTER = "eicu-demo-first-observed-single-hospital-adult/1"
 _PATIENT_EXCLUSION_REASONS = frozenset({
@@ -121,12 +126,27 @@ def _private_source_flow(candidate: Any) -> dict[str, Any]:
     }
 
 
+def _readonly_evidence_record(run_dir: Path, evidence_id: str) -> EvidenceRecord | None:
+    """Resolve the selected evidence generation without repairing the run."""
+    try:
+        snapshot = load_current_evidence_snapshot(run_dir)
+        records = [EvidenceRecord.model_validate(record) for record in snapshot.records]
+        # The mutable store validates every numeric claim when loading a
+        # generation. Preserve that fail-closed contract for read-only views.
+        for claim in snapshot.numeric_claims:
+            NumericClaim.from_dict(claim)
+        return _lookup_evidence_record(records, snapshot.aliases, evidence_id)
+    except Exception:
+        # EvidenceStore._load_snapshot likewise rejects any schema error.
+        return None
+
+
 def _verified_scientific_review(*, run_dir: Path, authority: PlanReviewAuthority, context: Any) -> str:
     """Revalidate the persisted review, not just the digest supplied in a request."""
     expected = authority.evidence_sha256.get("scientific_plan_review")
     if not expected or not (run_dir / "evidence").is_dir():
         raise ValueError("first_observed_preparation_scientific_review_missing")
-    record = EvidenceStore(run_dir).get("scientific_plan_review")
+    record = _readonly_evidence_record(run_dir, "scientific_plan_review")
     path = verified_run_evidence_path(run_dir, record) if record is not None else None
     if path is None or record.sha256 != expected:
         raise ValueError("first_observed_preparation_scientific_review_missing")
@@ -142,12 +162,137 @@ def _verified_scientific_review(*, run_dir: Path, authority: PlanReviewAuthority
     return expected
 
 
-def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
-    """Construct scope from bound plan, registered source, and metadata only."""
+def _pending_execution_proposal(run_dir: Path, review: PlanReviewAuthority) -> str:
+    """Bind a prepare-only proposal to its still-unapproved execution checkpoint."""
+    from easyicu.research_agent.orchestration.human_review_checkpoint import (
+        HumanReviewCheckpointError, load_checkpoint,
+    )
+
+    try:
+        checkpoint = load_checkpoint(run_dir / "human_review_checkpoint.json")
+    except HumanReviewCheckpointError as exc:
+        raise ValueError("first_observed_preparation_review_not_pending") from exc
+    execution = review.execution
+    if (execution is None or checkpoint.run_id != run_dir.name
+            or checkpoint.consumed_decision_sha256 is not None
+            or checkpoint.approved_decisions_sha256 is not None or checkpoint.approved_decisions
+            or checkpoint.approved_decision_records or checkpoint.execution_start_receipt is not None
+            or execution.pipeline_config_sha256 != checkpoint.pipeline_config_sha256
+            or execution.capability_activation_sha256 != checkpoint.capability_activation_sha256
+            or execution.run_input_capsule_sha256 != checkpoint.run_input_capsule_sha256):
+        raise ValueError("first_observed_preparation_review_not_pending")
+    matching = [item for item in checkpoint.requests
+                if isinstance(item.payload.get("plan_review_authority"), Mapping)]
+    if (not matching or len(matching) != len(checkpoint.requests)
+            or any(item.authority_sha256 != canonical_sha256(item.payload)
+            or item.payload.get("plan_review_authority") != review.model_dump(mode="json") for item in matching)
+            or not any(item.kind == "scientific_stop" and item.payload.get("approval_allowed") is False for item in matching)):
+        raise ValueError("first_observed_preparation_review_authority_mismatch")
+    with AnchoredDirectory.open(run_dir) as directory:
+        raw = directory.read_bytes("run_input_capsule.json", max_bytes=5 * 1024 * 1024)
+        directory.assert_still_selected()
+    if hashlib.sha256(raw).hexdigest() != execution.run_input_capsule_sha256:
+        raise ValueError("first_observed_preparation_review_capsule_mismatch")
+    record = _readonly_evidence_record(run_dir, "run_input_capsule")
+    path = verified_run_evidence_path(run_dir, record) if record is not None else None
+    if path is None or record.sha256 != execution.run_input_capsule_sha256:
+        raise ValueError("first_observed_preparation_review_capsule_mismatch")
+    with AnchoredDirectory.open(path.parent) as directory:
+        evidence = directory.read_bytes(path.name, max_bytes=5 * 1024 * 1024)
+        directory.assert_still_selected()
+    from easyicu.research_agent.authority.run_input import RunInputCapsule, RunInputCapsuleV2, RunInputCapsuleV3
+
+    payload = json.loads(raw)
+    schema = payload.get("schema_version") if isinstance(payload, dict) else None
+    models = {"easyicu.run_input_capsule/1": RunInputCapsule, "easyicu.run_input_capsule/2": RunInputCapsuleV2,
+              "easyicu.run_input_capsule/3": RunInputCapsuleV3}
+    if schema not in models or evidence != raw:
+        raise ValueError("first_observed_preparation_review_capsule_mismatch")
+    capsule = models[schema].model_validate(payload)
+    with AnchoredDirectory.open(run_dir) as directory:
+        context_raw = directory.read_bytes("research_context.json", max_bytes=5 * 1024 * 1024)
+        directory.assert_still_selected()
+    context = json.loads(context_raw)
+    identity = capsule.scientific_identity
+    context_cohort = context.get("cohort") if isinstance(context, dict) else None
+    context_preferences = context.get("user_preferences") if isinstance(context, dict) else None
+    identity_preferences = identity.get("user_preferences")
+    if (canonical_sha256(identity) != capsule.scientific_identity_sha256
+            or capsule.context_evidence_id != "research_context" or capsule.context_relative_path != "research_context.json"
+            or capsule.context_sha256 != review.evidence_sha256.get("research_context")
+            or hashlib.sha256(context_raw).hexdigest() != capsule.context_sha256
+            or not isinstance(context_cohort, dict) or not isinstance(context_preferences, dict)
+            or not isinstance(identity_preferences, dict)
+            or identity.get("question") != context.get("research_question")
+            or review.plan_payload.get("research_question") != context.get("research_question")
+            or identity.get("database") != context_cohort.get("database")
+            or identity_preferences.get("data_constraints") != context_preferences.get("data_constraints")):
+        raise ValueError("first_observed_preparation_review_capsule_mismatch")
+    try:
+        constraints = json.loads(context_preferences.get("data_constraints") or "{}")
+    except (ValueError, TypeError) as exc:
+        raise ValueError("first_observed_preparation_review_capsule_mismatch") from exc
+    if (not isinstance(constraints, dict) or not isinstance(context_cohort.get("provenance"), dict)
+            or not isinstance(constraints.get("source_identity"), dict)
+            or constraints["source_identity"].get("database") != context_cohort.get("database")
+            or context_cohort["provenance"].get("source_identity") != constraints["source_identity"]):
+        raise ValueError("first_observed_preparation_review_capsule_mismatch")
+    return checkpoint.checkpoint_sha256
+
+
+def _assert_pending_request_set(run_dir: Path, pending: Any) -> None:
+    from easyicu.research_agent.orchestration.human_review_checkpoint import HumanReviewCheckpointError, load_checkpoint
+
+    try:
+        checkpoint = load_checkpoint(run_dir / "human_review_checkpoint.json")
+    except HumanReviewCheckpointError as exc:
+        raise ValueError("first_observed_preparation_review_not_pending") from exc
+    if tuple(checkpoint.requests) != tuple(pending.requests):
+        raise ValueError("first_observed_preparation_review_request_set_mismatch")
+
+
+def _metadata_source(identity: SourceIdentity) -> tuple[Path, dict[str, str]]:
+    """Bind the named Demo and metadata only; no patient or archive byte reads."""
+    from easyicu.webserver.demo_source_storage import read_marker, verified_public_demo_replanning_export
+
+    registered_path = sources.stored_source_path_for_identity(identity)
+    if registered_path is None:
+        raise ValueError("first_observed_preparation_source_unavailable")
+    export = Path(registered_path)
+    historical = verified_public_demo_replanning_export(export)
+    if historical is None:
+        raise ValueError("first_observed_preparation_source_unavailable")
+    source, paths = historical
+    if (source.database != "eicu_demo" or identity.source_id != source.id
+            or identity.version != source.version or identity.archive_sha256 != source.archive_sha256):
+        raise ValueError("first_observed_preparation_source_mismatch")
+    with AnchoredDirectory.open(export) as directory:
+        manifest_bytes = directory.read_bytes("_manifest.json", max_bytes=16 * 1024 * 1024)
+        directory.assert_still_selected()
+    manifest = json.loads(manifest_bytes)
+    if not isinstance(manifest, dict) or manifest.get("database") != "eicu_demo" or manifest.get("data_path") != str(paths.raw):
+        raise ValueError("first_observed_preparation_source_mismatch")
+    metadata = {"source_id": source.id, "source_version": source.version,
+                "export_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                "archive_sha256": source.archive_sha256,
+                "raw_path_sha256": hashlib.sha256(str(paths.raw).encode()).hexdigest()}
+    for name, path in (("conversion", paths.raw / "conversion_manifest.json"),
+                       ("prepared", paths.prepared_marker), ("extracted", paths.extracted_marker),
+                       ("converted", paths.converted_marker)):
+        if name != "conversion" and (read_marker(path, source) or {}).get("archive_sha256") != source.archive_sha256:
+            raise ValueError("first_observed_preparation_source_mismatch")
+        with AnchoredDirectory.open(path.parent) as directory:
+            content = directory.read_bytes(path.name, max_bytes=4 * 1024 * 1024)
+            directory.assert_still_selected()
+        metadata[name + "_metadata_sha256"] = hashlib.sha256(content).hexdigest()
+    return export, metadata
+
+
+def _host_inputs(*, run_dir: Path, request: Any, verify_source_bytes: bool = True) -> tuple[dict[str, Any], Path]:
+    """Construct a plan-bound scope; byte verification requires an existing grant."""
     raw = request.payload.get("plan_review_authority")
     review = PlanReviewAuthority.model_validate(raw)
-    if review.execution is not None:
-        raise ValueError("first_observed_preparation_review_not_proposal")
+    checkpoint_sha256 = _pending_execution_proposal(run_dir, review) if review.execution is not None else None
     projection = reviewed_population_spec(run_dir=run_dir, pending=SimpleNamespace(requests=[request]))
     if projection is None or projection["plan_sha256"] != review.plan_sha256:
         raise ValueError("first_observed_preparation_population_unverified")
@@ -167,21 +312,17 @@ def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
     identity = SourceIdentity.from_record(_constraints(context).get("source_identity"))
     if identity is None or identity.database != "eicu_demo":
         raise ValueError("first_observed_preparation_source_unavailable")
-    registered = [item for item in sources.load_registry().get("sources", [])
-                  if isinstance(item, Mapping) and item.get("path")
-                  and sources.registered_source_identity(str(item["path"])) == identity]
-    if len(registered) != 1:
-        raise ValueError("first_observed_preparation_source_unavailable")
-    export = Path(str(registered[0]["path"]))
-    binding = resolve_raw_source_identity_binding(export_path=export, database="eicu_demo")
-    if binding is None or binding.family != "eicu" or "patient" not in binding.table_paths:
-        raise ValueError("first_observed_preparation_source_unavailable")
-    source = verified_public_demo_raw(Path(binding.table_paths["patient"]).parent)
-    if source is None or source.database != "eicu_demo" or not source.archive_sha256:
-        raise ValueError("first_observed_preparation_source_unavailable")
-    if identity.archive_sha256 != source.archive_sha256:
-        raise ValueError("first_observed_preparation_source_mismatch")
-    return ({"adapter_id": _ADAPTER, "purpose": "prepare_only", "analysis_authorized": False,
+    export, metadata = _metadata_source(identity)
+    if verify_source_bytes:
+        binding = resolve_raw_source_identity_binding(export_path=export, database="eicu_demo")
+        if binding is None or binding.family != "eicu" or "patient" not in binding.table_paths:
+            raise ValueError("first_observed_preparation_source_unavailable")
+        source = verified_public_demo_raw(Path(binding.table_paths["patient"]).parent)
+        if (source is None or source.database != "eicu_demo" or source.archive_sha256 != identity.archive_sha256
+                or binding.export_manifest_sha256 != metadata["export_manifest_sha256"]):
+            raise ValueError("first_observed_preparation_source_mismatch")
+    return ({"adapter_id": _ADAPTER, "read_scope_version": 2, "purpose": "prepare_only", "analysis_authorized": False,
+             **({"human_review_checkpoint_sha256": checkpoint_sha256} if checkpoint_sha256 else {}),
              "producer_runtime_sha256": runtime_digest(),
              "database": "eicu_demo", "source_identity_sha256": canonical_sha256(identity.to_dict()),
              "plan_sha256": review.plan_sha256, "context_sha256": context_sha,
@@ -192,14 +333,14 @@ def _host_inputs(*, run_dir: Path, request: Any) -> tuple[dict[str, Any], Path]:
              "multiple_hospitalization_policy": "exclude_patient",
              "missing_age_policy": "exclude_patient", "not_lifetime_first_icu": True,
              "read_outcome_columns": False, "public_coordinate_authorized": False,
-             "export_manifest_sha256": binding.export_manifest_sha256,
-             "patient_table_sha256": binding.table_sha256["patient"],
-             "archive_sha256": source.archive_sha256}, export)
+             "full_archive_and_patient_file_bytes_read": True,
+             "official_patient_csv_decompression_streamed": True,
+             **metadata}, export)
 
 
 def proposed_first_observed_scope(*, run_dir: Path, request: Any) -> dict[str, Any]:
-    """Return an exact reviewable scope, without reading patient rows."""
-    scope, _ = _host_inputs(run_dir=run_dir, request=request)
+    """Review the pinned source and metadata before any patient byte reads."""
+    scope, _ = _host_inputs(run_dir=run_dir, request=request, verify_source_bytes=False)
     return scope
 
 
@@ -227,6 +368,8 @@ def _verify_consumed_owner(*, run_dir: Path, checkpoint: RawPreparationCheckpoin
         raise ValueError("first_observed_preparation_run_owner_changed")
     pending, _ = agent_pipeline_runs.raw_preparation_review_owner(binding.run_id, binding.study_context_id)
     expected = PlanReviewAuthority.model_validate(checkpoint.request.payload.get("plan_review_authority"))
+    if expected.execution is not None:
+        _assert_pending_request_set(run_dir, pending)
     authorities = [PlanReviewAuthority.model_validate(request.payload["plan_review_authority"])
                    for request in pending.requests
                    if isinstance(request.payload.get("plan_review_authority"), Mapping)]
@@ -238,16 +381,25 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
                                       binding: RawPreparationHostBinding,
                                       scope: Mapping[str, Any]) -> FirstObservedIcuCoordinate:
     """Consume host approval before reading source rows and attest exact bytes."""
-    expected, export = _host_inputs(run_dir=run_dir, request=checkpoint.request)
+    expected, export = _host_inputs(run_dir=run_dir, request=checkpoint.request, verify_source_bytes=False)
     scope = dict(scope)
     if scope != expected:
         raise ValueError("first_observed_preparation_scope_mismatch")
     verify_raw_preparation_review(checkpoint=checkpoint, requested_scope=scope, scope_key=_SCOPE_KEY,
         expected_summary=_SUMMARY, registered_database="eicu_demo",
         registered_identity_sha256=scope["source_identity_sha256"], plan_sha256=scope["plan_sha256"],
-        context_sha256=scope["context_sha256"], scientific_review_sha256=scope["scientific_review_sha256"])
+        context_sha256=scope["context_sha256"], scientific_review_sha256=scope["scientific_review_sha256"],
+        allow_execution_bound=bool(scope.get("human_review_checkpoint_sha256")))
     consume_host_review(checkpoint=checkpoint, scope=scope, **binding.model_dump(mode="python"))
     _verify_consumed_owner(run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
+    # Only the consumed, exact host decision permits the first source-byte read.
+    current_scope, current_export = _host_inputs(run_dir=run_dir, request=checkpoint.request)
+    if current_scope != scope or current_export != export:
+        raise ValueError("first_observed_preparation_scope_mismatch")
+    source_binding = resolve_raw_source_identity_binding(export_path=export, database="eicu_demo")
+    if source_binding is None or "patient" not in source_binding.table_sha256:
+        raise ValueError("first_observed_preparation_source_unavailable")
+    patient_sha256 = source_binding.table_sha256["patient"]
     candidate = derive_from_verified_eicu_demo(export)
     proof = candidate.receipt.get("source_binding", {})
     completeness = proof.get("complete_patient_source", {})
@@ -255,17 +407,18 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
         or completeness.get("schema_version") != "easyicu.eicu_demo_complete_patient_source/1"
         or completeness.get("all_source_rows_compared") is not True
         or completeness.get("archive_sha256") != scope["archive_sha256"]
-        or proof.get("patient_table_sha256") != scope["patient_table_sha256"]
+        or proof.get("patient_table_sha256") != patient_sha256
         or proof.get("export_manifest_sha256") != scope["export_manifest_sha256"]):
         raise ValueError("first_observed_preparation_source_proof_mismatch")
     source_flow = _private_source_flow(candidate)
     buffer = io.BytesIO()
     pq.write_table(pa.Table.from_pandas(candidate.frame, preserve_index=False), buffer)
     data = buffer.getvalue()
-    body = {"schema_version": "easyicu.first-observed-coordinate-attestation/2",
+    body = {"schema_version": "easyicu.first-observed-coordinate-attestation/3",
             "scope_sha256": canonical_sha256(scope), "checkpoint_sha256": checkpoint.checkpoint_sha256,
             "binding_sha256": canonical_sha256(binding.model_dump(mode="json")),
-            "coordinate_sha256": hashlib.sha256(data).hexdigest(), "source_complete_six_columns": True,
+            "coordinate_sha256": hashlib.sha256(data).hexdigest(), "patient_table_sha256": patient_sha256,
+            "source_complete_six_columns": True,
             "analysis_authorized": False, "private_source_flow": source_flow}
     # The source and reviewed plan can change while the candidate is being
     # computed. Do not publish an attestation for the earlier snapshot after
@@ -273,6 +426,9 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
     current_scope, current_export = _host_inputs(run_dir=run_dir, request=checkpoint.request)
     if current_scope != scope or current_export != export:
         raise ValueError("first_observed_preparation_scope_changed_before_publication")
+    current_binding = resolve_raw_source_identity_binding(export_path=export, database="eicu_demo")
+    if current_binding is None or current_binding.table_sha256.get("patient") != patient_sha256:
+        raise ValueError("first_observed_preparation_source_changed_before_publication")
     _verify_consumed_owner(run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
     document = canonical_json({"body": body, "signature": _signature(body)}).encode()
     root = _private_root(create=True)
@@ -286,18 +442,20 @@ def prepare_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparati
 def _coordinate(root: Path, binding: RawPreparationHostBinding, scope: Mapping[str, Any], checkpoint: RawPreparationCheckpoint,
                 body: Mapping[str, Any]) -> FirstObservedIcuCoordinate:
     return FirstObservedIcuCoordinate(root / (binding.nonce + ".parquet"), str(body["coordinate_sha256"]),
-        scope["archive_sha256"], scope["patient_table_sha256"], scope["export_manifest_sha256"],
+        scope["archive_sha256"], body["patient_table_sha256"], scope["export_manifest_sha256"],
         scope["plan_sha256"], checkpoint.checkpoint_sha256, preparation_run_id=binding.run_id,
         preparation_binding_sha256=canonical_sha256(binding.model_dump(mode="json")))
 
 
-def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
-                                     binding: RawPreparationHostBinding,
-                                     scope: Mapping[str, Any]) -> tuple[FirstObservedIcuCoordinate, dict[str, Any] | None]:
-    """Reverify host decision, exact scope, signed result and coordinate bytes."""
-    expected, _ = _host_inputs(run_dir=run_dir, request=checkpoint.request)
+def _resolve_consumed_coordinate_evidence(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
+                                         binding: RawPreparationHostBinding,
+                                         scope: Mapping[str, Any]) -> tuple[FirstObservedIcuCoordinate, dict[str, Any] | None]:
+    """Verify completed private evidence without rereading the source tables.
+
+    This is for reporting an already consumed decision, never a new read grant.
+    """
     scope = dict(scope)
-    if scope != expected or checkpoint.request.payload.get(_SCOPE_KEY) != scope:
+    if checkpoint.request.payload.get(_SCOPE_KEY) != scope:
         raise ValueError("first_observed_preparation_scope_mismatch")
     _verify_consumed_owner(run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
     root = _private_root(create=False)
@@ -310,21 +468,37 @@ def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparatio
     if not isinstance(signature, str) or not hmac.compare_digest(signature, _signature(body)):
         raise ValueError("first_observed_attestation_invalid")
     version = body.get("schema_version")
-    if version not in {"easyicu.first-observed-coordinate-attestation/1",
-                       "easyicu.first-observed-coordinate-attestation/2"}:
+    if version != "easyicu.first-observed-coordinate-attestation/3" or scope.get("read_scope_version") != 2:
         raise ValueError("first_observed_attestation_binding_mismatch")
     expected_body = {"schema_version": version,
                      "scope_sha256": canonical_sha256(scope), "checkpoint_sha256": checkpoint.checkpoint_sha256,
                      "binding_sha256": canonical_sha256(binding.model_dump(mode="json")), "coordinate_sha256": digest,
                      "source_complete_six_columns": True, "analysis_authorized": False}
-    flow = body.get("private_source_flow") if version.endswith("/2") else None
-    if version.endswith("/2"):
-        if not isinstance(flow, dict):
-            raise ValueError("first_observed_attestation_binding_mismatch")
-        expected_body["private_source_flow"] = flow
+    flow = body.get("private_source_flow")
+    patient_sha256 = body.get("patient_table_sha256")
+    if (not isinstance(flow, dict) or not isinstance(patient_sha256, str)
+            or len(patient_sha256) != 64 or any(c not in "0123456789abcdef" for c in patient_sha256)):
+        raise ValueError("first_observed_attestation_binding_mismatch")
+    expected_body["private_source_flow"] = flow
+    expected_body["patient_table_sha256"] = patient_sha256
     if body != expected_body:
         raise ValueError("first_observed_attestation_binding_mismatch")
     return _coordinate(root, binding, scope, checkpoint, body), flow
+
+
+def _resolve_prepared_first_observed(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,
+                                     binding: RawPreparationHostBinding,
+                                     scope: Mapping[str, Any]) -> tuple[FirstObservedIcuCoordinate, dict[str, Any] | None]:
+    """Reverify current source as well as the already consumed coordinate."""
+    coordinate, flow = _resolve_consumed_coordinate_evidence(
+        run_dir=run_dir, checkpoint=checkpoint, binding=binding, scope=scope)
+    expected, export = _host_inputs(run_dir=run_dir, request=checkpoint.request)
+    if dict(scope) != expected:
+        raise ValueError("first_observed_preparation_scope_mismatch")
+    current_binding = resolve_raw_source_identity_binding(export_path=export, database="eicu_demo")
+    if current_binding is None or current_binding.table_sha256.get("patient") != coordinate.patient_table_sha256:
+        raise ValueError("first_observed_preparation_source_changed")
+    return coordinate, flow
 
 
 def resolve_prepared_first_observed_coordinate(*, run_dir: Path, checkpoint: RawPreparationCheckpoint,

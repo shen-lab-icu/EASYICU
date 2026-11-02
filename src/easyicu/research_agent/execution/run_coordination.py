@@ -9,120 +9,16 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
-from dataclasses import dataclass, field
 from threading import Event
-from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
-from ..schema import AnalysisStep
+from ..schema import AgentRuntimeState, AnalysisStep
 from ..authority.provider_hard_stop import ProviderHardStopError
-from .step_worker_state import guarded_parallel_execute, merge_parallel_runtime_states
-
-_SUCCESS_REPLAN_REQUEST_FIELDS = (
-    "replan_requested",
-    "plan_revision_requested",
+from ..contracts.runtime import RunExecutionState, RunTransition
+from .replan_review import (
+    _successful_run_transition_requests_replan as _successful_run_transition_requests_replan,
+    _successful_step_requests_replan as _successful_step_requests_replan,
 )
-
-
-def _successful_step_requests_replan(
-    record: Mapping[str, Any],
-    *,
-    progressive_observation_loop: bool = False,
-) -> bool:
-    """Decide whether a successful observation authorizes suffix revision."""
-
-    if str(record.get("status") or "") != "ok":
-        return False
-    containers = [record]
-    summary = record.get("step_summary")
-    if isinstance(summary, Mapping):
-        containers.append(summary)
-    explicit_request = any(
-        container.get(field) is True
-        for container in containers
-        for field in _SUCCESS_REPLAN_REQUEST_FIELDS
-    )
-    generation_mode = str(record.get("generation_mode") or "").strip().lower()
-    authority_kind = str(record.get("step_authority_kind") or "").strip().lower()
-    host_deterministic = generation_mode.startswith(
-        "deterministic_"
-    ) or authority_kind.startswith("host_deterministic_")
-    return explicit_request or (
-        progressive_observation_loop and not host_deterministic
-    )
-
-
-def _successful_run_transition_requests_replan(
-    pipeline: Any,
-    record: Mapping[str, Any],
-    has_remaining: bool,
-) -> bool:
-    """Apply host strategy and queue guards to one clean observation."""
-
-    return bool(
-        pipeline._enable_replanning
-        and has_remaining
-        and _successful_step_requests_replan(
-            record,
-            progressive_observation_loop=(
-                getattr(pipeline, "_planner_strategy", None) == "progressive_v2"
-            ),
-        )
-    )
-
-
-@dataclass(slots=True)
-class RunExecutionState:
-    """Mutable queue state without a second copy of the current plan."""
-
-    remaining_steps: list[AnalysisStep]
-    executed_step_ids: set[str]
-    stop_on_failure: bool = False
-    stop_failure_roles: frozenset[str] = frozenset()
-    stop_reason: Optional[str] = None
-    # Steps that failed while the queue continued. Consumers of their declared
-    # outputs are skipped by the caller's dependency gate, not by suppressing
-    # the whole remaining queue.
-    failed_step_ids: list[str] = field(default_factory=list)
-    # Caller-requested stop point. A failed step at this coordinate still stops
-    # the queue, because the request is a scheduling command, not a replan.
-    stop_after_step_id: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class RunTransition:
-    """A caller-authorized scheduling transition after one completed step."""
-
-    kind: Literal["continue", "stop", "pause", "replan"]
-    reason: Optional[str] = None
-    revised_plan: Any = None
-    rerun_current_step: bool = False
-
-    @classmethod
-    def continue_run(cls) -> "RunTransition":
-        return cls(kind="continue")
-
-    @classmethod
-    def stop(cls, reason: str) -> "RunTransition":
-        return cls(kind="stop", reason=str(reason))
-
-    @classmethod
-    def pause(cls, reason: str) -> "RunTransition":
-        """Stop scheduling without converting a review wait into a failure."""
-
-        return cls(kind="pause", reason=str(reason))
-
-    @classmethod
-    def replan(
-        cls,
-        revised_plan: Any,
-        *,
-        rerun_current_step: bool = False,
-    ) -> "RunTransition":
-        return cls(
-            kind="replan",
-            revised_plan=revised_plan,
-            rerun_current_step=bool(rerun_current_step),
-        )
 
 
 class RunCoordinator:
@@ -280,6 +176,98 @@ class RunCoordinator:
                         pending.cancel()
         if stop_error is not None:
             raise stop_error
+
+
+def parallel_isolation_blocked(*, pipeline, steps, typed_dependencies, cohort_producer,
+                               stop_after, evidence, run_dir, isolation_available, findings):
+    """Report the serial fallback only when a parallel wave was otherwise eligible."""
+    blocked = (pipeline._max_concurrent_steps > 1 and len(steps) > 1
+        and not pipeline._enable_replanning and not typed_dependencies and not cohort_producer
+        and stop_after is None and pipeline._submission_profile_name is None
+        and not isolation_available(evidence=evidence, run_dir=run_dir))
+    if blocked:
+        from ..schema import ValidationFinding
+        findings.append(ValidationFinding(
+            validator="parallel_evidence_isolation", severity="info",
+            message="Concurrent steps were run in plan order because the host cannot yet isolate each worker's evidence reads.",
+            detail={"reason": "parallel_evidence_isolation_unavailable"},
+        ))
+    return blocked
+
+
+def merge_parallel_worker_results(*, runtime_state, shared_lock, steps,
+                                  parallel_runtime_states, merge_states):
+    """Merge completed worker states in plan order after the wave joins."""
+    with shared_lock:
+        completed = [(step.step_id, parallel_runtime_states[step.step_id])
+                     for step in steps if step.step_id in parallel_runtime_states]
+    return merge_states(runtime_state, completed)
+
+
+class StepExecutionState:
+    """Keep sequential state and batch-local worker states with their owner."""
+
+    def __init__(self, current: Any, lock: Any) -> None:
+        self.current = current
+        self.lock = lock
+        self.parallel_runtime_states: dict[str, Any] = {}
+
+    def execute(self, executor: Any, step: Any, *, batch: dict[str, Any],
+                typed_binding_resolver: Any, **kwargs: Any) -> dict[str, Any]:
+        base = batch.get("batch_base")
+        batch_resolver = batch.get("batch_binding_resolver")
+        result, record = executor(
+            step, runtime_state=self.current if base is None else base,
+            typed_binding_resolver=typed_binding_resolver if batch_resolver is None else batch_resolver,
+            batch_numeric_claims=batch.get("batch_numeric_claims"),
+            batch_artifact_authority=batch.get("batch_artifact_authority"), **kwargs,
+        )
+        if base is None:
+            self.current = result
+        else:
+            with self.lock:
+                self.parallel_runtime_states[step.step_id] = result
+        return record
+
+
+def merge_parallel_runtime_states(
+    base: AgentRuntimeState,
+    states: Sequence[tuple[str, AgentRuntimeState]],
+) -> AgentRuntimeState:
+    """Merge independent supervisor reflections in the declared plan order.
+
+    Each worker must descend from the same frozen batch state and may append
+    reflections, but may not replace prior memory or the scientific scope.
+    Step-local request, critique and result fields come from the last step
+    that actually advanced its supervisor state in plan order.
+    """
+    reflections = list(base.reflection_memory)
+    selected = base
+    fixed_fields = (
+        "run_id", "analysis_family", "semantics", "extraction_request",
+        "extraction_result", "manuscript_packet",
+    )
+    for step_id, state in states:
+        if any(getattr(base, name) != getattr(state, name) for name in fixed_fields):
+            raise ValueError("parallel supervisor state changed scientific scope")
+        count = len(base.reflection_memory)
+        if state.reflection_memory[:count] != base.reflection_memory:
+            raise ValueError("parallel supervisor state replaced prior reflections")
+        reflections.extend(state.reflection_memory[count:])
+        if state.current_step is not None and state.current_step.step_id == step_id:
+            selected = state
+    return selected.model_copy(update={"reflection_memory": reflections})
+
+
+def guarded_parallel_execute(step: Any, *, stopped: Any, execute_step: Any) -> Any:
+    """Stop queued work after a raised worker while in-flight workers settle."""
+    if stopped.is_set():
+        return None
+    try:
+        return execute_step(step)
+    except BaseException:
+        stopped.set()
+        raise
 
 
 __all__ = [

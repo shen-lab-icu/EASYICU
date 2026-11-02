@@ -26,7 +26,7 @@ def _synthetic_kernel(tmp_path):
     seed.write_text("from easyicu.helper_a import count\n")
     (root / "helper_a.py").write_text("count = 1\n")
     (root / "helper_b.py").write_text("count = 2\n")
-    lock = root / "research_agent/runner_image/requirements.lock"
+    lock = root / "research_agent/runner_image" / kernel_identity.RUNNER_PACKAGE_LOCK_NAME
     lock.parent.mkdir()
     lock.write_text("synthetic==1\n")
     return root, seed
@@ -170,7 +170,7 @@ def test_execution_kernel_identity_separates_host_source_and_runner_inputs(
     package_root = tmp_path / "easyicu"
     kernel_path = package_root / "kernel.py"
     host_path = package_root / "host_only.py"
-    lock_path = package_root / "research_agent" / "runner_image" / "requirements.lock"
+    lock_path = package_root / "research_agent" / "runner_image" / kernel_identity.RUNNER_PACKAGE_LOCK_NAME
     lock_path.parent.mkdir(parents=True)
     kernel_path.write_text("VALUE = 1\n", encoding="utf-8")
     host_path.write_text("HOST = 1\n", encoding="utf-8")
@@ -214,7 +214,7 @@ def test_the_runner_image_probe_reproves_the_identity_it_was_built_for(
     """Run the probe on a synthetic installed package, outside Docker."""
 
     package_root = tmp_path / "easyicu"
-    lock_path = package_root / "research_agent" / "runner_image" / "requirements.lock"
+    lock_path = package_root / "research_agent" / "runner_image" / kernel_identity.RUNNER_PACKAGE_LOCK_NAME
     lock_path.parent.mkdir(parents=True)
     (package_root / "__init__.py").write_text("", encoding="utf-8")
     kernel_path = package_root / "kernel.py"
@@ -253,3 +253,23 @@ def test_the_runner_image_probe_reproves_the_identity_it_was_built_for(
     assert "execution-kernel source mismatch" in other_kernel.stderr
     assert missing_kernel.returncode == RUNNER_IMAGE_KERNEL_MISMATCH_EXIT
     assert "execution-kernel file unavailable: kernel.py" in missing_kernel.stderr
+
+
+def test_old_runner_lock_cannot_satisfy_current_successor_identity(tmp_path, monkeypatch):
+    repo = Path(__file__).resolve().parents[3]
+    installed = tmp_path / "easyicu"
+    (installed / "__init__.py").parent.mkdir(parents=True)
+    (installed / "__init__.py").write_text("", encoding="utf-8")
+    locks = installed / "research_agent" / "runner_image"
+    locks.mkdir(parents=True)
+    source = repo / "src/easyicu/research_agent/runner_image"
+    for name in ("requirements.lock", kernel_identity.RUNNER_PACKAGE_LOCK_NAME):
+        (locks / name).write_bytes((source / name).read_bytes())
+    identity = build_execution_kernel_identity(installed, relative_paths=("__init__.py",))
+    monkeypatch.setattr(kernel_identity, "RUNNER_IMAGE_LOCK_PATH", str(locks / "requirements.lock"))
+    probe = subprocess.run(
+        [sys.executable, "-c", runner_image_probe_source(identity, ("__init__.py",))],
+        capture_output=True, text=True, env={"PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin"}, timeout=120,
+    )
+    assert probe.returncode == RUNNER_IMAGE_LOCK_MISMATCH_EXIT
+    assert "requirements.lock mismatch" in probe.stderr

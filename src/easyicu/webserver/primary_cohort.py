@@ -154,6 +154,32 @@ def normalize_diagnosis_tokens(raw: Any) -> Tuple[str, ...]:
     return unique
 
 
+def icd_source_proof_required(cohort: Any) -> bool:
+    """Conservatively project an ICD axis without executing a legacy cohort.
+
+    Full normalization remains mandatory at extraction and approval boundaries.
+    Invalid legacy values remain visible; anything that might enable ICD is
+    treated as requiring source proof rather than silently discarded.
+    """
+    if not isinstance(cohort, Mapping) or not cohort:
+        return False
+    try:
+        return bool(normalize_execution_cohort(cohort)["icd_enabled"])
+    except PrimaryCohortContractError:
+        preset = str(cohort.get("preset") or "").strip().lower()
+        if preset == "icd":
+            return True
+        if "icd_enabled" in cohort:
+            try:
+                return parse_bool(cohort.get("icd_enabled"), default=False)
+            except ValueError:
+                return True
+        return any(cohort.get(key) for key in (
+            "icd_include", "icd_exclude", "include_diagnoses", "exclude_diagnoses",
+            "include", "exclude",
+        ))
+
+
 def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
     """Return the flat cohort contract consumed by Data Extraction."""
 

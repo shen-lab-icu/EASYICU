@@ -47,6 +47,8 @@
     DISTRIBUTION_MISSINGNESS_AUTHORITY_INVALID: ['分布或缺失分析的设定无效', '某个分布或缺失分析步骤的设定不能被执行组件接受。'],
     LANDMARK_STAY_LENGTH_OUTCOME: ['结局是时间零点时仍在 ICU 者的总住院时长', '入组条件恰好保留在分析时间零点时仍在 ICU 的住院（landmark 队列），而结局是从入 ICU 算起的 ICU 住院时长。按这个条件人群陈述结局即可，或改报时间零点之后剩余的 ICU 住院时长。'],
     LITERATURE_DESIGN_ROUTE_NOT_EXPLICIT: ['文献对设计的作用未写明', '引用了文献，但没有写明每篇文献支撑了哪个设计要素。'],
+    LITERATURE_SOURCE_EVIDENCE_UNVERIFIED: ['文献依据尚未核实', '文献来源或筛选记录尚不足以核实计划所声明的依据。请检查原文和筛选记录，补全证据或移除无法支持的引用。'],
+    LITERATURE_SOURCE_INTEGRITY_INVALID: ['文献来源校验失败', '文献来源或筛选记录未通过完整性校验，不能据此支持计划。请检查原文和筛选记录，重新建立证据或移除无法支持的引用。'],
     LITERATURE_RETRIEVAL_NOT_CONDUCTED: ['未进行文献检索', '只有人工种子文献，没有完成可核查的实时检索。'],
     LITERATURE_SEARCH_PROVENANCE_INCOMPLETE: ['文献检索记录不完整', '检索的来源、日期或筛选记录不完整。'],
     LITERATURE_SEARCH_QUERY_NOT_RECORDED: ['检索式未记录', '检索回执没有保存确切的检索式。'],
@@ -56,6 +58,8 @@
     MODEL_TERM_CODING_CONFLICTS_WITH_DECLARED_DOMAIN: ['变量编码与取值类型冲突', '有分类或有序变量被当作连续变量编码。'],
     NOVELTY_POSITIONING_REVIEW_REQUIRED: ['创新性定位待独立审阅', '已筛到可比研究，但检索与自动筛选不能证明创新性；人群、暴露、时间零点、估计目标、分析路线和临床贡献仍需独立评估。'],
     OUTCOME_DEFINITION_UNRESOLVED: ['主要结局的定义不完整', '主要结局的含义、观察范围或汇总方式还没有确定，暂时无法分析。'],
+    QUESTION_UNCERTAINTY_UNRESOLVED: ['置信区间要求不明确', '研究问题中的置信区间要求尚不明确，请说明是否需要区间及其具体置信水平，再继续审阅。'],
+    QUESTION_DESCRIPTIVE_UNCERTAINTY_NOT_MET: ['描述结果未满足置信区间要求', '计划没有为主要描述结果指定可执行且符合问题要求的方法和置信水平。请核对来源、独立观测或患者分组依据，再修订计划；不能静默替换区间方法。'],
     PHENOTYPING_COMPARISON_CONTRACT_INVALID: ['表型比较的设定无效', '聚类后的描述性比较没有绑定到确切的主聚类队列与分配结果。'],
     PHENOTYPING_FIT_ROSTER_INVALID: ['聚类拟合变量清单无效', '需要把用于聚类拟合的变量和仅供阅读的变量分开声明。'],
     PHENOTYPING_OUTCOME_COMPARISON_INCOMPLETE: ['聚类后的结局比较不完整', '没有可执行的步骤覆盖所请求结局的分群比较。'],
@@ -116,6 +120,7 @@
   // The question a review decision asks the researcher, in Chinese.  English
   // readers keep the host's own authorization question.
   const QUESTIONS = {
+    QUESTION_UNCERTAINTY_UNRESOLVED: '请明确是否需要置信区间；如需要，请说明具体置信水平。',
     ADJUSTMENT_RATIONALE_OR_TIMING_UNBOUND: '你是否批准新研究版本中每个调整协变量的临床理由与基线时间定位？',
     POPULATION_SCOPE_AMENDMENT_DECLARED: '新计划改变了描述性结果的研究人群，是否接受这项声明的科学变更？',
     PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH: '研究应采用概念所有者发布的临床定义锚点，还是为所声明的临床锚点发布新的暴露定义（新的概念或研究版本）？',

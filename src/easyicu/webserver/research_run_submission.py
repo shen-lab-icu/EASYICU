@@ -145,7 +145,7 @@ class ResearchRunSubmissionReceipt(BaseModel):
     engine: Literal["research_agent_pipeline"] = "research_agent_pipeline"
     study_context_id: str
     study_context_revision: int
-    budget_mode: Literal["planner_canary", "full_reviewed"]
+    budget_mode: Literal["planner_canary", "full_reviewed", "deferred_reviewed"]
     planner_start_mode: PlannerStartMode
     resume_source_job_id: Optional[str] = None
     #: The automatic checkpoint seed this run declined, and why.
@@ -298,11 +298,29 @@ def submit_research_run(
     *,
     account_environment: Optional[Mapping[str, str]] = None,
     authorize: Optional[Callable[[], None]] = None,
+    no_automatic_retries: bool = False,
+    _controlled_candidate: Any = None,
+    _deferred_binding: Any = None,
 ) -> ResearchRunSubmissionReceipt:
     """Validate, bind, and start one ResearchAgentPipeline run."""
 
     if not isinstance(request, ResearchRunSubmissionRequest):
         raise TypeError("submit_research_run requires ResearchRunSubmissionRequest")
+    if type(no_automatic_retries) is not bool:
+        raise TypeError("no_automatic_retries must be a boolean")
+    if _controlled_candidate is not None:
+        if (not no_automatic_retries or request.planner_start_mode != "fresh"
+                or request.intent != "candidate_plan" or request.report_only
+                or request.plan_change_request is not None
+                or request.execution_resume_source_run_id or request.plan_revision_source_run_id):
+            raise ValueError("controlled_candidate_launch_scope_invalid")
+    if _deferred_binding is not None:
+        if (_controlled_candidate is not None or not no_automatic_retries
+                or request.planner_start_mode != "fresh" or request.intent != "candidate_plan"
+                or request.report_only or request.plan_change_request is not None
+                or request.execution_resume_source_run_id or request.plan_revision_source_run_id
+                or _deferred_binding.stage.study_context_id != request.study_context_id):
+            raise ValueError("deferred_reviewed_submission_scope_invalid")
     engine = "research_agent_pipeline"
     run_type = "full"
     clock = _LaunchClock()
@@ -326,7 +344,7 @@ def submit_research_run(
     path = str(source.get("path") or "").strip()
     if not path:
         _reject({"error": "study_context_source_required"})
-    desc = dataio.describe_source_tables(path)
+    desc = dataio.describe_source_tables(path, planning_metadata_only=True)
     if not desc.get("ok"):
         _reject(desc)
     clock.mark("describe_source")
@@ -371,7 +389,9 @@ def submit_research_run(
             study_context, intent=request.intent
         ),
     )
-    if budget_mode == "full_reviewed" or prepared_manifest is not None:
+    if _deferred_binding is not None:
+        budget_mode = "deferred_reviewed"
+    if _deferred_binding is None and (budget_mode == "full_reviewed" or prepared_manifest is not None):
         try:
             dataio.validate_research_pipeline_source(path, database=database)
         except dataio.ExportCohortError as exc:
@@ -439,6 +459,10 @@ def submit_research_run(
         }
         if literature_search_authorized:
             runner_kwargs["literature_search_authorized"] = True
+        if no_automatic_retries:
+            runner_kwargs["no_automatic_retries"] = True
+        if _controlled_candidate is not None:
+            runner_kwargs["expected_provider_public"] = dict(_controlled_candidate.seed.provider_public)
         if request.plan_change_request is not None:
             runner_kwargs["plan_change_request"] = request.plan_change_request
         planner_start_mode = request.planner_start_mode
@@ -533,6 +557,14 @@ def submit_research_run(
                 runner_kwargs["development_resume_source_job_id"] = (
                     development_resume_source_job_id
                 )
+        if _deferred_binding is not None:
+            runner_kwargs.update(
+                budget_mode="deferred_reviewed", no_automatic_retries=True,
+                allow_environment_resume=False,
+                development_resume_source_job_id=_deferred_binding.candidate_job_id,
+                expected_provider_public=dict(_deferred_binding.source_record.provider_public),
+                _deferred_stage=_deferred_binding.stage,
+            )
         if request.report_only:
             from easyicu.webserver.manuscript_repair import make_report_only_run_runner
             from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
@@ -590,7 +622,40 @@ def submit_research_run(
         terminal_stage = "agent_failed"
         result: Dict[str, Any] | None = None
         try:
-            result = base_runner(job)
+            if _deferred_binding is not None:
+                from easyicu.webserver.research_job_recovery import prepare_deferred_review_stage, run_deferred_review_stage
+                current = prepare_deferred_review_stage(
+                    service=durable, preparation_run_id=_deferred_binding.stage.preparation_run_id,
+                    study_context_id=_deferred_binding.stage.study_context_id,
+                    project_id=_deferred_binding.stage.project_id, session_id=_deferred_binding.stage.session_id,
+                )
+                if (current.source_seed_sha256 != _deferred_binding.source_seed_sha256
+                        or current.stage != _deferred_binding.stage):
+                    raise ValueError("deferred_reviewed_source_changed")
+                result = run_deferred_review_stage(
+                    runner=base_runner, job=job, task=current.task,
+                    expected_candidate_job_id=current.candidate_job_id,
+                )
+            elif _controlled_candidate is None:
+                result = base_runner(job)
+            else:
+                from types import SimpleNamespace
+                from easyicu.webserver.research_job_recovery import (
+                    prepare_controlled_candidate_from_original_job, run_controlled_candidate,
+                )
+                checked_binding = prepare_controlled_candidate_from_original_job(
+                    service=durable, original_job_id=_controlled_candidate.original_job_id,
+                    historical_worker_tree=_controlled_candidate.historical_worker_tree,
+                    _successor=getattr(_controlled_candidate, "successor", None))
+                if checked_binding.seed.seed_sha256 != _controlled_candidate.seed.seed_sha256:
+                    raise ValueError("controlled_candidate_seed_changed")
+                controlled_request = SimpleNamespace(no_automatic_retries=True,
+                    allow_environment_resume=False, study_context=study_context)
+                result = run_controlled_candidate(runner=base_runner, request=controlled_request,
+                                                  job=job, task=checked_binding.task,
+                                                  original_job_id=checked_binding.original_job_id,
+                                                  historical_worker_tree=checked_binding.historical_worker_tree,
+                                                  _successor=getattr(checked_binding, "successor", None))
             if job.cancel_requested:
                 terminal_stage = "agent_cancelled"
             elif (result.get("gate") or {}).get("status") == "blocked":
@@ -617,6 +682,8 @@ def submit_research_run(
     from easyicu.webserver.research_auto_resume import prepare_descriptor
 
     durable = current_service()
+    if (_controlled_candidate is not None or _deferred_binding is not None) and durable is None:
+        raise ValueError("controlled_candidate_durable_service_required")
     if durable is None or request.report_only:
         job = _submit_job("agent-run", runner)
         durable = None

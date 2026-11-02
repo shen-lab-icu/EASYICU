@@ -69,10 +69,9 @@ from .nonfinite_audit import (
     patch_strict_numeric_helper_nonfinite_guard,
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
-from .figure_output_registration import patch_figure_output_registration
+from .ast_rewrites import patch_figure_output_registration, patch_literal_mapping_access
+from .ast_rewrites import patch_pandas_numeric_container
 from .input_binding_receipt import patch_missing_loaded_input_binding_receipt
-from .literal_mapping_access import patch_literal_mapping_access
-from .pandas_numeric_container import patch_pandas_numeric_container
 from .rendering_role import patch_structured_analysis_role_selection
 from .runner_dispatch import (
     RunnerRepairServices,

@@ -277,7 +277,7 @@ _PREDICTION = MethodSuite(
             tier="standard_supporting",
             implementation="deterministic",
             produces="per-subgroup performance table",
-            runner="prediction_subgroup",
+            runner="prediction_subgroup_performance",
             reporting_items=("TRIPOD+AI 12", "TRIPOD+AI 18"),
         ),
         AnalysisMethod(

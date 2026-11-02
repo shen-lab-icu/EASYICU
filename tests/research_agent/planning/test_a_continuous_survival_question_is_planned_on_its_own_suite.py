@@ -12,12 +12,15 @@ Synthetic contexts only; zero patient rows.
 
 from __future__ import annotations
 
+from tests.support.reviewed_literature import curated_method_bundle
+
 import json
 from types import SimpleNamespace
 
 import pytest
 
 from easyicu.research_agent import pipeline as _pipeline
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.agents.family_spec_planner import (
     FAMILY_SPEC_GUIDE,
     family_spec_user_prompt,
@@ -37,9 +40,6 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 )
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
-)
 from easyicu.research_agent.planning.family_spec import (
     LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     FamilySpecError,
@@ -431,7 +431,7 @@ def _plan_through_host(context, authorities) -> tuple[AnalysisPlan, ScriptedMock
         required_primary_cohort_selection_mode="all_input_rows",
     ).output
     fake = SimpleNamespace(
-        _scientific_runtime_authorities=authorities,
+        _scientific_runtime_authorities=authorities, _services=PipelineServices(),
         _enable_publication_figure_skill=True,
         _max_total_steps=24,
     )
@@ -439,7 +439,6 @@ def _plan_through_host(context, authorities) -> tuple[AnalysisPlan, ScriptedMock
         pipeline=fake, plan=plan, context=context, agent_context=context,
         long_trajectory_bound=False, findings=[],
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _bind_findings = authorities.bind_plan(plan)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, [])
     authorities.validate_plan(bound)
@@ -495,7 +494,7 @@ def test_the_sealed_continuous_suite_is_planned_in_one_call_and_bound_to_the_sig
         "signed_landmark_continuous_survival_figure",
     ]
     review = build_plan_scientific_review(
-        context=context, plan=bound, literature=None,
+        context=context, plan=bound, literature=curated_method_bundle(context.research_question),
         figure_strategy=build_article_figure_strategy(context), runtime_authority=authority,
     )
     codes = {finding.code for finding in review.findings}

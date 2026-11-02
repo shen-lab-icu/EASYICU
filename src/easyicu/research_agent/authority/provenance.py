@@ -538,21 +538,79 @@ def publish_run_data_provenance(*, run_dir: Path, evidence: EvidenceStore):
     )
 
 
-def register_run_metadata(
+def register_run_dictionary(
     *, run_dir, evidence, write_fingerprint, assert_matches,
-    expected_concept_dict_sha, expected_sofa2_dict_sha,
+    expected_concept_dict_sha, expected_sofa2_dict_sha, expected_sic_case_overlay_sha=None,
 ):
-    """Keep dictionary drift validation and run metadata registration together."""
+    """Capture or recheck the immutable dictionary authority for this run."""
     path = run_dir / "concept_dict_fingerprint.json"
-    fingerprint = write_fingerprint(path)
+    existing = evidence.get("concept_dict_fingerprint")
+    if existing is None:
+        from ..concept_dict_audit import compute_concept_dict_fingerprint
+
+        initial = compute_concept_dict_fingerprint()
+        assert_matches(initial, expected_concept_dict_sha=expected_concept_dict_sha,
+                       expected_sofa2_dict_sha=expected_sofa2_dict_sha,
+                       expected_sic_case_overlay_sha=expected_sic_case_overlay_sha, mode="strict")
+        fingerprint = write_fingerprint(path)
+        if (initial.concept_dict_sha, initial.sofa2_dict_sha, initial.sic_case_overlay_sha) != (
+            fingerprint.concept_dict_sha, fingerprint.sofa2_dict_sha, fingerprint.sic_case_overlay_sha
+        ):
+            raise ValueError("dictionary changed while capturing run authority")
+    else:
+        from ..concept_dict_audit import ConceptDictFingerprint, sealed_run_dictionary_manifest_fields
+
+        fingerprint = ConceptDictFingerprint(
+            **sealed_run_dictionary_manifest_fields(run_dir, evidence)["concept_dict_fingerprint"]
+        )
     assert_matches(
         fingerprint, expected_concept_dict_sha=expected_concept_dict_sha,
         expected_sofa2_dict_sha=expected_sofa2_dict_sha, mode="strict",
+        expected_sic_case_overlay_sha=expected_sic_case_overlay_sha,
     )
-    if evidence.get("concept_dict_fingerprint") is None:
+    if existing is None:
         evidence.register_file(
             kind="log", description="SHA-256 fingerprint for EasyICU concept dictionaries.",
             source_path=path, evidence_id="concept_dict_fingerprint",
             producer="pipeline", generation_mode="system",
         )
+
+
+def prepare_context_dictionary_authority(run_dir, pipeline):
+    """Capture resource identity before the context builder consumes it."""
+    from ..concept_dict_audit import assert_dict_matches, write_concept_dict_fingerprint
+
+    evidence = EvidenceStore(root=run_dir, enforcement_mode=pipeline._evidence_enforcement_mode)
+    register_run_dictionary(
+        run_dir=run_dir, evidence=evidence, write_fingerprint=write_concept_dict_fingerprint,
+        assert_matches=assert_dict_matches, expected_concept_dict_sha=pipeline._expected_concept_dict_sha,
+        expected_sofa2_dict_sha=pipeline._expected_sofa2_dict_sha,
+        expected_sic_case_overlay_sha=pipeline._expected_sic_case_overlay_sha,
+    )
+    return run_dir / "research_context.json", evidence
+
+
+def dictionary_guarded_context_builder(builder, run_dir, evidence):
+    """Recheck the same sealed identity before exposing each built context."""
+    from ..concept_dict_audit import sealed_run_dictionary_manifest_fields
+
+    def build(**kwargs):
+        result = builder(**kwargs)
+        sealed_run_dictionary_manifest_fields(run_dir, evidence)
+        return result
+
+    return build
+
+
+def register_run_metadata(
+    *, run_dir, evidence, write_fingerprint, assert_matches,
+    expected_concept_dict_sha, expected_sofa2_dict_sha, expected_sic_case_overlay_sha=None,
+):
+    """Recheck the initial dictionary authority and publish context provenance."""
+    register_run_dictionary(
+        run_dir=run_dir, evidence=evidence, write_fingerprint=write_fingerprint,
+        assert_matches=assert_matches, expected_concept_dict_sha=expected_concept_dict_sha,
+        expected_sofa2_dict_sha=expected_sofa2_dict_sha,
+        expected_sic_case_overlay_sha=expected_sic_case_overlay_sha,
+    )
     publish_run_data_provenance(run_dir=run_dir, evidence=evidence)

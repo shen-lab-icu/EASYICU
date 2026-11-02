@@ -50,7 +50,7 @@ def test_registry_ambiguity_never_picks_an_arbitrary_export(monkeypatch, tmp_pat
 
     rows = [dict(id="one", database="aumc", path=str(tmp_path / "one"), ok=True),
             dict(id="two", database="aumc", path=str(tmp_path / "two"), ok=True)]
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": rows})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": rows})
     identity = SourceIdentity(database="aumc", registration_id="two")
     monkeypatch.setattr(sources, "registered_source_identity", lambda _: identity)
     with pytest.raises(MultiDatabaseError, match="source_ambiguous"):
@@ -69,7 +69,7 @@ def test_registration_identity_must_match_the_selected_row(monkeypatch, tmp_path
     from easyicu.research_agent.research_context.export_selection import SourceIdentity
 
     row = dict(id="one", database="aumc", path=str(tmp_path / "synthetic"), ok=True)
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [row]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [row]})
     monkeypatch.setattr(sources, "registered_source_identity", lambda _: SourceIdentity(database=database, registration_id=registration))
     with pytest.raises(MultiDatabaseError, match="multi_database_source_changed"):
         select_source(DatabaseTarget(database="aumc", source_id="one"))

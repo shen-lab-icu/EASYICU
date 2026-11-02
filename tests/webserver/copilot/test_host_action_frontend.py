@@ -31,6 +31,7 @@ def _node() -> str:
 def test_a_starting_decision_is_a_card_with_nothing_to_act_on() -> None:
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read("js/screens-guided-pi-confirmation.js")!r});
       const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({{
         tr: (en, zh) => zh, esc: value => String(value), iconHtml: () => '',

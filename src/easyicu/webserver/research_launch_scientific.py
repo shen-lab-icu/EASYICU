@@ -957,7 +957,7 @@ def _neutral_materialization_scope(
         isinstance(raw_modules, (list, tuple)) and not raw_modules
     ):
         try:
-            described = dataio.describe_source_tables(export_path)
+            described = dataio.describe_source_tables(export_path, planning_metadata_only=True)
         except Exception:  # noqa: BLE001 - scope default must never mask the
             described = {}  # owner's own manifest/inventory error below
         available = [
@@ -1086,7 +1086,7 @@ def _observability_preserving_exposure(
     return alternative
 
 
-def _bound_source_column(export_path: Optional[str]):
+def _bound_source_column(export_path: Optional[str], *, database: str | None = None):
     """Read a named concept as the bound source's owner-declared output column.
 
     Some public concepts are published by a versioned composite output under a
@@ -1101,12 +1101,18 @@ def _bound_source_column(export_path: Optional[str]):
 
     available: frozenset[str] = frozenset()
     if export_path:
-        try:
-            source = build_available_catalog(Path(export_path).expanduser())
-        except (FileNotFoundError, OSError, ValueError):
-            source = None
-        if source is not None:
-            available = frozenset(item.concept_id for item in source.concepts)
+        path = Path(export_path).expanduser()
+        from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
+        native = native_planning_metadata(export_path=path, database=database)
+        if native is not None:
+            available = frozenset(item.concept_id for item in native["catalog"].concepts)
+        else:
+            try:
+                source = build_available_catalog(path)
+            except (FileNotFoundError, OSError, ValueError):
+                source = None
+            if source is not None:
+                available = frozenset(item.concept_id for item in source.concepts)
 
     def column(concept: Optional[str]) -> Optional[str]:
         if not concept:
@@ -1289,10 +1295,14 @@ def checked_stated_variables(
         else str(source.get("database") or database or "").strip()
         if path and Path(path).is_dir() and not is_export_package(path) else ""
     )
+    native = None
+    if path and not raw_database:
+        from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
+        native = native_planning_metadata(export_path=Path(path), database=str(source.get("database") or database or "") or None)
     available = (
         {item.concept_id for item in build_database_capability_catalog(raw_database).concepts}
         if raw_database else
-        {item.concept_id for item in build_available_catalog(Path(path)).concepts}
+        {item.concept_id for item in (native["catalog"] if native is not None else build_available_catalog(Path(path))).concepts}
         if path else set()
     )
     database_concepts: frozenset[str] = frozenset()
@@ -1347,10 +1357,12 @@ def checked_exposure_concept(
         raise ValueError("尚未指定数据库，无法核验分组或暴露的概念；请先指定数据库并查找概念。")
     if not isinstance(concept, str) or not concept.strip():
         raise ValueError("请保存查找返回的分组或暴露概念标识。")
-    catalog = (
-        build_available_catalog(Path(path)) if path
-        else build_database_capability_catalog(database)
-    )
+    if path:
+        from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
+        native = native_planning_metadata(export_path=Path(path), database=str(source.get("database") or database or "") or None)
+        catalog = native["catalog"] if native is not None else build_available_catalog(Path(path))
+    else:
+        catalog = build_database_capability_catalog(database)
     available = {item.concept_id for item in catalog.concepts}
     record = _checked_stated_variable(
         {"variable": exposure, "words": exposure, "concept": concept},
@@ -1609,7 +1621,7 @@ def _metadata_only_planning_coordinates(
 
     def is_grouping(concept: str) -> bool:
         item = catalog_by_id.get(concept)
-        definition = load_dictionary().get(concept)
+        definition = load_dictionary(src_name=database).get(concept)
         return item is not None and (
             item.column_role == "event_status"
             or (definition is not None and definition.class_name == "fct_cncpt"
@@ -1692,7 +1704,7 @@ def _metadata_only_planning_coordinates(
             named_exposure = None
     named_measurement = named_concept("exposure") if descriptive and not named_exposure else None
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
-    source_column = _bound_source_column(export_path)
+    source_column = _bound_source_column(export_path, database=database)
     # A host-derived window reading is already one value per stay; an
     # aggregation phrase in the question applies only to a named source concept.
     exposure_operation = (
@@ -1720,7 +1732,7 @@ def _metadata_only_planning_coordinates(
                     item, column=source_column(name),
                     aggregation=operation.aggregation if operation is not None else None,
                 )
-                definition = load_dictionary().get(name)
+                definition = load_dictionary(src_name=database).get(name)
                 requested_measurement = (
                     definition is not None and definition.target != "id_tbl"
                     and (name == named_measurement or operation is not None
@@ -1753,7 +1765,7 @@ def _metadata_only_planning_coordinates(
         and target_catalog is not None
     ):
         column = source_column(target_outcome)
-        definition = load_dictionary().get(target_outcome)
+        definition = load_dictionary(src_name=database).get(target_outcome)
         if descriptive and definition is not None and definition.target == "id_tbl":
             # A stay attribute is already one quantity per episode. "Mean"
             # there summarizes stays, not a second temporal reduction.

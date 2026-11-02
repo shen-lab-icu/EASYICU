@@ -29,7 +29,7 @@ def source(tmp_path, monkeypatch):
     ]}
     (root / "conversion_manifest.json").write_text(json.dumps(manifest))
     identity = SourceIdentity(database="sic", registration_id="registered")
-    monkeypatch.setattr(discovery.sources, "load_registry", lambda: {"sources": [{"ok": True, "path": str(export)}]})
+    monkeypatch.setattr(discovery.sources, "load_registry", lambda **_kwargs: {"sources": [{"ok": True, "path": str(export)}]})
     monkeypatch.setattr(discovery.sources, "registered_source_identity", lambda p: identity if p == str(export) else None)
     binding = SimpleNamespace(source_root=root, export_manifest_sha256="a" * 64, table_sha256={"cases": "b" * 64})
     monkeypatch.setattr(discovery, "resolve_raw_source_identity_binding", lambda **_: binding)

@@ -60,7 +60,7 @@ def _listing(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {"active_path": f"/private/{active}" if active else "", "sources": exports},
+        lambda **_kwargs: {"active_path": f"/private/{active}" if active else "", "sources": exports},
     )
     result = tool_module.execute_tool(
         "easyicu_list_data_sources",
@@ -436,7 +436,7 @@ def test_recommending_a_credentialed_source_does_not_activate_it(
 ) -> None:
     registry = _synthetic_catalog(database)
     registry["sources"][0]["path"] = str(tmp_path / "unverified")
-    monkeypatch.setattr(tool_module.sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(tool_module.sources, "load_registry", lambda **_kwargs: registry)
     _, recommendation = registered_sources_for_database(registry, database)
     assert recommendation.source["source_id"] == "src_synthetic"
     context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-uncleared"))

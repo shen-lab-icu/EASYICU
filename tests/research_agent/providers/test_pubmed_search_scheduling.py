@@ -23,7 +23,8 @@ def test_strata_overlap_but_hydrate_once_in_query_order(monkeypatch):
     ids = [["11", "44"], ["22", "44"], ["33"], []]
     client = literature.PubMedLiteratureClient()
     context = SimpleNamespace(
-        primary_exposure=None, target_outcome=None, research_question="Synthetic counts"
+        primary_exposure=None, target_outcome=None, research_question="Synthetic counts",
+        user_preferences=None,
     )
     monkeypatch.setattr(
         literature, "build_pubmed_protocol_queries_for_context", lambda _: queries
@@ -135,7 +136,8 @@ def test_parallel_search_keeps_empty_results_and_failed_source_provenance(
 ):
     client = literature.PubMedLiteratureClient()
     context = SimpleNamespace(
-        primary_exposure=None, target_outcome=None, research_question="Synthetic counts"
+        primary_exposure=None, target_outcome=None, research_question="Synthetic counts",
+        user_preferences=None,
     )
     monkeypatch.setattr(
         literature, "build_pubmed_protocol_queries_for_context", lambda _: queries

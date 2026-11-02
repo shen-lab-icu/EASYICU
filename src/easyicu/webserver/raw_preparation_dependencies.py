@@ -6,7 +6,10 @@ files. The trusted producer and its runtime still have to prove that closure.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Literal, Mapping
 
@@ -166,6 +169,262 @@ class CandidatePreparationPreview(BaseModel):
     analysis_authorized: Literal[False] = False
 
 
+def declared_native_export_inventory(*, export_path: Path, expected_manifest_sha256: str,
+                                     expected_database: str) -> dict:
+    """Describe manifest-declared files without opening them or granting preparation.
+
+    The future native-package reader snapshots every listed file. This inventory
+    is only a candidate: it does not hash or validate file contents, establish
+    decoded columns or callbacks, or authorize any data access.
+    """
+    from easyicu.research_agent.intake.export_package import _FORMAT_BY_SUFFIX, _manifest_file_entries
+
+    def reject_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("candidate_export_manifest_duplicate_key")
+            result[key] = value
+        return result
+
+    with AnchoredDirectory.open(Path(export_path)) as directory:
+        raw = directory.read_bytes("_manifest.json", max_bytes=16 * 1024 * 1024)
+        directory.assert_still_selected()
+    if hashlib.sha256(raw).hexdigest() != expected_manifest_sha256:
+        raise ValueError("candidate_export_manifest_changed")
+    manifest = json.loads(raw, object_pairs_hook=reject_duplicates)
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != "easyicu_native_export_v2"
+            or manifest.get("database") != expected_database):
+        raise ValueError("candidate_export_manifest_unavailable")
+    entries = _manifest_file_entries(manifest, manifest_kind="native")
+    if not 0 < len(entries) <= 1000:
+        raise ValueError("candidate_export_roster_invalid")
+    files = []
+    for entry in entries:
+        path = entry.get("file")
+        module = entry.get("module") or entry.get("group")
+        relative = PurePosixPath(path) if isinstance(path, str) else PurePosixPath("")
+        if (not isinstance(path, str) or not path or "\\" in path or "\x00" in path
+                or relative.is_absolute() or relative.as_posix() != path
+                or any(part in {".", ".."} for part in relative.parts)
+                or ".derivation-context" in relative.parts or relative.suffix.lower() not in _FORMAT_BY_SUFFIX
+                or not isinstance(module, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", module)):
+            raise ValueError("candidate_export_roster_invalid")
+        files.append({"file": path, "module": module})
+    if len({item["file"] for item in files}) != len(files):
+        raise ValueError("candidate_export_roster_invalid")
+    metadata_files = ["_manifest.json"]
+    features = manifest.get("feature_definitions")
+    if isinstance(features, Mapping) and features.get("included") is True:
+        feature_files = features.get("files")
+        if not isinstance(feature_files, list) or any(not isinstance(item, Mapping) for item in feature_files):
+            raise ValueError("candidate_export_roster_invalid")
+        metadata_files.extend(item.get("file") for item in feature_files)
+    column_metadata = manifest.get("column_metadata")
+    if column_metadata is not None:
+        if not isinstance(column_metadata, Mapping):
+            raise ValueError("candidate_export_roster_invalid")
+        metadata_files.append(column_metadata.get("file"))
+    if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,255}", name)
+           or name in {".", ".."} for name in metadata_files) or len(set(metadata_files)) != len(metadata_files):
+        raise ValueError("candidate_export_roster_invalid")
+    return {"schema_version": "easyicu.declared-export-read-inventory/1",
+            "manifest_sha256": expected_manifest_sha256, "database": expected_database, "files": files,
+            "metadata_files": metadata_files,
+            "all_manifest_files_will_be_snapshotted": True, "file_contents_verified": False,
+            "decoded_column_scope_verified": False, "preparation_authorized": False, "analysis_authorized": False}
+
+
+def _declared_typed_export_columns(*, export_path: Path, inventory: Mapping) -> dict:
+    """Verify manifest and sidecar metadata bytes, without opening data files."""
+    from easyicu.concept.metadata_sidecar import ColumnMetadataSidecar, EXPORT_PHYSICAL_SCOPE, SidecarRef
+
+    with AnchoredDirectory.open(export_path) as directory:
+        raw_manifest = directory.read_bytes("_manifest.json", max_bytes=16 * 1024 * 1024)
+        if hashlib.sha256(raw_manifest).hexdigest() != inventory["manifest_sha256"]:
+            raise ValueError("candidate_export_manifest_changed")
+        manifest = json.loads(raw_manifest)
+        reference = SidecarRef.from_dict(manifest["column_metadata"])
+        if reference.file != f"column_metadata.sha256-{reference.sha256}.json":
+            raise ValueError("candidate_column_metadata_invalid")
+        raw_sidecar = directory.read_bytes(reference.file, max_bytes=64 * 1024 * 1024)
+        directory.assert_still_selected()
+    if len(raw_sidecar) != reference.size or hashlib.sha256(raw_sidecar).hexdigest() != reference.sha256:
+        raise ValueError("candidate_column_metadata_changed")
+    sidecar = ColumnMetadataSidecar.from_dict(json.loads(raw_sidecar))
+    if (sidecar.record_count != reference.record_count or sidecar.scope != EXPORT_PHYSICAL_SCOPE
+            or sidecar.source_database != inventory["database"]):
+        raise ValueError("candidate_column_metadata_invalid")
+    expected = {(item["file"], item["module"]) for item in inventory["files"]}
+    if {(item.relative_path, item.module) for item in sidecar.files} != expected:
+        raise ValueError("candidate_column_metadata_inventory_changed")
+    if any(PurePosixPath(item.relative_path).suffix.lower() != ".parquet" for item in sidecar.files):
+        raise ValueError("candidate_non_parquet_export_unverified")
+    files = []
+    for item in sidecar.files:
+        columns = [{"column": name, "source_concept": binding.metadata.source_concept,
+                    "role": binding.metadata.role.value} for name, binding in item.columns.items()]
+        files.append({"file": item.relative_path, "module": item.module,
+                      "identity_column": item.identity_column,
+                      "time_columns": sorted(coordinate.column for coordinate in item.time_coordinates),
+                      "declared_columns": columns})
+    return {"sidecar_sha256": reference.sha256, "files": files}
+
+
+def native_planning_metadata(*, export_path: Path, database: str | None = None):
+    """Validate native manifest/sidecar for planning without opening data members."""
+    import os
+    from easyicu.concept.metadata_sidecar import ColumnMetadataSidecar, SidecarRef
+    from easyicu.concept.selection_policy import concept_selection_policy
+    from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept, _methodology_tag
+    from easyicu.research_agent.concept_availability import normalize_database_name
+    from easyicu.research_agent.intake.export_package import _WITHOUT_VALUES
+    from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+    from easyicu.webserver.dataio import ExportCohortError
+
+    root = Path(export_path).expanduser()
+    if not os.path.lexists(root / "_manifest.json"):
+        return None
+    try:
+        with AnchoredDirectory.open(root) as directory:
+            raw = directory.read_bytes("_manifest.json", max_bytes=16 * 1024 * 1024)
+            directory.assert_still_selected()
+        try:
+            manifest = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            from easyicu.research_agent.intake.export_package import ExportPackageError
+            from easyicu.webserver.dataio import _research_pipeline_intake_diagnostic
+
+            intake_error = ExportPackageError(
+                "invalid export manifest JSON", code="export_manifest_json_invalid"
+            )
+            raise ExportCohortError(
+                "research_pipeline_manifest_invalid", _research_pipeline_intake_diagnostic(intake_error)
+            ) from exc
+        name = manifest.get("database") if isinstance(manifest, dict) else None
+        if (not isinstance(name, str) or not name
+                or (database and normalize_database_name(name) != normalize_database_name(database))):
+            raise ValueError("native metadata database mismatch")
+        inventory = declared_native_export_inventory(export_path=root,
+            expected_manifest_sha256=hashlib.sha256(raw).hexdigest(), expected_database=name)
+        declared = _declared_typed_export_columns(export_path=root, inventory=inventory)
+        files = declared.get("files")
+        if not files or any(item.get("identity_column") != "stay_id" for item in files):
+            raise ValueError("native metadata identity mismatch")
+        for item in files:
+            member = root
+            for part in PurePosixPath(item["file"]).parts:
+                member = member / part
+                if member.is_symlink():
+                    raise ValueError("native metadata member unavailable")
+            if not member.is_file():
+                raise ValueError("native metadata member unavailable")
+            member.resolve(strict=True).relative_to(root.resolve(strict=True))
+        reference = SidecarRef.from_dict(manifest["column_metadata"])
+        with AnchoredDirectory.open(root) as directory:
+            sidecar_raw = directory.read_bytes(reference.file, max_bytes=64 * 1024 * 1024,
+                                               expected_sha256=reference.sha256)
+            directory.assert_still_selected()
+        sidecar = ColumnMetadataSidecar.from_dict(json.loads(sidecar_raw))
+        statuses: dict[str, set[str]] = {}
+        for entry in manifest.get("files", []):
+            if isinstance(entry, Mapping):
+                recorded = entry.get("concept_status")
+                for concept, status in (recorded.items() if isinstance(recorded, Mapping) else ()):
+                    value = status.get("availability") if isinstance(status, Mapping) else None
+                    statuses.setdefault(str(concept), set()).add(str(value))
+        absent = {concept for concept, values in statuses.items() if values <= _WITHOUT_VALUES}
+        by_concept = {}
+        for item in sidecar.files:
+            for name_, binding in item.columns.items():
+                meta = binding.metadata
+                concept = meta.source_concept
+                if isinstance(concept, str) and concept and meta.role.value in {"value", "event_status"}:
+                    by_concept.setdefault(concept, []).append((item, name_, meta))
+        concepts = []
+        for concept, values in sorted(by_concept.items()):
+            if concept in absent or len(values) != 1:
+                continue
+            item, column, meta = values[0]
+            policy = concept_selection_policy(concept)
+            category = meta.category or ""
+            concepts.append(CatalogConcept(concept_id=concept, description=meta.description or "",
+                category=category, file_name=item.relative_path, resolved_column=column,
+                typed_metadata=True, column_role=meta.role.value, methodology=_methodology_tag(concept, category),
+                selection_mode=policy.selection_mode if policy else "ordinary",
+                selection_note=policy.rationale if policy else "",
+                canonical_alternative=(policy.canonical_alternative or "") if policy else ""))
+        return {"database": name, "inventory": inventory, "files": files,
+                "catalog": AvailableCatalog(source="verified_native_column_metadata", concepts=concepts)}
+    except ExportCohortError:
+        raise
+    except (AuthorityFilesystemError, OSError, ValueError, TypeError, KeyError) as exc:
+        raise ResearchPipelineRunError("research_pipeline_planning_native_metadata_invalid",
+            "The native export column metadata cannot be verified without reading patient rows.") from exc
+
+
+def _candidate_plan_input_dependencies(*, plan, context, population_spec, structural_columns=()) -> dict:
+    """Compile declared dependencies only; this cannot authorize any file reads."""
+    from easyicu.research_agent.contracts.declared_product import typed_product
+    from easyicu.research_agent.contracts.host_derivations import host_derivation_producing
+    from easyicu.research_agent.planning.plan_graph import _typed_plan_dependency_graph
+    from easyicu.research_agent.planning.population_compile import population_spec_concepts
+
+    steps = list(plan.steps)
+    graph, findings = _typed_plan_dependency_graph(steps)
+    blockers = []
+    if len(graph) != len(steps) or findings:
+        blockers.append("candidate_typed_plan_graph_invalid")
+    unresolved_graph = {key: set(value) for key, value in graph.items()}
+    while unresolved_graph:
+        ready = {key for key, value in unresolved_graph.items() if not value}
+        if not ready:
+            blockers.append("candidate_typed_plan_graph_cycle")
+            break
+        unresolved_graph = {key: value - ready for key, value in unresolved_graph.items() if key not in ready}
+    variables = {item.name: item for item in context.variables}
+    structural_columns = frozenset(structural_columns)
+    if len(variables) != len(context.variables):
+        raise ValueError("candidate_preparation_variable_ambiguous")
+    required = set(population_spec_concepts(population_spec))
+    products = []
+    for step in steps:
+        for name in step.inputs:
+            product = typed_product(name)
+            if product is not None:
+                products.append({"step_id": step.step_id, "product": name})
+            elif name in structural_columns:
+                continue
+            elif name in variables and variables[name].source_concept:
+                required.add(variables[name].source_concept)
+            else:
+                blockers.append("candidate_step_input_binding_unverified")
+    # Context variables can be needed by typed method contracts even if the
+    # plan omits an explicit input. Include them conservatively.
+    for variable in context.variables:
+        if variable.name in structural_columns:
+            continue
+        if variable.source_concept:
+            required.add(variable.source_concept)
+        else:
+            blockers.append("candidate_context_variable_binding_unverified")
+    required.update(reviewed_plan_cohort_concepts(context=context, plan=plan))
+    derivations = {}
+    for concept in list(required):
+        derivation = host_derivation_producing(concept)
+        if derivation is not None:
+            required.discard(concept)
+            required.update(derivation[0].source_concepts)
+            derivations[derivation[0].derivation_id] = sorted(derivation[0].source_concepts)
+    if any(item.kind == "diagnosis_codes" for item in population_spec.criteria):
+        blockers.append("candidate_diagnosis_source_binding_unverified")
+    return {"required_source_concepts": sorted(required),
+            "typed_step_dependencies": {key: sorted(value) for key, value in sorted(graph.items())},
+            "typed_product_inputs": sorted(products, key=lambda item: (item["step_id"], item["product"])),
+            "host_derivation_sources": dict(sorted(derivations.items())),
+            "blockers": sorted(set(blockers))}
+
+
 def first_observed_candidate_preparation_preview(*, run_dir: Path, pending, checkpoint) -> dict:
     """Recheck the host-reviewed scope before projecting known plan coordinates.
 
@@ -231,10 +490,13 @@ def first_observed_candidate_preparation_preview(*, run_dir: Path, pending, chec
                 "candidate_extraction_window_unverified", "candidate_coordinate_export_binding_unavailable"]
     if any(item.source_concept is None for item in step_inputs):
         blockers.append("candidate_step_input_binding_unverified")
-    return CandidatePreparationPreview(plan_sha256=authority.plan_sha256,
+    result = CandidatePreparationPreview(plan_sha256=authority.plan_sha256,
         scientific_review_sha256=scope["scientific_review_sha256"], context_sha256=scope["context_sha256"],
         step_inputs=tuple(step_inputs), population_needs=tuple(population_needs),
         context_windows=windows, blockers=tuple(blockers)).model_dump(mode="json")
+    result["declared_plan_dependencies"] = _candidate_plan_input_dependencies(
+        plan=plan, context=context, population_spec=spec)
+    return result
 
 
 def declaration_from_provenance(*, plan: PlanReviewAuthority, context_sha256: str,

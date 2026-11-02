@@ -87,7 +87,7 @@ def verify_raw_preparation_review(*, checkpoint: RawPreparationCheckpoint,
         requested_scope: dict, scope_key: str, expected_summary: str,
         registered_database: str, registered_identity_sha256: str,
         plan_sha256: str, context_sha256: str, scientific_review_sha256: str,
-        now: datetime | None = None) -> None:
+        now: datetime | None = None, allow_execution_bound: bool = False) -> None:
     """Recheck an exact adapter-validated scope against current host identity.
 
     ``registered_*`` must come from the host registry, not from the request.
@@ -115,6 +115,7 @@ def verify_raw_preparation_review(*, checkpoint: RawPreparationCheckpoint,
             or payload[scope_key] != requested_scope):
         raise ValueError(f"{prefix}_scope_binding_mismatch")
     plan_review = PlanReviewAuthority.model_validate(payload["plan_review_authority"])
-    if (plan_review.plan_sha256 != plan_sha256 or plan_review.execution is not None
+    if (plan_review.plan_sha256 != plan_sha256
+            or (plan_review.execution is not None and not allow_execution_bound)
             or plan_review.evidence_sha256.get("scientific_plan_review") != scientific_review_sha256):
         raise ValueError(f"{prefix}_review_mismatch")

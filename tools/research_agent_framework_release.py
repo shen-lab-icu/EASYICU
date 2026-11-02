@@ -21,15 +21,15 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = "easyicu.research_agent_framework_release/2"
-TOOL_VERSION = "1.3.0"
+TOOL_VERSION = "1.4.0"
 
 RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "resource_context",
         (
             "tools/research_agent_resource_baseline.py",
-            "--diff",
-            "tools/arch_baselines/research_agent_resource_context.json",
+            "--verify-current",
+            "tools/arch_baselines/research_agent_resource_context.current.json",
         ),
     ),
     (

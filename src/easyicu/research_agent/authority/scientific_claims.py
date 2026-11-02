@@ -18,7 +18,7 @@ import re
 from typing import Literal, Mapping, Sequence
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 
-from .claim_coordinates import contrast_exposure_coordinate
+from .numeric_claim_identity import contrast_exposure_coordinate
 from .reported_numbers import ReportedNumber
 from .continuous_survival_scientific_claims import (
     continuous_survival_reporting_requests_claims,

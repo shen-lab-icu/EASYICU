@@ -17,7 +17,7 @@ from easyicu.runtime.memory_manager import (
     MAX_EXTRACT_CHUNKS,
     _ceil_div,
 )
-from easyicu.api import EXTRACT_MODULES
+from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
 from easyicu.api.extraction import (
     _INVALIDATED_MEASURED_PROFILES,
     _MEASURED_BATCH_PROFILES,
@@ -489,7 +489,7 @@ def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
 def test_eicu_full_request_uses_complete_measured_batch_coverage():
     plan = plan_extraction_resources(
         "eicu",
-        list(EXTRACT_MODULES),
+        list(EXTRACT_MODULE_ORDER),
         200_859,
         available_memory_mb=8 * 1024,
     )
@@ -499,6 +499,25 @@ def test_eicu_full_request_uses_complete_measured_batch_coverage():
     assert plan.measured_peak_rss_mb == pytest.approx(7_435.9)
     assert plan.required_available_memory_mb == pytest.approx(8_179.49)
     assert plan.advisory is None
+
+
+@pytest.mark.parametrize(("database", "total"), [("eicu", 200_859), ("miiv", 94_458)])
+def test_explicit_unmeasured_sic_module_does_not_borrow_default_coverage(database, total):
+    opt_in_module = "sic_case_landmark"
+    assert opt_in_module in EXTRACT_MODULES
+    assert opt_in_module not in EXTRACT_MODULE_ORDER
+    assert opt_in_module not in _MEASURED_ONESHOT_PROFILES.get(database, {})
+    assert opt_in_module not in _MEASURED_BATCH_PROFILES.get(database, {})
+
+    plan = plan_extraction_resources(
+        database, [*EXTRACT_MODULE_ORDER, opt_in_module], total,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.measured_peak_rss_mb is None
+    assert plan.advisory and plan.advisory_zh
 
 
 def test_eicu_renal_uses_measured_isolated_five_batch_profile():
@@ -668,7 +687,7 @@ def test_module_batch_overrides_fail_closed(overrides):
 def test_miiv_full_module_set_has_current_measured_coverage():
     plan = plan_extraction_resources(
         "miiv",
-        list(EXTRACT_MODULES),
+        list(EXTRACT_MODULE_ORDER),
         94_458,
         available_memory_mb=8 * 1024,
     )

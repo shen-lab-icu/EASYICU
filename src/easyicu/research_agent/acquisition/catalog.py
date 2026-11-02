@@ -153,7 +153,7 @@ def catalog_endpoint(
 
     if concept.column_role == "event_status":
         return EndpointSpec(name=column, kind="binary", absence_semantics="no_absent_rows", levels=[0, 1])
-    definition = load_dictionary().get(concept.concept_id)
+    definition = load_dictionary(src_name="sic").get(concept.concept_id)
     if (
         definition is None
         or concept.column_role not in {"", "value", "numeric_aggregate"}
@@ -320,7 +320,7 @@ def _methodology_dictionary() -> Optional[object]:
     try:
         from easyicu.concept.loader import load_dictionary
 
-        return load_dictionary(include_sofa2=True)
+        return load_dictionary(src_name="sic", include_sofa2=True)
     except Exception:
         return None
 

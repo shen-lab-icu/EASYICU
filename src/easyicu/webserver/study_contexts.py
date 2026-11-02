@@ -90,6 +90,7 @@ _CONTEXT_FIELDS = {
     "question",
     "purpose",
     "data_source",
+    "demo_planning_authority_ref",
     "crossdb_selection",
     "cohort",
     "modules",
@@ -1437,6 +1438,7 @@ def _sanitize_patch(
     raw: Any,
     *,
     allow_literature_authority: bool = False,
+    allow_demo_planning_authority: bool = False,
     allow_cohort_eligibility_authority: bool = False,
     allow_concept_selection_authority: bool = False,
     allow_target_trial_design: bool = False,
@@ -1502,6 +1504,13 @@ def _sanitize_patch(
         )
     if "data_source" in raw:
         patch["data_source"] = _data_source(raw.get("data_source"))
+    if "demo_planning_authority_ref" in raw:
+        if not allow_demo_planning_authority:
+            raise StudyContextError({"error": "demo_planning_authority_server_owned"})
+        ref = str(raw.get("demo_planning_authority_ref") or "")
+        if ref and not re.fullmatch(r"[a-f0-9]{64}", ref):
+            raise StudyContextError({"error": "demo_planning_authority_invalid"})
+        patch["demo_planning_authority_ref"] = ref
     if "crossdb_selection" in raw:
         patch["crossdb_selection"] = _crossdb_selection(
             raw.get("crossdb_selection")
@@ -1946,6 +1955,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
                 not in ("analysis_design", "trajectory_design", "target_trial_design")
             },
             allow_literature_authority=True,
+            allow_demo_planning_authority=True,
             allow_cohort_eligibility_authority=True,
             allow_concept_selection_authority=True,
             allow_causal_trial_reading=True,
@@ -2310,6 +2320,7 @@ def upsert_context(
     require_revision: bool = False,
     lifecycle_write: bool = True,
     _server_literature_authority_write: bool = False,
+    _server_demo_planning_authority_write: bool = False,
     _server_cohort_eligibility_authority_write: bool = False,
     _server_concept_selection_authority_write: bool = False,
     _server_target_trial_design_write: bool = False,
@@ -2330,6 +2341,7 @@ def upsert_context(
         raw_context,
         allow_skill_attachments=_server_skill_attachments_write,
         allow_literature_authority=_server_literature_authority_write,
+        allow_demo_planning_authority=_server_demo_planning_authority_write,
         allow_cohort_eligibility_authority=(
             _server_cohort_eligibility_authority_write
         ),
@@ -2410,6 +2422,11 @@ def upsert_context(
             None if _server_skill_attachments_write and "question_family_check" in patch else current,
         )
         proposed_context.update(patch)
+        if (current and current.get("demo_planning_authority_ref")
+                and not _server_demo_planning_authority_write
+                and scientific_configuration_sha256(current) != scientific_configuration_sha256(proposed_context)):
+            patch["demo_planning_authority_ref"] = ""
+            proposed_context["demo_planning_authority_ref"] = ""
         proposed_authority = patch.get("cohort_eligibility_authority")
         if isinstance(proposed_authority, dict) and proposed_authority:
             # The receipt owner validates the complete contract. Persistence
@@ -3188,6 +3205,7 @@ def restore_turn_configuration_snapshot(
         "confirmations": {},
         # These authorities are not part of the path-free turn receipt.  More
         # importantly, they are bound to exact earlier scopes/revisions.
+        "demo_planning_authority_ref": "",
         "idea_handoff": {},
         "literature_authority": {},
         "cohort_eligibility_authority": {},
@@ -3196,6 +3214,7 @@ def restore_turn_configuration_snapshot(
         "target_trial_design": {},
     }
     non_replayable_authorities = {
+        "demo_planning_authority_ref",
         "idea_handoff",
         "literature_authority",
         "cohort_eligibility_authority",
@@ -3213,6 +3232,7 @@ def restore_turn_configuration_snapshot(
         require_revision=True,
         lifecycle_write=False,
         _server_literature_authority_write=True,
+        _server_demo_planning_authority_write=True,
         _server_cohort_eligibility_authority_write=True,
         _server_target_trial_design_write=True,
         _server_question_wording_write=True,

@@ -614,6 +614,7 @@ class PipelineWorkflow:
         human_review_execution_commit: Optional[
             Callable[[Sequence[Mapping[str, Any]]], None]
         ] = None,
+        human_review_prepare_inputs: Optional[Callable[[PlanPhaseResult, str, str, str], PlanPhaseResult]] = None,
         human_review_execution_start: Optional[Callable[[], None]] = None,
         human_review_write_start: Optional[Callable[[], None]] = None,
         human_review_finalize_start: Optional[Callable[[], None]] = None,
@@ -628,6 +629,7 @@ class PipelineWorkflow:
         self._human_review_recorder = human_review_recorder
         self._human_review_decision_prepare = human_review_decision_prepare
         self._human_review_execution_commit = human_review_execution_commit
+        self._human_review_prepare_inputs = human_review_prepare_inputs
         self._human_review_execution_start = human_review_execution_start
         self._human_review_write_start = human_review_write_start
         self._human_review_finalize_start = human_review_finalize_start
@@ -648,6 +650,8 @@ class PipelineWorkflow:
         self._pause_snapshot: tuple[dict[str, Any], ...] = ()
         self._pause_digest: str = ""
         self._approved_plan_sha256: str = ""
+        self._approved_decision_sha256: str = ""
+        self._approved_deferred_recipe_sha256: str = ""
         #: Built decision records, keyed by the digest of the decision set that
         #: produced them. See :meth:`_decision_records_for` for why a resubmitted
         #: decision must not be re-stamped.
@@ -829,6 +833,14 @@ class PipelineWorkflow:
             if decision.decision == "rejected"
         ]
         approved_authority = _shared_plan_authority_payload(self._pause_snapshot)
+        recipe_digests = []
+        for snapshot in self._pause_snapshot:
+            payload = snapshot.get("payload") or {}
+            authority = payload.get("plan_review_authority") or {}
+            evidence = authority.get("evidence_sha256") or {}
+            recipe_digests.append(evidence.get("first_observed_deferred_recipe"))
+        if any(recipe_digests) and (not all(recipe_digests) or len(set(recipe_digests)) != 1):
+            raise HumanReviewAuthorityError("deferred recipe review authority differs between requests")
         approval_source = None
         approved_handoff = None
         if (
@@ -887,6 +899,10 @@ class PipelineWorkflow:
             approved_handoff.cohort_concept_ids = approved.cohort_concept_ids
             self._plan_result = approved_handoff
             self._approved_plan_sha256 = approved.plan_sha256
+            self._approved_decision_sha256 = canonical_sha256(
+                [item.model_dump(mode="json") for item in ordered]
+            )
+            self._approved_deferred_recipe_sha256 = str(recipe_digests[0] or "") if recipe_digests else ""
         try:
             return self._finish(tuple(records))
         except Exception:
@@ -1178,6 +1194,8 @@ class PipelineWorkflow:
         self._pause_snapshot = ()
         self._pause_digest = ""
         self._approved_plan_sha256 = ""
+        self._approved_decision_sha256 = ""
+        self._approved_deferred_recipe_sha256 = ""
         self._plan_result = None
         # The run is over; nothing can be resubmitted, so the retry cache has
         # no remaining purpose and should not outlive the decisions it holds.
@@ -1189,6 +1207,15 @@ class PipelineWorkflow:
     ) -> WorkflowCompleted:
         if self._plan_result is None:
             raise RuntimeError("workflow cannot execute without a plan result")
+        if self._human_review_prepare_inputs is not None:
+            self._plan_result = self._human_review_prepare_inputs(
+                self._plan_result, self._approved_plan_sha256, self._approved_decision_sha256,
+                self._approved_deferred_recipe_sha256
+            )
+            if self._approved_plan_sha256 and canonical_sha256(
+                AnalysisPlan.model_validate(self._plan_result.plan).model_dump(mode="json")
+            ) != self._approved_plan_sha256:
+                raise HumanReviewStateDrift("approved plan changed while binding execution input")
         if self._human_review_execution_start is not None:
             self._human_review_execution_start()
         execute_result = self._execute_invoker(self._plan_result)
@@ -1247,6 +1274,7 @@ def build_pipeline_workflow(
     human_review_execution_commit: Optional[
         Callable[[Sequence[Mapping[str, Any]]], None]
     ] = None,
+    human_review_prepare_inputs: Optional[Callable[[PlanPhaseResult, str, str, str], PlanPhaseResult]] = None,
     human_review_execution_start: Optional[Callable[[], None]] = None,
     human_review_write_start: Optional[Callable[[], None]] = None,
     human_review_finalize_start: Optional[Callable[[], None]] = None,
@@ -1264,6 +1292,7 @@ def build_pipeline_workflow(
         human_review_recorder=human_review_recorder,
         human_review_decision_prepare=human_review_decision_prepare,
         human_review_execution_commit=human_review_execution_commit,
+        human_review_prepare_inputs=human_review_prepare_inputs,
         human_review_execution_start=human_review_execution_start,
         human_review_write_start=human_review_write_start,
         human_review_finalize_start=human_review_finalize_start,

@@ -37,7 +37,7 @@ def grouping_catalog(monkeypatch):
 
     definitions = dict(loader.load_dictionary())
     definitions[GROUP] = SimpleNamespace(class_name="fct_cncpt", target="id_tbl")
-    monkeypatch.setattr(loader, "load_dictionary", lambda: definitions)
+    monkeypatch.setattr(loader, "load_dictionary", lambda **_kwargs: definitions)
     original = catalog.build_database_capability_catalog
     monkeypatch.setattr(catalog, "build_database_capability_catalog", lambda database: catalog.AvailableCatalog(
         source=database, concepts=[*original(database).concepts, catalog.CatalogConcept(concept_id=GROUP)],

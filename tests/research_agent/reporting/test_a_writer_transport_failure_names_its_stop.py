@@ -300,11 +300,7 @@ def test_the_draft_stage_records_the_stop_on_the_writer_s_error(
         "_repair_robustness_reader_prose": stop_after_writer,
     }.items():
         monkeypatch.setattr(write_phase, name, value)
-    evidence = SimpleNamespace(
-        current_verified_records=lambda _records: [],
-        current_resolvable_names=lambda _records: [],
-        register_text=lambda **_kwargs: None,
-    )
+    evidence = EvidenceStore(root=tmp_path)
     pipeline = SimpleNamespace(
         _enable_nature_writing_skill=False,
         _user_extension_activation=SimpleNamespace(writing_advisory=None),

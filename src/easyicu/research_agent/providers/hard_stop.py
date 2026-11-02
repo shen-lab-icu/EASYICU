@@ -80,6 +80,9 @@ class HardStopClient:
         temperature: float = 0.2,
         structured_output: Optional[StructuredOutputRequest] = None,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
+        from .client_trust import require_registered_wrapper_preflights
+
+        require_registered_wrapper_preflights(self, task=self._task)
         with provider_hard_stop_call_scope(
             task=self._task,
             role=self._role,
@@ -143,6 +146,9 @@ class HardStopClient:
     ) -> str:
         """Account an authorized multimodal request before image transport."""
 
+        from .client_trust import require_registered_wrapper_preflights
+
+        require_registered_wrapper_preflights(self, task=self._task)
         messages = (LLMMessage(role="user", content=str(prompt)),)
         with provider_hard_stop_call_scope(
             task=self._task,

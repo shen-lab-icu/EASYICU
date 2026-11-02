@@ -15,7 +15,7 @@ from ...contracts.continuous_outcome_summary import (
     continuous_outcome_columns, continuous_outcome_summary_verdict,
 )
 from ...contracts.cohort_product_keys import sole_typed_cohort_input
-from ...contracts.continuous_outcome_metadata import continuous_summary_columns
+from ...contracts.continuous_outcome_summary import continuous_summary_columns
 from ...schema import AnalysisStep, ConceptDescriptor
 from .descriptive_distribution_executor import grouped_distribution_table
 from .plausibility_receipt import render_standard_plausibility_receipt_code

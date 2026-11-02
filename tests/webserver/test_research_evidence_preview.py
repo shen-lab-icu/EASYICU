@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.research_preview import _literature_source
+
 from easyicu.webserver.research_evidence_preview import (
     EvidencePreviewError,
     build_evidence_preview,
@@ -56,26 +58,6 @@ def _register(
     return path, digest
 
 
-def _literature_source(*, filler: int = 0, summary: str = "This source describes an ICU cohort.") -> bytes:
-    return json.dumps({
-        "research_question": "A synthetic research question",
-        "citations": [{
-            "key": "paper_1", "title": "Synthetic study", "year": "2025",
-            "pmid": "12345", "relevance": "x" * filler,
-        }],
-        "screening_decisions": [{
-            "citation_key": "paper_1", "source": "pubmed", "disposition": "include",
-            "evidence_role": "database", "rationale": "A synthetic source candidate.",
-        }],
-        "design_evidence_cards": [{
-            "citation_key": "paper_1", "evidence_role": "database", "access_mode": "abstract",
-            "abstract_locator": "https://pubmed.ncbi.nlm.nih.gov/12345/",
-            "abstract_sha256": "a" * 64, "supplement_status": "unknown",
-            "reviewed_at": "2026-10-29T12:00:00Z",
-            "evidence": [{"dimension": "study_population", "review_role": "data_source",
-                          "source_backed_summary": summary, "locator": "Abstract"}],
-        }],
-    }).encode()
 
 
 def _register_literature(run_dir: Path, raw: bytes, *, producer: str = "hypothesis_blueprint") -> tuple[Path, str]:

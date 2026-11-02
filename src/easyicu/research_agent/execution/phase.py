@@ -234,6 +234,7 @@ from ..contracts.primary_cohort import (
     primary_analysis_cohort_plan_findings,
     primary_analysis_cohort_producer_uses_universe,
 )
+from ..orchestration.services import refuse_model_access_to_local_source_flow
 from ..authority.evidence_store import (
     EvidenceAuthorityIntegrityError,
     sha256_of_bytes,
@@ -497,6 +498,8 @@ from .run_coordination import (
     merge_parallel_runtime_states,
     _successful_run_transition_requests_replan,
     _successful_step_requests_replan,
+    StepExecutionState,
+    parallel_isolation_blocked, merge_parallel_worker_results,
 )
 from .cohort_adoption import (
     adopt_existing_host_cohort_materialization,
@@ -556,10 +559,8 @@ from ..authority.step_attempt import (
     StepAuthorityOperations,
 )
 from .step_execution import LockedStepExecutionRequest, StepExecutor
-from .step_worker_state import (
-    StepWorkerProgress, StepExecutionState, _parallel_evidence_isolation_available,
-    parallel_isolation_blocked, prepare_parallel_wave, merge_parallel_worker_results,
-)
+from .step_worker_state import StepWorkerProgress
+from .phase_support import _parallel_evidence_isolation_available, prepare_parallel_wave
 from ..repairs.summary import salvage_step_summary
 from ..viability import (
     CohortViability,
@@ -995,7 +996,13 @@ def _repair_publication_figure_in_staging(
         for json_path in out_dir.rglob("*.json"):
             try:
                 content = json_path.read_text(encoding="utf-8")
-                rewritten = content.replace(str(staging_dir), str(out_dir))
+                # JSON may escape non-ASCII characters and backslashes in paths.
+                # Replace the serialized string fragments as well as raw UTF-8.
+                rewritten = content
+                for ensure_ascii in (True, False):
+                    old_path = json.dumps(str(staging_dir), ensure_ascii=ensure_ascii)[1:-1]
+                    new_path = json.dumps(str(out_dir), ensure_ascii=ensure_ascii)[1:-1]
+                    rewritten = rewritten.replace(old_path, new_path)
                 if rewritten != content:
                     json_path.write_text(rewritten, encoding="utf-8")
             except Exception:
@@ -1190,6 +1197,7 @@ def run_execute_phase(
     the queue) and step outcomes are recorded back into the log.  Both
     must travel together; when both are absent the path is unchanged.
     """
+    refuse_model_access_to_local_source_flow(run_dir)
     cohort_path = _materialize_approved_case_duration_if_needed(
         pipeline, plan_result=plan_result, cohort_path=cohort_path, run_dir=run_dir,
     )

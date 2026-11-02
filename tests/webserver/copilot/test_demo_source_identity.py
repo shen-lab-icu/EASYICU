@@ -80,7 +80,7 @@ def test_a_demo_only_registry_offers_no_eicu_export_but_names_the_demo(monkeypat
         session_id="pi-demo-identity",
         data_source_authorization=PiSessionDataSourceAuthorization(status="pending"),
     )
-    monkeypatch.setattr(sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: registry)
     offer = offer_owner.registered_source_offer(record, "eicu", registry=registry)
     assert offer["recommended"] is None
     assert offer["choices"] == []
@@ -121,7 +121,7 @@ def test_an_unprepared_official_demo_card_still_states_the_catalog_stay_count():
 
 def test_binding_checks_exact_identity_even_if_a_demo_was_offered(monkeypatch):
     demo = export("eicu_demo")
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [demo]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [demo]})
     monkeypatch.setattr(offer_owner, "registered_source_offer", lambda *args, **kwargs: {
         "database": "eicu", "recommended": {"source_id": demo["id"]}, "choices": [],
     })
@@ -272,7 +272,7 @@ def test_an_explicit_demo_name_keeps_the_demo_identity_in_the_listing(tmp_path, 
     }))
     demo = export(database)
     demo["path"] = str(root)
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [demo]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [demo]})
     listing = tools.execute_tool(
         "easyicu_list_data_sources", {"database": database},
         ToolExecutionContext(session=PiSessionRecord(session_id="pi-demo-identity"), user_message=message),

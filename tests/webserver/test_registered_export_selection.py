@@ -26,7 +26,7 @@ def test_selection_fails_closed_without_registered_export(
     monkeypatch.setattr(
         sources,
         "load_registry",
-        lambda: {"sources": [], "active_path": None},
+        lambda **_kwargs: {"sources": [], "active_path": None},
     )
 
     with pytest.raises(sources.RegisteredExportSelectionError) as exc_info:
@@ -48,7 +48,7 @@ def test_selection_validates_description_once(
     monkeypatch.setattr(
         sources,
         "load_registry",
-        lambda: {"sources": [source], "active_path": export_path},
+        lambda **_kwargs: {"sources": [source], "active_path": export_path},
     )
 
     def describe(path: str):
@@ -70,7 +70,7 @@ def test_selection_rejects_unregistered_active_path(
     monkeypatch.setattr(
         sources,
         "load_registry",
-        lambda: {"sources": [], "active_path": "/stale/export"},
+        lambda **_kwargs: {"sources": [], "active_path": "/stale/export"},
     )
 
     with pytest.raises(sources.RegisteredExportSelectionError) as exc_info:
@@ -87,7 +87,7 @@ def test_selection_rejects_invalid_registered_export(
     monkeypatch.setattr(
         sources,
         "load_registry",
-        lambda: {"sources": [source], "active_path": source["path"]},
+        lambda **_kwargs: {"sources": [source], "active_path": source["path"]},
     )
     monkeypatch.setattr(
         sources.dataio,

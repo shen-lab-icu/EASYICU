@@ -57,7 +57,7 @@ from ..planning.question_requirements import (
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
 from ..planning.exposure_group_reader_names import exposure_group_label_findings
-from ..planning.question_substance_forms import (
+from ..planning.question_interpretation import (
     QUESTION_SUBSTANCE_FORMS_KEY,
     SUBSTITUTED_REASON,
     QuestionSubstanceFormError,
@@ -266,7 +266,9 @@ def population_approval_findings(
     findings: list[ValidationFinding] = []
     for disposition, reason in POPULATION_APPROVAL_STOPS.items():
         blocking = [
-            item for item in population.blocking if item.disposition == disposition
+            item for item in population.blocking
+            if item.disposition == disposition
+            or (disposition == "requires_extraction" and item.disposition == "pending_materialization")
         ]
         if not blocking:
             continue
@@ -299,6 +301,71 @@ def population_approval_findings(
             )
         )
     return findings
+
+
+def population_pending_review_findings(
+    population: CompiledPopulation, *, context: Any, plan: Any, run_dir: Path, evidence: Any,
+) -> list[ValidationFinding]:
+    """Describe a verified pending recipe for review, never for direct execution.
+
+    Any missing, stale, mixed or unbound evidence returns the ordinary blocking
+    findings. The caller must still require complete human plan review and a
+    separate post-approval actual-input check.
+    """
+    fallback = population_approval_findings(population)
+    try:
+        import json
+        from ..authority.filesystem import AnchoredDirectory
+        from ..authority.runtime_artifacts import verified_run_evidence_path
+        from ..canonical_json import canonical_sha256
+        from ..planning.population_compile import compile_population
+        from ..planning.population_spec import PopulationSpec
+
+        first = [item for item in population.criteria if item.criterion.kind == "first_observed_icu_single_hospital_adult"
+                 and item.criterion.role == "include" and item.disposition == "pending_materialization"]
+        extra = [item for item in population.criteria if item not in first]
+        if (len(first) != 1 or len(extra) > 1 or any(
+            item.criterion.kind != "age_years" or item.criterion.role != "include"
+            or item.criterion.min_years != 18 or item.criterion.max_years is not None
+            or not (item.disposition == "applied_by_plan" or (
+                item.disposition == "requires_extraction" and item.reason == "population_concept_not_in_export"))
+            for item in extra
+        )):
+            return fallback
+        spec = PopulationSpec.model_validate({"criteria": [item.criterion.model_dump(mode="json") for item in population.criteria]})
+        current = compile_population(spec, context, time_zero_hours=population.time_zero_hours)
+        if current.sha256() != population.sha256():
+            return fallback
+        record = evidence.get("first_observed_deferred_recipe")
+        path = verified_run_evidence_path(run_dir, record) if record is not None else None
+        if path is None:
+            return fallback
+        with AnchoredDirectory.open(path.parent) as directory:
+            raw = directory.read_bytes(path.name, max_bytes=4 * 1024 * 1024, expected_sha256=record.sha256)
+            directory.assert_still_selected()
+        recipe = json.loads(raw)
+        if (recipe.get("criterion") != first[0].criterion.model_dump(mode="json")
+                or (len(population.criteria) > 1 and recipe.get("population_spec") != spec.model_dump(mode="json"))
+                or recipe.get("schema_version") != "easyicu.first-observed-pending-materialization/1"
+                or recipe.get("status") != "pending_materialization"
+                or recipe.get("analysis_authorized") is not False
+                or recipe.get("actual_cohort_exists") is not False
+                or recipe.get("decoded_scope_enforced") is not True
+                or recipe.get("same_skeleton_compilation_verified") is not True
+                or recipe.get("plan_sha256") != canonical_sha256(plan.model_dump(mode="json"))
+                or recipe.get("context_sha256") != canonical_sha256(context.model_dump(mode="json"))
+                or recipe.get("population_status", {}).get("compilation_sha256") != population.sha256()):
+            return fallback
+    except Exception:
+        return fallback
+    return [ValidationFinding(
+        validator="population_compile", severity="info",
+        message=("The verified first-observed adult population, including any explicit age 18 or older criterion, "
+                 "is pending materialization after complete plan review; no analysis input exists yet."),
+        evidence_ids=["first_observed_deferred_recipe"],
+        detail={"reason": "population_pending_materialization_review", "analysis_authorized": False,
+                "population_compile": population.record(), "population_compile_sha256": population.sha256()},
+    )]
 
 
 def population_criterion_decision_finding(
@@ -416,7 +483,7 @@ def refuse_substance_form_substitution(
     """Stop a plan whose primary exposure reads a named substance in its other form.
 
     The question named albumin given, and the plan studies the serum level
-    (``planning.question_substance_forms``): it answers another question, so
+    (``planning.question_interpretation``): it answers another question, so
     planning stops with a typed reason rather than analyse it.
     """
 

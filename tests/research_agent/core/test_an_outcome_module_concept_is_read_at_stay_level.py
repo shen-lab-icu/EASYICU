@@ -82,6 +82,27 @@ def _export(tmp_path: Path) -> Path:
     )
 
 
+def _synthetic_source_time_axis(root: Path, database: str):
+    """Bind synthetic SIC physical semantics; this is not plan approval."""
+    if database != "sic":
+        return None
+    from easyicu.databases.time_origin import SIC_CARE_UNIT_ORIGIN, SourceTimeAxisBinding
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.intake.export_package import open_export_package
+
+    manifest_path = root / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["canonical_physical_schema"] = {"time_origin": SIC_CARE_UNIT_ORIGIN}
+    manifest_path.write_text(json.dumps(manifest))
+    with open_export_package(root) as package:
+        return SourceTimeAxisBinding(
+            source_identity_sha256=canonical_sha256({"database": "sic", "synthetic_source": str(root.resolve())}),
+            export_authority_sha256=package.authority_sha256,
+            manifest_sha256=package.manifest_sha256,
+            selected_origin=SIC_CARE_UNIT_ORIGIN,
+        )
+
+
 def _materialize(root: Path, *, window=(0.0, 24.0), features=(), definition=None):
     return materialize_cohort(
         feature_concepts=list(features),
@@ -142,9 +163,22 @@ def test_a_dictionary_stay_value_is_not_summarized_by_its_export_grid(
             concept: [65.0, 65.0, None, 80.0],
         }), longitudinal_concepts=[concept],
     )
+    axis = _synthetic_source_time_axis(source, database)
+    if axis is not None:
+        from dataclasses import replace
+        from easyicu.research_agent.intake.export_package import ExportPackageError
+
+        with pytest.raises(ExportPackageError, match="source-bound care-unit axis"):
+            materialize_cohort(data_path=source, database=database, feature_concepts=[concept],
+                               static_concepts=["age"], outcome_concepts=["death"])
+        with pytest.raises(ExportPackageError, match="source-bound care-unit axis"):
+            materialize_cohort(data_path=source, database=database, feature_concepts=[concept],
+                               static_concepts=["age"], outcome_concepts=["death"],
+                               source_time_axis=replace(axis, manifest_sha256="f" * 64))
     cohort, provenance = materialize_cohort(
         data_path=source, database=database, feature_concepts=[concept],
         static_concepts=["age"], outcome_concepts=["death"], cohort_window=window,
+        source_time_axis=axis,
     )
     assert _column(cohort, concept) == {1: 65.0, 2: 80.0, 3: None, 4: None}
     assert not any(name.startswith(f"{concept}_") for name in cohort.columns)
@@ -451,12 +485,14 @@ def test_the_acquisition_binds_a_stay_value_to_its_bare_coordinate(tmp_path, con
             concept: [65.0, 65.0, 80.0, 80.0],
         }), longitudinal_concepts=[concept],
     )
+    axis = _synthetic_source_time_axis(source, database)
     result = acquire_universe_for_question(
         export_dir=source, database=database, question="Describe the admission measure and hospital outcome.",
         llm=ScriptedMockLLMClient([]), output_dir=tmp_path / "universe",
         target_outcome="death", outcome_concepts=["death"],
         required_feature_concepts=[concept], primary_exposure_concept=concept,
         static_concepts=["age"], concept_selection_authority="host_exact", emit_trajectory=False,
+        source_time_axis=axis,
     )
     assert result.blocked is False
     assert concept in result.materialized_columns

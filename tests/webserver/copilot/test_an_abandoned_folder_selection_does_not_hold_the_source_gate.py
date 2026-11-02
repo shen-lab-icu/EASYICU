@@ -59,7 +59,7 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         service_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {"id": "src_eicu", "path": REGISTERED, "database": "eicu",
                  "label": "eICU v2.0", "ok": True},

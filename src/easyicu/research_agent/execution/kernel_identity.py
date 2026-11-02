@@ -33,8 +33,9 @@ _SEED_PREFIXES = (
 )
 _DYNAMIC_MODULE_RE = re.compile(r"easyicu(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
 #: Where a Runner image keeps the dependency lock it was built from; the image's
-#: Dockerfile copies ``runner_image/requirements.lock`` there.
+#: Dockerfile copies the current versioned runner lock there.
 RUNNER_IMAGE_LOCK_PATH = "/opt/easyicu-runner/requirements.lock"
+RUNNER_PACKAGE_LOCK_NAME = "requirements-pydantic-core-v1.lock"
 #: Exit codes of :func:`runner_image_probe_source` for an image that does not
 #: carry this host's execution-kernel source or dependency lock, and the
 #: runner-unavailable reason each one reports.  The host reads the code, never
@@ -320,10 +321,10 @@ def build_execution_kernel_identity(
             "execution kernel manifest must contain sorted unique Python paths"
         )
     files_payload = "\n".join(manifest).encode("utf-8")
-    lock_path = root / "research_agent" / "runner_image" / "requirements.lock"
+    lock_path = root / "research_agent" / "runner_image" / RUNNER_PACKAGE_LOCK_NAME
     if lock_path.is_symlink() or not lock_path.is_file():
         raise ExecutionKernelIdentityError(
-            "execution Runner requirements.lock is unavailable"
+            "execution Runner current dependency lock is unavailable"
         )
     payload: dict[str, str | int] = {
         "schema_version": EXECUTION_KERNEL_IDENTITY_SCHEMA,

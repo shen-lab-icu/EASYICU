@@ -494,11 +494,11 @@ def test_langgraph_is_not_a_packaged_dependency() -> None:
 
 def test_langgraph_is_not_in_the_runner_lock() -> None:
     root = Path(__file__).resolve().parents[3]
-    lock_lines = (
-        root / "src/easyicu/research_agent/runner_image/requirements.lock"
-    ).read_text(encoding="utf-8").splitlines()
-
-    assert not any("langgraph" in line.lower() for line in lock_lines)
+    for name in ("requirements.lock", "requirements-pydantic-core-v1.lock"):
+        lock_lines = (root / "src/easyicu/research_agent/runner_image" / name).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        assert not any("langgraph" in line.lower() for line in lock_lines)
 
 
 def test_langgraph_is_not_installed_by_ci() -> None:

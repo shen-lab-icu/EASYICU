@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const path = require('node:path');
 global.window = { EU_LANG: 'zh' };
-for (const name of ['screens-guided-pi-modules', 'html-escape', 'screens-guided-pi-plan-actions', 'screens-guided-pi-confirmation']) {
+for (const name of ['screens-guided-pi-modules', 'html-escape', 'screens-guided-pi-plan-actions', 'screens-guided-pi-confirmation-data', 'screens-guided-pi-confirmation']) {
   require(path.join(__dirname, '../../src/easyicu/webserver/static/js', name + '.js'));
 }
 

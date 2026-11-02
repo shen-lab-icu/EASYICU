@@ -1,0 +1,1131 @@
+{
+  "baseline_change_summary": {
+    "source_digest_changes": [
+      "src/easyicu/research_agent/agents/plan_payload.py"
+    ],
+    "summary_changes": {}
+  },
+  "baseline_history": [
+    {
+      "reason": "Record the current source-bound planner and source-specific SIC overlay while retaining every historical resource ceiling",
+      "source_digest_changes": [
+        "src/easyicu/concept/loader.py",
+        "src/easyicu/data/concept-dict.json",
+        "src/easyicu/data/sic-case-duration-overlay.v1.json",
+        "src/easyicu/data/sofa2-dict.json",
+        "src/easyicu/research_agent/agents/core.py",
+        "src/easyicu/research_agent/agents/plan_payload.py",
+        "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/concept_catalog.py",
+        "src/easyicu/research_agent/graph.py",
+        "src/easyicu/research_agent/know_how/registry.py",
+        "src/easyicu/research_agent/learning/runtime.py",
+        "src/easyicu/research_agent/learning/store.py",
+        "src/easyicu/research_agent/planning/analysis_blueprint.py",
+        "src/easyicu/research_agent/planning/analysis_method_suite.py",
+        "src/easyicu/research_agent/planning/analysis_types.py",
+        "src/easyicu/research_agent/planning/cohort_contract.py",
+        "src/easyicu/research_agent/planning/figure_strategy.py",
+        "src/easyicu/research_agent/planning/method_adapter_catalog.py",
+        "src/easyicu/research_agent/planning/scientific_action_catalog.py",
+        "src/easyicu/research_agent/planning/study_design.py",
+        "src/easyicu/research_agent/planning/study_design_playbook.py",
+        "src/easyicu/research_agent/providers/prompts/v1/system.txt",
+        "src/easyicu/research_agent/reporting/article_contract.py",
+        "src/easyicu/research_agent/research_context/outbound.py",
+        "src/easyicu/research_agent/resources/capability.py",
+        "src/easyicu/research_agent/resources/capability_runtime.py",
+        "src/easyicu/research_agent/resources/catalog.py",
+        "src/easyicu/research_agent/resources/coder.py",
+        "src/easyicu/research_agent/resources/context.py",
+        "src/easyicu/research_agent/resources/scheduler.py",
+        "src/easyicu/research_agent/resources/schema.py",
+        "src/easyicu/research_agent/schema.py",
+        "src/easyicu/resources.py",
+        "tools/research_agent_resource_baseline.py"
+      ],
+      "summary_changes": {
+        "coder_resource_provider_calls": {
+          "now": 0,
+          "was": null
+        },
+        "max_coder_resource_prompt_bytes": {
+          "now": 2255,
+          "was": null
+        },
+        "max_planner_with_resources_bytes": {
+          "now": 63309,
+          "was": null
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 58901,
+          "was": null
+        },
+        "max_resource_added_bytes": {
+          "now": 4565,
+          "was": null
+        },
+        "selected_resource_count": {
+          "now": 7,
+          "was": null
+        },
+        "task_count": {
+          "now": 9,
+          "was": null
+        }
+      }
+    },
+    {
+      "reason": "Bind current analysis method source identity while retaining historical resource ceilings",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/analysis_method_suite.py"
+      ],
+      "summary_changes": {}
+    },
+    {
+      "reason": "Record planner wire v2 source identity after equivalent transport compaction; preserve legacy consumer schema and all historical ceilings",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/agents/plan_payload.py"
+      ],
+      "summary_changes": {}
+    }
+  ],
+  "baseline_reason": "Record planner wire v2 source identity after equivalent transport compaction; preserve legacy consumer schema and all historical ceilings",
+  "online_runtime_metrics": {
+    "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
+    "status": "not_measured_no_provider_calls"
+  },
+  "patient_data_reads": 0,
+  "provider_calls": 0,
+  "schema_version": "easyicu.research_agent_resource_baseline/2",
+  "scope": "offline_minimal_context_fixture_not_paper_input_authority",
+  "source_sha256": {
+    "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
+    "src/easyicu/data/concept-dict.json": "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532",
+    "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
+    "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
+    "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
+    "src/easyicu/research_agent/agents/plan_payload.py": "aad4b7206bbe99dd170e2663c1d4d3054e2843cad0e7e384348ae9f2fcb0308e",
+    "src/easyicu/research_agent/agents/planner.py": "5d01bba07f26e0f2bee94cc0fd6df758c11212aec1b231a4dab28ec758fa66d2",
+    "src/easyicu/research_agent/concept_catalog.py": "cccd6de5f15be09760fe9be2e19ad9f526eb4c5f175cf0310d203177d0ae4058",
+    "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
+    "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
+    "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
+    "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
+    "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
+    "src/easyicu/research_agent/planning/analysis_method_suite.py": "2b4eaed80f523388c75a6b8d9636819941e63febb84bd84d7c646fd99bee10dd",
+    "src/easyicu/research_agent/planning/analysis_types.py": "019e3fd4bc15c78efc1679d3d9c316d6c97035d591772df0b7e0a43605fa6aa4",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "fba16caf43e3147418f66a7c385f90dd64ebece957be0c3fe7bd79710c27f969",
+    "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
+    "src/easyicu/research_agent/planning/method_adapter_catalog.py": "31ce210bede1f221cfd5f2eaac20fb20320639d9f52411bd08013067871bbbbd",
+    "src/easyicu/research_agent/planning/scientific_action_catalog.py": "7efa6f31cdaae0fecc03f02483ae651eaf2010fe4fd43fa84fbf340a088df102",
+    "src/easyicu/research_agent/planning/study_design.py": "785778a009fd3bd4334b65c207bb1e9b529b24a941207f02b34dc08ee78a4ed0",
+    "src/easyicu/research_agent/planning/study_design_playbook.py": "d8ed48cb61aace3c42b2f5cc3bbc4453d7d4daf9a97d8243a86697b32a26ba6f",
+    "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
+    "src/easyicu/research_agent/reporting/article_contract.py": "882743dc1beff5ea792ce8cefbb986c89b33ffa8358daa0daaa84c607ddac509",
+    "src/easyicu/research_agent/research_context/outbound.py": "1d5706a7504a722a62375b53ca6626abedfb1afc6332af4d59ce89119ddc6fa5",
+    "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
+    "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",
+    "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
+    "src/easyicu/research_agent/resources/coder.py": "9cfa95df9338ecd9d7c158fe80d492a79b83fc99417bcf78e0b45af412418095",
+    "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
+    "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
+    "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
+    "src/easyicu/research_agent/schema.py": "4bfcee83665863afbe4c22ca98e5f37eadb92f323f75d25e641afbd1d7e61ea4",
+    "src/easyicu/resources.py": "6274402cb42e53ba1cee79cdfd9c8142388f2c73a5b7d22d6a5ffde70a07c715",
+    "tools/research_agent_resource_baseline.py": "643dd67bf97f51cf8ad87179404c6b29fbee7dffbb986fd7c1c15801b8d380e4"
+  },
+  "summary": {
+    "coder_resource_provider_calls": 0,
+    "max_coder_resource_prompt_bytes": 2255,
+    "max_planner_with_resources_bytes": 63309,
+    "max_planner_without_resources_bytes": 58901,
+    "max_resource_added_bytes": 4565,
+    "selected_resource_count": 7,
+    "task_count": 9
+  },
+  "task_order": [
+    "E1",
+    "E2",
+    "E3",
+    "M1",
+    "M2",
+    "M3",
+    "H1",
+    "H2",
+    "H3"
+  ],
+  "tasks": [
+    {
+      "coder_resources": {
+        "bundle_sha256": "f177900fc79c65d0382937ade8992f5b3bd962867d8ff2c5bf32348776072f2f",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 369,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "22249aa61fd2594e50910aa574afbb977f9df8f7377e6f02e19c72245d899ad8",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "d577aa30ecc80a5b7a10494c9352ab276d1905e9f99c1d00dc64ec97ade5b7b0",
+          "e19cce9c8bd64dcdd80194dfab279f44c05a428005a30fe8906409fcd03c8b8e",
+          "1f3baf126b13fbb98dd8708aca83b91369754b0cb97abaf35cc4be66942e7d3c"
+        ]
+      },
+      "fixture_concepts": [
+        "sepsis3",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 4029,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14483,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 44920,
+            "included": true,
+            "required": true,
+            "sha256": "251d3818ef62e6ce34a4a1f7eb6098b888f93b29428f3ad7c327464984ed0b36"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4565,
+            "included": true,
+            "required": true,
+            "sha256": "e5c2cd39d87e51925f55d4569a9b2d74e09afeebc75f5e445c41917ece35114a"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 57929,
+        "truncated_strings": false,
+        "user_bytes": 49485
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13341,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 44920,
+            "included": true,
+            "required": true,
+            "sha256": "251d3818ef62e6ce34a4a1f7eb6098b888f93b29428f3ad7c327464984ed0b36"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 53364,
+        "truncated_strings": false,
+        "user_bytes": 44920
+      },
+      "planning_contract_bytes": 6128,
+      "planning_contract_sha256": "703681b904a34c690aacf7f56dedb766cf1d8f311dabbc8988ef54d93dfb9d4f",
+      "question": "Estimate Sepsis-3 prevalence and mortality association.",
+      "resource_added_bytes": 4565,
+      "resource_allowlist_sha256": "8adc13a12942ac73918005d454a567e8477bbc5f25682e947d60e4e800ddf855",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "descriptive",
+      "selected_know_how": [
+        {
+          "card_id": "sepsis_prognosis",
+          "data_readiness": "partial",
+          "file_sha256": "026504ee8ac555ffce3cf3f34d684888b56f05de2c7529b1f153fa64bb243cc8",
+          "score": 0.845385,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "E1"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "b996a5c327dd67726e61fed1c7cbda0e138cde601c6a461cc59903e8b95a2299",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 1138,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rcs_dose_response",
+            "sha256": "5ed39cd34edb9485122f9bd878ed932bc34283093a1b7077e20ec7e1db2cda66",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "713a5bb2d170c8684937ab1dd0311be88e0d95fbd9b253333965841517794f64",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "86f2313ff10cbed4fa851a0b928d91efd58eb7a3fc2a934f2adb479c96faf4ba",
+          "54c294f2c26a26b07c67caa01e4c7b8d94cabdc02eccf86358f0e9b04bc45f70",
+          "70f3e0cf3a82dbe16e47c0e7aeb0cf99c2021251d17437a5c9e484d22d530f32"
+        ]
+      },
+      "fixture_concepts": [
+        "lactate",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3791,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14974,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 47123,
+            "included": true,
+            "required": true,
+            "sha256": "e670e311c1d929d9b93fa8b288cdfb4665ef612d22bfcbe762acfb5693367fc0"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4327,
+            "included": true,
+            "required": true,
+            "sha256": "0c198d2ec9238f4dea3ef3c7573aa83f53feae4abdcfdc1400814181d5c6bfb3"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 59894,
+        "truncated_strings": false,
+        "user_bytes": 51450
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13892,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 47123,
+            "included": true,
+            "required": true,
+            "sha256": "e670e311c1d929d9b93fa8b288cdfb4665ef612d22bfcbe762acfb5693367fc0"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 55567,
+        "truncated_strings": false,
+        "user_bytes": 47123
+      },
+      "planning_contract_bytes": 7541,
+      "planning_contract_sha256": "50e21b7661aafd128d44ec79f5ee5b0828e92a427a3c6c505273ad900529caa3",
+      "question": "Estimate the association of first-24-hour peak lactate with in-hospital mortality.",
+      "resource_added_bytes": 4327,
+      "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "association",
+      "selected_know_how": [
+        {
+          "card_id": "early_peak_lactate_association",
+          "data_readiness": "partial",
+          "file_sha256": "5faecfef24d846e1e08167b2334bd1e98702427aa09e1537f230922aa835bba3",
+          "score": 0.893182,
+          "version": "1.1.0"
+        }
+      ],
+      "task_id": "E2"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "6d4ba8312382578062a07da6a9753c77df816a0138d6908803ce41060778acba",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 1138,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rcs_dose_response",
+            "sha256": "5ed39cd34edb9485122f9bd878ed932bc34283093a1b7077e20ec7e1db2cda66",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "183499aaeec2b9ca37bd647ae892902fd61b9a1dd8867a54287fd2c19ee97ed7",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "c3f446099c2650cb843b582387f7bdcff3d179c7389769c447c8e4453e3b854a",
+          "648642e6b0c2f2d0c5b12ced5dcce0e268c33c7ce2673704d0dc56122c6112b7",
+          "7f496149514f742e2085586b192e217ed8bebab3339307b918f8a3411cfeff90"
+        ]
+      },
+      "fixture_concepts": [
+        "kdigo",
+        "death",
+        "los_icu",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 0,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13281,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 44679,
+            "included": true,
+            "required": true,
+            "sha256": "e7e7ffeae550c0cce354e5eb5c3f13f06e7947a9b4d8c19a01d6d990aba9986b"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 53123,
+        "truncated_strings": false,
+        "user_bytes": 44679
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13281,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 44679,
+            "included": true,
+            "required": true,
+            "sha256": "e7e7ffeae550c0cce354e5eb5c3f13f06e7947a9b4d8c19a01d6d990aba9986b"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 53123,
+        "truncated_strings": false,
+        "user_bytes": 44679
+      },
+      "planning_contract_bytes": 5784,
+      "planning_contract_sha256": "9ec94c6b086f85e8708e27dfb0e64c1720dc0b6edbeb2df65752f710c7795862",
+      "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
+      "resource_added_bytes": 0,
+      "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "association",
+      "selected_know_how": [],
+      "task_id": "E3"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "a96e5aef69e6ddc133e0d8cef8762bd9b104c7cf46680ab688e397f029e3fb1e",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 1138,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rcs_dose_response",
+            "sha256": "5ed39cd34edb9485122f9bd878ed932bc34283093a1b7077e20ec7e1db2cda66",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "2d214ca69b86c255be416d42cca977a59b34a7492873105522c35015fab806f0",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "52f3f61fb947969fcb8991b9a8e7df105cb94da497ed50641fdde05f2c90ec8c",
+          "90b85d8ead6710a466a2c7fdb0d204ee82c9e10d3396b2748cdf09a450ca138c",
+          "68e9f398414f53fb362e0ddbefc8e60b1a78142bf91a53acd14a6240ffb69bdf"
+        ]
+      },
+      "fixture_concepts": [
+        "bilirubin",
+        "sofa",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 0,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 12873,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 43046,
+            "included": true,
+            "required": true,
+            "sha256": "5e1ba78023cd68a7a70be7fff8319da6140a8bb575bd9ad37ed4cade8d669111"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 51490,
+        "truncated_strings": false,
+        "user_bytes": 43046
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 12873,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 43046,
+            "included": true,
+            "required": true,
+            "sha256": "5e1ba78023cd68a7a70be7fff8319da6140a8bb575bd9ad37ed4cade8d669111"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 51490,
+        "truncated_strings": false,
+        "user_bytes": 43046
+      },
+      "planning_contract_bytes": 5559,
+      "planning_contract_sha256": "7787cb4516d89155e10167ef38a1fe6a75c18f2cab1dd33029a381712f6093de",
+      "question": "Assess hepatobiliary SOFA and bilirubin missingness in mortality analysis.",
+      "resource_added_bytes": 0,
+      "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "association",
+      "selected_know_how": [],
+      "task_id": "M1"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "fe46bb245e3e07f8757ad399861fa3b606880d17e50ba840ae5ad7d3885f86bd",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 2026,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.shap_attribution",
+            "sha256": "baf56501968af823f82c2bba7a37451253d0d2e2d84e5735617ad90027cde645",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.lasso_selection",
+            "sha256": "76351d9a7b97a6fbafc8029938ad35e2f27b20f9fe7ae4d113579910f1502469",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.conformal",
+            "sha256": "ee1005ab2f969d8080e8843da6be7c87d2ee1e3934cc0ac3f8b0d647332f9c0b",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "0892a10ece1f933ee98f5d554601b28f8437801d1aa1b77799e4035ddcb6950c",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "81a3d8f0c4667bdd291d5edbcf66ad6c08652e9cebff3de52e13fbf5d9674e4a",
+          "a34c14a1af7cc562e0c3ea7abb4a8a7ebaf7ea78906e0225321eb9d1457e69ec",
+          "cd1e5684a366543865f69b2fe6c19833eff45011308dc57b03def32332da7910"
+        ]
+      },
+      "fixture_concepts": [
+        "death",
+        "age",
+        "sex",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 4012,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 15231,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 47930,
+            "included": true,
+            "required": true,
+            "sha256": "b4b93172dac87bfd87d56a0fecf8b22ab7129f21f39998654e71e4c7f429dd0e"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4548,
+            "included": true,
+            "required": true,
+            "sha256": "7543259224c9c5efc1684c9c751285ac6f3255c7252df0fbbfb3399eea32a5e0"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 60922,
+        "truncated_strings": false,
+        "user_bytes": 52478
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14094,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 47930,
+            "included": true,
+            "required": true,
+            "sha256": "b4b93172dac87bfd87d56a0fecf8b22ab7129f21f39998654e71e4c7f429dd0e"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 56374,
+        "truncated_strings": false,
+        "user_bytes": 47930
+      },
+      "planning_contract_bytes": 7361,
+      "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",
+      "question": "Build a first-24-hour mortality risk prediction model.",
+      "resource_added_bytes": 4548,
+      "resource_allowlist_sha256": "a555fc5c589dbc20a2f3ccada523c79ada2ae697f4b009e477022b7bf09cee81",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "prediction",
+      "selected_know_how": [
+        {
+          "card_id": "icu_mortality_prediction",
+          "data_readiness": "partial",
+          "file_sha256": "ae02940fe3531aa24fca4446748888474bec0ff8de8ad899b7ec6a806817f72b",
+          "score": 0.9375,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "M2"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "7bfd7989639892717c301adaa826630e31d0619283f1046204b1df311fb6cde9",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 1280,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.subtype_assignment",
+            "sha256": "7892dd5d73b2a69c996771fc07c0d579b265050078189afb2996418515233ae8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:sklearn",
+            "sha256": "021deb761e48985ee20bd00e7f81a78bbe2bab65a908030e1a241e82bc1c6fb8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "67629a19d082ed3a6a50d4e4ff97d02f6208b8706aeef961e0d6a438604211df",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "f2df0e361179492ac63b862f5b7826de5568b438aada41e0ce01274d3d706e8e",
+          "4c7d379ef41def674a23d46ab4eb0a6168507e6858f5ae5d0ba78e713ecc4900",
+          "34a014ae5c91c6f7bfb33e8d7cc06b23a7462ddf1283c139a7f0b8ec476f4532"
+        ]
+      },
+      "fixture_concepts": [
+        "sepsis3",
+        "heart_rate",
+        "lactate",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3872,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 15828,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 50457,
+            "included": true,
+            "required": true,
+            "sha256": "83c175c0c2974ba548f499f5d9a85340c18514f7dfc34b83f15c4e1269d9654d"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4408,
+            "included": true,
+            "required": true,
+            "sha256": "05092c1bdbed9b524dbff9c759f6264b3ee7a80dd055e43c36668bbbe3bb5352"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 63309,
+        "truncated_strings": false,
+        "user_bytes": 54865
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14726,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 50457,
+            "included": true,
+            "required": true,
+            "sha256": "83c175c0c2974ba548f499f5d9a85340c18514f7dfc34b83f15c4e1269d9654d"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 58901,
+        "truncated_strings": false,
+        "user_bytes": 50457
+      },
+      "planning_contract_bytes": 6797,
+      "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",
+      "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
+      "resource_added_bytes": 4408,
+      "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "phenotyping",
+      "selected_know_how": [
+        {
+          "card_id": "longitudinal_icu_phenotyping",
+          "data_readiness": "not_ready",
+          "file_sha256": "51afa923a6ce2a1089c86c5d02b075eab8ae548ac6643b9ed31a88c34b17a431",
+          "score": 0.8,
+          "version": "2.0.0"
+        }
+      ],
+      "task_id": "M3"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "331325af00a9e97737cf53b5220b35806ebdf348702124a12dfafdcb853e1042",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 2255,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.rmst",
+            "sha256": "a4cf43d2ad7a7ae50e74dc9d17f02feff15bdf1bd4d064cbd3138daa59e4b8d0",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.ph_schoenfeld",
+            "sha256": "b95d932607787dfdb357118724baae846db4be081cafdf8122d85fe95d4f2068",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.temporal_features",
+            "sha256": "ddbcabddac23aa5543f50e59167b718e43e1de73cae0dfcf7364f17caae53e05",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "8bf797aa02bd65b7cbd52155f6e010be77bb3d461320dac4c74c12d749d81066",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "893e98c8667b443d4662f7526cbd74b69fbad2c30e4fc0e3481838e39dffb691",
+          "2e7025d1d6cda57f48e7d88f02b28a943dc708604a63bd7d9ddf3c33a62f8d62",
+          "4928b62dc2479c4cf7fa0c0269a3c0240f63b1a894e91871ca494683f55a213c"
+        ]
+      },
+      "fixture_concepts": [
+        "mechvent",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 4015,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14620,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 45483,
+            "included": true,
+            "required": true,
+            "sha256": "124fb11d1bd7eac803adca5ad5eccf41718bf62a3815c5800003b891fbf5551b"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4551,
+            "included": true,
+            "required": true,
+            "sha256": "e1f151510373ea69f66ea9cfe8d6e0f39a6980bdb6b61ddd0841843d2fd6baa7"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 58478,
+        "truncated_strings": false,
+        "user_bytes": 50034
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13482,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 45483,
+            "included": true,
+            "required": true,
+            "sha256": "124fb11d1bd7eac803adca5ad5eccf41718bf62a3815c5800003b891fbf5551b"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 53927,
+        "truncated_strings": false,
+        "user_bytes": 45483
+      },
+      "planning_contract_bytes": 6777,
+      "planning_contract_sha256": "7426aa9258538c2435537b62ad55d33c38c7c0acffa9624978eddce8b2f6dd06",
+      "question": "Estimate mechanical ventilation survival and 28-day mortality.",
+      "resource_added_bytes": 4551,
+      "resource_allowlist_sha256": "9fdb53508a14f7aeee8455163b7c328ee6430d83fb990fee9173a5719d84d7aa",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "time_to_event",
+      "selected_know_how": [
+        {
+          "card_id": "mechanical_ventilation_liberation",
+          "data_readiness": "partial",
+          "file_sha256": "1ea112b3d320a4f958517216154cc09a7f74986f575ba83339dafc2c7858470d",
+          "score": 0.839091,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "H1"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "5cf9049b61161e1a2aaffbd56a9d54fdb635fa50be485c7b8993e34e386f01bb",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 1337,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.temporal_features",
+            "sha256": "ddbcabddac23aa5543f50e59167b718e43e1de73cae0dfcf7364f17caae53e05",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "ae1a64d34d1c58553d436923cc6eb2386a63892c0bdd3f1a924eb7f7a30ae975",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "c05525527eb5046904541c6684a290f43b7a7e38fdaf2e8dae2d1087e7d501f9",
+          "a145c199f207f63e8cc28ac56a7240435b5c8372f1a669223b979a41585dc416",
+          "667e3463140a7563f87f98dd93fb2cd9c5a954d0606f46a64351b59719a4e10d"
+        ]
+      },
+      "fixture_concepts": [
+        "vaso",
+        "death",
+        "age",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3905,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14999,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 47109,
+            "included": true,
+            "required": true,
+            "sha256": "bad97c36d5e156312adc2d8a5bbc46c44c5986fac02c3d92dcd3b9494dc535ed"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4441,
+            "included": true,
+            "required": true,
+            "sha256": "56b237a0cc9cd2ece23be88abc4170427bf10992196db6ba9356c5a0e1fdf96a"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 59994,
+        "truncated_strings": false,
+        "user_bytes": 51550
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13889,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 47109,
+            "included": true,
+            "required": true,
+            "sha256": "bad97c36d5e156312adc2d8a5bbc46c44c5986fac02c3d92dcd3b9494dc535ed"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 55553,
+        "truncated_strings": false,
+        "user_bytes": 47109
+      },
+      "planning_contract_bytes": 7064,
+      "planning_contract_sha256": "aafe0c660d3095ecd5bb1da2d748f729f6bb180d98012f6af64edc302a9de199",
+      "question": "Compare vasopressor strategies with a confounding-aware causal analysis.",
+      "resource_added_bytes": 4441,
+      "resource_allowlist_sha256": "2acd291bd3a92bcc1d6ac991e2af1e269e7f1a5db76a9c2f1a22b921f6e9dd29",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "causal_emulation",
+      "selected_know_how": [
+        {
+          "card_id": "vasopressor_comparative_effectiveness",
+          "data_readiness": "partial",
+          "file_sha256": "c3cea48d338a467a178d84b61cef5b470025089b0b2c23cfdb9f22f78945d6ed",
+          "score": 0.840526,
+          "version": "2.0.0"
+        }
+      ],
+      "task_id": "H2"
+    },
+    {
+      "coder_resources": {
+        "bundle_sha256": "bd545139683c6fd742e656a62c6c2df1c918f755d98fbfe82bd3449c2abed86a",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 1280,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:easyicu.research_agent.methods.subtype_assignment",
+            "sha256": "7892dd5d73b2a69c996771fc07c0d579b265050078189afb2996418515233ae8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:sklearn",
+            "sha256": "021deb761e48985ee20bd00e7f81a78bbe2bab65a908030e1a241e82bc1c6fb8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "b14c45d35f5032a467ef7f7772da89ef2acc4db220b59453ed53b93467fa285f",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "eb99c93e58f937da92f5d4fd46e52f556bc05987a71987bac276dfd998c3dd7d",
+          "57e50b5df3be2608c9eec967d79b77c73f3d55914ffe863ea3514e5a0eae5d26",
+          "1773ad918031b9920ad8d58670854851bc5f644ccb2aa197ec627b913919cb1c"
+        ]
+      },
+      "fixture_concepts": [
+        "sofa",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3872,
+      "planner_with_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 14893,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 46718,
+            "included": true,
+            "required": true,
+            "sha256": "51a0e530ed7d6ee57f56aacc9b4561cd66c3358f30dbf19be7fbb2cc5bf3d2fc"
+          },
+          "reviewed_protocol_resources": {
+            "authority_bound": true,
+            "bytes": 4408,
+            "included": true,
+            "required": true,
+            "sha256": "05092c1bdbed9b524dbff9c759f6264b3ee7a80dd055e43c36668bbbe3bb5352"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 59570,
+        "truncated_strings": false,
+        "user_bytes": 51126
+      },
+      "planner_without_resources": {
+        "analysis_type_catalog_detail": "full",
+        "approx_input_tokens": 13791,
+        "limit_bytes": 120000,
+        "segments": {
+          "planner_contract_and_typed_context": {
+            "authority_bound": true,
+            "bytes": 46718,
+            "included": true,
+            "required": true,
+            "sha256": "51a0e530ed7d6ee57f56aacc9b4561cd66c3358f30dbf19be7fbb2cc5bf3d2fc"
+          }
+        },
+        "system_bytes": 8444,
+        "total_bytes": 55162,
+        "truncated_strings": false,
+        "user_bytes": 46718
+      },
+      "planning_contract_bytes": 6791,
+      "planning_contract_sha256": "62e1d3ad93ceab51cf7fcb9c872658398efcd2b4de7fe3d55fe660a6d87aaeb2",
+      "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
+      "resource_added_bytes": 4408,
+      "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
+      "resource_catalog_sha256": "722548831dbc3a32eceb707aa87f97545361a941083a5b8fcf4d67eed5f2f415",
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "phenotyping",
+      "selected_know_how": [
+        {
+          "card_id": "longitudinal_icu_phenotyping",
+          "data_readiness": "not_ready",
+          "file_sha256": "51afa923a6ce2a1089c86c5d02b075eab8ae548ac6643b9ed31a88c34b17a431",
+          "score": 0.811765,
+          "version": "2.0.0"
+        }
+      ],
+      "task_id": "H3"
+    }
+  ],
+  "tool_version": "2.4.0"
+}

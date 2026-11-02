@@ -48,7 +48,7 @@ def owners(monkeypatch):
         catalog.CatalogConcept(concept_id=name, description=definition.description or "")
         for name, definition in definitions.items()
     ])
-    monkeypatch.setattr(loader, "load_dictionary", lambda: definitions)
+    monkeypatch.setattr(loader, "load_dictionary", lambda **_kwargs: definitions)
     monkeypatch.setattr(catalog, "build_database_capability_catalog", lambda db: menu)
     monkeypatch.setattr(builder, "_concept_info_for_wide_column", lambda col:
                         ({"name": col, "description": definitions[col].description}, col)

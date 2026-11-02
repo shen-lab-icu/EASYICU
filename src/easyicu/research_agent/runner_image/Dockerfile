@@ -64,7 +64,7 @@ RUN sed -i \
 # Install the complete, version-locked package set declared by
 # contracts/method_packages.py. The image is network-disabled at execution
 # time, so a package advertised to the coder must already be importable here.
-COPY src/easyicu/research_agent/runner_image/requirements.lock /opt/easyicu-runner/
+COPY src/easyicu/research_agent/runner_image/requirements-pydantic-core-v1.lock /opt/easyicu-runner/requirements.lock
 RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
         -r /opt/easyicu-runner/requirements.lock
 

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.authority.claim_coordinates import (
+from easyicu.research_agent.authority.numeric_claim_identity import (
     contrast_exposure_coordinate,
 )
 from easyicu.research_agent.authority.scientific_claims import (

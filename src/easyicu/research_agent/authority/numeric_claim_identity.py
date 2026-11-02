@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -205,6 +206,7 @@ class NumericClaim:
 
 
 __all__ = [
+    "contrast_exposure_coordinate",
     "NumericClaim",
     "NumericEffectScale",
     "NumericEstimand",
@@ -396,3 +398,21 @@ def _evaluate_derived_formula(
             f"derived-formula evaluated to non-finite value {fresult!r}"
         )
     return fresult
+
+
+def _coordinate_level(level: str) -> str:
+    """A level as a JSON coordinate value; an integer token stays a number."""
+
+    text = str(level)
+    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", text):
+        return text
+    return json.dumps(text, ensure_ascii=False)
+
+
+def contrast_exposure_coordinate(variable: str, level: str, reference: str) -> str:
+    """Name one contrast of a categorical exposure as a claim coordinate."""
+
+    return (
+        f"{variable}={_coordinate_level(level)} versus "
+        f"{variable}={_coordinate_level(reference)}"
+    )

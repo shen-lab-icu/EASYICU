@@ -336,7 +336,7 @@ def test_an_issued_time_must_be_in_hours_from_icu_admission() -> None:
             death=_typed_entry("event_status"),
             death_time=_issued(origin=origin, unit=unit),
         )
-        with pytest.raises(MaterializedMetadataError, match="hours from ICU admission"):
+        with pytest.raises(MaterializedMetadataError, match="selected source-hour axis"):
             M._export_event_time_source(package, "death")
 
 

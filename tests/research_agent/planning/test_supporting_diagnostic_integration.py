@@ -15,11 +15,11 @@ from easyicu.research_agent.gates.step_contract import _step_contract_findings
 from easyicu.research_agent.planning.progressive_compiler import _compile_one_step, compile_progressive_plan
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanSkeleton, ProgressiveSkeletonStep
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
-from tests.research_agent.core.test_phenotyping_feature_roles import _skeleton as _cluster_skeleton
-from tests.research_agent.core.test_cross_sectional_phenotyping_executor import _context as _cluster_context
-from tests.research_agent.core.test_standalone_balance_and_cluster_sizes import _bound_case
-from tests.research_agent.core.test_standalone_balance_and_cluster_sizes import _sizes_frames, _size_spec
-from tests.research_agent.execution.test_prediction_subgroup_executor import _gate_fixture, _spec
+from tests.support.phenotyping_fixtures import _skeleton as _cluster_skeleton
+from tests.support.phenotyping_fixtures import _context as _cluster_context
+from tests.support.standalone_diagnostics import _bound_case
+from tests.support.standalone_diagnostics import _sizes_frames, _size_spec
+from tests.support.prediction_subgroup import _gate_fixture, _spec
 from tests.research_agent.planning.progressive_planner_fixtures import _context, _payload
 from tests.support.schema_names import authority_schema_json
 

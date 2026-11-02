@@ -148,14 +148,22 @@ _FACTORY_CHILD = r'''
 import json, sys
 from pathlib import Path
 import pandas as pd
+from easyicu.concept.metadata_projection import ConceptColumnRole
+from easyicu.concept.metadata_sidecar import EXPORT_PHYSICAL_SCOPE, ColumnMetadataFileBinding, ColumnMetadataSidecar, write_content_addressed_sidecar
 from easyicu.webserver import agent_pipeline_runs, durable_research, jobs, research_auto_resume, sources
+from tests.support.typed_export import metadata_binding
 root, port = Path(sys.argv[1]), int(sys.argv[2]); root.mkdir(exist_ok=True)
 export = root / "source"; export.mkdir()
 pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(export / "demographics.parquet", index=False)
-(export / "_manifest.json").write_text(json.dumps({"database": "miiv", "format": "parquet",
+sidecar = ColumnMetadataSidecar(source_database="miiv", source_database_class_prefixes=(), scope=EXPORT_PHYSICAL_SCOPE,
+    files=(ColumnMetadataFileBinding(relative_path="demographics.parquet", module="demographics", identity_column="stay_id",
+        time_coordinates=(), columns={"age": metadata_binding("age", "age", ConceptColumnRole.VALUE)}),))
+reference = write_content_addressed_sidecar(export, sidecar)
+(export / "_manifest.json").write_text(json.dumps({"schema_version": "easyicu_native_export_v2", "database": "miiv", "format": "parquet",
+    "column_metadata": reference.to_dict(),
     "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
     "feature_definitions": {"included": False}, "files": [{"file": "demographics.parquet",
-    "module": "demographics", "concepts": 1, "concept_ids": ["age"], "rows": 1}]}))
+    "module": "demographics", "concepts": 1, "concept_ids": ["age"], "column_metadata_columns": ["age"], "rows": 1}]}))
 assert sources.register_source(str(export), label="synthetic", crossdb=False)["ok"]
 study = {"id": "study-a", "revision": 1, "question": "Describe the age distribution of adult ICU patients.",
          "data_source": {"path": str(export), "database": "miiv"}}

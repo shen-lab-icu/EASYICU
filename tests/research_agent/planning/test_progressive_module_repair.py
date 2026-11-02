@@ -8,7 +8,7 @@ import pytest
 from easyicu.research_agent.agents.progressive_attempt import progressive_planner_failure_facts
 from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
 from easyicu.research_agent.canonical_json import canonical_sha256
-from easyicu.research_agent.contracts.cohort_summary_products import auxiliary_summary_product
+from easyicu.research_agent.contracts.cohort_summary import auxiliary_summary_product
 from easyicu.research_agent.planning.progressive_compiler import compile_progressive_plan
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError, ProgressivePlanOutline, ProgressivePlanSkeleton,

@@ -36,6 +36,8 @@ from easyicu.research_agent.authority.plan_lifecycle import (
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
+from tests.support.progressive_retry import _RecordingEvidence
+
 from tests.research_agent.planning.progressive_planner_fixtures import (
     _context as _context,
     _foundation_payload as _foundation_payload,
@@ -44,21 +46,6 @@ from tests.research_agent.planning.progressive_planner_fixtures import (
 )
 
 
-class _RecordingEvidence:
-    def __init__(self) -> None:
-        self.records: dict[str, dict[str, object]] = {}
-
-    def get(self, evidence_id_or_alias: str) -> object | None:
-        return self.records.get(evidence_id_or_alias)
-
-    def register_file(self, **kwargs: object) -> object:
-        evidence_id = str(kwargs["evidence_id"])
-        source_path = Path(str(kwargs["source_path"]))
-        self.records[evidence_id] = {
-            **dict(kwargs),
-            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
-        }
-        return self.records[evidence_id]
 
 
 @pytest.mark.parametrize(("requirement", "concept", "verification", "calls"), [

@@ -523,7 +523,7 @@ def verify_desktop_build(backend: Path) -> dict:
 def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | None = None) -> dict:
     """Use reviewed replay when supplied; otherwise keep the honest model stop."""
     from easyicu.research_agent.execution import runner
-    from easyicu.research_agent.orchestration.profiles import DESKTOP_FIRST_RESULT, get_submission_profile
+    from easyicu.research_agent.orchestration.profiles import WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY, get_submission_profile
     from easyicu.webserver import dataio
     from easyicu.webserver.demo_source_contracts import SOURCES
     from easyicu.webserver.research_launch_runtime import _require_execution_runtime, _submission_profile_ref
@@ -535,7 +535,7 @@ def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | Non
     profile = get_submission_profile(_submission_profile_ref(
         budget_mode="full_reviewed", live_pubmed=False, runner_kind=kind,
     ))
-    if profile != DESKTOP_FIRST_RESULT or profile.requires_runner != "host":
+    if profile != WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY or profile.requires_runner != "host":
         raise AcceptanceFailure("desktop_first_result_profile_mismatch")
     if len(exports) != len(SOURCES):
         raise AcceptanceFailure("demo_exports_unavailable_for_research")
@@ -548,7 +548,7 @@ def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | Non
         "docker_reason_code": docker.reason_code, "profile_ref": profile.ref,
         "docker_executable_policy": "intentionally_unavailable",
         "deterministic_analysis_without_docker": "yes",
-        "deterministic_analysis_owner": "easyicu.research_agent.orchestration.profiles.DESKTOP_FIRST_RESULT",
+        "deterministic_analysis_owner": "easyicu.research_agent.orchestration.profiles.WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY",
         "source_validated": True, "source_owner": "easyicu.webserver.dataio.validate_research_pipeline_source",
         "analysis_executed": False, "provider_calls": 0,
         "first_result": {

@@ -12,7 +12,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..contracts.rmst import RMSTSpec
+from ..contracts.survival import RMSTSpec
 from ..contracts.time_varying_exposure import TimeVaryingExposureSpecification
 
 

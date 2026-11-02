@@ -38,6 +38,15 @@ def source_concept_reference(concept_id: str, database: str) -> dict[str, Any] |
         # valid source catalog unusable or manufacture a mapping.
         return None
     item = payload.get(str(concept_id))
+    overlay_sha256 = None
+    if key == "sic":
+        from easyicu.resources import SIC_CASE_OVERLAY_SHA256, _sic_case_overlay
+        overlay = _sic_case_overlay()
+        if set(payload) & set(overlay):
+            raise ValueError("sic_case_overlay_concept_collision")
+        if str(concept_id) in overlay:
+            item = overlay[str(concept_id)]
+            overlay_sha256 = SIC_CASE_OVERLAY_SHA256
     if not isinstance(item, dict) or not isinstance(item.get("sources"), dict):
         return None
     raw = item["sources"].get(key)
@@ -81,7 +90,7 @@ def source_concept_reference(concept_id: str, database: str) -> dict[str, Any] |
     units = [unit] if isinstance(unit, str) and unit.strip() else []
     if isinstance(unit, list):
         units = [u[:80] for u in unit[:20] if isinstance(u, str) and u.strip()]
-    return {"database": key, "dictionary_sha256": digest, "source_config_sha256": config_digest, "declared_units": units,
+    return {"database": key, "dictionary_sha256": digest, **({"sic_case_overlay_sha256": overlay_sha256} if overlay_sha256 else {}), "source_config_sha256": config_digest, "declared_units": units,
             "declared_mappings": mappings, "scope": "packaged_dictionary_reference_only",
             "actual_source_reads_verified": False, "record_units_verified": False}
 

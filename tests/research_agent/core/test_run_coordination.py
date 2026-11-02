@@ -15,6 +15,30 @@ def _step(step_id: str) -> AnalysisStep:
     return AnalysisStep(step_id=step_id, intent=f"execute {step_id}")
 
 
+def test_original_coordination_contract_imports_and_pickles_remain_readable():
+    import pickle
+    from typing import get_type_hints
+    from easyicu.research_agent.contracts import runtime
+    from easyicu.research_agent.execution import replan_review, run_coordination
+
+    for name in ("RunExecutionState", "RunTransition"):
+        contract = getattr(run_coordination, name)
+        assert contract is getattr(runtime, name)
+        value = (contract(remaining_steps=[], executed_step_ids=set())
+                 if name == "RunExecutionState" else contract.stop("synthetic"))
+        current_module = contract.__module__
+        try:
+            contract.__module__ = run_coordination.__name__
+            old_pickle = pickle.dumps(value)
+        finally:
+            contract.__module__ = current_module
+        assert pickle.loads(old_pickle) == value
+        assert pickle.loads(pickle.dumps(value)) == value
+    for name in ("_successful_step_requests_replan", "_successful_run_transition_requests_replan"):
+        assert getattr(run_coordination, name) is getattr(replan_review, name)
+    assert get_type_hints(run_coordination.RunExecutionState)["remaining_steps"] == list[AnalysisStep]
+
+
 def test_parallel_exception_seals_identity_and_flushes_terminal_record():
     from easyicu.research_agent.execution.run_coordination import RunCoordinator
     from easyicu.research_agent.execution.phase import _step_record_step_exception

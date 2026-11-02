@@ -110,19 +110,13 @@ def _example_plan_payload() -> dict:
     prompt = _build_planner_user_prompt(_minimal_context())
 
     # The example is the first embedded object carrying a "steps" array.
-    start = prompt.find('{\n  "research_question"')
+    marker = prompt.find("OUTPUT FORMAT — VERY IMPORTANT:\n")
+    assert marker != -1, "the planner prompt no longer identifies its output format"
+    start = prompt.find("{\n", marker)
     assert start != -1, "the planner prompt no longer contains a worked example"
-
-    depth = 0
-    for index in range(start, len(prompt)):
-        char = prompt[index]
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return json.loads(prompt[start : index + 1])
-    raise AssertionError("the worked example in the planner prompt is unbalanced")
+    payload, _end = json.JSONDecoder().raw_decode(prompt[start:])
+    assert "research_question" in payload and "steps" in payload
+    return payload
 
 
 def _distribution_example_step() -> dict:

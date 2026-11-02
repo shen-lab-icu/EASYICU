@@ -189,7 +189,6 @@ from .planning.cohort_contract import (
 )
 from .planning.dependence_authority import (
     DependenceAuthorityError,
-    bind_context_dependence_authority,
 )
 from .planning.family_spec import caller_bound_population_conflict
 from .reporting.article_contract import (
@@ -242,7 +241,7 @@ from .orchestration.human_review_restore import (
     prepare_human_review_decision,
     restore_durable_human_review_pause,
 )
-from .orchestration.services import PipelineServices
+from .orchestration.services import PipelineServices, refuse_model_access_to_local_source_flow
 from .orchestration.progress import (
     ProgressControlSignal,
     ResumableProgressChannel,
@@ -269,10 +268,10 @@ from .execution.primary_model_retention import (
 )
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
-    verify_recorded_dict_match,
+    verify_run_dictionary_checkpoint,
     write_concept_dict_fingerprint,
 )
-from .authority.provenance import register_run_metadata
+from .authority.provenance import dictionary_guarded_context_builder, prepare_context_dictionary_authority, register_run_metadata
 from .cohort.schema import (
     CohortAuthorityError,
     ensure_cohort_definition,
@@ -411,7 +410,7 @@ from .planning import figure_plan_shaping as _figure_plan
 from .planning import final_plan_shape as _final_plan
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .orchestration import scientific_plan_review_gate as _scientific_plan_gate
-from .orchestration.development_locked_plan import read_development_locked_plan
+from .orchestration.development_locked_plan import read_development_locked_plan, bind_development_plan_capability
 from .figures.skill import PublicationFigureSkill
 from .figures.prior_output_support import (
     figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
@@ -1129,6 +1128,8 @@ def _run_preplan_literature_and_hypothesis(
     llm: Any,
     resume_state: Any,
 ) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
+    if self._services.deferred_first_observed_stage is not None:
+        return self._services.deferred_preplan_literature(context=agent_context, run_dir=run_dir, evidence=evidence)
     if _scientific_plan_gate.defer_preplan_literature(self._config, skill_obj, emit_progress, run_id):
         return _scientific_plan_gate.deferred_preplan_result(agent_context, run_dir, evidence, resume_state)
     allowed_literature_citation_keys: list[str] = []
@@ -1371,7 +1372,7 @@ def _shape_fresh_plan(
     )
     findings.extend(report_input_findings)
     # Bind before deterministic figure selection; the universal gate below rechecks every source.
-    plan = bind_context_dependence_authority(plan=plan, context=agent_context)
+    plan = pipeline._services.bind_plan_dependence(plan=plan, context=agent_context)
     # Force a declared figure step whenever the publication-figure skill
     # will produce one regardless of the plan: the scorer reads
     # analysis_plan.json, and a question-only heuristic misses tasks
@@ -1757,6 +1758,7 @@ class ResearchAgentPipeline:
         self._submission_profile_locked_at = config.submission_profile_locked_at
         self._expected_concept_dict_sha = config.expected_concept_dict_sha
         self._expected_sofa2_dict_sha = config.expected_sofa2_dict_sha
+        self._expected_sic_case_overlay_sha = config.expected_sic_case_overlay_sha
         # O22 — family-aware multiple-testing correction. Defaults to ON
         # because reviewers of a research-agent paper will always ask
         # for it; the correction is cheap to compute and does not
@@ -2343,62 +2345,19 @@ class ResearchAgentPipeline:
                 enable_know_how=self._enable_know_how,
                 findings=findings,
             )
+        elif self._services.deferred_first_observed_stage is not None:
+            plan = self._services.compile_deferred_plan(
+                context=agent_context, allowed_literature_citation_keys=allowed_literature_citation_keys,
+            )
+            plan_generation_mode = "host_deferred_first_observed"
+            development_locked_plan_loaded = True
         elif self._config.development_locked_analysis_plan_path is not None:
             plan, observed_digest = read_development_locked_plan(
                 self._config.development_locked_analysis_plan_path,
                 self._config.development_locked_analysis_plan_sha256,
                 agent_context,
             )
-            primary_steps = [
-                step for step in plan.steps if step.planned_analysis_role == "primary"
-            ]
-            if len(primary_steps) == 1 and primary_steps[0].scientific_capability:
-                from .planning.analysis_types import (
-                    get_analysis_type,
-                    optional_analysis_type_for_capability,
-                )
-                from .planning.capability_registry import get_capability_by_id
-
-                current_type = get_analysis_type(plan.analysis_type)
-                declared_capability = get_capability_by_id(
-                    primary_steps[0].scientific_capability
-                )
-                expected_capability = get_capability_by_id(current_type.capability_id)
-                rebound_type = None
-                if (
-                    declared_capability is not None
-                    and expected_capability is not None
-                    and declared_capability.family == expected_capability.family
-                    and declared_capability.capability_id
-                    != expected_capability.capability_id
-                ):
-                    rebound_type = optional_analysis_type_for_capability(
-                        declared_capability.capability_id
-                    )
-                if rebound_type is not None:
-                    findings.append(
-                        ValidationFinding(
-                            validator="scientific_capability",
-                            severity="warning",
-                            message=(
-                                "Rebound a locked development plan's analysis "
-                                "subtype to the capability declared by its sole "
-                                "primary owner; no estimator or result changed."
-                            ),
-                            detail={
-                                "reason_code": (
-                                    "development_locked_plan_primary_capability_rebound"
-                                ),
-                                "source_analysis_type": plan.analysis_type,
-                                "rebound_analysis_type": rebound_type.key,
-                                "primary_step_id": primary_steps[0].step_id,
-                                "primary_capability_id": (
-                                    declared_capability.capability_id
-                                ),
-                            },
-                        )
-                    )
-                    plan = plan.model_copy(update={"analysis_type": rebound_type.key})
+            plan = bind_development_plan_capability(plan, findings)
             plan_generation_mode = "development_locked_analysis_plan"
             development_locked_plan_loaded = True
             findings.append(
@@ -2509,7 +2468,7 @@ class ResearchAgentPipeline:
                 )
                 if progressive:
                     # Family-spec fast path per attempt; falls back to the outline.
-                    planner_run_kwargs["planner_strategy"] = self._planner_strategy
+                    planner_run_kwargs.update(planner_strategy=self._planner_strategy, bound_plan_revision_contract=self._bound_plan_revision_contract)
                     progressive_result = _progressive_planning.run_pipeline_progressive_planner(
                         planner=planner,
                         context=agent_context,
@@ -2665,10 +2624,8 @@ class ResearchAgentPipeline:
             # unstructured, the 纳排 is unenforceable free text. Give the planner
             # one focused retry; adopt it only if it actually structures the
             # cohort, so a good plan is never discarded when the retry doesn't.
-            if (
-                not used_mock_llm
-                and _final_plan._plan_expects_analysis_cohort(plan)
-                and _final_plan._cohort_definition_is_empty(plan)
+            if _final_plan.should_retry_unstructured_cohort(
+                plan, used_mock_llm=used_mock_llm, no_automatic_retries=self._config.no_automatic_retries,
             ):
                 cohort_retry = None
                 try:
@@ -2765,7 +2722,7 @@ class ResearchAgentPipeline:
         # digest-verified resume. Planner parsing also binds early for prompt
         # diagnostics, but execution authority cannot depend on which producer
         # happened to create the plan.
-        bound_dependence_plan = bind_context_dependence_authority(
+        bound_dependence_plan = self._services.bind_plan_dependence(
             plan=plan,
             context=agent_context,
         )
@@ -2813,6 +2770,7 @@ class ResearchAgentPipeline:
             )
             findings.extend(scientific_runtime_compile_findings)
             plan = _figure_plan.apply_runtime_bound_figure_contracts(plan, findings)
+            plan = self._services.normalize_deferred_review_interval(plan=plan, context=agent_context)
         self._services.validate_plan_revision(plan=plan, context=agent_context, run_dir=run_dir)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
@@ -2931,6 +2889,17 @@ class ResearchAgentPipeline:
         _plan_lifecycle.persist_normalized_plan(
             run_dir=run_dir, evidence=evidence, normalized=normalized_plan
         )
+        replayed_metrics = self._services.persist_deferred_progressive_evidence(
+            context=agent_context, run_dir=run_dir, evidence=evidence, prompt_pack_version=prompt_version,
+        )
+        if replayed_metrics is not None:
+            planner_prompt_metrics = replayed_metrics
+        self._services.prepare_deferred_review(
+            context=context, agent_context=agent_context, normalized_lineage=normalized_plan, run_dir=run_dir, evidence=evidence,
+        )
+        findings.extend(self._services.deferred_review_findings(
+            context=context, normalized_lineage=normalized_plan, run_dir=run_dir, evidence=evidence,
+        ))
         know_how_binding.persist_prompt_metrics(
             planner_prompt_metrics,
             run_dir=run_dir,
@@ -2939,6 +2908,7 @@ class ResearchAgentPipeline:
         if plan_generation_mode in {
             "llm_progressive_v2",
             "llm_progressive_v2_dev_resume",
+            "host_deferred_first_observed",
         }:
             lifecycle_evidence_id = _plan_lifecycle.plan_lifecycle_evidence_id(
                 plan.revision
@@ -3052,39 +3022,40 @@ class ResearchAgentPipeline:
             _scientific_plan_gate.append_required_literature_findings(
                 self._config, findings, plan, preplan_literature
             )
-            review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
-                context=context,
-                plan=plan,
-                literature=preplan_literature,
-                figure_strategy=article_figure_strategy,
-                run_dir=run_dir,
-                evidence=evidence,
-                bound_plan_revision_contract=self._bound_plan_revision_contract,
-                require_reportable_capability=(
-                    self._config.require_reportable_scientific_capability
-                ),
-                reuse_existing_review=reused_prior_plan,
-                time_origin_attestor=self._services.time_origin_attestor,
-                case_duration_attestor=self._services.case_duration_attestor,
-                case_duration_metadata_attestor=self._services.case_duration_metadata_attestor,
-                runtime_authority=(
-                    self._scientific_runtime_authorities.current_case
-                ),
-                model_retention=measure_primary_model_retention(
+            with self._services.deferred_review_scope(context=context):
+                review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
                     context=context,
                     plan=plan,
-                    cohort_path=resolve_review_cohort_path(
-                        run_dir=run_dir,
-                        plan=plan,
-                        universe_path=cohort_path,
-                        materialization=analysis_cohort,
-                        cohort_concept_ids=cohort_concept_ids,
+                    literature=preplan_literature,
+                    figure_strategy=article_figure_strategy,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    bound_plan_revision_contract=self._bound_plan_revision_contract,
+                    require_reportable_capability=(
+                        self._config.require_reportable_scientific_capability
                     ),
+                    reuse_existing_review=reused_prior_plan,
+                    time_origin_attestor=self._services.time_origin_attestor,
+                    case_duration_attestor=self._services.case_duration_attestor,
+                    case_duration_metadata_attestor=self._services.case_duration_metadata_attestor,
                     runtime_authority=(
                         self._scientific_runtime_authorities.current_case
                     ),
-                ),
-            )
+                    model_retention=measure_primary_model_retention(
+                        context=context,
+                        plan=plan,
+                        cohort_path=resolve_review_cohort_path(
+                            run_dir=run_dir,
+                            plan=plan,
+                            universe_path=cohort_path,
+                            materialization=analysis_cohort,
+                            cohort_concept_ids=cohort_concept_ids,
+                        ),
+                        runtime_authority=(
+                            self._scientific_runtime_authorities.current_case
+                        ),
+                    ),
+                )
             findings.append(review_gate.finding)
         emit_progress(
             "plan",
@@ -3190,7 +3161,7 @@ class ResearchAgentPipeline:
         # Planner can still act on it -- H3 previously met that contract only
         # after its last revision, so it never got to satisfy it.
         long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
-        context_path = run_dir / "research_context.json"
+        context_path, evidence = prepare_context_dictionary_authority(run_dir, self)
         from .orchestration.reviewed_requirements import bind_reviewed_requirements
 
         # Built before the first Provider call the phase can make.
@@ -3230,6 +3201,7 @@ class ResearchAgentPipeline:
                 if self._disable_icu_context
                 else build_research_context
             )
+            is_icu_builder = builder is build_research_context
             # The run identity keeps the caller's declaration; the context
             # binds what the sealed authorities declare on top of it (a
             # survival suite's time-to-event endpoint and exposure status
@@ -3260,8 +3232,9 @@ class ResearchAgentPipeline:
                 user_preferences=user_preferences,
                 notes=notes,
             )
-            if builder is build_research_context:
+            if is_icu_builder:
                 context_kwargs["trajectory_binding"] = trajectory_binding
+            builder = dictionary_guarded_context_builder(builder, run_dir, evidence)
             context = builder(**context_kwargs)
             context = bind_reviewed_requirements(context, self._config)
             # A fixed skill plans without the Planner, so it is not asked.
@@ -3285,7 +3258,7 @@ class ResearchAgentPipeline:
                     ) from exc
             elif (
                 self._config.enable_exposure_grouping
-                and builder is build_research_context
+                and is_icu_builder
                 and skill_obj is None
             ):
                 grouping = run_exposure_grouping_phase(
@@ -3331,10 +3304,6 @@ class ResearchAgentPipeline:
             n_variables=len(context.variables),
         )
 
-        evidence = EvidenceStore(
-            root=run_dir,
-            enforcement_mode=self._evidence_enforcement_mode,
-        )
         if evidence.get("research_context") is None:
             evidence.register_file(
                 kind="log",
@@ -3363,6 +3332,7 @@ class ResearchAgentPipeline:
             assert_matches=assert_concept_dict_matches,
             expected_concept_dict_sha=self._expected_concept_dict_sha,
             expected_sofa2_dict_sha=self._expected_sofa2_dict_sha,
+            expected_sic_case_overlay_sha=self._expected_sic_case_overlay_sha,
         )
         if (
             experiment_spec_path is not None
@@ -4709,7 +4679,7 @@ class ResearchAgentPipeline:
         resume_trajectory_binding: Optional[StagedTrajectoryBinding] = None
         experiment_spec_path: Optional[Path] = None
         if resume_run_id:
-            run_dir = self.workdir / run_id
+            run_dir = self._services.model_safe_resume_dir(self.workdir / run_id)
             if run_dir.exists():
                 resume_state = _load_resume_state(run_dir)
                 if resume_state is None and any(run_dir.iterdir()):
@@ -4751,9 +4721,9 @@ class ResearchAgentPipeline:
                     # provenance authority.  Check the checkpoint-selected
                     # manifest before prepare_existing_resume_input writes a
                     # resume receipt or the plan phase refreshes the mutable
-                    # root fingerprint file.  Historical manifests that
-                    # predate dictionary fingerprints remain compatible.
-                    verify_recorded_dict_match(resume_state, mode="strict")
+                    # root fingerprint file. Old unproven resources cannot
+                    # authorize recovery in the current environment.
+                    verify_run_dictionary_checkpoint(run_dir, resume_state, (self._expected_concept_dict_sha, self._expected_sofa2_dict_sha, self._expected_sic_case_overlay_sha))
                     prepared_resume = prepare_existing_resume_input(
                         run_dir=run_dir,
                         resume_state=resume_state,
@@ -4951,11 +4921,16 @@ class ResearchAgentPipeline:
                 source_files=source_files,
             )
 
+        checkpoint_commit: Dict[str, Any] = {
+            "path": None, "decision_sha256": None, "decision_payloads": None,
+            "cohort_path": cohort_path,
+        }
+
         def _execute_invoker(plan_result):
             return _pipeline_run___execute_invoker(
                 plan_result,
                 _emit_progress=_emit_progress,
-                cohort_path=cohort_path,
+                cohort_path=checkpoint_commit["cohort_path"],
                 notes=notes,
                 resume_from_step_id=resume_from_step_id,
                 resume_session_key=resume_session_key,
@@ -4990,7 +4965,7 @@ class ResearchAgentPipeline:
                 _emit_progress=_emit_progress,
                 audit_logger=audit_logger,
                 cache_key=cache_key,
-                cohort_path=cohort_path,
+                cohort_path=checkpoint_commit["cohort_path"],
                 database=database,
                 experiment_spec_path=experiment_spec_path,
                 notes=notes,
@@ -5031,12 +5006,6 @@ class ResearchAgentPipeline:
         gate = self._human_review_gate
         from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
 
-        checkpoint_commit: Dict[str, Any] = {
-            "path": None,
-            "decision_sha256": None,
-            "decision_payloads": None,
-        }
-
         def _prepare_human_review_execution(
             decision_records: Sequence[Mapping[str, Any]],
         ):
@@ -5056,7 +5025,7 @@ class ResearchAgentPipeline:
 
         def _commit_human_review_execution_start():
             return _pipeline_run___commit_human_review_execution_start(
-                checkpoint_commit=checkpoint_commit
+                checkpoint_commit=checkpoint_commit, self=self, reviewed_plan=reviewed_plan, run_dir=run_dir,
             )
 
         def _commit_human_review_write_start():
@@ -5079,6 +5048,7 @@ class ResearchAgentPipeline:
             human_review_recorder=_human_review_recorder,
             human_review_decision_prepare=_prepare_human_review_execution,
             human_review_execution_commit=_commit_human_review_execution,
+            human_review_prepare_inputs=self._services.reviewed_input_preparer(run_dir=run_dir, binding=checkpoint_commit),
             human_review_execution_start=_commit_human_review_execution_start,
             human_review_write_start=_commit_human_review_write_start,
             human_review_finalize_start=_commit_human_review_finalize_start,
@@ -5292,6 +5262,8 @@ class ResearchAgentPipeline:
                 f"(legacy scope {HUMAN_REVIEW_RESUME_SCOPE!r})."
             )
         pending = pending_state["pending"]
+        if not all_rejected:
+            refuse_model_access_to_local_source_flow(self.workdir / pending.run_id)
         if not pending.resumable_here:
             raise RuntimeError(
                 f"human review for run {pending.run_id!r} was paused in process "
@@ -7324,12 +7296,17 @@ def _pipeline_run___commit_human_review_execution(
 
 
 def _pipeline_run___commit_human_review_execution_start(
-    *, checkpoint_commit: Any
+    *, checkpoint_commit: Any, self: Any, reviewed_plan: Any, run_dir: Path,
 ) -> None:
     path = checkpoint_commit.get("path")
     if path is None:
         return
     mark_human_review_execution_started(Path(path))
+    from .orchestration.services import release_reviewed_provider_transport
+    release_reviewed_provider_transport(
+        run_dir=run_dir, binding=checkpoint_commit, provider_task=self._provider_hard_stop,
+        evidence=reviewed_plan[-1].evidence if reviewed_plan else None,
+    )
 
 
 def _pipeline_run___commit_human_review_write_start(*, checkpoint_commit: Any) -> None:

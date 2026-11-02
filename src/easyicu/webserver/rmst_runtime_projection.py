@@ -9,7 +9,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
-from easyicu.research_agent.contracts.rmst import RMSTSpec
+from easyicu.research_agent.contracts.survival import RMSTSpec
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )

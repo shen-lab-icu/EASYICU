@@ -19,9 +19,9 @@ function screen() {
     } },
   };
   const context = vm.createContext({
-    window: { EasyICU: { guidedPi: { declare: (name, owner) => { declared[name] = owner; }, optional: () => null } } },
+    window: { EasyICU: { guidedPi: { declare: (name, owner) => { declared[name] = owner; }, require: name => declared[name], optional: () => null } } },
   });
-  for (const name of ['confirmation', 'plan-actions']) {
+  for (const name of ['confirmation-data', 'confirmation', 'plan-actions']) {
     vm.runInContext(fs.readFileSync(path.join(JS, `screens-guided-pi-${name}.js`), 'utf8'), context);
   }
   const api = { authorizePiCopilotDataSource: async (id, body) => { state.calls.push({ id, body }); } };
@@ -36,7 +36,7 @@ function screen() {
     startAgentRun: () => assert.fail('source selection cannot start a Provider run'),
     sendText: () => assert.fail('source selection cannot send a turn or grant execution'),
   };
-  return { state, api, confirmation: declared.confirmation.create(host), actions: declared.planActions.create(host) };
+  return { state, api, context, confirmation: declared.confirmation.create(host), actions: declared.planActions.create(host) };
 }
 
 test('only an available same-source offer has a choice button and it grants no execution', () => {
@@ -81,4 +81,40 @@ test('a slow choice does not refresh a different conversation after navigation',
   await pending;
   assert.equal(ui.state.calls.length, 0);
   assert.equal(ui.state.renders, rendersBefore);
+});
+
+test('historical ICD policy refusal is visible and offers no automatic retry or approval', () => {
+  const ui = screen();
+  ui.state.workflow = { next_action_code: 'plan_icd_source_unverified' };
+  const offer = ui.confirmation.workflowConfirmation();
+  assert.equal(offer.nonApprovable, true);
+  assert.equal(JSON.stringify(offer.grants), '[]');
+  const html = ui.confirmation.workflowConfirmationHtml();
+  assert.match(html, /诊断编码人群无法核验/);
+  assert.match(html, /当前版本无法核验数据来源/);
+  assert.match(html, /修改人群/);
+  assert.match(html, /同步修改研究问题/);
+  assert.match(html, /data-gpi-confirm-edit/);
+  assert.match(ui.confirmation.planChangeDraft(), /修改研究人群/);
+  assert.doesNotMatch(ui.confirmation.planChangeDraft(), /保留原始问题/);
+  assert.doesNotMatch(html, /data-gpi-confirm-action/);
+});
+
+
+test('a current ICD policy blocker has a visible modify-cohort action and cannot replan automatically', () => {
+  const ui = screen();
+  ui.context.window.AGENT_RENDER = { scientificFindingCopy: () => ({ title: '诊断编码人群无法核验', detail: '修改人群，必要时修改原问题' }) };
+  ui.state.workflow = {
+    next_action_code: 'plan_scientific_changes_required',
+    plan_review_summary: { finding_codes: ['HOST_ICD_SOURCE_UNVERIFIED'],
+      automatic_revision_blockers: ['HOST_ICD_SOURCE_UNVERIFIED'],
+      remediation_buckets: { runtime_capability: ['HOST_ICD_SOURCE_UNVERIFIED'], agent_plan_revision: [] },
+      authorization_questions: [] },
+  };
+  const html = ui.confirmation.workflowConfirmationHtml();
+  assert.match(html, /诊断编码人群无法核验/);
+  assert.match(html, /data-gpi-confirm-edit>修改人群/);
+  assert.match(ui.confirmation.planChangeDraft(), /修改研究人群/);
+  assert.doesNotMatch(ui.confirmation.planChangeDraft(), /保留原始问题/);
+  assert.doesNotMatch(html, /data-gpi-confirm-action/);
 });

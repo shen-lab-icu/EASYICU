@@ -20,6 +20,7 @@ def dispatch(monkeypatch):
     }
     context = SimpleNamespace(
         session=SimpleNamespace(binding=SimpleNamespace()), user_message="Continue planning",
+        expected_replan_source_run_id="",
     )
     calls = []
     monkeypatch.setattr(owner, "_bound_context", lambda _: study)

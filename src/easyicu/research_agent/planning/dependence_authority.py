@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -307,9 +309,42 @@ def _host_restricted_to_first_icu_stays(provenance: Mapping[str, Any]) -> bool:
     )
 
 
+_HOST_INDEPENDENT_UNITS: ContextVar[Callable[[ResearchContext], bool | None] | None] = ContextVar(
+    "host_verified_independent_units", default=None
+)
+
+
+@contextmanager
+def host_independent_units_scope(verify: Callable[[ResearchContext], bool | None]) -> Iterator[None]:
+    """Temporarily bind a live host verifier, never a serialized assertion."""
+    if not callable(verify):
+        raise TypeError("host independent-units verifier must be callable")
+    active = True
+
+    def scoped(context: ResearchContext) -> bool | None:
+        return verify(context) if active else False
+
+    token = _HOST_INDEPENDENT_UNITS.set(scoped)
+    try:
+        yield
+    finally:
+        active = False
+        _HOST_INDEPENDENT_UNITS.reset(token)
+
+
 def repeat_units_possible(context: ResearchContext) -> bool:
     """Assess repeated-unit risk once for planning, compilation, and review."""
 
+    verifier = _HOST_INDEPENDENT_UNITS.get()
+    if verifier is not None:
+        try:
+            result = verifier(context)
+            if result is True:
+                return False
+            if result is not None:
+                return True
+        except Exception:
+            return True
     provenance = context.cohort.provenance or {}
     if _host_restricted_to_first_icu_stays(provenance):
         # One row per patient by construction: the host kept each patient's

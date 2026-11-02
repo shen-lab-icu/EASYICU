@@ -5,9 +5,9 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.case_duration_landmark import propose_case_duration_landmark_authority
-from easyicu.research_agent.execution.runners.care_unit_landmark_cohort_executor import care_unit_landmark_cohort_executor_code
+from easyicu.research_agent.execution.runners.host_bound_cohort_executor import care_unit_landmark_cohort_executor_code
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, CohortDefinition
-from tests.research_agent.authority.test_case_duration_landmark_authority import _inputs, _PROVENANCE
+from tests.support.case_duration_landmark import _inputs, _PROVENANCE
 
 
 def _case():
@@ -83,7 +83,7 @@ def test_signed_synthetic_landmark_materializes_reuses_and_publishes(tmp_path, m
     from easyicu.webserver.dataio import make_export_runner
     from easyicu.webserver.raw_case_snapshot import stage_reviewed_source_files
     from easyicu.webserver import case_duration_materialization as host_materializer
-    from tests.research_agent.planning.test_time_origin_review_binding import _review
+    from tests.support.source_substitutions import _review
     from tests.support.data_provenance import ExportJob
     from tests.support.signed_case_duration import signed_case_duration_case
     from tests.support.source_substitutions import _approve
@@ -239,7 +239,7 @@ def test_signed_synthetic_landmark_materializes_reuses_and_publishes(tmp_path, m
     import json
     summary = json.loads((tmp_path / "step" / "step_summary.json").read_text())
     assert summary["output_files"] == {"artifact:analysis_cohort": "analysis_cohort.parquet"}
-    from tests.research_agent.core.test_cross_sectional_phenotyping_executor import _binding
+    from tests.support.phenotyping_fixtures import _binding
     product = tmp_path / "step" / "analysis_cohort.parquet"
     product_frame = pd.read_parquet(product)
     typed = _binding("artifact:analysis_cohort", product_frame, product, primary.step_id)

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping, Sequence
+
+from ..authority.declared_levels import closed_planning_levels_for
+from ..research_context.typed import declares_factor_values
 
 from .cohort_product_keys import sole_typed_cohort_input
 from .ownership_verdict import OwnershipVerdict
+from .table_one_semantics import table_one_variable_kind
 
 CONTINUOUS_OUTCOME_SUMMARY = "continuous_outcome_summary"
 CONTINUOUS_OUTCOME_OUTPUT = "table:continuous_outcome_summary"
@@ -46,3 +50,36 @@ def continuous_outcome_summary_verdict(step: Any) -> OwnershipVerdict:
             reason="Declare a secondary summary, one cohort, one grouping then continuous outcomes, and its sole table; no model or effect contract.",
         )
     return OwnershipVerdict.claim(CONTINUOUS_OUTCOME_SUMMARY, reason="exact secondary grouped summaries without inference")
+
+
+def continuous_summary_columns(
+    *, grouping: str, raw_inputs: Sequence[str], variables: Mapping[str, Any],
+    planning_context: Any = None,
+) -> tuple[str, ...]:
+    """Order a declared roster; never add, infer, or drop an outcome."""
+    if (not grouping or grouping not in raw_inputs or len(raw_inputs) < 2
+            or len(raw_inputs) != len(set(raw_inputs))
+            or not set(raw_inputs).issubset(variables)):
+        raise ValueError("continuous summary needs an explicit grouping and unique available outcomes")
+    levels = closed_planning_levels_for(name=grouping, variables=dict(variables))
+    cohort = getattr(planning_context, "cohort", None)
+    provenance = getattr(cohort, "provenance", None) or {}
+    deferred_factor = (
+        not levels and declares_factor_values(variables[grouping])
+        and getattr(cohort, "n_stays", None) == 0
+        and provenance.get("evidence_stage") == "metadata_only_planning"
+        and provenance.get("patient_rows_read") is False
+    )
+    if (str(variables[grouping].role.value) in {"id", "index", "meta"}
+            or (len(levels) < 2 and not deferred_factor)):
+        raise ValueError("continuous summary grouping needs a closed domain with at least two levels")
+    outcomes = tuple(name for name in raw_inputs if name != grouping)
+    for name in outcomes:
+        variable = variables[name]
+        levels = closed_planning_levels_for(name=name, variables=dict(variables))
+        dtype = str(variable.dtype or "").casefold()
+        if (str(variable.role.value) != "outcome"
+                or not dtype.startswith(("float", "double", "int", "uint", "decimal"))
+                or table_one_variable_kind(variable, levels) != "continuous"):
+            raise ValueError(f"continuous summary requires a typed numeric continuous outcome: {name}")
+    return (grouping, *outcomes)

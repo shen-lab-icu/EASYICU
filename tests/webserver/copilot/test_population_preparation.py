@@ -193,6 +193,20 @@ def test_omission_card_keeps_system_interpretation_separate_from_the_question(st
     assert population.criteria[0].disposition == "not_applied"
 
 
+@pytest.mark.parametrize("disposition", ["pending_materialization", "requires_extraction"])
+def test_omission_card_is_not_offered_when_another_population_is_pending(monkeypatch, study, disposition):
+    from easyicu.webserver.pi_copilot import population_acceptance as owner
+
+    request = SimpleNamespace(payload={"reason": owner.NOT_APPLIED_STOP})
+    monkeypatch.setattr(owner, "sealed_population", lambda *_args, **_kwargs: {
+        "criteria": [{"disposition": disposition, "criterion": {"role": "include"}}],
+    })
+    monkeypatch.setattr(owner, "unapplied_inclusions", lambda *_: pytest.fail("pending population cannot be waived"))
+    assert owner.population_acceptance_proposal(
+        study=study, pending=SimpleNamespace(requests=[request], run_id="synthetic"),
+    ) is None
+
+
 @pytest.mark.parametrize(
     "criterion,field,value",
     [

@@ -139,7 +139,7 @@ def exercise(case: str = "projected") -> dict:
         pytest.skip("Node is not installed")
     script = SCRIPT.replace(
         "__CONFIRMATION_SOURCE__",
-        json.dumps(_read("js/screens-guided-pi-confirmation.js")),
+        json.dumps(_read("js/screens-guided-pi-confirmation-data.js") + "\n" + _read("js/screens-guided-pi-confirmation.js")),
     )
     script = script.replace(
         "__ACTIONS_SOURCE__",

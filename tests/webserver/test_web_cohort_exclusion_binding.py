@@ -57,7 +57,7 @@ def test_an_exclusion_is_compiled_as_an_exclusion() -> None:
 
     # who is removed -- and none of it is still filed as inclusion
     assert "exclude diagnoses: condition-b, condition-c" in exclusion
-    assert any("keeps only the first ICU stay per patient" in row for row in exclusion)
+    assert "each patient's later ICU stays across the bound source" in exclusion
     joined_inclusion = " | ".join(inclusion)
     assert "exclude" not in joined_inclusion
     assert "readmission" not in joined_inclusion
@@ -111,15 +111,126 @@ def test_the_pipeline_call_passes_the_exclusion_channel(
         assert declared["inclusion_criteria"] == _inclusion_criteria(
             study, export_recorded=recorded
         )
-        assert declared["exclusion_criteria"] == _exclusion_criteria(
-            study, export_recorded=recorded
-        )
+        expected = ["exclude diagnoses: condition-b"] if recorded else []
+        assert declared["exclusion_criteria"] == expected
+        import json
+        preferences = json.loads(declared["user_preferences"]["data_constraints"])
+        assert preferences["cohort"]["exclude_readmissions"] is True
+        assert preferences["source_selection"]["host_applied"] == []
     assert _exclusion_criteria(study, export_recorded=True)
     # the reviewer-facing cohort summary reports both sides too
     source = " ".join(
         Path("src/easyicu/webserver/agent_pipeline_runs.py").read_text(encoding="utf-8").split()
     )
     assert '"exclusion_criteria": _exclusion_criteria(study),' in source
+
+
+@pytest.mark.parametrize("kind", ["patient", "hospitalization"])
+@pytest.mark.parametrize("basis", ["export_contract", "unrecorded"])
+def test_first_stay_contract_requires_a_matching_sealed_cohort(tmp_path, monkeypatch, kind, basis):
+    """The requested rule survives, but only materialized evidence makes it applied."""
+    import json
+    from dataclasses import replace
+
+    import pandas as pd
+    from easyicu.research_agent.cohort.materializer import materialize_to_parquet
+    from easyicu.research_agent.intake.materialized_metadata import load_verified_materialized_cohort_authority
+    from easyicu.research_agent.planning.population_compile import compile_population
+    from easyicu.research_agent.planning.population_spec import PopulationSpec
+    from easyicu.research_agent.research_context.builder import build_research_context
+    from easyicu.research_agent.research_context.export_selection import SourceIdentity, export_applied_selection
+    from easyicu.webserver import raw_source_authority, source_identity_authority, sources
+    from tests.support.typed_export import typed_export
+
+    monkeypatch.setattr(source_identity_authority.state_paths, "state_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(raw_source_authority, "_DEFAULT_CONFIG_PATH", tmp_path / "absent.env")
+    monkeypatch.setattr(source_identity_authority, "_DEFAULT_CONFIG_PATH", tmp_path / "absent-grouping.env")
+    monkeypatch.setattr(sources, "_CONFIG_PATH", tmp_path / "registry.json")
+    monkeypatch.setattr(sources, "path_allowed", lambda *args, **kwargs: True)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    if kind == "patient":
+        database = "miiv"
+        field = "first_icu_stay"
+        cohort = {"exclude_readmissions": True}
+        question = "Among each patient's first ICU stays, describe age."
+        pd.DataFrame({"stay_id": [1, 2], "hadm_id": [101, 102], "subject_id": [7, 7],
+                      "intime": ["2026-02-01", "2026-01-01"]}).to_parquet(raw / "icustays.parquet", index=False)
+        pd.DataFrame({"hadm_id": [101, 102], "dischtime": ["2026-06-01"] * 2,
+                      "deathtime": [None, None], "hospital_expire_flag": [0, 0]}).to_parquet(
+                          raw / "admissions.parquet", index=False)
+        resolve = source_identity_authority.resolve_study_first_icu_stay
+    else:
+        database = "eicu"
+        field = "first_icu_stay_per_hospitalization"
+        cohort = {field: True}
+        question = "Among first ICU stays per hospitalization, describe age."
+        pd.DataFrame({"patientunitstayid": [1, 2], "patienthealthsystemstayid": [1, 1],
+                      "unitvisitnumber": [2, 1], "uniquepid": ["same", "same"],
+                      "unittype": ["MICU", "MICU"], "hospitaldischargeoffset": [100, 100],
+                      "hospitaldischargestatus": ["Alive", "Alive"]}).to_parquet(raw / "patient.parquet", index=False)
+        resolve = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization
+    source = typed_export(tmp_path / "export", database=database).resolve()
+    manifest = source / "_manifest.json"
+    manifest_data = json.loads(manifest.read_text())
+    manifest_data["data_path"] = str(raw)
+    manifest.write_text(json.dumps(manifest_data))
+    identity = SourceIdentity(database, sources._source_id(str(source)))
+    (tmp_path / "registry.json").write_text(json.dumps({"sources": [
+        {"path": str(source), "id": identity.registration_id, "database": database}
+    ]}))
+    binding = resolve(export_path=source, database=database)
+    assert binding is not None
+    paths = materialize_to_parquet(tmp_path / "materialized", data_path=source, database=database,
+        static_concepts=("age",), feature_concepts=("lact",), outcome_concepts=("death",),
+        **binding.materializer_kwargs())
+    assert pd.read_parquet(paths["parquet"])["stay_id"].tolist() == [2]
+    verified = load_verified_materialized_cohort_authority(paths["parquet"])
+    assert verified is not None
+    acquisition = SimpleNamespace(universe_path=paths["parquet"], blocked=False,
+        cohort_authority_ref=verified.reference,
+        cohort_authority_path=paths["parquet"].parent / verified.reference.file)
+    cohort.update(label=question, review=question)
+    study = {"id": "synthetic", "question": question, "cohort": cohort}
+    scientific = SimpleNamespace(study=study, materialization_study=study, patient_grouping=None,
+        cohort_window=(0.0, 24.0), metadata_planning_coordinates={}, metadata_only_planning=False,
+        foundation_profile={field: binding})
+    monkeypatch.setattr(agent_pipeline_runs, "bound_export_selection_basis", lambda *_: basis)
+
+    def selection():
+        declared = agent_pipeline_runs.research_context_declarations(
+            scientific, export_path=str(source), source_identity=identity.to_dict(), acquisition=acquisition)
+        constraints = json.loads(declared["user_preferences"]["data_constraints"])
+        assert constraints["cohort"]["review"] == question
+        assert constraints["cohort"]["exclude_readmissions" if kind == "patient" else field] is True
+        context = build_research_context(research_question=question, cohort=pd.DataFrame({"stay_id": [2], "age": [60]}),
+            cohort_name="synthetic", database=database, inclusion_criteria=declared["inclusion_criteria"],
+            exclusion_criteria=declared["exclusion_criteria"], user_preferences=declared["user_preferences"])
+        return declared, constraints, export_applied_selection(context), context
+
+    declared, constraints, applied, _ = selection()
+    assert declared["exclusion_criteria"] == agent_pipeline_runs._host_applied_criteria(study)
+    assert constraints["source_selection"]["host_applied"] == declared["exclusion_criteria"]
+    assert list(applied.known_applied.exclusion) == declared["exclusion_criteria"]
+    scientific.foundation_profile[field] = replace(binding, coordinate_sha256="f" * 64)
+    declared, constraints, applied, context = selection()
+    assert declared["exclusion_criteria"] == []
+    assert constraints["source_selection"]["host_applied"] == [] and not applied.known_applied.exclusion
+    spec = PopulationSpec.model_validate({"criteria": [{"id": "c1", "quote": question,
+        "source": "question", "role": "include", "kind": field}]})
+    (criterion,) = compile_population(spec, context).criteria
+    assert criterion.disposition == "requires_extraction"
+    assert criterion.reason == f"population_{field}_not_restricted"
+    scientific.foundation_profile[field] = binding
+    acquisition.cohort_authority_ref = None
+    declared, constraints, applied, _ = selection()
+    assert declared["exclusion_criteria"] == []
+    assert constraints["source_selection"]["host_applied"] == [] and not applied.known_applied.exclusion
+    acquisition.cohort_authority_ref = verified.reference
+    scientific.metadata_only_planning = True
+    declared, constraints, applied, _ = selection()
+    assert declared["exclusion_criteria"] == []
+    assert constraints["source_selection"]["host_applied"] == [] and not applied.known_applied.exclusion
 
 
 def test_the_planner_is_shown_the_exclusion_contract() -> None:
@@ -217,7 +328,7 @@ def test_a_diagnosis_criterion_is_declared_only_when_the_owner_can_run_it() -> N
     # stale diagnosis lists stay undeclared.
     assert _inclusion_criteria({"cohort": explicitly_disabled}) == ["age range: 18 to *"]
     exclusion = _exclusion_criteria({"cohort": explicitly_disabled})
-    assert len(exclusion) == 1 and "keeps only the first ICU stay" in exclusion[0]
+    assert exclusion == ["each patient's later ICU stays across the bound source"]
     assert primary_cohort.normalize_execution_cohort(explicitly_disabled)[
         "icd_include"
     ] == []

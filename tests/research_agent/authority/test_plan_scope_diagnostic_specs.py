@@ -9,8 +9,8 @@ from easyicu.research_agent.authority.plan_scope import (
     completed_step_record_matches_plan,
     plan_scientific_scope_signature,
 )
-from easyicu.research_agent.contracts.cluster_sizes import CLUSTER_SIZE_OUTPUTS
-from easyicu.research_agent.contracts.covariate_balance import BALANCE_OUTPUTS
+from easyicu.research_agent.contracts.diagnostic_specs import CLUSTER_SIZE_OUTPUTS
+from easyicu.research_agent.contracts.diagnostic_specs import BALANCE_OUTPUTS
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 

@@ -96,7 +96,7 @@ def prepare_case_duration_metadata_plan(raw_path: str | Path, *, expected_identi
         raise ValueError("case_metadata_fields_unavailable")
     config = load_src_cfg("sic")
     snapshot = capture_data_provenance(
-        load_dictionary(include_sofa2=True), concepts=sorted(SIC_CASE_LANDMARK_COLUMNS),
+        load_dictionary(include_sofa2=True, src_name="sic"), concepts=sorted(SIC_CASE_LANDMARK_COLUMNS),
         source_database="sic", class_prefixes=tuple(config.class_prefix),
         source_config=config, source_config_sha256=metadata_digest(config.model_dump(mode="json")),
     )

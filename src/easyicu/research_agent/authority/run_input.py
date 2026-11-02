@@ -75,6 +75,10 @@ from ..cohort.artifact_facts import (
 
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
+DEFERRED_RECIPE_NAME = "first_observed_deferred_recipe.json"
+DEFERRED_RECEIPT_NAME = "deferred_first_observed_receipt.json"
+DEFERRED_ACTUAL_CAPSULE_EVIDENCE_ID = "deferred_first_observed_actual_capsule"
+DEFERRED_RECEIPT_EVIDENCE_ID = "deferred_first_observed_receipt"
 RUN_INPUT_CAPSULE_SCHEMA_VERSION = "easyicu.run_input_capsule/1"
 RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2 = "easyicu.run_input_capsule/2"
 RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3 = "easyicu.run_input_capsule/3"
@@ -1186,6 +1190,44 @@ def adopt_verified_legacy_run_input_capsule(
         scientific_identity=scientific_identity,
     )
 
+
+def verified_deferred_input_capsule_digest(*, run_dir: Path, evidence_store: Any) -> Optional[str]:
+    """Verify the approved actual input separately from the planning capsule."""
+    from .filesystem import AnchoredDirectory, AuthorityFilesystemError
+    try:
+        with AnchoredDirectory.open(run_dir) as root:
+            has_recipe = not root.is_absent(DEFERRED_RECIPE_NAME)
+            root.assert_still_selected()
+        recipe_record = evidence_store.get('first_observed_deferred_recipe')
+        if has_recipe or recipe_record is not None:
+            receipt_record = evidence_store.get(DEFERRED_RECEIPT_EVIDENCE_ID)
+            capsule_record = evidence_store.get(DEFERRED_ACTUAL_CAPSULE_EVIDENCE_ID)
+            if any(item is None for item in (recipe_record, receipt_record, capsule_record)):
+                raise RunInputIdentityError('approved deferred input evidence is missing')
+            def verified_bytes(record, working):
+                sealed = verified_run_evidence_path(run_dir, record)
+                if sealed is None:
+                    raise RunInputIdentityError('approved deferred input evidence failed verification')
+                with AnchoredDirectory.open(working.parent) as directory:
+                    raw = directory.read_bytes(working.name, max_bytes=16 * 1024 * 1024,
+                                               expected_sha256=str(record.sha256))
+                    directory.assert_still_selected()
+                if raw != sealed.read_bytes():
+                    raise RunInputIdentityError('approved deferred input working copy changed')
+                return raw
+            recipe = verified_bytes(recipe_record, run_dir / DEFERRED_RECIPE_NAME)
+            receipt = verified_bytes(receipt_record, run_dir / DEFERRED_RECEIPT_NAME)
+            capsule = verified_bytes(capsule_record, run_dir / 'deferred_input' / 'run_input_capsule.json')
+            body = json.loads(receipt)['body']
+            digest = hashlib.sha256(capsule).hexdigest()
+            if (body.get('schema_version') != 'easyicu.first-observed-deferred-input-receipt/1'
+                    or body.get('recipe_sha256') != hashlib.sha256(recipe).hexdigest()
+                    or body.get('capsule_sha256') != digest):
+                raise RunInputIdentityError('approved deferred input receipt changed')
+            return digest
+    except (AuthorityFilesystemError, KeyError, TypeError, ValueError, OSError) as exc:
+        raise RunInputIdentityError('approved deferred input authority invalid') from exc
+    return None
 
 def load_verified_run_input_capsule(
     *,

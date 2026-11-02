@@ -120,7 +120,7 @@ def projection(source, monkeypatch):
     # Both roots see two distinct wrappers with the same content identities.
     history = Mock(return_value={"runs": [failed, second, candidate]})
     monkeypatch.setattr(run_authority.agent_runs, "list_run_history", history)
-    monkeypatch.setattr(workflow.sources, "load_registry", lambda: {})
+    monkeypatch.setattr(workflow.sources, "load_registry", lambda **_kwargs: {})
     monkeypatch.setattr(workflow.agent_pipeline_runs, "pending_review", lambda _: {
         "run_id": candidate["run_id"], "resumable_here": True, "budget_mode": "planner_canary",
         "scientific_configuration_sha256": digest, "research_input_state": "metadata_only",

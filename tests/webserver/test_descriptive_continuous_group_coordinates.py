@@ -28,7 +28,7 @@ def owners(monkeypatch):
         }),
         "undefined": ConceptDefinition.from_name_and_payload("undefined", {}),
     }
-    monkeypatch.setattr(loader, "load_dictionary", lambda: definitions)
+    monkeypatch.setattr(loader, "load_dictionary", lambda **_kwargs: definitions)
     monkeypatch.setitem(concept_catalog.CONCEPT_GROUPS_INTERNAL, "outcome", ["event", "recovery"])
     menu = catalog.AvailableCatalog(source="synthetic", concepts=[
         catalog.CatalogConcept(concept_id=name, description=definition.description or "")

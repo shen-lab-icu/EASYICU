@@ -46,6 +46,7 @@ _ADDITIVE_FIELDS = frozenset(
         "enable_exposure_grouping",
         "generate_manuscript",
         "execution_tier",
+        "no_automatic_retries",
     }
 )
 
@@ -376,6 +377,8 @@ class PipelineConfig:
     # contract/visual repairs and runtime-crash repairs each get their own),
     # so genuinely broken steps still terminate.
     max_code_repair_attempts: int = 3
+    # Host-owned single-attempt policy. None preserves archived config digests.
+    no_automatic_retries: Optional[bool] = None
     # Cross-gate stop-loss. Concept, contract, visual, and runtime repair used
     # to each receive the per-class budget above, multiplying model calls for
     # one local defect. Keep legacy per-class limits for compatibility, but cap
@@ -520,6 +523,7 @@ class PipelineConfig:
     submission_profile_locked_at: Optional[str] = None
     expected_concept_dict_sha: Optional[str] = None
     expected_sofa2_dict_sha: Optional[str] = None
+    expected_sic_case_overlay_sha: Optional[str] = None
 
     # --- statistical safeguards -----------------------------------------
     enable_multiple_testing_correction: bool = True
@@ -698,6 +702,17 @@ class PipelineConfig:
         return cls(**kwargs)
 
     def __post_init__(self) -> None:
+        if self.no_automatic_retries is not None and type(self.no_automatic_retries) is not bool:
+            raise ValueError("no_automatic_retries must be a boolean or None")
+        if self.no_automatic_retries:
+            for name, value in (
+                ("max_code_repair_attempts", 0),
+                ("max_step_llm_repair_attempts", 0),
+                ("enable_replanning", False),
+                ("enable_deterministic_code_fallback", False),
+                ("enable_deterministic_planner_fallback", False),
+            ):
+                object.__setattr__(self, name, value)
         if self.execution_tier not in (None, "article", "first_result"):
             raise ValueError("execution_tier must be first_result or article")
         from .profiles import is_paper_facing_profile

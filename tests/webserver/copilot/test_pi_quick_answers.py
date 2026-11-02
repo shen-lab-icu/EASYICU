@@ -36,7 +36,7 @@ def host(tmp_path, monkeypatch, request):
         outcome_concepts=["icu_death"],
     )
     registry = {"sources": [{"id": "src_synthetic", "database": database, "path": str(export), "ok": True}]}
-    monkeypatch.setattr(sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: registry)
     monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "studies.json")
     study = study_contexts.upsert_context({"id": "study-quick", "question": "",
                                          "data_source": {"database": database, "path": str(export)}})

@@ -209,6 +209,7 @@ def _code_binding() -> dict:
         "scores/sepsis.py",
         "utils/time_units.py",
         "data/concept-dict.json",
+        "data/sic-case-duration-overlay.v1.json",
         "data/data-sources.json",
     ]
     return {

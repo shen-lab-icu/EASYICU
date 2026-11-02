@@ -80,7 +80,7 @@ def batch(tmp_path):
     owner = SyntheticOwner()
     batch = MultiDatabaseRun(tmp_path / ("a" * 64), owner)
     batch.prepare(MultiDatabaseRequest(project_id="project", session_id="session", study_context_id="study",
-        targets=tuple(DatabaseTarget(database=key) for key in ("miiv", "aumc", "hirid", "sic"))))
+        targets=tuple(DatabaseTarget(database=key) for key in ("miiv", "aumc", "hirid", "mimic"))))
     return batch
 
 
@@ -106,8 +106,23 @@ def test_one_card_names_exact_adjusted_and_refused_targets(batch):
         batch.execute()
     approve(batch)
     result = batch.execute()
-    assert batch.owner.started == ["miiv", "aumc", "sic"]
+    assert batch.owner.started == ["miiv", "aumc", "mimic"]
     assert result["targets"]["hirid"]["state"] == "not_run"
+
+
+def test_sic_case_duration_does_not_authorize_icu_los(tmp_path):
+    owner = SyntheticOwner()
+    batch = MultiDatabaseRun(tmp_path / ("a" * 64), owner)
+    card = batch.prepare(MultiDatabaseRequest(project_id="project", session_id="session", study_context_id="study",
+        targets=(DatabaseTarget(database="miiv"), DatabaseTarget(database="sic"))))
+    sic = card.targets[1]
+    assert sic.disposition == "not_run"
+    assert "icu_los_unavailable" in sic.reason_codes
+    assert sic.review is sic.egress is None
+    approve(batch)
+    result = batch.execute()
+    assert owner.started == ["miiv"]
+    assert result["targets"]["sic"]["state"] == "not_run"
 
 
 @pytest.mark.parametrize("field", ["plan_sha256", "context_sha256", "scientific_review_sha256", "requests_sha256",
@@ -144,15 +159,15 @@ def test_a_failure_preserves_its_code_and_other_results(batch):
     approve(batch)
     result = batch.execute()
     assert result["targets"]["aumc"]["reason_code"] == "synthetic_singular_model"
-    assert [result["targets"][key]["state"] for key in ("miiv", "sic")] == ["completed", "completed"]
-    assert batch.owner.started == ["miiv", "aumc", "sic"]
+    assert [result["targets"][key]["state"] for key in ("miiv", "mimic")] == ["completed", "completed"]
+    assert batch.owner.started == ["miiv", "aumc", "mimic"]
 
 
 def test_pending_cancellation_only_stops_that_database(batch):
     approve(batch)
     batch.cancel("aumc")
     result = batch.execute()
-    assert batch.owner.started == ["miiv", "sic"]
+    assert batch.owner.started == ["miiv", "mimic"]
     assert result["targets"]["aumc"]["reason_code"] == "multi_database_cancelled"
 
 
@@ -161,7 +176,7 @@ def test_mid_fit_cancellation_is_visible_to_the_single_run(batch):
     batch.owner.hook = lambda job: batch.cancel("aumc") if job.database == "aumc" else None
     result = batch.execute()
     assert result["targets"]["aumc"]["state"] == "cancelled"
-    assert result["targets"]["sic"]["state"] == "completed"
+    assert result["targets"]["mimic"]["state"] == "completed"
 
 
 def test_restart_reconciles_started_run_and_does_not_repeat_finished_fits(batch):
@@ -178,7 +193,7 @@ def test_restart_reconciles_started_run_and_does_not_repeat_finished_fits(batch)
     restarted = MultiDatabaseRun(batch.root, batch.owner)
     restarted.execute()
     assert batch.owner.started.count("miiv") == 1
-    assert batch.owner.started.count("sic") == 1
+    assert batch.owner.started.count("mimic") == 1
     assert restarted.state()["targets"]["aumc"]["state"] == "completed"
 
 
@@ -193,7 +208,7 @@ def test_completed_run_after_crash_before_state_write_is_reconciled(batch):
         batch.execute()
     batch.owner.execute = execute
     MultiDatabaseRun(batch.root, batch.owner).execute()
-    assert batch.owner.started == ["miiv", "aumc", "sic"]
+    assert batch.owner.started == ["miiv", "aumc", "mimic"]
 
 
 def test_changed_card_and_changed_request_cannot_reuse_approval(batch):
@@ -217,11 +232,11 @@ def test_pending_original_plan_joins_the_same_card_once(tmp_path):
     owner.reference_target = lambda _: original
     batch = MultiDatabaseRun(tmp_path / ("a" * 64), owner)
     card = batch.prepare(MultiDatabaseRequest(project_id="p", session_id="s", study_context_id="study",
-        targets=(DatabaseTarget(database="miiv"), DatabaseTarget(database="sic"))))
-    assert [row.database for row in card.targets] == ["miiv", "sic"]
+        targets=(DatabaseTarget(database="miiv"), DatabaseTarget(database="mimic"))))
+    assert [row.database for row in card.targets] == ["miiv", "mimic"]
     approve(batch)
     batch.execute()
-    assert owner.started == ["miiv", "sic"]
+    assert owner.started == ["miiv", "mimic"]
 
 
 def test_pending_original_never_silently_replaces_a_different_selected_source(tmp_path):
@@ -244,7 +259,7 @@ def test_projection_failure_does_not_relabel_a_completed_single_run(batch):
     state = batch.execute()
     assert state["targets"]["aumc"]["state"] == "completed"
     assert state["targets"]["aumc"]["reason_code"] == "multi_database_primary_estimate_unavailable"
-    assert state["targets"]["sic"]["state"] == "completed"
+    assert state["targets"]["mimic"]["state"] == "completed"
 
 
 def test_repeated_approval_and_execution_do_not_repeat_results(batch):
@@ -252,7 +267,7 @@ def test_repeated_approval_and_execution_do_not_repeat_results(batch):
     batch.execute()
     approve(batch)
     batch.execute()
-    assert batch.owner.started == ["miiv", "aumc", "sic"]
+    assert batch.owner.started == ["miiv", "aumc", "mimic"]
 
 
 def test_combined_answer_has_its_own_deterministic_evidence(batch):
@@ -350,7 +365,7 @@ def test_combined_pool_uses_sealed_ses_and_excludes_capability_substitutions(bat
     answer = combined_answer(batch)
     pooled = answer["meta_analysis"]
     assert pooled["status"] == "pooled"
-    assert [row["database"] for row in pooled["included"]] == ["miiv", "sic"]
+    assert [row["database"] for row in pooled["included"]] == ["miiv", "mimic"]
     reasons = {row["database"]: row["reason_code"] for row in pooled["excluded"]}
     assert reasons["aumc"] == "changed_estimand"
     assert reasons["hirid"] == "result_gate_failed"
@@ -365,7 +380,7 @@ def test_failed_gate_database_cannot_enter_pool_even_when_completed(batch):
     execute = batch.owner.execute
     def with_failed_gate(target, **kwargs):
         value = execute(target, **kwargs)
-        value.update(standard_error=.2, gate_passed=target.target.database != "sic")
+        value.update(standard_error=.2, gate_passed=target.target.database != "mimic")
         return value
     batch.owner.execute = with_failed_gate
     approve(batch)
@@ -373,7 +388,7 @@ def test_failed_gate_database_cannot_enter_pool_even_when_completed(batch):
     pooled = combined_answer(batch)["meta_analysis"]
     assert pooled["status"] == "unavailable"
     assert [row["database"] for row in pooled["included"]] == ["miiv"]
-    assert {row["database"]: row["reason_code"] for row in pooled["excluded"]}["sic"] == "result_gate_failed"
+    assert {row["database"]: row["reason_code"] for row in pooled["excluded"]}["mimic"] == "result_gate_failed"
 
 
 @pytest.mark.parametrize("change", ["database", "source", "decision", "refusal"])

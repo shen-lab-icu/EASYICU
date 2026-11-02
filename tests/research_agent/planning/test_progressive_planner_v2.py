@@ -5616,10 +5616,15 @@ def test_compiler_reports_attributable_unknown_variable() -> None:
         compile_progressive_plan(skeleton=skeleton, context=_context())
 
     assert caught.value.owner == "easyicu.planning.progressive_compiler_v1"
-    assert caught.value.reason_code == "progressive_unknown_variable"
+    assert caught.value.reason_code == "progressive_compile_batch_invalid"
     assert caught.value.step_id == "05_primary"
     assert caught.value.step_index == 4
     assert caught.value.path == "model_terms"
+    findings = caught.value.details["findings"]
+    assert [(item["step_id"], item["path"], item["reason_code"]) for item in findings] == [
+        ("05_primary", "model_terms", "progressive_unknown_variable"),
+        ("06_sensitivity", "raw_inputs", "progressive_unknown_variable"),
+    ]
 
 
 def test_compiler_uses_concept_declared_levels_for_metadata_only_model_term() -> None:

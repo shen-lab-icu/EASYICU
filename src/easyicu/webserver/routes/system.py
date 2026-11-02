@@ -31,7 +31,7 @@ def favicon() -> Response:
 @router.get("/api/catalog")
 def catalog() -> dict:
     """The concept catalog the Data Dictionary screen renders."""
-    return build_catalog()
+    return build_catalog(planning_metadata_only=True)
 
 
 @router.get("/api/catalog/lineage/{concept_id}")

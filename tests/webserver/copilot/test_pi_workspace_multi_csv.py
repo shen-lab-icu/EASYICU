@@ -1,6 +1,6 @@
 """Trusted CSV bridge with a handwritten multi-export DOM, never artifact JS."""
 
-from tests.webserver.copilot.test_pi_workspace_csv_filter import _run
+from tests.support.workspace_csv import _run
 
 
 def test_declared_and_semantic_multi_exports_require_explicit_choice_and_preserve_filters():

@@ -69,6 +69,7 @@ def _card(code: str, *, lang: str, decision_context: dict | None = None) -> str:
       global.window = {{ EU_LANG: {json.dumps(lang)} }};
       eval({json.dumps(VOCAB_SOURCE)});
       eval({json.dumps(MODULES_SOURCE)});
+      eval({json.dumps((STATIC / "js/screens-guided-pi-confirmation-data.js").read_text(encoding="utf-8"))});
       eval({json.dumps(CONFIRMATION_SOURCE)});
       const confirmation = window.EasyICU.guidedPi.require('confirmation').create({{
         tr: (en, zh) => {json.dumps(lang)} === 'zh' ? (zh || en) : en,

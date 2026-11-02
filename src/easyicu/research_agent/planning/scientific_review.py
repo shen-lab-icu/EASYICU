@@ -26,7 +26,7 @@ from ..contracts.cohort_summary import (
     primary_descriptive_summary_scope_error,
 )
 from ..contracts.continuous_outcome_summary import continuous_outcome_columns, continuous_outcome_summary_verdict
-from ..contracts.continuous_outcome_metadata import continuous_summary_columns
+from ..contracts.continuous_outcome_summary import continuous_summary_columns
 from ..authority.declared_levels import closed_planning_levels_for
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
@@ -3460,31 +3460,80 @@ def build_plan_scientific_review(
     require_g_method_plan(context, plan)
 
     findings: list[PlanScientificFinding] = []
-    from .descriptive_question_uncertainty import (
+    from .question_interpretation import (
         amendment_user_messages, primary_distribution_gaps, requested_uncertainty,
+        verified_independent_patient_rows,
     )
 
+    from ..research_context.concept_population import context_data_constraints
+
+    if context_data_constraints(context).get("host_icd_source_proof_required") is True:
+        findings.append(PlanScientificFinding(
+            code="HOST_ICD_SOURCE_UNVERIFIED", severity="blocker", dimension="icu_clinical_design",
+            message="The configured diagnosis-code population cannot be verified against the source in this version.",
+            evidence_refs=["research_context.json.user_preferences.data_constraints"],
+            remediation="The user may change the question or cohort, then review a new complete plan. Retaining this ICD condition is not executable with the current source proof.",
+            remediation_route="runtime_capability",
+        ))
     amendment_messages = amendment_user_messages(bound_plan_revision_contract)
     uncertainty_requirement = requested_uncertainty(context.research_question, *amendment_messages)
+    if uncertainty_requirement.unresolved:
+        findings.append(PlanScientificFinding(
+            code="QUESTION_UNCERTAINTY_UNRESOLVED", severity="blocker", dimension="statistical_design",
+            message="The stated confidence interval has an ambiguous level or negation; this plan cannot be checked against the request.",
+            evidence_refs=["research_context.json.research_question", "pipeline_config.bound_plan_revision_contract"],
+            remediation="Clarify which confidence interval and level should be reported before plan approval.",
+            remediation_route="study_authority_change",
+            requires_user_authorization=True,
+            authorization_question="Is an interval needed, and what level and method? If using CI, does it mean confidence interval or cardiac index?",
+        ))
     uncertainty_fact = None
-    coverage = primary_distribution_gaps(plan.model_dump(mode="json"), uncertainty_requirement)
+    needs_independence = "wilson" in uncertainty_requirement.interval_methods and any(
+        step.exposure_outcome_distribution_spec is not None
+        and step.exposure_outcome_distribution_spec.interval_method == "wilson"
+        and step.exposure_outcome_distribution_spec.dependence is None
+        for step in plan.steps
+    )
+    independence_verified = verified_independent_patient_rows(context) if needs_independence else False
+    coverage = primary_distribution_gaps(plan.model_dump(mode="json"), uncertainty_requirement,
+                                         independent_patient_rows_verified=independence_verified)
     if coverage is not None:
         distribution_steps, missing = coverage
         uncertainty_fact = {
             "requested_confidence_levels": list(uncertainty_requirement.confidence_levels),
+            "requested_interval_methods": list(uncertainty_requirement.interval_methods),
+            "independent_patient_rows_verified": independence_verified,
             "revision_contract_sha256": canonical_sha256(bound_plan_revision_contract) if amendment_messages else None,
             "distribution_step_ids": list(distribution_steps),
             "unmet_distribution_step_ids": list(missing),
         }
         if not distribution_steps or missing:
+            method_detail = ""
+            if uncertainty_requirement.interval_methods:
+                methods = []
+                for step in plan.steps:
+                    spec = step.exposure_outcome_distribution_spec
+                    if spec is not None and step.step_id in distribution_steps:
+                        method = (spec.repeated_unit_interval_method if spec.dependence is not None
+                                  else spec.interval_method)
+                        methods.append(str(method or "unavailable"))
+                method_detail = (
+                    " Requested method: " + ", ".join(uncertainty_requirement.interval_methods)
+                    + "; effective method: " + (", ".join(methods) if methods else "unavailable") + "."
+                )
+                if "wilson" in uncertainty_requirement.interval_methods and "patient_cluster_robust_wald" in methods:
+                    method_detail += " A patient-cluster Wald interval is not a Wilson interval."
+                if "wilson" in uncertainty_requirement.interval_methods and "wilson" in methods and not independence_verified:
+                    method_detail += " One row per patient has not been verified in the prepared cohort."
             findings.append(PlanScientificFinding(
                 code="QUESTION_DESCRIPTIVE_UNCERTAINTY_NOT_MET",
                 severity="blocker",
                 dimension="statistical_design",
                 message=(
                     "The researcher requested a confidence interval for the descriptive result, "
-                    "but the reviewed plan does not specify the requested confidence "
-                    "interval for its primary distribution."
+                    "but the reviewed plan does not specify an executable interval "
+                    "with the requested method and level for its primary distribution."
+                    + method_detail
                 ),
                 evidence_refs=[
                     "research_context.json.research_question",
@@ -3492,11 +3541,11 @@ def build_plan_scientific_review(
                     "analysis_plan.json.steps.exposure_outcome_distribution_spec",
                 ],
                 remediation=(
-                    "Bind an appropriate, executable interval and requested confidence "
+                    "Bind the requested executable interval method and confidence "
                     "level to the reviewed distribution only when the source and "
                     "independent-unit or patient-grouping authority support it. Otherwise "
-                    "explain the missing source authority and ask the researcher to "
-                    "review a feasible change; do not silently omit the request."
+                    "explain the mismatch and ask the researcher to review a feasible "
+                    "change; do not substitute a different interval method silently."
                 ),
                 remediation_route="study_authority_change",
             ))

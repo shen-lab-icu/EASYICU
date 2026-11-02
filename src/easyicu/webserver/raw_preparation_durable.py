@@ -61,7 +61,7 @@ def _scope_matches(checkpoint: RawPreparationCheckpoint, scope: Mapping[str, Any
 def _validate_current_scope(*, root: Path, checkpoint: RawPreparationCheckpoint, scope: Mapping[str, Any]) -> None:
     if scope.get('adapter_id') == 'eicu-demo-first-observed-single-hospital-adult/1':
         from easyicu.webserver.first_observed_preparation import _host_inputs
-        expected, _ = _host_inputs(run_dir=root, request=checkpoint.request)
+        expected, _ = _host_inputs(run_dir=root, request=checkpoint.request, verify_source_bytes=False)
         if expected != dict(scope):
             raise ValueError('preparation_intent_scope_mismatch')
     else:
@@ -553,20 +553,61 @@ def inspect_admitted_first_observed(*, job_id: str, job: Any, checkpoint: RawPre
                 signature, hmac.new(key, canonical_json(body).encode(), hashlib.sha256).hexdigest()):
             raise ValueError('preparation_admitted_result_invalid')
         version = body.get('schema_version')
-        if version not in {'easyicu.first-observed-coordinate-attestation/1',
-                           'easyicu.first-observed-coordinate-attestation/2'}:
+        if version != 'easyicu.first-observed-coordinate-attestation/3' or scope.get('read_scope_version') != 2:
             raise ValueError('preparation_admitted_result_invalid')
         expected_result = {'schema_version': version, 'scope_sha256': canonical_sha256(dict(scope)),
             'checkpoint_sha256': checkpoint.checkpoint_sha256,
             'binding_sha256': canonical_sha256(binding.model_dump(mode='json')),
             'coordinate_sha256': coordinate_digest, 'source_complete_six_columns': True,
             'analysis_authorized': False}
-        if version.endswith('/2'):
-            flow = body.get('private_source_flow')
-            if not isinstance(flow, dict):
-                raise ValueError('preparation_admitted_result_invalid')
-            expected_result['private_source_flow'] = flow
+        flow = body.get('private_source_flow')
+        patient_sha = body.get('patient_table_sha256')
+        if (not isinstance(flow, dict) or not isinstance(patient_sha, str)
+                or len(patient_sha) != 64 or any(c not in '0123456789abcdef' for c in patient_sha)):
+            raise ValueError('preparation_admitted_result_invalid')
+        expected_result['private_source_flow'] = flow
+        expected_result['patient_table_sha256'] = patient_sha
         if body != expected_result:
+            raise ValueError('preparation_admitted_result_invalid')
+        # A completed status must not conceal drift of the source bound to the
+        # coordinate. The consumed grant covers this repeated full-file check;
+        # the resolver verifies that grant before accessing source bytes.
+        from easyicu.webserver.first_observed_preparation import resolve_prepared_first_observed_coordinate
+        coordinate = resolve_prepared_first_observed_coordinate(
+            run_dir=owner_root, checkpoint=checkpoint, binding=binding, scope=scope)
+        if coordinate.sha256 != coordinate_digest:
             raise ValueError('preparation_admitted_result_invalid')
     result = 'complete' if status == 'done' else 'preparing' if status == 'running' else 'stopped'
     return {'job_id': job_id, 'preparation_status': result, 'job_status': status, 'analysis_authorized': False}
+
+
+def launch_deferred_review_after_first_observed(*, job_id: str, output: Path) -> dict[str, Any] | None:
+    """Admit one host-only review stage after the signed preparation completes.
+
+    The write-once private intent prevents a crash or replay from silently
+    creating a second stage. It records an attempted handoff, not an approval.
+    """
+    if Path(output).parent.name != 'private-first-observed':
+        return None
+    from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+    from easyicu.research_agent.canonical_json import canonical_json
+    from easyicu.webserver.preparation_recovery_snapshot import _read_signed
+    from easyicu.webserver.raw_preparation_decisions import (
+        RawPreparationHostBinding, _private_directory, _publish_once, _signature,
+    )
+    from easyicu.webserver.research_job_recovery import submit_deferred_review_stage
+
+    intent = _read_signed(job_id + '.preparation-intent.json')
+    binding = RawPreparationHostBinding.model_validate(intent['binding'])
+    if intent.get('job_id') != job_id:
+        raise ValueError('deferred_review_handoff_source_changed')
+    body = {'schema_version': 'easyicu.deferred-review-stage-intent/1',
+            'preparation_job_id': job_id, 'binding': binding.model_dump(mode='json'),
+            'preparation_intent_sha256': canonical_sha256(intent), 'analysis_authorized': False}
+    content = canonical_json({**body, 'signature': _signature(body)}).encode()
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        _publish_once(directory, binding.nonce + '.deferred-review-stage-intent.json', content)
+        directory.assert_still_selected()
+    receipt = submit_deferred_review_stage(preparation_run_id=binding.run_id,
+        study_context_id=binding.study_context_id, project_id=binding.project_id, session_id=binding.session_id)
+    return {'status': 'preparing_review', 'job_id': receipt.job_id, 'analysis_authorized': False}

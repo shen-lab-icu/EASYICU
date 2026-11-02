@@ -141,7 +141,7 @@ from .host_bound_cohort_executor import (
     host_bound_cohort_executor_code,
     host_bound_cohort_executor_owns_step,
 )
-from .care_unit_landmark_cohort_executor import care_unit_landmark_cohort_executor_code
+from .host_bound_cohort_executor import care_unit_landmark_cohort_executor_code
 from .landmark_categorical_association_executor import (
     LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
     LANDMARK_CATEGORICAL_PRIMARY_ANALYSIS_KIND,

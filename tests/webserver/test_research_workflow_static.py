@@ -23,7 +23,7 @@ def test_workflow_dependencies_and_changed_cache_tokens_are_explicit():
                  "screens-guided-pi-skill-attach.js"]:
         assert re.search(rf'js/{re.escape(file)}\?v=[^"\s]+"', html)
     assert 'js/screens-skills-implementation.js?v=20261029-followup1"' in html
-    assert 'js/screens-skills.js?v=20261029-followup1"' in html
+    assert 'js/screens-skills.js?v=20261030-video1"' in html
     assert 'css/skills-implementation.css?v=20261029-fn5"' in html
     assert html.index('css/skills-hub.css?') < html.index('css/skills-implementation.css?')
     assert 'css/skills-workflows.css?v=20261029-flow1"' in html

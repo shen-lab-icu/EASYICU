@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent.contracts.rmst import RMSTSpec
+from easyicu.research_agent.contracts.survival import RMSTSpec
 
 
 def _spec(**overrides):
@@ -66,3 +66,12 @@ def test_rmst_group_levels_cannot_be_mutated_after_validation():
     spec = _spec()
     with pytest.raises(TypeError):
         spec.group_levels[0] = spec.group_levels[1]
+
+
+def test_preexisting_rmst_json_round_trips_without_cox_authority() -> None:
+    old_json = ('{"time_column":"time_days","event_column":"death",'
+                '"group_column":"lact_group","group_levels":["high","low"],'
+                '"tau":28.0,"time_unit":"days","event_code":1.0}')
+    spec = RMSTSpec.model_validate_json(old_json)
+    assert spec.model_dump_json() == old_json
+    assert not hasattr(spec, "estimator")

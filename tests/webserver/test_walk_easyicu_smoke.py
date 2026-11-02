@@ -43,7 +43,7 @@ def test_two_workflow_walk_over_asgi_with_stubbed_execution_and_offline_provider
     })
     registry = {"sources": [{"id": "walk-demo", "label": "Synthetic walk source", "database": "sic",
                               "ok": True, "source_kind": "synthetic"}], "active_path": None}
-    monkeypatch.setattr(sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: registry)
     provider = ScriptedMockLLMClient(["Synthetic candidate ready for review."] * 2)
 
     class OfflineService:

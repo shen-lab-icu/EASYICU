@@ -62,6 +62,20 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     return `<section class="gpi-evidence-record"><div class="gpi-evidence-record-head"><span>${esc(tr('Registered source record', '真实登记文件'))}</span><strong>${esc(text(p.display_name || p.evidence_id, 180))}</strong></div><p class="gpi-evidence-record-status">${esc(tr('Registry digest verified', '登记摘要已核对'))}</p></section>`;
   }
+  function recordedGenerationView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const labels = {
+      llm: tr('Model-generated code', '模型生成代码'),
+      deterministic_standard: tr('Standard executor', '标准执行器'),
+      repaired: tr('Repaired code', '修订后的代码'),
+      runner_repaired: tr('Runtime-repaired code', '运行时修订代码'),
+      fallback: tr('Fallback code', '备用代码'),
+      resumed_code_reuse: tr('Reused recorded code', '复用已记录代码'),
+    };
+    const mode = String(p.generation_mode || '');
+    if (!Object.prototype.hasOwnProperty.call(labels, mode)) return '';
+    return `<p class="gpi-evidence-generation" role="note"><strong>${esc(tr('Recorded generation method', '记录的生成方式'))}</strong>: ${esc(labels[mode])}. ${esc(tr('This record alone does not establish independent validation or publication authority.', '此记录本身不能证明独立验证或授予发表权限。'))}</p>`;
+  }
   function reproductionPathView(payload, rows) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const stages = [p.kind === 'code' ? tr('Code', '代码') : tr('Result', '结果')];
@@ -427,7 +441,7 @@
     else if (p.previewable && p.renderer === 'json') body = reviewRecordView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
     const summaryFirst = p.previewable && (p.renderer === 'json' || p.renderer === 'literature_cards');
-    return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}</div>`;
+    return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${recordedGenerationView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}</div>`;
   }
 
   window.EasyICU.guidedPi.declare('evidencePreview', { render, title, kindLabel });

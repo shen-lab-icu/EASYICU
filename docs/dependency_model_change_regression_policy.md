@@ -37,7 +37,10 @@ Web/JS 资产发生任何变更。
 ## 2. 版本与许可字段（复用，不另建）
 
 - 适配器声明：`scientific_adapters/runtime.py` 的 typed spec（版本范围、license、验证引用）。
-- 科学包登记：`contracts/method_packages.py`；镜像直接依赖锁定于 `runner_image/requirements.lock`。
+- 科学包登记：`contracts/method_packages.py`；当前镜像直接依赖锁定于
+  `runner_image/requirements-pydantic-core-v1.lock`，由 Dockerfile 复制到镜像的
+  `requirements.lock` 位置。原 `runner_image/requirements.lock` 和清单中的旧摘要
+  保留为回滚坐标；新增版本锁需要单独的镜像身份与验证回执。
 - base 镜像 digest：`runner_image/base-image.lock` + Dockerfile 双写；升级需审阅上游 manifest、跑镜像 CI 冒烟并重新生成 CycloneDX SBOM。
 - 运行记录：收据含代码版本、镜像 id 与依赖快照（`authority/run_receipt.py`）。
 

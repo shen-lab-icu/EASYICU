@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Mapping, Optional
 
 
 ADJUSTED_ASSOCIATION_ANALYSIS_KIND = "adjusted_association_estimates"
@@ -114,7 +114,35 @@ def canonical_survival_ph_diagnostic(value: Any) -> str:
     return _SURVIVAL_PH_ALIASES.get(token, token)
 
 
+MODEL_REQUIREMENT_REPORT_FIELDS = (
+    "outcome",
+    "outcome_type",
+    "outcome_definition",
+    "method_family",
+    "exposure_source",
+    "analysis_role",
+    "analysis_set",
+    "dependence",
+)
+
+
+def reported_model_requirement_fields(
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project one emitted model contract onto its planned comparison shape."""
+
+    reported = {
+        field: contract.get(field) for field in MODEL_REQUIREMENT_REPORT_FIELDS
+    }
+    reported["method_family"] = contract.get("method_family") or contract.get(
+        "model_family"
+    )
+    return reported
+
+
 __all__ = [
+    "MODEL_REQUIREMENT_REPORT_FIELDS",
+    "reported_model_requirement_fields",
     "ADJUSTED_ASSOCIATION_ANALYSIS_KIND",
     "ADJUSTED_ASSOCIATION_OUTPUT",
     "PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND",

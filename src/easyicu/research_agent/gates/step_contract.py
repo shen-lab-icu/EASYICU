@@ -108,22 +108,20 @@ def _step_contract_findings(
     # These diagnostic products have their own source-bound numeric replay.
     # Import runners only for the matching action to keep catalog reads light.
     if step.scientific_action_id == "causal_emulation.covariate_balance":
-        from ..execution.runners.covariate_balance_executor import covariate_balance_output_findings
+        from ..methods.propensity_weighting import covariate_balance_output_findings
 
         findings.extend(covariate_balance_output_findings(
             step=step, step_summary=step_summary, context=context,
             resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
         ))
     if step.scientific_action_id == "phenotyping.cluster_sizes":
-        from ..execution.runners.cluster_sizes_executor import cluster_sizes_output_findings
+        from ..methods.cluster_sizes import cluster_sizes_output_findings
 
         findings.extend(cluster_sizes_output_findings(
             step=step, step_summary=step_summary, context=context,
             resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
         ))
     if step.scientific_action_id == "prediction.subgroup_fairness":
-        from ..contracts.prediction_subgroup_output import prediction_subgroup_output_findings
-
         findings.extend(prediction_subgroup_output_findings(
             step=step, step_summary=step_summary, context=context,
             resolved_input_bindings=resolved_input_bindings, out_dir=out_dir,
@@ -607,3 +605,88 @@ __all__ = [
     "_step_contract_findings",
     "step_contract_findings",
 ]
+
+
+def prediction_subgroup_output_findings(
+    *, step: object, step_summary: Mapping[str, Any], context: object | None = None,
+    resolved_input_bindings: Mapping[str, Mapping[str, Any]] | None = None,
+    out_dir: Path | None = None,
+) -> list[ValidationFinding]:
+    """Verify results, CSV and provenance by replay; never trust a claimed hash."""
+    from ..contracts.prediction_subgroup import (
+        PREDICTION_SUBGROUP_ACTION, PREDICTION_SUBGROUP_PRODUCT,
+        prediction_subgroup_spec_for_step, prediction_subgroup_step_matches,
+    )
+
+    if getattr(step, "scientific_action_id", None) != PREDICTION_SUBGROUP_ACTION:
+        return []
+    import json
+
+    from ..canonical_json import canonical_sha256, sha256_bytes
+    from ..contracts.artifact_consumption import load_typed_input
+    from ..contracts.prediction_execution import PREDICTION_SCORES_PRODUCT
+    from ..methods.prediction_validation import (
+        bind_subgroup_membership, evaluate_prediction_subgroups,
+        subgroup_performance_frame, subgroup_provenance,
+    )
+
+    try:
+        if out_dir is None or resolved_input_bindings is None:
+            raise ValueError("prediction_subgroup_validation_bindings_missing")
+        if not prediction_subgroup_step_matches(step):
+            raise ValueError("prediction_subgroup_declaration_invalid")
+        spec = prediction_subgroup_spec_for_step(step)
+        keys = (PREDICTION_SCORES_PRODUCT, spec.subgroup_input_key)
+        if set(resolved_input_bindings) != set(keys):
+            raise ValueError("prediction_subgroup_validation_bindings_mismatch")
+        # Normal pipeline outputs are <run>/steps/<step>/outputs.
+        output = Path(out_dir)
+        root = output.parents[2]
+        manifest = {"step_id": step.step_id, "inputs": dict(resolved_input_bindings)}
+        bound = [load_typed_input(
+            input_key=key, run_dir=root, resolved_inputs=manifest, step_id=step.step_id,
+            expected_declared_kind=key.partition(":")[0], expected_evidence_kind="table",
+            require_consumption_contract=True, minimum_row_count=1,
+        ) for key in keys]
+        frame = bind_subgroup_membership(bound[0].frame, bound[1].frame, spec)
+        expected = evaluate_prediction_subgroups(frame, spec)
+        payload = expected.model_dump(mode="json")
+        provenance = subgroup_provenance(expected, spec, bound[0].sha256, bound[1].sha256)
+        csv_bytes = subgroup_performance_frame(expected).to_csv(index=False).encode("utf-8")
+        provenance_bytes = json.dumps(provenance, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
+        required_summary = {
+            "step_id": step.step_id, "status": "ok", "analysis_status": "ok",
+            "analysis_family": "prediction", "method": "frozen_prediction_subgroup_performance",
+            "deterministic_standard_analysis": "prediction_subgroup_performance",
+            "authority_scope": "analysis_only", "paper_authorization_allowed": False,
+            "source_inputs": list(keys), "input_bindings": [{"input_key": key, "loaded": True} for key in keys],
+            "output_files": {PREDICTION_SUBGROUP_PRODUCT: "subgroup_performance.csv"},
+            "subgroup_performance": payload, "provenance": provenance,
+            "performance_rows": len(expected.rows), "output_sha256": sha256_bytes(csv_bytes),
+            "provenance_sha256": sha256_bytes(provenance_bytes),
+        }
+        if any(canonical_sha256(step_summary.get(key)) != canonical_sha256(value) for key, value in required_summary.items()):
+            raise ValueError("prediction_subgroup_summary_recomputation_mismatch")
+        for filename, expected_bytes in (
+            ("subgroup_performance.csv", csv_bytes),
+            ("subgroup_performance_provenance.json", provenance_bytes),
+        ):
+            path = output / filename
+            if path.is_symlink() or path.read_bytes() != expected_bytes:
+                raise ValueError("prediction_subgroup_output_recomputation_mismatch")
+        summary_path = output / "step_summary.json"
+        if summary_path.is_symlink():
+            raise ValueError("prediction_subgroup_summary_symlink")
+        saved = json.loads(summary_path.read_text("utf-8"))
+        if any(canonical_sha256(saved.get(key)) != canonical_sha256(value) for key, value in required_summary.items()):
+            raise ValueError("prediction_subgroup_saved_summary_mismatch")
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError, OSError, RuntimeError) as error:
+        reason = getattr(error, "reason_code", None)
+        if reason is None:
+            reason = str(error) if str(error).startswith("prediction_subgroup_") else type(error).__name__
+        return [ValidationFinding(
+            validator="prediction_subgroup_output_contract", severity="error",
+            message="Subgroup performance could not be verified against the reviewed declaration and bound input bytes.",
+            detail={"step_id": getattr(step, "step_id", None), "reason": reason},
+        )]
+    return []

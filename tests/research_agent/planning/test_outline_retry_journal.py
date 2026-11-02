@@ -7,24 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger
 from easyicu.research_agent.planning import outline_retry_journal as owner
 from easyicu.research_agent.providers.protocol import LLMMessage
 from easyicu.research_agent.providers.structured_retry import call_llm_with_structured_retry
-from easyicu.webserver import provider_adapter
+from tests.support.progressive_retry import _setup
 
 
-def _setup(tmp_path, monkeypatch):
-    import easyicu.research_agent.providers.llm  # noqa: F401
-    monkeypatch.setattr(owner.state_paths, "state_root", lambda: tmp_path / "state")
-    env = {"OPENAI_API_KEY": "synthetic-secret", "OPENAI_BASE_URL": "http://127.0.0.1:1/v1",
-           "OPENAI_MODEL": "synthetic", "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
-           "EASYICU_PROVIDER_DATA_HANDLING": "user_accepted_external"}
-    inner, _ = provider_adapter.build_research_agent_provider_client({"provider": "openai", "external": True}, environ=env)
-    book = ProviderHardStopLedger(path=tmp_path / "budget.json", task_ids=("task",),
-        limits=provider_adapter.web_research_agent_hard_stop_limits("planner_canary"),
-        batch_id="task", declaration_sha256="a" * 64)
-    return inner, book, book.start_task("task")
 
 
 def _journal(inner, task, run_dir, **kwargs):
@@ -82,6 +70,61 @@ def test_retry_journal_refuses_tampering_drift_or_other_prompt(tmp_path, monkeyp
     source.write_text(json.dumps(tampered))
     with pytest.raises(ValueError, match="signature_invalid"):
         owner.load_retry_journal(source)
+
+
+@pytest.mark.parametrize("mutation", ["response", "cursor", "child", "ledger"])
+def test_replay_refuses_mutable_state_injection_without_transport(tmp_path, monkeypatch, mutation):
+    inner, book, task = _setup(tmp_path, monkeypatch)
+    transport_calls = []
+    monkeypatch.setattr(owner, "authorized_complete", lambda *_a, **_kw: transport_calls.append(1) or "original")
+    initial = _journal(inner, task, tmp_path / "source")
+    messages = [LLMMessage("user", "original")]
+    assert initial.complete(messages, max_tokens=16) == "original"
+    source = tmp_path / "source" / ".runtime" / owner.FILE_NAME
+    resumed = _journal(inner, task, tmp_path / "continued", source_path=source,
+                       source_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+    if mutation == "response":
+        resumed._data["records"][0]["response"] = "forged"
+    elif mutation == "cursor":
+        resumed._index = 1
+    elif mutation == "child":
+        resumed._inner = object()
+    else:
+        task.ledger = object()
+    with pytest.raises(ValueError, match="retry_journal_state_invalid"):
+        resumed.complete(messages, max_tokens=16)
+    assert transport_calls == [1]
+    assert not book.snapshot()["tasks"][0]["calls"]
+
+
+def test_child_cannot_mutate_pending_journal_before_response_is_signed(tmp_path, monkeypatch):
+    inner, _book, task = _setup(tmp_path, monkeypatch)
+    journal = _journal(inner, task, tmp_path / "source")
+    def corrupt(*_args, **_kwargs):
+        journal._data["abandoned"] = 0
+        journal._data["records"].append({"response": "forged"})
+        return "original"
+    monkeypatch.setattr(owner, "authorized_complete", corrupt)
+    with pytest.raises(ValueError, match="retry_journal_state_invalid"):
+        journal.complete([LLMMessage("user", "original")], max_tokens=16)
+    signed = owner.load_retry_journal(tmp_path / "source" / ".runtime" / owner.FILE_NAME)
+    assert signed["records"] == []
+    assert signed["pending"] is not None
+
+
+def test_signed_journal_replacement_is_not_replayed(tmp_path, monkeypatch):
+    inner, _book, task = _setup(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(owner, "authorized_complete", lambda *_a, **_kw: calls.append(1) or "original")
+    journal = _journal(inner, task, tmp_path / "source")
+    path = tmp_path / "source" / ".runtime" / owner.FILE_NAME
+    old = owner.load_retry_journal(path)
+    messages = [LLMMessage("user", "original")]
+    assert journal.complete(messages, max_tokens=16) == "original"
+    owner._atomic_write(path, old)
+    with pytest.raises(ValueError, match="retry_journal_state_invalid"):
+        journal.complete(messages, max_tokens=16)
+    assert calls == [1]
 
 
 def test_unknown_signed_binding_fields_are_named_without_disclosure(tmp_path, monkeypatch):
@@ -169,7 +212,7 @@ def test_pipeline_owner_loads_private_prefix_and_revalidates_same_outline(tmp_pa
     from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
     from tests.research_agent.planning.progressive_planner_fixtures import _context, _outline_payload
-    from tests.research_agent.planning.test_progressive_planner_checkpoints import _RecordingEvidence
+    from tests.support.progressive_retry import _RecordingEvidence
 
     _inner, book, task = _setup(tmp_path, monkeypatch)
     inner = ScriptedMockLLMClient([])
@@ -480,3 +523,28 @@ def test_interrupted_journal_requires_successful_host_verification_before_transp
     assert sent == []
     assert len(book.snapshot()["tasks"][0]["calls"]) == 1
     assert not (tmp_path / "continued" / ".runtime" / owner.FILE_NAME).exists()
+
+
+@pytest.mark.parametrize("mutation", ["state", "receipt_flag"])
+def test_hard_stop_refuses_tampered_journal_before_budget_or_shared_receipt(tmp_path, monkeypatch, mutation):
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+
+    inner, book, task = _setup(tmp_path, monkeypatch)
+    journal = _journal(inner, task, tmp_path / "source")
+    journal.last_finish_reason = "length"
+    journal.last_usage = {"prompt_tokens": 99}
+    journal.last_transport_attempts = 3
+    if mutation == "state":
+        journal._data["abandoned"] = 1
+    else:
+        journal.requires_call_scoped_receipt = False
+    hard_stop = HardStopClient(journal, role="planner", task=task)
+    before = book.path.read_bytes()
+    with pytest.raises(ValueError) as exc:
+        call_llm_with_structured_retry(
+            hard_stop, [LLMMessage("user", "synthetic")], parser=lambda value: value,
+            role="planner", max_retries=0, max_tokens=8)
+    metadata = exc.value.easyicu_structured_attempt_metadata[0]
+    assert metadata["finish_reason"] is None and metadata["usage"] == {}
+    assert metadata["transport_attempts"] == 1
+    assert book.path.read_bytes() == before

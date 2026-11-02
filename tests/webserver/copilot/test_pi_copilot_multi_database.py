@@ -37,7 +37,7 @@ def conversation(tmp_path, monkeypatch, study_state):
     monkeypatch.setattr(state_paths, "state_root", lambda: tmp_path / "state")
     rows = [dict(id="fixture_" + db, database=db, path=str(tmp_path / db), ok=True)
             for db in ("aumc", "sic")]
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": rows})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": rows})
     monkeypatch.setattr(sources, "registered_source_identity", lambda path: next(
         (SourceIdentity(database=row["database"], registration_id=row["id"])
          for row in rows if row["path"] == path), None))

@@ -125,6 +125,27 @@ for (const language of ['zh', 'en']) {
     assert.ok(!mismatch.includes(tr('Source field and value match', '来源字段与原值已核对')));
   });
 
+  test(`${language}: registered generation mode is readable without inventing verification`, () => {
+    const renderer = owners(language, ['evidence-preview']).EasyICU.guidedPi.require('evidencePreview');
+    for (const [mode, en, zh] of [
+      ['llm', 'Model-generated code', '模型生成代码'],
+      ['deterministic_standard', 'Standard executor', '标准执行器'],
+      ['repaired', 'Repaired code', '修订后的代码'],
+    ]) {
+      const html = renderer.render({ ...evidence, generation_mode: mode });
+      assert.ok(html.includes(tr('Recorded generation method', '记录的生成方式')));
+      assert.ok(html.includes(tr(en, zh)));
+      assert.ok(html.includes(tr('This record alone does not establish independent validation or publication authority.', '此记录本身不能证明独立验证或授予发表权限。')));
+      assert.ok(html.includes('code_synthetic') && html.includes('unavailable_input'));
+      assert.doesNotMatch(html, /verified_tool|composed_workflow/);
+    }
+    const absent = renderer.render(evidence);
+    assert.ok(!absent.includes('class="gpi-evidence-generation"'));
+    const unknown = renderer.render({ ...evidence, generation_mode: '<script>invalid</script>' });
+    assert.ok(!unknown.includes('class="gpi-evidence-generation"'));
+    assert.ok(!unknown.includes('<script>'));
+  });
+
   test(`${language}: unavailable previews show file information without a fabricated action`, () => {
     const window = owners(language, ['evidence-preview']);
     const renderer = window.EasyICU.guidedPi.require('evidencePreview');

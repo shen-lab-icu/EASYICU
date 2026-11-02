@@ -27,7 +27,6 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
-from .planner_display_labels import planner_binary_level_labels
 from .figure_input_capability import TypedInputCapability
 from ._shared import method_head as _method_head
 
@@ -38,6 +37,36 @@ __all__ = [
     "prevalence_mortality_figure_executor_owns_step",
     "run_prevalence_mortality_figure",
 ]
+
+
+_LEVEL_KEY = re.compile(r"\s*(.+?)\s*=\s*([01])\s*")
+
+
+def planner_binary_level_labels(
+    display_labels: Mapping[str, str] | None,
+) -> tuple[str, str, str] | None:
+    """Return ``(column, label_for_0, label_for_1)`` for the one complete pair.
+
+    ``None`` means the Planner did not declare exactly one unambiguous binary
+    label pair.  Callers must fail closed or fall back explicitly; this
+    function never fabricates a placeholder.
+    """
+
+    pairs: dict[str, dict[int, str]] = {}
+    for raw_key, raw_label in (display_labels or {}).items():
+        match = _LEVEL_KEY.fullmatch(str(raw_key))
+        label = " ".join(str(raw_label or "").split())
+        if match is None or not label:
+            continue
+        pairs.setdefault(match.group(1).strip(), {})[int(match.group(2))] = label
+    complete = [
+        (column, levels[0], levels[1])
+        for column, levels in pairs.items()
+        if set(levels) == {0, 1} and levels[0] != levels[1] and column
+    ]
+    if len(complete) == 1:
+        return complete[0]
+    return None
 
 
 PREVALENCE_MORTALITY_FIGURE_INPUTS = (

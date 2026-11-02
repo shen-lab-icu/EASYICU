@@ -116,13 +116,15 @@ def test_reference_docker_image_matches_advertised_capabilities(ra):
         .read_text(encoding="utf-8")
         .lower()
     )
+    from easyicu.research_agent.execution.kernel_identity import RUNNER_PACKAGE_LOCK_NAME
+
     requirements_lock = (
         repo_root
         / "src"
         / "easyicu"
         / "research_agent"
         / "runner_image"
-        / "requirements.lock"
+        / RUNNER_PACKAGE_LOCK_NAME
     ).read_text(encoding="utf-8")
     locked_packages = {
         line.split("==", 1)[0].strip().lower()
@@ -149,14 +151,14 @@ def test_reference_docker_image_matches_advertised_capabilities(ra):
     for import_name, pip_name in pip_names.items():
         assert pip_name.lower() in locked_packages, (
             f"{import_name} is advertised but {pip_name} is absent from "
-            "runner_image/requirements.lock"
+            f"runner_image/{RUNNER_PACKAGE_LOCK_NAME}"
         )
     assert all(
         "==" in line
         for line in requirements_lock.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
-    assert "requirements.lock" in dockerfile
+    assert f"copy src/easyicu/research_agent/runner_image/{RUNNER_PACKAGE_LOCK_NAME} /opt/easyicu-runner/requirements.lock" in dockerfile
     assert "pip install --no-cache-dir --no-deps /opt/easyicu" in dockerfile
     assert "--no-build-isolation" in dockerfile
 

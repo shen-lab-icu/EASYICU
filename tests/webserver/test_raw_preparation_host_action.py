@@ -9,7 +9,7 @@ from easyicu.webserver import agent_pipeline_runs, host_action_jobs, raw_prepara
 from easyicu.webserver.host_action_contracts import HostDecisionOffers
 from easyicu.webserver.raw_preparation_decisions import verify_host_review
 from easyicu.webserver.routes import agent as route
-from tests.webserver.test_raw_preparation_decisions import _host_decision
+from tests.support.raw_preparation_decision import _host_decision
 
 
 def test_synthetic_host_action_records_decision_and_binds_scope(tmp_path, monkeypatch):

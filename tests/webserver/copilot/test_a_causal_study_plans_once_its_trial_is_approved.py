@@ -35,7 +35,7 @@ _CAUSAL = {
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(workflow_owner.sources, "load_registry", lambda: {})
+    monkeypatch.setattr(workflow_owner.sources, "load_registry", lambda **_kwargs: {})
     monkeypatch.setattr(workflow_owner, "list_bound_run_history", lambda **_kwargs: [])
     latest: dict[str, Any] = {"value": None}
     monkeypatch.setattr(

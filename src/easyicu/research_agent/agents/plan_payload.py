@@ -594,10 +594,10 @@ def _planner_structured_output_request_cached(
 ) -> StructuredOutputRequest:
     """Cache one immutable authority per normalized run-bound source roster."""
 
+    schema = compact_schema_definition_names(_planner_transport_schema(allowed_literature_citation_keys))
     return StructuredOutputRequest.from_schema(
-        name="easyicu_analysis_plan_v1",
-        schema=compact_schema_definition_names(_planner_transport_schema(allowed_literature_citation_keys)),
-        strict=True,
+        name="easyicu_analysis_plan_v1", schema=schema, strict=True,
+        wire_schema_version="easyicu.planner-wire/2",
     )
 
 
@@ -1390,6 +1390,17 @@ def interval_bearing_distribution_guide() -> str:
         "for complete-plan review. It uses actual patient stay weights, may "
         "yield 0–100% bounds, and computes no standard error; never treat the "
         "patient count as binomial trials or change a reviewed interval at runtime."
+    )
+
+
+def compact_static_planner_example(example: str) -> str:
+    """Save prompt space while retaining the fixed JSON example's nesting.
+
+    The caller supplies only its static example, never user or scientific text.
+    """
+    return "".join(
+        " " * ((len(line) - len(line.lstrip(" "))) // 2) + line.lstrip(" ")
+        for line in example.splitlines(keepends=True)
     )
 
 

@@ -300,6 +300,7 @@ def test_host_availability_probes_application_interpreter(monkeypatch, returncod
 
 def test_kernel_identity_on_installed_python_sources_without_git(tmp_path):
     from easyicu.research_agent.execution.kernel_identity import (
+        RUNNER_PACKAGE_LOCK_NAME,
         build_execution_kernel_identity,
     )
 
@@ -308,7 +309,7 @@ def test_kernel_identity_on_installed_python_sources_without_git(tmp_path):
     owner.parent.mkdir(parents=True)
     (root / "__init__.py").write_text("")
     owner.write_text("VALUE = 17\n")
-    lock = root / "research_agent" / "runner_image" / "requirements.lock"
+    lock = root / "research_agent" / "runner_image" / RUNNER_PACKAGE_LOCK_NAME
     lock.parent.mkdir()
     lock.write_text("numpy==2.0\n")
     first = build_execution_kernel_identity(root)

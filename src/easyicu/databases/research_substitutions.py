@@ -180,7 +180,7 @@ def source_binding(context):
 
 def bind_source_substitutions(context, *, restoring=False):
     """Prepare an inspectable candidate on existing, never invented columns."""
-    from easyicu.research_agent.schema import AnalysisPlan
+    from easyicu.research_agent.schema import AnalysisPlan, UserPreferences
 
     source_binding(context)
     profile = registered_source_profile(context.cohort.database)
@@ -240,8 +240,9 @@ def bind_source_substitutions(context, *, restoring=False):
         notes = prior_notes + "\n" + notes
     provenance = {**context.cohort.provenance, BINDING_FIELD: binding}
     cohort = context.cohort.model_copy(update={"notes": notes, "provenance": provenance})
+    preferences = context.user_preferences or UserPreferences()
     updated = context.model_copy(update={"target_outcome": target, "variables": variables, "cohort": cohort,
-        "user_preferences": context.user_preferences.model_copy(update={"data_constraints": json.dumps(constraints)})})
+        "user_preferences": preferences.model_copy(update={"data_constraints": json.dumps(constraints)})})
     if restoring and updated != context:
         raise ValueError("capability_substitution_binding_drift")
     return updated

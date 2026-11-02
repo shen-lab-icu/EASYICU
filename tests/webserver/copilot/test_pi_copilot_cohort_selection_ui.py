@@ -51,6 +51,7 @@ def test_repeated_stay_method_stays_system_owned_not_a_user_choice() -> None:
 global.window = { EU_LANG: 'zh' };
 require(process.argv[1]);
 require(process.argv[2]);
+require(require('node:path').join(require('node:path').dirname(process.argv[3]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[3]);
 const options = [
   { id: 'first_admission_only', expected_revision: 29,

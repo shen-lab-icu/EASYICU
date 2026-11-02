@@ -13,7 +13,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 
 from easyicu.research_agent.authority.rmst_runtime import RmstRuntimeAuthority
 
-from easyicu.research_agent.contracts.rmst import RMSTSpec
+from easyicu.research_agent.contracts.survival import RMSTSpec
 
 from tests.support.continuous_survival import continuous_authority_body
 

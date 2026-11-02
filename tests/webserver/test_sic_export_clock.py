@@ -14,7 +14,7 @@ from easyicu.webserver.sic_export_clock import sic_export_clock
 def _inputs():
     config = load_src_cfg("sic")
     snapshot = capture_data_provenance(
-        load_dictionary(include_sofa2=True), concepts=sorted(SIC_CASE_LANDMARK_COLUMNS),
+        load_dictionary(include_sofa2=True, source_name="sic"), concepts=sorted(SIC_CASE_LANDMARK_COLUMNS),
         source_database="sic", source_config=config,
         source_config_sha256=metadata_digest(config.model_dump(mode="json")),
     )

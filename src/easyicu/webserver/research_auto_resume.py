@@ -50,7 +50,7 @@ def prepare_descriptor(
     root = project_root or kwargs.get("project_root")
     mode = budget_mode or kwargs.get("budget_mode")
     source = credential_source or kwargs.get("credential_source")
-    if not identity or not root or mode not in {"planner_canary", "full_reviewed"}:
+    if not identity or not root or mode not in {"planner_canary", "full_reviewed", "deferred_reviewed"}:
         _refuse("launch_binding_invalid")
     if str(execution_resume_source_run_id).startswith("append-"):
         if mode != "full_reviewed":
@@ -70,6 +70,7 @@ def prepare_descriptor(
         "external_llm_opt_in": True,
         "execution_resume_source_run_id": str(execution_resume_source_run_id or kwargs.get("execution_resume_source_run_id") or ""),
         "literature_search_authorized": bool(literature_search_authorized or kwargs.get("literature_search_authorized", False)),
+        **({"no_automatic_retries": True} if kwargs.get("no_automatic_retries") is True else {}),
     }
 
 
@@ -91,7 +92,7 @@ def _owned_wrapper(descriptor: Mapping[str, Any], binding: Mapping[str, Any]) ->
     return wrapper.resolve()
 
 
-def _authority(descriptor: Mapping[str, Any], job: Any) -> tuple[dict, Any, Path, dict]:
+def _authority(descriptor: Mapping[str, Any], job: Any, *, allow_single_attempt_source: bool = False, _allow_failed_successor: bool = False) -> tuple[dict, Any, Path, dict]:
     from easyicu.research_agent.orchestration.config import PipelineConfig
     from easyicu.research_agent.orchestration.profiles import is_paper_facing_profile
     from easyicu.webserver import agent_review_recovery, settings
@@ -117,6 +118,8 @@ def _authority(descriptor: Mapping[str, Any], job: Any) -> tuple[dict, Any, Path
             or seed.budget_mode != descriptor.get("budget_mode")):
         _refuse("checkpoint_binding_changed")
     config = PipelineConfig.from_recovery_payload(seed.pipeline_config, expected_digest=seed.pipeline_config_sha256)
+    if getattr(config, "no_automatic_retries", False) and not allow_single_attempt_source:
+        _refuse("automatic_retry_disabled")
     if is_paper_facing_profile(config.submission_profile_name):
         _refuse("formal_profile_requires_protocol")
     if Path(config.workdir).resolve() != wrapper / "pipeline":
@@ -137,7 +140,7 @@ def _authority(descriptor: Mapping[str, Any], job: Any) -> tuple[dict, Any, Path
             or ledger.get("limits") != provider_adapter.web_research_agent_hard_stop_limits(seed.budget_mode).canonical_payload()):
         _refuse("budget_binding_changed")
     rows = ledger.get("tasks") or []
-    if len(rows) != 1 or rows[0].get("status") not in {"running", "paused"}:
+    if len(rows) != 1 or rows[0].get("status") not in ({"failed"} if _allow_failed_successor else {"running", "paused"}):
         _refuse("budget_task_terminal")
     return dict(current), seed, wrapper, rows[0]
 
@@ -199,7 +202,7 @@ def _approved_checkpoint(seed: Any, wrapper: Path, run_id: str) -> None:
             _refuse("child_process_state_unverified")
 
 
-def _original_task(seed: Any) -> Any:
+def _original_task(seed: Any, *, _failed_successor: bool = False) -> Any:
     from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger
     from easyicu.webserver import provider_adapter
 
@@ -210,7 +213,11 @@ def _original_task(seed: Any) -> Any:
         declaration_sha256=seed.hard_stop_declaration_sha256,
         resume_existing=True, require_existing=True,
     )
-    task = ledger.start_task(seed.hard_stop_task_id)
+    if _failed_successor:
+        from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHardStop
+        task = TaskProviderHardStop(ledger, seed.hard_stop_task_id)
+    else:
+        task = ledger.start_task(seed.hard_stop_task_id)
     snapshot = ledger.snapshot()
     row = snapshot["tasks"][0]
     totals = snapshot["totals"]
@@ -222,7 +229,7 @@ def _original_task(seed: Any) -> Any:
         _refuse("budget_exhausted")
     if row["status"] == "running":
         task.assert_active()
-    elif row["status"] != "paused" or row["elapsed_seconds"] >= limits.max_wall_clock_seconds_per_task:
+    elif row["status"] != ("failed" if _failed_successor else "paused") or row["elapsed_seconds"] >= limits.max_wall_clock_seconds_per_task:
         _refuse("budget_exhausted")
     return task
 
@@ -426,7 +433,7 @@ def _recover_unstarted_metadata_planner(
             _refuse("early_source_invalid")
         source_path = str((current.get("data_source") or {}).get("path") or "")
         try:
-            current_source = metadata_binding(str(source.get("database") or ""), source_path)
+            current_source = metadata_binding(str(source.get("database") or ""), source_path, current)
         except (OSError, ValueError):
             _refuse("early_source_unavailable")
         if current_source != source:
@@ -476,6 +483,8 @@ def _recover_unstarted_metadata_planner(
 
 def recover_runner(descriptor: Mapping[str, Any], job: Any) -> Callable[[Any], Any]:
     """Return an exact continuation; no branch may silently launch fresh work."""
+    if descriptor.get("no_automatic_retries") is True:
+        _refuse("automatic_retry_disabled")
     from .research_multi_actions import SCHEMA as MULTI_SCHEMA, recover_multi_runner
 
     if descriptor.get("schema_version") == MULTI_SCHEMA:

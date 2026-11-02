@@ -15,8 +15,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import FLAG_COLUMN, REASON_COLUMN
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import FirstObservedIcuCoordinate
+from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
+from easyicu.research_agent.acquisition.first_icu_stay import FirstObservedIcuCoordinate
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
 from easyicu.research_agent.canonical_json import canonical_sha256
@@ -68,7 +68,7 @@ def _case(tmp_path, monkeypatch, *, apply_coordinate=True, cohort_stem="cohort")
         preparation_run_id="source_run", preparation_binding_sha256=canonical_sha256(binding.model_dump(mode="json")))
     run = tmp_path / "target_run"
     run.mkdir()
-    from easyicu.research_agent.acquisition import first_observed_icu_coordinate
+    from easyicu.research_agent.acquisition import first_icu_stay as first_observed_icu_coordinate
     original_restrict = first_observed_icu_coordinate.restrict_to_first_observed_icu
     if not apply_coordinate:
         monkeypatch.setattr(first_observed_icu_coordinate, "restrict_to_first_observed_icu", lambda frame, **_: frame)
@@ -114,6 +114,50 @@ def _case(tmp_path, monkeypatch, *, apply_coordinate=True, cohort_stem="cohort")
 def test_verified_coordinate_and_typed_cohort_are_bound(tmp_path, monkeypatch):
     pending, _, _ = _case(tmp_path, monkeypatch)
     assert guard.verify_first_observed_execution_inputs(pending=pending, study_context_id="study")
+
+
+def test_exact_membership_refuses_an_eligible_stay_missing_from_cohort(tmp_path, monkeypatch):
+    pending, coordinate, _ = _case(tmp_path, monkeypatch)
+    cohort_path = Path(pending.run_dir) / "cohort.parquet"
+    guard.verify_exact_first_observed_membership(cohort_path=cohort_path, coordinate=coordinate)
+    path = tmp_path / "both_eligible.parquet"
+    pd.DataFrame({"stay_id": [1, 2], FLAG_COLUMN: [True, True],
+                  REASON_COLUMN: ["kept", "kept"]}).to_parquet(path, index=False)
+    changed = replace(coordinate, path=path, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    with pytest.raises(ValueError, match="membership_incomplete"):
+        guard.verify_exact_first_observed_membership(cohort_path=cohort_path, coordinate=changed)
+
+
+def test_actual_verified_population_supplies_independent_units_only_in_host_scope(tmp_path, monkeypatch):
+    from easyicu.research_agent.planning.dependence_authority import repeat_units_possible
+
+    pending, coordinate, _ = _case(tmp_path, monkeypatch)
+    source = SourceIdentity(database="eicu_demo", registration_id="synthetic", archive_sha256="a" * 64)
+    context = ResearchContext(research_question="first observed ICU", cohort_parquet=str(Path(pending.run_dir) / "cohort.parquet"),
+        cohort=CohortDescriptor(cohort_name="synthetic", database="eicu_demo", n_stays=2, n_patients=1),
+        variables=[], user_preferences=UserPreferences(data_constraints=json.dumps({"source_identity": source.to_dict()})))
+    assert repeat_units_possible(context)
+    with guard.host_first_observed_review_scope(study_context_id="study"):
+        assert not repeat_units_possible(context)
+        coordinate.path.write_bytes(b"changed")
+        assert repeat_units_possible(context)
+    assert repeat_units_possible(context)
+
+
+def test_unrestricted_actual_population_cannot_claim_independent_units(tmp_path, monkeypatch):
+    from easyicu.research_agent.planning.dependence_authority import repeat_units_possible
+    from easyicu.research_agent.intake.materialized_metadata import FIRST_ICU_STAY_RESTRICTION_SCHEMA
+
+    pending, _, _ = _case(tmp_path, monkeypatch, apply_coordinate=False)
+    source = SourceIdentity(database="eicu_demo", registration_id="synthetic", archive_sha256="a" * 64)
+    context = ResearchContext(research_question="first observed ICU", cohort_parquet=str(Path(pending.run_dir) / "cohort.parquet"),
+        cohort=CohortDescriptor(cohort_name="synthetic", database="eicu_demo", n_stays=2, n_patients=2,
+            provenance={"first_icu_stay_restriction": {"schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+                                                        "coordinate_sha256": "f" * 64}}),
+        variables=[], user_preferences=UserPreferences(data_constraints=json.dumps({"source_identity": source.to_dict()})))
+    with guard.host_first_observed_review_scope(study_context_id="study"):
+        assert repeat_units_possible(context)
+        assert repeat_units_possible(context.model_copy(update={"cohort_parquet": None}))
 
 
 def test_rows_not_filtered_by_coordinate_cannot_run(tmp_path, monkeypatch):
@@ -272,3 +316,113 @@ def test_legacy_capsule_cannot_pair_a_filtered_cohort_with_unbound_trajectory(tm
         context_evidence_path=Path(pending.run_dir) / "context-evidence.json"))
     with pytest.raises(ValueError, match="trajectory_authority_missing"):
         guard.verify_first_observed_execution_inputs(pending=pending, study_context_id="study")
+
+
+@pytest.fixture
+def host_coordinate_case(tmp_path, monkeypatch):
+    from easyicu.webserver import durable_research, raw_preparation_durable
+
+    root = tmp_path / "state"
+    decisions = root / "private-preparation-decisions"
+    decisions.mkdir(parents=True)
+    monkeypatch.setattr(guard.state_paths, "state_root", lambda: root)
+    identity = SourceIdentity(database="eicu_demo", registration_id="synthetic", archive_sha256="a" * 64)
+    criterion = {"id": "c1", "kind": "first_observed_icu_single_hospital_adult", "role": "include", "quote": "first ICU"}
+    scope = {"criterion": criterion, "source_identity_sha256": canonical_sha256(identity.to_dict()),
+             "export_manifest_sha256": "b" * 64}
+    payload = {"first_observed_icu_preparation_scope": scope}
+    request = HumanReviewRequest.create(kind="scientific_stop", summary="prepare", payload=payload,
+        authority_sha256=canonical_sha256(payload))
+    pending = RawPreparationCheckpoint.pending(plan_sha256="c" * 64, request=request)
+    approved = pending.decide(HumanReviewDecision(review_id=request.review_id, authority_sha256=request.authority_sha256,
+        decision="approved", reviewer="synthetic", decided_at=datetime.now(timezone.utc).isoformat()))
+    run = tmp_path / "run"; run.mkdir()
+    (run / "raw_preparation_checkpoint.json").write_text(approved.model_dump_json())
+    nonce = canonical_sha256({"run_id": "run", "study_context_id": "study", "checkpoint_sha256": pending.checkpoint_sha256})
+    (decisions / f"{nonce}.json").write_text(json.dumps({"job_id": "job"}))
+    monkeypatch.setattr(guard.agent_pipeline_runs, "raw_preparation_review_owner", lambda *args: (SimpleNamespace(run_dir=str(run)), {}))
+    job = SimpleNamespace(id="job", snapshot=lambda: {"status": "done", "cancel_requested": False,
+        "result": {"preparation_status": "first_observed_coordinate_complete", "analysis_authorized": False}})
+    command = {"id": "job", "status": "terminal", "reason": "done", "payload": {}}
+    service = SimpleNamespace(manager=SimpleNamespace(_journal=SimpleNamespace(path=tmp_path / "journal"),
+        get=lambda _: job), store=SimpleNamespace(path=tmp_path / "store", get=lambda _: command))
+    monkeypatch.setattr(durable_research, "current_service", lambda: service)
+    def inspect(*, binding, **kwargs):
+        if (binding.project_id, binding.session_id, binding.study_context_id, binding.run_id, binding.nonce) != (
+            "project", "session", "study", "run", nonce):
+            raise ValueError("binding mismatch")
+        return {"preparation_status": "complete", "analysis_authorized": False}
+    monkeypatch.setattr(raw_preparation_durable, "inspect_admitted_first_observed", inspect)
+    coordinate = SimpleNamespace(sha256="d" * 64)
+    monkeypatch.setattr(guard, "resolve_prepared_first_observed_coordinate", lambda **kwargs: coordinate)
+    args = dict(preparation_run_id="run", study_context_id="study", project_id="project", session_id="session",
+                source_identity=identity, criterion=criterion, export_manifest_sha256="b" * 64)
+    return SimpleNamespace(args=args, run=run, pending=pending, coordinate=coordinate, service=service,
+                           job=job, command=command)
+
+
+def test_host_coordinate_resolver_requires_completed_reviewed_preparation(host_coordinate_case):
+    case = host_coordinate_case
+    assert guard.resolve_host_prepared_first_observed_coordinate(**case.args) is case.coordinate
+    (case.run / "raw_preparation_checkpoint.json").write_text(case.pending.model_dump_json())
+    with pytest.raises(ValueError):
+        guard.resolve_host_prepared_first_observed_coordinate(**case.args)
+
+
+def test_preparation_recipe_checks_private_coordinate_without_claiming_a_cohort(
+    host_coordinate_case, monkeypatch, tmp_path,
+):
+    case = host_coordinate_case
+    path = tmp_path / "coordinate.parquet"
+    pd.DataFrame({"stay_id": [1, 2], FLAG_COLUMN: [True, False],
+                  REASON_COLUMN: ["kept", "non_selected_unit"]}).to_parquet(path, index=False)
+    coordinate = FirstObservedIcuCoordinate(
+        path=path, sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        archive_sha256="a" * 64, patient_table_sha256="b" * 64,
+        export_manifest_sha256="b" * 64, plan_sha256="c" * 64,
+        preparation_checkpoint_sha256="d" * 64,
+    )
+    monkeypatch.setattr(guard, "resolve_host_prepared_first_observed_coordinate", lambda **_: coordinate)
+    proof = guard.verify_first_observed_preparation_recipe(**case.args)
+    assert proof.coordinate_sha256 == coordinate.sha256
+    assert not hasattr(proof, "cohort_authority_sha256")
+    path.write_bytes(b"changed")
+    with pytest.raises(ValueError):
+        guard.verify_first_observed_preparation_recipe(**case.args)
+
+
+@pytest.mark.parametrize("change", [
+    {"project_id": "other"}, {"session_id": "other"}, {"study_context_id": "other"},
+    {"preparation_run_id": "other"}, {"export_manifest_sha256": "e" * 64},
+    {"source_identity": SourceIdentity(database="eicu_demo", registration_id="other")},
+    {"criterion": {"kind": "first_observed_icu_single_hospital_adult", "role": "include", "quote": "other"}},
+])
+def test_host_coordinate_resolver_refuses_mismatched_bindings(host_coordinate_case, change):
+    with pytest.raises((ValueError, OSError)):
+        guard.resolve_host_prepared_first_observed_coordinate(**{**host_coordinate_case.args, **change})
+
+
+@pytest.mark.parametrize("status", ["preparing", "stopped"])
+def test_host_coordinate_resolver_refuses_unfinished_jobs(host_coordinate_case, monkeypatch, status):
+    from easyicu.webserver import raw_preparation_durable
+    monkeypatch.setattr(raw_preparation_durable, "inspect_admitted_first_observed", lambda **_: {
+        "preparation_status": status, "analysis_authorized": False})
+    with pytest.raises(ValueError):
+        guard.resolve_host_prepared_first_observed_coordinate(**host_coordinate_case.args)
+
+
+@pytest.mark.parametrize("change", ["active", "failed", "cancelled", "interrupted", "persistence", "bad_result"])
+def test_host_coordinate_resolver_refuses_unsettled_durable_state(host_coordinate_case, change):
+    case = host_coordinate_case
+    if change == "active":
+        case.command["status"] = "active"
+    elif change == "failed":
+        case.command["reason"] = "failed"
+    elif change == "cancelled":
+        case.command["payload"]["_cancel_requested"] = True
+    else:
+        original = case.job.snapshot
+        extra = {"interrupted": True} if change == "interrupted" else {"persistence_error": "unavailable"} if change == "persistence" else {"result": {"analysis_authorized": True}}
+        case.job.snapshot = lambda: {**original(), **extra}
+    with pytest.raises(ValueError):
+        guard.resolve_host_prepared_first_observed_coordinate(**case.args)

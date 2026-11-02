@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+import pytest
+from starlette.requests import Request
 
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot import cohort_eligibility
@@ -348,3 +350,99 @@ def _write_development_resume_planner_catalog(
         ),
         encoding="utf-8",
     )
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/jobs/agent-run",
+            "raw_path": b"/api/jobs/agent-run",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 123),
+        }
+    )
+
+
+
+def _write_pipeline_export(
+    root: Path, *, database: str = "miiv", current_contract: bool = True
+) -> Path:
+    """Write a prepared export package manifest.
+
+    ``current_contract=False`` reproduces an export written before intake began
+    requiring per-file ``concept_ids``: the same directory is laid out correctly
+    and passes the layout-only readiness probe, but cannot establish authority.
+    """
+
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
+        root / "demographics.parquet", index=False
+    )
+    # Built in the original key order so the default path serializes the same
+    # manifest bytes as before; the file entry joins the binding hash.
+    file_entry: dict[str, Any] = {
+        "file": "demographics.parquet",
+        "module": "demographics",
+        "concepts": 1,
+    }
+    if current_contract:
+        from easyicu.concept.metadata_projection import ConceptColumnRole
+        from easyicu.concept.metadata_sidecar import (
+            ColumnMetadataFileBinding, ColumnMetadataSidecar, EXPORT_PHYSICAL_SCOPE,
+            write_content_addressed_sidecar,
+        )
+        from tests.support.typed_export import metadata_binding
+        file_entry["concept_ids"] = ["age"]
+        file_entry["column_metadata_columns"] = ["age"]
+        binding = ColumnMetadataFileBinding(relative_path="demographics.parquet", module="demographics",
+            identity_column="stay_id", time_coordinates=(), columns={
+                "age": metadata_binding("age", "age", ConceptColumnRole.VALUE, database=database),
+            })
+        reference = write_content_addressed_sidecar(root, ColumnMetadataSidecar(
+            source_database=database, source_database_class_prefixes=(), scope=EXPORT_PHYSICAL_SCOPE,
+            files=(binding,),
+        ))
+    file_entry["rows"] = 1
+    (root / "_manifest.json").write_text(
+        json.dumps(
+            {
+                **({"schema_version": "easyicu_native_export_v2", "column_metadata": reference.to_dict()}
+                   if current_contract else {}),
+                "database": database,
+                "format": "parquet",
+                "concept_selection": {
+                    "mode": "explicit",
+                    "modules": {"demographics": ["age"]},
+                },
+                "feature_definitions": {"included": False},
+                "files": [file_entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+
+def _assume_execution_runtime_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An executing launch now probes the container runtime before it starts.
+
+    That gate has its own contract tests in
+    ``test_web_execution_runtime_preflight.py``; the launches here are about
+    scope and resume authority and must not depend on the host's daemon.
+    """
+
+    from easyicu.research_agent.execution import runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module,
+        "probe_runner_availability",
+        lambda kind, **_kwargs: runner_module.RunnerAvailability(
+            kind=kind, available=True, image="easyicu-research-agent:test"
+        ),
+)

@@ -2,9 +2,9 @@
 import pytest
 from easyicu.extensions.skill_attachments import attachment_payload
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
-from tests.webserver.copilot.test_turn_skill_attachments import _install, _session
+from tests.support.skill_attachments import _install, _session
 
-pytest_plugins = ["tests.webserver.copilot.test_turn_skill_attachments"]
+pytest_plugins = ["tests.support.skill_attachments"]
 
 
 def test_stale_default_can_be_cleared_explicitly_without_changing_old_session(service, registry):

@@ -10,8 +10,8 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import FLAG_COLUMN, REASON_COLUMN
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import FirstObservedIcuCoordinate
+from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
+from easyicu.research_agent.acquisition.first_icu_stay import FirstObservedIcuCoordinate
 from easyicu.research_agent.cohort.materializer import MaterializedMetadataError, materialize_to_parquet
 from easyicu.research_agent.cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
 from easyicu.research_agent.intake.export_package import open_export_package

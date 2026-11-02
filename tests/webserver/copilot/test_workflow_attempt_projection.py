@@ -175,7 +175,7 @@ def test_project_adapter_passes_latest_attempt_separately_from_plan(monkeypatch)
     from easyicu.webserver.pi_copilot import workflow as owner
 
     study, candidate, failed, review = case()
-    monkeypatch.setattr(owner.sources, "load_registry", lambda: {})
+    monkeypatch.setattr(owner.sources, "load_registry", lambda **_kwargs: {})
     monkeypatch.setattr(owner, "list_bound_run_history", lambda **k: [failed, candidate])
     monkeypatch.setattr(owner.agent_pipeline_runs, "pending_review", lambda _: review)
     monkeypatch.setattr(owner.agent_runs, "read_run_review", lambda _: {})

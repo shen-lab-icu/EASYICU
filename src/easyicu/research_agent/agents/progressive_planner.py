@@ -145,7 +145,7 @@ from ..planning.prompt_projection import (
 )
 from ..providers.prompts import load_prompt_pack
 from ..providers.protocol import LLMClient, LLMMessage, StructuredOutputRequest
-from ..providers.structured_retry import call_llm_with_structured_retry
+from ..providers.structured_retry import automatic_retry_limit, call_llm_with_structured_retry
 from ..reporting.article_contract import (
     build_article_analysis_contract,
     hinted_typed_products,
@@ -3272,7 +3272,7 @@ class ProgressivePlannerAgent:
             article_context=article_context, analysis_type=outline.analysis_type,
             enforce_article_contract=enforce_article_contract,
         )
-        for final_revision in range(_MAX_COMPILE_REVISIONS + 1):
+        for final_revision in range(automatic_retry_limit(_MAX_COMPILE_REVISIONS) + 1):
             skeleton = assemble_progressive_skeleton(
                 outline=outline, foundation=foundation, steps=prefix_state.steps,
             )
@@ -3290,9 +3290,9 @@ class ProgressivePlannerAgent:
                 self._attempt.record_final_rejection(exc)
                 start = final_acceptance_repair_start(exc, outline)
                 if (
-                    start is None or final_revision >= _MAX_COMPILE_REVISIONS
+                    start is None or final_revision >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
                     or len(self._attempt.prompt_metrics.get("final_acceptance_repairs", []))
-                    >= _MAX_COMPILE_REVISIONS
+                    >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
                 ):
                     raise
                 previous_suffix = {
@@ -3485,6 +3485,10 @@ class ProgressivePlannerAgent:
                                 path="literature_bindings",
                             )
                 except ProgressivePlanCompileError:
+                    # A single-attempt job cannot replace a rejected host step
+                    # with another automatically generated candidate.
+                    if automatic_retry_limit(1) == 0:
+                        raise
                     # The compiler is the authority.  A host projection that is
                     # not uniquely valid falls back to this step's Planner call.
                     pass
@@ -3518,7 +3522,7 @@ class ProgressivePlannerAgent:
                         prompt_metrics=self._attempt.prompt_metrics,
                     )
                     continue
-            for revision in range(_MAX_COMPILE_REVISIONS + 1):
+            for revision in range(automatic_retry_limit(_MAX_COMPILE_REVISIONS) + 1):
                 prior_materialization = (
                     self._attempt.compile_failure_attempts[-1].materialization
                     if self._attempt.compile_failure_attempts
@@ -3584,7 +3588,7 @@ class ProgressivePlannerAgent:
                         outline_step_sha256=outline_step_sha256,
                     ),
                     role="progressive_planner_step_materialization",
-                    max_retries=_MAX_STEP_PARSE_RETRIES,
+                    max_retries=automatic_retry_limit(_MAX_STEP_PARSE_RETRIES),
                     max_tokens=_MAX_STEP_OUTPUT_TOKENS,
                     temperature=0.2,
                     include_failed_response_on_retry=False,
@@ -3733,7 +3737,7 @@ class ProgressivePlannerAgent:
                         ) from exc
                     if exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS or exc.details.get("repair_scope") == "outline_required":
                         raise
-                    if revision >= _MAX_COMPILE_REVISIONS:
+                    if revision >= automatic_retry_limit(_MAX_COMPILE_REVISIONS):
                         raise
                     if exc.step_index is not None and int(exc.step_index) < step_index:
                         raise ProgressivePlanCompileError(
@@ -3887,7 +3891,7 @@ class ProgressivePlannerAgent:
                 literature_sha256=outline_retry_journal["literature_sha256"],
                 source_path=outline_retry_journal.get("source_path"),
                 source_sha256=outline_retry_journal.get("source_sha256"),
-                stage="family_spec", parse_attempt_limit=_MAX_STEP_PARSE_RETRIES + 1,
+                stage="family_spec", parse_attempt_limit=automatic_retry_limit(_MAX_STEP_PARSE_RETRIES) + 1,
             )
         return run_family_spec_attempt(
             llm=family_llm,
@@ -3917,7 +3921,7 @@ class ProgressivePlannerAgent:
             ),
             checkpoint_emitter=checkpoint_emitter,
             progress_callback=progress_callback,
-            max_parse_retries=_MAX_STEP_PARSE_RETRIES,
+            max_parse_retries=automatic_retry_limit(_MAX_STEP_PARSE_RETRIES),
             prompt_byte_limit=planner_prompt_byte_limit(self.llm),
             bind_outline=bind_outline,
             validate_outline=validate_outline,
@@ -3971,6 +3975,7 @@ class ProgressivePlannerAgent:
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
         planning_contract_context: str = "",
+        bound_plan_revision_contract: str = "",
         progress_callback: Optional[Callable[[Any], None]] = None,
         checkpoint_callback: Optional[
             Callable[[ProgressivePlannerCheckpoint], None]
@@ -4137,6 +4142,8 @@ class ProgressivePlannerAgent:
                 host_cohort.model_dump(mode="json") if host_cohort is not None else None
             ),
         }
+        if bound_plan_revision_contract:
+            scientific_authority["bound_plan_revision_contract_sha256"] = canonical_sha256(bound_plan_revision_contract)
         fallback_reason: str | None = None
         if planner_strategy == FAMILY_SPEC_STRATEGY:
             fallback_reason = family_spec_fallback_reason(
@@ -4487,7 +4494,7 @@ class ProgressivePlannerAgent:
                 parser=parse_outline,
                 retryable_parse_error=(self.scientific_authorities.planner_retryable_error if self.scientific_authorities else None),
                 role="progressive_planner_outline",
-                max_retries=_MAX_INITIAL_PARSE_RETRIES,
+                max_retries=automatic_retry_limit(_MAX_INITIAL_PARSE_RETRIES),
                 max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,
                 temperature=0.2,
                 include_failed_response_on_retry=False,

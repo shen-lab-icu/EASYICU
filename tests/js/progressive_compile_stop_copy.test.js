@@ -10,9 +10,19 @@ const compiler = fs.readFileSync(path.join(root, 'src/easyicu/research_agent/pla
 const codes = new Set([...compiler.matchAll(/["'](progressive_[a-z_]+)["']/g)]
   .map(match => match[1]).filter(code => !compiler.includes(`def ${code}(`)));
 const features = fs.readFileSync(path.join(root, 'src/easyicu/research_agent/contracts/phenotyping_features.py'), 'utf8');
-for (const match of (compiler + features).matchAll(/(?:ValueError\(|reason = )f?["']((?:phenotyping_feature_|phenotype_comparison_)[a-z_]+)(?=:|["'])/g)) {
+// Only require_phenotyping_features errors are explicitly prefixed by the
+// compiler. The separate AnalysisStep validator is wrapped in the generic
+// progressive_analysis_step_invalid stop, not its internal ValueError text.
+const validatorStart = features.indexOf('\ndef validate_phenotyping_step(');
+assert.ok(validatorStart > 0, 'phenotyping step validator boundary is present');
+const directFeatureChecks = features.slice(0, validatorStart);
+for (const match of (compiler + directFeatureChecks).matchAll(/(?:ValueError\(|reason = )f?["']((?:phenotyping_feature_|phenotype_comparison_)[a-z_]+)(?=:|["'])/g)) {
   codes.add(`progressive_${match[1]}`);
 }
+assert.ok(compiler.includes('"progressive_analysis_step_invalid"'), 'compiled step validation has a generic stop');
+assert.ok(features.slice(validatorStart).includes('"phenotype_comparison_input_mismatch"'));
+assert.ok(codes.has('progressive_analysis_step_invalid'));
+assert.ok(!codes.has('progressive_phenotype_comparison_input_mismatch'));
 const contrasts = fs.readFileSync(path.join(root, 'src/easyicu/research_agent/planning/exposure_group_compile.py'), 'utf8');
 for (const match of contrasts.matchAll(/["'](progressive_[a-z_]+)["']/g)) codes.add(match[1]);
 const contract = fs.readFileSync(path.join(root, 'src/easyicu/research_agent/planning/progressive_contract.py'), 'utf8');

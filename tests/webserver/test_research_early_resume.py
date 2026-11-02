@@ -40,7 +40,7 @@ def early(tmp_path, monkeypatch):
     )
     ledger.start_task(task_id)
     source_binding = {"database": "miiv", "export_path": str(source), "source_identity": {"database": "miiv", "registration_id": "r"}, "catalog_sha256": "a" * 64, "without_values": []}
-    monkeypatch.setattr(research_early_resume, "metadata_binding", lambda database, path: dict(source_binding))
+    monkeypatch.setattr(research_early_resume, "metadata_binding", lambda database, path, *args: dict(source_binding))
     public = {"provider": "openai", "model": "synthetic", "credential_fingerprint": "b" * 64}
     research_early_resume.create_seed(
         wrapper=wrapper, study_id=study["id"], scientific_sha256=digest,
@@ -103,12 +103,27 @@ def test_recovered_real_runner_reserves_original_ledger_in_new_wrapper(early, mo
     from pathlib import Path
     root = Path(source)
     pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(root / "demographics.parquet", index=False)
+    from easyicu.concept.metadata_projection import ConceptColumnRole
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE, ColumnMetadataFileBinding, ColumnMetadataSidecar,
+        write_content_addressed_sidecar,
+    )
+    from tests.support.typed_export import metadata_binding
+
+    sidecar = ColumnMetadataSidecar(
+        source_database="miiv", source_database_class_prefixes=(), scope=EXPORT_PHYSICAL_SCOPE,
+        files=(ColumnMetadataFileBinding(
+            relative_path="demographics.parquet", module="demographics", identity_column="stay_id",
+            time_coordinates=(), columns={"age": metadata_binding("age", "age", ConceptColumnRole.VALUE)},
+        ),),
+    )
+    reference = write_content_addressed_sidecar(root, sidecar)
     (root / "_manifest.json").write_text(json.dumps({
-        "database": "miiv", "format": "parquet",
+        "schema_version": "easyicu_native_export_v2", "database": "miiv", "format": "parquet",
         "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
-        "feature_definitions": {"included": False},
+        "feature_definitions": {"included": False}, "column_metadata": reference.to_dict(),
         "files": [{"file": "demographics.parquet", "module": "demographics", "concepts": 1,
-                   "concept_ids": ["age"], "rows": 1}],
+                   "concept_ids": ["age"], "column_metadata_columns": ["age"], "rows": 1}],
     }))
     monkeypatch.setattr(sources, "registered_source_identity", lambda _path: SourceIdentity(database="miiv", registration_id="r"))
     monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client",

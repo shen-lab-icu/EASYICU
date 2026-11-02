@@ -34,6 +34,7 @@ from tests.support.survival_sealed import (
     run_signed_suite as _run,
     sealed_draft,
     sealed_survival,
+    synthetic_reviewed_literature,
     synthetic_survival_rows as _frame,
 )
 
@@ -99,10 +100,16 @@ def test_an_unevenly_measured_covariate_is_answered_by_the_suites_own_audit(tmp_
     assert AUDIT in suite.expected_outputs
 
     review = build_plan_scientific_review(
-        context=context, plan=bound, require_reportable_capability=True, runtime_authority=authority,
+        context=context, plan=bound, literature=synthetic_reviewed_literature(context.research_question),
+        require_reportable_capability=True, runtime_authority=authority,
     )
     assert "ARTICLE_CONTENT_ROLES_INCOMPLETE" not in {finding.code for finding in review.findings}
     assert review.approval_allowed is True
+    missing_sources = build_plan_scientific_review(
+        context=context, plan=bound, require_reportable_capability=True, runtime_authority=authority,
+    )
+    assert not missing_sources.approval_allowed
+    assert "LITERATURE_SOURCE_INTEGRITY_INVALID" in {finding.code for finding in missing_sources.findings}
 
 
 def test_a_suite_signed_without_the_audit_cannot_answer_for_data_quality(tmp_path):

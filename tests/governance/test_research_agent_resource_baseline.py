@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import copy
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_PATH = REPO_ROOT / "tools/research_agent_resource_baseline.py"
 BASELINE_PATH = REPO_ROOT / "tools/arch_baselines/research_agent_resource_context.json"
+CURRENT_PATH = REPO_ROOT / "tools/arch_baselines/research_agent_resource_context.current.json"
 
 
 def _load_tool():
@@ -46,8 +48,16 @@ def test_resource_measurement_binds_live_planner_schema_and_prompt_sources() -> 
 
     assert {
         "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/agents/plan_payload.py",
         "src/easyicu/research_agent/providers/prompts/v1/system.txt",
         "src/easyicu/research_agent/schema.py",
+        "src/easyicu/research_agent/planning/scientific_action_catalog.py",
+        "src/easyicu/research_agent/planning/analysis_method_suite.py",
+        "src/easyicu/research_agent/planning/method_adapter_catalog.py",
+        "src/easyicu/research_agent/concept_catalog.py",
+        "src/easyicu/concept/loader.py",
+        "src/easyicu/resources.py",
+        "src/easyicu/data/sic-case-duration-overlay.v1.json",
     } <= set(tool.SOURCE_FILES)
 
 
@@ -81,9 +91,67 @@ def test_each_selected_resource_is_digest_bound_and_selection_is_llm_free() -> N
 
 def test_checked_in_resource_context_baseline_has_no_drift() -> None:
     tool = _load_tool()
-    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    assert tool.verify_current_snapshot(CURRENT_PATH) == 0
 
-    assert tool.diff(baseline, tool.measure()) == 0
+
+def test_resource_snapshot_binds_current_sources_and_historical_ceilings(tmp_path) -> None:
+    tool = _load_tool()
+    historical = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    measured = tool.measure()
+    assert tool.historical_ceiling_errors(historical, measured) == []
+    current = tmp_path / "current.json"
+    tool._write(current, measured, reason="current fixture")
+    assert tool.verify_current_snapshot(current, measured=measured) == 0
+
+    # A refreshed snapshot cannot approve a larger historical budget.
+    increased = copy.deepcopy(measured)
+    increased["tasks"][0]["planner_with_resources"]["total_bytes"] = (
+        historical["tasks"][0]["planner_with_resources"]["total_bytes"] + 1
+    )
+    tool._write(current, increased, reason="simulated regression")
+    assert tool.verify_current_snapshot(current, measured=increased) == 1
+
+    missing_source = copy.deepcopy(measured)
+    del missing_source["source_sha256"]["src/easyicu/research_agent/schema.py"]
+    tool._write(current, missing_source, reason="simulated missing source")
+    assert tool.verify_current_snapshot(current, measured=missing_source) == 1
+
+    # Nor can an unchanged snapshot hide an altered source or prompt segment.
+    for mutate in ("source", "prompt"):
+        changed = copy.deepcopy(measured)
+        if mutate == "source":
+            changed["source_sha256"]["src/easyicu/research_agent/schema.py"] = "0" * 64
+        else:
+            changed["tasks"][0]["planner_with_resources"]["segments"][
+                "planner_contract_and_typed_context"
+            ]["sha256"] = "0" * 64
+        tool._write(current, measured, reason="current fixture")
+        assert tool.verify_current_snapshot(current, measured=changed) == 1
+
+    damaged_history = tmp_path / "history.json"
+    damaged_history.write_text(BASELINE_PATH.read_text(encoding="utf-8") + "\n")
+    assert tool.verify_current_snapshot(
+        current, historical_path=damaged_history, measured=measured,
+    ) == 1
+
+
+def test_historical_ceiling_does_not_accept_removed_resource_or_changed_limit() -> None:
+    tool = _load_tool()
+    historical = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    unchanged = copy.deepcopy(historical)
+    unchanged["tool_version"] = tool.TOOL_VERSION
+    assert tool.historical_ceiling_errors(historical, unchanged) == []
+    for mutation in ("resource", "limit", "segment"):
+        changed = copy.deepcopy(unchanged)
+        if mutation == "resource":
+            changed["tasks"][0]["selected_know_how"].clear()
+        elif mutation == "limit":
+            changed["tasks"][0]["planner_with_resources"]["limit_bytes"] += 1
+        else:
+            changed["tasks"][0]["planner_without_resources"]["segments"][
+                "planner_contract_and_typed_context"
+            ]["required"] = False
+        assert tool.historical_ceiling_errors(historical, changed)
 
 
 def test_resource_baseline_emit_requires_a_reason(tmp_path, monkeypatch) -> None:

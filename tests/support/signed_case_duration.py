@@ -8,7 +8,7 @@ from easyicu.research_agent.authority.case_duration_landmark import propose_case
 from easyicu.research_agent.planning.cohort_contract import CohortDefinition
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, ConceptDescriptor, TimeWindow, UserPreferences
 from easyicu.webserver.time_origin_source_authority import CaseDurationSourceProvenance, RegisteredExportTimeOrigin
-from tests.research_agent.authority.test_case_duration_landmark_authority import _inputs
+from tests.support.case_duration_landmark import _inputs
 from tests.support.source_substitutions import context
 
 

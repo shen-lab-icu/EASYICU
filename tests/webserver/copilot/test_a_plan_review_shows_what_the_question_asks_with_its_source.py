@@ -623,16 +623,14 @@ def _card_html(notes: Mapping[str, Any], code: str) -> str:
     script = r"""
 global.window = { EU_LANG: 'zh' };
 require(process.argv[1]);
-let notesApi = null;
-let declared = null;
-window.EasyICU = { guidedPi: {
-  declare: (name, api) => { if (name === 'questionRequirements') notesApi = api; else declared = api; },
-  optional: name => (name === 'questionRequirements' ? notesApi : null),
-} };
+const path = require('node:path');
+const ownerDir = path.dirname(process.argv[3]);
+require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
 require(process.argv[2]);
+require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[3]);
 const summary = { run_id: 'run-requirements', question_requirements: JSON.parse(process.argv[4]) };
-const owner = declared.create({
+const owner = window.EasyICU.guidedPi.require('confirmation').create({
   tr: (en, zh) => zh || en,
   esc: window.EU_HTML.esc,
   iconHtml: () => '',

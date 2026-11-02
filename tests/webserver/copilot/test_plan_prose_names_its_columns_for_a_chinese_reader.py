@@ -112,6 +112,7 @@ window.EU_CATALOG = {{ dict: {json.dumps(catalog)} }};
 require({json.dumps(str(STATIC / "js/screens-agent-plan-prose.js"))});
 require({json.dumps(str(STATIC / "js/screens-guided-pi-modules.js"))});
 require({json.dumps(str(STATIC / "js/product-labels.js"))});
+require({json.dumps(str(STATIC / "js/screens-guided-pi-confirmation-data.js"))});
 require({json.dumps(str(STATIC / "js/screens-guided-pi-confirmation.js"))});
 const workflow = {{ next_action_code: 'operator_plan_approval_required', plan_conversation_preview: {json.dumps(preview, ensure_ascii=False)} }};
 const host = {{
