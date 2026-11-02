@@ -360,7 +360,7 @@ class BaseICULoader:
                 if env_override:
                     dict_path = env_override
 
-            dicts: List[ConceptDictionary] = [load_dictionary(include_sofa2=use_sofa2)]
+            dicts: List[ConceptDictionary] = [load_dictionary(include_sofa2=use_sofa2, source_name=self.database)]
 
             if dict_path is not None:
                 if isinstance(dict_path, (list, tuple)):
@@ -380,6 +380,10 @@ class BaseICULoader:
                 for dict_obj in dicts[1:]:
                     merged.update(dict_obj)
                 self.concept_dict = merged
+
+            from .resources import _is_sic_source, require_sic_case_overlay
+            if _is_sic_source(self.database):
+                require_sic_case_overlay(self.concept_dict)
 
             # Initialize resolver
             self.concept_resolver = ConceptResolver(

@@ -454,7 +454,9 @@ def test_preparation_compiles_three_frozen_states_in_authority_order(
 def test_public_preparation_interface_does_not_expose_primitive_operations() -> None:
     signature = inspect.signature(prepare_research_pipeline_run)
 
-    assert tuple(signature.parameters) == ("request",)
+    assert tuple(signature.parameters) == ("request", "_deferred_stage")
+    assert signature.parameters["_deferred_stage"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["_deferred_stage"].default is None
     assert len(inspect.signature(PreparedScientificLaunch).parameters) < 22
     assert len(inspect.signature(PreparedLaunchAuthority).parameters) == 6
     assert len(inspect.signature(PreparedLaunchExecution).parameters) == 12
@@ -667,3 +669,85 @@ def test_sic_los_metadata_only_discussion_keeps_execution_scope_closed():
     assert not owner._metadata_only_sic_definition_gap(request, "sic", {**gap, "family": "survival"})
     assert not owner._metadata_only_sic_definition_gap(request, "sic", {**gap, "missing_capabilities": [
         *gap["missing_capabilities"], {"capability": "concept:lact", "code": "required_concept_unmapped"}]})
+
+
+def test_deferred_stage_reuses_only_original_canary_scope(source, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.webserver.first_observed_deferred_recipe import FirstObservedDeferredReviewStage
+
+    checkpoint, scope, _ = source
+    monkeypatch.setattr(owner, '_development_resume_acquisition_profile',
+        lambda **kwargs: SimpleNamespace(kind='metadata_only_planning_catalog'))
+    stage = FirstObservedDeferredReviewStage('source', 'study-1', 'project', 'session', 'a' * 64)
+    request = replace(_request(), project_root=str(tmp_path), budget_mode='deferred_reviewed',
+        development_resume_source_job_id='prior', allow_environment_resume=False, no_automatic_retries=True)
+    scientific = replace(_scientific(), foundation_profile={
+        'outcome_concepts': (), 'static_concepts': (), 'required_feature_concepts': (),
+    })
+    _, execution = owner._prepare_launch_execution(request, scientific, owner._authorize_launch_provider(request),
+                                                   _deferred_stage=stage)
+    assert execution.development_resume_scope is scope
+    assert execution.development_resume_binding == (checkpoint, 'a' * 64)
+    assert execution.budget_mode == 'deferred_reviewed'
+
+
+@pytest.mark.parametrize('defect', ['missing_stage', 'wrong_study', 'automatic_retry', 'environment_resume',
+                                   'no_source', 'other_scope', 'ordinary_mode'])
+def test_deferred_stage_scope_exception_requires_host_binding(source, tmp_path, monkeypatch, defect):
+    from types import SimpleNamespace
+    from easyicu.webserver.first_observed_deferred_recipe import FirstObservedDeferredReviewStage
+
+    _, scope, _ = source
+    monkeypatch.setattr(owner, '_development_resume_acquisition_profile',
+        lambda **kwargs: SimpleNamespace(kind='metadata_only_planning_catalog'))
+    stage = FirstObservedDeferredReviewStage('source', 'study-1', 'project', 'session', 'a' * 64)
+    request = replace(_request(), project_root=str(tmp_path), budget_mode='deferred_reviewed',
+        development_resume_source_job_id='prior', allow_environment_resume=False, no_automatic_retries=True)
+    scientific = replace(_scientific(), foundation_profile={
+        'outcome_concepts': (), 'static_concepts': (), 'required_feature_concepts': (),
+    })
+    if defect == 'missing_stage':
+        stage = None
+    elif defect == 'wrong_study':
+        stage = replace(stage, study_context_id='other')
+    elif defect == 'automatic_retry':
+        request = replace(request, no_automatic_retries=False)
+    elif defect == 'environment_resume':
+        request = replace(request, allow_environment_resume=True)
+    elif defect == 'no_source':
+        request = replace(request, development_resume_source_job_id='')
+    elif defect == 'other_scope':
+        monkeypatch.setattr(owner, '_development_resume_launch_scope', lambda **kwargs: replace(scope, budget_mode='full_reviewed'))
+    elif defect == 'ordinary_mode':
+        request = replace(request, budget_mode='planner_canary')
+    with pytest.raises(owner.ResearchPipelineRunError) as error:
+        owner._prepare_launch_execution(request, scientific, owner._authorize_launch_provider(request), _deferred_stage=stage)
+    assert error.value.code == 'research_pipeline_development_resume_scope_mismatch'
+
+
+def test_deferred_runner_checks_acquisition_in_prepared_execution(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.webserver import durable_research, durable_research_store
+    from easyicu.webserver.first_observed_deferred_recipe import FirstObservedDeferredReviewStage
+    from easyicu.webserver.research_pipeline_run_preparation import PreparedResearchPipelineRun
+
+    stage = FirstObservedDeferredReviewStage('source', 'study-1', 'project', 'session', 'a' * 64)
+    acquisition = SimpleNamespace(kind='metadata_only_planning_catalog')
+    execution = PreparedLaunchExecution(export_path='/typed/demo', project_root=str(tmp_path),
+        budget_mode='deferred_reviewed', development_resume_binding=(tmp_path / 'checkpoint', 'b' * 64),
+        development_resume_acquisition=acquisition, development_resume_literature=None,
+        plan_revision_source_run_id='', execution_resume_source_run_id='', runner_image='')
+    authority = PreparedLaunchAuthority(provider={}, provider_environment={}, credential_source='pi_verified',
+        literature_search_authorized=False, publication_skill_flags={}, user_extension_activation=None)
+    prepared = PreparedResearchPipelineRun(scientific=_scientific(), authority=authority, execution=execution)
+    monkeypatch.setattr(agent_pipeline_runs, 'prepare_research_pipeline_run',
+        lambda request, **kwargs: prepared if kwargs.get('_deferred_stage') is stage else pytest.fail('stage lost'))
+    monkeypatch.setattr(agent_pipeline_runs, 'get_review_recovery_record',
+        lambda run_id: SimpleNamespace(budget_mode='planner_canary', wrapper_dir=str(tmp_path / 'run_prior')))
+    monkeypatch.setattr(durable_research, 'current_service',
+        lambda: SimpleNamespace(store=SimpleNamespace(get=lambda job_id: {'status':'terminal', 'code_sha256':'runtime'})))
+    monkeypatch.setattr(durable_research_store, 'runtime_digest', lambda: 'runtime')
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(export_path='/typed/demo', study_context={'id':'study-1'},
+        project_root=str(tmp_path), provider={}, budget_mode='deferred_reviewed', _deferred_stage=stage,
+        development_resume_source_job_id='prior', allow_environment_resume=False, no_automatic_retries=True)
+    assert callable(runner)

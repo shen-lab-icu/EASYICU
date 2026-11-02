@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import (
+from easyicu.research_agent.acquisition.first_icu_stay import (
     FLAG_COLUMN,
     REASON_COLUMN,
     REQUIRED_COLUMNS,

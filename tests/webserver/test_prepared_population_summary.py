@@ -117,5 +117,14 @@ def test_actual_materialization_counts_are_digest_bound_to_the_prepared_rows(tmp
     for filename in ("run_context.json", "cohort_summary.json"):
         projected = json.loads((wrapper / filename).read_text())
         assert projected["population_preparation"] == summary
+    # An unbound projection is not evidence of an applied first-stay rule.
+    from easyicu.webserver.run_population_proof import verified_first_stay_applied
+    scientific = SimpleNamespace(
+        metadata_only_planning=False,
+        study={"cohort": {"first_icu_stay_per_hospitalization": True}},
+        foundation_profile={"first_icu_stay_per_hospitalization": SimpleNamespace(coordinate_sha256=digest)},
+    )
+    acquisition.blocked = False
+    assert not verified_first_stay_applied(scientific, acquisition, export_path=str(source), source_identity=None)
     paths["parquet"].write_bytes(b"changed synthetic cohort")
     assert owner.prepared_population_summary(acquisition) is None

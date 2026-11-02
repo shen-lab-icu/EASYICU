@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 from easyicu.research_agent.acquisition.catalog import build_database_capability_catalog
-from easyicu.research_agent.contracts.rmst import RMSTSpec
+from easyicu.research_agent.contracts.survival import RMSTSpec
 from easyicu.webserver import study_contexts
 from easyicu.webserver.landmark_survival_runtime_projection import (
     landmark_survival_rmst_spec,

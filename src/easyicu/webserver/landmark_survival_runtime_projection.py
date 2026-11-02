@@ -49,7 +49,7 @@ from easyicu.research_agent.contracts.sealed_suite_robustness import (
     prevalence_sensitivity_cutoffs_hours,
 )
 from easyicu.research_agent.icu_rules import VariableKind
-from easyicu.research_agent.contracts.rmst import RMSTSpec
+from easyicu.research_agent.contracts.survival import RMSTSpec
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
     load_verified_materialized_cohort_authority,

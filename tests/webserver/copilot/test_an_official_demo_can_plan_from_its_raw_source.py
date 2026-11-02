@@ -8,53 +8,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.webserver import dataio, demo_source_storage as storage, study_contexts
+from easyicu.webserver import dataio, demo_source_prepare, demo_source_storage as storage, sources, study_contexts
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError, PiSessionRecord
 from easyicu.webserver.pi_copilot.demo_planning_source import ACTION, resolve_demo_planning_source
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 from tests.support.official_demo_raw import official_raw as official_raw
+from tests.support.official_demo_choice import choice as choice
 from tests.support.node import run_node
 
 
-@pytest.fixture
-def choice(official_raw, tmp_path, monkeypatch):
-    paths, source, _ = official_raw
-    paths.export.mkdir(parents=True)
-    cohort = dataio.normalize_export_cohort_contract({"preset": "all_icu"})
-    manifest = {
-        "schema_version": "easyicu_native_export_v2", "database": source.database,
-        "data_path": str(paths.raw), "format": "parquet",
-        "cohort_contract": cohort, "cohort_execution": dataio.export_cohort_execution(cohort),
-        "files": [{"file": "demographics.parquet", "module": "demographics"}],
-    }
-    (paths.export / "_manifest.json").write_text(json.dumps(manifest))
-    storage.write_export_marker(paths, source, archive_sha256=source.archive_sha256, export={})
-    monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "contexts.json")
-    study = study_contexts.upsert_context({
-        "question": "描述成年患者每次住院首次 ICU 入住的院内死亡比例。",
-        "data_source": {"database": source.database, "path": str(paths.export),
-                        "stays": 42},
-        "cohort": {"age_min": 18, "first_icu_stay_per_hospitalization": True},
-        "modules": ["demographics"], "confirmations": {"extraction_completed": True},
-    })
-    service = PiCopilotService.__new__(PiCopilotService)
-    record = PiSessionRecord(session_id="pi-demo-choice", project_id="project",
-                            binding=service._binding_for_context(study))
-    service.project_store = SimpleNamespace(assert_matches=lambda _project, context_id: context_id)
-    monkeypatch.setattr(service, "_get_record", lambda _id: record)
-    monkeypatch.setattr(service, "_stale_details", lambda _record: {})
-    saved = []
-    monkeypatch.setattr(service, "_save_record", lambda value: saved.append(value.model_dump(mode="json")))
-    monkeypatch.setattr(service, "_public_session", lambda value: value.model_dump(mode="json"))
-    resolved = resolve_demo_planning_source(study)
-    assert resolved is not None
-    body = {"project_id": "project", "action": ACTION,
-            "expected_revision": study["revision"], "offer_sha256": resolved.offer["offer_sha256"]}
-    return SimpleNamespace(paths=paths, study=study, service=service, record=record,
-                           saved=saved, body=body, resolved=resolved)
 
 
 def snapshot(study):
@@ -101,13 +65,14 @@ def render_choice(workflow, session):
         pytest.skip("Node.js is unavailable")
     owner = Path(storage.__file__).parent / "static/js/screens-guided-pi-confirmation.js"
     result = run_node(node, r"""
-let module;
-global.window = { EasyICU: { guidedPi: {
-  declare: (_name, api) => { module = api; }, optional: () => null,
-} } };
+global.window = {};
+const path = require('node:path');
+const ownerDir = path.dirname(process.argv[1]);
+require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
+require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const session = JSON.parse(process.argv[3]);
-const renderer = module.create({
+const renderer = window.EasyICU.guidedPi.require('confirmation').create({
   workflow: () => JSON.parse(process.argv[2]), session: () => session,
   sessionIsStale: () => Boolean((session.stale || {}).stale), busy: () => false,
   tr: (en, zh) => zh || en, esc: value => String(value),
@@ -253,3 +218,131 @@ def test_http_action_accepts_only_the_displayed_offer_and_no_paths(choice, monke
     response = client.post(endpoint, json=choice.body)
     assert response.status_code == 200, response.text
     assert "job_id" not in response.json()
+
+
+def test_confirmed_choice_recheck_does_not_scan_export_registry(choice, monkeypatch):
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("rechecking a bound source must not discover or inspect exports")
+
+    monkeypatch.setattr(sources, "load_registry", forbidden)
+    monkeypatch.setattr(dataio, "describe_export_source", forbidden)
+    assert resolve_choice(study) is not None
+
+
+def test_confirmed_raw_choice_binds_launch_and_survives_only_lifecycle_changes(choice, monkeypatch):
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    identity = resolve_choice(study)
+    assert identity == sources.registered_source_identity(str(choice.paths.export))
+    with pytest.raises(study_contexts.StudyContextError, match="server_owned"):
+        study_contexts.upsert_context({"id": study["id"], "demo_planning_authority_ref": study["demo_planning_authority_ref"]})
+
+    running = study_contexts.handoff_context(study["id"], active_job_id="job-test", expected_revision=study["revision"])
+    finished = study_contexts.clear_active_job_if(study["id"], "job-test", current_stage="agent")["context"]
+    assert finished["revision"] > study["revision"]
+    assert resolve_choice(finished) == identity
+    monkeypatch.setattr(preparation, "_prepare_scientific_launch", lambda request: None)
+    monkeypatch.setattr(preparation, "_authorize_launch_provider", lambda request: None)
+    monkeypatch.setattr(preparation, "_prepare_launch_execution", lambda *args: (None, None))
+    request = preparation.ResearchPipelineLaunchRequest(
+        export_path=finished["data_source"]["path"], study_context=finished, project_root=None,
+        provider={}, provider_environment={}, credential_source="pi_verified", literature_search_authorized=False,
+        plan_revision_source_run_id="", execution_resume_source_run_id="", development_resume_source_job_id="",
+        budget_mode="planner_canary", runner_image=None,
+    )
+    assert preparation.prepare_research_pipeline_run(request).source_identity == identity
+    from dataclasses import replace
+    with pytest.raises(preparation.ResearchPipelineRunError, match="confirmed Demo planning source changed"):
+        preparation.prepare_research_pipeline_run(replace(request, export_path=str(choice.paths.export)))
+    other = {**finished, "id": "different-study"}
+    with pytest.raises(ValueError, match="stale"):
+        resolve_choice(other)
+    study_contexts.upsert_context({"id": study["id"], "data_source": choice.study["data_source"]})
+    changed = study_contexts.get_context(study["id"])
+    assert not changed.get("demo_planning_authority_ref")
+    study_contexts.upsert_context({"id": study["id"], "data_source": finished["data_source"]})
+    assert resolve_choice(study_contexts.get_context(study["id"])) is None
+
+
+@pytest.mark.parametrize("change", ["registry", "reregister", "export_manifest", "conversion_manifest", "prepared_marker", "converted_marker", "signature", "science"])
+def test_confirmed_raw_choice_fails_closed_after_drift(choice, change):
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+    from easyicu.webserver.raw_preparation_decisions import _private_directory
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    assert resolve_choice(study) is not None
+    if change == "registry":
+        sources.remove_source(str(choice.paths.export))
+    elif change == "reregister":
+        sources.remove_source(str(choice.paths.export))
+        source = storage.verified_public_demo_raw(choice.paths.raw)
+        demo_source_prepare.register_export(source, choice.paths, SimpleNamespace(emit=lambda event: None))
+    elif change == "export_manifest":
+        path = choice.paths.export / "_manifest.json"
+        path.write_text(path.read_text() + " ")
+    elif change == "conversion_manifest":
+        path = choice.paths.raw / "conversion_manifest.json"
+        path.write_text(path.read_text() + " ")
+    elif change in {"prepared_marker", "converted_marker"}:
+        path = getattr(choice.paths, change)
+        path.write_text(path.read_text() + " ")
+    elif change == "signature":
+        path = _private_directory() / f"demo-planning-{study['demo_planning_authority_ref']}.json"
+        path.write_text(path.read_text() + " ")
+    else:
+        study_contexts.upsert_context({"id": study["id"], "question": "A different question"})
+        assert not study_contexts.get_context(study["id"]).get("demo_planning_authority_ref")
+        return
+    with pytest.raises((ValueError, OSError, dataio.ExportCohortError)):
+        resolve_choice(study)
+
+
+def test_source_change_during_confirmation_cannot_issue_binding(choice, monkeypatch):
+    from easyicu.webserver.pi_copilot import demo_planning_authority as authority
+
+    original = authority._source_facts
+    def change_after_first_read(*args):
+        facts = original(*args)
+        path = choice.paths.prepared_marker
+        path.write_text(path.read_text() + " ")
+        return facts
+    monkeypatch.setattr(authority, "_source_facts", change_after_first_read)
+    with pytest.raises(PiCopilotError):
+        choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    after = study_contexts.get_context(choice.study["id"])
+    assert after["revision"] == choice.study["revision"]
+    assert not after.get("demo_planning_authority_ref")
+    assert after["data_source"] == choice.study["data_source"]
+
+
+def test_restoring_a_turn_never_replays_demo_source_authority(choice):
+    import hashlib
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    assert resolve_choice(study) is not None
+    source = study["data_source"]
+    snapshot = {
+        "schema_version": "easyicu.pi-turn-study-snapshot/1", "study_context_id": study["id"],
+        "source_revision": study["revision"], "configuration": {
+            "question": study["question"], "data_source": {
+                "label": source["label"], "database": source["database"],
+                "path_hash": hashlib.sha256(source["path"].encode()).hexdigest()[:16],
+            }, "demo_planning_authority_ref": study["demo_planning_authority_ref"],
+        },
+    }
+    restored = study_contexts.restore_turn_configuration_snapshot(
+        study["id"], snapshot, expected_revision=study["revision"],
+    )
+    assert not restored.get("demo_planning_authority_ref")
+    assert resolve_choice(restored) is None

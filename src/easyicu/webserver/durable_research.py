@@ -395,7 +395,19 @@ class DurableResearchService:
                         output = recover(job_id=job_id, job=bound_job, timeout=payload["timeout_seconds"])
                     except Exception as exc:
                         raise DurableResearchError("preparation_auto_resume_refused") from exc
-                    return _preparation_result(output)
+                    result = _preparation_result(output)
+                    if payload.get('schema_version') == _HANDOFF_PREPARATION_SCHEMA:
+                        from easyicu.webserver.raw_preparation_durable import launch_deferred_review_after_first_observed
+                        try:
+                            handoff = launch_deferred_review_after_first_observed(job_id=job_id, output=output)
+                            if handoff is not None:
+                                result['deferred_review'] = handoff
+                        except Exception as exc:
+                            # The first-observed coordinate remains valid. Do not
+                            # replay a failed stage or silently say it was started.
+                            result['deferred_review'] = {'status': 'blocked', 'reason': type(exc).__name__,
+                                                         'analysis_authorized': False}
+                    return result
                 runner = self.recover_runner(payload, bound_job)
                 result = runner(bound_job)
                 terminal_stage = ("agent_cancelled" if bound_job.is_cancel_requested()

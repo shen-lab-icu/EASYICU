@@ -686,12 +686,21 @@ def restore_durable_human_review_pause(
             "run-input capsule and runtime-capability checks that authorize it"
         )
 
+    execution_input = {"cohort_path": cohort_path}
+
+    def prepare_reviewed_inputs(restored_plan: Any, plan_sha256: str, decision_sha256: str, recipe_sha256: str):
+        from .services import prepare_workflow_inputs
+        return prepare_workflow_inputs(
+            restored_plan, plan_sha256, decision_sha256, recipe_sha256, run_dir=run_dir,
+            consumer=pipeline._services.deferred_first_observed_consumer, binding=execution_input,
+        )
+
     def execute_invoker(restored_plan: Any):
         if rejection_only:
             _rejection_only_phase("execute")
         return pipeline._run_execute_phase(
             plan_result=restored_plan,
-            cohort_path=cohort_path,
+            cohort_path=execution_input["cohort_path"],
             trajectory_binding=trajectory_binding,
             run_dir=run_dir,
             run_id=str(run_id),
@@ -765,7 +774,7 @@ def restore_durable_human_review_pause(
             write_result=write_result,
             run_id=str(run_id),
             run_dir=run_dir,
-            cohort_path=cohort_path,
+            cohort_path=execution_input["cohort_path"],
             notes=execution.get("notes"),
             database=str(execution.get("database") or ""),
             target_outcome=str(target_outcome) if target_outcome else None,
@@ -808,6 +817,11 @@ def restore_durable_human_review_pause(
 
     def commit_human_review_execution_start() -> None:
         mark_human_review_execution_started(checkpoint_file)
+        from .services import release_reviewed_provider_transport
+        release_reviewed_provider_transport(
+            run_dir=run_dir, binding=execution_input, provider_task=pipeline._provider_hard_stop,
+            evidence=evidence,
+        )
 
     def commit_human_review_write_start() -> None:
         mark_human_review_execution_phase(checkpoint_file, "write_in_progress")
@@ -831,6 +845,7 @@ def restore_durable_human_review_pause(
         ),
         human_review_decision_prepare=prepare_human_review_execution,
         human_review_execution_commit=commit_human_review_execution,
+        human_review_prepare_inputs=prepare_reviewed_inputs,
         human_review_execution_start=commit_human_review_execution_start,
         human_review_write_start=commit_human_review_write_start,
         human_review_finalize_start=commit_human_review_finalize_start,

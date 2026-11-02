@@ -3,8 +3,8 @@
 The Planner reads the context's inclusion and exclusion criteria as contracts
 already applied to its input rows. The Web caller used to file the study's own
 wording there -- ``label``, ``review`` and ``exclusion_statement`` -- although
-nothing executes prose: Data Extraction executes the typed fields, and the host
-the first-ICU-stay restriction. A study whose cohort read "Adults with septic
+nothing executes prose: Data Extraction executes typed fields, while a
+first-ICU-stay restriction requires verified host evidence. A study whose cohort read "Adults with septic
 shock" therefore planned on an all-ICU export with every input row kept, under
 a cohort named for the population it never selected. The criteria now declare
 only what something applies; the wording still reaches the Planner, verbatim,
@@ -72,7 +72,7 @@ def test_the_typed_fields_are_declared_beside_the_wording() -> None:
         "include diagnoses: A41",
     ]
     assert len(exclusion) == 2
-    assert "keeps only the first ICU stay per patient" in exclusion[0]
+    assert exclusion[0] == "each patient's later ICU stays across the bound source"
     assert exclusion[1] == "exclude diagnoses: T20-T32"
     declared = " | ".join([*inclusion, *exclusion])
     for text in _WORDING.values():

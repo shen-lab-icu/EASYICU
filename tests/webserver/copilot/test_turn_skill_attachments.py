@@ -6,6 +6,7 @@ import time
 import pytest
 
 from easyicu.extensions import ExtensionRegistry
+from tests.support.skill_attachments import _install, _session, registry as registry, service as service
 from easyicu.extensions.skill_attachments import attachment_payload
 from easyicu.extensions.method_attachments import builtin_attachment
 from easyicu.webserver import agent_pipeline_runs, jobs, study_contexts
@@ -41,16 +42,8 @@ def test_a_turn_carries_a_typed_skill_without_task_starter_prose():
     assert request.attached_skills[0].id == BUILTIN["id"]
 
 
-def _install(registry, body="Use concise sentences.", **kwargs):
-    return registry.install_skill(
-        "---\nname: synthetic-helper\ndescription: Synthetic helper\n---\n" + body,
-        **kwargs,
-    )
 
 
-@pytest.fixture
-def registry(tmp_path):
-    return ExtensionRegistry(tmp_path / "extensions")
 
 
 def _validate(registry, value, activation=None):
@@ -237,15 +230,8 @@ def test_regeneration_restores_the_original_attachment_and_family_choice_state(s
     assert restored["analysis_design"] == {}
 
 
-@pytest.fixture
-def service(tmp_path, registry, study_state):
-    instance = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway(), extension_registry=registry)
-    yield instance
-    instance.close()
 
 
-def _session(service):
-    return service.create_session(project_id="synthetic-project", external_llm_opt_in=True)["session"]
 
 
 def _send(service, session_id, **kwargs):

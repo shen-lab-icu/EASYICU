@@ -11,18 +11,9 @@ import pytest
 from easyicu.webserver import cohort_review
 from tests.support.cohort_export import write_cohort_export
 from tests.support.cohort_reference import install_reference
+from tests.support.cohort_parquet import _replace_module, _run
 
 
-def _run(monkeypatch, path, desc, selected=None):
-    monkeypatch.setattr(cohort_review, "_SUMMARY_CACHE", {})
-    monkeypatch.setattr(
-        cohort_review,
-        "_resolve_registered_source",
-        lambda body: ({"id": "synthetic", "path": str(path)}, desc),
-    )
-    return cohort_review.cohort_review_summary(
-        {} if selected is None else {"selected_features": selected}
-    )
 
 
 def test_summary_never_materializes_parquet_modules(tmp_path, monkeypatch):
@@ -82,14 +73,6 @@ def test_complete_payload_matches_original_readers(
     )
 
 
-def _replace_module(root, desc, module, frame):
-    item = next(entry for entry in desc["files"] if entry["module"] == module)
-    frame.to_parquet(root / item["file"], index=False)
-    item["columns"] = list(frame.columns)
-    item["rows"] = len(frame)
-    item["concept_ids"] = [
-        column for column in frame if column not in {"stay_id", "charttime"}
-    ]
 
 
 def _assert_parity(monkeypatch, root, desc, selected=None):

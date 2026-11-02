@@ -18,8 +18,7 @@ from ..contracts.fraction_scale import (
     normalize_metric_key,
 )
 from ..contracts.model_retention import estimable_missing_category_rows
-from ..contracts.model_tokens import canonical_association_method
-from ..contracts.model_contract_match import reported_model_requirement_fields
+from ..contracts.model_tokens import canonical_association_method, reported_model_requirement_fields
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,

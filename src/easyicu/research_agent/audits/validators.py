@@ -34,8 +34,7 @@ from ..contracts.fraction_scale import (
     is_scale_descriptor_field,
     normalize_metric_key,
 )
-from ..contracts.model_tokens import canonical_association_method
-from ..contracts.model_contract_match import reported_model_requirement_fields
+from ..contracts.model_tokens import canonical_association_method, reported_model_requirement_fields
 from ..replication.metrics import compare_metric_values
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (

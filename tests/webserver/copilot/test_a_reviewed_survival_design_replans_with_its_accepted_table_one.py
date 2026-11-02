@@ -26,6 +26,7 @@ from tests.support.survival_sealed import (
     bound_survival_plan as _bound_plan,
     sealed_request as _request,
     sealed_survival as _sealed,
+    synthetic_reviewed_literature,
 )
 
 BASELINE = "ACCEPTED_BASELINE_CONTENT_MISSING"
@@ -34,7 +35,8 @@ PROTOCOL_ONLY = "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY"
 
 def _codes(context, plan, authority):
     review = build_plan_scientific_review(
-        context=context, plan=plan, require_reportable_capability=True, runtime_authority=authority,
+        context=context, plan=plan, literature=synthetic_reviewed_literature(context.research_question),
+        require_reportable_capability=True, runtime_authority=authority,
     )
     return review, {finding.code for finding in review.findings if finding.severity == "blocker"}
 

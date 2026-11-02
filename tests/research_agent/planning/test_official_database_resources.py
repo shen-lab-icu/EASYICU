@@ -150,7 +150,7 @@ def test_cross_database_resource_binding_blocks_the_actual_scientific_review():
     from easyicu.research_agent.literature import LiteratureBundle
     from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
     from tests.research_agent.planning.scientific_review_fixtures import _context
-    from tests.research_agent.planning.test_literature_source_integrity import _real_plan
+    from tests.support.literature_integrity import _real_plan
 
     source = CitationRecord(key="source_1", title=MIMIC_PUBLICATION, pmid="36596836", doi=MIMIC_PUBLICATION_DOI,
                             year="2023", relevance="Study-design excerpt: MIMIC-IV contains critical care data.")

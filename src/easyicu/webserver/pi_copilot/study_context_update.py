@@ -1455,6 +1455,68 @@ def update_study_context(
                         "safe_alternatives": ["adult_all", "all_icu"],
                     },
                 )
+    # An incomplete ICD filter is not an executable population. Reject the
+    # entire proposed update before spending the grant or changing any existing
+    # diagnosis fields; the natural-language question remains in the turn.
+    if isinstance(proposed_cohort, Mapping) and isinstance(patch.get("cohort"), Mapping):
+        merged_cohort = patch["cohort"]
+        # Inspect only the ICD axis here: legacy non-executable preset names
+        # must remain editable, but may never make an enabled empty ICD axis
+        # look like a valid population. Execution still validates the preset.
+        requires_icd = primary_cohort.icd_source_proof_required(merged_cohort)
+        include = primary_cohort.normalize_diagnosis_tokens(
+            merged_cohort.get("icd_include") or merged_cohort.get("include_diagnoses")
+            or merged_cohort.get("include") or ""
+        ) if requires_icd else ()
+        exclude = primary_cohort.normalize_diagnosis_tokens(
+            merged_cohort.get("icd_exclude") or merged_cohort.get("exclude_diagnoses")
+            or merged_cohort.get("exclude") or ""
+        ) if requires_icd else ()
+        empty_icd = requires_icd and not include and not exclude
+        unsupported_preset = False
+        try:
+            primary_cohort.normalize_execution_cohort(merged_cohort)
+        except primary_cohort.PrimaryCohortContractError as exc:
+            if exc.code == "empty_icd_filter":
+                empty_icd = True
+            elif exc.code == "unsupported_cohort_preset":
+                unsupported_preset = True
+                # A legacy label cannot bypass validation of the independent
+                # axes. Substitute only for validation; preserve the stored
+                # preset and keep execution's unsupported-preset refusal.
+                primary_cohort.normalize_execution_cohort({**merged_cohort, "preset": "all_icu"})
+            else:
+                raise
+        if empty_icd:
+            return _result(
+                context,
+                status="blocked",
+                code="study_cohort_icd_codes_required",
+                summary=(
+                    "An ICD cohort needs diagnosis codes. Supply the requested codes, "
+                    "or remove the ICD preset if it was added by mistake, then save "
+                    "the original research question again."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={"field": "cohort", "reason": "empty_icd_filter"},
+            )
+        if unsupported_preset:
+            previous_cohort = (current or {}).get("cohort")
+            previous_cohort = previous_cohort if isinstance(previous_cohort, Mapping) else {}
+            # A legacy label may be corrected without changing its meaning.
+            # Any other change requires an executable preset first; in
+            # particular never add, remove, or replace disease predicates.
+            if ({k: v for k, v in previous_cohort.items() if k != "label"}
+                    != {k: v for k, v in merged_cohort.items() if k != "label"}):
+                return _result(
+                    context,
+                    status="blocked",
+                    code="unsupported_cohort_preset",
+                    summary=("This saved cohort preset cannot be executed. Select a supported "
+                             "population definition before changing its conditions."),
+                    owner="easyicu.webserver.study_contexts",
+                    details={"field": "cohort.preset"},
+                )
     outcome_changed = False
     if (
         params.get("outcome")

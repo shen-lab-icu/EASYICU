@@ -12,6 +12,34 @@ from easyicu.research_agent.schema import UserPreferences
 from tests.support.source_substitutions import _approve, _review, context, plan
 
 
+@pytest.mark.parametrize("database", ["hirid", "aumc"])
+def test_source_proposal_accepts_missing_preferences_and_restores_only_after_binding(database):
+    from easyicu.databases.research_substitutions import bind_source_substitutions, source_binding
+
+    original = context(database, outcome="death").model_copy(update={"user_preferences": None})
+    with pytest.raises(ValueError, match="capability_substitution_binding_drift"):
+        bind_source_substitutions(original, restoring=True)
+    bound = bind_source_substitutions(original)
+    assert original.user_preferences is None
+    assert bound.user_preferences is not None
+    binding = source_binding(bound)
+    assert binding is not None
+    assert bound.cohort.provenance["database_capability_binding"] == binding
+    assert bind_source_substitutions(bound, restoring=True) == bound
+
+
+def test_source_proposal_preserves_existing_preferences():
+    from easyicu.databases.research_substitutions import bind_source_substitutions
+
+    preferences = UserPreferences(preferred_methods="cox", must_have_outputs="95% CI")
+    original = context("hirid", outcome="death").model_copy(update={"user_preferences": preferences})
+    bound = bind_source_substitutions(original)
+    assert bound.user_preferences.preferred_methods == "cox"
+    assert bound.user_preferences.must_have_outputs == "95% CI"
+    assert preferences.data_constraints is None
+    assert bind_source_substitutions(bound, restoring=True) == bound
+
+
 def test_unknown_concepts_remain_unassessed_in_an_applied_proposal(tmp_path):
     from easyicu.databases.research_substitutions import bind_source_substitutions
 

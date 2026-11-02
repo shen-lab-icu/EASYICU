@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from easyicu import state_paths
 from easyicu.webserver import raw_preparation_decisions as owner, raw_preparation_durable
 from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding
-from tests.webserver.test_raw_preparation_decisions import _host_decision
+from tests.support.raw_preparation_decision import _host_decision
 
 
 def _case(tmp_path, monkeypatch):

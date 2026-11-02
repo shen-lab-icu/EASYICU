@@ -27,7 +27,7 @@ def isolated_profile(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "_CONFIG_DIR", tmp_path)
     monkeypatch.setattr(settings, "_CONFIG_PATH", tmp_path / "settings.json")
     monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": []})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": []})
     monkeypatch.delenv("EASYICU_PUBLIC_ORIGIN", raising=False)
     monkeypatch.delenv("EASYICU_WEB_TRUST_PROXY", raising=False)
 

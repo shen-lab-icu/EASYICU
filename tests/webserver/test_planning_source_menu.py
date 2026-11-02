@@ -441,25 +441,10 @@ def test_an_offered_cross_concept_reading_can_actually_be_selected(monkeypatch):
 
 def _captured_planning_roster(tmp_path, monkeypatch, study_context: dict) -> dict:
     """Run a planner-only launch until it binds its source menu; return the roster."""
-    import pandas as pd
-
     from easyicu.webserver import provider_adapter
+    from tests.support.typed_export import typed_export
 
-    export = tmp_path / "export"
-    export.mkdir()
-    pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
-        export / "demographics.parquet", index=False
-    )
-    (export / "_manifest.json").write_text(json.dumps({
-        "database": "miiv",
-        "format": "parquet",
-        "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
-        "feature_definitions": {"included": False},
-        "files": [{
-            "file": "demographics.parquet", "module": "demographics",
-            "concepts": 1, "concept_ids": ["age"], "rows": 1,
-        }],
-    }), encoding="utf-8")
+    export = typed_export(tmp_path / "export", database="miiv")
     monkeypatch.setattr(
         provider_adapter,
         "build_research_agent_provider_client",
@@ -592,3 +577,65 @@ def test_the_readmitted_stay_attribute_rides_in_the_planning_schema(monkeypatch,
     names = pq.read_schema(result.universe_path).names
     assert "icu_stay_is_readmission" in names
     assert "icu_readmission" not in names
+
+
+def test_native_eicu_planning_identity_comes_from_verified_sidecar_without_data_reads(tmp_path, monkeypatch):
+    import pyarrow.parquet as pq
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from tests.support.typed_export import typed_export
+
+    source = typed_export(tmp_path / 'synthetic-export', database='eicu_demo')
+    import builtins
+    real_open = builtins.open
+    real_parquet_file = pq.ParquetFile
+    def no_source_open(file, *args, **kwargs):
+        if isinstance(file, (str, bytes, __import__('os').PathLike)) and str(file).startswith(str(source)) and str(file).endswith('.parquet'):
+            pytest.fail('source parquet opened during metadata-only planning')
+        return real_open(file, *args, **kwargs)
+    def no_source_parquet(file, *args, **kwargs):
+        if isinstance(file, (str, bytes, __import__('os').PathLike)) and str(file).startswith(str(source)):
+            pytest.fail('source parquet decoded during metadata-only planning')
+        return real_parquet_file(file, *args, **kwargs)
+    monkeypatch.setattr(builtins, 'open', no_source_open)
+    monkeypatch.setattr(pq, 'ParquetFile', no_source_parquet)
+    # Native metadata planning must not enter the generic package opener,
+    # which snapshots exported data files rather than only metadata.
+    monkeypatch.setattr(catalog_module, 'build_available_catalog',
+        lambda *_args, **_kwargs: pytest.fail('data-bearing export opener used'))
+    llm = ScriptedMockLLMClient([json.dumps({'selected_concepts':['death'],
+        'rationale':'synthetic mortality', 'inclusion_exclusion':[]})])
+    result = owner._metadata_only_planning_acquisition(database='eicu_demo', export_path=source,
+        question='Describe mortality.', llm=llm, output_dir=tmp_path / 'catalog')
+    assert not result.blocked
+    assert pq.read_schema(result.universe_path).names == ['stay_id', 'death']
+    assert pq.read_metadata(result.universe_path).num_rows == 0
+    receipt = json.loads(result.provenance_path.read_text())
+    assert receipt['row_identity_column'] == 'stay_id'
+    assert receipt['patient_rows_read'] is False
+
+
+@pytest.mark.parametrize('defect', ['missing_sidecar', 'tampered_sidecar', 'inconsistent_identity'])
+def test_declared_native_identity_invalid_fails_before_planner(tmp_path, monkeypatch, defect):
+    from easyicu.webserver import raw_preparation_dependencies
+    from tests.support.typed_export import typed_export
+
+    source = typed_export(tmp_path / 'synthetic-export', database='eicu_demo')
+    manifest = json.loads((source / '_manifest.json').read_text())
+    sidecar = source / manifest['column_metadata']['file']
+    if defect == 'missing_sidecar':
+        sidecar.unlink()
+    elif defect == 'tampered_sidecar':
+        sidecar.write_bytes(sidecar.read_bytes() + b' ')
+    else:
+        real = raw_preparation_dependencies._declared_typed_export_columns
+        def inconsistent(**kwargs):
+            result = real(**kwargs)
+            result['files'][0]['identity_column'] = 'patientunitstayid'
+            return result
+        monkeypatch.setattr(raw_preparation_dependencies, '_declared_typed_export_columns', inconsistent)
+    llm = ScriptedMockLLMClient([])
+    with pytest.raises(ResearchPipelineRunError) as exc:
+        owner._metadata_only_planning_acquisition(database='eicu_demo', export_path=source,
+            question='Describe mortality.', llm=llm, output_dir=tmp_path / 'catalog')
+    assert exc.value.code == 'research_pipeline_planning_native_metadata_invalid'
+    assert not (tmp_path / 'catalog').exists()

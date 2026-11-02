@@ -319,8 +319,8 @@ def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
 
 
 def test_failed_run_literature_preview_uses_its_actual_registered_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from tests.webserver.copilot.test_a_run_step_shows_the_code_it_ran import _failed_replay_wrapper
-    from tests.webserver.test_research_evidence_preview import _literature_source
+    from tests.support.research_preview import _failed_replay_wrapper
+    from tests.support.research_preview import _literature_source
 
     wrapper = _failed_replay_wrapper(tmp_path)
     pipeline = wrapper / "pipeline/run_inner"

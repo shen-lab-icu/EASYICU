@@ -89,7 +89,7 @@ def exercise(case: str = "ready") -> dict:
         }));
       })().catch(error => {console.error(error); process.exit(1);});
     """
-    script = script.replace("__CONFIRMATION_SOURCE__", json.dumps(_read("js/screens-guided-pi-confirmation.js")))
+    script = script.replace("__CONFIRMATION_SOURCE__", json.dumps(_read("js/screens-guided-pi-confirmation-data.js") + "\n" + _read("js/screens-guided-pi-confirmation.js")))
     script = script.replace("__ACTIONS_SOURCE__", json.dumps(_read("js/screens-guided-pi-plan-actions.js")))
     script = f"const CASE = {json.dumps(case)};\n" + script
     result = run_node(node, script)

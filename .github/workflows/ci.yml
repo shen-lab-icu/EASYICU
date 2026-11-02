@@ -144,7 +144,7 @@ jobs:
           git rev-parse HEAD > ci-receipts/commit-sha.txt
           python --version > ci-receipts/python-version.txt
           python -m pip freeze --all > ci-receipts/resolved-requirements.txt
-          pytest --collect-only -q -m "" > ci-receipts/collected-tests.txt
+          pytest --collect-only -q -m "" -p tests.support.figure2_versioned_ci --figure2-current-v4 --figure2-collection-receipt=ci-receipts/current-figure2-collection.json > ci-receipts/collected-tests.txt
           tail -n 1 ci-receipts/collected-tests.txt
 
       - name: Run test suite
@@ -160,6 +160,8 @@ jobs:
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest -q -m "" -n auto --dist loadfile \
               --ignore=tests/research_agent/execution/test_runner.py \
+              -p tests.support.figure2_versioned_ci --figure2-current-v4 \
+              --figure2-collection-receipt=ci-receipts/current-figure2-execution-collection.json \
               --junitxml=ci-receipts/results.xml
 
       - name: Preserve exact candidate validation receipts
@@ -207,7 +209,7 @@ jobs:
           from importlib.resources import files
           root = files("easyicu.research_agent") / "runner_image"
           names = sorted(p.name for p in root.iterdir())
-          for required in ("Dockerfile", "requirements.lock", "base-image.lock", "README.md"):
+          for required in ("Dockerfile", "requirements.lock", "requirements-pydantic-core-v1.lock", "base-image.lock", "README.md"):
               assert required in names, f"{required} missing from the wheel: {names}"
           print("runner_image ships:", ", ".join(names))
           cards = files("easyicu.research_agent") / "methods" / "tool_cards"
@@ -228,3 +230,40 @@ jobs:
           /tmp/sdist-env/bin/pip install --upgrade pip
           /tmp/sdist-env/bin/pip install dist/*.tar.gz
           /tmp/sdist-env/bin/pip check
+
+  figure2-history:
+    name: historical Figure2 v3 (py${{ matrix.python-version }})
+    needs: checkpoint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.11"]') || fromJSON('["3.10","3.11","3.12"]') }}
+    steps:
+      - name: Check out current candidate and retained history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the explicit test runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,webapp]"
+          pip install "lifelines>=0.27" "shap>=0.44" "xgboost>=2.0" \
+            "xgboost<3.1; python_version < '3.11'"
+      - name: Replay unchanged historical v3 at its exact source
+        run: python tools/run_figure2_historical_ci.py --receipt-dir ci-receipts/figure2-history
+      - name: Preserve historical identity, collection and execution receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: figure2-history-py${{ matrix.python-version }}-${{ github.sha }}
+          path: |
+            ci-receipts/figure2-history/historical-v3-receipt.json
+            ci-receipts/figure2-history/historical-v3-collection.log
+            ci-receipts/figure2-history/historical-v3-execution.log
+            ci-receipts/figure2-history/historical-v3-results.xml
+          retention-days: 30

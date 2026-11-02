@@ -2637,5 +2637,249 @@
     "protection": "ProviderCredentials requires explicit desktop deployment before credential-store or index writes; credential_id is opaque, never a filesystem coordinate",
     "writes": "refused on hosted",
     "write_owner": "ProviderCredentials.delete removes one OS credential and atomically updates the key-free index."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/download",
+    "fields": [
+      "path:project_id",
+      "query:file",
+      "query:expected_sha256"
+    ],
+    "reaches": "PiCopilotService.get_workspace_download -> checked project workspace bytes returned as attachment",
+    "protection": "ProjectWorkspace relative-file and project containment; rejects traversal and symlinks; expected source digest must match. hosted.guard_request is also mounted.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "ProjectWorkspace uses hashed project-owned directories; Pi service initialization may update instance-owned project and session state."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/runtime-qa",
+    "fields": [
+      "path:project_id",
+      "body:file",
+      "body:checked_sha256"
+    ],
+    "reaches": "PiCopilotService.begin_workspace_runtime_qa -> checked HTML -> in-memory RuntimeQaStore nonce",
+    "protection": "ProjectWorkspace relative-file and project containment; rejects traversal and symlinks; expected source digest must match. hosted.guard_request is also mounted.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "ProjectWorkspace uses hashed project-owned directories; Pi service initialization may update instance-owned project and session state."
+  },
+  {
+    "method": "GET",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/runtime-qa",
+    "fields": [
+      "path:project_id",
+      "query:file",
+      "query:checked_sha256"
+    ],
+    "reaches": "PiCopilotService.get_workspace_runtime_qa -> checked HTML -> runtime QA receipt",
+    "protection": "ProjectWorkspace relative-file and project containment; rejects traversal and symlinks; expected source digest must match. hosted.guard_request is also mounted.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "ProjectWorkspace uses hashed project-owned directories; Pi service initialization may update instance-owned project and session state."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/runtime-qa/report",
+    "fields": [
+      "path:project_id",
+      "body:file",
+      "body:checked_sha256",
+      "body:nonce",
+      "body:report"
+    ],
+    "reaches": "PiCopilotService.record_workspace_runtime_qa -> checked HTML and nonce-bound in-memory report",
+    "protection": "ProjectWorkspace relative-file and project containment; rejects traversal and symlinks; expected source digest must match. hosted.guard_request is also mounted. JSON body is capped at 32768 bytes and rejects unknown fields.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "ProjectWorkspace uses hashed project-owned directories; Pi service initialization may update instance-owned project and session state."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/projects/{project_id}/workspace/download-csv",
+    "fields": [
+      "path:project_id",
+      "form:file",
+      "form:expected_sha256",
+      "form:filename",
+      "form:media_type",
+      "form:csv_base64"
+    ],
+    "reaches": "read_csv_download_form -> checked workspace preview -> user-provided CSV attachment",
+    "protection": "ProjectWorkspace relative-file and project containment; rejects traversal and symlinks; expected source digest must match. hosted.guard_request is also mounted. Form requires same origin, bounded UTF-8 CSV, a safe filename and exact fields; it does not write the submitted CSV.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "ProjectWorkspace uses hashed project-owned directories; Pi service initialization may update instance-owned project and session state."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/continue-reply",
+    "fields": [
+      "path:session_id",
+      "body:project_id",
+      "body:source_error_entry_id"
+    ],
+    "reaches": "PiCopilotService.continue_reply -> original bound conversation/error and execution continuation",
+    "protection": "hosted.guard_request plus project/session binding and original error/job lifecycle checks; source_error_entry_id is an identity, not a client filesystem path.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Pi replay/session state and bound project workspace use instance-owned state_paths; provider calls follow original session authority."
+  },
+  {
+    "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/retry-unstarted",
+    "fields": [
+      "path:session_id",
+      "body:project_id",
+      "body:source_error_entry_id"
+    ],
+    "reaches": "PiCopilotService.retry_unstarted_reply -> original bound conversation/error and execution continuation",
+    "protection": "hosted.guard_request plus project/session binding and original error/job lifecycle checks; source_error_entry_id is an identity, not a client filesystem path.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Pi replay/session state and bound project workspace use instance-owned state_paths; provider calls follow original session authority."
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/raw-preparation-candidate",
+    "fields": [
+      "body:run_id",
+      "body:study_context_id",
+      "body:session_id",
+      "body:project_id"
+    ],
+    "reaches": "host_action_session -> reviewed run -> candidate source and private pending checkpoint",
+    "protection": "hosted.guard_request scans path aliases; project/session/study/run ownership and scientific review bind host-resolved paths; candidate grants no preparation or analysis.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Run-owned checkpoint under the instance project root; host action and conversation records under instance state."
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/raw-preparation-review",
+    "fields": [
+      "body:host_action",
+      "body:study_context_id",
+      "body:decision"
+    ],
+    "reaches": "host action owner -> pending checkpoint -> signed one-use host decision and private preparation handoff",
+    "protection": "hosted.guard_request scans path aliases; exact action, session, project, study, checkpoint, scope, nonce and job binding; preparation adapter and durable worker revalidate; no analysis grant.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Server-owned decision directory, run checkpoint and durable job state under the instance root; preparation outputs use the selected host-owned work root."
+  },
+  {
+    "method": "POST",
+    "route": "/api/jobs/raw-preparation-projection-download",
+    "fields": [
+      "body:project_id",
+      "body:session_id",
+      "body:study_context_id",
+      "body:run_id",
+      "body:job_id"
+    ],
+    "reaches": "host session + run owner -> approved checkpoint and verified consumed decision -> one completed projection attachment",
+    "protection": "hosted.guard_request plus exact request keys, same-origin check, host-bound session/job/checkpoint, anchored directories and verified delivery; no client filesystem path.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Run-owned projection is read only; Pi service initialization may update instance-owned project/session state."
+  },
+  {
+    "method": "GET",
+    "route": "/api/pi/proposal/{project_id}/{session_id}/{run_id}",
+    "fields": [
+      "path:project_id",
+      "path:session_id",
+      "path:run_id"
+    ],
+    "reaches": "project_proposal -> bound study, session, run and verified evidence -> non-executable HTML",
+    "protection": "hosted.guard_request and project/session/child-run/study configuration binding; source and evidence coordinates come from host-owned run records, not request paths; HTML escapes rendered content.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Instance project root, session replay and content-addressed candidate evidence; host resolves all locations."
+  },
+  {
+    "method": "GET",
+    "route": "/api/pi/proposal/{project_id}/{session_id}/{run_id}/source-candidate",
+    "fields": [
+      "path:project_id",
+      "path:session_id",
+      "path:run_id"
+    ],
+    "reaches": "project_proposal -> bound proposal -> source registry discovery and source partition candidates; registry inspection may read CSV rows or stay IDs and identity binding may hash the selected raw table",
+    "protection": "hosted.guard_request and project/session/child-run/study configuration binding; source and evidence coordinates come from host-owned run records, not request paths; HTML escapes rendered content. Candidate metadata is not execution or preparation authority; registry discovery can inspect other registered or discovered exports and is not a metadata-only operation.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Instance project root, session replay and content-addressed candidate evidence; host resolves all locations."
+  },
+  {
+    "method": "POST",
+    "route": "/api/pi/proposal/{project_id}/{session_id}/{run_id}/candidate",
+    "fields": [
+      "path:project_id",
+      "path:session_id",
+      "path:run_id",
+      "form:decision_id",
+      "form:citation_key",
+      "form:source_evidence_id",
+      "form:verbatim_excerpt",
+      "form:evidence_scope"
+    ],
+    "reaches": "project_proposal -> transient literature binding validated against bound evidence",
+    "protection": "hosted.guard_request and project/session/child-run/study configuration binding; source and evidence coordinates come from host-owned run records, not request paths; HTML escapes rendered content. Bounded exact form fields; no submitted path or evidence contents are trusted.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Instance project root, session replay and content-addressed candidate evidence; host resolves all locations."
+  },
+  {
+    "method": "POST",
+    "route": "/api/pi/proposal/{project_id}/{session_id}/{run_id}/candidate/save",
+    "fields": [
+      "path:project_id",
+      "path:session_id",
+      "path:run_id",
+      "form:decision_id",
+      "form:citation_key",
+      "form:source_evidence_id",
+      "form:verbatim_excerpt",
+      "form:evidence_scope"
+    ],
+    "reaches": "save_candidate_reference -> checked proposal and independent candidate evidence record",
+    "protection": "hosted.guard_request and project/session/child-run/study configuration binding; source and evidence coordinates come from host-owned run records, not request paths; HTML escapes rendered content. Same-origin and bounded exact form fields; evidence reference and excerpt are checked before persistence.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Instance project root, session replay and content-addressed candidate evidence; host resolves all locations."
+  },
+  {
+    "method": "POST",
+    "route": "/api/pi/proposal/{project_id}/{session_id}/{run_id}/pubmed-abstract",
+    "fields": [
+      "path:project_id",
+      "path:session_id",
+      "path:run_id",
+      "form:citation_key"
+    ],
+    "reaches": "project_proposal -> screened citation -> PubMed client -> candidate abstract evidence",
+    "protection": "hosted.guard_request and project/session/child-run/study configuration binding; source and evidence coordinates come from host-owned run records, not request paths; HTML escapes rendered content. Same-origin bounded form; citation must match the bound screened record and PMID/DOI/title/abstract checks; the request starts at the configured PubMed endpoint. urllib may follow redirects and buffers the response before the post-read size check.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Instance project root, session replay and content-addressed candidate evidence; host resolves all locations."
+  },
+  {
+    "method": "POST",
+    "route": "/api/pi/proposal/{project_id}/{session_id}/{run_id}/pubmed-candidate",
+    "fields": [
+      "path:project_id",
+      "path:session_id",
+      "path:run_id",
+      "form:pmid"
+    ],
+    "reaches": "project_proposal -> PubMed client -> unscreened candidate abstract evidence",
+    "protection": "hosted.guard_request and project/session/child-run/study configuration binding; source and evidence coordinates come from host-owned run records, not request paths; HTML escapes rendered content. Same-origin bounded form and numeric PMID; initial request uses the PubMed client, which may follow redirects and buffers the response. This is not an analysis approval.",
+    "guarded_fields": [],
+    "writes": "instance home",
+    "write_owner": "Instance project root, session replay and content-addressed candidate evidence; host resolves all locations."
   }
 ]

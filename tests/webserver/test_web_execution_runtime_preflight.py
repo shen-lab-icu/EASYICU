@@ -568,30 +568,40 @@ def test_a_resume_after_approval_also_names_the_runtime(monkeypatch) -> None:
     assert '"research_pipeline_review_resume_failed"' in resume
 
 
-def test_sic_metadata_candidate_uses_new_profile_without_rewriting_historical_or_execution():
+def _assert_sic_overlay_profile_keeps_history(profile):
     from dataclasses import asdict
+    from easyicu.research_agent.orchestration import profiles
+
+    historical = profiles.get_submission_profile(f"{profile.name}/20261026")
+    previous = profiles.get_submission_profile(f"{profile.name}/20261029")
+    assert historical.expected_concept_dict_sha == "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532"
+    assert previous.expected_concept_dict_sha == "a5b69c801822befa6e77cac707f366494f5ad97433dae50d4140dfe6e4097ef2"
+    assert historical.expected_sic_case_overlay_sha is None
+    assert previous.expected_sic_case_overlay_sha is None
+    assert {key for key, value in asdict(previous).items() if value != asdict(historical)[key]} == {
+        "version", "locked_at", "expected_concept_dict_sha"
+    }
+    assert profile.version == "20261030-sic-overlay-v1"
+    assert profile.expected_concept_dict_sha == historical.expected_concept_dict_sha
+    assert profile.expected_sic_case_overlay_sha == "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b"
+    assert {key for key, value in asdict(profile).items() if value != asdict(previous)[key]} == {
+        "version", "locked_at", "expected_concept_dict_sha", "expected_sic_case_overlay_sha"
+    }
+
+
+def test_sic_metadata_candidate_uses_new_profile_without_rewriting_historical_or_execution():
     from easyicu.research_agent.orchestration import profiles
 
     research_launch_runtime._require_profile_dictionaries(budget_mode="planner_canary")
     for live in (False, True):
         ref = research_launch_runtime._submission_profile_ref(budget_mode="planner_canary", live_pubmed=live)
         profile = profiles.get_submission_profile(ref)
-        assert profile.version == "20261029"
-        assert profile.expected_concept_dict_sha == "a5b69c801822befa6e77cac707f366494f5ad97433dae50d4140dfe6e4097ef2"
-        historical = profiles.get_submission_profile(f"{profile.name}/20261026")
-        assert historical.expected_concept_dict_sha == "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532"
-        assert {key for key, value in asdict(profile).items() if value != asdict(historical)[key]} == {
-            "version", "locked_at", "expected_concept_dict_sha"
-        }
+        _assert_sic_overlay_profile_keeps_history(profile)
         execution = profiles.get_submission_profile(research_launch_runtime._submission_profile_ref(
             budget_mode="full_reviewed", live_pubmed=live))
-        assert execution.version == "20261029"
+        _assert_sic_overlay_profile_keeps_history(execution)
         assert execution.expected_concept_dict_sha == profile.expected_concept_dict_sha
-        previous_execution = profiles.get_submission_profile(f"{execution.name}/20261026")
-        assert previous_execution.expected_concept_dict_sha == historical.expected_concept_dict_sha
-        assert {key for key, value in asdict(execution).items() if value != asdict(previous_execution)[key]} == {
-            "version", "locked_at", "expected_concept_dict_sha"
-        }
+        assert execution.expected_sic_case_overlay_sha == profile.expected_sic_case_overlay_sha
 
 
 def test_sic_dictionary_reseal_keeps_profile_preflight_both_modes():
@@ -601,18 +611,13 @@ def test_sic_dictionary_reseal_keeps_profile_preflight_both_modes():
 
 
 @pytest.mark.parametrize("live", [False, True])
-def test_web_host_profile_reseals_only_dictionary_and_keeps_history(live):
-    from dataclasses import asdict
+def test_web_host_profile_binds_overlay_and_keeps_history(live):
     from easyicu.research_agent.orchestration import profiles
 
     ref = research_launch_runtime._submission_profile_ref(
         budget_mode="full_reviewed", live_pubmed=live, runner_kind="host")
     current = profiles.get_submission_profile(ref)
-    old = profiles.get_submission_profile(f"{current.name}/20261026")
-    assert current.version == "20261029"
-    assert old.expected_concept_dict_sha == "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532"
-    assert {k for k, v in asdict(current).items() if v != asdict(old)[k]} == {
-        "version", "locked_at", "expected_concept_dict_sha"}
+    _assert_sic_overlay_profile_keeps_history(current)
     research_launch_runtime._require_profile_dictionaries(budget_mode="full_reviewed", runner_kind="host")
 
 

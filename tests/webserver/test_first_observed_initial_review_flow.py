@@ -6,12 +6,14 @@ does not approve or execute research, or demonstrate the real Demo journey.
 import subprocess
 import sys
 import signal
+import pytest
 
-from tests.webserver.test_first_observed_approved_handoff_recovery import _environment
-from tests.webserver.test_first_observed_guarded_process import _PROCESS
+from tests.support.first_observed_handoff import _environment
+from tests.support.first_observed_process import _PROCESS
 
 
-def test_first_review_starts_same_guarded_preparation_without_analysis(tmp_path):
+@pytest.mark.parametrize("execution_bound", [False, True])
+def test_first_review_starts_same_guarded_preparation_without_analysis(tmp_path, execution_bound):
     script = _PROCESS.split('scope = producer.proposed_first_observed_scope', 1)[0] + r'''
 from easyicu.webserver import durable_research, host_action_jobs, raw_preparation_candidate
 from easyicu.webserver.deployment_lease import acquire_single_process_lease
@@ -26,11 +28,9 @@ assert candidate['status']=='pending' and candidate['analysis_authorized'] is Fa
 assert not (root/'source-reads.txt').exists()
 from easyicu.webserver.raw_preparation_projection import pending_preparation_projection
 preview=pending_preparation_projection({'run_id':run_id,'project_dir':str(run)},study_context_id=study_id)
-scope_preview=preview['candidate_preparation_preview']
-assert scope_preview['plan_sha256']==plan_sha
-assert scope_preview['population_needs'][0]['kind']=='first_observed_icu_single_hospital_adult'
-assert scope_preview['complete'] is False and scope_preview['preparation_authorized'] is False
-assert 'candidate_dependency_closure_unverified' in scope_preview['blockers']
+assert preview['scope']['plan_sha256']==plan_sha
+assert preview['scope']['read_scope_version']==2 and 'patient_table_sha256' not in preview['scope']
+assert 'candidate_preparation_preview' not in preview and not preview['approvable']
 assert not (root/'source-reads.txt').exists()
 original_context=(run/'research_context.json').read_bytes()
 (run/'research_context.json').write_bytes(original_context+b' ')
@@ -44,6 +44,15 @@ assert 'candidate_preparation_preview' not in changed_study
 study_contexts.get_context=get_current_study
 assert not (root/'source-reads.txt').exists()
 choice, checkpoint, scope, _=raw_preparation_candidate.available_host_review(run_id=run_id,study_context_id=study_id)
+from easyicu.research_agent.research_context.export_selection import SourceIdentity
+from easyicu.webserver.first_observed_run_guard import resolve_host_prepared_first_observed_coordinate
+host_args = dict(preparation_run_id=run_id, study_context_id=study_id, project_id=project, session_id=session,
+    source_identity=SourceIdentity.from_record(identity), criterion=scope['criterion'],
+    export_manifest_sha256=scope['export_manifest_sha256'])
+try:
+    resolve_host_prepared_first_observed_coordinate(**host_args)
+except (ValueError, OSError): pass
+else: raise AssertionError('unapproved preparation returned a coordinate')
 action=HostActionRequest(session_id=session,project_id=project,action_code='review_raw_preparation',decision=choice)
 def submit(action, body, callback, **key_inputs):
     return host_action_jobs.submit_with_host_action(action,study_context_id=study_id,submit=callback,
@@ -62,18 +71,74 @@ else: raise AssertionError('guarded preparation did not terminate')
 assert job.status=='done', job.error
 assert job.result['preparation_status']=='first_observed_coordinate_complete'
 assert not job.result['analysis_authorized']
+coordinate_binding = resolve_host_prepared_first_observed_coordinate(**host_args)
+assert coordinate_binding.preparation_run_id == run_id
+assert coordinate_binding.export_manifest_sha256 == scope['export_manifest_sha256']
+for change in ({'project_id': 'wrong-project'}, {'session_id': 'wrong-session'},
+               {'study_context_id': 'wrong-study'}, {'export_manifest_sha256': 'd'*64},
+               {'source_identity': SourceIdentity(database='eicu_demo', registration_id='other', archive_sha256='a'*64)},
+               {'criterion': {**scope['criterion'], 'quote': 'different population'}}):
+    try:
+        resolve_host_prepared_first_observed_coordinate(**{**host_args, **change})
+    except (ValueError, OSError): pass
+    else: raise AssertionError('mismatched host binding returned a coordinate: '+str(change))
 assert (root/'source-reads.txt').read_text().splitlines()==['read']
 from easyicu.webserver.raw_preparation_projection import pending_preparation_projection
 projection=pending_preparation_projection({'run_id':run_id,'project_dir':str(run)},study_context_id=study_id)
-assert projection=={'status':'first_observed_complete','analysis_authorized':False}
+assert projection['status']=='first_observed_complete' and projection['analysis_authorized'] is False
+if 'candidate_preparation_preview' in projection:
+    assert projection['candidate_preparation_preview']['complete'] is False
+    assert projection['candidate_preparation_preview']['preparation_authorized'] is False
 coordinate=root/'home'/'.easyicu'/'private-first-observed'/(choice.nonce+'.parquet')
 saved=coordinate.read_bytes(); coordinate.write_bytes(saved+b'changed')
 assert pending_preparation_projection({'run_id':run_id,'project_dir':str(run)},study_context_id=study_id)['status']=='first_observed_unavailable'
+try:
+    resolve_host_prepared_first_observed_coordinate(**host_args)
+except (ValueError, OSError, RuntimeError): pass
+else: raise AssertionError('modified coordinate returned by host resolver')
 coordinate.write_bytes(saved)
+assert resolve_host_prepared_first_observed_coordinate(**host_args).sha256 == coordinate_binding.sha256
 assert (root/'source-reads.txt').read_text().splitlines()==['read']
 assert service.close()
 '''
-    result = subprocess.run([sys.executable, '-c', script, str(tmp_path)], env=_environment(tmp_path),
+    if execution_bound:
+        script = script.replace('spec = PopulationSpec.model_validate',
+            "context = context.model_copy(update={'cohort': context.cohort.model_copy(update={'database': 'eicu_demo', 'provenance': {'source_identity': identity}})})\nspec = PopulationSpec.model_validate", 1)
+        script = script.replace(
+            'authority = PlanReviewAuthority.create(plan=plan, evidence_sha256=files)',
+            """from easyicu.research_agent.authority.plan_review import ReviewExecutionAuthority
+from easyicu.research_agent.authority.run_input import RunInputCapsule
+scientific_identity = {'question': context.research_question, 'database': context.cohort.database,
+    'user_preferences': {'data_constraints': context.user_preferences.data_constraints}}
+capsule = RunInputCapsule(scientific_identity=scientific_identity, scientific_identity_sha256=canonical_sha256(scientific_identity),
+    context_sha256=files['research_context'], cohort_sha256='f'*64, initial_environment={}).model_dump_json().encode()
+(run / 'run_input_capsule.json').write_bytes(capsule)
+EvidenceStore(run).register_text(kind='log', description='capsule', filename='capsule.json',
+    text=capsule.decode(), evidence_id='run_input_capsule')
+capsule_sha = hashlib.sha256(capsule).hexdigest()
+execution = ReviewExecutionAuthority(pipeline_config_sha256='1'*64, capability_activation_sha256='4'*64,
+    run_input_capsule_sha256=capsule_sha)
+authority = PlanReviewAuthority.create(plan=plan, evidence_sha256=files, execution=execution)""",
+        ).replace('original_payload = {"plan_review_authority": authority.model_dump(mode="json")}',
+                  'original_payload = {"plan_review_authority": authority.model_dump(mode="json"), "approval_allowed": False}')
+        script = script.replace('run_input_capsule_sha256="3"*64', 'run_input_capsule_sha256=capsule_sha')
+        script = script.replace('hc = HumanReviewCheckpoint.create(', """second_payload = {'plan_review_authority': authority.model_dump(mode='json'),
+    'approval_allowed': True, 'reason': 'another independent review finding'}
+second_request = HumanReviewRequest.create(kind='scientific_stop', summary='Another finding',
+    payload=second_payload, authority_sha256=canonical_sha256(second_payload))
+hc = HumanReviewCheckpoint.create(""", 1)
+        script = script.replace('requests=(original_request,), plan_handoff=',
+                                'requests=(original_request, second_request), plan_handoff=', 1)
+    env = _environment(tmp_path)
+    with (tmp_path / 'sitecustomize.py').open('a') as stream:
+        stream.write('''\nreal_binding = owner.resolve_raw_source_identity_binding
+def checked_binding(**kwargs):
+    decisions = root / "home" / ".easyicu" / "private-preparation-decisions"
+    assert decisions.exists() and any(decisions.glob("*.used")), "patient bytes read before consent consumption"
+    return real_binding(**kwargs)
+owner.resolve_raw_source_identity_binding = checked_binding
+''')
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path)], env=env,
                             capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stderr
 
@@ -107,7 +172,7 @@ raise AssertionError('expected SIGKILL')
     first = subprocess.run([sys.executable, '-c', setup, str(tmp_path)], env=env,
                            capture_output=True, text=True, timeout=60)
     assert first.returncode == -signal.SIGKILL, first.stderr
-    from tests.webserver.test_first_observed_approved_handoff_recovery import _RECOVER
+    from tests.support.first_observed_handoff import _RECOVER
     prefix, tail = _RECOVER.split("accepted=service.recover_approved_preparation_handoff", 1)
     tail = tail[tail.index('deadline=time.monotonic()+50'):]
     restart = prefix + r'''
@@ -124,8 +189,9 @@ for condition in ('used','lease','receipt','source'):
         tampered=json.loads(original_receipt); tampered['scientific_configuration_sha256']='0'*64
         receipt.write_text(json.dumps(tampered))
     if condition=='source':
-        old_source=producer.verified_public_demo_raw
-        producer.verified_public_demo_raw=lambda _: None
+        old_source=producer._metadata_source
+        def missing_source(_): raise ValueError('selected source metadata missing')
+        producer._metadata_source=missing_source
     try:
         raw_preparation_candidate.recoverable_first_observed_review(
             run_id=binding.run_id,study_context_id=binding.study_context_id)
@@ -134,7 +200,7 @@ for condition in ('used','lease','receipt','source'):
     if condition=='used': (private/(binding.nonce+'.used')).unlink()
     if condition=='lease': (run/'.preparation-execution-job').rmdir()
     if condition=='receipt': receipt.write_bytes(original_receipt)
-    if condition=='source': producer.verified_public_demo_raw=old_source
+    if condition=='source': producer._metadata_source=old_source
     assert service.store.get('job') is None and not (root/'source-reads.txt').exists()
 choice, session_id=raw_preparation_candidate.recoverable_first_observed_review(
     run_id=binding.run_id,study_context_id=binding.study_context_id)

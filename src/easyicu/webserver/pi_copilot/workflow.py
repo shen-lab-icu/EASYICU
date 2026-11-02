@@ -564,6 +564,7 @@ def build_research_workflow_snapshot(
         "operator_plan_approval_required",
         "plan_scientific_changes_required",
         "scientific_plan_review_policy_stale",
+        "plan_icd_source_unverified",
         "agent_plan_revision_nonconvergent",
         # The plan is reviewed, but its population or an analysis the question
         # asks for refuses its approval (``approval_stops.PLAN_APPROVAL_STOPS``).
@@ -758,6 +759,8 @@ def build_research_workflow_snapshot(
             **({"coordinate_readings": coordinate_readings} if coordinate_readings is not None else {}),
             **({"population_preparation": population_preparation} if population_preparation is not None else {}),
             **({"population_acceptance": population_acceptance} if population_acceptance is not None else {}),
+            **({"deferred_input_scope": dict(review_authority["deferred_input_scope"])}
+               if isinstance(review_authority.get("deferred_input_scope"), Mapping) else {}),
             **({"reviewed_population_spec": review_authority["reviewed_population_spec"]}
                if isinstance(review_authority.get("reviewed_population_spec"), Mapping) else {}),
             # How the selected database changes the study (db capability review).
@@ -816,7 +819,9 @@ def build_research_workflow_snapshot(
         != "planner_canary"
     )
     live_plan_reason = (
-        "agent_plan_revision_nonconvergent"
+        "plan_icd_source_unverified"
+        if "plan_icd_source_unverified" in active_plan_review_codes
+        else "agent_plan_revision_nonconvergent"
         if "agent_plan_revision_nonconvergent" in active_plan_review_codes
         else "scientific_plan_review_policy_stale"
         if "scientific_plan_review_policy_stale" in active_plan_review_codes
@@ -1714,7 +1719,7 @@ def build_project_workflow_projection(
     if not clean_study_id:
         clean_study_id = str(study.get("id") or "").strip()
 
-    registry = sources.load_registry()
+    registry = sources.load_registry(planning_metadata_only=True)
     projected_study = _study_with_registered_source_identity(study, registry)
     active_job: Optional[Mapping[str, Any]] = None
     active_job_id = str(study.get("active_job_id") or "").strip()

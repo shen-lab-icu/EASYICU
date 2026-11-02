@@ -17,6 +17,8 @@
     const iconHtml = host.iconHtml;
     const resourceButton = host.resourceButton;
     const sessionIsStale = host.sessionIsStale;
+    const { preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml } =
+      window.EasyICU.guidedPi.require('confirmationData').create(host);
     const cohortEligibilityDecisionHtml = typeof host.cohortEligibilityDecisionHtml === 'function'
       ? host.cohortEligibilityDecisionHtml : () => '';
     // These are implementation choices the Agent plan must make.  Keep the
@@ -32,26 +34,6 @@
       'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED',
       'REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY',
     ]);
-
-    function preparedDataStatus() {
-      const authorization = (host.session() && host.session().data_source_authorization) || {};
-      const scope = String(authorization.extraction_scope || '');
-      const source = authorization.source || {};
-      const sourceLabel = String(source.label || source.reference_release || source.database || '').trim();
-      const titles = {
-        reuse_prepared_full: tr('Prepared source data and planned variables are available', '已复用现有数据源，计划变量可用'),
-        all_supported: tr('Source data and planned variables are available', '数据源与计划变量可用'),
-        study_required: tr('Study data source and planned variables are available', '本研究数据源与计划变量可用'),
-      };
-      return {
-        title: titles[scope] || tr('The source data and planned variables are available', '数据源与计划变量可用'),
-        sourceLabel,
-        detail: tr(
-          'Approval reuses this source. The final analytic cohort, preprocessing, and models are still pending and run only after approval.',
-          '批准后复用该数据源；最终分析队列、数据预处理和模型仍待执行，不会重复提取已有数据。',
-        ),
-      };
-    }
 
     // The cards that move a plan towards its run name a system-default
     // repeated-stay route (plan_decisions.repeated_stays_system_default_route).
@@ -177,6 +159,14 @@
         flowHint: tr('Process preview · no action needed yet', '流程预览 · 现在无需操作'),
         flowCurrent: tr('Current: waiting to generate the candidate plan', '当前：等待生成候选计划'),
         approve: tr('Generate candidate plan', '生成候选计划'),
+      };
+      if (code === 'plan_icd_source_unverified') return {
+        code, grants: [], nonApprovable: true, showPlanPreview: true,
+        title: tr('Configured diagnosis-code population cannot be verified', '已配置的诊断编码人群无法核验'),
+        note: tr(
+          'This version cannot verify that the diagnosis-code inclusion or exclusion was applied to the source. The saved review remains unchanged, other plan issues may also remain, and analysis cannot proceed with this condition. You may change the cohort in the conversation, update the question if needed, and review the complete revised plan.',
+          '当前版本无法核验数据来源是否实际施加了已配置的诊断编码纳排条件，原审阅记录保持不变，其他计划问题也可能仍需解决，不能按该条件开始分析。你可以在对话中修改人群，并在需要时同步修改研究问题，再审核完整的修订计划。',
+        ),
       };
       if (code === 'plan_configuration_superseded' || code === 'plan_review_not_resumable' || code === 'scientific_plan_review_policy_stale') return {
         code, grants: ['provider_run', 'literature'],
@@ -601,6 +591,7 @@
         requires_extraction: tr('needs data preparation', '需要数据准备'),
         not_applied: tr('not applied', '尚未施加'),
       };
+      const shownSourceQuotes = new Set();
       const rows = projection.criteria.map(item => {
         const c = item && item.criterion || {};
         const fields = [];
@@ -616,7 +607,19 @@
         if (['measurement', 'condition_present', 'event_absent'].includes(c.kind)) fields.push(`${tr('Unknown values', '无法判定时')}: ${missingLabels[c.missing_policy] || tr('not specified', '未注明')}`);
         if (c.kind === 'event_absent') fields.push(tr('Event must be absent', '要求事件未发生'));
         const role = c.role === 'exclude' ? tr('Exclude', '排除') : tr('Include', '纳入');
-        return `<li><strong>${esc(role)} · ${esc(c.quote || '')}</strong><small>${esc(fields.join(' · '))}</small><small>${esc(disposition[item.disposition] || tr('status unverified', '状态未核验'))}</small></li>`;
+        const ageBounds = [];
+        if (typeof c.min_years === 'number') ageBounds.push(`≥ ${c.min_years}`);
+        if (typeof c.max_years === 'number') ageBounds.push(`≤ ${c.max_years}`);
+        const title = c.kind === 'age_years' && ageBounds.length
+          ? `${tr('Age', '年龄')} ${ageBounds.join(' · ')} ${tr('years', '岁')}`
+          : c.kind === 'first_observed_icu_single_hospital_adult'
+            ? tr('Adult, one visible hospitalization and first verifiable ICU stay', '成年患者、仅一次可见住院且首次 ICU 可核实')
+            : String(c.quote || '');
+        const quote = String(c.quote || '');
+        const sourceQuote = title !== quote && quote && !shownSourceQuotes.has(quote)
+          ? `<small>${esc(tr('Source wording', '来源原文'))}: ${esc(quote)}</small>` : '';
+        if (title !== quote && quote) shownSourceQuotes.add(quote);
+        return `<li><strong>${esc(role)} · ${esc(title)}</strong>${sourceQuote}<small>${esc(fields.join(' · '))}</small><small>${esc(disposition[item.disposition] || tr('status unverified', '状态未核验'))}</small></li>`;
       }).join('');
       if (!rows) return '';
       return `<details class="gpi-confirmation-data-status" open><summary>${esc(tr('Population conditions in the reviewed plan', '待审计划中的人群条件'))}</summary><small>${esc(tr('These are the plan’s proposed conditions and decisions; review them before approval.', '这些是计划提出的条件和处理方式，请在批准前逐条审阅。'))}</small><ul>${rows}</ul></details>`;
@@ -708,6 +711,8 @@
         .map(resource => resourceButton(resource, resource.label));
       const reviewResources = reviewResourceButtons.join('');
       const review = host.workflow() && host.workflow().plan_review_summary;
+      const deferredScopeRejected = review && review.deferred_input_scope
+        && !validDeferredInputScope(review.deferred_input_scope);
       const planPreview = host.workflow() && host.workflow().plan_conversation_preview;
       const decisionItems = confirmation.code === 'plan_scientific_changes_required'
         && review && Array.isArray(review.authorization_questions)
@@ -742,6 +747,11 @@
           const copy = window.AGENT_RENDER.scientificFindingCopy({ code, remediation_route: route && route[0] });
           return `<li data-gpi-review-finding="${esc(code)}"><strong>${esc(copy.title)}</strong><span>${esc(copy.detail)}</span></li>`;
         }).join('') : '';
+      const icdSourceFinding = review && Array.isArray(review.finding_codes)
+        && review.finding_codes.includes('HOST_ICD_SOURCE_UNVERIFIED');
+      const icdSourceNotice = icdSourceFinding && window.AGENT_RENDER && window.AGENT_RENDER.scientificFindingCopy
+        ? (() => { const copy = window.AGENT_RENDER.scientificFindingCopy({ code: 'HOST_ICD_SOURCE_UNVERIFIED' });
+          return `<div class="gpi-confirmation-review-status"><strong>${esc(copy.title)}</strong><p>${esc(copy.detail)}</p></div>`; })() : '';
       const reviewStatus = confirmation.code === 'plan_scientific_changes_required'
         ? firstDecisionCopy
           ? `<div class="gpi-decision-evidence"><span>${esc(firstDecisionCopy.evidenceLabel)}</span><strong>${esc(firstDecisionCopy.evidenceStatus)}</strong><small>${esc(firstDecisionCopy.evidenceDetail)}</small></div><p class="gpi-decision-guidance">${esc(firstDecisionCopy.guidance)}</p>`
@@ -818,8 +828,29 @@
       };
       const planBlockerRows = planScopeValid && Array.isArray(planScope.blockers) ? planScope.blockers.map(code =>
         `<li>${esc(planScopeBlockers[code] || tr('Another dependency remains unverified.', '还有依赖尚未核实。'))}</li>`).join('') : '';
-      const planScopeDetails = planScopeValid ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Candidate research inputs and windows', '候选研究计划的输入与时间窗'))}</summary><p>${esc(tr('These coordinates come from the reviewed plan and context. Source verification hashes the raw table without decoding patient rows. This preview cannot authorize research data preparation or analysis.', '以下坐标来自已核验的候选计划和研究上下文。核验来源时会计算原始表摘要，但不解析患者记录。此预览不能授权科研数据准备或分析。'))}</p><p>${esc(tr('Plan step inputs', '计划步骤输入'))}</p><ul>${planInputRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Population requirements', '人群条件'))}</p><ul>${planPopulationRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Context windows', '上下文时间窗'))}</p><ul>${planWindowRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Still unverified', '尚未核实'))}</p><ul>${planBlockerRows}</ul></details>` : '';
-      const firstObservedDetails = firstObservedScope ? `<p>${esc(tr('The first verifiable ICU stay is retained only for adults with one visible hospitalization. Other hospitalizations and unverifiable identity, order, or age are excluded. This does not establish lifetime first ICU.', '仅保留一次可见住院且首次 ICU 可核实的成年患者；多次可见住院或身份、顺序、年龄无法核实的患者将被排除。这不能证明是终生首次 ICU。'))}</p><p>${esc(tr('Patient-table source fields', '患者表读取字段'))}: ${esc(preparationScope.source_columns.join(', '))}</p><p>${esc(tr('This prepares a private identity coordinate only. It does not read outcomes or run analysis. The subsequent research-data binding is not yet available.', '此步骤仅准备私有身份坐标，不读取结局，也不执行分析；后续科研数据绑定尚未接通。'))}</p>` : '';
+      const exportInventory = planScopeValid && planScope.declared_export_inventory;
+      const exportInventoryValid = exportInventory
+        && exportInventory.schema_version === 'easyicu.declared-export-read-inventory/1'
+        && exportInventory.all_manifest_files_will_be_snapshotted === true
+        && exportInventory.file_contents_verified === false
+        && exportInventory.preparation_authorized === false && exportInventory.analysis_authorized === false
+        && Array.isArray(exportInventory.files) && Array.isArray(exportInventory.metadata_files);
+      const exportInventoryRows = exportInventoryValid ? exportInventory.files.map(file =>
+        `<li>${esc(file.module)} · ${esc(file.file)}</li>`).join('') : '';
+      const exportInventoryDetails = exportInventoryValid ? `<details><summary>${esc(tr('Export files potentially read in full', '后续准备可能完整读取的导出文件'))}</summary><p>${esc(tr('If preparation is later authorized and the package passes validation, the native reader snapshots every file listed below, even when only selected columns are decoded. File contents, decoded columns, dependencies and storage costs remain unverified. No outcome data preparation is authorized.', '如果后续准备获授权且数据包通过校验，原生读取器会为下列全部文件建立完整快照，即使只提取其中部分列。文件内容、实际提取列、依赖和存储成本尚未核实，也尚未授权结局数据准备。'))}</p><ul>${exportInventoryRows}</ul><p>${esc(tr('Manifest-declared metadata files', '清单声明的元数据文件'))}: ${esc(exportInventory.metadata_files.join(', '))}</p></details>` : '';
+      const readScope = planScopeValid && planScope.candidate_read_scope;
+      const readScopeValid = readScope && readScope.schema_version === 'easyicu.candidate-research-read-scope/1'
+        && readScope.complete === false && readScope.preparation_authorized === false && readScope.analysis_authorized === false
+        && readScope.plan_dependencies && Array.isArray(readScope.plan_dependencies.required_source_concepts)
+        && Array.isArray(readScope.undeclared_source_concepts) && readScope.typed_columns && Array.isArray(readScope.typed_columns.files)
+        && /^[0-9a-f]{64}$/.test(String(planScope.candidate_read_scope_sha256 || ''));
+      const readScopeRows = readScopeValid ? readScope.typed_columns.files.map(file => {
+        const columns = Array.isArray(file.declared_columns) ? file.declared_columns.filter(item => readScope.plan_dependencies.required_source_concepts.includes(item.source_concept)) : [];
+        return columns.length ? `<li>${esc(file.file)} · ${esc(columns.map(item => `${item.source_concept}: ${item.column}`).join(', '))} · ${esc(tr('identity', '身份字段'))}: ${esc(file.identity_column)} · ${esc(tr('time fields', '时间字段'))}: ${esc((file.time_columns || []).join(', ') || tr('none declared', '未声明'))}</li>` : '';
+      }).join('') : '';
+      const readScopeDetails = readScopeValid ? `<details><summary>${esc(tr('Declared candidate fields', '已声明的候选字段'))}</summary><p>${esc(tr('These metadata declarations do not prove data availability, complete reads, or authorization. Preparation remains blocked.', '这些元数据声明不能证明数据可用、读取范围完整或已有授权；数据准备仍被阻断。'))}</p><p>${esc(tr('Required source concepts', '所需来源概念'))}: ${esc(readScope.plan_dependencies.required_source_concepts.join(', '))}</p><ul>${readScopeRows}</ul><p>${esc(tr('Concepts not declared in metadata', '元数据未声明的概念'))}: ${esc(readScope.undeclared_source_concepts.join(', ') || tr('none', '无'))}</p><p>${esc(tr('Candidate scope digest', '候选范围摘要'))}: ${esc(planScope.candidate_read_scope_sha256)}</p></details>` : '';
+      const planScopeDetails = planScopeValid ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Candidate research inputs and windows', '候选研究计划的输入与时间窗'))}</summary><p>${esc(tr('These coordinates come from the reviewed plan and context. Source verification hashes the raw table without decoding patient rows. This preview cannot authorize research data preparation or analysis.', '以下坐标来自已核验的候选计划和研究上下文。核验来源时会计算原始表摘要，但不解析患者记录。此预览不能授权科研数据准备或分析。'))}</p><p>${esc(tr('Plan step inputs', '计划步骤输入'))}</p><ul>${planInputRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Population requirements', '人群条件'))}</p><ul>${planPopulationRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul><p>${esc(tr('Context windows', '上下文时间窗'))}</p><ul>${planWindowRows || `<li>${esc(tr('None recorded', '未记录'))}</li>`}</ul>${exportInventoryDetails}${readScopeDetails}<p>${esc(tr('Still unverified', '尚未核实'))}</p><ul>${planBlockerRows}</ul></details>` : '';
+      const firstObservedDetails = firstObservedScope ? `<p>${esc(tr('Source', '来源'))}: ${esc(preparationScope.source_id || preparationScope.database)} · ${esc(preparationScope.source_version || '')}</p><p>${esc(tr('The first verifiable ICU stay is retained only for adults with one visible hospitalization. Other hospitalizations and unverifiable identity, order, or age are excluded. This does not establish lifetime first ICU.', '仅保留一次可见住院且首次 ICU 可核实的成年患者；多次可见住院或身份、顺序、年龄无法核实的患者将被排除。这不能证明是终生首次 ICU。'))}</p><p>${esc(tr('Patient-table source fields', '患者表读取字段'))}: ${esc(preparationScope.source_columns.join(', '))}</p><p>${esc(tr('Only the six listed fields are selected, retained and used for comparison and cohort calculation; outcome columns are not analyzed. After approval, integrity checks may repeatedly read and hash the entire official archive and patient Parquet, and stream and parse the decompressed patient CSV; those files can contain other information including outcomes. This prepares a private coordinate and does not authorize outcome analysis. Research-data binding is not yet available.', '仅选择、保留并使用所列六个字段进行比较和人群计算，不分析结局列。批准后完整性核验可能多次读取并计算整个官方压缩包和患者 Parquet 文件的摘要，并流式解压和解析患者 CSV；这些文件可能包含结局等其他信息。本步骤只准备私有坐标，不授权结局分析；科研数据绑定尚未接通。'))}</p>` : '';
       const preparationCanReview = Boolean(preparationOffer && (partialCsv || preparationRows || firstObservedScope));
       const preparationRun = String((host.workflow() || {}).raw_preparation_candidate_run_id || '');
       const preparationAttempt = (host.workflow() || {}).raw_preparation_candidate_result;
@@ -873,8 +904,8 @@
             : tr('The complete source files or their dependencies could not be verified yet. Preparation remains unavailable.', '尚无法核验完整来源文件或读取依赖，暂时不能开始准备。');
       // A candidate check is independent of the host's in-flight job. Do not
       // show its stale blocked preview as the result of that starting job.
-      const pendingPreparation = firstObservedStatusText
-        ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('First-ICU preparation', '首次 ICU 数据准备'))}</strong><small>${esc(firstObservedCanResume ? tr('The original approved preparation can be resumed. This reuses the same decision and task; it does not approve analysis.', '可继续原来已批准的准备任务，将沿用原决定和任务，不会批准科研分析。') : firstObservedStatusText)}</small>${firstObservedCanResume ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Resume original preparation', '继续原准备任务'))}</button>` : ''}<button type="button" class="btn sm" data-gpi-preparation-status-refresh>${esc(tr('Refresh preparation status', '刷新准备状态'))}</button></div>`
+      const pendingPreparation = review && review.deferred_input_scope ? '' : firstObservedStatusText
+        ? `<div class="gpi-confirmation-data-status"><strong>${esc(tr('First-ICU preparation', '首次 ICU 数据准备'))}</strong><small>${esc(firstObservedCanResume ? tr('The original approved preparation can be resumed. This reuses the same decision and task; it does not approve analysis.', '可继续原来已批准的准备任务，将沿用原决定和任务，不会批准科研分析。') : firstObservedStatusText)}</small>${firstObservedCanResume ? `<button type="button" class="btn sm" data-gpi-preparation-review="approved"${preparationReviewBusy ? ' disabled' : ''}>${esc(tr('Resume original preparation', '继续原准备任务'))}</button>` : ''}<button type="button" class="btn sm" data-gpi-preparation-status-refresh>${esc(tr('Refresh preparation status', '刷新准备状态'))}</button>${planScopeDetails}</div>`
         : confirmation.code === 'starting' && firstObservedPreview ? '' : preparation && preparation.status === 'awaiting_consumption_closure'
         ? `<details class="gpi-confirmation-data-status"><summary>${esc(tr('Proposed data preparation', '拟准备的数据范围'))}</summary><p>${esc(String(preparation.summary || ''))}</p>${partialCsvDetails}${firstObservedDetails}${planScopeDetails}${preparationRows ? `<ul>${preparationRows}</ul>` : ''}<small>${esc(preparationCanReview ? firstObservedScope ? tr(
           'Approval starts only this private coordinate preparation; research execution requires a separate reviewed plan and is not available from this step.',
@@ -922,7 +953,7 @@
       // (owner: screens-guided-pi-exposure-groups.js).
       const groupOwner = window.EasyICU.guidedPi.optional('exposureGroups');
       const groupNotes = groupOwner ? groupOwner.notesHtml(review, { tr, esc }) : '';
-      const dataStatus = confirmation.dataStatus
+      const dataStatus = confirmation.dataStatus && !(review && review.deferred_input_scope)
         ? confirmation.compactApproval
           ? `<div class="gpi-confirmation-data-status is-compact"><strong>${esc(confirmation.dataStatus.title)}${confirmation.dataStatus.sourceLabel ? ` · ${esc(confirmation.dataStatus.sourceLabel)}` : ''}</strong><small>${esc(confirmation.dataStatus.detail)}</small></div>`
           : `<div class="gpi-confirmation-data-status"><strong>${esc(confirmation.dataStatus.title)}</strong>${confirmation.dataStatus.sourceLabel ? `<span>${esc(confirmation.dataStatus.sourceLabel)}</span>` : ''}<small>${esc(confirmation.dataStatus.detail)}</small></div>`
@@ -962,8 +993,12 @@
       )
         ? planConversationHtml(planPreview)
         : '';
-      const displayedTitle = firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
-      const displayedNote = firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
+      const displayedTitle = review && review.deferred_input_scope
+        ? deferredScopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
+          : tr('Review the complete plan and data-read scope', '审阅完整计划与数据读取范围')
+        : firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
+      const displayedNote = review && review.deferred_input_scope ? ''
+        : firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
       const profileName = String(review && review.submission_profile_ref || '').split('/')[0];
       const desktopProfile = ['desktop_first_result_dev', 'desktop_first_result_live_pubmed_dev'].includes(profileName)
         ? `<p class="gpi-confirmation-profile">${esc(tr('This run produces analysis tables and figures, not a manuscript.', '本次只生成分析表格和图形，不写论文。'))}</p>`
@@ -971,6 +1006,7 @@
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
       const reviewedPopulation = reviewedPopulationSpecHtml(review && review.reviewed_population_spec);
+      const deferredInputScope = deferredInputScopeHtml(review && review.deferred_input_scope);
       // index.html always loads this owner (static contract); harnesses that
       // load the confirmation alone simply show no database card.
       const adjustmentOwner = window.EasyICU.guidedPi.optional('sourceAdjustments');
@@ -982,13 +1018,14 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
-          ${decisionActions && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
+          ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount && !icdSourceFinding) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
+          ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
+          ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
-          ${confirmation.retryPlanRevision ? `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.retryLabel)}</button>` : confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action${confirmation.approveDisabled ? ' disabled' : ''}>${esc(confirmation.approve)}</button>`}
+          ${confirmation.retryPlanRevision ? `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.retryLabel)}</button>` : confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action${confirmation.approveDisabled || deferredScopeRejected ? ' disabled' : ''}>${esc(confirmation.approve)}</button>`}
         </div>
       </section>`;
     }
@@ -1418,6 +1455,12 @@
 
     function planChangeDraft() {
       const workflow = host.workflow() || {};
+      const findingCodes = (workflow.plan_review_summary || {}).finding_codes;
+      if (workflow.next_action_code === 'plan_icd_source_unverified'
+          || (Array.isArray(findingCodes) && findingCodes.includes('HOST_ICD_SOURCE_UNVERIFIED'))) return tr(
+        'I want to change the cohort and, if needed, the research question as follows: ',
+        '我想按以下内容修改研究人群，并在需要时修改研究问题：',
+      );
       if (['study_family_database_out_of_scope', 'study_family_reading_disagreement'].includes(workflow.next_action_code)) return tr(
         'I want to change the study design or data source: ', '我想修改研究设计或数据来源：',
       );

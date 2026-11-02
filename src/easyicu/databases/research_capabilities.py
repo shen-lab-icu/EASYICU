@@ -140,11 +140,11 @@ def _loader_output(name: str, database: str) -> ConceptAvailability:
     return ConceptAvailability(concept=name, mapped=False, defined=False, source="concept-dict.json+sofa2-dict.json")
 
 
-@lru_cache(maxsize=1)
-def _dictionary():
+@lru_cache(maxsize=16)
+def _dictionary(source_name: str | None = None):
     from easyicu.resources import load_dictionary
 
-    return load_dictionary(include_sofa2=True)
+    return load_dictionary(include_sofa2=True, source_name=source_name)
 
 
 def _field(config, table: str, column: str, *, source: str | None = None,
@@ -172,13 +172,19 @@ def _identifier_field(config, unit: str, attribute: str) -> SourceField | None:
 
 
 def _concepts(config) -> tuple[ConceptAvailability, ...]:
-    dictionary = _dictionary()
+    from easyicu.resources import SIC_CASE_OVERLAY_CONCEPTS, SIC_CASE_OVERLAY_FILE
+
+    dictionary = _dictionary(config.name)
     seen: dict[str, ConceptAvailability] = {}
 
     def read(name: str, visiting: frozenset[str] = frozenset()) -> ConceptAvailability:
         if name in seen:
             return seen[name]
-        origin = f"concept-dict.json+sofa2-dict.json#/{name}"
+        origin = (
+            f"{SIC_CASE_OVERLAY_FILE}#/{name}"
+            if config.name == "sic" and name in SIC_CASE_OVERLAY_CONCEPTS
+            else f"concept-dict.json+sofa2-dict.json#/{name}"
+        )
         definition = dictionary.get(name)
         if definition is None or name in visiting:
             return ConceptAvailability(concept=name, mapped=False, defined=definition is not None, source=origin)
@@ -214,7 +220,7 @@ def _concepts(config) -> tuple[ConceptAvailability, ...]:
 
 
 def _numeric(config, name: str) -> NumericRepresentation:
-    definition = _dictionary()[name]
+    definition = _dictionary(config.name)[name]
     entries = definition.for_data_source(config)
     source = f"concept-dict.json#/{name}/sources/{config.name}"
     if not entries:
@@ -272,7 +278,7 @@ def _numeric(config, name: str) -> NumericRepresentation:
 
 
 def _mortality(config) -> MortalityCapability | None:
-    entries = _dictionary()["death"].for_data_source(config)
+    entries = _dictionary(config.name)["death"].for_data_source(config)
     if not entries:
         return None
     item = entries[0]

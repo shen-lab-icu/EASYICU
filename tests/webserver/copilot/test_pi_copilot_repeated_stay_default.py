@@ -312,15 +312,15 @@ def _card(code: str, summary: dict[str, Any]) -> str:
     if node is None:
         pytest.skip("Node.js is unavailable")
     script = r"""
-let declared = null;
-global.window = {
-  EU_LANG: 'zh',
-  EasyICU: { guidedPi: { declare: (_name, api) => { declared = api; }, optional: () => null } },
-};
+global.window = { EU_LANG: 'zh' };
+const path = require('node:path');
+const ownerDir = path.dirname(process.argv[1]);
+require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
+require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const code = process.argv[2];
 const summary = JSON.parse(process.argv[3]);
-const owner = declared.create({
+const owner = window.EasyICU.guidedPi.require('confirmation').create({
   tr: (en, zh) => zh || en,
   esc: value => String(value),
   iconHtml: () => '',

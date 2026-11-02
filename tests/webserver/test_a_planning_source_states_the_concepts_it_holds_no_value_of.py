@@ -48,6 +48,16 @@ def export(tmp_path, monkeypatch):
             source="export", concepts=[CatalogConcept("death"), CatalogConcept("age")]
         ),
     )
+    from easyicu.concept.metadata_projection import (
+        ColumnProjectionSpec, ConceptColumnRole, project_concept_column_metadata,
+    )
+    from easyicu.concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE, ColumnMetadataBinding, ColumnMetadataFileBinding,
+        ColumnMetadataSidecar, write_content_addressed_sidecar,
+    )
+    from easyicu.concept.schema import ConceptDefinition
+    from easyicu.resources import load_dictionary
+
     root = tmp_path / "export"
     root.mkdir()
     statuses = {
@@ -56,24 +66,32 @@ def export(tmp_path, monkeypatch):
         "circulatory": {"circ_failure": "produced_all_null"},
         "other_scores": {"apache_iv": "structurally_unavailable_placeholder"},
     }
-    (root / NATIVE_MANIFEST).write_text(
-        json.dumps(
-            {
-                "database": "miiv",
-                "files": [
-                    {
-                        "module": module,
-                        "concept_status": {
-                            concept: {"availability": availability}
-                            for concept, availability in concepts.items()
-                        },
-                    }
-                    for module, concepts in statuses.items()
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    values = {"death": [False], "age": [65], "circ_failure": [None], "apache_iv": [None]}
+    definitions = load_dictionary(include_sofa2=True)
+    bindings, entries = [], []
+    for module, concepts in statuses.items():
+        concept, availability = next(iter(concepts.items()))
+        filename = module + ".parquet"
+        pd.DataFrame({"stay_id": [1], concept: values[concept]}).to_parquet(root / filename, index=False)
+        definition = definitions.get(concept) or ConceptDefinition(name=concept, sources={})
+        metadata = project_concept_column_metadata(
+            definition, spec=ColumnProjectionSpec(column_name=concept, source_concept=concept,
+                role=ConceptColumnRole.VALUE), source_database="miiv",
+        )
+        bindings.append(ColumnMetadataFileBinding(relative_path=filename, module=module,
+            identity_column="stay_id", time_coordinates=(),
+            columns={concept: ColumnMetadataBinding(metadata=metadata)}))
+        entries.append({"file": filename, "module": module, "concepts": 1,
+            "concept_ids": [concept], "column_metadata_columns": [concept], "rows": 1,
+            "concept_status": {concept: {"availability": availability}}})
+    sidecar = ColumnMetadataSidecar(source_database="miiv", source_database_class_prefixes=(),
+        scope=EXPORT_PHYSICAL_SCOPE, files=tuple(bindings))
+    reference = write_content_addressed_sidecar(root, sidecar)
+    (root / NATIVE_MANIFEST).write_text(json.dumps({"schema_version": "easyicu_native_export_v2",
+        "database": "miiv", "format": "parquet", "feature_definitions": {"included": False},
+        "concept_selection": {"mode": "explicit", "modules": {module: list(concepts)
+            for module, concepts in statuses.items()}},
+        "column_metadata": reference.to_dict(), "files": entries}), encoding="utf-8")
     return root
 
 

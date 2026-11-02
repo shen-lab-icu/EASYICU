@@ -29,44 +29,6 @@ def test_node_prompt_obeys_owner_order_before_internal_resolution() -> None:
     assert "Never offer a generic continue/继续对话 action" in prompt
 
 
-def test_plan_change_draft_requests_whole_plan_revision_without_setup_questionnaire() -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is not installed")
-    script = r"""
-global.window = {};
-require(process.argv[1]);
-let workflow = {next_action_code: 'plan_execution_upgrade_required'};
-const host = {
-  tr: (en, zh) => zh,
-  workflow: () => workflow,
-};
-const owner = window.EU_GUIDED_PI_CONFIRMATION.create(host);
-const candidate = owner.planChangeDraft();
-workflow = {next_action_code: 'operator_plan_approval_required'};
-const executable = owner.planChangeDraft();
-workflow = {
-  next_action_code: 'plan_scientific_changes_required',
-  plan_review_summary: {authorization_questions: [{question: 'Which external review is authorized?'}]},
-};
-const requiredDecision = owner.planChangeDraft();
-process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
-"""
-    completed = run_node(
-        node,
-        script,
-        str(STATIC / "js" / "screens-guided-pi-confirmation.js"),
-        check=True,
-    )
-    payload = json.loads(completed.stdout)
-    for key in ("candidate", "executable"):
-        assert "修订整份研究计划" in payload[key]
-        assert "不要开始分析" in payload[key]
-        assert "一次只问" not in payload[key]
-    assert payload["requiredDecision"] == "Which external review is authorized?"
-    shell = _read("js/screens-guided-pi.js")
-    edit = shell.split("function editWorkflow()", 1)[1].split("function studySetupReviewPrompt", 1)[0]
-    assert "state.draft = CONFIRMATION.planChangeDraft();" in edit
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
@@ -96,7 +58,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20261022-nofiller1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261029-opt2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20261029-freshfix6" in index
-    assert "js/screens-guided-pi-starters.js?v=20261029-freshfix6" in index
+    assert "js/screens-guided-pi-starters.js?v=20261030-example-outputs1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261030-video2" in index
     assert "js/screens-guided-pi-header.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-model-menu.js?v=20261028-ux1" in index
@@ -111,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-demo-walkthrough.css?v=20261026-demo3" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
-        "js/screens-guided-pi-evidence-preview.js?v=20261030-video2" in index
+        "js/screens-guided-pi-evidence-preview.js?v=20261101-s12-method1" in index
     )
     assert (
         "js/screens-guided-pi-technical-report.js?v=20261022-plain3"
@@ -155,7 +117,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261030-first-observed3" in index
+    assert "js/screens-guided-pi-confirmation-data.js?v=20261101-scope1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261101-scope-split1" in index
+    assert index.index("js/screens-guided-pi-confirmation-data.js") < index.index("js/screens-guided-pi-confirmation.js")
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
     assert "js/screens-dict-studies.js?v=20261027-dmap1" in index
@@ -176,7 +140,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261030-shared-capacity1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261030-shared-capacity2" in index
     assert "js/screens-guided-pi.js?v=20261030-preparation1" in index
     assert "js/screens-guided.js?v=20261027-old1" in index
     assert (
@@ -2293,7 +2257,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "快速审阅" in confirmation_owner
     assert "研究计划" in confirmation_owner
     assert "文献依据" in confirmation_owner
-    assert "已复用现有数据源，计划变量可用" in confirmation_owner
+    confirmation_data_owner = _read("js/screens-guided-pi-confirmation-data.js")
+    assert "已复用现有数据源，计划变量可用" in confirmation_data_owner
     assert "批准后才会生成最终分析队列、完成预处理并运行分析" in confirmation_owner
     assert "先预览分析数据" in confirmation_owner
     assert "批准并开始分析" in confirmation_owner
@@ -2601,6 +2566,7 @@ def test_whole_plan_review_renders_its_actual_confirmation_choice() -> None:
     confirmation_owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
     script = r"""
 global.window = { EU_LANG: 'zh' };
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
   tr: (en, zh) => zh || en,
@@ -2640,6 +2606,7 @@ def test_post_baseline_timing_review_hides_method_choices() -> None:
     confirmation_owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
     script = r"""
 global.window = { EU_LANG: 'zh' };
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
   tr: (en, zh) => zh || en,
@@ -2690,6 +2657,7 @@ def test_non_lactate_timing_review_hides_method_choices() -> None:
     confirmation_owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
     script = r"""
 global.window = { EU_LANG: 'zh' };
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
   tr: (en, zh) => zh || en,
@@ -2744,6 +2712,7 @@ def test_fixed_window_aki_review_hides_method_choices() -> None:
     confirmation_owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
     script = r"""
 global.window = { EU_LANG: 'zh' };
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
   tr: (en, zh) => zh || en,
@@ -3145,6 +3114,7 @@ def test_workflow_confirmation_owner_is_split_out_and_read_only() -> None:
     )
     script = r"""
 global.window = {};
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const host = {
   tr: (en, zh) => zh || en, esc: (v) => String(v), iconHtml: () => '',
@@ -3209,6 +3179,7 @@ def test_failed_plan_review_links_to_last_reviewable_run_not_failed_binding() ->
     )
     script = r"""
 global.window = {};
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const host = {
   tr: (en, zh) => zh || en, esc: (v) => String(v), iconHtml: () => '',

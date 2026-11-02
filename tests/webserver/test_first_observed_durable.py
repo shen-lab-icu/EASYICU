@@ -7,12 +7,12 @@ import pytest
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import FLAG_COLUMN, REASON_COLUMN
+from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
 from easyicu.webserver import agent_pipeline_runs, first_observed_preparation as producer, jobs, raw_preparation_durable as durable, study_contexts
 from easyicu.webserver.host_action_contracts import HostActionRequest, HostActionTag, RawPreparationReviewDecision, decision_key, host_action_id
 from easyicu.webserver.pi_copilot import service
 from easyicu.webserver.raw_preparation_decisions import record_host_review
-from tests.webserver.test_first_observed_preparation_boundaries import _pending
+from tests.support.first_observed_pending import PATIENT_SHA, _pending
 
 
 def _case(tmp_path, monkeypatch):
@@ -43,6 +43,8 @@ def _case(tmp_path, monkeypatch):
     checkpoint = record_host_review(host_action=action, pending=pending, decision="approved", study_context_id="study",
                                     job_id="job", run_id="run", scientific_configuration_sha256="2" * 64)
     monkeypatch.setattr(producer, "_host_inputs", lambda **_: (scope, tmp_path))
+    monkeypatch.setattr(producer, "resolve_raw_source_identity_binding", lambda **_: SimpleNamespace(
+        table_sha256={"patient": PATIENT_SHA}))
     job = SimpleNamespace(id="job", is_cancel_requested=lambda: False, tag_host_action=lambda _: True,
                           register_cancel_callback=lambda _: lambda: None)
     return scope, checkpoint, binding, job
@@ -50,7 +52,7 @@ def _case(tmp_path, monkeypatch):
 
 def test_consumed_completed_coordinate_recovers_without_a_second_source_read(tmp_path, monkeypatch):
     scope, checkpoint, binding, job = _case(tmp_path, monkeypatch)
-    proof = {"official_release_independently_verified": True, "patient_table_sha256": scope["patient_table_sha256"],
+    proof = {"official_release_independently_verified": True, "patient_table_sha256": PATIENT_SHA,
              "export_manifest_sha256": scope["export_manifest_sha256"], "complete_patient_source": {
                  "schema_version": "easyicu.eicu_demo_complete_patient_source/1", "all_source_rows_compared": True,
                  "archive_sha256": scope["archive_sha256"]}}

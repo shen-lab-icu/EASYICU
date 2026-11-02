@@ -241,7 +241,12 @@ def pipeline_instance_lifecycle(
                 else lease.begin_resume(pending_review_run_id=pending_run_id)
             )
             try:
-                return method(self, *args, **kwargs)
+                from ..providers.structured_retry import automatic_retry_scope
+
+                with automatic_retry_scope(disabled=getattr(
+                    getattr(self, "_config", None), "no_automatic_retries", False
+                ) is True):
+                    return method(self, *args, **kwargs)
             finally:
                 pending_run_id = _pending_review_run_id(self)
                 if pending_run_id:

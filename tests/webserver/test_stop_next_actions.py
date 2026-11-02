@@ -285,6 +285,22 @@ def test_pending_researcher_decisions_do_not_offer_plan_replacement(code):
     assert owner.next_actions_for_stop(code) == []
 
 
+
+@pytest.mark.parametrize("code", [
+    "research_pipeline_demo_planning_authority_stale",
+    "research_pipeline_first_observed_input_binding_unavailable",
+    "controlled_candidate_provider_identity_changed",
+    "research_pipeline_deferred_review_stage_mismatch",
+    "research_pipeline_deferred_review_unverified",
+    "research_pipeline_planning_native_metadata_invalid",
+])
+def test_stale_source_or_first_icu_binding_never_offers_retry_or_population_removal(code):
+    detail = {"element": "population", "question_required": False,
+              "reason_code": "missing_data", "cause_code": "source_unavailable"}
+    assert owner.next_actions_for_stop(code, detail=detail) == []
+    job = project_job({"id": "synthetic_job", "status": "failed", "error": code})
+    assert job["next_actions"] == []
+
 def test_changed_time_origin_requires_a_new_reviewed_plan():
     actions = owner.next_actions_for_stop("candidate_plan_time_origin_binding_invalid")
     assert [action.kind for action in actions] == ["edit_plan"]

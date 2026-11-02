@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from contextlib import contextmanager
 from importlib import resources
 from pathlib import Path
@@ -12,6 +13,44 @@ from .concept import ConceptDictionary
 from .config import DataSourceRegistry
 
 _DATA_PACKAGE = "easyicu.data"
+SIC_CASE_OVERLAY_FILE = "sic-case-duration-overlay.v1.json"
+SIC_CASE_OVERLAY_SHA256 = "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b"
+SIC_CASE_OVERLAY_CONCEPTS = frozenset({
+    "care_unit_to_case_closure_days", "death_during_case", "death_time_during_case_hours",
+})
+
+
+def _sic_case_overlay() -> Mapping[str, Any]:
+    """Load the separately versioned SIC definitions only with exact identity."""
+    resource = resources.files(_DATA_PACKAGE).joinpath(SIC_CASE_OVERLAY_FILE)
+    data = resource.read_bytes()
+    if hashlib.sha256(data).hexdigest() != SIC_CASE_OVERLAY_SHA256:
+        raise ValueError("sic_case_overlay_identity_mismatch")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != SIC_CASE_OVERLAY_CONCEPTS:
+        raise ValueError("sic_case_overlay_concept_mismatch")
+    if any(not isinstance(value, dict) or set(value.get("sources", {})) != {"sic"}
+           for value in payload.values()):
+        raise ValueError("sic_case_overlay_source_mismatch")
+    return payload
+
+
+def _is_sic_source(source_name: Optional[str]) -> bool:
+    if not source_name:
+        return False
+    from .databases.profiles import get_database_profile
+
+    try:
+        return get_database_profile(source_name).key == "sic"
+    except (KeyError, ValueError):
+        return False
+
+
+def require_sic_case_overlay(dictionary: ConceptDictionary) -> None:
+    """Reject attempts to replace a pinned SIC source definition in place."""
+    expected = ConceptDictionary.from_payload(_sic_case_overlay())
+    if any(dictionary.get(name) != expected.get(name) for name in SIC_CASE_OVERLAY_CONCEPTS):
+        raise ValueError("sic_case_overlay_definition_mismatch")
 
 @contextmanager
 def package_path(filename: str) -> Iterator[Path]:
@@ -92,6 +131,7 @@ def load_dictionary(
     *,
     extras: Optional[Sequence[str]] = None,
     include_sofa2: bool = False,
+    source_name: Optional[str] = None,
 ) -> ConceptDictionary:
     """Load the concept dictionary with optional overlays.
 
@@ -105,17 +145,24 @@ def load_dictionary(
             Same-name sources are merged by database; explicitly provided
             metadata fields override the base definition.
         include_sofa2: Convenience flag to append the packaged ``sofa2-dict`` overlay.
+        source_name: Optional source identity. The packaged SIC case overlay is
+            selected only for SIC; the historic base remains unchanged.
 
     Returns:
         ConceptDictionary with merged definitions.
     """
 
-    dictionary = ConceptDictionary.from_payload(
-        _load_json_payload(name, directories)
-    )
+    payload = _load_json_payload(name, directories)
+    is_packaged_default = name.removesuffix(".json") == "concept-dict" and resolve_resource(name, directories) is None
+    if is_packaged_default and _is_sic_source(source_name):
+        overlay = _sic_case_overlay()
+        if set(payload) & set(overlay):
+            raise ValueError("sic_case_overlay_concept_collision")
+        payload = {**payload, **overlay}
+    dictionary = ConceptDictionary.from_payload(payload)
     # Computed outputs have no raw-source mapping in the sealed dictionary.
     # Declare their domains before applying caller-supplied overlays.
-    if name.removesuffix(".json") == "concept-dict" and resolve_resource(name, directories) is None:
+    if is_packaged_default:
         derived = ConceptDictionary.from_payload(_load_package_json("derived-outcome-dict.json"))
         derived.update(dictionary)
         dictionary = derived
@@ -127,5 +174,8 @@ def load_dictionary(
     for extra in extra_names:
         overlay = _load_json_payload(extra, directories)
         dictionary.update(ConceptDictionary.from_payload(overlay))
+
+    if is_packaged_default and _is_sic_source(source_name):
+        require_sic_case_overlay(dictionary)
 
     return dictionary

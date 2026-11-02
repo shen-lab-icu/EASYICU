@@ -1888,7 +1888,7 @@ def _module_parquet_columns(columns, concepts, *, include_missing=False):
 def _module_arrow_storage_kind(concept: str) -> str:
     return _native_export_storage_kind(
         concept,
-        load_dictionary(include_sofa2=True),
+        load_dictionary(include_sofa2=True, source_name="sic"),
     )
 
 
@@ -3775,7 +3775,7 @@ def _capture_worker_failure(
             }
         )
     try:
-        record["runtime_provenance"] = _native_export_runtime_provenance()
+        record["runtime_provenance"] = _native_export_runtime_provenance(source_name=database)
     except Exception as exc:
         record["runtime_provenance"] = {
             "error_type": type(exc).__name__,
@@ -6143,7 +6143,7 @@ def _enforce_native_export_concept_bounds(
     return audit
 
 
-def _native_export_runtime_provenance() -> Dict[str, object]:
+def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict[str, object]:
     """Capture enough runtime identity to reproduce or diagnose an export."""
     import hashlib
     import importlib.metadata
@@ -6211,6 +6211,17 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
         package_version = importlib.metadata.version("easyicu")
     except importlib.metadata.PackageNotFoundError:
         package_version = None
+    overlay_metadata = {}
+    from ..resources import SIC_CASE_OVERLAY_FILE, SIC_CASE_OVERLAY_SHA256, _is_sic_source, _sic_case_overlay
+    if _is_sic_source(source_name):
+        _sic_case_overlay()  # Verify the packaged version before binding it.
+        overlay_path = package_root / "data" / SIC_CASE_OVERLAY_FILE
+        overlay_bytes = overlay_path.read_bytes()
+        if hashlib.sha256(overlay_bytes).hexdigest() != SIC_CASE_OVERLAY_SHA256:
+            raise ValueError("sic_case_overlay_identity_mismatch")
+        digest.update(overlay_path.name.encode("utf-8"))
+        digest.update(overlay_bytes)
+        overlay_metadata = {"sic_case_overlay_sha256": hashlib.sha256(overlay_bytes).hexdigest()}
     return {
         "easyicu_version": package_version,
         "easyicu_git_commit": git_commit,
@@ -6219,6 +6230,7 @@ def _native_export_runtime_provenance() -> Dict[str, object]:
         "easyicu_import_path": str(package_root),
         "concept_catalog_sha256": digest.hexdigest(),
         **foundation_sha256,
+        **overlay_metadata,
         "python_version": platform.python_version(),
         "python_executable": sys.executable,
         "platform": platform.platform(),
@@ -6298,7 +6310,7 @@ def _publish_native_export_v2(
     published_modules = list(modules)
 
     normalized_database = str(database).strip().lower()
-    dictionary = load_dictionary(include_sofa2=True)
+    dictionary = load_dictionary(include_sofa2=True, source_name=normalized_database)
     source_config = load_src_cfg(normalized_database)
     class_prefixes = tuple(
         str(value).strip().lower()
@@ -6812,7 +6824,7 @@ def _publish_native_export_v2(
         "resource_budget_mb": result.get("resource_budget_mb"),
         "resource_execution_limits": result.get("resource_execution_limits"),
         "time_window_authority": time_window_authority,
-        "runtime_provenance": _native_export_runtime_provenance(),
+        "runtime_provenance": _native_export_runtime_provenance(source_name=normalized_database),
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
         "concept_selection": {

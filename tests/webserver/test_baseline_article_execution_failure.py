@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
 from easyicu.research_agent.execution.runners.baseline_association_executor import run_baseline_step
 from easyicu.research_agent.pipeline import _shape_fresh_plan
@@ -21,7 +22,7 @@ def _article(tmp_path):
     draft = baseline_plan_attempt(context)[0].output
     runtime = runtime.seal_for_plan(draft)
     shaped = _shape_fresh_plan(
-        SimpleNamespace(_scientific_runtime_authorities=runtime, _enable_publication_figure_skill=True, _max_total_steps=20),
+        SimpleNamespace(_scientific_runtime_authorities=runtime, _services=PipelineServices(), _enable_publication_figure_skill=True, _max_total_steps=20),
         plan=draft, context=context, agent_context=context, long_trajectory_bound=False, findings=[],
     )
     return context, runtime, shaped

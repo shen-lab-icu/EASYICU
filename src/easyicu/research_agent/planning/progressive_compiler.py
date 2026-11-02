@@ -28,7 +28,7 @@ from ..contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
 )
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
-from ..contracts.cohort_summary_products import auxiliary_summary_product
+from ..contracts.cohort_summary import auxiliary_summary_product
 from ..contracts.cohort_summary import DESCRIPTIVE_SUMMARY_ACTION, DESCRIPTIVE_SUMMARY_OUTPUTS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec, level_spelling
@@ -99,7 +99,7 @@ from .dependence_authority import (
     descriptive_counts_only_required,
     descriptive_interval_decision,
 )
-from ..contracts.continuous_outcome_metadata import continuous_summary_columns
+from ..contracts.continuous_outcome_summary import continuous_summary_columns
 from .exposure_group_reader_names import exposure_group_display_labels
 from .exposure_group_compile import ExposureGroupContrastError, validate_exposure_group_contrasts
 from .distribution_authority import distribution_policy_issues
@@ -108,7 +108,7 @@ from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordered_trend_binding
 from .population_compile import CompiledPopulation, compile_population
-from .population_question_completeness import (
+from .population_review import (
     adult_age_source_unverified,
     adult_population_accounted_for,
     explicit_adult_population,

@@ -58,6 +58,23 @@ def test_recorded_lock_identities_match_the_repository() -> None:
     assert f"digest={recorded['base_image_digest']}" in base_lock
 
 
+def test_current_runner_lock_is_a_pinned_successor_of_the_recorded_lock() -> None:
+    """The old rollback coordinate remains intact while the image uses the successor."""
+    from easyicu.research_agent.execution.kernel_identity import RUNNER_PACKAGE_LOCK_NAME
+
+    original = (RUNNER_IMAGE / "requirements.lock").read_text(encoding="utf-8")
+    current = (RUNNER_IMAGE / RUNNER_PACKAGE_LOCK_NAME).read_text(encoding="utf-8")
+    assert original.count("pydantic==2.13.4\n") == 1
+    assert current == original.replace(
+        "pydantic==2.13.4\n", "pydantic==2.13.4\npydantic-core==2.46.4\n"
+    )
+    dockerfile = (RUNNER_IMAGE / "Dockerfile").read_text(encoding="utf-8")
+    assert (
+        f"COPY src/easyicu/research_agent/runner_image/{RUNNER_PACKAGE_LOCK_NAME} "
+        "/opt/easyicu-runner/requirements.lock"
+    ) in dockerfile
+
+
 def test_known_uncovered_methods_stay_registered() -> None:
     payload = _load()
     not_covered = payload["layer_2_numeric_oracles"]["known_not_covered"]

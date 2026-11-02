@@ -235,7 +235,7 @@ def test_audit_responses_keep_paths_on_desktop_only(isolated, monkeypatch, hoste
 
 def test_download_rechecks_id_resolved_path_before_manifest_read(isolated, monkeypatch):
     monkeypatch.setenv("EASYICU_HOSTED", "1")
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [
         {"id": "src_0123456789ab", "ok": True, "path": "/another-user/export"},
     ]})
     response = TestClient(app).post("/api/workspaces/download", json={"source_id": "src_0123456789ab"})

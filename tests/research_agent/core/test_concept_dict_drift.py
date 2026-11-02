@@ -38,6 +38,7 @@ def test_assert_dict_matches_passes_on_identical_sha() -> None:
             fingerprint,
             expected_concept_dict_sha=fingerprint.concept_dict_sha,
             expected_sofa2_dict_sha=fingerprint.sofa2_dict_sha,
+            expected_sic_case_overlay_sha=fingerprint.sic_case_overlay_sha,
             mode="strict",
         )
         == []
@@ -135,8 +136,16 @@ def test_replay_passes_when_unchanged(tmp_path: Path) -> None:
         tmp_path,
         concept_sha=fingerprint.concept_dict_sha,
         sofa2_sha=fingerprint.sofa2_dict_sha,
+        overlay_sha=fingerprint.sic_case_overlay_sha,
     )
     assert verify_replay_dict_match(tmp_path) == []
+
+
+def test_replay_of_old_base_only_manifest_rejects_installed_overlay(tmp_path: Path) -> None:
+    fingerprint = compute_concept_dict_fingerprint()
+    _write_manifest(tmp_path, concept_sha=fingerprint.concept_dict_sha, sofa2_sha=fingerprint.sofa2_dict_sha)
+    with pytest.raises(ConceptDictDriftError, match="overlay SHA mismatch"):
+        verify_replay_dict_match(tmp_path)
 
 
 def test_checkpoint_manifest_dict_authority_rejects_mismatch() -> None:
@@ -152,8 +161,9 @@ def test_checkpoint_manifest_dict_authority_rejects_mismatch() -> None:
         verify_recorded_dict_match(manifest, mode="strict")
 
 
-def test_checkpoint_manifest_without_legacy_dict_authority_remains_compatible() -> None:
-    assert verify_recorded_dict_match({}, mode="strict") == []
+def test_checkpoint_manifest_without_dict_authority_rejects_installed_overlay() -> None:
+    with pytest.raises(ConceptDictDriftError, match="no concept dictionary fingerprint"):
+        verify_recorded_dict_match({}, mode="strict")
     assert verify_recorded_dict_match({}, mode="soft") == [
         "manifest has no concept dictionary fingerprint to verify"
     ]
@@ -216,7 +226,7 @@ def test_sofa2_and_concept_dict_tracked_independently(tmp_path: Path) -> None:
     assert "concept-dict.json SHA mismatch" not in message
 
 
-def _write_manifest(tmp_path: Path, *, concept_sha: str, sofa2_sha: str) -> None:
+def _write_manifest(tmp_path: Path, *, concept_sha: str, sofa2_sha: str, overlay_sha: str | None = None) -> None:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "manifest.json").write_text(
         json.dumps(
@@ -226,9 +236,87 @@ def _write_manifest(tmp_path: Path, *, concept_sha: str, sofa2_sha: str) -> None
                     "concept_dict_sha": concept_sha,
                     "sofa2_dict_path": "easyicu/data/sofa2-dict.json",
                     "sofa2_dict_sha": sofa2_sha,
+                    "sic_case_overlay_sha": overlay_sha,
                     "computed_at": "2026-05-27T00:00:00Z",
                 }
             }
         ),
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "oversized"])
+def test_run_fingerprint_rejects_replacement_after_evidence_verification(tmp_path, monkeypatch, replacement):
+    from easyicu.research_agent.authority import runtime_artifacts
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.concept_dict_audit import (
+        sealed_run_dictionary_manifest_fields, write_concept_dict_fingerprint,
+    )
+
+    root_path = tmp_path / "concept_dict_fingerprint.json"
+    write_concept_dict_fingerprint(root_path)
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_file(kind="log", description="Frozen dictionaries", source_path=root_path,
+                           evidence_id="concept_dict_fingerprint")
+    original = runtime_artifacts.verified_run_evidence_path
+
+    def replace_after_verification(run_dir, record):
+        selected = original(run_dir, record)
+        assert selected is not None
+        if replacement == "symlink":
+            target = tmp_path / "untrusted"
+            target.write_text("untrusted")
+            selected.unlink()
+            selected.symlink_to(target)
+        else:
+            selected.write_bytes(b"x" * 16385)
+        return selected
+
+    monkeypatch.setattr(runtime_artifacts, "verified_run_evidence_path", replace_after_verification)
+    with pytest.raises(ConceptDictDriftError, match="evidence unreadable"):
+        sealed_run_dictionary_manifest_fields(tmp_path, evidence)
+
+
+def test_final_dictionary_fields_reject_a_midrun_package_change(tmp_path, monkeypatch):
+    from easyicu.research_agent import concept_dict_audit
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.orchestration.finalize import _concept_dictionary_manifest_fields
+
+    root_path = tmp_path / "concept_dict_fingerprint.json"
+    fingerprint = concept_dict_audit.write_concept_dict_fingerprint(root_path)
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_file(kind="log", description="Frozen dictionaries", source_path=root_path,
+                           evidence_id="concept_dict_fingerprint")
+    assert _concept_dictionary_manifest_fields(tmp_path, evidence)["concept_dict_fingerprint"] == fingerprint.to_dict()
+    monkeypatch.setattr(concept_dict_audit, "compute_concept_dict_fingerprint",
+                        lambda: replace(fingerprint, concept_dict_sha="0" * 64))
+    with pytest.raises(ConceptDictDriftError, match="concept-dict.json SHA mismatch"):
+        _concept_dictionary_manifest_fields(tmp_path, evidence)
+
+
+def test_dictionary_drift_during_context_build_stops_before_planning(ra, synthetic_cohort, tmp_path, monkeypatch):
+    from easyicu.research_agent import concept_dict_audit, pipeline as pipeline_module
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
+
+    original_builder = pipeline_module.build_research_context
+    fingerprint = concept_dict_audit.compute_concept_dict_fingerprint()
+
+    def build_then_change(*args, **kwargs):
+        context = original_builder(*args, **kwargs)
+        monkeypatch.setattr(concept_dict_audit, "compute_concept_dict_fingerprint",
+                            lambda: replace(fingerprint, concept_dict_sha="0" * 64))
+        return context
+
+    monkeypatch.setattr(pipeline_module, "build_research_context", build_then_change)
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient(), enable_literature=False)
+    with pytest.raises(ConceptDictDriftError, match="concept-dict.json SHA mismatch"):
+        pipeline.run(question="Describe mortality", cohort=synthetic_cohort,
+                     cohort_name="drift", database="miiv", target_outcome="death")
+    run_dir = next(tmp_path.glob("run_*"))
+    evidence = EvidenceStore(run_dir)
+    record = evidence.get("concept_dict_fingerprint")
+    path = verified_run_evidence_path(run_dir, record)
+    assert path is not None
+    assert json.loads(path.read_text())["concept_dict_sha"] == fingerprint.concept_dict_sha
+    assert not (run_dir / "analysis_plan.json").exists()

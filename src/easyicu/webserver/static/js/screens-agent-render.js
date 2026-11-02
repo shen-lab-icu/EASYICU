@@ -424,6 +424,16 @@
       };
     }
     const known = {
+      HOST_ICD_SOURCE_UNVERIFIED: [
+        'Configured diagnosis-code population cannot be verified', '已配置的诊断编码人群无法核验',
+        'This version cannot verify that the requested diagnosis-code inclusion or exclusion was applied to the source. Analysis cannot proceed with this condition. You may change the cohort in the conversation, update the question if needed, and review the complete revised plan.',
+        '当前版本无法核验数据来源是否实际施加了已配置的诊断编码纳排条件，因此不能按该条件开始分析。你可以在对话中修改人群，并在需要时同步修改研究问题，再审核完整的修订计划。',
+      ],
+      QUESTION_UNCERTAINTY_UNRESOLVED: [
+        'Confidence interval request needs clarification', '置信区间要求需要确认',
+        'Please state whether an interval is needed and specify its confidence level and method. If using CI, clarify whether it means confidence interval or cardiac index.',
+        '请说明是否需要置信区间，以及所需置信水平和方法；使用 CI 缩写时，请说明指置信区间还是心脏指数。',
+      ],
       SCIENTIFIC_CAPABILITY_NOT_REPORTABLE: [
         'The primary result lacks a validated calculation', '主要结果尚无可核验的计算方法',
         'The plan must bind its primary result to a supported calculation and result check while preserving the research question.',
@@ -481,6 +491,10 @@
   function scientificDecisionQuestion(row) {
     const code = String(row && row.code || '');
     const known = {
+      QUESTION_UNCERTAINTY_UNRESOLVED: t(
+        'Is an interval needed, and what level and method? Does CI mean confidence interval or cardiac index?',
+        '是否需要置信区间，采用什么置信水平和方法？CI 指置信区间还是心脏指数？',
+      ),
       OUTCOME_DEFINITION_UNRESOLVED: t(
         'Which available clinical endpoint and time horizon should this study use?',
         '这项研究应采用哪个临床结局，以及多长的观察时间范围？',
@@ -521,10 +535,11 @@
   function scientificPlanReviewView(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const findings = Array.isArray(p.findings) ? p.findings : [];
+    const icdSourceFinding = findings.find(row => row && row.code === 'HOST_ICD_SOURCE_UNVERIFIED');
     const decisions = findings.filter(row => row && !plannerOwnedScientificFinding(row) && (row.requires_user_authorization || row.remediation_route === 'study_authority_change'));
     const automatic = findings.filter(row => row && !decisions.includes(row) && (row.remediation_route === 'agent_plan_revision' || plannerOwnedScientificFinding(row)));
     const evidence = findings.filter(row => row && !decisions.includes(row) && !automatic.includes(row) && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
-    const remainder = findings.filter(row => !decisions.includes(row) && !automatic.includes(row) && !evidence.includes(row));
+    const remainder = findings.filter(row => row !== icdSourceFinding && !decisions.includes(row) && !automatic.includes(row) && !evidence.includes(row));
     const firstDecision = decisions[0] || null;
     const firstDecisionTitle = firstDecision ? scientificDecisionTitle(firstDecision) : '';
     const laterDecisions = decisions.slice(1);
@@ -563,6 +578,7 @@
           : t('Endpoint, sensitivity design, plan structure, and evidence follow-up are system-owned proposal work. Review the revised complete plan instead of designing them here.', '结局定义、敏感性分析、计划结构和补证都属于系统的方案工作；你应审阅修订后的完整计划，不必在这里替系统设计。'))}</p>${reviewMeta}</div>
         <span class="ag-science-review-state ${approvalAllowed ? 'is-ready' : 'is-waiting'}">${esc(approvalAllowed ? t('Ready', '可批准') : t('Analysis paused', '分析已暂停'))}</span>
       </header>
+      ${icdSourceFinding ? `<section class="ag-science-review-section is-current"><strong>${esc(scientificFindingCopy(icdSourceFinding).title)}</strong><p>${esc(scientificFindingCopy(icdSourceFinding).detail)}</p></section>` : ''}
       ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionTitle)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Answer it in the conversation on the left.', '请在左侧对话中回答。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificDecisionTitle(laterDecisions[0]))}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
       <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length + remainder.length} plan, evidence and runtime items`, `${automatic.length + evidence.length + remainder.length} 项计划、证据与运行问题`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
         <article><div><strong>${esc(t('Plan revision', '计划修订'))}</strong><span>${esc(t(`${automatic.length} items`, `${automatic.length} 项`))}</span></div><ul>${findingList(automatic)}</ul></article>
@@ -668,9 +684,6 @@
       return '';
     }
     if (!/association|regression|descriptive|predict|surviv/.test(type)) return '';
-    if (kind === 'supports') {
-      return t('This design can report the direction, size, and uncertainty of the target quantity in the data at hand.', '这套设计能报告目标量在当前数据中的方向、大小和不确定性。');
-    }
     if (kind === 'cannot_prove') {
       return t('Being observational, it cannot establish causation, and cannot rule out unmeasured confounding, selection bias, or measurement error.', '这是观察性设计，不能证明因果关系，也不能排除未测量混杂、选择偏倚或测量误差。');
     }

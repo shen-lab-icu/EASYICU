@@ -50,6 +50,7 @@ def test_staged_pi_smoke_retains_transitively_required_dist_doc(tmp_path):
     staged = desktop / "src-tauri/resources/backend/_internal/easyicu/webserver/pi_copilot/node_app"
     shutil.copytree(source, staged)
     write_files(staged.parent, {"tool_catalog.json": "{}"})
+    write_files(staged.parent.parent, {"static/js/screens-guided-pi-research-draft.js": "module.exports = {};\n"})
     shutil.copy2(node, desktop / "src-tauri/resources/node.exe")
     write_files(desktop / "src-tauri", {
         "tauri.conf.json": json.dumps({"bundle": {"resources": {"resources/backend": "resources/backend", "p": "p"}}}),
@@ -283,6 +284,7 @@ def test_import_smoke_catches_a_peer_stranded_by_hoisting(tmp_path, monkeypatch)
     staged.parent.mkdir(parents=True)
     shutil.move(str(app), staged)
     write_files(staged.parent, {"tool_catalog.json": "{}"})
+    write_files(staged.parent.parent, {"static/js/screens-guided-pi-research-draft.js": "module.exports = {};\n"})
     shutil.copy2(node, desktop / "src-tauri/resources/node.exe")
     write_files(desktop / "src-tauri", {
         "tauri.conf.json": json.dumps({"bundle": {"resources": {"p": "p"}}}),
@@ -327,6 +329,7 @@ def test_staging_deduplicates_generated_sdk_paths_below_the_unchanged_budget(tmp
     desktop = tmp_path / "desktop"
     staged = desktop / "src-tauri/resources/backend/_internal/easyicu/webserver/pi_copilot/node_app"
     shutil.copytree(source.parent, staged.parent)
+    write_files(staged.parent.parent, {"static/js/screens-guided-pi-research-draft.js": "module.exports = {};\n"})
     node = shutil.which("node")
     assert node
     bundled_node = desktop / "src-tauri/resources/node.exe"

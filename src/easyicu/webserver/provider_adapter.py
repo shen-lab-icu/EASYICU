@@ -99,7 +99,7 @@ def web_research_agent_hard_stop_limits(
     )
 
     selected = str(mode or "").strip().lower()
-    if selected == "planner_canary":
+    if selected in {"planner_canary", "deferred_reviewed"}:
         attempts = _WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS
         tokens = _WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS
         cost = _WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD
@@ -499,6 +499,8 @@ def build_research_agent_provider_client(
                 "secrets_returned": False,
             }
         )
+        from easyicu.webserver.metadata_provider_binding import remember_adapter_client
+        remember_adapter_client(client, provider=provider_meta, environment=environ, public=public)
         return client, public
     credentials = _load_external_credentials(
         str(provider_meta.get("provider") or ""), environ=environ
@@ -625,6 +627,8 @@ def build_research_agent_provider_client(
             "secrets_returned": False,
         }
     )
+    from easyicu.webserver.metadata_provider_binding import remember_adapter_client
+    remember_adapter_client(client, provider=provider_meta, environment=environ, public=public)
     return client, public
 
 

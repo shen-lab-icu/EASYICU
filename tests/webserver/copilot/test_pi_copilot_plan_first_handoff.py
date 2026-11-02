@@ -30,6 +30,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
       global.window = {{}};
       eval({MODULES_SOURCE!r});
       eval({LABELS_SOURCE!r});
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -114,6 +115,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
       global.window = {{}};
       eval({MODULES_SOURCE!r});
       eval({LABELS_SOURCE!r});
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -165,6 +167,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
       global.window = {{}};
       eval({MODULES_SOURCE!r});
       eval({LABELS_SOURCE!r});
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'operator_plan_approval_required',
@@ -224,6 +227,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
       global.window = {{}};
       eval({MODULES_SOURCE!r});
       eval({LABELS_SOURCE!r});
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
@@ -271,6 +275,7 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
       global.window = {{}};
       eval({MODULES_SOURCE!r});
       eval({LABELS_SOURCE!r});
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
@@ -346,6 +351,7 @@ def test_paused_review_names_clinical_gaps_without_promising_unavailable_repairs
       eval({_read('js/screens-agent-reader-vocab.js')!r});
       eval({_read('js/screens-agent-report-reader.js')!r});
       eval({_read('js/screens-agent-render.js')!r});
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       const host = {{
         tr: window.t, esc: value => String(value), iconHtml: () => '',

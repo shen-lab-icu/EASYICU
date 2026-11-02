@@ -21,7 +21,10 @@ time-zero rule and for the window a column was summarized over
 
 from __future__ import annotations
 
-from typing import AbstractSet, Any, Literal
+from typing import AbstractSet, Any, Literal, Mapping, Optional
+
+from ..schema import ResearchContext
+from .concept_population import context_data_constraints
 
 from ..concept_availability import stay_level_concept_category
 from .temporal_semantics import normalise_time_anchor
@@ -231,7 +234,35 @@ def _role(variable: Any) -> str:
     return str(getattr(role, "value", role) or "").casefold()
 
 
+#: ``data_constraints`` key the launch records the labels under.
+EVENT_TIME_SEMANTICS_CONSTRAINT = "event_time_semantics"
+
+
+def recorded_event_time_semantics(
+    context: ResearchContext,
+) -> Optional[Mapping[str, str]]:
+    """Each issued event-time column's label; ``None`` for a context without the record.
+
+    A record that is not a mapping, or an entry that is not a non-empty label,
+    labels nothing.
+    """
+
+    constraints = context_data_constraints(context)
+    if EVENT_TIME_SEMANTICS_CONSTRAINT not in constraints:
+        return None
+    record = constraints[EVENT_TIME_SEMANTICS_CONSTRAINT]
+    if not isinstance(record, Mapping):
+        return {}
+    return {
+        column: label.strip()
+        for column, label in record.items()
+        if isinstance(column, str) and isinstance(label, str) and label.strip()
+    }
+
+
 __all__ = [
+    "EVENT_TIME_SEMANTICS_CONSTRAINT",
+    "recorded_event_time_semantics",
     "ADMISSION_ROLES",
     "ICU_LENGTH_OF_STAY_CONCEPT",
     "ColumnKind",

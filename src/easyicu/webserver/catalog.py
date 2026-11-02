@@ -492,7 +492,7 @@ def _coverage_band(meta: Dict[str, Any]) -> str:
     return "low"
 
 
-def build_catalog() -> Dict[str, Any]:
+def build_catalog(*, planning_metadata_only: bool = False) -> Dict[str, Any]:
     """Keep legacy labels/counts and enrich each ``conceptCoverage`` entry."""
     from easyicu.webserver import sources
 
@@ -511,7 +511,7 @@ def build_catalog() -> Dict[str, Any]:
     cov = dict(cc.CONCEPT_DB_COVERAGE)
     definitions = catalog_definitions()
     concept_coverage, coverage_summary = _coverage_metadata(concept_dict, definitions)
-    registry = sources.load_registry()
+    registry = sources.load_registry(**({"planning_metadata_only": True} if planning_metadata_only else {}))
     registered_sources = [
         source
         for source in registry.get("sources") or []
@@ -547,7 +547,11 @@ def build_catalog() -> Dict[str, Any]:
     for key, by_database in concept_source_semantics().items():
         if key in concept_coverage:
             concept_coverage[key]["source_semantics"] = by_database
-    active_export_coverage = _active_export_coverage(concept_dict, registry)
+    active_export_coverage = (
+        {"status": "not_computed", "concepts": {}, "summary": {},
+         "payload_scope": "metadata_only_no_rows"}
+        if planning_metadata_only else _active_export_coverage(concept_dict, registry)
+    )
 
     return {
         "groups": groups,

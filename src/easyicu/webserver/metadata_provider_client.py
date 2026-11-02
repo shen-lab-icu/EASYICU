@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from easyicu.research_agent.authority.provider_hard_stop import (
-    consume_active_provider_hard_stop_attempt, record_active_provider_retry_wait,
+    consume_active_provider_hard_stop_attempt, current_metadata_provider_reservation, record_active_provider_retry_wait,
     record_active_provider_transport_failure, record_active_metadata_capacity_rejection,
     record_active_metadata_coordination_rejection,
 )
 from easyicu.research_agent.providers.transport_retry import TransportRetrySchedule
+from easyicu.research_agent.providers.clients import _record_provider_call_receipt, clear_provider_call_receipt
 from easyicu.webserver import metadata_provider_concurrency as slots
 from easyicu.webserver.metadata_provider_worker import encode_guarded_request, guarded_call, identity
 
@@ -70,6 +71,7 @@ def guarded_metadata_resume_scope(*, has_checkpoint: bool, scope: Any, acquisiti
 
 class MetadataProviderClient:
     provider_attempt_budget_aware = True
+    requires_call_scoped_receipt = True
     verify_outline_retry_guard = staticmethod(verify_outline_retry_guard)
 
     def __init__(self, *, inner: Any, task: Any, provider: Mapping[str, Any],
@@ -91,7 +93,11 @@ class MetadataProviderClient:
         self.last_transport_attempts = 0
         from easyicu.research_agent.providers.factory import _register_provider_wrapper
 
-        _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
+        from easyicu.webserver.metadata_provider_binding import bind_wrapper, verify_wrapper
+
+        bind_wrapper(self, timeout=self._timeout)
+        _register_provider_wrapper(self, children_getter=lambda: (self._inner,),
+                                   preflight=lambda: verify_wrapper(self))
 
     @property
     def supports_strict_json_schema(self) -> bool:
@@ -110,6 +116,11 @@ class MetadataProviderClient:
     def complete_with_usage(self, messages: Sequence[Any], *, max_tokens: int = 2048,
                             temperature: float = 0.2, structured_output: Any = None) -> tuple[str, Any]:
         from easyicu.research_agent.providers.protocol import StructuredOutputRequest
+        from easyicu.webserver.metadata_provider_binding import verify_wrapper
+
+        clear_provider_call_receipt()
+        _record_provider_call_receipt(finish_reason=None, usage=None, transport_attempts=1)
+        bound = verify_wrapper(self)
 
         if structured_output is not None and not isinstance(structured_output, StructuredOutputRequest):
             raise ValueError("metadata_provider_structured_output_invalid")
@@ -117,12 +128,15 @@ class MetadataProviderClient:
         self.last_usage = None
         self.last_transport_attempts = 0
         request = {
-            "provider": self._provider, "environment": self._environment,
-            "provider_identity": self._public, "timeout": self._timeout,
+            "provider": bound["provider"], "environment": bound["environment"],
+            "provider_identity": bound["public"], "timeout": bound["timeout"],
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "max_tokens": max_tokens, "temperature": temperature,
             "strict_json_schema_enabled": self.supports_strict_json_schema,
             "structured_output": ({"name": structured_output.name, "schema_json": structured_output.schema_json,
+                                   **({"wire_schema_version": structured_output.wire_schema_version,
+                                       "wire_schema_json": structured_output.transport_schema_json}
+                                      if structured_output.wire_schema_version != "legacy/1" else {}),
                                    "strict": structured_output.strict} if structured_output is not None else None),
         }
         # Freeze a JSON-only payload before reserving either budget or capacity.
@@ -130,28 +144,28 @@ class MetadataProviderClient:
         # cannot have sent anything and must not leave an unknown remote slot.
         request = json.loads(encode_guarded_request(request))
         schedule = TransportRetrySchedule(delays_seconds=(20.0, 180.0), jitter_fraction=0.2, window_seconds=300.0)
+        from easyicu.research_agent.providers.structured_retry import automatic_retry_limit
+
+        retry_limit = automatic_retry_limit(2)
         start = time.monotonic()
-        for attempt in range(3):
+        for attempt in range(retry_limit + 1):
+            verify_wrapper(self)
             remaining = consume_active_provider_hard_stop_attempt()
             if remaining is None:
                 raise RuntimeError("metadata_provider_budget_scope_missing")
-            snapshot = self._task.ledger.snapshot()
-            rows = [row for row in snapshot["tasks"] if row.get("task_id") == self._task.task_id]
-            calls = rows[0]["calls"] if len(rows) == 1 else []
-            if not calls or calls[-1].get("state") != "in_progress" or calls[-1].get("role") not in {"acquisition", "planner", "provider_recovery_probe"}:
-                raise RuntimeError("metadata_provider_reservation_missing")
+            task = bound["task"]
+            attempt_id, role = current_metadata_provider_reservation(task)
             # Recovery controls its own probe interval and deadline. Do not
             # hide additional transport retries inside a single health probe.
-            is_probe = calls[-1].get("role") == "provider_recovery_probe"
-            attempt_id = calls[-1]["attempt_id"]
+            is_probe = role == "provider_recovery_probe"
             from easyicu.research_agent.providers.transport_retry import current_metadata_request_sha256
 
-            guard = Path(self._task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
+            guard = Path(task.ledger.path).parent / ".metadata-provider-execution" / attempt_id
             from easyicu.webserver.metadata_provider_shared_scope import SharedScopeError
 
             try:
-                slots.reserve(attempt_id=attempt_id, account=self._account, task_id=self._task.task_id,
-                              ledger_path=self._task.ledger.path, guard_path=guard, worker_sha256=identity(),
+                slots.reserve(attempt_id=attempt_id, account=bound["account"], task_id=task.task_id,
+                              ledger_path=task.ledger.path, guard_path=guard, worker_sha256=identity(),
                               request_sha256=current_metadata_request_sha256())
             except slots.MetadataProviderCapacityExhausted:
                 # This branch is owned by the local slot admission itself and
@@ -165,8 +179,9 @@ class MetadataProviderClient:
                 raise MetadataProviderCoordinationUnavailable(
                     "metadata_provider_shared_scope_unavailable"
                 ) from exc
+            _record_provider_call_receipt(finish_reason=None, usage=None, transport_attempts=attempt + 1)
             value = guarded_call(
-                guard, request, timeout=max(0.001, min(self._timeout, remaining)),
+                guard, request, timeout=max(0.001, min(bound["timeout"], remaining)),
                 on_prepared=lambda nonce: slots.bind_guard(attempt_id, nonce),
             )
             self.last_transport_attempts = attempt + 1
@@ -175,6 +190,9 @@ class MetadataProviderClient:
                 slots.release(attempt_id)
                 self.last_finish_reason = value.get("finish_reason")
                 self.last_usage = value.get("usage")
+                usage = value.get("usage") if isinstance(value.get("usage"), dict) else None
+                _record_provider_call_receipt(finish_reason=value.get("finish_reason"), usage=usage,
+                                              transport_attempts=attempt + 1)
                 return str(value["text"]), value.get("usage")
             if type(code) is int:
                 slots.release(attempt_id)
@@ -186,12 +204,12 @@ class MetadataProviderClient:
                 "APITimeoutError", "APIConnectionError", "ReadTimeout", "ConnectTimeout", "ConnectionError",
             })
             retryable = (type(code) is int and 500 <= code <= 599) or (
-                unknown_transport and slots.has_capacity(self._account)
+                unknown_transport and slots.has_capacity(bound["account"])
             )
-            if not retryable or is_probe or attempt == 2:
+            if not retryable or is_probe or attempt == retry_limit:
                 raise MetadataProviderError(str(value.get("reason") or value.get("type") or "metadata_provider_failed"), status_code=code if type(code) is int else None)
             wait, stopped = schedule.next_wait(retry_index=attempt, since_start=time.monotonic() - start,
-                                               since_reservation=0.0, wall_clock_remaining=self._task.assert_active(),
+                                               since_reservation=0.0, wall_clock_remaining=task.assert_active(),
                                                retry_after=None, draw=random.random)
             if stopped or wait is None:
                 raise MetadataProviderError("metadata_provider_retry_window_exhausted", status_code=code)

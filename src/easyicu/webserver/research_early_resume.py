@@ -27,26 +27,50 @@ def fresh_seed_scope(*, scope: Any, acquisition: Any, literature: Any) -> bool:
     return scope is None and acquisition is None and literature is None
 
 
-def metadata_binding(database: str, export_path: str) -> dict[str, Any]:
+def metadata_binding(database: str, export_path: str, study: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Bind the registered source and the exact value-free planning menu."""
     from easyicu.webserver import agent_pipeline_runs, sources
 
     path = Path(export_path).expanduser()
     if not path.is_absolute() or not path.is_dir() or path.is_symlink():
         raise ValueError("early_source_invalid")
-    identity = sources.registered_source_identity(str(path))
+    choice_ref = None
+    if study is not None:
+        selected = study.get("data_source")
+        if (not isinstance(selected, Mapping) or selected.get("database") != database
+                or selected.get("path") != export_path):
+            raise ValueError("early_source_changed")
+        choice_ref = study.get("demo_planning_authority_ref") or None
+    if choice_ref is not None:
+        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+        from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+        try:
+            identity = resolve_choice(study)
+        except (AuthorityFilesystemError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError("early_source_choice_invalid") from exc
+    else:
+        identity = sources.registered_source_identity(str(path))
     if identity is None:
         raise ValueError("early_source_identity_missing")
     catalog = agent_pipeline_runs._metadata_only_planning_catalog(
         database=database, export_path=path,
     )
-    return {
+    result = {
         "export_path": str(path.resolve()),
         "database": database,
         "source_identity": identity.to_dict(),
         "catalog_sha256": canonical_sha256(asdict(catalog)),
         "without_values": list(agent_pipeline_runs._source_concepts_without_values(path)),
     }
+    if choice_ref is not None:
+        try:
+            if resolve_choice(study) != identity:
+                raise ValueError("early_source_choice_changed")
+        except (AuthorityFilesystemError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError("early_source_choice_changed") from exc
+        result.update(source_kind="signed_demo_planning_raw", source_authority_ref=choice_ref)
+    return result
 
 
 def create_seed(
@@ -56,9 +80,16 @@ def create_seed(
     original_source_identity: Mapping[str, Any],
     hard_stop_ledger_path: str, hard_stop_task_id: str,
     hard_stop_declaration_sha256: str,
+    study: Mapping[str, Any] | None = None,
 ) -> None:
     """Persist before first provider dispatch; never overwrite earlier evidence."""
-    binding = metadata_binding(database, export_path)
+    if study is not None:
+        from easyicu.webserver.study_contexts import scientific_configuration_sha256
+
+        if study.get("id") != study_id or scientific_configuration_sha256(dict(study)) != scientific_sha256:
+            raise ValueError("early_study_changed")
+    binding = (metadata_binding(database, export_path, study) if study is not None
+               else metadata_binding(database, export_path))
     if binding["source_identity"] != original_source_identity:
         raise ValueError("early_source_identity_changed")
     payload = {

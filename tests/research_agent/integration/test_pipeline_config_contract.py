@@ -20,11 +20,16 @@ def test_pipeline_constructor_has_one_config_and_one_service_source(ra) -> None:
     service_fields = {item.name for item in fields(ra.PipelineServices)}
     assert service_fields == {
         "case_plugin_registry",
+        "deferred_first_observed_consumer",
+        "deferred_first_observed_stage",
+        "deferred_first_observed_late_publisher",
         "human_review_gate",
         "plan_revision_guard",
         "llm",
         "llm_concept_auditor_client",
         "provider_hard_stop",
+        "metadata_outline_journal_task",
+        "metadata_outline_guard_verifier",
         "execution_runtime_revision",
         "time_origin_attestor",
         "case_duration_attestor",

@@ -388,7 +388,7 @@ def test_catalog_active_export_coverage_uses_registered_source(
 ) -> None:
     export = _write_csv_export(tmp_path / "export")
     monkeypatch.setattr(
-        source_store, "load_registry", lambda: {"active_path": str(export)}
+        source_store, "load_registry", lambda **_kwargs: {"active_path": str(export)}
     )
 
     catalog = catalog_module.build_catalog()
@@ -420,7 +420,7 @@ def test_catalog_active_export_coverage_large_export_is_schema_only(
         raise AssertionError("large catalog coverage must not read concept columns")
 
     monkeypatch.setattr(
-        source_store, "load_registry", lambda: {"active_path": str(export)}
+        source_store, "load_registry", lambda **_kwargs: {"active_path": str(export)}
     )
     monkeypatch.setattr(dataio, "describe_export_source", lambda _path: desc)
     monkeypatch.setattr(dataio, "_fast_stay_ids", fail_fast_stay_ids)
@@ -4982,7 +4982,7 @@ def test_export_source_registry_endpoint_registers_and_rejects_invalid_paths(
 ) -> None:
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
-    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda *, planning_metadata_only=False: [])
     miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
     client = TestClient(app)
 
@@ -4990,14 +4990,24 @@ def test_export_source_registry_endpoint_registers_and_rejects_invalid_paths(
     bad = client.post(
         "/api/workspaces/register", json={"path": str(tmp_path / "missing")}
     )
-    reg = client.get("/api/workspaces/registry")
+    # Registry GET is metadata-only: reading a table, header or footer here
+    # would cross the planning boundary even though registration may inspect it.
+    from tests.support.workspace_registry_no_read import forbid_source_table_reads
+    with monkeypatch.context() as guarded:
+        accesses = forbid_source_table_reads(guarded, roots=[miiv])
+        reg = client.get("/api/workspaces/registry")
 
+    assert accesses == []
     assert ok.status_code == 200
     assert ok.json()["active_path"] == str(miiv)
     assert bad.status_code == 400
     assert bad.json()["detail"]["error"] == "not_a_directory"
     assert reg.status_code == 200
-    assert reg.json()["sources"][0]["summary"]["stays"] == 3
+    assert ok.json()["sources"][0]["summary"]["stays"] == 3
+    assert reg.json()["sources"][0]["path"] == str(miiv)
+    assert reg.json()["sources"][0]["ok"] is False
+    assert reg.json()["sources"][0]["error"] == "research_pipeline_planning_native_metadata_invalid"
+    assert "summary" not in reg.json()["sources"][0]
 
 
 def test_export_source_registry_autodiscovery_skips_unreadable_children(

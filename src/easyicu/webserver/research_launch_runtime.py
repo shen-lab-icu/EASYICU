@@ -59,8 +59,8 @@ def _submission_profile_ref(
         CURRENT_WEB_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF as CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
         CURRENT_WEB_E1_REVIEWED_DEMO_DEV_PROFILE_REF as CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
         CURRENT_WEB_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF as CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
-        WEB_DESKTOP_FIRST_RESULT_2026_10_29,
-        WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29,
+        WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY,
+        WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_SIC_OVERLAY,
     )
     from easyicu.webserver.capabilities import pubmed_connector_block_reason
 
@@ -69,8 +69,8 @@ def _submission_profile_ref(
     live_pubmed = bool(live_pubmed and pubmed_connector_block_reason(path="preplan_literature") is None)
 
     if runner_kind == "host":
-        return (WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29 if live_pubmed else WEB_DESKTOP_FIRST_RESULT_2026_10_29).ref
-    if str(budget_mode or "").strip().lower() == "full_reviewed":
+        return (WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_SIC_OVERLAY if live_pubmed else WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY).ref
+    if str(budget_mode or "").strip().lower() in {"full_reviewed", "deferred_reviewed"}:
         return (
             CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF
             if live_pubmed
@@ -134,6 +134,7 @@ def _require_profile_dictionaries(*, budget_mode: str, runner_kind: str | None =
                 fingerprint,
                 expected_concept_dict_sha=profile.expected_concept_dict_sha,
                 expected_sofa2_dict_sha=profile.expected_sofa2_dict_sha,
+                expected_sic_case_overlay_sha=profile.expected_sic_case_overlay_sha,
             )
         except ConceptDictDriftError as exc:
             raise ResearchPipelineRunError(

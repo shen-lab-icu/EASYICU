@@ -373,10 +373,20 @@ STOP_POLICIES = {
     # plan edit nor retry establishes that its capacity is available.
     "research_pipeline_metadata_provider_capacity_unavailable": "none",
     "research_pipeline_metadata_shared_scope_unavailable": "none",
+    # Source and first-observed input identities must be re-established by
+    # their owners; retrying or editing away the population would bypass them.
+    "research_pipeline_demo_planning_authority_stale": "none",
+    "research_pipeline_first_observed_input_binding_unavailable": "none",
+    "controlled_candidate_provider_identity_changed": "none",
+    "research_pipeline_deferred_review_stage_mismatch": "none",
+    "research_pipeline_deferred_review_unverified": "none",
+    "research_pipeline_planning_native_metadata_invalid": "none",
     # These are pending researcher decisions, not permission to generate a
     # replacement plan or silently keep the study's previous outcome.
     "case_duration_plan_approval_required": "none",
     "study_primary_outcome_confirmation_required": "none",
+    # Changing the cohort is offered by the guided review, not an automatic retry.
+    "plan_icd_source_unverified": "none",
     **dict.fromkeys(_EDIT_CODES, "edit_plan"),
     **dict.fromkeys(_RETRY_CODES, "retry"),
     **dict.fromkeys(_REPAIR_CODES, "repair"),

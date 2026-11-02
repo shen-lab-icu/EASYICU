@@ -30,7 +30,7 @@ def workspaces_crossdb_summary(body: Dict[str, Any]) -> dict:
 @router.get("/api/workspaces/registry")
 def workspaces_registry() -> dict:
     """Local export-source registry shared by Review, Cross-DB, Agent, Copilot."""
-    return source_store.load_registry()
+    return source_store.load_registry(planning_metadata_only=True)
 
 
 @router.post("/api/workspaces/registry")

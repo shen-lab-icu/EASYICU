@@ -118,12 +118,13 @@ from .population_spec import (
 POPULATION_COMPILE_SCHEMA_VERSION = "easyicu.population_compile/1"
 
 Disposition = Literal[
-    "applied_by_source", "applied_by_plan", "requires_extraction", "not_applied"
+    "applied_by_source", "applied_by_plan", "requires_extraction", "not_applied", "pending_materialization"
 ]
 ProofKind = Literal[
     "export_report_step", "recorded_study_contract", "host_first_icu_stay",
     "host_first_icu_stay_per_hospitalization",
     "host_first_observed_icu_single_hospital_adult",
+    "host_first_observed_preparation_recipe",
 ]
 Side = Literal["inclusion", "exclusion"]
 
@@ -192,6 +193,7 @@ class _HostFirstObservedScope:
 
     verify: Callable[[ResearchContext, FirstObservedIcuSingleHospitalAdult], Mapping[str, Any]]
     active: bool = True
+    pending_recipe: bool = False
 
 
 _HOST_FIRST_OBSERVED: ContextVar[Optional[_HostFirstObservedScope]] = ContextVar(
@@ -214,6 +216,22 @@ def host_first_observed_population_scope(
     if not callable(verify):
         raise TypeError("host population verifier must be callable")
     scope = _HostFirstObservedScope(verify=verify)
+    token = _HOST_FIRST_OBSERVED.set(scope)
+    try:
+        yield
+    finally:
+        scope.active = False
+        _HOST_FIRST_OBSERVED.reset(token)
+
+
+@contextmanager
+def host_first_observed_recipe_scope(
+    verify: Callable[[ResearchContext, FirstObservedIcuSingleHospitalAdult], Mapping[str, Any]],
+) -> Iterator[None]:
+    """Bind a verified preparation recipe without claiming input rows exist."""
+    if not callable(verify):
+        raise TypeError("host preparation verifier must be callable")
+    scope = _HostFirstObservedScope(verify=verify, pending_recipe=True)
     token = _HOST_FIRST_OBSERVED.set(scope)
     try:
         yield
@@ -245,6 +263,9 @@ def _host_first_observed_proof(
         "cohort_authority_sha256", "coordinate_sha256", "preparation_checkpoint_sha256",
         "source_identity_sha256", "criterion_sha256",
     )
+    if scope.pending_recipe:
+        digests = ("coordinate_sha256", "preparation_checkpoint_sha256", "source_identity_sha256",
+                   "criterion_sha256", "export_manifest_sha256")
     if (source is None or set(parameters) != {*digests, "preparation_run_id"}
             or any(re.fullmatch(r"[0-9a-f]{64}", str(parameters.get(key) or "")) is None for key in digests)
             or re.fullmatch(r"[A-Za-z0-9_-]{1,160}", str(parameters.get("preparation_run_id") or "")) is None
@@ -252,8 +273,10 @@ def _host_first_observed_proof(
             or parameters["criterion_sha256"] != canonical_sha256(criterion.model_dump(mode="json"))):
         return None
     return SourceProof(
-        kind="host_first_observed_icu_single_hospital_adult",
-        record_ref="host.verified_first_observed_population",
+        kind=("host_first_observed_preparation_recipe" if scope.pending_recipe
+              else "host_first_observed_icu_single_hospital_adult"),
+        record_ref=("host.pending_first_observed_materialization" if scope.pending_recipe
+                    else "host.verified_first_observed_population"),
         parameters=dict(parameters),
     )
 
@@ -300,9 +323,9 @@ class CompiledCriterion:
             raise ValueError(
                 "only a criterion applied by the plan has predicates and a side"
             )
-        if (self.disposition == "applied_by_source") != (self.proof is not None):
+        if (self.disposition in {"applied_by_source", "pending_materialization"}) != (self.proof is not None):
             raise ValueError(
-                "only a criterion applied by the source has a source proof"
+                "only a source-applied or pending-materialization criterion has a proof"
             )
         allowed = {
             "not_applied": NOT_APPLIED_REASONS,
@@ -680,6 +703,12 @@ def _compile(criterion: PopulationCriterion, reading: _Input) -> CompiledCriteri
         if not substituted and proof is None and isinstance(criterion, FirstObservedIcuSingleHospitalAdult):
             proof = _host_first_observed_proof(criterion, reading.context)
         if proof is not None:
+            if proof.kind == "host_first_observed_preparation_recipe":
+                return CompiledCriterion(
+                    criterion=criterion, disposition="pending_materialization", reason=None,
+                    detail="The verified host preparation is planned for materialization; input rows do not yet exist.",
+                    proof=proof,
+                )
             return CompiledCriterion(
                 criterion=criterion,
                 disposition="applied_by_source",

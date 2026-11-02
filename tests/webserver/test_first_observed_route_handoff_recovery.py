@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from tests.webserver.test_first_observed_approved_handoff_recovery import _environment, _RECOVER, _setup_script
+from tests.support.first_observed_handoff import _environment, _RECOVER, _setup_script
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='requires SIGKILL')
@@ -33,15 +33,17 @@ for field in ('checkpoint_sha256','scope_sha256','nonce'):
     else:
         raise AssertionError('changed host action was accepted: '+field)
     assert service.store.get('job') is None and not (root/'source-reads.txt').exists()
-original_source=producer.verified_public_demo_raw
-producer.verified_public_demo_raw=lambda _: None
+original_metadata=producer._metadata_source
+def missing_metadata(_): raise ValueError('selected source metadata missing')
+producer._metadata_source=missing_metadata
 try:
     route.raw_preparation_review(body)
 except HTTPException as exc:
     assert exc.status_code==409
 else:
     raise AssertionError('changed source was accepted')
-producer.verified_public_demo_raw=original_source
+producer._metadata_source=original_metadata
+original_source=producer.verified_public_demo_raw
 assert service.store.get('job') is None and not (root/'source-reads.txt').exists()
 accepted=route.raw_preparation_review(body)
 assert accepted['job_id']=='job' and accepted['reused'] and accepted['preparation_status']=='preparing'

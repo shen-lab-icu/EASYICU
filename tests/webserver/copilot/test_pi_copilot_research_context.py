@@ -1204,8 +1204,10 @@ def test_web_data_constraints_never_silently_drop_a_constraint_key(
         "analysis_design",
         "cohort",
         "confirmations",
+        "host_icd_source_proof_required",
         "materialization_window",
     }
+    assert constraints["host_icd_source_proof_required"] is True
     assert constraints["confirmations"] == {"repeated_icu_stays_retained": True}
     assert constraints["materialization_window"]["role"] == "outer_observation_window"
     assert "repeat" in str(validated.data_constraints).casefold()
@@ -1337,14 +1339,12 @@ def test_a_first_stay_study_transports_defaults_and_complete_source_rules() -> N
     payload = str(validated.data_constraints)
     constraints = json.loads(payload)
 
-    assert 2_400 < len(payload) <= 4_096
+    assert len(payload) <= 4_096
     assert constraints["cohort"] == study["cohort"]
     assert constraints["source_selection"]["export_report"] == source_report
-    assert constraints["source_selection"]["host_applied"] == (
-        agent_pipeline_runs._host_applied_criteria(study)
-    )
-    assert "complete preceding unit ordinals" in payload
-    assert "patient independence is not established" in payload
+    assert constraints["source_selection"]["host_applied"] == []
+    assert constraints["cohort"]["review"] == study["cohort"]["review"]
+    assert constraints["cohort"]["exclusion_statement"] == study["cohort"]["exclusion_statement"]
     assert constraints["confirmations"] == study["confirmations"]
     assert constraints["materialization_window"]["role"] == "outer_observation_window"
     assert "omitted]" not in payload

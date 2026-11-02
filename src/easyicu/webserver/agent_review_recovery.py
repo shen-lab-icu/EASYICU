@@ -254,7 +254,7 @@ class WebReviewRecoveryRecord(BaseModel):
         "scientific_provider",
         "codex_user_auth",
     ]
-    budget_mode: Literal["planner_canary", "full_reviewed"] = "full_reviewed"
+    budget_mode: Literal["planner_canary", "full_reviewed", "deferred_reviewed"] = "full_reviewed"
     prepared_package_binding: Optional[Dict[str, Any]] = None
     pipeline_config: Dict[str, Any]
     pipeline_config_sha256: Optional[str] = Field(
@@ -343,7 +343,7 @@ class WebReviewRecoverySeed(BaseModel):
         "scientific_provider",
         "codex_user_auth",
     ]
-    budget_mode: Literal["planner_canary", "full_reviewed"] = "full_reviewed"
+    budget_mode: Literal["planner_canary", "full_reviewed", "deferred_reviewed"] = "full_reviewed"
     prepared_package_binding: Optional[Dict[str, Any]] = None
     pipeline_config: Dict[str, Any]
     pipeline_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -519,6 +519,7 @@ def recover_pending_review(
         client, provider_public = provider_adapter.build_research_agent_provider_client(
             dict(record.provider_meta),
             environ=provider_environment,
+            **({"single_transport_attempt": True} if config.no_automatic_retries else {}),
         )
         for key in (
             "provider",
@@ -547,10 +548,19 @@ def recover_pending_review(
         require_existing=True,
     )
     task = ledger.start_task(task_id)
+    from functools import partial
+    from easyicu.webserver.first_observed_deferred_execution import (
+        consume_approved_first_observed_input, publish_approved_source_flow,
+    )
+
     pipeline = ResearchAgentPipeline.from_config(
         config,
         services=PipelineServices(
             llm=client,
+            deferred_first_observed_consumer=partial(
+                consume_approved_first_observed_input, provider_task=task,
+            ),
+            deferred_first_observed_late_publisher=publish_approved_source_flow,
             human_review_gate=_RecoveryHumanReviewGate(reviewer_identity),
             provider_hard_stop=task,
         ),

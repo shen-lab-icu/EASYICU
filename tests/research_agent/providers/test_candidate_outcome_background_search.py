@@ -9,7 +9,7 @@ from easyicu.research_agent.literature import (
     _screening_decision_for_record,
     build_review_query_families,
 )
-from tests.research_agent.providers.test_candidate_outcome_literature import _context
+from tests.support.candidate_outcome import _context
 
 
 def _candidate(label: str):

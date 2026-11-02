@@ -16,7 +16,6 @@ from typing import Any, Mapping
 
 import pandas as pd
 import pytest
-from starlette.requests import Request
 
 from easyicu.research_agent.orchestration.workflow import (
     HumanReviewPending,
@@ -42,6 +41,9 @@ from easyicu.webserver.pi_copilot.workflow import (
     registered_export_matches_study,
 )
 from tests.webserver.copilot.research_workflow_fixtures import (
+    _request as _request,
+    _write_pipeline_export as _write_pipeline_export,
+    _assume_execution_runtime_ready as _assume_execution_runtime_ready,
     _acquisition_receipt,
     _foundation_profile as _foundation_profile,
     _write_development_resume_literature,
@@ -61,81 +63,10 @@ def _install_pending_review(monkeypatch, entry):
     return registry
 
 
-def _request() -> Request:
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/jobs/agent-run",
-            "raw_path": b"/api/jobs/agent-run",
-            "headers": [],
-            "query_string": b"",
-            "scheme": "http",
-            "server": ("testserver", 80),
-            "client": ("testclient", 123),
-        }
-    )
 
 
-def _write_pipeline_export(
-    root: Path, *, database: str = "miiv", current_contract: bool = True
-) -> Path:
-    """Write a prepared export package manifest.
-
-    ``current_contract=False`` reproduces an export written before intake began
-    requiring per-file ``concept_ids``: the same directory is laid out correctly
-    and passes the layout-only readiness probe, but cannot establish authority.
-    """
-
-    root.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
-        root / "demographics.parquet", index=False
-    )
-    # Built in the original key order so the default path serializes the same
-    # manifest bytes as before; the file entry joins the binding hash.
-    file_entry: dict[str, Any] = {
-        "file": "demographics.parquet",
-        "module": "demographics",
-        "concepts": 1,
-    }
-    if current_contract:
-        file_entry["concept_ids"] = ["age"]
-    file_entry["rows"] = 1
-    (root / "_manifest.json").write_text(
-        json.dumps(
-            {
-                "database": database,
-                "format": "parquet",
-                "concept_selection": {
-                    "mode": "explicit",
-                    "modules": {"demographics": ["age"]},
-                },
-                "feature_definitions": {"included": False},
-                "files": [file_entry],
-            }
-        ),
-        encoding="utf-8",
-    )
-    return root
 
 
-def _assume_execution_runtime_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An executing launch now probes the container runtime before it starts.
-
-    That gate has its own contract tests in
-    ``test_web_execution_runtime_preflight.py``; the launches here are about
-    scope and resume authority and must not depend on the host's daemon.
-    """
-
-    from easyicu.research_agent.execution import runner as runner_module
-
-    monkeypatch.setattr(
-        runner_module,
-        "probe_runner_availability",
-        lambda kind, **_kwargs: runner_module.RunnerAvailability(
-            kind=kind, available=True, image="easyicu-research-agent:test"
-        ),
-)
 
 
 _PI_PROVIDER_ENVIRONMENT = {

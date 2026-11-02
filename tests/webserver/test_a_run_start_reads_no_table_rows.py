@@ -27,13 +27,14 @@ def _no_rows(_path):
 def test_source_tables_lists_tables_and_modules_without_rows(raw_folder, monkeypatch):
     monkeypatch.setattr(dataio, "_count_rows", _no_rows)
     monkeypatch.setattr(dataio, "_read_stay_ids", _no_rows)
+    monkeypatch.setattr(dataio, "_read_columns", _no_rows)
 
     described = dataio.describe_source_tables(str(raw_folder))
 
     assert described["ok"] is True
     assert [item["file"] for item in described["files"]] == ["cases.csv", "data_float_h.csv"]
     assert all("rows" not in item for item in described["files"])
-    assert described["files"][0]["columns"] == ["CaseID", "AgeOnAdmission"]
+    assert all(item["columns"] == [] for item in described["files"])
 
 
 def test_source_tables_keeps_the_describe_refusals(tmp_path):
@@ -53,3 +54,32 @@ def test_the_start_and_its_scope_default_use_the_row_free_description():
         source = Path(module.__file__).read_text(encoding="utf-8")
         assert "dataio.describe_source_tables(" in source
         assert "dataio.describe_export_source(" not in source
+
+
+def test_raw_parquet_run_start_never_opens_footer(tmp_path, monkeypatch):
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    pd.DataFrame({'patientunitstayid':[1], 'age':[65]}).to_parquet(tmp_path / 'patient.parquet', index=False)
+    pd.DataFrame({'patientunitstayid':[1], 'medication':['example']}).to_parquet(tmp_path / 'medication.parquet', index=False)
+    import builtins
+    import os
+    real_open, real_path_open = builtins.open, Path.open
+    def is_source_table(path):
+        return (isinstance(path, (str, bytes, os.PathLike)) and str(path).startswith(str(tmp_path))
+                and str(path).endswith(('.parquet', '.csv')))
+    def guarded_open(path, *args, **kwargs):
+        if is_source_table(path):
+            pytest.fail('raw source table opened')
+        return real_open(path, *args, **kwargs)
+    def guarded_path_open(path, *args, **kwargs):
+        if is_source_table(path):
+            pytest.fail('raw source table opened')
+        return real_path_open(path, *args, **kwargs)
+    monkeypatch.setattr(builtins, 'open', guarded_open)
+    monkeypatch.setattr(Path, 'open', guarded_path_open)
+    monkeypatch.setattr(pq, 'ParquetFile', lambda *_args, **_kwargs: pytest.fail('parquet footer opened'))
+    monkeypatch.setattr(dataio, '_read_columns', _no_rows)
+    result = dataio.describe_source_tables(str(tmp_path))
+    assert result['ok'] and {row['file'] for row in result['files']} == {'patient.parquet', 'medication.parquet'}
+    assert all(row['columns'] == [] for row in result['files'])

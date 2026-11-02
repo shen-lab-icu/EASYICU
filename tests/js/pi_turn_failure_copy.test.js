@@ -17,6 +17,13 @@ function owner(language) {
 }
 
 for (const language of ['zh', 'en']) {
+  test(`${language}: an unconfirmed outcome explains how to proceed`, () => {
+    const text = owner(language).errorText({ code: 'study_primary_outcome_confirmation_required' });
+    assert.match(text, language === 'zh' ? /在对话中明确确认结局/ : /Confirm it in the conversation/);
+    assert.match(text, language === 'zh' ? /尚未运行分析/ : /no analysis has run/);
+    assert.doesNotMatch(text, /study_primary_outcome_confirmation_required/);
+  });
+
   test(`${language}: message-call exhaustion explains its terminal budget across raw and typed errors`, () => {
     const errors = owner(language);
     const code = 'pi_shell_message_provider_call_budget_exhausted';

@@ -5,7 +5,7 @@ const path = require('node:path');
 const root = process.env.EASYICU_TEST_OWNER_ROOT || path.resolve(__dirname, '../..');
 global.window = { EU_LANG: 'zh' };
 for (const file of ['screens-guided-pi-modules', 'html-escape', 'screens-guided-pi-plan-actions',
-  'screens-guided-pi-confirmation', 'screens-guided-pi-regeneration', 'screens-guided-pi-question-requirements',
+  'screens-guided-pi-confirmation-data', 'screens-guided-pi-confirmation', 'screens-guided-pi-regeneration', 'screens-guided-pi-question-requirements',
   'screens-guided-pi-study-readings', 'screens-guided-pi-target-trial-copy', 'screens-guided-pi-target-trial']) {
   require(path.join(root, 'src/easyicu/webserver/static/js', file + '.js'));
 }

@@ -206,6 +206,7 @@ def test_staging_shortens_pi_without_mutating_installed_wheel_and_checks_imports
     resources = desktop / "src-tauri/resources"
     staged = resources / "backend/_internal/easyicu/webserver/pi_copilot/node_app"
     shutil.copytree(source.parent, staged.parent)
+    write_files(staged.parent.parent, {"static/js/screens-guided-pi-research-draft.js": "module.exports = {};\n"})
     # This stable third-party name exceeds 160 with the old prefix even after pruning.
     runtime_file = ("node_modules/@earendil-works/pi-coding-agent/node_modules/"
                     "@aws-sdk/client-bedrock-runtime/dist-es/commands/"
@@ -319,6 +320,7 @@ def test_drivers_gate_packaging_and_record_pruning_in_receipts(tmp_path, monkeyp
     def freeze(*args, **kwargs):
         staged = resources / "backend/_internal/easyicu/webserver/pi_copilot/node_app"
         node_app(staged)
+        write_files(staged.parent.parent, {"static/js/screens-guided-pi-research-draft.js": "module.exports = {};\n"})
         write_files(staged, {"a" * (length - 5) + ".js": "// synthetic\n"})
         write_files(staged.parent, {"tool_catalog.json": "{}"})
         return resources / "backend/easyicu-backend.exe"

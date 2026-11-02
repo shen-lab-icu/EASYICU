@@ -10,6 +10,7 @@ from easyicu.research_agent.planning.literature_design_authority import (
     LiteratureDesignEvidence, LiteratureDesignEvidenceCard, _selected_source_fact,
 )
 from easyicu.research_agent.planning.literature_source_integrity import inspect_plan_literature_sources
+from tests.support.literature_integrity import _real_plan
 
 
 EXCERPT = "The SICdb database contains records from an intensive care unit."
@@ -86,22 +87,6 @@ def test_historical_application_source_role_is_flagged_without_rewriting_bundle(
     assert old.model_dump_json() == before
 
 
-def _real_plan():
-    from tests.research_agent.planning.scientific_review_fixtures import _plan
-    from easyicu.research_agent.planning.literature_contract import LiteratureDesignBinding
-    original = _plan()
-    steps = []
-    for step in original.steps:
-        if step.literature_citation_keys:
-            step = step.model_copy(update={
-                "literature_citation_keys": ["source_1"],
-                "literature_design_bindings": [LiteratureDesignBinding(
-                    citation_key="source_1", design_elements=["population"],
-                    application="Describe the population of the original database resource.",
-                )],
-            })
-        steps.append(step)
-    return original.model_copy(update={"steps": steps})
 
 
 def test_digest_and_fact_integrity_block_the_actual_persisted_review_gate(tmp_path):
@@ -125,8 +110,9 @@ def test_digest_and_fact_integrity_block_the_actual_persisted_review_gate(tmp_pa
     ]):
         run_dir = tmp_path / str(index)
         run_dir.mkdir()
+        context = _context()
         gate = prepare_scientific_plan_review_gate(
-            context=_context(), plan=_real_plan(), literature=source, figure_strategy=None,
+            context=context, plan=_real_plan(), literature=source, figure_strategy=None,
             run_dir=run_dir, evidence=EvidenceStore(run_dir), model_retention=None,
         )
         assert not gate.review.approval_allowed
@@ -135,9 +121,15 @@ def test_digest_and_fact_integrity_block_the_actual_persisted_review_gate(tmp_pa
                    for f in gate.review.findings)
         assert gate.finding.detail["approval_allowed"] is False
         assert '"LITERATURE_SOURCE_INTEGRITY_INVALID"' in gate.artifact_path.read_text()
+        # Recovery rechecks the exact sealed question, not only the review.
+        context_path = run_dir / "research_context.json"
+        context_path.write_text(context.model_dump_json(), encoding="utf-8")
         authority = PlanReviewAuthority.create(
             plan=_real_plan(),
-            evidence_sha256={"scientific_plan_review": sha256(gate.artifact_path.read_bytes()).hexdigest()},
+            evidence_sha256={
+                "scientific_plan_review": sha256(gate.artifact_path.read_bytes()).hexdigest(),
+                "research_context": sha256(context_path.read_bytes()).hexdigest(),
+            },
         )
         pending = SimpleNamespace(requests=[SimpleNamespace(
             payload={"plan_review_authority": authority.model_dump(mode="json")},

@@ -32,8 +32,8 @@ from easyicu.research_agent.schema import (
     VariableRole,
 )
 
-from .test_cross_sectional_phenotyping_executor import _binding, _context, _primary_step
-from .test_phenotyping_feature_roles import _skeleton
+from tests.support.phenotyping_fixtures import _binding, _context, _primary_step
+from tests.support.phenotyping_fixtures import _skeleton
 
 
 def _comparison_spec():

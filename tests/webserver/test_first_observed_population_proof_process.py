@@ -7,7 +7,7 @@ import sys
 
 from easyicu.research_agent.intake.export_package import open_export_package
 from tests.support.typed_export import typed_export
-from tests.webserver.test_first_observed_guarded_process import _PROCESS, _SOURCE_STUB
+from tests.support.first_observed_process import _PROCESS, _SOURCE_STUB
 
 
 def test_host_signed_preparation_proves_typed_rows_without_granting_analysis(tmp_path):

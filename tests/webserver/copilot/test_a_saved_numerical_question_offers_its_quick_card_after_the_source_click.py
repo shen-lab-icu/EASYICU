@@ -92,7 +92,7 @@ def conversation(tmp_path, monkeypatch):
         outcome_concepts=["icu_death"],
     )
     registry = {"sources": [{"id": "src_synthetic", "database": "eicu_demo", "path": str(export), "ok": True}]}
-    monkeypatch.setattr(sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: registry)
     monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "studies.json")
     monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True, "language": "zh"})
     study = study_contexts.upsert_context({"id": "study-transition", "question": QUESTION,

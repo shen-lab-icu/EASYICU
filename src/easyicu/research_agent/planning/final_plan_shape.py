@@ -135,3 +135,9 @@ _plan_expects_analysis_cohort = plan_expects_analysis_cohort
 _prediction_contract_applies = prediction_contract_applies
 _split_table_and_figure_outputs_in_plan = split_table_and_figure_outputs_in_plan
 _typed_plan_dag_findings = typed_plan_dag_findings
+
+
+def should_retry_unstructured_cohort(plan, *, used_mock_llm: bool, no_automatic_retries: bool) -> bool:
+    """Retry only when a live model left a required cohort unstructured."""
+    return (not used_mock_llm and not no_automatic_retries
+            and plan_expects_analysis_cohort(plan) and cohort_definition_is_empty(plan))

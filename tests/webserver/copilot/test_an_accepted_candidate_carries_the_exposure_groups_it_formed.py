@@ -406,35 +406,44 @@ _PROVIDER_ENVIRONMENT = {
 
 
 def _export(root: Path) -> Path:
-    """A prepared export package: one demographics file and its manifest."""
+    """Synthetic native export with declared demographics, lactate and outcomes."""
+    from dataclasses import replace
+    from easyicu.concept.metadata_projection import ConceptColumnRole
+    from easyicu.concept.metadata_sidecar import (
+        ColumnMetadataFileBinding, ColumnMetadataSidecar, write_content_addressed_sidecar,
+    )
+    from tests.support.typed_export import metadata_binding, typed_export
 
-    root.mkdir(parents=True)
+    typed_export(
+        root, database="miiv",
+        labs=pd.DataFrame({"stay_id": [1], "charttime": [1.0], "lact": [1.0], "mech_vent": [False]}),
+        outcomes=pd.DataFrame({"stay_id": [1], "death": [False]}),
+    )
     pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
         root / "demographics.parquet", index=False
     )
-    (root / "_manifest.json").write_text(
-        json.dumps(
-            {
-                "database": "miiv",
-                "format": "parquet",
-                "concept_selection": {
-                    "mode": "explicit",
-                    "modules": {"demographics": ["age"]},
-                },
-                "feature_definitions": {"included": False},
-                "files": [
-                    {
-                        "file": "demographics.parquet",
-                        "module": "demographics",
-                        "concepts": 1,
-                        "concept_ids": ["age"],
-                        "rows": 1,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    manifest_path = root / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    sidecar_path = root / manifest["column_metadata"]["file"]
+    sidecar = ColumnMetadataSidecar.from_dict(json.loads(sidecar_path.read_text(encoding="utf-8")))
+    lab = next(item for item in sidecar.files if item.module == "labs")
+    lab = replace(lab, columns={key: value for key, value in lab.columns.items() if key != "age"})
+    demographics = ColumnMetadataFileBinding(
+        relative_path="demographics.parquet", module="demographics", identity_column="stay_id",
+        time_coordinates=(), columns={"age": metadata_binding("age", "age", ConceptColumnRole.VALUE)},
     )
+    sidecar = replace(sidecar, files=tuple(lab if item.module == "labs" else item for item in sidecar.files) + (demographics,))
+    manifest["column_metadata"] = write_content_addressed_sidecar(root, sidecar).to_dict()
+    manifest["concept_selection"]["modules"]["labs"].remove("age")
+    manifest["concept_selection"]["modules"]["demographics"] = ["age"]
+    lab_entry = next(item for item in manifest["files"] if item["module"] == "labs")
+    lab_entry["concept_ids"].remove("age")
+    lab_entry["column_metadata_columns"].remove("age")
+    lab_entry["concepts"] -= 1
+    manifest["files"].append({"file": "demographics.parquet", "module": "demographics",
+                              "concepts": 1, "concept_ids": ["age"], "rows": 1,
+                              "column_metadata_columns": ["age"]})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return root
 
 

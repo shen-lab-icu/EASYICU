@@ -27,7 +27,9 @@ def catalog_manifest() -> dict[str, object]:
     data_root = Path(__file__).resolve().parent / "data"
     base = json.loads((data_root / "concept-dict.json").read_text(encoding="utf-8"))
     sofa2 = json.loads((data_root / "sofa2-dict.json").read_text(encoding="utf-8"))
-    merged = load_dictionary(include_sofa2=True)
+    # The public catalog is the union across supported sources; the SIC-only
+    # overlay belongs in that count even though other sources cannot load it.
+    merged = load_dictionary(include_sofa2=True, source_name="sic")
     capabilities = _load_capabilities()
     # Explicit degradation marker: empty means research_agent unavailable,
     # not "zero capabilities". Callers must not mistake () for a real count.

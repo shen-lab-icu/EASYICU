@@ -97,7 +97,7 @@ def test_verified_scientific_review_to_real_snapshot_stays_blocked_if_inputs_unk
     from easyicu.concept.loader import load_dictionary
     from easyicu.concept.provenance import capture_data_provenance, metadata_digest
     from easyicu.config import load_src_cfg
-    from tests.webserver.test_sic_raw_preparation_grant import _case
+    from tests.support.sic_raw_preparation import _case
 
     result, source_root, _, _ = _case(tmp_path, monkeypatch, approved=False)
     record = result.evidence.get("scientific_plan_review")
@@ -128,8 +128,8 @@ def test_reviewed_cohort_predicates_enter_source_discovery_but_never_claim_closu
     from easyicu.research_agent.orchestration.scientific_plan_review_gate import persist_or_validate_scientific_plan_review
     from easyicu.research_agent.planning.cohort_contract import CohortDefinition, ConceptPredicate, TimeWindow
     from easyicu.webserver.raw_preparation_dependencies import reviewed_plan_provenance_concepts
-    from tests.research_agent.planning.test_time_origin_review_binding import _review
-    from tests.webserver.test_sic_raw_preparation_grant import _case
+    from tests.support.source_substitutions import _review
+    from tests.support.sic_raw_preparation import _case
 
     original, source_root, _, _ = _case(tmp_path, monkeypatch, approved=False)
     context = original.context.model_copy(update={

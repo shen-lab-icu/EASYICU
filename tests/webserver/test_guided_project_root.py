@@ -7,7 +7,7 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
-from easyicu.webserver import guided_sessions, state_paths
+from easyicu.webserver import guided_sessions, settings, state_paths
 from easyicu.webserver.app import app
 
 
@@ -18,6 +18,7 @@ def isolated_projects(tmp_path, monkeypatch):
     monkeypatch.delenv("EASYICU_DEPLOYMENT", raising=False)
     monkeypatch.delenv("EASYICU_HOSTED", raising=False)
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", state_paths.projects_root())
+    monkeypatch.setattr(settings, "_CONFIG_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "registry")
     monkeypatch.setattr(
         guided_sessions, "_CONFIG_PATH", tmp_path / "registry" / "guided.json"
@@ -134,6 +135,20 @@ def test_the_default_parent_itself_is_never_moved_to_the_trash(isolated_projects
         guided_sessions._trash_guided_project_folder(str(isolated_projects), "any")
 
     assert refused.value.code == "project_folder_scope_not_allowed"
+
+
+def test_configured_project_parent_is_used_and_cannot_be_trashed(isolated_projects, tmp_path):
+    configured_parent = tmp_path / "configured-projects"
+    settings.update_settings({"project_dir": str(configured_parent)})
+
+    project = _create("Synthetic configured study")
+    assert project.parent == configured_parent
+    shutil.copy(project / "guided_draft.json", configured_parent / "guided_draft.json")
+
+    with pytest.raises(guided_sessions.GuidedProjectTrashError) as refused:
+        guided_sessions._trash_guided_project_folder(str(configured_parent), "any")
+    assert refused.value.code == "project_folder_scope_not_allowed"
+    assert configured_parent.is_dir()
 
 
 def test_hosted_projects_keep_the_instance_projects_root(isolated_projects, monkeypatch):

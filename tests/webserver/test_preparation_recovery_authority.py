@@ -54,7 +54,7 @@ def test_live_consumed_decision_is_bound_to_original_job_and_scope(authority):
     '2026-10-30T00:00:00',
     'invalid',
     None,
-])
+], ids=['expired', 'timezone_missing', 'invalid', 'missing'])
 def test_expiry_blocks_work_but_preserves_read_only_result_access(authority, expiry):
     body, save, checkpoint, binding, scope, _ = authority
     body['expires_at'] = expiry

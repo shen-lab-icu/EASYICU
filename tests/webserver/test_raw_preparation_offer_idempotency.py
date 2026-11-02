@@ -244,7 +244,7 @@ else:
 def test_original_route_accepts_identical_checkpoint_published_by_replay(tmp_path, monkeypatch):
     from easyicu.webserver import raw_preparation_candidate, raw_preparation_decisions
     from easyicu.webserver.routes import agent as route
-    from tests.webserver.test_raw_preparation_decisions import _host_decision
+    from tests.support.raw_preparation_decision import _host_decision
 
     pending, args, values = _host_decision(tmp_path, monkeypatch)
     path = tmp_path / "raw_preparation_checkpoint.json"

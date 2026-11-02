@@ -57,6 +57,107 @@ __all__ = [
 ]
 
 
+def render_local_first_observed_source_flow(
+    *, evidence: EvidenceStore, approved_plan_sha256: str,
+    decision_set_sha256: str, language: str,
+) -> tuple[str, dict[str, Any]]:
+    """Render host-verified counts locally, after every model call has ended.
+
+    These claims deliberately do not join the model-facing numeric registry.
+    Each displayed value names its exact JSON field, avoiding value-based
+    matching when several exclusion counts happen to be equal.
+    """
+    owner = "first_observed_source_flow"
+    payload = _verified_evidence_json(evidence, owner, exact_evidence_id=True,
+        expected_kind="table", expected_producer="host")
+    record = evidence.get(owner)
+    binding = payload.get("binding", {})
+    if (record is None or record.generation_mode != "system" or record.produced_by_step
+            or payload.get("schema_version") != "easyicu.first-observed-source-flow-evidence/1"
+            or payload.get("not_lifetime_first_icu") is not True
+            or payload.get("disclosure") != "local_report_with_publication_review"
+            or binding.get("approved_plan_sha256") != approved_plan_sha256
+            or binding.get("decision_set_sha256") != decision_set_sha256):
+        raise ValueError("first_observed_local_report_authority_invalid")
+    from ..authority.run_input import DEFERRED_ACTUAL_CAPSULE_EVIDENCE_ID, DEFERRED_RECEIPT_EVIDENCE_ID
+
+    dependency_ids = {DEFERRED_ACTUAL_CAPSULE_EVIDENCE_ID, DEFERRED_RECEIPT_EVIDENCE_ID}
+    if set(record.inputs) != dependency_ids or any(
+        not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None
+        for value in (binding.get(key) for key in (
+            "recipe_sha256", "coordinate_sha256", "source_attestation_sha256",
+            "actual_capsule_sha256", "actual_cohort_sha256", "deferred_receipt_sha256"))
+    ):
+        raise ValueError("first_observed_local_report_dependencies_invalid")
+    capsule = _verified_evidence_json(evidence, DEFERRED_ACTUAL_CAPSULE_EVIDENCE_ID,
+                                     exact_evidence_id=True, expected_kind="log")
+    receipt = _verified_evidence_json(evidence, DEFERRED_RECEIPT_EVIDENCE_ID,
+                                     exact_evidence_id=True, expected_kind="log")
+    body = receipt.get("body", {})
+    if (evidence.get(DEFERRED_ACTUAL_CAPSULE_EVIDENCE_ID).sha256 != binding["actual_capsule_sha256"]
+            or evidence.get(DEFERRED_RECEIPT_EVIDENCE_ID).sha256 != binding["deferred_receipt_sha256"]
+            or capsule.get("cohort_sha256") != binding["actual_cohort_sha256"]
+            or not isinstance(receipt.get("signature"), str)
+            or any(body.get(left) != binding[right] for left, right in (
+                ("approved_plan_sha256", "approved_plan_sha256"), ("decision_set_sha256", "decision_set_sha256"),
+                ("recipe_sha256", "recipe_sha256"), ("capsule_sha256", "actual_capsule_sha256"),
+                ("cohort_sha256", "actual_cohort_sha256")))):
+        raise ValueError("first_observed_local_report_dependencies_invalid")
+    chinese = str(language).lower().startswith("zh")
+    labels = {
+        "source_patients_n": ("Source-visible patients", "来源中可见的患者人数"),
+        "source_stays_n": ("Source ICU unit-stay records", "来源 ICU 单元记录数"),
+        "eligible_patients_n": ("Eligible patients in the analytic cohort", "纳入分析队列的患者人数"),
+        "first_icu_order_or_type_unverifiable_n": ("First ICU order or unit type could not be verified", "首次 ICU 次序或单元类型无法确认的人数"),
+    }
+    reasons = {
+        "hospitalization_identifier_missing_or_invalid_n": ("Missing or invalid hospitalization identity", "住院标识缺失或无效"),
+        "hospitalization_identifier_shared_across_patients_n": ("Hospitalization identity shared by different patients", "不同患者共享住院标识"),
+        "multiple_observed_hospitalizations_n": ("Multiple source-visible hospitalizations", "存在多次可见住院"),
+        "first_icu_order_or_type_unverifiable_n": ("Unverifiable first ICU order or unit type", "首次 ICU 次序或单元类型无法确认"),
+        "age_unknown_or_invalid_n": ("Unknown or invalid age", "年龄未知或无效"),
+        "under_18_n": ("Below the reviewed adult age threshold", "低于审阅计划的成人年龄下限"),
+    }
+    counts = payload.get("counts", {})
+    rows = [(f"counts.{key}", counts.get(key), label) for key, label in labels.items()]
+    for group, prefix, allowed in (
+        ("excluded_patients_by_reason", ("Excluded patients — ", "排除患者人数："), reasons),
+        ("excluded_stays_by_reason", ("Excluded ICU unit-stay records — ", "排除 ICU 单元记录数："),
+         {**reasons, "non_selected_unit_n": ("Other units of eligible patients", "符合条件患者的其他单元")}),
+    ):
+        exclusions = counts.get(group)
+        if not isinstance(exclusions, dict) or set(exclusions) - set(allowed):
+            raise ValueError("first_observed_local_report_counts_invalid")
+        rows.extend((f"counts.{group}.{key}", value,
+                     tuple(prefix[i] + allowed[key][i] for i in range(2)))
+                    for key, value in sorted(exclusions.items()))
+    claims = [claim for claim in evidence.numeric_claims()
+              if claim.step_id == owner and claim.evidence_id == owner]
+    title = "来源人群筛选记录" if chinese else "Source population selection"
+    lines, definitions, binding_map = [f"\n\n### {title}\n"], [], {}
+    for index, (source_field, number, label) in enumerate(rows, 1):
+        matches = [claim for claim in claims if claim.source_field == source_field]
+        if (type(number) is not int or number < 0 or len(matches) != 1
+                or matches[0].canonical != number or matches[0].value != str(number)):
+            raise ValueError("first_observed_local_report_claim_mismatch")
+        claim = matches[0]
+        footnote = f"source_flow_{index}"
+        binding_map[footnote] = claim
+        lines.append(f"- {label[int(chinese)]}: {number}[^{footnote}]\n")
+        definitions.append(f"[^{footnote}]: value={claim.value}; step={claim.step_id}; "
+                           f"field={claim.source_field}; evidence={claim.evidence_id}; sha256={record.sha256}\n")
+    lines.append("\n" + (
+        "以上为完整来源在其他研究筛选前的人群记录；ICU 单元记录数不代表住院次数。"
+        "本研究只能确认来源内可观察的首次 ICU，不能保证是患者终生首次 ICU。"
+        "此段由本机根据已核验记录生成，未发送给模型。\n"
+        if chinese else
+        "These are complete-source counts before other study filters. ICU unit-stay records are not hospitalizations. "
+        "The selected stay is the first observable ICU stay in this source, not necessarily the patient's lifetime first ICU stay. "
+        "This section was generated locally from verified records and was not sent to a model.\n"
+    ))
+    return "".join(lines) + "\n" + "".join(definitions), binding_map
+
+
 def _resolve_writer_aux_path(
     *,
     run_dir: Path,

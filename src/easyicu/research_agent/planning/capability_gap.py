@@ -409,7 +409,7 @@ def fixed_window_association_facts(context: ResearchContext) -> dict[str, Any] |
     from ..concept_availability import variable_source_unavailability
     from ..contracts.concept_values import names_without_values
     from ..contracts.patient_grouping_need import PATIENT_GROUPING_STATUSES, PATIENT_GROUPING_STATUS_KEY
-    from ..research_context.event_time_semantics import recorded_event_time_semantics
+    from ..research_context.stay_events import recorded_event_time_semantics
     from ..research_context.materialization_window import column_materialized_window
     from .analysis_types import infer_analysis_type, longitudinal_trajectory_requested
     from .exposure_group_compile import grouping_sources, planned_on_metadata

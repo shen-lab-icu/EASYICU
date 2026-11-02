@@ -69,7 +69,7 @@ def _build(root, monkeypatch, *, streamed=True, backend="arrow", id_col="stay_id
     }
     monkeypatch.setattr(api, "EXTRACT_MODULES", modules)
     monkeypatch.setattr(
-        api, "_native_export_runtime_provenance", lambda: {"fixture": True}
+        api, "_native_export_runtime_provenance", lambda **_: {"fixture": True}
     )
     merged = sofa.merge(suspicion, on=[id_col, "charttime"], how="outer")
     monkeypatch.setattr(easyicu, "load_concepts", lambda **kwargs: merged.copy())
@@ -356,7 +356,7 @@ def test_public_api_collector_retains_context_after_worker_cleanup(
         lambda _: SimpleNamespace(Process=InlineProcess),
     )
     monkeypatch.setattr(
-        api, "_native_export_runtime_provenance", lambda: {"fixture": True}
+        api, "_native_export_runtime_provenance", lambda **_: {"fixture": True}
     )
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
     monkeypatch.setenv("EASYICU_DUCKDB_TEMP_DIR", str(tmp_path / "spill"))

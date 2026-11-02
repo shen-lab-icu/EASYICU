@@ -330,6 +330,10 @@ def _verified_run_input_capsule_digest(
 ) -> str:
     """Return the working capsule digest only when sealed evidence agrees."""
 
+    from ..authority.run_input import verified_deferred_input_capsule_digest
+    deferred = verified_deferred_input_capsule_digest(run_dir=run_dir, evidence_store=evidence_store)
+    if deferred is not None:
+        return deferred
     record = evidence_store.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
     if record is None:
         raise RunInputIdentityError("run input capsule evidence is missing")
@@ -1038,6 +1042,8 @@ def _step_flush_partial_manifest(
     }
     if extra:
         payload.update(extra)
+    from ..concept_dict_audit import sealed_run_dictionary_manifest_fields
+    payload.update(sealed_run_dictionary_manifest_fields(run_dir, evidence))
     write_run_checkpoint(run_dir / "manifest_partial.json", payload)
 
 
@@ -3734,3 +3740,43 @@ def _non_llm_interpretation_for_generation(
         "interpretation; no new LLM interpretation was requested.",
         interpretation_mode,
     )
+
+
+def prepare_parallel_wave(*, runtime_state, shared_lock, flush_manifest, per_step_records,
+                          evidence, run_dir, run_id, plan_result, typed_binding_resolver,
+                          execute_step):
+    """Capture a common authority view before scheduling the wave."""
+    import copy
+    import functools
+    from dataclasses import replace
+    from .runner import capture_wave_artifact_authority
+
+    with shared_lock:
+        flush_manifest()
+        step_records = copy.deepcopy(per_step_records)
+    view = evidence.read_view()
+    authority = capture_wave_artifact_authority(
+        workdir=run_dir, run_id=run_id, step_records=step_records,
+        evidence_records=view.records(), resumed=plan_result.resume_state is not None,
+    )
+    claims = view.authoritative_numeric_claims(step_records)
+    resolver = replace(typed_binding_resolver, evidence_store=view,
+                       per_step_records=step_records, unpublished_evidence_store=evidence)
+    return functools.partial(execute_step, batch_base=runtime_state,
+        batch_binding_resolver=resolver, batch_numeric_claims=claims,
+        batch_artifact_authority=authority)
+
+
+def _parallel_evidence_isolation_available(*, evidence: Any, run_dir: Path) -> bool:
+    """Whether the host has a verified per-worker evidence view for this run.
+
+    The current execution owner passes a live shared EvidenceStore and the run
+    root to every worker. A later worker can therefore observe another worker's
+    result before that batch has joined. Neither disjoint plan inputs nor a
+    conflict check after the batch proves isolation. No current execution owner
+    supplies a sealed worker-local reader and write merge, so concurrent
+    execution is not admitted here. This is not a user-configurable switch.
+    """
+
+    del evidence, run_dir
+    return False

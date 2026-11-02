@@ -67,6 +67,9 @@ def _worker(lease_dir: Path, nonce: str, expected: str) -> int:
         if len(raw) > _MAX_MESSAGE:
             raise ValueError("provider_request_too_large")
         request = json.loads(raw)
+        environment = request.get("environment") if isinstance(request, dict) else None
+        if not isinstance(environment, dict) or environment.get("EASYICU_DISABLE_PROVIDER_ENV_FILE") != "1":
+            raise ValueError("metadata_provider_file_fallback_forbidden")
         # The trust owner pins reviewed adapters to their public llm module.
         import easyicu.research_agent.providers.llm  # noqa: F401
 
@@ -92,12 +95,20 @@ def _worker(lease_dir: Path, nonce: str, expected: str) -> int:
         if schema is not None:
             if not isinstance(schema, dict) or type(schema.get("strict")) is not bool:
                 raise ValueError("provider_schema_invalid")
+            original = json.loads(schema.get("schema_json") or "")
+            version = schema.get("wire_schema_version", "legacy/1")
+            if version not in {"legacy/1", "easyicu.planner-wire/2"}:
+                raise ValueError("provider_wire_schema_version_invalid")
+            if version == "legacy/1" and schema.get("wire_schema_json") is not None:
+                raise ValueError("provider_wire_schema_mismatch")
             structured = StructuredOutputRequest.from_schema(
-                name=schema.get("name"), schema=json.loads(schema.get("schema_json") or ""),
-                strict=schema["strict"],
+                name=schema.get("name"), schema=original, strict=schema["strict"],
+                wire_schema_version=version,
             )
             if structured.schema_json != schema.get("schema_json"):
                 raise ValueError("provider_schema_not_canonical")
+            if version != "legacy/1" and structured.transport_schema_json != schema.get("wire_schema_json"):
+                raise ValueError("provider_wire_schema_mismatch")
         kwargs = {"max_tokens": request["max_tokens"], "temperature": request["temperature"]}
         if structured is not None:
             kwargs["structured_output"] = structured

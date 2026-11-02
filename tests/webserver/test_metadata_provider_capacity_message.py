@@ -1,7 +1,7 @@
 """The actual stop renderer explains safe metadata admission failures."""
 
-import subprocess
 from pathlib import Path
+from tests.support.node import run_node
 
 
 def test_capacity_stop_is_explained_in_chinese_and_english():
@@ -24,4 +24,4 @@ for (const lang of [0, 1]) {
   if (!incomplete.includes(lang ? '已生成的结果仍可查看' : 'remain available to view')) process.exit(4);
 }
 """
-    subprocess.run(["node", "-e", code, str(owner)], check=True, capture_output=True, text=True)
+    run_node("node", code, str(owner), check=True)

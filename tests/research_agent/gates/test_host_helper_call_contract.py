@@ -1314,3 +1314,41 @@ qa = audit_publication_exports(out_dir=out_dir, stem=stem, strict=True)
     assert len(findings) == 1
     assert repaired == script
     assert names == []
+
+
+def test_closed_counts_repair_preserves_unicode_before_diagnosed_expression(ra):
+    script = '''from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+counts = closed_categorical_counts(sex, declared_levels=["Female", "Male"])
+count_table = counts.table
+说明 = "中文"; levels = list(count_table.index)
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+'''
+    findings = _level_index_findings(script, ra)
+    assert len(findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        script, [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+    assert names == ["closed_counts_level_column_v1"]
+    assert '说明 = "中文"; levels = list(count_table["level"])' in repaired
+    assert _level_index_findings(repaired, ra) == []
+
+
+def test_table_one_repair_preserves_unicode_before_diagnosed_assignment(ra):
+    script = '''from easyicu.research_agent.methods.table_one import build_grouped_table_one
+说明 = "中文"; table_one_spec = {"group_by": "death", "group_levels": [0, 1], "variables": []}
+result = build_grouped_table_one(frame, table_one_spec)
+'''
+    findings = [finding for finding in audit_mechanical_code_contracts(script, _table_step(ra))
+                if (finding.detail or {}).get("reason") == "table_one_spec_not_planner_owned"]
+    assert len(findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        script, [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+    assert names == ["table_one_planner_spec_binding_v1"]
+    assert '说明 = "中文"; table_one_spec = ' in repaired
+    assert "'variable_kind': 'continuous'" in repaired

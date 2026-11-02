@@ -180,7 +180,7 @@ def test_a_confirmed_bound_source_returns_its_export_catalog(monkeypatch):
         "question": "How is a trial marker related to the outcome in eICU?",
         "data_source": source,
     })
-    monkeypatch.setattr(tools.sources, "load_registry", lambda: {"sources": [source]})
+    monkeypatch.setattr(tools.sources, "load_registry", lambda **_kwargs: {"sources": [source]})
     monkeypatch.setattr(catalog, "build_database_capability_catalog", _unexpected_source_access)
     calls = []
 
@@ -206,5 +206,9 @@ def test_a_confirmed_bound_source_returns_its_export_catalog(monkeypatch):
         "concepts": [{"concept_id": "export_score", "module": "scores", "role": "value",
                       "description": "", "selection_mode": "ordinary", "selection_note": "",
                       "canonical_alternative": ""}],
+        "source_dictionary_reference_note": (
+            "Declared mappings and units are packaged dictionary references only; "
+            "they do not verify the selected source, actual reads, or per-record units."
+        ),
         "canonical_alternatives": [], "returned_count": 1, "truncated": False,
     }

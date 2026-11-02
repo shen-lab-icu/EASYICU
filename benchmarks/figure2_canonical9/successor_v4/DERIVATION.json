@@ -1,0 +1,37 @@
+{
+  "schema_version": "easyicu.figure2_successor_derivation/1",
+  "authority_status": "engineering_candidate_no_formal_authority",
+  "source_namespace": "benchmarks.figure2_canonical9.evaluator",
+  "successor_namespace": "benchmarks.figure2_canonical9.successor_v4",
+  "source_owner_projection": {
+    "scoring_inputs.py": {
+      "origin": "benchmarks/figure2_canonical9/evaluator/scoring_inputs.py",
+      "origin_sha256": "33eb20a0b9bb12950228360bc21fddf72f7214e2d8d72ab7be81ca3ddf888416",
+      "coordinate_projection_only": true
+    },
+    "scoring.py": {
+      "origin": "benchmarks/figure2_canonical9/evaluator/scoring.py",
+      "origin_sha256": "654f654f1e7e65eeac1f93d3efbf228c45e88791877bdc51fc1143be85d92d9d",
+      "coordinate_projection_only": true
+    },
+    "safety_issuer.py": {
+      "origin": "benchmarks/figure2_canonical9/evaluator/safety_issuer.py",
+      "origin_sha256": "9ad039868e56002def9aa106b287c79e45e44393f3de0377d5b255768538e320",
+      "coordinate_projection_only": true
+    }
+  },
+  "authority_coordinate_projection": {
+    "easyicu.figure2_paper_rubric/20260719-v3": "easyicu.figure2_paper_rubric/20261101-v4",
+    "easyicu.figure2_paper_rubric_manifest/3": "easyicu.figure2_paper_rubric_manifest/4",
+    "easyicu.figure2_scorecard_envelope/3": "easyicu.figure2_scorecard_envelope/4",
+    "easyicu.figure2_paper_scorecard_envelope/2": "easyicu.figure2_paper_scorecard_envelope/3",
+    "easyicu.figure2_evaluation_attempt/2": "easyicu.figure2_evaluation_attempt/3",
+    "easyicu.figure2_scoring_input_authority/5": "easyicu.figure2_scoring_input_authority/6",
+    "easyicu.figure2_run_task_authority/4": "easyicu.figure2_run_task_authority/5",
+    "easyicu.figure2_safety_request/1": "easyicu.figure2_safety_request/2",
+    "easyicu.figure2_safety_receipt/1": "easyicu.figure2_safety_receipt/2",
+    "figure2_paper_rubric_v3.json": "figure2_paper_rubric_v4.json"
+  },
+  "old_safety_runner_reused": false,
+  "old_manifest_rewritten": false
+}

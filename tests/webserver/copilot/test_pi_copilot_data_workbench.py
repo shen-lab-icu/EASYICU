@@ -463,7 +463,7 @@ def test_cohort_tool_resolves_feature_and_returns_snapshot_coordinate_only(
     store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
     calls: list[dict] = []
 
-    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda: _registry(export))
+    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda **_kwargs: _registry(export))
     monkeypatch.setattr(
         tool_owner.cohort_review,
         "cohort_review_summary",
@@ -511,7 +511,7 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
     export = tmp_path / "export"
     export.mkdir()
     store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
-    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda: _registry(export))
+    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda **_kwargs: _registry(export))
     monkeypatch.setattr(
         patient_drilldown,
         "patient_review_entity_page",
@@ -611,7 +611,7 @@ def test_patient_timeline_rejects_unknown_leading_slash_unit(
     export = tmp_path / "export"
     export.mkdir()
     store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
-    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda: _registry(export))
+    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda **_kwargs: _registry(export))
     monkeypatch.setattr(
         patient_drilldown,
         "patient_review_entity_page",
@@ -667,7 +667,7 @@ def test_crossdb_tool_keeps_paths_host_side_and_seals_aggregate_view(
     }
     store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
     captured: list[dict] = []
-    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda **_kwargs: registry)
     monkeypatch.setattr(
         tool_owner.crossdb_review,
         "crossdb_review_summary",

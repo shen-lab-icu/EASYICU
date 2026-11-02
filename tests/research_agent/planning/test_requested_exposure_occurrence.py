@@ -22,6 +22,7 @@ import pytest
 from tests.support.distribution_policies import STOP_MISSING
 
 from easyicu.research_agent import pipeline as research_pipeline
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
@@ -33,9 +34,6 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 from easyicu.research_agent.planning import figure_plan_shaping, final_plan_shape
 from easyicu.research_agent.planning.analysis_types import (
     requested_exposure_occurrence_cues,
-)
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
 )
 from easyicu.research_agent.planning.family_spec import (
     FamilySpecError,
@@ -524,7 +522,7 @@ def _signed(context):
         current_case=build_current_case_scientific_runtime_authority(_AUTHORITY),
     )
     host = SimpleNamespace(
-        _scientific_runtime_authorities=authorities,
+        _scientific_runtime_authorities=authorities, _services=PipelineServices(),
         _enable_publication_figure_skill=True,
         _max_total_steps=PipelineConfig(workdir="./unused").max_total_steps,
     )
@@ -533,7 +531,6 @@ def _signed(context):
         pipeline=host, plan=plan, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _ = authorities.bind_plan(plan)
     bound = figure_plan_shaping.apply_runtime_bound_figure_contracts(bound, findings)
     sealed = authorities.seal_for_plan(bound)

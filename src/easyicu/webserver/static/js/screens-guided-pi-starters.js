@@ -48,11 +48,8 @@
   }
 
   /* Example questions, one per method, spread over the six databases.
-     Each is chosen so that its database records what it asks for (the
-     capability owner assesses it exact, with no substituted definition, and
-     every variable it names is fully derivable there).
-     "You get" names only what that method's reviewed workflow produces;
-     no duration is shown until run records give a typical one. */
+     Questions with an unverified source time definition stay available for
+     exploration, with their execution limit stated on the card. */
   function exampleQuestions(tr) {
     return [
       {
@@ -122,6 +119,7 @@
         id: 'example-ventilation-rmst', database: 'SICdb', kind: tr('Survival with RMST', '生存分析与 RMST'),
         title: tr('Ventilation and 28-day survival', '机械通气与 28 天生存'),
         gets: tr('Kaplan–Meier curves, adjusted Cox hazard ratio, 28-day RMST difference (sensitivity)', 'Kaplan–Meier 曲线、调整后的 Cox 风险比、28 天 RMST 差值（敏感性分析）'),
+        scopeNotice: tr('SICdb does not currently establish the requested ICU time origin, so this analysis cannot run with that definition. Source timing and system support must first be confirmed.', 'SICdb 目前不能确认此问题要求的 ICU 时间起点，无法按该定义执行分析；需要先核实来源时间并确认系统支持。'),
         prompt: tr(
           'In SICdb, does 28-day survival differ between patients ventilated on the first ICU day and those who are not, after adjusting for age and sex? Report the 28-day restricted mean survival time difference as a sensitivity analysis.',
           '在 SICdb 中，入 ICU 第一天接受机械通气的患者与未通气的患者相比，调整年龄和性别后 28 天生存是否不同？并以 28 天限制性平均生存时间差作为敏感性分析。',
@@ -140,6 +138,7 @@
         id: 'example-creatinine-competing', database: 'SICdb', kind: tr('Competing risks', '竞争风险'),
         title: tr('Creatinine and ICU death: competing risks', '肌酐与 ICU 死亡的竞争风险'),
         gets: tr('Cumulative incidence curves with Gray\'s test, cause-specific Cox and Fine–Gray models', '累积发生率曲线与 Gray 检验、原因别 Cox 与 Fine–Gray 模型'),
+        scopeNotice: tr('SICdb does not currently establish the requested ICU time origin or ICU discharge censoring time, so this analysis cannot run with those definitions. Source timing and system support must first be confirmed.', 'SICdb 目前不能确认此问题要求的 ICU 时间起点或 ICU 转出的删失时间，无法按这些定义执行分析；需要先核实来源时间并确认系统支持。'),
         prompt: tr(
           'In SICdb, how is the highest creatinine on the first ICU day related to death in the ICU, treating discharge alive from the ICU as a competing event and adjusting for age and sex?',
           '在 SICdb 中，入 ICU 第一天的最高肌酐与 ICU 内死亡有什么关系？把活着转出 ICU 作为竞争事件，调整年龄和性别。',
@@ -226,7 +225,8 @@
       <span class="gpi-starter-category">${esc(row.database)} · ${esc(row.kind)}</span>
       <strong>${esc(row.title)}</strong>
       <small>${esc(row.prompt)}</small>
-      <span class="gpi-starter-gets"><b>${esc(tr('You get', '会得到'))}</b>${esc(row.gets)}</span>
+      <span class="gpi-starter-gets"><b>${esc(tr('Possible outputs', '可能的产出'))}</b>${esc(row.gets)}</span>
+      ${row.scopeNotice ? `<span class="gpi-starter-scope">${esc(row.scopeNotice)}</span>` : ''}
       <span class="gpi-starter-card-foot"><span>${esc(tr('Use this question', '用这个问题'))}</span></span>
     </button>`;
   }

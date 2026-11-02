@@ -191,6 +191,8 @@ class _TrustedClientRecord:
     authorization: Optional[ProviderAuthorization]
     child_ids: tuple[int, ...] = ()
     children_getter: Optional[Callable[[], Sequence[Any]]] = None
+    preflight: Optional[Callable[[], Any]] = None
+    call_scoped_receipt: bool = False
     constructor_impl: object | None = None
     callable_contract: _CallableContract | None = None
     dispatch_identity: tuple[Any, ...] = ()
@@ -984,6 +986,8 @@ def require_provider_client_authorization(client: Any) -> None:
                     EXTERNAL_LLM_NOT_AUTHORIZED,
                     type(current).__name__,
                 )
+            if record.preflight is not None:
+                record.preflight()
             stack.extend(children)
             continue
         raise ProviderConfigurationError(
@@ -992,6 +996,30 @@ def require_provider_client_authorization(client: Any) -> None:
         )
     if "replay" in leaf_kinds and leaf_kinds != {"replay"}:
         raise ReplayError("model_replay_mixed_provider_forbidden")
+
+
+def require_registered_wrapper_preflights(client: Any, *, task: Any = None) -> None:
+    """Check registered wrapper bindings before a budget scope is opened."""
+    stack, seen = [client], set()
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        record = _trusted_client_record(current)
+        if record is None or record.kind != "wrapper" or record.children_getter is None:
+            continue
+        children = tuple(record.children_getter())
+        if tuple(id(child) for child in children) != record.child_ids or not _callables_match_record(current, record):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, type(current).__name__)
+        if record.preflight is not None:
+            result = record.preflight()
+            if isinstance(result, dict) and "task" in result:
+                bound_task = result["task"]
+                if (task is None or getattr(task, "ledger", None) is not getattr(bound_task, "ledger", None)
+                        or getattr(task, "task_id", None) != getattr(bound_task, "task_id", None)):
+                    raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, type(current).__name__)
+        stack.extend(children)
 
 
 def authorized_complete(client: Any, messages: Any, **kwargs: Any) -> str:
@@ -1146,6 +1174,7 @@ def _new_trusted_record(
     authorization: Optional[ProviderAuthorization],
     child_ids: tuple[int, ...] = (),
     children_getter: Optional[Callable[[], Sequence[Any]]] = None,
+    preflight: Optional[Callable[[], Any]] = None,
     construction: Optional[_ConstructedClientRecord] = None,
 ) -> _TrustedClientRecord:
     contract = _callable_contract(client)
@@ -1155,6 +1184,8 @@ def _new_trusted_record(
         authorization=authorization,
         child_ids=child_ids,
         children_getter=children_getter,
+        preflight=preflight,
+        call_scoped_receipt=getattr(client, "requires_call_scoped_receipt", False) is True,
         constructor_impl=(
             construction.constructor_impl
             if construction
@@ -1420,22 +1451,27 @@ def _register_provider_wrapper(
     wrapper: Any,
     *,
     children_getter: Callable[[], Sequence[Any]],
+    preflight: Optional[Callable[[], Any]] = None,
 ) -> Any:
     """Register one reviewed wrapper and bind its complete child graph."""
 
     children = tuple(children_getter())
     if not children or any(child is None or child is wrapper for child in children):
         raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, type(wrapper).__name__)
-    _remember_trusted_client(
-        wrapper,
-        _new_trusted_record(
+    with _TRUSTED_CLIENTS_LOCK:
+        if _trusted_client_record(wrapper) is not None:
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, type(wrapper).__name__)
+        _remember_trusted_client(
             wrapper,
-            kind="wrapper",
-            authorization=None,
-            child_ids=tuple(id(child) for child in children),
-            children_getter=children_getter,
-        ),
-    )
+            _new_trusted_record(
+                wrapper,
+                kind="wrapper",
+                authorization=None,
+                child_ids=tuple(id(child) for child in children),
+                children_getter=children_getter,
+                preflight=preflight,
+            ),
+        )
     return wrapper
 
 ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261026"

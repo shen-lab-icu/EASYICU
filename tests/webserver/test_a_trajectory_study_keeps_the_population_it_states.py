@@ -33,17 +33,16 @@ from easyicu.research_agent.contracts.trajectory_design import (
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
-)
 from easyicu.research_agent.planning.family_spec import build_family_spec_request
 from easyicu.research_agent.planning.family_spec.contract import sealed_cohort_predicate
 from easyicu.research_agent.planning.family_spec.request import (
     SEALED_TRAJECTORY_SUITE_MARKER,
     sealed_trajectory_suite_coordinates,
 )
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     CohortDescriptor,
@@ -367,13 +366,13 @@ def _plan(mode: str):
     plan = _pipeline._shape_fresh_plan(
         pipeline=SimpleNamespace(
             _scientific_runtime_authorities=authorities,
+            _services=PipelineServices(),
             _enable_publication_figure_skill=True,
             _max_total_steps=24,
         ),
         plan=draft, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _ = authorities.bind_plan(plan)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, findings)
     authorities.validate_plan(bound)
@@ -404,8 +403,9 @@ def test_a_filtered_study_plans_the_population_its_suite_seals() -> None:
     assert _cohort(bound.cohort) == _SEALED_COHORT
 
 
-def test_an_unfiltered_study_keeps_its_template_cohort_and_the_suite_binds_the_population() -> None:
-    draft, bound = _plan("all_input_rows")
-
-    assert _cohort(draft.cohort) == ("all_input_rows", [], [])
-    assert _cohort(bound.cohort) == _SEALED_COHORT
+def test_an_adult_question_cannot_be_planned_as_every_input_row() -> None:
+    # A later signed-suite binding must not silently repair a draft that has
+    # already claimed to retain every row of this adult study.
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        _plan("all_input_rows")
+    assert caught.value.reason_code == "progressive_stated_adult_population_missing"

@@ -694,6 +694,14 @@ def validate_release(run_root: Path) -> dict[str, Any]:
 
     run_root = run_root.resolve()
     foundation = _validate_foundation_lock()
+    # The historical v6 lock never authorized the SIC case overlay.  Even if
+    # an older manifest happens to match its base digest, an installation with
+    # that extra runtime resource is not the sealed v6 execution environment.
+    overlay = FOUNDATION_RESOURCE_PATHS["concept_dictionary_sha256"].with_name(
+        "sic-case-duration-overlay.v1.json"
+    )
+    if overlay.exists() or overlay.is_symlink():
+        raise ReleaseValidationError("v6 foundation cannot seal with SIC overlay installed")
     export_root = run_root / "exports"
     if not export_root.is_dir():
         raise ReleaseValidationError(f"Missing export root: {export_root}")

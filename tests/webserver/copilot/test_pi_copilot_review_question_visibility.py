@@ -41,6 +41,7 @@ def _card(review: dict) -> str:
     script = f"""
       global.window = {{ EU_LANG: 'zh' }};
       eval({json.dumps(MODULES_SOURCE)});
+      eval({json.dumps((STATIC / "js/screens-guided-pi-confirmation-data.js").read_text(encoding="utf-8"))});
       eval({json.dumps(CONFIRMATION_SOURCE)});
       const confirmation = window.EasyICU.guidedPi.require('confirmation').create({{
         tr: (en, zh) => zh || en,

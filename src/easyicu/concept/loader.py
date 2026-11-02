@@ -11,8 +11,7 @@ formerly lived interleaved with the resolver code (former lines
   the cached raw dict; used by ``filter_bounds`` plumbing inside the
   resolver and by :mod:`easyicu.api`.
 * :func:`load_dictionary` — public compatibility wrapper that delegates
-  to :func:`easyicu.resources.load_dictionary`; the ``src_name`` argument
-  is accepted for backward compatibility but currently ignored.
+  to :func:`easyicu.resources.load_dictionary` with source-specific overlays.
 
 Public surface
 --------------
@@ -40,7 +39,13 @@ def _load_concept_dict_cached() -> dict[str, Any]:
         payload = json.load(handle)
     if not isinstance(payload, dict):
         raise ValueError("concept-dict.json root must be a JSON object")
-    return payload
+    # This cache serves cross-source *discovery*. Actual resolver access is
+    # selected separately by source_name in resources.load_dictionary.
+    from ..resources import _sic_case_overlay
+    overlay = _sic_case_overlay()
+    if set(payload) & set(overlay):
+        raise ValueError("sic_case_overlay_concept_collision")
+    return {**payload, **overlay}
 
 
 def _get_concept_bounds(concept_name: str, bound: str) -> Optional[float]:
@@ -71,7 +76,7 @@ def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False)
     """加载概念字典 - 兼容函数
 
     Args:
-        src_name: 数据源名称（可选，当前未使用，保留以兼容旧调用）
+        src_name: 数据源名称（可选，用于选择数据源专用定义）
         include_sofa2: 是否包含 SOFA-2 概念字典
 
     Returns:
@@ -80,8 +85,8 @@ def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False)
     if src_name is not None:
         warnings.warn(
             "load_dictionary(src_name=...) is deprecated: the argument is "
-            "accepted for backward compatibility but ignored; call "
-            "load_dictionary() without src_name instead.",
+            "accepted for backward compatibility; call easyicu.resources."
+            "load_dictionary(source_name=...) instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -89,8 +94,7 @@ def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False)
     # module load time (resources -> concept_loader -> resources ...).
     from ..resources import load_dictionary as _load_dictionary
 
-    # 当前实现不根据数据源过滤概念，但保留参数以兼容既有调用
-    return _load_dictionary(include_sofa2=include_sofa2)
+    return _load_dictionary(include_sofa2=include_sofa2, source_name=src_name)
 
 
 # --- Public cross-package alias (thin wrapper, no logic change) ---

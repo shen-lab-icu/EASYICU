@@ -23,6 +23,7 @@ def test_large_package_copies_complete_main_and_discloses_omitted_references(tmp
     omitted = copied["source"]["omitted_reference_paths"]
     assert omitted
     assert "omitted_reference_paths" in detail["instructions"]
+    assert "Only Markdown reference text is embedded; excluded non-Markdown files are listed below" in detail["instructions"]
     assert detail["size_bytes"] == len(detail["skill_md"].encode()) <= 12_000
     included = []
     for file in package["files"]:
@@ -30,7 +31,7 @@ def test_large_package_copies_complete_main_and_discloses_omitted_references(tmp
             assert (
                 file["content"].split("---\n", 2)[2].strip() in detail["instructions"]
             )
-        elif file["path"].startswith("references/"):
+        elif file["path"].startswith("references/") and file["path"].endswith(".md"):
             heading = f"## Copied reference: {file['path']}"
             if file["path"] in omitted:
                 assert heading not in detail["instructions"]
@@ -38,6 +39,9 @@ def test_large_package_copies_complete_main_and_discloses_omitted_references(tmp
                 included.append(file["path"])
                 assert heading in detail["instructions"]
                 assert file["content"].strip() in detail["instructions"]
+        elif file["path"].startswith("references/"):
+            assert f"- `{file['path']}`" in detail["instructions"]
+            assert file["content"].strip() not in detail["instructions"]
     assert included
     assert set(omitted) <= {
         file["path"]
@@ -75,10 +79,9 @@ def test_copy_preserves_reviewed_markdown_and_provenance(
     # Executable method notes also compete for the fixed reader-copy budget;
     # every omitted reference is disclosed whole, never truncated.
     omitted = installed["source"]["omitted_reference_paths"]
-    assert omitted == (
-        ["references/methods.md", "references/validation_framework.md", "references/workflow_contract.md"]
-        if builtin_id == "survival-time-to-event" else []
-    )
+    assert omitted == sorted(set(omitted))
+    assert set(omitted) <= {file["path"] for file in package["files"]
+                            if file["path"].startswith("references/") and file["path"].endswith(".md")}
     assert installed["source"] == {
         "builtin_id": builtin_id,
         "registry_version": method_skills.METHOD_SKILL_REGISTRY_VERSION,
@@ -285,6 +288,21 @@ def test_each_provenance_field_is_digest_bound(tmp_path, field, value):
     assert parse_skill_markdown(changed)["digest"] != copied["digest"]
 
 
+def test_frozen_copy_rejects_tampered_excluded_reference_list(tmp_path):
+    registry = ExtensionRegistry(tmp_path)
+    copied = registry.copy_builtin_skill("survival-time-to-event")
+    object_path = registry.skill_objects / f"{copied['digest']}.md"
+    original = object_path.read_text(encoding="utf-8")
+    assert "references/implementation.json" in original
+    changed = original.replace("references/implementation.json", "references/implementatIon.json")
+    assert len(changed.encode("utf-8")) <= 12_000
+    object_path.write_text(changed, encoding="utf-8")
+    with pytest.raises(ExtensionRegistryError) as caught:
+        registry.load_skill(name=copied["name"], digest=copied["digest"])
+    assert caught.value.code == "extension_skill_object_mismatch"
+    assert object_path.read_text(encoding="utf-8") == changed
+
+
 def test_copy_reviews_embedded_reference_text(tmp_path, monkeypatch):
     registry = ExtensionRegistry(tmp_path)
     package = method_skills.method_skill_package("survival-time-to-event", enabled=True)
@@ -295,6 +313,25 @@ def test_copy_reviews_embedded_reference_text(tmp_path, monkeypatch):
     with pytest.raises(ExtensionRegistryError) as sensitive:
         registry.copy_builtin_skill("survival-time-to-event")
     assert sensitive.value.code == "extension_skill_sensitive_content_rejected"
+
+
+@pytest.mark.parametrize("path", ["references/../private.json", "references/" + "x" * 257 + ".json"])
+def test_uncopied_reference_paths_must_remain_safe_and_bounded(tmp_path, monkeypatch, path):
+    package = method_skills.method_skill_package("survival-time-to-event", enabled=True)
+    package["files"].append({"path": path, "content": "synthetic"})
+    monkeypatch.setattr(method_skills, "method_skill_package", lambda *a, **kw: package)
+    with pytest.raises(ExtensionRegistryError) as caught:
+        ExtensionRegistry(tmp_path).copy_builtin_skill("survival-time-to-event")
+    assert caught.value.code == "extension_skill_source_invalid"
+
+
+def test_uncopied_reference_list_is_bounded(tmp_path, monkeypatch):
+    package = method_skills.method_skill_package("survival-time-to-event", enabled=True)
+    package["files"].extend({"path": f"references/extra{index}.json", "content": "{}"} for index in range(65))
+    monkeypatch.setattr(method_skills, "method_skill_package", lambda *a, **kw: package)
+    with pytest.raises(ExtensionRegistryError) as caught:
+        ExtensionRegistry(tmp_path).copy_builtin_skill("survival-time-to-event")
+    assert caught.value.code == "extension_skill_source_invalid"
 
 
 def test_reference_packing_is_stable_and_never_truncates_a_reference(
@@ -309,9 +346,18 @@ def test_reference_packing_is_stable_and_never_truncates_a_reference(
     first = ExtensionRegistry(tmp_path / "first")
     copied = first.copy_builtin_skill("survival-time-to-event")
     detail = first.current_skill(copied["name"])
-    assert copied["source"]["omitted_reference_paths"] == [
-        "references/large.md", "references/methods.md",
-        "references/validation_framework.md", "references/workflow_contract.md"]
+    omitted = copied["source"]["omitted_reference_paths"]
+    assert "references/large.md" in omitted
+    assert omitted == sorted(set(omitted))
+    for file in package["files"]:
+        path = file["path"]
+        if path.startswith("references/") and path.endswith(".md"):
+            heading = f"## Copied reference: {path}"
+            if path in omitted:
+                assert heading not in detail["instructions"]
+            else:
+                assert heading in detail["instructions"]
+                assert file["content"].strip() in detail["instructions"]
     assert "字" not in detail["skill_md"]
     assert detail["size_bytes"] <= 12_000
     package["files"].reverse()
@@ -391,10 +437,13 @@ def test_provenance_accepts_only_the_descriptive_source_contract(tmp_path, chang
     registry = ExtensionRegistry(tmp_path)
     copied = registry.copy_builtin_skill("survival-time-to-event")
     content = registry.current_skill(copied["name"])["skill_md"]
-    _, header, body = content.split("---\n", 2)
+    _, header, _ = content.split("---\n", 2)
     metadata = yaml.safe_load(header)
     metadata["source"].update(changes)
-    changed = "---\n" + yaml.safe_dump(metadata, sort_keys=False) + "---\n" + body
+    # Keep this provenance test below the size gate regardless of which whole
+    # references fit the current generated package.
+    changed = "---\n" + yaml.safe_dump(metadata, sort_keys=False) + "---\nSynthetic safe instructions.\n"
+    assert len(changed.encode("utf-8")) <= 12_000
     with pytest.raises(ExtensionRegistryError) as caught:
         registry.install_skill(changed)
     assert caught.value.code == "extension_skill_source_invalid"

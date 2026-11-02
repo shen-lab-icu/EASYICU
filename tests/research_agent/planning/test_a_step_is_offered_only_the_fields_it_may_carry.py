@@ -39,12 +39,31 @@ _ROSTER = (
     "phenotyping.trajectory_feature_clustering",
     "phenotyping.outcome_by_cluster",
     "phenotyping.trajectory_cluster_stability",
+    "causal_emulation.covariate_balance",
+    "phenotyping.cluster_sizes",
+    "prediction.subgroup_fairness",
 )
 _VARIABLES = ["stay_key", "marker_a", "marker_b", "marker_c", "event_flag"]
 _FEATURES = ["marker_a", "marker_b"]
 _COMPARISONS = [{"name": "event_flag", "summary": "count_percent"}]
 _FORM = {"target_column": "marker_a", "knot_quantiles": [0.1, 0.5, 0.9]}
 _VALUES = {
+    "covariate_balance_spec": {
+        "unit_id_column": "stay_key", "analysis_unit": "encounter",
+        "treatment_column": "marker_a",
+        "covariates": [{"column": "marker_b", "kind": "continuous"}],
+    },
+    "cluster_size_spec": {
+        "unit_id_column": "stay_key", "analysis_unit": "encounter",
+        "assignment_source": "table:phenotype_assignments",
+        "assignment_unit_id_column": "stay_key", "label_column": "cluster",
+        "expected_clusters": ["A", "B"], "missing_label_policy": "exclude",
+    },
+    "prediction_subgroup_spec": {
+        "analysis_unit": "subject", "subgroup_input_key": "artifact:analysis_cohort",
+        "subgroup_unit_id_column": "stay_key",
+        "axes": [{"column": "marker_a", "levels": ["A", "B"]}],
+    },
     "data_preparation": {"missing_data": {"strategy": "complete_case"}},
     "bootstrap_spec": {"replicates": 20, "seed": 12},
     "external_validation_spec": {
@@ -61,6 +80,9 @@ _VALUES = {
     "effect_measure": "risk_ratio",
 }
 _COORDINATES = {
+    "balance_secondary": ("causal_emulation.covariate_balance", "secondary"),
+    "size_auxiliary": ("phenotyping.cluster_sizes", "auxiliary"),
+    "subgroup_secondary": ("prediction.subgroup_fairness", "secondary"),
     "prediction_primary": ("prediction.discrimination_calibration", "primary"),
     "external_validation_secondary": ("prediction.external_validation", "secondary"),
     "external_validation_as_primary": ("prediction.external_validation", "primary"),
@@ -203,18 +225,44 @@ def test_the_owners_keep_their_fields_in_both_transports():
 
 
 def _accepts(action, role, field):
+    diagnostic = {
+        "causal_emulation.covariate_balance": "covariate_balance_spec",
+        "phenotyping.cluster_sizes": "cluster_size_spec",
+        "prediction.subgroup_fairness": "prediction_subgroup_spec",
+    }.get(action)
+    values = {field: _VALUES[field]}
+    if diagnostic is not None and diagnostic != field:
+        values[diagnostic] = _VALUES[diagnostic]
     try:
         ProgressiveSkeletonStep(
             step_id="cluster_fit", planned_analysis_role=role, module_id="custom_analysis",
-            objective="Fit the prespecified clusters.", raw_inputs=_VARIABLES,
+            objective="Fit the prespecified clusters.",
+            raw_inputs=[] if action == "prediction.subgroup_fairness" else _VARIABLES,
             outputs=[{"product_id": "table:cluster_fit", "semantic_role": "custom"}],
             scientific_action_id=action, custom_method="prespecified_cluster_fit",
-            **{field: _VALUES[field]},
+            **values,
         )
     except ValueError as exc:
         assert re.search(r"belongs? only to", str(exc)), exc
         return False
     return True
+
+
+@pytest.mark.parametrize(("action", "field"), [
+    ("causal_emulation.covariate_balance", "covariate_balance_spec"),
+    ("phenotyping.cluster_sizes", "cluster_size_spec"),
+    ("prediction.subgroup_fairness", "prediction_subgroup_spec"),
+])
+@pytest.mark.parametrize("role", ["primary", "sensitivity"])
+def test_standalone_diagnostics_refuse_non_supporting_roles(action, field, role):
+    with pytest.raises(ValueError, match="belongs only|requires its closed"):
+        ProgressiveSkeletonStep(
+            step_id="diagnostic", planned_analysis_role=role, module_id="custom_analysis",
+            objective="Describe the reviewed data.", raw_inputs=_VARIABLES,
+            outputs=[{"product_id": "table:diagnostic", "semantic_role": "custom"}],
+            scientific_action_id=action, custom_method="diagnostic",
+            **{field: _VALUES[field]},
+        )
 
 
 def test_only_an_adjusted_association_step_is_offered_an_effect_measure():

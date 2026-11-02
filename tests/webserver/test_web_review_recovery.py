@@ -379,7 +379,12 @@ def test_missing_global_record_is_reconciled_from_exact_durable_checkpoint(
     assert loaded.pipeline_config_sha256
 
 
-def test_register_pipeline_work_root_prunes_deleted_roots(tmp_path) -> None:
+def test_register_pipeline_work_root_prunes_deleted_roots(tmp_path, monkeypatch) -> None:
+    # Pytest's explicit basetemp may be outside the system temp directory.
+    monkeypatch.setattr(agent_review_recovery, "tempfile", SimpleNamespace(
+        gettempdir=lambda: str(tmp_path.resolve()),
+        mkstemp=agent_review_recovery.tempfile.mkstemp,
+    ))
     index = tmp_path / "review-index.json"
     stale = tmp_path / "stale-projects"
     stale.mkdir()
@@ -793,10 +798,11 @@ def test_recovery_defers_provider_reconcile_to_locked_pipeline(
             return SimpleNamespace(task_id=task_id)
 
     monkeypatch.setattr(provider_hard_stop, "ProviderHardStopLedger", _Ledger)
+    captured_services = []
     monkeypatch.setattr(
         research_agent.ResearchAgentPipeline,
         "from_config",
-        lambda _config, *, services: SimpleNamespace(),
+        lambda _config, *, services: captured_services.append(services) or SimpleNamespace(),
     )
 
     entry = agent_review_recovery.recover_pending_review(
@@ -807,6 +813,10 @@ def test_recovery_defers_provider_reconcile_to_locked_pipeline(
 
     assert entry is not None
     assert entry.prepared_package_binding == record.prepared_package_binding
+    from easyicu.webserver.first_observed_deferred_execution import consume_approved_first_observed_input
+    consumer = captured_services[0].deferred_first_observed_consumer
+    assert consumer.func is consume_approved_first_observed_input
+    assert consumer.keywords["provider_task"] is entry.provider_hard_stop
 
 
 def test_recovery_rejects_provider_endpoint_drift(
@@ -952,6 +962,7 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
 
     from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
     from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.orchestration.config import PipelineConfig
     from easyicu.research_agent.orchestration.human_review_checkpoint import (
         HumanReviewCheckpoint,
         write_checkpoint,
@@ -965,6 +976,7 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
     from easyicu.webserver import agent_pipeline_runs
+    from tests.support.descriptive_plan import _context as synthetic_context
 
     run_id = f"run-{checkpoint_state}"
     run_dir = tmp_path / "pipeline" / run_id
@@ -983,6 +995,9 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
         ],
     )
     initial_authority = PlanReviewAuthority.create(plan=plan)
+    context = synthetic_context().model_copy(update={"research_question": plan.research_question})
+    context_raw = context.model_dump_json(indent=2).encode("utf-8")
+    (run_dir / "research_context.json").write_bytes(context_raw)
     scientific_review = PlanScientificReview(
         status="ready_for_approval",
         approval_allowed=True,
@@ -991,7 +1006,7 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
         dimension_scores={"study_design": 75},
         findings=[],
         facts={"test": True},
-        context_sha256="f" * 64,
+        context_sha256=canonical_sha256(context.model_dump(mode="json")),
         plan_sha256=initial_authority.plan_sha256,
         literature_sha256="1" * 64,
         figure_strategy_sha256="2" * 64,
@@ -1005,6 +1020,7 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
     plan_review_authority = PlanReviewAuthority.create(
         plan=plan,
         evidence_sha256={
+            "research_context": hashlib.sha256(context_raw).hexdigest(),
             "scientific_plan_review": hashlib.sha256(
                 scientific_review_raw.encode("utf-8")
             ).hexdigest()
@@ -1038,9 +1054,10 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
             "server_decided_at": "2026-08-14T01:02:04+00:00",
         }
     ]
+    pipeline_config = PipelineConfig(workdir=run_dir.parent)
     checkpoint = HumanReviewCheckpoint.create(
         run_id=run_id,
-        pipeline_config_sha256="b" * 64,
+        pipeline_config_sha256=pipeline_config.canonical_digest(),
         environment_identity={},
         llm_signature_sha256="c" * 64,
         run_input_capsule_sha256="d" * 64,
@@ -1070,6 +1087,8 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
     captured = {}
 
     class _Pipeline:
+        _config = pipeline_config
+
         def resume_human_review(self, submitted, **_kwargs):
             captured["decisions"] = submitted
             return SimpleNamespace(manifest_path=run_dir / "manifest.json")
@@ -1095,7 +1114,13 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
     )
     registry = PendingReviewRegistry()
     monkeypatch.setattr(agent_pipeline_runs, "_PENDING_REVIEWS", registry)
+    monkeypatch.setattr(agent_pipeline_runs, "load_recovery_seed", lambda *_: None)
+    monkeypatch.setattr(agent_pipeline_runs, "get_review_recovery_record", lambda *_: None)
     registry.register(entry)
+    assert agent_pipeline_runs._load_pending_scientific_review(run_dir, pending)["approval_allowed"] is True
+    entry.pipeline._config = PipelineConfig(workdir=run_dir.parent, timeout_seconds=901)
+    assert agent_pipeline_runs._load_pending_scientific_review(run_dir, pending) == {}
+    entry.pipeline._config = pipeline_config
     monkeypatch.setattr(agent_pipeline_runs, "remove_review_recovery_record", lambda *_: None)
     monkeypatch.setattr(
         agent_pipeline_runs,
@@ -1114,3 +1139,17 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
 
     assert result == {"status": "complete"}
     assert captured["decisions"] == decisions
+
+
+def test_deferred_scope_is_opt_in_by_review_marker_and_fails_closed(tmp_path, monkeypatch):
+    from easyicu.webserver import agent_pipeline_runs, first_observed_deferred_recipe
+    calls = []
+    monkeypatch.setattr(first_observed_deferred_recipe, 'project_pending_first_observed_review',
+                        lambda **kwargs: calls.append(kwargs) or {'verified': False})
+    request = SimpleNamespace(payload={'plan_review_authority': {'evidence_sha256': {}}})
+    pending = SimpleNamespace(run_dir=tmp_path, requests=[request])
+    assert agent_pipeline_runs._deferred_review_scope(pending=pending, study_context_id='study') is None
+    assert calls == []
+    request.payload['plan_review_authority']['evidence_sha256']['first_observed_deferred_recipe'] = 'a' * 64
+    assert agent_pipeline_runs._deferred_review_scope(pending=pending, study_context_id='study') == {'verified': False}
+    assert len(calls) == 1

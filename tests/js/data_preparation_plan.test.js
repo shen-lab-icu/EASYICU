@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const base = path.resolve(__dirname, '../../src/easyicu/webserver/static/js');
 for (const language of ['en', 'zh']) {
-  const context = vm.createContext({ window: { t: (en, zh) => language === 'zh' ? zh : en, icon: () => '' } });
+  const context = vm.createContext({ window: { EU_LANG: language, t: (en, zh) => language === 'zh' ? zh : en, icon: () => '' } });
   for (const name of ['html-escape.js', 'screens-agent-reader-vocab.js', 'screens-agent-report-reader.js', 'screens-agent-render.js']) {
     vm.runInContext(fs.readFileSync(path.join(base, name), 'utf8'), context);
   }
@@ -23,5 +23,20 @@ for (const language of ['en', 'zh']) {
   assert.match(html, /123/);
   assert.match(html, /auxiliary/);
   assert.doesNotMatch(html, /<img src=x>/);
+  // The saved plan alone owns what it can answer, regardless of interval method.
+  for (const method of [
+    'Counts and proportions; no confidence interval (typed counts-only design).',
+    'Counts and proportions with 95% confidence intervals.',
+  ]) {
+    const supports = 'Row-level counts and proportions & <img src=x>.';
+    const saved = { research_question: 'Synthetic description', design_selection: { candidates: [{
+      disposition: 'selected', analysis_type: 'descriptive_epidemiology',
+      primary_method: method, supports,
+    }] } };
+    const rendered = context.window.AGENT_RENDER.artifactStructuredView('agent_plan.json', saved);
+    assert.match(rendered, /Row-level counts and proportions &amp; &lt;img src=x&gt;\./);
+    assert.doesNotMatch(rendered, /<img src=x>/);
+    assert.doesNotMatch(rendered, /方向、大小和不确定性|direction, size, and uncertainty/);
+  }
 }
 console.log('2 preparation plan language checks passed');

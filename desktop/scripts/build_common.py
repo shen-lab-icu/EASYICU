@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from urllib.parse import quote
 import warnings
 
 MIN_NODE = (22, 19, 0)
@@ -20,6 +21,15 @@ _OPTIONAL_NODE_DIRS = frozenset({
 })
 _NODE_BUILD_SUFFIXES = (".d.ts", ".d.mts", ".d.cts", ".map")
 _NODE_SOURCE_SUFFIXES = (".ts", ".mts", ".cts")
+# CLI entrypoints verified against the currently pinned Node dependency tree.
+# A changed or additional link needs its own relocation/behavior verification.
+_AUDITED_NODE_BIN_LINKS = {
+    "node_modules/.bin/jiti": ("node_modules/jiti/lib/jiti-cli.mjs", "8829aad7e953f97ef9e25782c99eafa013efa0c36db7c2ffebcc140bd8eeaf54"),
+    "node_modules/.bin/marked": ("node_modules/marked/bin/marked.js", "dc015672ddc613210a6fae6ab123b9295a670a4e7044a8170b41ccf4d8f5af06"),
+    "node_modules/.bin/node-which": ("node_modules/which/bin/node-which", "055f0ac4eed1a1591d033d59462972968bf3483b4cc07e163589569c0fb999f0"),
+    "node_modules/.bin/semver": ("node_modules/semver/bin/semver.js", "bd6c871026985937dc945011fc54b74b47f5998154216d7b8d40d5ed782e4402"),
+    "node_modules/.bin/yaml": ("node_modules/yaml/bin.mjs", "faebbf70669988b5be13130907adf7b788145960448eab08e92e66189e72f448"),
+}
 # Typed executors run generated scripts in a frozen child. Their import strings
 # are not visible to PyInstaller's normal Python bytecode analysis. Importing
 # these entry points also activates PyInstaller's numerical-library hooks.
@@ -366,6 +376,10 @@ try {
             await import(specifier);
         }
     }
+    for (const helper of ['./src/draft-repair.mjs', './src/attached-skills.mjs']) {
+        specifier = helper;
+        await import(helper);
+    }
 } catch (error) {
     console.error(`desktop_pi_import_failed: ${specifier}: ${error.stack || error}`);
     process.exit(1);
@@ -382,6 +396,86 @@ process.exit(0);
         if StagedPiImportError.code not in detail:
             detail = f"{StagedPiImportError.code}: {detail}"
         raise StagedPiImportError(detail.strip()) from error
+
+
+def normalize_node_bin_links(staged_root: Path) -> dict[str, int]:
+    """Preserve Node CLI entrypoints when a bundler dereferences .bin links."""
+    root = staged_root.resolve()
+    changes: list[tuple[Path, bytes, int]] = []
+    for bin_dir in sorted(root.rglob(".bin")):
+        if bin_dir.parent.name != "node_modules":
+            continue
+        if bin_dir.is_symlink() or not bin_dir.is_dir():
+            raise RuntimeError("Packaged Pi .bin must be a real directory")
+        for link in sorted(bin_dir.iterdir()):
+            if not link.is_symlink():
+                continue  # Keep native Windows shims and other ordinary files intact.
+            target = Path(os.path.abspath(link.parent / os.readlink(link)))
+            if not target.is_relative_to(root):
+                raise RuntimeError("Packaged Pi .bin target escapes the runtime")
+            cursor = root
+            for part in target.relative_to(root).parts:
+                cursor = cursor / part
+                mode = cursor.lstat().st_mode
+                if stat.S_ISLNK(mode):
+                    raise RuntimeError("Packaged Pi .bin target traverses a link")
+            mode = target.lstat().st_mode
+            if not stat.S_ISREG(mode):
+                raise RuntimeError("Packaged Pi .bin target is not a regular file")
+            with target.open("rb") as handle:
+                if handle.readline(4097).rstrip(b"\r\n") != b"#!/usr/bin/env node":
+                    raise RuntimeError("Packaged Pi .bin target is not a supported Node CLI")
+                digest = hashlib.sha256()
+                handle.seek(0)
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            identity = (target.relative_to(root).as_posix(), digest.hexdigest())
+            if _AUDITED_NODE_BIN_LINKS.get(link.relative_to(root).as_posix()) != identity:
+                raise RuntimeError("Packaged Pi .bin link has not been audited for relocation")
+            relative = Path(os.path.relpath(target, link.parent)).as_posix()
+            if not relative.startswith("."):
+                relative = "./" + relative
+            specifier = quote(relative, safe="/.-_~")
+            content = ("#!/usr/bin/env node\nimport(" + json.dumps(specifier) + ");\n").encode("utf-8")
+            changes.append((link, content, stat.S_IMODE(mode)))
+    for link, content, mode in changes:
+        link.unlink()
+        link.write_bytes(content)
+        link.chmod(mode)
+    return {"converted": len(changes)}
+
+
+def seal_packaged_pi(staged_root: Path) -> None:
+    """Record the final local bundle bytes; this is not a publisher signature."""
+    root = staged_root.resolve()
+    receipt = "packaged-runtime-seal.json"
+    try:
+        (root / receipt).lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise RuntimeError("Packaged Pi seal path is already occupied")
+    files = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if relative == receipt:
+            continue
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            target = path.resolve(strict=True)
+            if not target.is_relative_to(root):
+                raise RuntimeError("Packaged Pi link escapes the runtime")
+            files[relative] = "link:" + os.readlink(path)
+        elif stat.S_ISREG(mode):
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            files[relative] = "sha256:" + digest.hexdigest()
+        elif not stat.S_ISDIR(mode):
+            raise RuntimeError("Packaged Pi contains a special file")
+    (root / receipt).write_text(json.dumps({"schema_version": "easyicu.pi-packaged-runtime/1",
+                                           "files": files}, sort_keys=True) + "\n", encoding="utf-8")
 
 
 class BundlePathBudgetError(RuntimeError):
@@ -460,13 +554,18 @@ def prepare_bundle(*, desktop_root, build_root, run, windows=False) -> dict:
     pruned = prune_node_modules(resources)
     rooted = stage_pi_root(original, short)
     shutil.copy2(original.parent / "tool_catalog.json", short / "tool_catalog.json")
+    shared = short / "shared/screens-guided-pi-research-draft.cjs"
+    shared.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(original.parent.parent / "static/js/screens-guided-pi-research-draft.js", shared)
     hoisted = hoist_node_modules(short)
+    launchers = normalize_node_bin_links(short)
     report = check_bundle_paths(desktop_root, build_root / "longest-paths.json", windows=windows)
     bundled_node = resources / ("node.exe" if windows else "node")
     run([str(bundled_node), "--check", "src/main.mjs"], cwd=short)
     check_staged_pi(short, bundled_node, run=run)
+    seal_packaged_pi(short)
     return {"node_modules_pruned": pruned, "node_modules_root_staged": rooted,
-            "node_modules_hoisted": hoisted, "bundle_paths": report}
+            "node_modules_hoisted": hoisted, "node_bin_launchers": launchers, "bundle_paths": report}
 
 
 def select_python(target: str) -> str:

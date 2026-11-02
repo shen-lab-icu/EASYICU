@@ -100,7 +100,7 @@ def test_registered_export_download_route_accepts_only_source_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry = _export(tmp_path / "export")
-    monkeypatch.setattr(export_download.sources, "load_registry", lambda: registry)
+    monkeypatch.setattr(export_download.sources, "load_registry", lambda **_kwargs: registry)
     client = TestClient(app)
 
     rejected = client.post(

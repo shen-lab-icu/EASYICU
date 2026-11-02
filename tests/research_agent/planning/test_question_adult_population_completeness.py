@@ -2,14 +2,14 @@
 
 import pytest
 
-from easyicu.research_agent.planning.population_question_completeness import explicit_adult_population
+from easyicu.research_agent.planning.population_review import explicit_adult_population
 from easyicu.research_agent.planning.population_compile import compile_population
 from easyicu.research_agent.planning.population_spec import PopulationSpec
 from easyicu.research_agent.orchestration.progressive_planning import population_approval_findings
 from easyicu.research_agent.planning.progressive_compiler import validate_progressive_foundation
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
-from tests.research_agent.planning.test_a_population_spec_compiles_to_the_cohort_it_states import _recorded_ctx
-from tests.research_agent.planning.test_a_stated_population_is_applied_by_its_predicates import (
+from tests.support.population_context import _recorded_ctx
+from tests.support.population_foundation import (
     _context, _foundation, _predicate,
 )
 

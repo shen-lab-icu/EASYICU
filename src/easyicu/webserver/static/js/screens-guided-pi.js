@@ -450,7 +450,7 @@
     openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
     openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
     loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
-    setShell, openStudySetupInConversation, createSession, startEntry, loadWorkflow,
+    setShell, openStudySetupInConversation, createSession, startEntry, loadWorkflow, watchChildJob,
     previewApprovedPlanDataPackage, confirmWorkflowAction,
     retryFailedExecution,
     rejectWorkflowAction, editWorkflow, confirmCohortEligibility,

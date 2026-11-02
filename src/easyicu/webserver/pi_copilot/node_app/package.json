@@ -20,7 +20,12 @@
     "@earendil-works/pi-client": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
     "@earendil-works/pi-protocol": "0.84.1",
-    "@earendil-works/pi-tui": "0.84.1"
+    "@earendil-works/pi-tui": "0.84.1",
+    "glob": "14.0.2",
+    "minimatch": "11.0.1",
+    "undici": "8.12.2",
+    "brace-expansion": "5.0.12",
+    "zod": "4.6.6"
   },
   "engines": {
     "node": ">=22.19.0"

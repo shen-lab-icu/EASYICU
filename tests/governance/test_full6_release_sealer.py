@@ -915,3 +915,14 @@ def test_corrected_time_gate_rejects_missing_or_noncanonical_sha(bad) -> None:
     commits["eicu"] = bad
     with pytest.raises(sealer.ReleaseValidationError, match="full lowercase"):
         sealer._validate_harmonized_commit_ancestry(commits)
+
+
+def test_v6_seal_refuses_an_installation_with_the_sic_overlay(tmp_path, monkeypatch):
+    """A matching base digest must not promote overlay data into old v6."""
+    base = tmp_path / "concept-dict.json"
+    base.write_text("{}", encoding="utf-8")
+    base.with_name("sic-case-duration-overlay.v1.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setitem(sealer.FOUNDATION_RESOURCE_PATHS, "concept_dictionary_sha256", base)
+    monkeypatch.setattr(sealer, "_validate_foundation_lock", lambda: {})
+    with pytest.raises(sealer.ReleaseValidationError, match="cannot seal with SIC overlay"):
+        sealer.validate_release(tmp_path)

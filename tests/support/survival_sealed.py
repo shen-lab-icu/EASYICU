@@ -32,10 +32,10 @@ from easyicu.research_agent.execution.runners.landmark_survival_executor import 
     run_landmark_survival_suite,
 )
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
 from easyicu.research_agent.planning.baseline_requirements import bind_baseline_requirements
-from easyicu.research_agent.planning.dependence_authority import bind_context_dependence_authority
 from easyicu.research_agent.planning.family_spec import build_family_spec_request
 from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
 from easyicu.research_agent.planning.sensitivity_authority import normalize_prespecified_sensitivities
@@ -63,6 +63,7 @@ from tests.support.survival_proposal import (
     survival_request,
     survival_spec,
 )
+from tests.support.literature_fixtures import synthetic_reviewed_literature as synthetic_reviewed_literature
 
 STUDY = {
     "question": "Is renal replacement therapy associated with 90-day mortality?",
@@ -205,13 +206,13 @@ def bound_survival_plan(context, authorities: ScientificRuntimeAuthorities):
     plan = sealed_draft(context, authorities)
     findings: list = []
     fake = SimpleNamespace(
-        _scientific_runtime_authorities=authorities, _enable_publication_figure_skill=True, _max_total_steps=24,
+        _scientific_runtime_authorities=authorities, _services=PipelineServices(),
+        _enable_publication_figure_skill=True, _max_total_steps=24,
     )
     plan = _pipeline._shape_fresh_plan(
         pipeline=fake, plan=plan, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _ = authorities.bind_plan(plan)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, findings)
     authorities.validate_plan(bound)

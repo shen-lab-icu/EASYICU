@@ -33,7 +33,7 @@ from ...contracts.cohort_summary import (
     is_primary_descriptive_summary_step,
     primary_descriptive_summary_scope,
 )
-from ...contracts.cohort_summary_products import (
+from ...contracts.cohort_summary import (
     is_descriptive_summary_product_step as cohort_summary_executor_owns_step,
 )
 from ...contracts.product_identity import is_canonical_typed_product_token

@@ -15,6 +15,68 @@ from easyicu.research_agent.authority.raw_preparation import RawPreparationCheck
 from easyicu.research_agent.canonical_json import canonical_sha256
 
 
+def run_artifact_disclosure_safe_scope(scope: Mapping[str, Any]) -> bool:
+    from easyicu.webserver.run_artifact_disclosure import scan_browser_projection
+    return bool(scan_browser_projection(dict(scope)).get("passed"))
+
+
+def _candidate_projection(*, run: Mapping[str, Any], study_context_id: str,
+                          checkpoint: RawPreparationCheckpoint, scope: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Project metadata without granting preparation or analysis.
+
+    Source identity verification may hash the full raw patient file.
+    """
+    from easyicu.webserver import agent_pipeline_runs, first_observed_preparation, run_artifact_disclosure, study_contexts
+    from easyicu.webserver.raw_preparation_dependencies import (
+        _declared_typed_export_columns, declared_native_export_inventory, first_observed_candidate_preparation_preview,
+    )
+
+    try:
+        pending, study = agent_pipeline_runs.raw_preparation_review_owner(run["run_id"], study_context_id)
+        if Path(pending.run_dir) != Path(str(run["project_dir"])):
+            return None
+        expected_study = study_contexts.scientific_configuration_sha256(study)
+        current = study_contexts.get_context(study_context_id)
+        if not current or study_contexts.scientific_configuration_sha256(current) != expected_study:
+            return None
+        preview = first_observed_candidate_preparation_preview(
+            run_dir=Path(pending.run_dir), pending=pending, checkpoint=checkpoint)
+        try:
+            verified_scope, export_path = first_observed_preparation._host_inputs(
+                run_dir=Path(pending.run_dir), request=checkpoint.request)
+            if verified_scope != dict(scope):
+                raise ValueError("candidate_preparation_scope_changed")
+            preview["declared_export_inventory"] = declared_native_export_inventory(
+                export_path=export_path, expected_manifest_sha256=scope["export_manifest_sha256"],
+                expected_database=scope["database"])
+            columns = _declared_typed_export_columns(
+                export_path=export_path, inventory=preview["declared_export_inventory"])
+            dependencies = preview["declared_plan_dependencies"]
+            available = {column["source_concept"] for item in columns["files"]
+                         for column in item["declared_columns"] if column["role"] in {"value", "event_status"}}
+            missing = sorted(set(dependencies["required_source_concepts"]) - available)
+            candidate_scope = {"schema_version": "easyicu.candidate-research-read-scope/1",
+                "first_observed_scope": dict(scope), "plan_dependencies": dependencies,
+                "population_needs": preview["population_needs"], "context_windows": preview["context_windows"],
+                "manifest_inventory": preview["declared_export_inventory"], "typed_columns": columns,
+                "undeclared_source_concepts": missing,
+                "blockers": sorted(set(dependencies["blockers"] + [
+                    "candidate_reader_projection_unverified", "candidate_host_action_authority_unavailable",
+                    *(["candidate_required_source_concepts_unavailable"] if missing else []),
+                ])), "complete": False, "preparation_authorized": False, "analysis_authorized": False}
+            preview["candidate_read_scope_sha256"] = canonical_sha256(candidate_scope)
+            preview["candidate_read_scope"] = candidate_scope
+        except (AuthorityFilesystemError, OSError, KeyError, ValueError, TypeError, RuntimeError):
+            pass  # No roster is safer than an invented or partial roster.
+        current = study_contexts.get_context(study_context_id)
+        if (current and study_contexts.scientific_configuration_sha256(current) == expected_study
+                and run_artifact_disclosure.scan_browser_projection(preview).get("passed")):
+            return preview
+    except (AuthorityFilesystemError, OSError, KeyError, ValueError, TypeError, RuntimeError):
+        pass
+    return None
+
+
 def pending_preparation_projection(run: Mapping[str, Any] | None, *, study_context_id: str = "") -> Mapping[str, Any] | None:
     if not run or not run.get("run_id") or not run.get("project_dir"):
         return None
@@ -31,7 +93,12 @@ def pending_preparation_projection(run: Mapping[str, Any] | None, *, study_conte
         if checkpoint.state == "approved" and study_context_id:
             scope = checkpoint.request.payload.get("first_observed_icu_preparation_scope")
             if isinstance(scope, Mapping) and scope.get("adapter_id") == "eicu-demo-first-observed-single-hospital-adult/1":
-                return _approved_first_observed_projection(checkpoint, scope, run=run, study_context_id=study_context_id)
+                result = dict(_approved_first_observed_projection(checkpoint, scope, run=run, study_context_id=study_context_id))
+                if result.get("status") == "first_observed_complete":
+                    preview = _candidate_projection(run=run, study_context_id=study_context_id, checkpoint=checkpoint, scope=scope)
+                    if preview is not None and run_artifact_disclosure_safe_scope(scope):
+                        result.update(scope=dict(scope), candidate_preparation_preview=preview)
+                return result
         if checkpoint.state != "pending":
             return None
         expires = datetime.fromisoformat(checkpoint.expires_at.replace("Z", "+00:00"))
@@ -43,29 +110,8 @@ def pending_preparation_projection(run: Mapping[str, Any] | None, *, study_conte
         result = {"run_id": str(run["run_id"]), "checkpoint_sha256": checkpoint.checkpoint_sha256,
                   "summary": str(checkpoint.request.summary)[:4000],
                   "scope": dict(scope[0]), "status": "awaiting_consumption_closure", "approvable": False}
-        if (study_context_id and scope[0].get("adapter_id")
-                == "eicu-demo-first-observed-single-hospital-adult/1"):
-            # This is informational only; the existing raw preparation
-            # decision continues to cover just the six source fields.
-            try:
-                from easyicu.webserver import agent_pipeline_runs, run_artifact_disclosure, study_contexts
-                from easyicu.webserver.raw_preparation_dependencies import first_observed_candidate_preparation_preview
-
-                pending, study = agent_pipeline_runs.raw_preparation_review_owner(run["run_id"], study_context_id)
-                if Path(pending.run_dir) != Path(str(run["project_dir"])):
-                    raise ValueError("candidate_preparation_owner_changed")
-                expected_study = study_contexts.scientific_configuration_sha256(study)
-                current_study = study_contexts.get_context(study_context_id)
-                if not current_study or study_contexts.scientific_configuration_sha256(current_study) != expected_study:
-                    raise ValueError("candidate_preparation_study_changed")
-                preview = first_observed_candidate_preparation_preview(
-                    run_dir=Path(pending.run_dir), pending=pending, checkpoint=checkpoint)
-                current_study = study_contexts.get_context(study_context_id)
-                if (current_study and study_contexts.scientific_configuration_sha256(current_study) == expected_study
-                        and run_artifact_disclosure.scan_browser_projection(preview).get("passed")):
-                    result["candidate_preparation_preview"] = preview
-            except (AuthorityFilesystemError, OSError, KeyError, ValueError, TypeError, RuntimeError):
-                pass  # An unverifiable preview is not a preparation grant.
+        # A pending first-observed checkpoint grants no patient-file reads.
+        # The saved disclosure remains visible; discovery waits for approval.
         return result
     except (AuthorityFilesystemError, OSError, ValidationError, ValueError, TypeError):
         return None
@@ -98,7 +144,24 @@ def _approved_first_observed_projection(checkpoint: RawPreparationCheckpoint, sc
         command = service.store.get(job_id)
         if command is None:
             return unavailable
-        result = inspect_admitted_first_observed(job_id=job_id, job=service.manager.get(job_id),
+        job = service.manager.get(job_id)
+        if job is not None and job.snapshot().get("status") == "done":
+            from easyicu.databases.research_plan_requirements import _constraints
+            from easyicu.research_agent.research_context.export_selection import SourceIdentity
+            from easyicu.research_agent.research_context.typed import parse_research_context_json
+            from easyicu.webserver.first_observed_run_guard import resolve_host_prepared_first_observed_coordinate
+
+            with AnchoredDirectory.open(Path(str(run["project_dir"]))) as directory:
+                raw_context = directory.read_bytes("research_context.json", max_bytes=5 * 1024 * 1024)
+                directory.assert_still_selected()
+            context = parse_research_context_json(raw_context.decode("utf-8"))
+            source = SourceIdentity.from_record(_constraints(context).get("source_identity"))
+            resolve_host_prepared_first_observed_coordinate(
+                preparation_run_id=str(run["run_id"]), study_context_id=study_context_id,
+                project_id=binding.project_id, session_id=binding.session_id, source_identity=source,
+                criterion=scope["criterion"], export_manifest_sha256=scope["export_manifest_sha256"])
+            return {"status": "first_observed_complete", "analysis_authorized": False}
+        result = inspect_admitted_first_observed(job_id=job_id, job=job,
             checkpoint=checkpoint, binding=binding, scope=scope, command=command,
             store_path=service.store.path.absolute(), journal_path=service.manager._journal.path.absolute())
         return {"status": "first_observed_" + result["preparation_status"],

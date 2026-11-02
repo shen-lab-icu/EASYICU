@@ -18,8 +18,7 @@ import numpy as np
 import pandas as pd
 
 from ...contracts.cohort_product_keys import is_closed_cohort_product_key
-from ...contracts.functional_form_effects import FunctionalFormEffects
-from ...contracts.functional_form_projection import FunctionalFormProjection
+from ...contracts.functional_form import FunctionalFormEffects, FunctionalFormProjection
 
 _IDENTITY_COLUMN = "functional_form_effects_json"
 _PROJECTION_IDENTITY_COLUMN = "functional_form_projection_json"

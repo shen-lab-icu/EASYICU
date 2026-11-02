@@ -5,7 +5,7 @@ import pytest
 
 from easyicu.webserver import agent_pipeline_runs, raw_preparation_candidate, sources
 from easyicu.webserver.routes.agent import raw_preparation_candidate as candidate_route
-from tests.webserver.test_sic_raw_preparation_grant import _case
+from tests.support.sic_raw_preparation import _case
 
 
 def test_real_review_owner_builds_candidate_without_approving_or_starting(tmp_path, monkeypatch):
@@ -13,7 +13,7 @@ def test_real_review_owner_builds_candidate_without_approving_or_starting(tmp_pa
     (tmp_path / "research_context.json").write_text(result.context.model_dump_json())
     pending = SimpleNamespace(run_id="run", run_dir=str(tmp_path), requests=(checkpoint.request,))
     monkeypatch.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda run_id, study_id: (pending, {"id": study_id}))
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": [{"path": str(source_root)}]})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [{"path": str(source_root)}]})
     outcome = raw_preparation_candidate.create_candidate_for_review(run_id="run", study_context_id="study")
     assert outcome["status"] == "blocked"
     assert outcome["blocker_codes"]
@@ -50,7 +50,7 @@ def test_candidate_includes_reviewed_predicate_concept_missing_from_variables(tm
     (tmp_path / 'research_context.json').write_text(context.model_dump_json())
     pending = SimpleNamespace(run_id='run', run_dir=str(tmp_path), requests=(checkpoint.request,))
     monkeypatch.setattr(agent_pipeline_runs, 'raw_preparation_review_owner', lambda *_: (pending, {'id': 'study'}))
-    monkeypatch.setattr(sources, 'load_registry', lambda: {'sources': [{'path': str(source_root)}]})
+    monkeypatch.setattr(sources, 'load_registry', lambda **_kwargs: {'sources': [{'path': str(source_root)}]})
     monkeypatch.setattr(raw_preparation_candidate, '_plan_authority', lambda _: PlanReviewAuthority.create(plan=plan))
     real_capture = raw_preparation_candidate.capture_data_provenance
     seen = []
@@ -87,7 +87,7 @@ def test_reviewed_plan_gets_only_non_approvable_partial_multitable_preview(tmp_p
     study = {'id': 'study', 'revision': 1}
     pending = SimpleNamespace(run_id='run', run_dir=str(tmp_path), requests=(checkpoint.request,))
     monkeypatch.setattr(agent_pipeline_runs, 'raw_preparation_review_owner', lambda *_: (pending, study))
-    monkeypatch.setattr(sources, 'load_registry', lambda: {'sources': [{'path': str(source_root)}]})
+    monkeypatch.setattr(sources, 'load_registry', lambda **_kwargs: {'sources': [{'path': str(source_root)}]})
     monkeypatch.setattr(study_contexts, 'get_context', lambda _: study)
     monkeypatch.setattr(study_contexts, 'scientific_configuration_sha256', lambda s: s['revision'])
     monkeypatch.setattr(source_partition_candidates, 'candidate_from_bound_research_context', lambda **_: dict(candidate))

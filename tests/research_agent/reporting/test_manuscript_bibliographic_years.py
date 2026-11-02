@@ -13,14 +13,19 @@ from easyicu.research_agent.reporting.manuscript_post import (
 )
 
 
-def _literature(**changes):
+def _literature(*, reviewed=True, **changes):
     record = {
         "key": "definition_2016", "year": "2016",
         "title": "Consensus definitions for Example-3",
         "doi": "10.0000/example", "authors": ["Example Author"],
     }
     record.update(changes)
-    return LiteratureBundle(research_question="Example", citations=[CitationRecord(**record)])
+    decisions = [LiteratureScreeningDecision(
+        citation_key=record["key"], source="synthetic_test", disposition="include",
+        evidence_role="definition", rationale="Synthetic source included",
+    )] if reviewed else []
+    return LiteratureBundle(research_question="Example", citations=[CitationRecord(**record)],
+                            screening_decisions=decisions)
 
 
 @pytest.mark.parametrize("qualifier", ["source-bound", "recorded"])
@@ -108,7 +113,7 @@ def test_same_sentence_citation_does_not_exempt_intervening_study_numbers(tmp_pa
 
 @pytest.mark.parametrize("condition", ["excluded", "conflicting", "duplicate_key"])
 def test_unusable_or_ambiguous_reference_cannot_authorize_a_year(tmp_path, condition):
-    literature = _literature()
+    literature = _literature(reviewed=condition == "duplicate_key")
     if condition == "duplicate_key":
         literature.citations.append(literature.citations[0].model_copy(update={"year": "2015"}))
     else:
@@ -126,4 +131,13 @@ def test_unusable_or_ambiguous_reference_cannot_authorize_a_year(tmp_path, condi
             "We used the 2016 Example-3 definition [@definition_2016].",
             evidence=EvidenceStore(tmp_path), enforcement_mode=EvidenceEnforcementMode.STRICT,
             literature=literature,
+        )
+
+
+def test_unreviewed_synthetic_reference_cannot_authorize_a_year(tmp_path):
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(
+            "We used the 2016 Example-3 definition [@definition_2016].",
+            evidence=EvidenceStore(tmp_path), enforcement_mode=EvidenceEnforcementMode.STRICT,
+            literature=_literature(reviewed=False),
         )

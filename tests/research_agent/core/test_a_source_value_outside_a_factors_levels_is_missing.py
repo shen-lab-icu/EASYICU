@@ -44,7 +44,8 @@ def test_values_within_the_levels_are_left_as_they_are() -> None:
     frame, receipt = _read(["Female", "Male", None])
 
     assert receipt is None
-    assert frame["sex"].tolist() == ["Female", "Male", None]
+    assert frame["sex"].iloc[:2].tolist() == ["Female", "Male"]
+    assert pd.isna(frame["sex"].iloc[2])
 
 
 def test_a_source_with_its_own_map_keeps_its_mapping_defect_visible() -> None:

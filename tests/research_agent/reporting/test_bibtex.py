@@ -3,8 +3,7 @@
 Pin three contracts:
 
 1. ``render_bibtex`` produces a syntactically-plausible ``.bib`` for
-   any LiteratureBundle, with sanitised keys and best-effort entry
-   typing.
+   citable records, with sanitised keys and best-effort entry typing.
 2. ``scaffold_to_latex`` emits ``\\bibliography{…}`` +
    ``\\bibliographystyle{…}`` (or a ``thebibliography`` block when
    ``inline_bibliography=True``) so a single ``pdflatex`` cycle can
@@ -18,6 +17,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
+
+def _reviewed_bundle(bundle):
+    """Give synthetic records explicit inclusion, without changing their metadata."""
+    from easyicu.research_agent.literature import LiteratureScreeningDecision
+
+    return bundle.model_copy(update={"screening_decisions": [
+        LiteratureScreeningDecision(citation_key=key, source="synthetic_test",
+            disposition="include", evidence_role="related_context", rationale="Test source included")
+        for key in dict.fromkeys(record.key for record in bundle.citations)
+    ]})
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +77,7 @@ def test_render_bibtex_basic(ra):
             ),
         ],
     )
-    bib = render_bibtex(bundle)
+    bib = render_bibtex(_reviewed_bundle(bundle))
     # Header forms
     assert bib.startswith("@article{vincent_sofa_1996,")
     assert "@software{ricu_2023," in bib
@@ -97,14 +107,25 @@ def test_render_bibtex_disambiguates_duplicate_keys(ra):
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
-            CitationRecord(key="dup", title="A", year="2020"),
-            CitationRecord(key="dup", title="B", year="2021"),
-            CitationRecord(key="dup", title="C", year="2022"),
+            CitationRecord(key="dup-a", title="A", year="2020"),
+            CitationRecord(key="dup a", title="B", year="2021"),
+            CitationRecord(key="dup_a", title="C", year="2022"),
         ],
     )
-    bib = render_bibtex(bundle)
+    bib = render_bibtex(_reviewed_bundle(bundle))
     keys = re.findall(r"@\w+\{([^,]+),", bib)
-    assert keys == ["dup", "dup_2", "dup_3"], keys
+    assert keys == ["dup_a", "dup_a_2", "dup_a_3"], keys
+
+
+def test_duplicate_source_keys_remain_uncitable_even_when_included(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
+
+    bundle = LiteratureBundle(research_question="x", citations=[
+        CitationRecord(key="dup", title="A", year="2020"),
+        CitationRecord(key="dup", title="B", year="2021"),
+    ])
+    assert render_bibtex(_reviewed_bundle(bundle)) == ""
 
 
 def test_render_bibtex_empty(ra):
@@ -127,7 +148,8 @@ def test_bibliography_never_derives_authors_from_citation_keys(ra):
             CitationRecord(key="surname_2020", title="Clinical study", year="2020"),
         ],
     )
-    rendered = render_bibtex(bundle)
+    rendered = render_bibtex(_reviewed_bundle(bundle))
+    assert "record_2015" in rendered and "surname_2020" in rendered
 
     assert not re.search(r"\bauthor\s*=", rendered)
     assert "et al." not in rendered
@@ -148,6 +170,7 @@ def test_bibliography_preserves_source_author_names_without_reparsing_them(ra):
         )],
     )
 
+    bundle = _reviewed_bundle(bundle)
     assert "author  = {{de Silva AB} and {Research and Care Group}}" in render_bibtex(bundle)
     inline = render_thebibliography_block(bundle)
     assert "de Silva AB; Research and Care Group. A study" in inline
@@ -168,6 +191,7 @@ def test_bibliography_escapes_source_author_names(ra):
         )],
     )
 
+    bundle = _reviewed_bundle(bundle)
     assert r"author  = {{Research \& Care}}" in render_bibtex(bundle)
     assert r"Research \& Care. Study" in render_thebibliography_block(bundle)
 
@@ -177,6 +201,8 @@ def test_bibliography_omits_explicitly_excluded_candidates(ra):
         CitationRecord,
         LiteratureBundle,
         LiteratureScreeningDecision,
+        _CURATED,
+        complete_missing_authors,
     )
     from easyicu.research_agent.reporting.bibtex import (
         render_bibtex,
@@ -184,12 +210,14 @@ def test_bibliography_omits_explicitly_excluded_candidates(ra):
     )
     from easyicu.research_agent.reporting.latex import scaffold_to_latex
 
+    curated = CitationRecord.model_validate(complete_missing_authors(_CURATED[0].model_dump(mode="json"))[0])
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
             CitationRecord(key="curated_2020", title="Curated.", year="2020"),
             CitationRecord(key="included_2024", title="Included.", year="2024"),
             CitationRecord(key="excluded_2025", title="Excluded.", year="2025"),
+            curated,
         ],
         screening_decisions=[
             LiteratureScreeningDecision(
@@ -209,7 +237,8 @@ def test_bibliography_omits_explicitly_excluded_candidates(ra):
         ],
     )
 
-    assert "curated_2020" in render_bibtex(bundle)
+    assert "curated_2020" not in render_bibtex(bundle)  # Synthetic key is not a curated identity.
+    assert curated.key in render_bibtex(bundle)
     assert "included_2024" in render_bibtex(bundle)
     assert "excluded_2025" not in render_bibtex(bundle)
     assert "excluded_2025" not in render_thebibliography_block(bundle)
@@ -240,7 +269,7 @@ def test_render_bibtex_escapes_field_specials(ra):
             ),
         ],
     )
-    bib = render_bibtex(bundle)
+    bib = render_bibtex(_reviewed_bundle(bundle))
     assert r"\&" in bib
     assert r"\%" in bib
     assert r"\$" in bib
@@ -262,7 +291,7 @@ def test_thebibliography_block(ra):
             ),
         ],
     )
-    block = render_thebibliography_block(bundle)
+    block = render_thebibliography_block(_reviewed_bundle(bundle))
     assert block.startswith(r"\begin{thebibliography}")
     assert r"\bibitem{vincent_sofa_1996}" in block
     assert "PMID:8844239" in block
@@ -329,7 +358,7 @@ def test_scaffold_to_latex_renders_grouped_citations(ra):
     )
     rendered = scaffold_to_latex(
         markdown="## Introduction\n\nPrior work [@source_a; @source_b].",
-        bibliography=bundle,
+        bibliography=_reviewed_bundle(bundle),
     )
     assert r"\cite{source_a,source_b}" in rendered
     assert "[@source_a" not in rendered
@@ -357,7 +386,7 @@ def test_scaffold_to_latex_emits_bibliography_directives(ra):
         "## Methods\n\n"
         "Cohort definition follows prior work [@vincent_sofa_1996].\n"
     )
-    tex = scaffold_to_latex(markdown=md, title="T", authors=["A"], bibliography=bundle)
+    tex = scaffold_to_latex(markdown=md, title="T", authors=["A"], bibliography=_reviewed_bundle(bundle))
     assert r"\bibliographystyle{plain}" in tex
     assert r"\bibliography{manuscript_scaffold}" in tex
     assert r"\cite{vincent_sofa_1996}" in tex
@@ -382,7 +411,7 @@ def test_scaffold_to_latex_inline_bibliography_fallback(ra):
     )
     tex = scaffold_to_latex(
         markdown="# Methods\n\nbody [@ricu_2023]\n",
-        bibliography=bundle,
+        bibliography=_reviewed_bundle(bundle),
         inline_bibliography=True,
     )
     assert r"\begin{thebibliography}" in tex
@@ -472,6 +501,7 @@ def test_inline_bibliography_only_prints_cited_records_in_first_citation_order()
     bundle = LiteratureBundle(research_question='test', citations=[
         CitationRecord(key=k, title=k, year='2023') for k in ('unused', 'first', 'second')
     ])
+    bundle = _reviewed_bundle(bundle)
     tex = scaffold_to_latex(markdown='# Report\n\nSee [@second; @first] and [@second].', bibliography=bundle, inline_bibliography=True)
     assert r'\bibitem{unused}' not in tex
     assert tex.count(r'\bibitem{second}') == 1

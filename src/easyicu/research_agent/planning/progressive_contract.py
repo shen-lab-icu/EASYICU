@@ -38,7 +38,7 @@ from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAss
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.trajectory_design import REPEATED_ACTIONS, RepeatedMeasurePlanFields
 from ..contracts.prediction_subgroup import PredictionSubgroupPlanFields, PredictionSubgroupSpec
-from .diagnostic_step_fields import DiagnosticPlanFields
+from ..contracts.diagnostic_specs import DiagnosticPlanFields
 from .design_selection import ResearchDesignSelection
 
 

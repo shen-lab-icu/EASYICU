@@ -11,7 +11,7 @@ from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from tests.research_agent.planning.progressive_planner_fixtures import (
     _context, _foundation_payload, _outline_payload,
 )
-from tests.research_agent.planning.test_outline_retry_journal import _setup
+from tests.support.progressive_retry import _setup
 
 
 @pytest.mark.parametrize("rejected_first", [False, True])
@@ -65,7 +65,7 @@ def test_foundation_preserves_its_budget_after_accepted_outline(tmp_path, monkey
         # another provider transport must still leave the original reservation
         # attributable on the next restart.
         from easyicu.research_agent.planning.progressive_artifacts import ProgressivePlannerCheckpointRecorder
-        from tests.research_agent.planning.test_progressive_planner_checkpoints import _RecordingEvidence
+        from tests.support.progressive_retry import _RecordingEvidence
 
         continued = tmp_path / "continued"
         continued.mkdir()

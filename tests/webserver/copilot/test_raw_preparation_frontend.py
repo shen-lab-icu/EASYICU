@@ -13,6 +13,7 @@ def test_proposal_display_requires_host_pending_and_escapes_summary():
         pytest.skip("Node unavailable")
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       let workflow = {{next_action_code:'starting', starting:{{action_code:'prepare_analysis_data'}}}};
       const escape = v => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
@@ -71,6 +72,7 @@ def test_review_controls_require_a_host_offer_and_show_every_escaped_dependency(
         pytest.skip("Node unavailable")
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       const esc = v => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
       let workflow = {{next_action_code:'starting', starting:{{action_code:'prepare_analysis_data'}},
@@ -121,6 +123,7 @@ def test_blocked_candidate_shows_specific_reasons_without_untrusted_codes():
         pytest.skip("Node unavailable")
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read('js/screens-guided-pi-confirmation-data.js')!r});
       eval({_read('js/screens-guided-pi-confirmation.js')!r});
       const esc=v=>String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;');
       const workflow={{next_action_code:'starting',starting:{{action_code:'prepare_analysis_data'}},

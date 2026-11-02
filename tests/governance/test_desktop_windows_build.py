@@ -149,6 +149,7 @@ def test_frozen_backend_preserves_installed_sources_and_kernel_identity(tmp_path
         "research_agent/execution/runners/demo.py": "from easyicu.helper import VALUE\n",
         "helper.py": "VALUE = 7\n",
         "research_agent/runner_image/requirements.lock": "synthetic==1\n",
+        "research_agent/runner_image/requirements-pydantic-core-v1.lock": "synthetic==1\n",
     }
     for relative, payload in payloads.items():
         path = installed / relative
@@ -161,9 +162,11 @@ def test_frozen_backend_preserves_installed_sources_and_kernel_identity(tmp_path
     def freeze(command):
         commands.append(command)
         dist = tmp_path / "pyinstaller-dist/easyicu-backend"
-        target_lock = dist / "_internal/easyicu/research_agent/runner_image/requirements.lock"
-        target_lock.parent.mkdir(parents=True)
-        target_lock.write_text(payloads["research_agent/runner_image/requirements.lock"])
+        for lock in ("requirements.lock", "requirements-pydantic-core-v1.lock"):
+            relative = f"research_agent/runner_image/{lock}"
+            target_lock = dist / "_internal/easyicu" / relative
+            target_lock.parent.mkdir(parents=True, exist_ok=True)
+            target_lock.write_text(payloads[relative])
         (dist / name).write_bytes(b"synthetic executable")
 
     backend = common.build_backend(

@@ -20,13 +20,21 @@ def test_raw_case_metadata_receipt_and_export_match(tmp_path, monkeypatch):
     receipt = authority.prepare_case_duration_metadata_plan(tmp_path, expected_identity=identity)
     assert all(len(value) == 64 for value in receipt.to_dict().values())
     config = load_src_cfg("sic")
-    snapshot = capture_data_provenance(load_dictionary(include_sofa2=True),
+    snapshot = capture_data_provenance(load_dictionary(src_name="sic", include_sofa2=True),
         concepts=sorted(SIC_CASE_LANDMARK_COLUMNS), source_database="sic",
         class_prefixes=tuple(config.class_prefix), source_config=config,
         source_config_sha256=metadata_digest(config.model_dump(mode="json")))
     package = SimpleNamespace(data_provenance=SimpleNamespace(snapshots=(snapshot,)),
         concept_index={name: {} for name in SIC_CASE_LANDMARK_COLUMNS})
     authority.match_case_duration_metadata_plan(receipt, package)
+    base_only = capture_data_provenance(load_dictionary(include_sofa2=True),
+        concepts=sorted(SIC_CASE_LANDMARK_COLUMNS), source_database="sic",
+        class_prefixes=tuple(config.class_prefix), source_config=config,
+        source_config_sha256=metadata_digest(config.model_dump(mode="json")))
+    with pytest.raises(ValueError, match="provenance_unavailable"):
+        authority.match_case_duration_metadata_plan(receipt, SimpleNamespace(
+            data_provenance=SimpleNamespace(snapshots=(base_only,)),
+            concept_index={name: {} for name in SIC_CASE_LANDMARK_COLUMNS}))
     from dataclasses import replace
     with pytest.raises(ValueError, match="provenance_mismatch"):
         authority.match_case_duration_metadata_plan(replace(receipt, implementation_sha256="a" * 64), package)

@@ -80,6 +80,17 @@ def test_every_plan_review_finding_has_a_chinese_title_and_detail() -> None:
     assert english == []
 
 
+@pytest.mark.parametrize(("code", "title", "detail"), [
+    ("LITERATURE_SOURCE_EVIDENCE_UNVERIFIED", "文献依据尚未核实", "检查原文和筛选记录"),
+    ("LITERATURE_SOURCE_INTEGRITY_INVALID", "文献来源校验失败", "未通过完整性校验"),
+    ("QUESTION_DESCRIPTIVE_UNCERTAINTY_NOT_MET", "描述结果未满足置信区间要求", "不能静默替换区间方法"),
+])
+def test_literature_and_requested_interval_findings_name_the_actual_issue(code, title, detail) -> None:
+    html = _render_zh([{"code": code, "severity": "blocker", "message": "Host message"}])
+    assert title in html and detail in html
+    assert "Host message" not in html
+
+
 def test_a_requested_variable_without_data_has_the_reviewed_next_step() -> None:
     html = _render_zh([{
         "code": "REQUESTED_CONCEPT_NO_DATA", "severity": "blocker",

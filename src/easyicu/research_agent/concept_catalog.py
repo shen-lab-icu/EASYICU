@@ -395,6 +395,12 @@ def _load_dicts(dict_paths: Optional[Sequence[str | Path]]) -> Dict[str, dict]:
             for key, value in data.items():
                 if isinstance(value, dict):
                     merged.setdefault(key, value)
+    if dict_paths is None:
+        from easyicu.resources import _sic_case_overlay
+        overlay = _sic_case_overlay()
+        if set(merged) & set(overlay):
+            raise ValueError("sic_case_overlay_concept_collision")
+        merged.update(overlay)
     return merged
 
 

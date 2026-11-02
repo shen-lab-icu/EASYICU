@@ -4,10 +4,9 @@ Exact data columns are bound against a source's catalog.  On a new hosted
 project (pilot1, 10-22) the first update named "请调整性别"; the host
 synchronized ``sex`` into the executable columns, and with no source bound it
 refused the whole update.  The question, outcome and exposure were lost, and
-after the researcher confirmed the source no plan could be generated.  Now the
-columns are left for the planner, the receipt names the deferral (no reply
-lists it as an unsaved setting: pilot1 showed the raw field name), and
-everything else is saved.  With a source bound the columns are still checked.
+after the researcher confirmed the source no plan could be generated. The
+question and candidate outcome are retained, while the primary outcome still
+requires explicit confirmation. Columns are deferred until a source is bound.
 """
 
 from __future__ import annotations
@@ -84,7 +83,9 @@ def test_the_question_is_saved_and_the_columns_wait_for_the_source(monkeypatch):
     assert (result["status"], result["code"]) == ("ok", "study_context_updated")
     (saved,) = writes
     assert saved["question"] == MESSAGE
-    assert saved["outcome"] == "院内死亡"
+    assert saved["unconfirmed_outcome"] == "院内死亡"
+    assert not saved.get("outcome")
+    assert "outcome" in result["details"]["omitted_unconfirmed_fields"]
     assert saved["covariates"] == ["sex"]
     assert not saved.get("execution_concepts")
     # The deferral is the receipt's, not a setting the researcher is told of.

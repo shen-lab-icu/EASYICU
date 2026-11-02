@@ -17,6 +17,7 @@ import mmap
 import os
 import tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
@@ -35,6 +36,31 @@ from typing import (
 
 import pandas as pd
 import pyarrow.parquet as pq
+
+
+_HOST_DEFERRED_READ_SCOPE: ContextVar[Any] = ContextVar("host_deferred_export_read_scope", default=None)
+
+
+@contextmanager
+def host_deferred_export_read_scope(*, manifest_sha256: str, columns_by_file: Mapping[str, Sequence[str]]):
+    """Enforce a host-verified recipe; installing this scope grants no I/O."""
+    import re
+
+    if _HOST_DEFERRED_READ_SCOPE.get() is not None:
+        raise ValueError("deferred_export_read_scope_nested")
+    if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256 or "") is None or not columns_by_file:
+        raise ValueError("deferred_export_read_scope_invalid")
+    columns = {str(key): frozenset(value) for key, value in columns_by_file.items()}
+    if any(not key or not value or any(not isinstance(name, str) or not name for name in value)
+           for key, value in columns.items()):
+        raise ValueError("deferred_export_read_scope_invalid")
+    scope = {"active": True, "manifest_sha256": manifest_sha256, "columns": columns}
+    token = _HOST_DEFERRED_READ_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        scope["active"] = False
+        _HOST_DEFERRED_READ_SCOPE.reset(token)
 
 from easyicu.concept.provenance import ExportDataProvenance
 
@@ -1474,6 +1500,12 @@ def _open_export_package_impl(
     manifest_path, manifest_kind = _select_manifest(root)
 
     manifest, manifest_bytes = _read_json(manifest_path, label="export manifest")
+    read_scope = _HOST_DEFERRED_READ_SCOPE.get()
+    if read_scope is not None and (
+        not read_scope["active"]
+        or hashlib.sha256(manifest_bytes).hexdigest() != read_scope["manifest_sha256"]
+    ):
+        raise ExportPackageError("deferred export manifest changed", code="deferred_export_scope_changed")
     raw_seal_kind = manifest.get("seal_kind") if manifest_kind == "native" else None
     if raw_seal_kind is not None and (
         not isinstance(raw_seal_kind, str)
@@ -1523,6 +1555,10 @@ def _open_export_package_impl(
     physical_files: list[ExportPhysicalFile] = []
     concept_index: dict[str, Mapping[str, object]] = {}
     entries = _manifest_file_entries(manifest, manifest_kind=manifest_kind)
+    if read_scope is not None and {
+        str(entry.get("file") or "") for entry in entries
+    } != set(read_scope["columns"]):
+        raise ExportPackageError("deferred export roster changed", code="deferred_export_scope_changed")
     if (
         manifest_kind == "native"
         and native_schema is None
@@ -2085,6 +2121,12 @@ def require_canonical_time_projection(
 def _read_projected(
     physical_file: ExportPhysicalFile, columns: Sequence[str]
 ) -> pd.DataFrame:
+    read_scope = _HOST_DEFERRED_READ_SCOPE.get()
+    if read_scope is not None:
+        allowed = read_scope["columns"].get(physical_file.relative_path)
+        if (not read_scope["active"] or allowed is None
+                or set(physical_file.columns) != allowed or not set(columns).issubset(allowed)):
+            raise ExportPackageError("deferred export column scope changed", code="deferred_export_scope_changed")
     try:
         frame = physical_file._snapshot.projected_frame(
             file_format=physical_file.file_format,
@@ -2115,6 +2157,12 @@ def read_exported_concept(
     owns_package = not isinstance(export_dir, ExportPackage)
     package = export_dir if not owns_package else open_export_package(export_dir)
     try:
+        read_scope = _HOST_DEFERRED_READ_SCOPE.get()
+        if read_scope is not None and (
+            not read_scope["active"] or package.manifest_sha256 != read_scope["manifest_sha256"]
+            or {item.relative_path for item in package.files} != set(read_scope["columns"])
+        ):
+            raise ExportPackageError("deferred export manifest changed", code="deferred_export_scope_changed")
         index = package.concept_index
         resolved = resolve_exported_concept(index, concept)
         if resolved is None:

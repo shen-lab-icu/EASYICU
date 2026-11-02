@@ -93,7 +93,7 @@ def test_provision_uses_existing_verifier_and_changes_capability(tooling, tmp_pa
     key.chmod(0o600)
     store = PiProviderConfigStore(config_path=instance / "home/.easyicu/pi-provider.env",
                                   receipt_path=instance / "home/.easyicu/pi-provider-verification.json")
-    monkeypatch.setattr(sources, "load_registry", lambda: {"sources": []})
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": []})
     original = PiProviderConfigStore.public_status
     monkeypatch.setattr(PiProviderConfigStore, "public_status", lambda self, **kw: original(store, environ={}))
     monkeypatch.setenv("EASYICU_HOSTED", "1")

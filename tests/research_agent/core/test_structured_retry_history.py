@@ -324,24 +324,21 @@ def test_safe_attempt_projection_keeps_owner_declared_reason_code(
 def test_structured_failure_captures_safe_provider_metadata_per_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Client:
-        last_finish_reason = "length"
-        last_usage = {
-            "prompt_tokens": 20,
-            "completion_tokens": 8,
-            "total_tokens": 28,
-            "actual_model": "provider-private-routing-name",
-        }
-        last_transport_attempts = 2
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-    monkeypatch.setattr(
-        "easyicu.research_agent.providers.structured_retry.authorized_complete",
-        lambda *_args, **_kwargs: "not json",
-    )
+    client = ScriptedMockLLMClient(["not json"])
+    client.last_finish_reason = "length"
+    client.last_usage = {
+        "prompt_tokens": 20,
+        "completion_tokens": 8,
+        "total_tokens": 28,
+        "actual_model": "provider-private-routing-name",
+    }
+    client.last_transport_attempts = 2
 
     with pytest.raises(StructuredResponseFailure) as raised:
         call_llm_with_structured_retry(
-            _Client(),
+            client,
             [],
             parser=lambda _raw: (_ for _ in ()).throw(ValueError("bad contract")),
             role="planner",

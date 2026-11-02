@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from easyicu.research_agent.orchestration.human_review_checkpoint import (
@@ -19,7 +18,6 @@ from easyicu.research_agent.authority.provider_hard_stop import (
     ProviderHardStopLimits,
 )
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
-from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.research_context.typed import (
     RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
@@ -27,46 +25,7 @@ from easyicu.research_agent.research_context.typed import (
 from tests.support.typed_export import typed_export
 
 
-def _pipeline(root: Path, **overrides) -> ResearchAgentPipeline:
-    options = {
-        "workdir": root,
-        "llm": MockLLMClient(),
-        "require_human_plan_review": True,
-        "enable_visual_qa": False,
-        "enable_publication_figure_skill": False,
-        "enable_nature_writing_skill": False,
-    }
-    options.update(overrides)
-    return ResearchAgentPipeline(**options)
-
-
-def _force_approvable_plan_review(monkeypatch) -> None:
-    """Remove unrelated Mock-LLM findings while keeping real review authority."""
-
-    import easyicu.research_agent.orchestration.workflow as workflow_module
-
-    real = workflow_module.human_review_requests_for_plan
-
-    def plan_only(**kwargs):
-        request = dict(kwargs)
-        request["findings"] = []
-        request["require_plan_review"] = True
-        return real(**request)
-
-    monkeypatch.setattr(
-        workflow_module,
-        "human_review_requests_for_plan",
-        plan_only,
-    )
-
-
-def _cohort() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "age": [45, 60, 75] * 10,
-            "death": [0, 1, 0] * 10,
-        }
-    )
+from tests.support.durable_human_review import _cohort, _force_approvable_plan_review, _pipeline
 
 
 def test_new_pipeline_instance_resumes_without_running_planner_again(

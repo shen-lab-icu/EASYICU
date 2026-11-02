@@ -28,6 +28,9 @@ def node_app(root: Path) -> Path:
             "@earendil-works/pi-coding-agent": "1.0.0", "@earendil-works/pi-ai": "1.0.0", "typebox": "1.0.0",
         }}),
         "src/main.mjs": "export const gateway = true;\n",
+        "src/draft-repair.mjs": "export const draft = true;\n",
+        "src/attached-skills.mjs": "export const skills = true;\n",
+        "shared/screens-guided-pi-research-draft.cjs": "module.exports = {};\n",
         "src/skills/web-prototype/SKILL.md": "Synthetic skill\n",
     })
     for name in ("@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "typebox"):

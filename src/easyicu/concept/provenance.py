@@ -245,6 +245,21 @@ def capture_data_provenance(
     from easyicu.clinical_contracts import load_clinical_contracts
 
     database = source_database.strip().lower()
+    # The separately versioned SIC overlay is authority-bearing metadata. A
+    # snapshot that refers to its concepts must name its exact packaged bytes;
+    # callers cannot supply or override this host-owned identity.
+    from easyicu.resources import SIC_CASE_OVERLAY_CONCEPTS, SIC_CASE_OVERLAY_SHA256, _sic_case_overlay
+    resolver_parameters = dict(resolver_parameters or {})
+    if "sic_case_overlay_sha256" in resolver_parameters:
+        raise ValueError("sic_case_overlay_parameter_reserved")
+    requested_overlay = SIC_CASE_OVERLAY_CONCEPTS.intersection(concepts)
+    if database == "sic" and requested_overlay:
+        expected = ConceptDictionary.from_payload(_sic_case_overlay())
+        present = [name for name in requested_overlay if dictionary.get(name) is not None]
+        if any(dictionary.get(name) != expected.get(name) for name in present):
+            raise ValueError("sic_case_overlay_definition_mismatch")
+        if present:
+            resolver_parameters["sic_case_overlay_sha256"] = SIC_CASE_OVERLAY_SHA256
     # These are resolver configuration coordinates, not evidence that any
     # particular patient row was extracted or transformed. Never substitute
     # packaged defaults for a run's possibly customized source configuration.

@@ -224,7 +224,7 @@ def test_a_fresh_plan_after_a_failed_run_is_refused_and_a_resume_is_not(
 def test_the_project_projection_reads_the_studys_bound_export(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(workflow_owner.sources, "load_registry", lambda: {})
+    monkeypatch.setattr(workflow_owner.sources, "load_registry", lambda **_kwargs: {})
     monkeypatch.setattr(workflow_owner, "list_bound_run_history", lambda **_kwargs: [])
 
     def project(export_path: Path) -> Any:

@@ -242,9 +242,14 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     assert EXTRACT_MODULES == {
         module: list(concepts)
         for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
-    }
+    } | {"sic_case_landmark": [
+        "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
+    ]}
+    # The SIC case module is explicitly selected, not part of the six-source
+    # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)
     assert len(EXTRACT_MODULE_ORDER) == len(CONCEPT_GROUPS_INTERNAL) == 19
+    assert "sic_case_landmark" not in EXTRACT_MODULE_ORDER
 
 
 def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:

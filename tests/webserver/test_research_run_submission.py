@@ -230,7 +230,7 @@ def test_owner_checks_readiness_before_consuming_authorization(
     monkeypatch.setattr(
         research_run_submission.dataio,
         "describe_source_tables",
-        lambda _path: {"ok": True},
+        lambda _path, **_kwargs: {"ok": True},
     )
     authorizations: list[str] = []
     request = research_run_submission.ResearchRunSubmissionRequest(
@@ -280,7 +280,7 @@ def start_gate_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
     monkeypatch.setattr(research_run_submission.context_store, "get_context", lambda _: study)
-    monkeypatch.setattr(research_run_submission.dataio, "describe_source_tables", lambda _: {"ok": True})
+    monkeypatch.setattr(research_run_submission.dataio, "describe_source_tables", lambda _, **_kwargs: {"ok": True})
     monkeypatch.setattr(research_run_submission.dataio, "prepared_export_manifest_path", lambda _: None)
     monkeypatch.setattr(
         research_run_submission, "build_research_workflow_snapshot",
@@ -543,3 +543,101 @@ def test_durable_submission_activates_only_after_original_grant_and_handoff(
         captured["runner"](launch.job)
         launch.callbacks.base_runner.assert_called_once()
     assert "provider_environment" not in captured["payload"]
+
+
+def test_controlled_candidate_dispatches_through_durable_owner_and_original_task(start_gate_launch, tmp_path, monkeypatch):
+    from easyicu.webserver import durable_research, research_job_recovery, provider_adapter
+    from easyicu.webserver.jobs import JobManager
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger
+    from easyicu.research_agent.providers.hard_stop import HardStopClient
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+    from tests.support.durable_dispatcher import Dispatcher
+
+    study = research_run_submission.context_store.get_context('study-start-gate')
+    digest = research_run_submission.context_store.scientific_configuration_sha256(study)
+    ledger = ProviderHardStopLedger(path=(tmp_path / 'budget.json').resolve(), task_ids=('original',),
+        limits=provider_adapter.web_research_agent_hard_stop_limits('planner_canary'),
+        batch_id='original', declaration_sha256=digest)
+    task = ledger.start_task('original')
+    task.pause()
+    seed = SimpleNamespace(seed_sha256='fixed', provider_public={})
+    binding = SimpleNamespace(seed=seed, task=task, original_job_id='prior', historical_worker_tree='a' * 40)
+    monkeypatch.setattr(research_job_recovery, 'prepare_controlled_candidate_from_original_job', lambda **_: binding)
+    monkeypatch.setattr(research_job_recovery, '_historical_worker_identity', lambda _: 'b' * 64)
+    monkeypatch.setattr('easyicu.webserver.durable_research_store.runtime_digest', lambda: 'synthetic')
+    manager = JobManager()
+    service = durable_research.DurableResearchService(tmp_path / 'durable', manager=manager, dispatcher_factory=Dispatcher)
+    monkeypatch.setattr(durable_research, 'current_service', lambda: service)
+    seen = []
+    def factory(**kwargs):
+        assert kwargs['no_automatic_retries'] is True
+        assert kwargs['allow_environment_resume'] is False
+        assert kwargs['expected_provider_public'] == {}
+        kwargs['on_prepared_study'](study)
+        def run(job):
+            bound = research_job_recovery.existing_provider_task(job)
+            assert bound is task
+            seen.append(job.id)
+            HardStopClient(ScriptedMockLLMClient(['ok']), role='planner', task=task).complete(
+                [LLMMessage(role='user', content='synthetic')], max_tokens=32)
+            return {'gate': {'status': 'passed'}}
+        return run
+    monkeypatch.setattr(research_run_submission.agent_pipeline_runs, 'make_research_pipeline_run_runner', factory)
+    request = research_run_submission.ResearchRunSubmissionRequest(study_context_id=study['id'], provider='mock',
+        credential_source='pi_verified', external_llm_opt_in=True, planner_start_mode='fresh', intent='candidate_plan')
+    receipt = research_run_submission.submit_research_run(request, no_automatic_retries=True, _controlled_candidate=binding)
+    assert service.store.get(receipt.job_id)['status'] == 'active'
+    assert service.execute(receipt.job_id)['status'] == 'done'
+    assert seen == [receipt.job_id]
+    assert len(ledger.snapshot()['tasks'][0]['calls']) == 1
+    assert service.store.get(receipt.job_id)['status'] == 'terminal'
+
+
+def test_deferred_stage_uses_original_task_and_durable_submission(start_gate_launch, tmp_path, monkeypatch):
+    from easyicu.webserver import durable_research, research_job_recovery, provider_adapter
+    from easyicu.webserver.jobs import JobManager
+    from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopLedger, ProviderHardStopLedgerError
+    from tests.support.durable_dispatcher import Dispatcher
+
+    study = research_run_submission.context_store.get_context('study-start-gate')
+    digest = research_run_submission.context_store.scientific_configuration_sha256(study)
+    ledger = ProviderHardStopLedger(path=(tmp_path / 'budget.json').resolve(), task_ids=('original',),
+        limits=provider_adapter.web_research_agent_hard_stop_limits('planner_canary'),
+        batch_id='original', declaration_sha256=digest)
+    task = ledger.start_task('original')
+    task.pause()
+    task.claim_controlled_candidate('candidate')
+    task.pause()
+    stage = SimpleNamespace(study_context_id=study['id'], preparation_run_id='prior-run', project_id='p', session_id='s')
+    source = SimpleNamespace(provider_public={})
+    binding = SimpleNamespace(stage=stage, task=task, candidate_job_id='candidate',
+                              source_record=source, source_seed_sha256='fixed')
+    monkeypatch.setattr(research_job_recovery, 'prepare_deferred_review_stage', lambda **_: binding)
+    monkeypatch.setattr('easyicu.webserver.durable_research_store.runtime_digest', lambda: 'synthetic')
+    service = durable_research.DurableResearchService(tmp_path / 'durable', manager=JobManager(), dispatcher_factory=Dispatcher)
+    monkeypatch.setattr(durable_research, 'current_service', lambda: service)
+    seen = []
+    def factory(**kwargs):
+        assert kwargs['budget_mode'] == 'deferred_reviewed'
+        assert kwargs['_deferred_stage'] is stage
+        assert kwargs['development_resume_source_job_id'] == 'candidate'
+        kwargs['on_prepared_study'](study)
+        def run(job):
+            assert research_job_recovery.existing_provider_task(job) is task
+            with pytest.raises(ProviderHardStopLedgerError, match='cannot send'):
+                ledger.reserve_transport_attempt(task_id='original', role='planner', model='synthetic',
+                    messages=[], max_tokens=16, prior_attempt_id=None)
+            seen.append(job.id)
+            task.pause()
+            return {'gate': {'status': 'pending'}}
+        return run
+    monkeypatch.setattr(research_run_submission.agent_pipeline_runs, 'make_research_pipeline_run_runner', factory)
+    request = research_run_submission.ResearchRunSubmissionRequest(study_context_id=study['id'], provider='mock',
+        credential_source='pi_verified', external_llm_opt_in=True, planner_start_mode='fresh', intent='candidate_plan')
+    receipt = research_run_submission.submit_research_run(request, no_automatic_retries=True, _deferred_binding=binding)
+    assert service.execute(receipt.job_id)['status'] == 'done'
+    row = ledger.snapshot()['tasks'][0]
+    assert seen == [receipt.job_id] and row['calls'] == []
+    assert row['controlled_candidate_job_id'] == 'candidate' and row['deferred_stage_job_id'] == receipt.job_id
+    assert row['status'] == 'paused' and row['deferred_stage_no_send'] is True

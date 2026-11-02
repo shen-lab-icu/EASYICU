@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from easyicu.research_agent.method_skills import method_skill_catalog, method_skill_package
-from easyicu.research_agent.skill_packages import component_sources, host_sources
+from easyicu.research_agent.skill_packages import host_sources
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -151,7 +151,7 @@ def test_balance_source_names_the_registered_action_and_real_kernel():
 
 
 def test_component_binding_drift_is_a_typed_error(monkeypatch):
-    monkeypatch.setitem(component_sources._COMPONENT_FUNCTIONS, "prediction.external_validation", (
+    monkeypatch.setitem(host_sources._COMPONENT_FUNCTIONS, "prediction.external_validation", (
         ("methods.prediction_validation", ("renamed_external_validation",)),
     ))
     with pytest.raises(host_sources.MethodSkillSourceError, match="renamed_external_validation"):

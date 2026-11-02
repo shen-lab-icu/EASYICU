@@ -15,6 +15,9 @@ def _module():
 
 def test_release_gate_is_offline_and_covers_all_new_boundaries() -> None:
     module = _module()
+    resource_command = dict(module.RELEASE_COMMANDS)["resource_context"]
+    assert "--verify-current" in resource_command
+    assert "tools/arch_baselines/research_agent_resource_context.current.json" in resource_command
     flattened = " ".join(
         token for _name, command in module.RELEASE_COMMANDS for token in command
     )

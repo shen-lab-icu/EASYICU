@@ -143,7 +143,7 @@ def test_same_size_table_change_during_binding_is_refused(tmp_path: Path, monkey
 
 
 def test_legacy_authority_preserves_digest_mismatch_before_schema_error(tmp_path: Path):
-    from tests.webserver.test_webserver_raw_source_authority import _authority_environment
+    from tests.support.raw_source_authority import _authority_environment
 
     environ, export = _authority_environment(tmp_path)
     (tmp_path / "raw" / "icu" / "icustays.parquet").write_bytes(b"not a parquet file")

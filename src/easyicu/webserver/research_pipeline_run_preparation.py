@@ -115,6 +115,12 @@ class ResearchPipelineLaunchRequest:
     runner_image: Optional[str]
     plan_change_request: Optional[PlanChangeRequest] = None
     allow_environment_resume: bool = True
+    no_automatic_retries: bool = False
+    expected_provider_public: Optional[Mapping[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if type(self.no_automatic_retries) is not bool:
+            raise TypeError("no_automatic_retries must be a boolean")
 
 
 def _development_resume_source(request: ResearchPipelineLaunchRequest) -> str:
@@ -377,7 +383,7 @@ def _prepare_scientific_launch(
             WINDOWED_SUMMARY_STOP_MESSAGES["windowed_summary_materialization_window_mismatch"],
             details={"requested_window": outcome_window, "materialization_window": window},
         )
-    metadata_only_planning = budget_mode == "planner_canary"
+    metadata_only_planning = budget_mode in {"planner_canary", "deferred_reviewed"}
     # A candidate-plan run is the owner that proposes unresolved scientific
     # design choices for human review.  Requiring an execution-ready analysis
     # unit and variance estimator before that run creates a circular gate and
@@ -653,6 +659,7 @@ def _prepare_launch_execution(
     request: ResearchPipelineLaunchRequest,
     scientific: PreparedScientificLaunch,
     provider_authorization: _ProviderAuthorization,
+    *, _deferred_stage: Any = None,
 ) -> tuple[PreparedLaunchAuthority, PreparedLaunchExecution]:
     if not request.project_root:
         raise ResearchPipelineRunError(
@@ -661,6 +668,28 @@ def _prepare_launch_execution(
         )
     project_root = request.project_root
     budget_mode = str(request.budget_mode or "").strip().lower()
+    deferred_source_scope = False
+    if budget_mode == "deferred_reviewed":
+        from easyicu.webserver.first_observed_deferred_recipe import FirstObservedDeferredReviewStage
+
+        deferred_source_scope = (
+            type(_deferred_stage) is FirstObservedDeferredReviewStage
+            and _deferred_stage.study_context_id == str(scientific.study.get("id") or "")
+            and request.no_automatic_retries is True and request.allow_environment_resume is False
+            and bool(request.development_resume_source_job_id)
+            and not request.plan_revision_source_run_id and not request.execution_resume_source_run_id
+            and request.plan_change_request is None and scientific.metadata_only_planning
+        )
+        if not deferred_source_scope:
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_scope_mismatch",
+                "The deferred review stage requires its verified host-owned canary binding.",
+            )
+    elif _deferred_stage is not None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_mismatch",
+            "A deferred review stage cannot change another launch mode.",
+        )
 
     development_resume_binding: tuple[Path, str] | None = None
     selected_resume_source = _development_resume_source(request)
@@ -696,7 +725,7 @@ def _prepare_launch_execution(
             project_root=project_root,
             study_id=str(scientific.study.get("id") or ""),
             source_job_id=selected_resume_source,
-            budget_mode=budget_mode,
+            budget_mode=("planner_canary" if budget_mode == "deferred_reviewed" else budget_mode),
             checkpoint_sequence=os.environ.get(_DEVELOPMENT_RESUME_SEQUENCE_ENV),
         )
     development_resume_scope = (
@@ -760,7 +789,8 @@ def _prepare_launch_execution(
         if development_resume_binding is not None
         else None
     )
-    if development_resume_scope is not None and development_resume_scope.budget_mode != budget_mode:
+    expected_resume_scope_mode = "planner_canary" if deferred_source_scope else budget_mode
+    if development_resume_scope is not None and development_resume_scope.budget_mode != expected_resume_scope_mode:
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_scope_mismatch",
             "The Planner continuation must retain its sealed launch scope.",
@@ -867,6 +897,7 @@ def _prepare_launch_execution(
 
 def prepare_research_pipeline_run(
     request: ResearchPipelineLaunchRequest,
+    *, _deferred_stage: Any = None,
 ) -> PreparedResearchPipelineRun:
     """Validate one launch request completely before runner side effects."""
 
@@ -891,11 +922,27 @@ def prepare_research_pipeline_run(
         request,
         scientific,
         provider_authorization,
+        **({"_deferred_stage": _deferred_stage} if _deferred_stage is not None else {}),
     )
+    if request.study_context.get("demo_planning_authority_ref"):
+        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+        from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+        try:
+            selected_source = request.study_context.get("data_source") or {}
+            if request.export_path != selected_source.get("path"):
+                raise ValueError("demo_planning_source_changed")
+            source_identity = resolve_choice(request.study_context)
+        except (ValueError, OSError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
+            raise ResearchPipelineRunError(
+                "research_pipeline_demo_planning_authority_stale",
+                "The confirmed Demo planning source changed. Select it again before planning.",
+            ) from exc
+    else:
+        source_identity = sources.registered_source_identity(request.export_path)
     return PreparedResearchPipelineRun(
         scientific=scientific,
         authority=authority,
         execution=execution,
         prepared_plan_revision=revision,
-        source_identity=sources.registered_source_identity(request.export_path),
+        source_identity=source_identity,
     )

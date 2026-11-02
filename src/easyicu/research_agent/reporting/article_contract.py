@@ -35,7 +35,7 @@ from ..authority.planned_role import (
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..contracts.declared_product import typed_product
-from ..contracts.cohort_summary_products import is_descriptive_summary_product_step
+from ..contracts.cohort_summary import is_descriptive_summary_product_step
 from ..contracts.source_feasibility_validation import (
     context_declares_source_feasibility_scope,
 )

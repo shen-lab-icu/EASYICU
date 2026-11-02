@@ -210,7 +210,7 @@ def candidate_from_bound_research_context(*, study: Mapping[str, Any], run_dir: 
     if not concepts:
         raise ValueError("partition_candidate_no_recorded_concepts")
     config = load_src_cfg(identity.database)
-    snapshot = capture_data_provenance(load_dictionary(include_sofa2=True), concepts=concepts,
+    snapshot = capture_data_provenance(load_dictionary(include_sofa2=True, src_name=identity.database), concepts=concepts,
         source_database=identity.database, class_prefixes=tuple(config.class_prefix), source_config=config,
         source_config_sha256=metadata_digest(config.model_dump(mode="json")))
     tables: dict[str, set[str]] = {}

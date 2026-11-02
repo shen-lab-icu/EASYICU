@@ -1602,7 +1602,7 @@ class AnthropicMessagesClient:
             create_kwargs["output_config"] = {
                 "format": {
                     "type": "json_schema",
-                    "schema": json.loads(structured_output.schema_json),
+                    "schema": json.loads(structured_output.transport_schema_json),
                 }
             }
 

@@ -79,6 +79,8 @@
       if (!error) return '';
       const boundedFailure = boundedTurnFailureText(error);
       if (boundedFailure) return boundedFailure;
+      if (['research_pipeline_demo_planning_authority_stale', 'research_pipeline_first_observed_input_binding_unavailable'].includes(error.code)) return runFailureText(error.code);
+      if (error.code === 'study_primary_outcome_confirmation_required') return tr('The primary outcome has not been confirmed. Confirm it in the conversation, then generate the plan again; no analysis has run.', '主要结局尚未确认。请在对话中明确确认结局，再生成研究计划；尚未运行分析。');
       if (error.code === 'pi_regenerate_study_context_snapshot_missing') return tr('This older reply has no saved study snapshot, so it cannot be replaced safely. Send your question as a new message; the existing study and approvals stay saved.', '这条旧回复缺少保存的研究快照，无法安全替换。请把问题作为新消息发送；已有研究和批准会继续保留。');
       if (/^pi_credential_/.test(error.code || '')) return tr('EasyICU cannot access the saved model credential. Unlock the system credential store, or reconnect in Connection settings. Your question is saved.', 'EasyICU 无法读取已保存的模型凭据。请解锁系统凭据库，或在「连接设置」中重新连接；原问题已保留。');
       if (/^result_append_(source_changed|execution_failed|unavailable)$/.test(error.code || '')) return runFailureText(error.code);
@@ -972,6 +974,14 @@
         return suffix || tr('The run did not pass EasyICU\'s checks, so its results cannot be reported.', '这次运行没有通过 EasyICU 的检查，结果不能报告。');
       }
       const known = {
+        research_pipeline_demo_planning_authority_stale: tr(
+          'The selected Demo source or its confirmation changed. Select the Demo source again, then generate a new plan for review.',
+          '已选择的 Demo 数据源或确认信息发生变化。请重新选择 Demo 数据源，再生成新的研究计划供审阅。',
+        ),
+        research_pipeline_first_observed_input_binding_unavailable: tr(
+          'The first ICU population cannot currently be bound to the research input, so analysis has not started. Check the data source and preparation result, or contact support for help.',
+          '当前尚无法将首次 ICU 人群准备结果绑定到实际研究数据，分析尚未开始。请核对数据源和准备结果，或联系支持人员处理。',
+        ),
         extraction_database_filter_unsupported: tr(
           'The data filter could not process this official Demo; update EasyICU before retrying extraction.',
           '数据筛选器无法处理这份官方 Demo，请更新 EasyICU 后重新提取。',

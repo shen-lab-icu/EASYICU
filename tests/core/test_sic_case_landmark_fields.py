@@ -78,7 +78,7 @@ def test_registered_native_callback_uses_only_sic_and_retains_nullable_status():
     from easyicu.api.extraction import load_dictionary
     from easyicu.concept import ConceptResolver
 
-    dictionary = load_dictionary()
+    dictionary = load_dictionary(source_name="sic")
     cases = pd.DataFrame({"CaseID": [1, 2], "ICUOffset": [0, 0], "TimeOfStay": [172800, 172800],
                           "OffsetOfDeath": [None, None], "HospitalDischargeType": [2026, 2028]})
     class DataSource:
@@ -149,7 +149,7 @@ def test_landmark_source_snapshot_lists_registered_inputs_only_when_config_verif
     from easyicu.concept.provenance import capture_data_provenance, metadata_digest
     from easyicu.config import load_src_cfg
 
-    dictionary = load_dictionary()
+    dictionary = load_dictionary(source_name="sic")
     config = load_src_cfg("sic")
     kwargs = dict(concepts=["care_unit_to_case_closure_days"], source_database="sic")
     recorded = capture_data_provenance(
@@ -194,7 +194,7 @@ def test_explicit_landmark_module_runs_through_web_export_and_records_source(tmp
         yield None
     def load(concepts, **kwargs):
         record_resolver_inputs(kwargs, SimpleNamespace(
-            concept_resolver=SimpleNamespace(dictionary=load_dictionary()),
+            concept_resolver=SimpleNamespace(dictionary=load_dictionary(source_name="sic")),
             datasource=SimpleNamespace(config=load_src_cfg("sic")),
         ))
         return pd.DataFrame({"stay_id": [1, 2], "care_unit_to_case_closure_days": [2.0, 1.0],

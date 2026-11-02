@@ -398,14 +398,15 @@ def test_copilot_amendment_pins_source_and_current_configuration(source, monkeyp
     f = source()
     current_study = {**f.study, 'question': 'A newly authorized scientific question.'} if change_scope else f.study
     latest = {**f.row, 'study_id': f.study['id'], 'artifact_names': ['agent_plan.json'], 'run_status': 'failed'}
-    context = SimpleNamespace(session=SimpleNamespace(binding=object()), user_message=f.request.user_message)
+    context = SimpleNamespace(session=SimpleNamespace(binding=object()), user_message=f.request.user_message,
+                              expected_replan_source_run_id='')
     captured = {}
     monkeypatch.setattr(tools, '_bound_context', lambda _: current_study)
     monkeypatch.setattr(tools, '_select_run', lambda _: latest)
     monkeypatch.setattr(tools, '_workflow_snapshot', lambda *args, **kwargs: {})
     monkeypatch.setattr(tools, 'infer_explicit_turn_actions', lambda _: {'provider_run'})
     monkeypatch.setattr(tools, '_plan_change_references', lambda *args: f.request.reference_plans)
-    monkeypatch.setattr(tools.sources, 'load_registry', lambda: {'sources': []})
+    monkeypatch.setattr(tools.sources, 'load_registry', lambda **_kwargs: {'sources': []})
     monkeypatch.setattr(tools, 'prepare_user_message', lambda message, **kwargs: SimpleNamespace(provider_message=message))
     monkeypatch.setattr(tools, '_run', lambda *args, **kwargs: captured.update(kwargs) or {'code': 'captured'})
     assert tools._request_replan(context, {'strategy': 'fresh'}) == {'code': 'captured'}

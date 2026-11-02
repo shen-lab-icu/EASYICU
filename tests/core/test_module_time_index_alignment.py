@@ -90,7 +90,9 @@ def test_all_nineteen_modules_publish_from_synthetic_aumc(aumc_source, tmp_path)
     assert contract["time_column"] == "charttime"
     assert contract["time_origin"] == "icu_admission"
     assert contract["time_unit"] == "h"
-    assert {entry["module"] for entry in manifest["files"]} == set(api.EXTRACT_MODULES)
+    published_modules = {entry["module"] for entry in manifest["files"]}
+    assert published_modules == set(api.EXTRACT_MODULES) - {"sic_case_landmark"}
+    assert "sic_case_landmark" not in result["modules"]
     for entry in manifest["files"]:
         frame = pd.read_parquet(output / entry["file"])
         assert frame.columns[0] == "stay_id"

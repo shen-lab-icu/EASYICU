@@ -86,6 +86,10 @@ def test_installer_uses_lockfile_without_scripts_or_ambient_secrets(
         encoding="utf-8",
     )
     (source / "src" / "main.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "draft-repair.mjs").write_text("", encoding="utf-8")
+    (source / "src" / "attached-skills.mjs").write_text("", encoding="utf-8")
+    (source / "shared").mkdir()
+    (source / "shared" / "screens-guided-pi-research-draft.cjs").write_text("module.exports = {};\n", encoding="utf-8")
     (source / "src" / "event-projection.mjs").write_text("", encoding="utf-8")
     (source / "src" / "post-tool-finalization.mjs").write_text(
         "", encoding="utf-8"

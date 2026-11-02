@@ -874,7 +874,7 @@ def _normalize_legacy_export_categorical(
     from ...resources import load_dictionary
     from ...concept.callback_apply import apply_callback
 
-    definition = load_dictionary().get(concept)
+    definition = load_dictionary(source_name=database).get(concept)
     levels = getattr(definition, "levels", None)
     if definition is None or not isinstance(levels, (list, tuple)) or not levels:
         return frame, None
@@ -982,7 +982,7 @@ def _missing_outside_declared_source_factor(
     from ...config import load_src_cfg
     from ...resources import load_dictionary
 
-    definition = load_dictionary().get(concept)
+    definition = load_dictionary(source_name=database).get(concept)
     levels = getattr(definition, "levels", None)
     if (
         definition is None
@@ -1860,7 +1860,7 @@ def _materialize_cohort_from_resolved_source(
         from ...hospital_mortality import DENSE_STATUS_BINDINGS, MIMIC_HOSPITAL_STATUS_BINDING
         from ...resources import load_dictionary
 
-        definitions = load_dictionary()
+        definitions = load_dictionary(source_name=database)
         source_config = load_src_cfg(database)
         dense_status_outcomes = {
             concept for concept in outcome_set
@@ -2874,7 +2874,7 @@ def materialize_to_parquet(
         # This is an internal materializer input, not a host grant. Callers must
         # first verify the consumed preparation decision AND the research
         # execution authority. A constructible coordinate cannot authorize IO.
-        from ..acquisition.first_observed_icu_coordinate import (
+        from ..acquisition.first_icu_stay import (
             FirstObservedIcuCoordinate, restrict_to_first_observed_icu,
         )
         if (not isinstance(first_observed_icu_coordinate, FirstObservedIcuCoordinate)

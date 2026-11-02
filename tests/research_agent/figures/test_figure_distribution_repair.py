@@ -5,7 +5,7 @@ from easyicu.research_agent.repairs.figure_distribution import (
     patch_text_distribution_denominator_from_counts,
 )
 from easyicu.research_agent.repairs.import_repair import patch_known_host_helper_import
-from easyicu.research_agent.repairs.host_helper_failure import (
+from easyicu.research_agent.repairs.host_helper_result import (
     patch_host_validation_helper_reraise,
 )
 from easyicu.research_agent.schema import ValidationFinding

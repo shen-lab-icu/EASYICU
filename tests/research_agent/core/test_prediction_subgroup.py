@@ -12,29 +12,15 @@ from easyicu.research_agent.contracts.prediction_subgroup import (
     PredictionSubgroupResult, PredictionSubgroupSpec, prediction_subgroup_method,
     prediction_subgroup_spec_for_step, prediction_subgroup_step_matches,
 )
-from easyicu.research_agent.methods.prediction_subgroup import (
+from tests.support.prediction_subgroup import _frame, _spec
+
+from easyicu.research_agent.methods.prediction_validation import (
     evaluate_prediction_subgroups, prediction_subgroup_result_findings,
 )
 
 
-def _spec(**updates):
-    payload = dict(
-        analysis_unit="subject", subgroup_input_key="artifact:analysis_cohort",
-        subgroup_unit_id_column="row_id", axes=({"column": "group", "levels": ("A", "B", "C")},),
-        minimum_group_n=2, minimum_class_n=1,
-    )
-    return PredictionSubgroupSpec.model_validate({**payload, **updates})
 
 
-def _frame():
-    # At each of two probability values, the observed risks are exactly 1/4
-    # and 3/4. A is perfectly calibrated; B's logit is twice the true logit.
-    return pd.DataFrame({
-        "unit_id": [f"u{i}" for i in range(16)], "subject_id": range(16),
-        "split": "validation", "outcome": [0, 0, 0, 1, 0, 1, 1, 1] * 2,
-        "probability": [0.25] * 4 + [0.75] * 4 + [0.1] * 4 + [0.9] * 4,
-        "group": ["A"] * 8 + ["B"] * 8,
-    })
 
 
 def test_analytical_auroc_brier_and_logistic_calibration_oracle():

@@ -19,7 +19,6 @@ from typing import Any, Mapping
 
 import pytest
 import pandas as pd
-from starlette.requests import Request
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
@@ -84,20 +83,6 @@ def _install_pending_review(monkeypatch, entry):
     return registry
 
 
-def _request() -> Request:
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/jobs/agent-run",
-            "raw_path": b"/api/jobs/agent-run",
-            "headers": [],
-            "query_string": b"",
-            "scheme": "http",
-            "server": ("testserver", 80),
-            "client": ("testclient", 123),
-        }
-    )
 
 
 def _record_pipeline_submission(
@@ -158,46 +143,6 @@ def test_typed_selected_design_requires_complete_reviewable_recommendation() -> 
     assert agent_pipeline_runs._plan_has_complete_reviewable_recommendation({})
 
 
-def _write_pipeline_export(
-    root: Path, *, database: str = "miiv", current_contract: bool = True
-) -> Path:
-    """Write a prepared export package manifest.
-
-    ``current_contract=False`` reproduces an export written before intake began
-    requiring per-file ``concept_ids``: the same directory is laid out correctly
-    and passes the layout-only readiness probe, but cannot establish authority.
-    """
-
-    root.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
-        root / "demographics.parquet", index=False
-    )
-    # Built in the original key order so the default path serializes the same
-    # manifest bytes as before; the file entry joins the binding hash.
-    file_entry: dict[str, Any] = {
-        "file": "demographics.parquet",
-        "module": "demographics",
-        "concepts": 1,
-    }
-    if current_contract:
-        file_entry["concept_ids"] = ["age"]
-    file_entry["rows"] = 1
-    (root / "_manifest.json").write_text(
-        json.dumps(
-            {
-                "database": database,
-                "format": "parquet",
-                "concept_selection": {
-                    "mode": "explicit",
-                    "modules": {"demographics": ["age"]},
-                },
-                "feature_definitions": {"included": False},
-                "files": [file_entry],
-            }
-        ),
-        encoding="utf-8",
-    )
-    return root
 
 
 def _study_with_package_binding(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -221,24 +166,10 @@ _PI_PROVIDER_ENVIRONMENT = {
 }
 
 
-def _assume_execution_runtime_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An executing launch now probes the container runtime before it starts.
-
-    That gate has its own contract tests in
-    ``test_web_execution_runtime_preflight.py``; the launches here are about
-    scope and resume authority and must not depend on the host's daemon.
-    """
-
-    from easyicu.research_agent.execution import runner as runner_module
-
-    monkeypatch.setattr(
-        runner_module,
-        "probe_runner_availability",
-        lambda kind, **_kwargs: runner_module.RunnerAvailability(
-            kind=kind, available=True, image="easyicu-research-agent:test"
-        ),
-)
 from tests.webserver.copilot.research_workflow_fixtures import (
+    _request as _request,
+    _write_pipeline_export as _write_pipeline_export,
+    _assume_execution_runtime_ready as _assume_execution_runtime_ready,
     complete_study as _complete_study,
     confirmed_cohort_decision as _confirmed_cohort_decision,
 )
@@ -2349,6 +2280,11 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         patient_grouping,
     )
     prepared = _write_pipeline_export(tmp_path / "prepared-mimiciv")
+    # This runner-coordinates unit test supplies a schema-only capability menu;
+    # physical native-source coverage has independent owner tests.
+    from easyicu.research_agent.acquisition.catalog import build_database_capability_catalog
+    monkeypatch.setattr(agent_pipeline_runs, "_metadata_only_planning_catalog",
+        lambda *, database, **_kwargs: build_database_capability_catalog(database))
     study = {
         **_design_free_study(prepared),
         "outcome": "院内死亡（in-hospital death）",
@@ -2393,6 +2329,8 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
 
     result = runner(Job())
 
+    if not configs:
+        pytest.fail(json.dumps(result, ensure_ascii=False, default=str))
     assert configs[0].require_human_plan_review is True
     assert configs[0].required_primary_cohort_selection_mode is None
     assert configs[0].evidence_enforcement_mode == "strict"
@@ -5769,7 +5707,7 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": None,
             "sources": [
                 {
@@ -5848,7 +5786,7 @@ def test_extraction_reuses_project_bound_registered_export_even_when_not_global_
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": "/private/another/export",
             "sources": [
                 {
@@ -5908,7 +5846,7 @@ def test_extraction_rebuilds_registered_export_when_requested_contract_differs(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "sources": [
                 {
                     "id": "src_project",

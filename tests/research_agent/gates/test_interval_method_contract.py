@@ -151,3 +151,31 @@ def test_explicit_default_alpha_can_repair_normal_logit_label(ra):
     findings = _findings(_script().replace("conf_int()", "conf_int(alpha=0.05)"), ra)
     assert findings[0].detail["repair_safe"] is True
     assert findings[0].detail["occurrences"][0]["expected"] == "wald_95_percent"
+
+
+def test_interval_repair_uses_utf8_ast_coordinates_and_refuses_stale_finding(ra):
+    script = _script().replace(
+        'interval_method = "profile_normal"',
+        '备注 = "中文"; interval_method = "profile_normal"',
+    )
+    findings = _findings(script, ra)
+    assert len(findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+    assert names == ["statsmodels_interval_method_label_v1"]
+    assert '备注 = "中文"; interval_method = \'wald_95_percent\'' in repaired
+    assert _findings(repaired, ra) == []
+
+    stale = script.replace('备注 = "中文"', '备注 = "更长的中文"')
+    rejected, names = deterministic_concept_audit_repair(
+        stale,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+    assert rejected == stale
+    assert names == []

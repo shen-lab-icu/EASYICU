@@ -95,7 +95,8 @@ def test_an_english_reader_keeps_the_server_sentence_and_a_local_build_names_no_
     assert out["english"] == (
         "Initialize the EasyICU project before opening its governed resources."
     )
-    assert out["server"].endswith("if it keeps happening, contact the administrator.")
+    assert out["server"].endswith("if it keeps happening, keep this error message for troubleshooting.")
+    assert "administrator" not in out["server"]
     assert "/api/" not in out["server"]
     assert out["jobRaw"] == "RuntimeError: worker exited"
 

@@ -153,6 +153,41 @@ def registered_source_identity(export_path: str) -> SourceIdentity | None:
 
 
 @_registry_locked
+def stored_source_path_for_identity(identity: SourceIdentity) -> str | None:
+    """Resolve one saved identity without discovery or opening export tables.
+
+    The caller must verify the selected source's bound manifest separately.
+    Unstored discoveries and ambiguous or malformed registrations fail closed.
+    """
+    if not isinstance(identity, SourceIdentity) or SourceIdentity.from_record(identity.to_dict()) != identity:
+        return None
+    raw = _read_raw()
+    rows = raw.get("sources")
+    if not isinstance(rows, list):
+        return None
+    matches = [row for row in rows if isinstance(row, dict) and row.get("id") == identity.registration_id]
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    path = row.get("path")
+    if not isinstance(path, str) or not path or not Path(path).is_absolute():
+        return None
+    normalized = _norm_path(path)
+    if (normalized != path or not path_allowed(path, instance_owned=True)
+            or _source_id(path) != identity.registration_id
+            or path in _raw_removed_paths(raw)):
+        return None
+    if sum(isinstance(other, dict) and isinstance(other.get("path"), str)
+           and _norm_path(other["path"]) == path for other in rows) != 1:
+        return None
+    record = {key: row[key] for key in ("database", "version", "source_id", "archive_sha256") if key in row}
+    record["registration_id"] = row["id"]
+    if SourceIdentity.from_record(record) != identity or record != identity.to_dict():
+        return None
+    return path
+
+
+@_registry_locked
 def stored_registration_metadata() -> tuple[Dict[str, Any], ...]:
     """Path-free saved metadata, without rediscovery or export inspection.
 
@@ -232,10 +267,12 @@ def _preferred_configured_export(
 
 
 def _source_from_path(
-    path: str, label: str | None = None, registered_at: str | None = None
+    path: str, label: str | None = None, registered_at: str | None = None,
+    *, planning_metadata_only: bool = False,
 ) -> Dict[str, Any]:
     norm = _norm_path(path)
-    desc = dataio.describe_export_source(norm)
+    desc = (dataio.describe_source_tables(norm, planning_metadata_only=True)
+            if planning_metadata_only else dataio.describe_export_source(norm))
     item: Dict[str, Any] = {
         "id": _source_id(norm),
         "path": norm,
@@ -307,13 +344,16 @@ def _autodiscovery_bases() -> List[Path]:
     return bases
 
 
-def _autodiscovered_paths() -> List[str]:
+def _autodiscovered_paths(*, planning_metadata_only: bool = False) -> List[str]:
+    def describe(path: str) -> Dict[str, Any]:
+        return (dataio.describe_source_tables(path, planning_metadata_only=True)
+                if planning_metadata_only else dataio.describe_export_source(path))
     paths: List[str] = []
     for base in _autodiscovery_bases():
         if not base.is_dir():
             continue
         try:
-            if dataio.describe_export_source(str(base)).get("ok"):
+            if describe(str(base)).get("ok"):
                 paths.append(str(base))
         except (
             Exception
@@ -327,9 +367,7 @@ def _autodiscovered_paths() -> List[str]:
             if not path_allowed(child, instance_owned=True):
                 continue
             try:
-                if child.is_dir() and dataio.describe_export_source(str(child)).get(
-                    "ok"
-                ):
+                if child.is_dir() and describe(str(child)).get("ok"):
                     paths.append(str(child))
             except (
                 Exception
@@ -339,7 +377,7 @@ def _autodiscovered_paths() -> List[str]:
 
 
 @_registry_locked
-def load_registry() -> Dict[str, Any]:
+def load_registry(*, planning_metadata_only: bool = False) -> Dict[str, Any]:
     raw = _read_raw()
     removed_paths = set(_raw_removed_paths(raw))
     stored = raw.get("sources") if isinstance(raw.get("sources"), list) else []
@@ -355,13 +393,14 @@ def load_registry() -> Dict[str, Any]:
             str(item.get("path")),
             label=item.get("label"),
             registered_at=item.get("registered_at"),
+            **({"planning_metadata_only": True} if planning_metadata_only else {}),
         )
         source.update(_registration_fields(item))
         by_path[source["path"]] = source
-    for path in _autodiscovered_paths():
+    for path in _autodiscovered_paths(**({"planning_metadata_only": True} if planning_metadata_only else {})):
         if _norm_path(path) in removed_paths:
             continue
-        by_path.setdefault(path, _source_from_path(path))
+        by_path.setdefault(path, _source_from_path(path, **({"planning_metadata_only": True} if planning_metadata_only else {})))
 
     sources = sorted(
         by_path.values(),

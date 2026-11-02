@@ -16,9 +16,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from tests.support.literature_fixtures import synthetic_reviewed_literature
 from pydantic import ValidationError
 
 import easyicu.research_agent.pipeline as _pipeline
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.agents.family_spec_planner import FAMILY_SPEC_STRATEGY
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
@@ -35,9 +37,6 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 )
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
-)
 from easyicu.research_agent.planning.family_spec import (
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
     build_family_spec_request,
@@ -185,14 +184,13 @@ def _plan(context: ResearchContext) -> tuple[AnalysisPlan, AnalysisPlan]:
     findings: list = []
     plan = _pipeline._shape_fresh_plan(
         pipeline=SimpleNamespace(
-            _scientific_runtime_authorities=authorities,
+            _scientific_runtime_authorities=authorities, _services=PipelineServices(),
             _enable_publication_figure_skill=True,
             _max_total_steps=24,
         ),
         plan=draft, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _ = authorities.bind_plan(plan)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, findings)
     authorities.validate_plan(bound)
@@ -206,7 +204,7 @@ def _describes_an_outcome(step) -> bool:
 
 def _review_codes(context: ResearchContext, plan: AnalysisPlan) -> tuple[bool, set[str]]:
     review = build_plan_scientific_review(
-        context=context, plan=plan, literature=None,
+        context=context, plan=plan, literature=synthetic_reviewed_literature(context.research_question),
         figure_strategy=build_article_figure_strategy(context), runtime_authority=None,
     )
     return review.approval_allowed, {finding.code for finding in review.findings}

@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from easyicu.databases.research_plan_requirements import _constraints
-from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+from easyicu.research_agent.authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.raw_preparation import RawPreparationCheckpoint
 from easyicu.research_agent.authority.run_input import (
@@ -25,7 +26,7 @@ from easyicu.research_agent.intake.materialized_metadata import (
     _local_authority_reference, load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
 )
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import restrict_to_first_observed_icu
+from easyicu.research_agent.acquisition.first_icu_stay import restrict_to_first_observed_icu
 from easyicu.research_agent.orchestration.human_review_checkpoint import load_checkpoint
 from easyicu.research_agent.planning.population_spec import PopulationSpec
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanSkeleton
@@ -57,6 +58,87 @@ class FirstObservedPopulationProof:
     criterion_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class FirstObservedPreparationProof:
+    """Evidence for a proposed restriction, not proof of an analysis input."""
+
+    coordinate_sha256: str
+    preparation_checkpoint_sha256: str
+    preparation_run_id: str
+    source_identity_sha256: str
+    criterion_sha256: str
+    export_manifest_sha256: str
+
+
+def verify_exact_first_observed_membership(*, cohort_path: Path, coordinate: Any) -> None:
+    """Require the complete eligible coordinate for a recipe with no further filters.
+
+    This narrow check is not suitable for a plan with additional inclusion or
+    exclusion criteria. The caller must verify that restriction separately and
+    reverify the host preparation and cohort lineage; this function does not
+    turn a constructible coordinate into authority.
+    """
+    from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
+    from easyicu.research_agent.acquisition.patient_grouping import exact_integer_series, read_digest_bound_parquet
+
+    import pandas as pd
+
+    # Validate all flags, reasons and identities before reading the selection.
+    restrict_to_first_observed_icu(pd.DataFrame({"stay_id": pd.Series(dtype="int64")}), coordinate=coordinate)
+    rows, _ = read_digest_bound_parquet(
+        coordinate.path, expected_sha256=coordinate.sha256,
+        columns=["stay_id", FLAG_COLUMN, REASON_COLUMN],
+        label="first observed ICU coordinate", error=FirstObservedRunBindingError,
+    )
+    verified = load_verified_materialized_cohort_authority(Path(cohort_path))
+    if verified is None:
+        raise FirstObservedRunBindingError("first_observed_materialization_authority_missing")
+    actual = read_verified_materialized_cohort_table(Path(cohort_path), verified=verified).select(["stay_id"]).to_pandas()
+    expected = exact_integer_series(rows.loc[rows[FLAG_COLUMN], "stay_id"], label="coordinate stay")
+    observed = exact_integer_series(actual["stay_id"], label="cohort stay")
+    if (observed.isna().any() or observed.duplicated().any()
+            or set(observed) != set(expected)):
+        raise FirstObservedRunBindingError("first_observed_materialization_membership_incomplete")
+
+
+def verify_first_observed_preparation_recipe(
+    *, preparation_run_id: str, study_context_id: str, project_id: str,
+    session_id: str, source_identity: SourceIdentity, criterion: Mapping[str, Any],
+    export_manifest_sha256: str,
+) -> FirstObservedPreparationProof:
+    """Recheck the outcome-blind coordinate for planning a future restriction.
+
+    This proves neither that a cohort has been materialized nor that any
+    research-data read or analysis is authorized. The execution gate must
+    independently check the resulting cohort and its input capsule.
+    """
+    if (not isinstance(criterion, Mapping)
+            or criterion.get("kind") != "first_observed_icu_single_hospital_adult"
+            or criterion.get("role") != "include"):
+        raise FirstObservedRunBindingError("first_observed_run_population_invalid")
+    coordinate = resolve_host_prepared_first_observed_coordinate(
+        preparation_run_id=preparation_run_id, study_context_id=study_context_id,
+        project_id=project_id, session_id=session_id, source_identity=source_identity,
+        criterion=criterion, export_manifest_sha256=export_manifest_sha256,
+    )
+    # Validate the entire private coordinate, including unique stay identities
+    # and selection/reason consistency, without reading sex or outcomes.
+    import pandas as pd
+
+    restrict_to_first_observed_icu(
+        pd.DataFrame({"stay_id": pd.Series(dtype="int64")}), coordinate=coordinate,
+    )
+    return FirstObservedPreparationProof(
+        coordinate_sha256=coordinate.sha256,
+        preparation_checkpoint_sha256=coordinate.preparation_checkpoint_sha256,
+        preparation_run_id=preparation_run_id,
+        source_identity_sha256=canonical_sha256(source_identity.to_dict()),
+        criterion_sha256=canonical_sha256(dict(criterion)),
+        export_manifest_sha256=export_manifest_sha256,
+    )
+
+
+@contextmanager
 def host_first_observed_review_scope(*, study_context_id: str):
     """Install the Web host's live verifier for a single planning invocation.
 
@@ -65,6 +147,7 @@ def host_first_observed_review_scope(*, study_context_id: str):
     the complete approved plan and run-input capsule.
     """
     from easyicu.research_agent.planning.population_compile import host_first_observed_population_scope
+    from easyicu.research_agent.planning.dependence_authority import host_independent_units_scope
 
     if not isinstance(study_context_id, str) or not study_context_id.strip():
         raise ValueError("first_observed_study_context_invalid")
@@ -79,7 +162,34 @@ def host_first_observed_review_scope(*, study_context_id: str):
             criterion=criterion.model_dump(mode="json"), source_identity=source,
         ))
 
-    return host_first_observed_population_scope(verify)
+    def verify_independence(context: Any) -> bool | None:
+        source = SourceIdentity.from_record(_constraints(context).get("source_identity"))
+        raw_path = context.cohort_parquet
+        if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+            return False
+        cohort_path = Path(raw_path)
+        restriction, _ = _restriction_from_cohort(run_dir=cohort_path.parent, cohort_path=cohort_path)
+        source_run = restriction.get("preparation_run_id") if isinstance(restriction, Mapping) else None
+        if restriction is None:
+            return None
+        if source is None or not isinstance(source_run, str):
+            return False
+        pending, _ = agent_pipeline_runs.raw_preparation_review_owner(source_run, study_context_id)
+        with AnchoredDirectory.open(Path(pending.run_dir)) as directory:
+            checkpoint = RawPreparationCheckpoint.model_validate_json(
+                directory.read_bytes("raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+            directory.assert_still_selected()
+        scope = checkpoint.request.payload.get(_SCOPE_KEY)
+        if not isinstance(scope, Mapping) or not isinstance(scope.get("criterion"), Mapping):
+            return False
+        verify_prepared_first_observed_population(
+            cohort_path=cohort_path, study_context_id=study_context_id,
+            criterion=scope["criterion"], source_identity=source,
+        )
+        return True
+
+    with host_first_observed_population_scope(verify), host_independent_units_scope(verify_independence):
+        yield
 
 
 def _restriction_from_cohort(*, run_dir: Path, cohort_path: Path) -> tuple[Mapping[str, Any] | None, Any]:
@@ -100,6 +210,77 @@ def _restriction_from_cohort(*, run_dir: Path, cohort_path: Path) -> tuple[Mappi
         seen.add(parent)
         _, authority = _local_authority_reference(run_dir, authority_sha256=parent)
     return None, verified
+
+
+def resolve_host_prepared_first_observed_coordinate(
+    *, preparation_run_id: str, study_context_id: str, project_id: str, session_id: str,
+    source_identity: SourceIdentity, criterion: Mapping[str, Any], export_manifest_sha256: str,
+):
+    """Reopen one completed private preparation; this does not authorize materialization.
+
+    All arguments are host-owned review coordinates. The caller must separately
+    validate and authorize the exact source package and data-preparation scope.
+    A source identity, criterion, or manifest supplied by a client is never a grant.
+    """
+    from easyicu.webserver.durable_research import current_service
+    from easyicu.webserver.raw_preparation_durable import inspect_admitted_first_observed
+
+    if (not all(isinstance(value, str) and value.strip() for value in
+                (preparation_run_id, study_context_id, project_id, session_id, export_manifest_sha256))
+            or not isinstance(source_identity, SourceIdentity) or not isinstance(criterion, Mapping)):
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_binding_invalid")
+    pending, _ = agent_pipeline_runs.raw_preparation_review_owner(preparation_run_id, study_context_id)
+    run_dir = Path(pending.run_dir)
+    with AnchoredDirectory.open(run_dir) as directory:
+        checkpoint = RawPreparationCheckpoint.model_validate_json(
+            directory.read_bytes("raw_preparation_checkpoint.json", max_bytes=1024 * 1024))
+        directory.assert_still_selected()
+    scope = checkpoint.request.payload.get(_SCOPE_KEY)
+    if (checkpoint.state != "approved" or not isinstance(scope, Mapping)
+            or scope.get("source_identity_sha256") != canonical_sha256(source_identity.to_dict())
+            or scope.get("criterion") != dict(criterion)
+            or scope.get("export_manifest_sha256") != export_manifest_sha256):
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_binding_invalid")
+    raw_pending = checkpoint.model_dump(mode="json", exclude={"checkpoint_sha256"})
+    raw_pending.update(state="pending", decision=None)
+    nonce = canonical_sha256({"run_id": preparation_run_id, "study_context_id": study_context_id,
+                              "checkpoint_sha256": canonical_sha256(raw_pending)})
+    binding = RawPreparationHostBinding(project_id=project_id, session_id=session_id,
+        study_context_id=study_context_id, run_id=preparation_run_id, nonce=nonce)
+    try:
+        with AnchoredDirectory.open(state_paths.state_root() / "private-preparation-decisions") as directory:
+            receipt = json.loads(directory.read_bytes(nonce + ".json", max_bytes=64 * 1024))
+            directory.assert_still_selected()
+    except (AuthorityFilesystemError, OSError, ValueError) as exc:
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_unavailable") from exc
+    service = current_service()
+    if service is None or service.manager._journal is None or not isinstance(receipt, dict):
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_unavailable")
+    job_id = receipt.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_unavailable")
+    command = service.store.get(job_id)
+    job = service.manager.get(job_id)
+    if not isinstance(command, Mapping) or job is None:
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_unavailable")
+    payload = command.get("payload")
+    snapshot = job.snapshot()
+    job_result = snapshot.get("result")
+    if (command.get("status") != "terminal" or command.get("reason") != "done"
+            or not isinstance(payload, Mapping) or payload.get("_cancel_requested")
+            or snapshot.get("status") != "done" or snapshot.get("cancel_requested")
+            or snapshot.get("interrupted") or snapshot.get("persistence_error")
+            or (job_result is not None and (not isinstance(job_result, Mapping)
+                or job_result.get("preparation_status") != "first_observed_coordinate_complete"
+                or job_result.get("analysis_authorized") is not False))):
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_unavailable")
+    result = inspect_admitted_first_observed(job_id=job_id, job=job,
+        checkpoint=checkpoint, binding=binding, scope=scope, command=command,
+        store_path=service.store.path.absolute(), journal_path=service.manager._journal.path.absolute())
+    if result.get("preparation_status") != "complete" or result.get("analysis_authorized") is not False:
+        raise FirstObservedRunBindingError("first_observed_host_coordinate_unavailable")
+    return resolve_prepared_first_observed_coordinate(run_dir=run_dir, checkpoint=checkpoint,
+                                                       binding=binding, scope=scope)
 
 
 def verify_prepared_first_observed_population(

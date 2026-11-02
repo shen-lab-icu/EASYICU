@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import queue
+import sys
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -151,6 +156,67 @@ def test_codex_runtime_override_crosses_only_the_codex_subprocess_boundary(
 
     assert selected[CODEX_APP_SERVER_EXECUTABLE_ENV] == str(explicit)
     assert "OPENAI_API_KEY" not in selected
+
+
+def _runtime_with_fake_codex(tmp_path: Path, body: str) -> CodexAppServerRuntime:
+    executable = tmp_path / "codex"
+    executable.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
+    executable.chmod(0o700)
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path / "home"),
+        "CODEX_HOME": str(tmp_path / "codex-home"),
+        CODEX_APP_SERVER_EXECUTABLE_ENV: str(executable),
+    }
+    return CodexAppServerRuntime(
+        environment=environment, cwd=tmp_path / "runtime", request_timeout=5.0,
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fake executable uses a POSIX shebang")
+def test_runtime_starts_codex_with_default_stdio_transport(tmp_path: Path) -> None:
+    runtime = _runtime_with_fake_codex(tmp_path, '''
+import json, os, sys
+assert sys.argv[1:] == ["app-server"]
+request = json.loads(sys.stdin.readline())
+print(json.dumps({"id": request["id"], "result": {"codexHome": os.environ["CODEX_HOME"]}}), flush=True)
+for line in sys.stdin:
+    pass
+''')
+    try:
+        runtime.start()
+    finally:
+        runtime.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fake executable uses a POSIX shebang")
+def test_runtime_reports_child_exit_without_waiting_for_timeout(tmp_path: Path) -> None:
+    runtime = _runtime_with_fake_codex(tmp_path, '''
+import sys
+sys.stdin.readline()
+sys.exit(2)
+''')
+    started = time.monotonic()
+    with pytest.raises(CodexAppServerError, match="codex_auth_app_server_exited"):
+        runtime.start()
+    assert time.monotonic() - started < 4.0
+
+
+def test_previous_process_eof_does_not_interrupt_new_process() -> None:
+    runtime = object.__new__(CodexAppServerRuntime)
+    mailbox: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+    runtime._pending = {1: mailbox}
+    runtime._state = threading.Condition(threading.RLock())
+    replacement = SimpleNamespace()
+
+    class DelayedEof:
+        def __iter__(self):
+            runtime._process = replacement
+            return iter(())
+
+    runtime._process = SimpleNamespace(stdout=DelayedEof())
+    runtime._read_stdout()
+    assert mailbox.empty()
 
 
 def test_progress_resets_notification_idle_timeout_but_not_the_hard_deadline(

@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -53,6 +55,7 @@ from typing import (
 
 from ..contracts.control_signals import ProgressControlSignal
 from .protocol import LLMMessage
+
 from .clients import safe_provider_http_status_code
 from .factory import authorized_complete
 from .transport_retry import planning_transport_scope
@@ -72,6 +75,29 @@ from .structured_diagnostics import (
     safe_validation_stage,
     violation_sha256,
 )
+
+_AUTOMATIC_RETRIES_ALLOWED: ContextVar[bool] = ContextVar(
+    "automatic_model_retries_allowed", default=True
+)
+
+
+@contextmanager
+def automatic_retry_scope(*, disabled: bool = False):
+    """Bind a host retry policy to this call without widening an outer scope."""
+    token = _AUTOMATIC_RETRIES_ALLOWED.set(
+        _AUTOMATIC_RETRIES_ALLOWED.get() and not disabled
+    )
+    try:
+        yield
+    finally:
+        _AUTOMATIC_RETRIES_ALLOWED.reset(token)
+
+
+def automatic_retry_limit(default: int) -> int:
+    """Keep the existing bound, or refuse every automatic additional attempt."""
+    return default if _AUTOMATIC_RETRIES_ALLOWED.get() else 0
+
+
 
 T = TypeVar("T")
 
@@ -356,6 +382,32 @@ def _safe_provider_call_metadata(
             dict(receipt.usage_summary),
             receipt.transport_attempts,
         )
+
+    # These wrappers publish call-scoped metadata. A rejection before their
+    # invocation has no receipt; shared compatibility attributes may belong
+    # to another concurrent call and must not be used as its evidence.
+    from .client_trust import _trusted_client_record
+
+    stack, seen = [llm], set()
+    while stack:
+        client = stack.pop()
+        if id(client) in seen:
+            continue
+        seen.add(id(client))
+        record = _trusted_client_record(client)
+        if record is None:
+            return None, {}, 1
+        if record.call_scoped_receipt:
+            return None, {}, 1
+        if record.children_getter is not None:
+            try:
+                children = tuple(record.children_getter())
+                if tuple(id(child) for child in children) != record.child_ids:
+                    return None, {}, 1
+                stack.extend(children)
+            except Exception:
+                # A broken registered graph must not supply shared evidence.
+                return None, {}, 1
 
     try:
         raw_finish_reason = getattr(llm, "last_finish_reason", None)
@@ -707,6 +759,7 @@ def call_llm_with_structured_retry(
     StructuredResponseFailure
         When every attempt up to ``max_retries`` raised a retryable parse error.
     """
+    max_retries = automatic_retry_limit(max_retries)
     attempts: List[StructuredAttempt] = []
     base_messages: List[LLMMessage] = list(messages)
     current: List[LLMMessage] = list(base_messages)
@@ -816,7 +869,7 @@ def call_llm_with_structured_retry(
             )
             reason_code = _safe_declared_reason_code(exc)
             resend = (
-                resends < _MAX_TRUNCATED_RESPONSE_RESENDS
+                resends < automatic_retry_limit(_MAX_TRUNCATED_RESPONSE_RESENDS)
                 and finish_reason != "length"
                 and bool(json_truncation_issues(exc, raw))
             )

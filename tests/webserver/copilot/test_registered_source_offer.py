@@ -52,7 +52,7 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[PiCopilotServ
         _row("src_best"), _row("src_small", stays=10),
         _row("src_other", "miiv", stays=100), _row("src_invalid", stays=200, ok=False),
     ]}
-    monkeypatch.setattr(sources, "load_registry", lambda: copy.deepcopy(registry))
+    monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: copy.deepcopy(registry))
     service = PiCopilotService(
         store_path=tmp_path / "sessions.json", gateway=FakeGateway(),
         project_store=ProjectAuthorityStore(tmp_path / "projects.json"),

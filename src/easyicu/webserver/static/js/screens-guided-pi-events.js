@@ -12,7 +12,7 @@
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
       loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
-      setShell, openStudySetupInConversation, createSession, startEntry, loadWorkflow,
+      setShell, openStudySetupInConversation, createSession, startEntry, loadWorkflow, watchChildJob,
       previewApprovedPlanDataPackage, confirmWorkflowAction,
       retryFailedExecution,
       rejectWorkflowAction, editWorkflow, confirmCohortEligibility,
@@ -487,10 +487,14 @@
           render();
           void (async () => {
             try {
-              await api().reviewRawPreparation({study_context_id: studyId, decision,
+              const response = await api().reviewRawPreparation({study_context_id: studyId, decision,
                 host_action: {session_id: expectedSession, project_id: expectedProject,
                   action_code: 'review_raw_preparation', decision: offer}});
-              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession && loadWorkflow) await loadWorkflow();
+              if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession) {
+                if (response && response.preparation_job_id && typeof watchChildJob === 'function')
+                  watchChildJob(String(response.preparation_job_id), 'easyicu_raw_preparation_submitted');
+                if (loadWorkflow) await loadWorkflow();
+              }
             } catch (_) {
               if (projectId() === expectedProject && String((state.session || {}).session_id || '') === expectedSession) {
                 if (state.workflow) state.workflow.raw_preparation_review_loading = false;

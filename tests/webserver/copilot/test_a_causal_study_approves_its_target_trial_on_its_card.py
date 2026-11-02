@@ -37,6 +37,7 @@ _CAUSAL = {
 _CARD_FILES = (
     "screens-guided-pi-target-trial-copy.js",
     "screens-guided-pi-target-trial.js",
+    "screens-guided-pi-confirmation-data.js",
     "screens-guided-pi-confirmation.js",
 )
 _ITEM_LABELS = ["入选标准", "治疗策略", "分配", "时间零点", "随访", "结局", "因果对比", "分析计划"]
@@ -45,12 +46,7 @@ _HARNESS = r"""
 const path = require('path');
 const [jsDir, lang, files, input] = process.argv.slice(1, 5);
 global.window = { EU_LANG: lang };
-const registry = {};
-window.EasyICU = { guidedPi: {
-  declare: (name, api) => { registry[name] = api; },
-  optional: name => registry[name] || null,
-  require: name => { if (!registry[name]) throw new Error('missing owner ' + name); return registry[name]; },
-} };
+require(path.join(jsDir, 'screens-guided-pi-modules.js'));
 require(path.join(jsDir, 'html-escape.js'));
 for (const file of JSON.parse(files)) require(path.join(jsDir, file));
 const tr = (en, zh) => (lang === 'zh' ? zh : en) || en;
@@ -59,7 +55,7 @@ const INPUT = JSON.parse(input);
 const out = value => process.stdout.write(JSON.stringify(value === undefined ? null : value));
 const SESSION = { session_id: 'session-1', binding: { study_context_id: 'study-trial', study_revision: 7 } };
 function confirmationFor(workflow, session) {
-  return registry.confirmation.create({
+  return window.EasyICU.guidedPi.require('confirmation').create({
     tr, esc, iconHtml: () => '',
     resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
     sessionIsStale: () => false, busy: () => false,
@@ -111,7 +107,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def test_every_code_the_host_returns_has_its_line(lang: str) -> None:
     lines = _node(
         """
-        const copy = registry.targetTrialCopy;
+        const copy = window.EasyICU.guidedPi.require('targetTrialCopy');
         out(Object.fromEntries(copy.CODES.map(code => [code, copy.line(code, tr)])));
         """,
         files=("screens-guided-pi-target-trial-copy.js",),
@@ -161,7 +157,7 @@ _TICK_SCENARIO = """
 const workflow = { next_action_code: 'target_trial_review', target_trial_card: INPUT.card };
 const session = { session_id: 'session-1', binding: { study_context_id: INPUT.study, study_revision: INPUT.revision } };
 const owner = confirmationFor(workflow, session);
-const trial = registry.targetTrial;
+const trial = window.EasyICU.guidedPi.require('targetTrial');
 const before = owner.workflowConfirmationHtml();
 const digest = INPUT.card.compile_sha256;
 const lines = INPUT.card.confirmations.length;
@@ -456,12 +452,12 @@ const host = {
     startAgentRun: async body => { calls.push(['run', body]); return { job_id: 'plan-job' }; },
   }),
 };
-const actions = registry.planActions.create(host);
+const actions = window.EasyICU.guidedPi.require('planActions').create(host);
 const confirm = () => actions.confirmWorkflow(confirmationFor(workflow, session).workflowConfirmation());
 await confirm();
 const beforeTicks = calls.length;
 const ticks = INPUT.ticks === undefined ? (INPUT.card && INPUT.card.confirmations || []).length : INPUT.ticks;
-for (let index = 0; index < ticks; index += 1) registry.targetTrial.noteTick(INPUT.card.compile_sha256, index, true);
+for (let index = 0; index < ticks; index += 1) window.EasyICU.guidedPi.require('targetTrial').noteTick(INPUT.card.compile_sha256, index, true);
 if (INPUT.code === 'target_trial_review') await confirm();
 out({ beforeTicks, calls });
 """
@@ -578,7 +574,7 @@ def test_a_candidate_plan_the_launch_refuses_reads_as_its_cause(lang: str, line:
     # study whose trial is approved; the submission returns its code.
     shown = _node(
         """
-        const owner = registry.errorText.create({ tr, staticPreview: () => false });
+        const owner = window.EasyICU.guidedPi.require('errorText').create({ tr, staticPreview: () => false });
         out(owner.errorText({ code: 'research_pipeline_target_trial_plans_on_data', message: 'The host text.' }));
         """,
         files=("screens-guided-pi-error-text.js",),
@@ -625,7 +621,7 @@ def test_the_compile_row_reads_its_own_result(
     job: dict, title: str, terminal: str, blocked: bool
 ) -> None:
     shown = _node(
-        "out(registry.replay.childJobPresentation(INPUT.job, tr));",
+        "out(window.EasyICU.guidedPi.require('replay').childJobPresentation(INPUT.job, tr));",
         files=("screens-guided-pi-target-trial-copy.js", "screens-guided-pi-replay.js"),
         payload={"job": {"kind": "target-trial-compile", **job}},
     )
@@ -664,7 +660,7 @@ def test_the_conversation_follows_the_compile_and_writes_the_approval() -> None:
 
 
 _COHORT_SCENARIO = """
-const owner = registry.cohortEligibility.create({
+const owner = window.EasyICU.guidedPi.require('cohortEligibility').create({
   tr, esc, busy: () => false, sessionIsStale: () => false, planConfigurationError: () => '',
   session: () => ({ cohort_eligibility_selection: {
     present: true, stated: false, blocker_code: 'cohort_eligibility_confirmation_required',

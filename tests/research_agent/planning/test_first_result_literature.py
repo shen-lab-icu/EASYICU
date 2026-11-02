@@ -10,6 +10,7 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.literature import LiteratureBundle
 from easyicu.research_agent.orchestration import scientific_plan_review_gate as gate
 from easyicu.research_agent.orchestration.config import PipelineConfig
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.planning.design_selection import ResearchDesignSelection
 from easyicu.research_agent.planning.literature_design_authority import LiteratureDesignAuthorityError
 from easyicu.research_agent.schema import AnalysisPlan, CohortDescriptor, ResearchContext
@@ -48,7 +49,7 @@ def _preplan(tmp_path, monkeypatch, *, tier="first_result", live=False, strict=F
         planner_strategy="progressive_v2",
     )
     runtime = SimpleNamespace(
-        _config=config, _enable_literature=True, _enable_pubmed=live,
+        _config=config, _services=PipelineServices(), _enable_literature=True, _enable_pubmed=live,
         _pubmed_email=None, _pubmed_api_key=None, _enable_tavily=False,
         _tavily_api_key=None, _tavily_retmax=3, _tavily_include_domains=(),
         _bound_preplan_literature=None, _development_resume_reuse_bound_literature=False,
@@ -265,7 +266,6 @@ def test_plan_finalization_applies_the_tier_before_literature_gates(tmp_path, ti
     import pyarrow.parquet as pq
 
     from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
-    from easyicu.research_agent.orchestration.services import PipelineServices
     from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 
     proposed = plan(tier)
@@ -282,6 +282,7 @@ def test_plan_finalization_applies_the_tier_before_literature_gates(tmp_path, ti
         _config=config, _services=PipelineServices(),
         _scientific_runtime_authorities=ScientificRuntimeAuthorities(None, None),
         _required_primary_cohort_selection_mode=None,
+        _bound_plan_revision_contract=None,
     )
     method = pipeline_module.ResearchAgentPipeline._validate_and_persist_plan
     arguments = {name: None for name in inspect.signature(method).parameters if name != "self"}

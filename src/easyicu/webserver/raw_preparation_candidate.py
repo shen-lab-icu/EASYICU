@@ -161,12 +161,29 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
             requests = [item for item in pending.requests
                         if isinstance(item.payload.get("plan_review_authority"), Mapping)
                         and PlanReviewAuthority.model_validate(item.payload["plan_review_authority"]) == authority]
-            if len(requests) != 1:
+            if not requests:
                 raise ValueError("raw_preparation_first_observed_review_ambiguous")
             from easyicu.webserver.first_observed_preparation import (
-                _SCOPE_KEY, _SUMMARY, proposed_first_observed_scope,
+                _SCOPE_KEY, _SUMMARY, _assert_pending_request_set, proposed_first_observed_scope,
             )
-            scope = proposed_first_observed_scope(run_dir=run_dir, request=requests[0])
+            if authority.execution is not None:
+                _assert_pending_request_set(run_dir, pending)
+            for request in requests:
+                compiled = request.payload.get("population_compile")
+                if compiled is None:
+                    continue
+                criteria = compiled.get("criteria") if isinstance(compiled, Mapping) else None
+                projected = ([{"criterion": row.get("criterion"), "disposition": row.get("disposition")}
+                              for row in criteria] if isinstance(criteria, list)
+                             and all(isinstance(row, Mapping) and isinstance(row.get("criterion"), Mapping)
+                                     and isinstance(row.get("disposition"), str) for row in criteria) else None)
+                if (canonical_sha256(compiled) != request.payload.get("population_compile_sha256")
+                        or projected != list(population.get("criteria", ()))):
+                    raise ValueError("raw_preparation_first_observed_review_ambiguous")
+            scopes = [proposed_first_observed_scope(run_dir=run_dir, request=request) for request in requests]
+            scope = scopes[0]
+            if any(other != scope for other in scopes[1:]):
+                raise ValueError("raw_preparation_first_observed_review_ambiguous")
             if scope.get("criterion") != matches[0]["criterion"]:
                 raise ValueError("raw_preparation_first_observed_population_changed")
             payload = {"plan_review_authority": authority.model_dump(mode="json"), _SCOPE_KEY: scope}
@@ -210,7 +227,7 @@ def create_candidate_for_review(*, run_id: str, study_context_id: str) -> dict:
     )))
     if not concepts:
         raise ValueError("raw_preparation_concepts_unavailable")
-    snapshot = capture_data_provenance(load_dictionary(include_sofa2=True), concepts=concepts,
+    snapshot = capture_data_provenance(load_dictionary(include_sofa2=True, src_name=identity.database), concepts=concepts,
         source_database=identity.database, class_prefixes=tuple(config.class_prefix), source_config=config,
         source_config_sha256=metadata_digest(config.model_dump(mode="json")))
     result = candidate_from_scientific_review(plan_result=SimpleNamespace(

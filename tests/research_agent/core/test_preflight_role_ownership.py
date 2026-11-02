@@ -167,10 +167,11 @@ def test_staged_figure_repair_rejects_symlinked_agent_output_directory(tmp_path:
     assert sentinel.read_bytes() == b"untouched"
 
 
+@pytest.mark.parametrize("ensure_ascii", [True, False])
 def test_successful_staged_figure_repair_replaces_bundle_and_rewrites_paths(
-    tmp_path: Path,
+    tmp_path: Path, ensure_ascii: bool,
 ):
-    out_dir = tmp_path / "steps" / "05_result_figure" / "outputs"
+    out_dir = tmp_path / "测试 路径" / "steps" / "05_result_figure" / "outputs"
     out_dir.mkdir(parents=True)
     (out_dir / "agent_figure.png").write_bytes(b"old")
 
@@ -178,7 +179,7 @@ def test_successful_staged_figure_repair_replaces_bundle_and_rewrites_paths(
         staging = Path(kwargs["out_dir"])
         (staging / "publication_figure.png").write_bytes(b"new")
         (staging / "step_summary.json").write_text(
-            json.dumps({"figure_path": str(staging / "publication_figure.png")}),
+            json.dumps({"figure_path": str(staging / "publication_figure.png")}, ensure_ascii=ensure_ascii),
             encoding="utf-8",
         )
         return "source_backed_figure_v1"

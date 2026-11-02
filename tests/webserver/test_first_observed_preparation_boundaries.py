@@ -12,30 +12,16 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 from easyicu.webserver import first_observed_preparation as owner
+from tests.support.first_observed_pending import PATIENT_SHA, _pending
 from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding
 from easyicu.webserver.host_action_contracts import (
     HostActionRequest, HostActionTag, RawPreparationReviewDecision, decision_key, host_action_id,
 )
 from easyicu.webserver.raw_preparation_decisions import record_host_review
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import FLAG_COLUMN, REASON_COLUMN
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import restrict_to_first_observed_icu
+from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
+from easyicu.research_agent.acquisition.first_icu_stay import restrict_to_first_observed_icu
 
 
-def _pending():
-    plan = AnalysisPlan(research_question="Synthetic source only", steps=[AnalysisStep(step_id="one", intent="Describe data")])
-    authority = PlanReviewAuthority.create(plan=plan, evidence_sha256={"scientific_plan_review": "c" * 64})
-    scope = {"purpose": "prepare_only", "analysis_authorized": False, "database": "eicu_demo",
-             "source_identity_sha256": "a" * 64, "plan_sha256": authority.plan_sha256,
-             "context_sha256": "b" * 64, "scientific_review_sha256": "c" * 64,
-             "archive_sha256": "d" * 64, "patient_table_sha256": "f" * 64,
-             "export_manifest_sha256": "1" * 64}
-    payload = {"plan_review_authority": authority.model_dump(mode="json"), owner._SCOPE_KEY: scope}
-    request = HumanReviewRequest.create(kind="scientific_stop", summary=owner._SUMMARY,
-        payload=payload, authority_sha256=canonical_sha256(payload))
-    checkpoint = RawPreparationCheckpoint.pending(plan_sha256=authority.plan_sha256, request=request)
-    binding = RawPreparationHostBinding(project_id="project", session_id="session", study_context_id="study",
-                                        run_id="run", nonce="e" * 64)
-    return scope, checkpoint, binding
 
 
 def test_pending_review_never_reads_source_rows(tmp_path, monkeypatch):
@@ -91,6 +77,8 @@ def _approved(tmp_path, monkeypatch):
     monkeypatch.setattr(study_contexts, "get_context", lambda _: {"id": binding.study_context_id})
     monkeypatch.setattr(study_contexts, "scientific_configuration_sha256", lambda _: "2" * 64)
     monkeypatch.setattr(owner, "_host_inputs", lambda **_: (scope, tmp_path))
+    monkeypatch.setattr(owner, "resolve_raw_source_identity_binding", lambda **_: SimpleNamespace(
+        table_sha256={"patient": PATIENT_SHA}))
     return scope, checkpoint, binding
 
 
@@ -128,7 +116,7 @@ def test_consumed_grant_refuses_changed_owner_before_patient_read(tmp_path, monk
 def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_path, monkeypatch):
     scope, checkpoint, binding = _approved(tmp_path, monkeypatch)
     proof = {"official_release_independently_verified": True,
-             "patient_table_sha256": scope["patient_table_sha256"],
+             "patient_table_sha256": PATIENT_SHA,
              "export_manifest_sha256": scope["export_manifest_sha256"],
              "complete_patient_source": {"schema_version": "easyicu.eicu_demo_complete_patient_source/1",
                                          "all_source_rows_compared": True,
@@ -154,12 +142,16 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
     assert resolved == coordinate
     from easyicu.webserver import agent_pipeline_runs, study_contexts
     from easyicu.webserver.pi_copilot import service
+    def forbid_source(**_):
+        raise AssertionError("invalid host owner must be rejected before source reads")
     with monkeypatch.context() as changed:
+        changed.setattr(owner, "resolve_raw_source_identity_binding", forbid_source)
         changed.setattr(study_contexts, "scientific_configuration_sha256", lambda _: "0" * 64)
         with pytest.raises(ValueError, match="configuration_changed"):
             owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
                                                              binding=binding, scope=scope)
     with monkeypatch.context() as changed:
+        changed.setattr(owner, "resolve_raw_source_identity_binding", forbid_source)
         def unavailable(*args, **kwargs):
             raise ValueError("session_changed")
         changed.setattr(service, "get_pi_copilot_service", lambda: SimpleNamespace(
@@ -168,6 +160,7 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
             owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
                                                              binding=binding, scope=scope)
     with monkeypatch.context() as changed:
+        changed.setattr(owner, "resolve_raw_source_identity_binding", forbid_source)
         other = AnalysisPlan(research_question="Other study", steps=[AnalysisStep(step_id="two", intent="Describe")])
         authority = PlanReviewAuthority.create(plan=other)
         changed.setattr(agent_pipeline_runs, "raw_preparation_review_owner", lambda *_: (
@@ -200,14 +193,12 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
     attestation = coordinate.path.with_suffix(".json")
     original = attestation.read_text()
     document = json.loads(original)
-    legacy_body = {**document["body"], "schema_version": "easyicu.first-observed-coordinate-attestation/1"}
-    legacy_body.pop("private_source_flow")
-    attestation.write_text(json.dumps({"body": legacy_body, "signature": owner._signature(legacy_body)}))
-    assert owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
-                                                            binding=binding, scope=scope) == coordinate
-    with pytest.raises(ValueError, match="source_flow_unavailable"):
-        owner.resolve_private_first_observed_source_flow(run_dir=tmp_path, checkpoint=checkpoint,
-                                                         binding=binding, scope=scope)
+    for version in ("1", "2"):
+        legacy_body = {**document["body"], "schema_version": "easyicu.first-observed-coordinate-attestation/" + version}
+        attestation.write_text(json.dumps({"body": legacy_body, "signature": owner._signature(legacy_body)}))
+        with pytest.raises(ValueError, match="attestation_binding_mismatch"):
+            owner.resolve_prepared_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint,
+                                                             binding=binding, scope=scope)
     attestation.write_text(original)
     document["body"]["private_source_flow"]["eligible_patients"] = 2
     attestation.write_text(json.dumps(document))
@@ -225,7 +216,7 @@ def test_synthetic_host_signed_grant_binds_coordinate_and_rejects_tampering(tmp_
 def test_changed_host_binding_after_read_never_publishes_coordinate(tmp_path, monkeypatch, changed):
     scope, checkpoint, binding = _approved(tmp_path, monkeypatch)
     proof = {"official_release_independently_verified": True,
-             "patient_table_sha256": scope["patient_table_sha256"],
+             "patient_table_sha256": PATIENT_SHA,
              "export_manifest_sha256": scope["export_manifest_sha256"],
              "complete_patient_source": {"schema_version": "easyicu.eicu_demo_complete_patient_source/1",
                                          "all_source_rows_compared": True,
@@ -238,12 +229,15 @@ def test_changed_host_binding_after_read_never_publishes_coordinate(tmp_path, mo
         "source_stays": 1, "source_patients": 1, "eligible_patients": 1,
         "excluded_patients_by_reason": {}, "excluded_stays_by_reason": {}})
     second_scope = dict(scope)
-    if changed == "source":
-        second_scope["patient_table_sha256"] = "0" * 64
     if changed == "plan":
         second_scope["plan_sha256"] = "0" * 64
-    values = iter([(scope, tmp_path), (second_scope, tmp_path / "other" if changed == "export_path" else tmp_path)])
+    values = iter([(scope, tmp_path), (scope, tmp_path),
+                   (second_scope, tmp_path / "other" if changed == "export_path" else tmp_path)])
     monkeypatch.setattr(owner, "_host_inputs", lambda **_: next(values))
+    if changed == "source":
+        hashes = iter([PATIENT_SHA, "0" * 64])
+        monkeypatch.setattr(owner, "resolve_raw_source_identity_binding", lambda **_: SimpleNamespace(
+            table_sha256={"patient": next(hashes)}))
     monkeypatch.setattr(owner, "derive_from_verified_eicu_demo", lambda _: candidate)
     if changed == "grant":
         def invalid_grant(**_):
@@ -252,7 +246,8 @@ def test_changed_host_binding_after_read_never_publishes_coordinate(tmp_path, mo
     def forbidden_publication(**_):
         raise AssertionError("changed host binding must not publish")
     monkeypatch.setattr(owner, "_private_root", forbidden_publication)
-    expected = "host_receipt_invalid" if changed == "grant" else "scope_changed_before_publication"
+    expected = ("host_receipt_invalid" if changed == "grant" else
+                "source_changed_before_publication" if changed == "source" else "scope_changed_before_publication")
     with pytest.raises(ValueError, match=expected):
         owner.prepare_first_observed_coordinate(run_dir=tmp_path, checkpoint=checkpoint, binding=binding, scope=scope)
 
@@ -296,7 +291,7 @@ def test_source_completeness_mismatch_never_produces_an_attestation(tmp_path, mo
     scope, checkpoint, binding = _approved(tmp_path, monkeypatch)
     candidate = SimpleNamespace(frame=pd.DataFrame({"stay_id": [1], FLAG_COLUMN: [True], REASON_COLUMN: ["kept"]}),
         receipt={"source_binding": {"official_release_independently_verified": True,
-            "patient_table_sha256": scope["patient_table_sha256"],
+            "patient_table_sha256": PATIENT_SHA,
             "export_manifest_sha256": scope["export_manifest_sha256"],
             "complete_patient_source": {"schema_version": "easyicu.eicu_demo_complete_patient_source/1",
                 "all_source_rows_compared": False, "archive_sha256": scope["archive_sha256"]}}})

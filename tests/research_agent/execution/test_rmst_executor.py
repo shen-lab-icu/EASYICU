@@ -12,7 +12,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.authority.rmst_runtime import RmstRuntimeAuthority
-from easyicu.research_agent.contracts.rmst import RMSTSpec
+from easyicu.research_agent.contracts.survival import RMSTSpec
 from easyicu.research_agent.execution.runners.rmst_executor import (
     rmst_executor_code,
     run_rmst_contrast,

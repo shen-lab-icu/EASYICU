@@ -85,7 +85,7 @@ def test_incomplete_extraction_opens_path_free_native_workspace(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {"active_path": None, "sources": []},
+        lambda **_kwargs: {"active_path": None, "sources": []},
     )
 
     result = tool_module.execute_tool("easyicu_start_extraction", {}, _context())
@@ -124,7 +124,7 @@ def test_explicit_local_source_choice_does_not_reuse_bound_demo(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": "/private/demo-export",
             "sources": [
                 {
@@ -196,7 +196,7 @@ def test_bare_mimic_never_recovers_omitted_tool_args(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {"active_path": None, "sources": []},
+        lambda **_kwargs: {"active_path": None, "sources": []},
     )
 
     result = tool_module.execute_tool(
@@ -230,7 +230,7 @@ def test_submitted_extraction_workspace_carries_only_job_coordinate(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {"active_path": None, "sources": []},
+        lambda **_kwargs: {"active_path": None, "sources": []},
     )
     from easyicu.webserver.routes import jobs as jobs_route
 
@@ -344,7 +344,7 @@ def test_registered_export_download_opens_exact_source_in_native_workspace(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {
+        lambda **_kwargs: {
             "active_path": "/private/registered/export",
             "sources": [
                 {

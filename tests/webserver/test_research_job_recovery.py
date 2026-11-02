@@ -243,6 +243,7 @@ const output = ['en','zh'].map(lang => {
   // Execute the production host wiring, including its error-text dependency.
   const activity = require('node:vm').runInNewContext(activityInit + '\nACTIVITY', {
     MODULES:{require:name=>modules[name]}, tr, runFailureText:errors.runFailureText,
+    RESOURCE_OWNER:{merge:()=>[]}, agentMode:()=>false,
     esc:x=>x, iconHtml:()=>'', resourceName:x=>x, resourceKey:x=>x,
     resourceButton:()=>'', publicAssistantText:x=>x,
   });

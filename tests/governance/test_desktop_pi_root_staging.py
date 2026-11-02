@@ -149,6 +149,7 @@ def test_root_staged_runtime_validates_original_pins_and_metadata(tmp_path, tamp
     short = tmp_path / "p"
     common.stage_pi_root(source, short)
     write_files(short, {"tool_catalog.json": "{}"})
+    common.seal_packaged_pi(short)
     assert install.runtime_manifest(short) == expected
     assert install.packaged_runtime_is_complete(short)
     private_ai = short / "node_modules/@earendil-works/pi-ai/package.json"
@@ -220,8 +221,10 @@ def test_gateway_reports_the_root_staged_dependency_through_the_resource_owner(t
         if not (source / relative).is_file():
             write_files(source, {relative: "// synthetic gateway\n"})
     short = tmp_path / "p"
-    load_script("build_common").stage_pi_root(source, short)
+    common = load_script("build_common")
+    common.stage_pi_root(source, short)
     write_files(short, {"tool_catalog.json": "{}"})
+    common.seal_packaged_pi(short)
     monkeypatch.setattr(gateway, "packaged_app_dir", lambda: short)
     client = gateway.PiGatewayClient(app_dir=short, session_dir=tmp_path / "sessions", environ={})
     monkeypatch.setattr(client, "_node_binary", lambda: "node")

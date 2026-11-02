@@ -6,7 +6,7 @@ import pytest
 
 from easyicu.webserver import cohort_review
 from tests.support.cohort_export import write_cohort_export
-from tests.webserver.test_cohort_parquet import _replace_module, _run
+from tests.support.cohort_parquet import _replace_module, _run
 
 
 def test_mortality_unknowns_excluded_in_parquet_and_summary(tmp_path, monkeypatch):

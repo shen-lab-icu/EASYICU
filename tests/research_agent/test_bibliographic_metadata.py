@@ -84,10 +84,16 @@ def test_entire_curated_method_pack_has_source_verified_author_coverage():
 
 def test_frozen_reader_completes_metadata_with_a_separate_receipt(tmp_path):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.literature import LiteratureBundle
+    from easyicu.research_agent.literature import LiteratureBundle, LiteratureScreeningDecision
     from easyicu.research_agent.reporting.manuscript_reader import build_manuscript_reader
 
-    literature = LiteratureBundle.model_validate({"research_question": "Question", "citations": [_record()]})
+    literature = LiteratureBundle(
+        research_question="Question", citations=[_record()],
+        screening_decisions=[LiteratureScreeningDecision(
+            citation_key="not_an_author_hint", source="synthetic_test", disposition="include",
+            evidence_role="method", rationale="Synthetic screening of the identified STROBE record",
+        )],
+    )
     original = literature.model_dump_json()
     payload = build_manuscript_reader(manuscript="Context [@not_an_author_hint].", evidence=EvidenceStore(tmp_path), literature=literature)
     row = payload["references"][0]

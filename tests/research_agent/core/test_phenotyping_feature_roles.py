@@ -14,24 +14,10 @@ from easyicu.research_agent.planning.progressive_contract import ProgressivePlan
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 from tests.support.schema_names import authority_schema_json
 
-from .test_cross_sectional_phenotyping_executor import _context, _frame, _primary_step
+from tests.support.phenotyping_fixtures import _context, _frame, _primary_step, _skeleton
 from ..planning.progressive_planner_fixtures import _payload
 
 
-def _skeleton(features):
-    payload = _payload()
-    primary = payload["steps"][5]
-    primary.update(
-        step_id="cluster", planned_analysis_role="primary", module_id="custom_analysis",
-        depends_on=["01_cohort"], raw_inputs=["marker_a", "marker_b", "death"], product_inputs=[],
-        outputs=[{"product_id": product, "semantic_role": "custom"} for product in
-                 ("table:phenotype_profiles", "table:phenotype_assignments")],
-        scientific_action_id="phenotyping.cluster_solution", custom_method="cross_sectional_phenotyping",
-        sensitivity_spec_ids=[], phenotyping_feature_columns=features,
-    )
-    payload.update(analysis_type="trajectory_clustering", steps=[payload["steps"][0], primary],
-                   display_labels=[], robustness_intents=[])
-    return ProgressivePlanSkeleton.model_validate(payload)
 
 
 def test_compiler_binds_the_fit_roster_separately_from_readable_columns():

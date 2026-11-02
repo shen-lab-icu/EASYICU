@@ -32,6 +32,7 @@ class SubmissionProfile:
     requires_runner: str = "docker"
     expected_concept_dict_sha: Optional[str] = None
     expected_sofa2_dict_sha: Optional[str] = None
+    expected_sic_case_overlay_sha: Optional[str] = None
     # Cross-run agent-memory policy. ``None`` = the profile does not pin it (so
     # ``as_pipeline_options`` omits the key and the pre-existing profiles are
     # byte-identical replay contracts). Only a profile that explicitly sets these
@@ -187,6 +188,8 @@ class SubmissionProfile:
             "submission_profile_locked_at": self.locked_at,
             "expected_concept_dict_sha": self.expected_concept_dict_sha,
             "expected_sofa2_dict_sha": self.expected_sofa2_dict_sha,
+            **({"expected_sic_case_overlay_sha": self.expected_sic_case_overlay_sha}
+               if self.expected_sic_case_overlay_sha is not None else {}),
         }
 
     def to_dict(self) -> Dict[str, object]:
@@ -197,6 +200,7 @@ class SubmissionProfile:
         # a profile that explicitly pins them (``True``/``False``) surfaces the
         # keys. Mirrors ``as_pipeline_options`` — both are replay contracts.
         for field_name in (
+            "expected_sic_case_overlay_sha",
             "enable_memory",
             "enable_experience_bank",
             "enable_deterministic_code_fallback",
@@ -1268,7 +1272,32 @@ PUBLIC_DEMO_ACCEPTANCE = replace(
     expected_concept_dict_sha="44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532",
 )
 
+# Additive development profiles bind the restored v6 base and the distinct SIC
+# overlay. Historical profiles and their serialized identities stay unchanged.
+_SIC_OVERLAY_PROFILE_COORDINATES = {
+    "version": "20261030-sic-overlay-v1",
+    "locked_at": "2026-10-30T14:38:00Z",
+    "expected_concept_dict_sha": "44381216a749d146841200f028a6c58d5fe72b2e83b6039469c26707d5bcc532",
+    "expected_sic_case_overlay_sha": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
+}
+E1_PROGRESSIVE_PLANNER_CANARY_SIC_OVERLAY = replace(E1_PROGRESSIVE_PLANNER_CANARY_2026_10_29, **_SIC_OVERLAY_PROFILE_COORDINATES)
+E1_REVIEWED_DEMO_SIC_OVERLAY = replace(E1_REVIEWED_DEMO_2026_10_29, **_SIC_OVERLAY_PROFILE_COORDINATES)
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_SIC_OVERLAY = replace(E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_10_29, **_SIC_OVERLAY_PROFILE_COORDINATES)
+E1_REVIEWED_DEMO_LIVE_PUBMED_SIC_OVERLAY = replace(E1_REVIEWED_DEMO_LIVE_PUBMED_2026_10_29, **_SIC_OVERLAY_PROFILE_COORDINATES)
+WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY = replace(WEB_DESKTOP_FIRST_RESULT_2026_10_29, **_SIC_OVERLAY_PROFILE_COORDINATES)
+WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_SIC_OVERLAY = replace(WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29, **_SIC_OVERLAY_PROFILE_COORDINATES)
+CURRENT_WEB_E1_PLANNER_CANARY_DEV_PROFILE_REF = E1_PROGRESSIVE_PLANNER_CANARY_SIC_OVERLAY.ref
+CURRENT_WEB_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_SIC_OVERLAY.ref
+CURRENT_WEB_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF = E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_SIC_OVERLAY.ref
+CURRENT_WEB_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF = E1_REVIEWED_DEMO_LIVE_PUBMED_SIC_OVERLAY.ref
+
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
+    WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY.ref: WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY,
+    WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_SIC_OVERLAY.ref: WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_SIC_OVERLAY,
+    E1_PROGRESSIVE_PLANNER_CANARY_SIC_OVERLAY.ref: E1_PROGRESSIVE_PLANNER_CANARY_SIC_OVERLAY,
+    E1_REVIEWED_DEMO_SIC_OVERLAY.ref: E1_REVIEWED_DEMO_SIC_OVERLAY,
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_SIC_OVERLAY.ref: E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_SIC_OVERLAY,
+    E1_REVIEWED_DEMO_LIVE_PUBMED_SIC_OVERLAY.ref: E1_REVIEWED_DEMO_LIVE_PUBMED_SIC_OVERLAY,
     WEB_DESKTOP_FIRST_RESULT_2026_10_29.ref: WEB_DESKTOP_FIRST_RESULT_2026_10_29,
     WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29.ref: WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_10_29,
     E1_PROGRESSIVE_PLANNER_CANARY_2026_10_29.ref: E1_PROGRESSIVE_PLANNER_CANARY_2026_10_29,

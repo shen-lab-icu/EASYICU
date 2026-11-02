@@ -27,7 +27,7 @@ from .planning.method_adapter_catalog import HIGH_FREQUENCY_METHOD_ADAPTERS
 from .skill_packages.host_sources import (
     method_skill_implementation_files, method_skill_implementation_metadata,
 )
-from .skill_packages.component_sources import method_component_implementation
+from .skill_packages.host_sources import method_component_implementation
 
 METHOD_SKILL_REGISTRY_VERSION = "easyicu.method-skills/3"
 METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/5"

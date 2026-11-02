@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,8 +24,11 @@ RUNTIME_FILES = (
     "THIRD_PARTY_NOTICES.md",
 )
 RUNTIME_EXTERNAL_FILES = ("tool_catalog.json",)
+RUNTIME_SHARED_FILE = "shared/screens-guided-pi-research-draft.cjs"
 RUNTIME_SOURCE_FILES = (
     "src/main.mjs",
+    "src/attached-skills.mjs",
+    "src/draft-repair.mjs",
     "src/event-projection.mjs",
     "src/post-tool-finalization.mjs",
     "src/shell-budget.mjs",
@@ -39,6 +43,8 @@ RUNTIME_SOURCE_FILES = (
 )
 RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
 INSTALLATION_SCHEMA_VERSION = "easyicu.pi-runtime-installation/2"
+PACKAGED_SEAL_FILE = "packaged-runtime-seal.json"
+PACKAGED_SEAL_SCHEMA = "easyicu.pi-packaged-runtime/1"
 _EXECUTABLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs"})
 _PI_AGENT_PATH = "node_modules/@earendil-works/pi-coding-agent"
 
@@ -66,8 +72,28 @@ def _packaged_source_file(root: Path, relative: str) -> Path:
     if relative in RUNTIME_FILES and metadata.is_file():
         return metadata
     direct = root / relative
-    if direct.is_file():
+    if relative == RUNTIME_SHARED_FILE:
+        try:
+            shared_dir = (root / "shared").lstat()
+        except FileNotFoundError:
+            shared_dir = None
+        if shared_dir is not None and not stat.S_ISDIR(shared_dir.st_mode):
+            raise RuntimeError("Packaged Pi shared directory is not a real directory")
+        try:
+            shared_file = direct.lstat()
+        except FileNotFoundError:
+            shared_file = None
+        if shared_file is not None:
+            if not stat.S_ISREG(shared_file.st_mode):
+                raise RuntimeError("Packaged Pi shared parser is not a regular file")
+            return direct
+    if relative != RUNTIME_SHARED_FILE and direct.is_file():
         return direct
+    if (relative == RUNTIME_SHARED_FILE and root.name == "node_app"
+            and root.parent.name == "pi_copilot"
+            and not (root / RUNTIME_MANIFEST_FILE).exists()
+            and not (root / "gateway/package.json").exists()):
+        return root.parent.parent / "static/js/screens-guided-pi-research-draft.js"
     if relative in RUNTIME_EXTERNAL_FILES:
         return root.parent / relative
     return direct
@@ -100,6 +126,7 @@ def runtime_manifest(source: Optional[Path] = None) -> dict[str, object]:
     for relative in (
         *RUNTIME_FILES,
         *RUNTIME_EXTERNAL_FILES,
+        RUNTIME_SHARED_FILE,
         *RUNTIME_SOURCE_FILES,
     ):
         candidate = _packaged_source_file(root, relative)
@@ -150,6 +177,26 @@ def _installed_executable_hashes(
         files[candidate.relative_to(root).as_posix()] = _sha256(candidate)
     if not files:
         raise RuntimeError("Installed Pi runtime has no executable dependency files")
+    return files
+
+
+def _packaged_file_inventory(root: Path) -> dict[str, str]:
+    """Inventory the sealed bundle, including resources and internal links."""
+    files = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if relative == PACKAGED_SEAL_FILE:
+            continue
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            target = path.resolve(strict=True)
+            if not target.is_relative_to(root):
+                raise RuntimeError("Packaged Pi link escapes the runtime")
+            files[relative] = "link:" + os.readlink(path)
+        elif stat.S_ISREG(mode):
+            files[relative] = "sha256:" + _sha256(path)
+        elif not stat.S_ISDIR(mode):
+            raise RuntimeError("Packaged Pi contains a special file")
     return files
 
 
@@ -230,6 +277,17 @@ def packaged_runtime_is_complete(path: Optional[Path] = None) -> bool:
 
     root = Path(path or packaged_app_dir()).resolve()
     try:
+        # The package's own source-layout node_app is exempt; staged bundles
+        # and other paths require a build-time seal.
+        if root != Path(__file__).resolve().with_name("node_app"):
+            seal_path = root / PACKAGED_SEAL_FILE
+            if not stat.S_ISREG(seal_path.lstat().st_mode):
+                return False
+            seal = json.loads(seal_path.read_text(encoding="utf-8"))
+            if (not isinstance(seal, dict) or seal.get("schema_version") != PACKAGED_SEAL_SCHEMA
+                    or not isinstance(seal.get("files"), dict)
+                    or seal["files"] != _packaged_file_inventory(root)):
+                return False
         expected = runtime_manifest(root)
         for relative, version in dict(expected["pi_packages"]).items():
             package_file = pi_package_manifest(root, relative)
@@ -308,6 +366,8 @@ def install_runtime(
             shutil.copy2(_packaged_source_file(source_dir, name), staging / name)
         for name in RUNTIME_EXTERNAL_FILES:
             shutil.copy2(_packaged_source_file(source_dir, name), staging / name)
+        (staging / RUNTIME_SHARED_FILE).parent.mkdir(parents=True)
+        shutil.copy2(_packaged_source_file(source_dir, RUNTIME_SHARED_FILE), staging / RUNTIME_SHARED_FILE)
         shutil.copytree(source_dir / "src", staging / "src")
         subprocess.run(
             [npm, "ci", "--ignore-scripts", "--omit=dev"],

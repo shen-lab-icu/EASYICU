@@ -19,7 +19,7 @@ from typing import Any, Mapping, Sequence
 from easyicu import state_paths
 from easyicu.research_agent.canonical_json import canonical_json, canonical_sha256
 from easyicu.research_agent.providers.factory import _register_provider_wrapper, authorized_complete
-from easyicu.research_agent.providers.llm import current_provider_call_receipt, safe_provider_finish_reason
+from easyicu.research_agent.providers.llm import _record_provider_call_receipt, clear_provider_call_receipt, current_provider_call_receipt, safe_provider_finish_reason
 
 SCHEMA = "easyicu.metadata-outline-retry/1"
 FILE_NAME = "metadata_outline_retry.json"
@@ -194,6 +194,8 @@ def _verify_pending_guard(task: Any, call: Mapping[str, Any], request_sha: str, 
 class OutlineRetryJournal:
     """Reconstruct retry feedback through the original parser, without recharging replay."""
 
+    requires_call_scoped_receipt = True
+
     def __init__(self, *, inner: Any, task: Any, run_dir: Path, request_sha256: str,
                  dependency_sha256: str, literature_sha256: str, source_path: Path | None = None,
                  source_sha256: str | None = None, stage: str = "outline",
@@ -275,8 +277,35 @@ class OutlineRetryJournal:
                           "expected_retry_request_sha256": None}
         if not 0 <= self._data["abandoned"] <= MAX_CALLS:
             raise ValueError("retry_journal_attempt_limit")
+        self._persist()
+        _register_provider_wrapper(self, children_getter=lambda: (self._inner,), preflight=self._verify_state)
+
+    def _state_mac(self) -> str:
+        # This guards accidental or untrusted object mutation, not arbitrary
+        # code with access to the host signing key or Python process memory.
+        state = {"data": self._data, "cursor": self._index, "path": str(self._path),
+                 "child": id(self._inner), "task": id(self._task),
+                 "ledger": id(self._task.ledger), "task_id": self._task.task_id,
+                 "ledger_path": str(Path(self._task.ledger.path).resolve()),
+                 "parse_attempt_limit": self._parse_attempt_limit,
+                 "requires_call_scoped_receipt": self.requires_call_scoped_receipt}
+        return hmac.new(_key(), canonical_json(state).encode(), hashlib.sha256).hexdigest()
+
+    def _persist(self) -> None:
         _atomic_write(self._path, self._data)
-        _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
+        self._data = load_retry_journal(self._path)
+        self._state_signature = self._state_mac()
+
+    def _verify_state(self) -> dict[str, Any]:
+        try:
+            valid = hmac.compare_digest(self._state_signature, self._state_mac())
+        except (AttributeError, TypeError, ValueError):
+            valid = False
+        if not valid or self.requires_call_scoped_receipt is not True:
+            raise ValueError("retry_journal_state_invalid")
+        if load_retry_journal(self._path) != self._data:
+            raise ValueError("retry_journal_state_invalid")
+        return {"task": self._task}
 
     @property
     def supports_strict_json_schema(self) -> bool:
@@ -284,20 +313,31 @@ class OutlineRetryJournal:
         return llm_supports_strict_json_schema(self._inner)
 
     def complete(self, messages: Sequence[Any], **kwargs: Any) -> str:
+        clear_provider_call_receipt()
+        self._verify_state()
+        records = self._data["records"]
+        expected_calls = self._data.get("accounted_planner_calls")
+        if expected_calls is None:
+            expected_calls = records[-1]["planner_calls_after"] if records else self._data["initial_planner_calls"]
+        if _planner_calls(self._task) != expected_calls:
+            raise ValueError("retry_journal_ledger_changed")
         schema = kwargs.get("structured_output")
         request = {"messages": [{"role": item.role, "content": item.content} for item in messages],
                    "max_tokens": kwargs.get("max_tokens"), "temperature": kwargs.get("temperature"),
                    "schema": getattr(schema, "canonical_payload_json", None)}
         request_sha = canonical_sha256(request)
-        records = self._data["records"]
         if self._index < len(records):
             record = records[self._index]
             if not isinstance(record, dict) or record.get("request_sha256") != request_sha or not isinstance(record.get("response"), str):
                 raise ValueError("retry_journal_request_mismatch")
             self._index += 1
+            self._state_signature = self._state_mac()
             self.last_finish_reason = record.get("finish_reason")
             self.last_usage = record.get("usage")
             self.last_transport_attempts = record.get("transport_attempts", 1)
+            _record_provider_call_receipt(finish_reason=self.last_finish_reason,
+                                          usage=self.last_usage if isinstance(self.last_usage, dict) else None,
+                                          transport_attempts=self.last_transport_attempts)
             return record["response"]
         # The fifth call is normally reserved for a proven truncated response.
         # An interrupted call cannot prove that condition, so after any lost
@@ -311,18 +351,19 @@ class OutlineRetryJournal:
         self._data["expected_retry_request_sha256"] = None
         self._data.pop("expected_retry_guarded", None)
         self._data["pending"] = {"request_sha256": request_sha, "planner_calls": _planner_calls(self._task)}
-        _atomic_write(self._path, self._data)
+        self._persist()
         from easyicu.research_agent.providers.transport_retry import metadata_request_binding
 
         with metadata_request_binding(request_sha):
             result = authorized_complete(self._inner, messages, **kwargs)
+        self._verify_state()
         if not isinstance(result, str) or len(result.encode()) > MAX_RESPONSE_BYTES:
             raise ValueError("retry_journal_response_invalid")
         receipt = current_provider_call_receipt()
         self.last_finish_reason = safe_provider_finish_reason(
             receipt.finish_reason if receipt is not None else getattr(self._inner, "last_finish_reason", None)
         )
-        usage = receipt.usage_summary if receipt is not None else getattr(self._inner, "last_usage", None)
+        usage = dict(receipt.usage_summary) if receipt is not None else getattr(self._inner, "last_usage", None)
         self.last_usage = ({key: value for key, value in usage.items()
                             if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
                             and type(value) is int and value >= 0}
@@ -334,6 +375,8 @@ class OutlineRetryJournal:
                                       "planner_calls_after": _planner_calls(self._task)})
         self._data.pop("accounted_planner_calls", None)
         self._data["pending"] = None
-        _atomic_write(self._path, self._data)
         self._index += 1
+        self._persist()
+        _record_provider_call_receipt(finish_reason=self.last_finish_reason,
+                                      usage=self.last_usage, transport_attempts=self.last_transport_attempts)
         return result

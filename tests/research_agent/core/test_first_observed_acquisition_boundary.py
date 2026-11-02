@@ -10,8 +10,8 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import FLAG_COLUMN, REASON_COLUMN
-from easyicu.research_agent.acquisition.first_observed_icu_coordinate import FirstObservedIcuCoordinate
+from easyicu.research_agent.acquisition.first_icu_stay import FLAG_COLUMN, REASON_COLUMN
+from easyicu.research_agent.acquisition.first_icu_stay import FirstObservedIcuCoordinate
 from easyicu.research_agent.acquisition.foundation import acquire_universe_for_question
 from easyicu.research_agent.intake.export_package import open_export_package
 from easyicu.research_agent.intake.materialized_metadata import MaterializedMetadataError, load_verified_materialized_cohort_authority
@@ -67,4 +67,27 @@ def test_foundation_refuses_unreviewed_concept_selection_before_provider(tmp_pat
         acquire_universe_for_question(export_dir=source, question='first ICU', llm=None,
             output_dir=tmp_path / 'out', target_outcome='death', outcome_concepts=('death',),
             database='eicu', first_observed_icu_coordinate=coordinate)
+    assert not (tmp_path / 'out').exists()
+
+
+@pytest.mark.parametrize('missing_kind', ['static', 'population_feature', 'derivation_input'])
+def test_first_observed_refuses_missing_exact_inputs_before_materialization(tmp_path, monkeypatch, missing_kind):
+    from easyicu.research_agent.cohort import materializer
+
+    source, coordinate = _inputs(tmp_path)
+    monkeypatch.setattr(materializer, 'materialize_to_parquet',
+                        lambda *a, **kw: pytest.fail('incomplete inputs reached materialization'))
+    static = ['age', 'missing_required_static'] if missing_kind == 'static' else ['age']
+    features = ['lact', 'missing_population_measure'] if missing_kind == 'population_feature' else ['lact']
+    derivations = ['strict_kdigo_stage'] if missing_kind == 'derivation_input' else []
+    result = acquire_universe_for_question(export_dir=source, question='Synthetic first observed ICU', llm=None,
+        output_dir=tmp_path / 'out', target_outcome='death', outcome_concepts=('death',),
+        required_feature_concepts=features, static_concepts=static, database='eicu',
+        host_derivations=derivations, concept_selection_authority='host_exact',
+        first_observed_icu_coordinate=coordinate)
+    assert result.blocked and result.blocked_reason_code == 'required_concepts_unavailable'
+    assert not result.coverage.sufficient and set(result.coverage.missing) == set(result.missing_concepts)
+    expected = {'static': 'missing_required_static', 'population_feature': 'missing_population_measure',
+                'derivation_input': 'aki_stage_creat_reference'}
+    assert expected[missing_kind] in result.missing_concepts
     assert not (tmp_path / 'out').exists()

@@ -32,10 +32,10 @@ def test_preflight_never_reserves_capacity_or_budget(tmp_path, monkeypatch, fail
         monkeypatch.setattr(metadata_provider_worker.sys, "frozen", True, raising=False)
     sent = []
     monkeypatch.setattr(metadata_provider_client, "guarded_call", lambda *a, **k: sent.append(1))
-    client = metadata_provider_client.MetadataProviderClient(
-        inner=inner, task=task, provider=provider, environment=environment, public=public, timeout=10,
-    )
     with pytest.raises((ValueError, RuntimeError)):
+        client = metadata_provider_client.MetadataProviderClient(
+            inner=inner, task=task, provider=provider, environment=environment, public=public, timeout=10,
+        )
         HardStopClient(client, role="planner", task=task).complete(
             [LLMMessage(role="user", content="synthetic " * 200)]
         )

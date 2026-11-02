@@ -22,9 +22,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from tests.support.literature_fixtures import synthetic_reviewed_literature
 from pydantic import ValidationError
 
 import easyicu.research_agent.pipeline as _pipeline
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.agents.family_spec_planner import FAMILY_SPEC_STRATEGY
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
@@ -51,9 +53,6 @@ from easyicu.research_agent.planning.analysis_types import (
 from easyicu.research_agent.planning.capability_gap import (
     check_capability_gap,
     longitudinal_representation_facts,
-)
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
 )
 from easyicu.research_agent.planning.design_selection import ResearchDesignCandidate
 from easyicu.research_agent.planning.family_spec import (
@@ -315,14 +314,13 @@ def test_the_family_route_plans_the_sealed_suite_on_one_measurement() -> None:
     findings: list = []
     plan = _pipeline._shape_fresh_plan(
         pipeline=SimpleNamespace(
-            _scientific_runtime_authorities=authorities,
+            _scientific_runtime_authorities=authorities, _services=PipelineServices(),
             _enable_publication_figure_skill=True,
             _max_total_steps=24,
         ),
         plan=draft, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _ = authorities.bind_plan(plan)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, findings)
     authorities.validate_plan(bound)
@@ -331,7 +329,8 @@ def test_the_family_route_plans_the_sealed_suite_on_one_measurement() -> None:
     assert draft.design_selection.selected.required_variables == ["stay_id", "hr"]
     assert any(step.method == "signed_fixed_window_trajectory_representation" for step in bound.steps)
     review = build_plan_scientific_review(
-        context=context, plan=bound, literature=None, runtime_authority=None,
+        context=context, plan=bound, literature=synthetic_reviewed_literature(context.research_question),
+        runtime_authority=None,
     )
     blockers = {finding.code for finding in review.findings if finding.severity == "blocker"}
     assert review.approval_allowed, blockers

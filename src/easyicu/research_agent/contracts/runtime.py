@@ -11,16 +11,17 @@ authority, and orchestration modules share one dependency-neutral contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from ..cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
 from ..authority.evidence_store import NumericClaim
 from ..authority.scientific_claims import ScientificClaim
 from ..robustness.panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from ..schema import EvidenceRecord as EvidenceArtifact
+from ..schema import AnalysisStep
 from ..schema import ValidationFinding
 from .execution_result import RunnerFailureCode, RunResult
 
@@ -135,3 +136,58 @@ __all__ = [
 PlanPhaseResult = _PlanPhaseResult
 ExecutePhaseResult = _ExecutePhaseResult
 WritePhaseResult = _WritePhaseResult
+
+
+@dataclass(slots=True)
+class RunExecutionState:
+    """Mutable queue state without a second copy of the current plan."""
+
+    remaining_steps: list[AnalysisStep]
+    executed_step_ids: set[str]
+    stop_on_failure: bool = False
+    stop_failure_roles: frozenset[str] = frozenset()
+    stop_reason: Optional[str] = None
+    # Steps that failed while the queue continued. Consumers of their declared
+    # outputs are skipped by the caller's dependency gate, not by suppressing
+    # the whole remaining queue.
+    failed_step_ids: list[str] = field(default_factory=list)
+    # Caller-requested stop point. A failed step at this coordinate still stops
+    # the queue, because the request is a scheduling command, not a replan.
+    stop_after_step_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RunTransition:
+    """A caller-authorized scheduling transition after one completed step."""
+
+    kind: Literal["continue", "stop", "pause", "replan"]
+    reason: Optional[str] = None
+    revised_plan: Any = None
+    rerun_current_step: bool = False
+
+    @classmethod
+    def continue_run(cls) -> "RunTransition":
+        return cls(kind="continue")
+
+    @classmethod
+    def stop(cls, reason: str) -> "RunTransition":
+        return cls(kind="stop", reason=str(reason))
+
+    @classmethod
+    def pause(cls, reason: str) -> "RunTransition":
+        """Stop scheduling without converting a review wait into a failure."""
+
+        return cls(kind="pause", reason=str(reason))
+
+    @classmethod
+    def replan(
+        cls,
+        revised_plan: Any,
+        *,
+        rerun_current_step: bool = False,
+    ) -> "RunTransition":
+        return cls(
+            kind="replan",
+            revised_plan=revised_plan,
+            rerun_current_step=bool(rerun_current_step),
+        )

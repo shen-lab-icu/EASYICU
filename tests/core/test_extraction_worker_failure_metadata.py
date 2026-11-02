@@ -101,7 +101,7 @@ def test_in_worker_exception_is_persisted_before_temp_cleanup(
     monkeypatch.setattr(
         api,
         "_native_export_runtime_provenance",
-        lambda: {"fixture": True},
+        lambda **_: {"fixture": True},
     )
 
     result = api.extract_database(
@@ -257,7 +257,7 @@ def test_special_worker_exception_records_special_phase(tmp_path, monkeypatch):
     monkeypatch.setattr(
         api,
         "_native_export_runtime_provenance",
-        lambda: {"fixture": True},
+        lambda **_: {"fixture": True},
     )
 
     result = api.extract_database(

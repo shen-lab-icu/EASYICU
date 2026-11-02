@@ -34,7 +34,7 @@ from ...research_context.concept_population import (
     concept_cohort_window,
     context_data_constraints,
 )
-from ...research_context.event_time_semantics import recorded_event_time_semantics
+from ...research_context.stay_events import recorded_event_time_semantics
 from ...research_context.export_selection import export_applied_selection
 from ...research_context.minimum_stay import minimum_icu_stay_hours
 from ...schema import ResearchContext

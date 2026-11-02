@@ -147,6 +147,27 @@ def test_accepting_omissions_does_not_waive_an_extraction_stop():
     assert calls == records == []
 
 
+@pytest.mark.parametrize('disposition', ['requires_extraction', 'pending_materialization'])
+def test_mixed_omission_acceptance_cannot_waive_pending_population(disposition):
+    from easyicu.research_agent.canonical_json import canonical_sha256
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
+    from easyicu.research_agent.planning.population_review import request_allows_approval
+
+    _, pause, *_ = paused_population(extraction=True)
+    original = next(request for request in pause.requests
+                    if request.payload.get('reason') == 'population_inclusion_not_applied')
+    payload = dict(original.payload)
+    record = dict(payload['population_compile'])
+    record['criteria'] = [dict(row) for row in record['criteria']]
+    target = next(row for row in record['criteria'] if row['criterion']['id'] == 'c3')
+    target['disposition'] = disposition
+    payload['population_compile'] = record
+    payload['population_compile_sha256'] = canonical_sha256(record)
+    request = HumanReviewRequest.create(kind=original.kind, summary=original.summary,
+        payload=payload, authority_sha256=canonical_sha256(payload))
+    assert not request_allows_approval(request, ('c1', 'c2'))
+
+
 def test_accepting_old_inclusion_omissions_cannot_waive_an_unapplied_exclusion():
     workflow, pause, calls, records, _ = paused_population(exclusion=True)
     request = pause.requests[0]

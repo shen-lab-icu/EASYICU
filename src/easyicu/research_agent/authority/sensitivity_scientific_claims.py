@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .claim_coordinates import contrast_exposure_coordinate
+from .numeric_claim_identity import contrast_exposure_coordinate
 
 _POPULATION_BY_STRATEGY = {
     "functional_form": (

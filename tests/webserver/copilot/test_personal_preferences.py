@@ -34,6 +34,7 @@ def test_preferences_freeze_at_creation_and_reopen(tmp_path, monkeypatch, reques
 
 
 def test_advisory_instructions_cannot_grant_host_actions(tmp_path, request, monkeypatch):
+    monkeypatch.setenv("EASYICU_EXTENSION_HOME", str(tmp_path / "extensions"))
     current_study = request.getfixturevalue("study_state")
     current_study["data_source"] = {}
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=FakeGateway())

@@ -9,6 +9,8 @@ the host's ``bind_plan`` replaces the draft with the signed owners.
 
 from __future__ import annotations
 
+from tests.support.reviewed_literature import curated_method_bundle
+
 import json
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
     load_default_case_protocol,
 )
 from easyicu.research_agent import pipeline as _pipeline
+from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.agents.family_spec_planner import family_spec_fallback_reason
 from easyicu.research_agent.agents.progressive_planner import (
     FAMILY_SPEC_STRATEGY,
@@ -40,9 +43,6 @@ from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
 from easyicu.research_agent.planning.baseline_requirements import (
     bind_baseline_requirements,
-)
-from easyicu.research_agent.planning.dependence_authority import (
-    bind_context_dependence_authority,
 )
 from easyicu.research_agent.planning.family_spec import (
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -192,7 +192,7 @@ def _plan_through_host(
     )
     plan = result.output
     fake = SimpleNamespace(
-        _scientific_runtime_authorities=authorities,
+        _scientific_runtime_authorities=authorities, _services=PipelineServices(),
         _enable_publication_figure_skill=True,
         _max_total_steps=24,
     )
@@ -201,7 +201,6 @@ def _plan_through_host(
         pipeline=fake, plan=plan, context=context, agent_context=context,
         long_trajectory_bound=False, findings=findings,
     )
-    plan = bind_context_dependence_authority(plan=plan, context=context)
     bound, _bind_findings = authorities.bind_plan(plan)
     bound = _figure_plan.apply_runtime_bound_figure_contracts(bound, findings)
     authorities.validate_plan(bound)
@@ -260,8 +259,15 @@ def test_sealed_survival_suite_is_planned_in_one_call_and_bound_to_the_signed_ow
         "signed_landmark_survival_suite",
         "signed_landmark_survival_figure",
     ]
-    review = build_plan_scientific_review(
+    unbound_review = build_plan_scientific_review(
         context=context, plan=bound, literature=None,
+        figure_strategy=build_article_figure_strategy(context), runtime_authority=authority,
+    )
+    assert not unbound_review.approval_allowed
+    assert any(finding.code == "LITERATURE_SOURCE_INTEGRITY_INVALID"
+               and finding.severity == "blocker" for finding in unbound_review.findings)
+    review = build_plan_scientific_review(
+        context=context, plan=bound, literature=curated_method_bundle(context.research_question),
         figure_strategy=build_article_figure_strategy(context), runtime_authority=authority,
     )
     codes = {finding.code for finding in review.findings}
@@ -521,7 +527,7 @@ def test_sealed_trajectory_suite_is_planned_in_one_call_and_bound_to_the_four_si
         "trajectory_selection_diagnostic_figure",
     ]
     review = build_plan_scientific_review(
-        context=context, plan=bound, literature=None,
+        context=context, plan=bound, literature=curated_method_bundle(context.research_question),
         figure_strategy=build_article_figure_strategy(context), runtime_authority=None,
     )
     codes = {finding.code for finding in review.findings}

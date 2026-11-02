@@ -120,7 +120,7 @@ def runtime_identity() -> Dict[str, Any]:
     data_root = package_root.parent / "data"
     concept_files = {
         name: hash_file(data_root / name) if (data_root / name).is_file() else "missing"
-        for name in ("concept-dict.json", "sofa2-dict.json")
+        for name in ("concept-dict.json", "sic-case-duration-overlay.v1.json", "sofa2-dict.json")
     }
     return {
         "engine_code_sha256": _tree_sha256(package_root, engine_paths),

@@ -14,6 +14,7 @@ from easyicu.research_agent.planning.scientific_review import (
     build_plan_scientific_review,
     landmark_survival_suite_facts,
 )
+from tests.support.literature_fixtures import synthetic_reviewed_literature
 from tests.support.survival_proposal import (
     AGE,
     SEX,
@@ -52,7 +53,9 @@ def _blockers(review):
 
 def test_a_closing_proposal_is_a_runtime_gap_with_its_published_coordinates():
     context = _post_baseline_context()
-    review = build_plan_scientific_review(context=context, plan=_proposal(context))
+    review = build_plan_scientific_review(
+        context=context, plan=_proposal(context), literature=synthetic_reviewed_literature(context.research_question),
+    )
 
     assert _blockers(review) == {
         "SURVIVAL_LANDMARK_OWNER_NOT_SEALED": "runtime_capability",

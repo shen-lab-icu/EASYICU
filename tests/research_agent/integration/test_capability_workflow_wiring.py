@@ -90,6 +90,7 @@ def _target_profile(*, name: str = "capability_activated") -> SubmissionProfile:
         requires_arm="aware",
         expected_concept_dict_sha=fingerprint.concept_dict_sha,
         expected_sofa2_dict_sha=fingerprint.sofa2_dict_sha,
+        expected_sic_case_overlay_sha=fingerprint.sic_case_overlay_sha,
         enable_memory=False,
         enable_experience_bank=False,
         enable_know_how=False,
@@ -121,6 +122,7 @@ def test_missing_capability_pauses_real_pipeline_before_provider(
         get_submission_profile(PENDING_PROFILE_REF),
         expected_concept_dict_sha=fingerprint.concept_dict_sha,
         expected_sofa2_dict_sha=fingerprint.sofa2_dict_sha,
+        expected_sic_case_overlay_sha=fingerprint.sic_case_overlay_sha,
     )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,

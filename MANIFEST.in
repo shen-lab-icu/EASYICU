@@ -26,6 +26,17 @@ recursive-include src/easyicu/research_agent/runner_image *
 recursive-include src/easyicu/research_agent/methods/tool_cards *.json
 recursive-include src/easyicu/research_agent/skill_packages *.md
 
+# Figure 2 v4 successor reviewer authority, including in source archives without VCS metadata.
+include benchmarks/figure2_canonical9/figure2_paper_rubric_v4.json
+include benchmarks/figure2_canonical9/figure2_versioned_ci_v4.json
+include benchmarks/figure2_canonical9/successor_v4/DERIVATION.json
+include benchmarks/figure2_canonical9/successor_v4/README.md
+include benchmarks/figure2_canonical9/successor_v4/__init__.py
+include benchmarks/figure2_canonical9/successor_v4/paper_rubric_v4.py
+include benchmarks/figure2_canonical9/successor_v4/safety_issuer.py
+include benchmarks/figure2_canonical9/successor_v4/scoring.py
+include benchmarks/figure2_canonical9/successor_v4/scoring_inputs.py
+
 # Include data files
 recursive-include src/easyicu/data *.json *.md
 recursive-include src/easyicu/webserver/static *.html *.css *.js
@@ -37,6 +48,8 @@ include src/easyicu/webserver/pi_copilot/node_app/package-lock.json
 include src/easyicu/webserver/pi_copilot/node_app/README.md
 include src/easyicu/webserver/pi_copilot/node_app/THIRD_PARTY_NOTICES.md
 include src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
+include src/easyicu/webserver/pi_copilot/node_app/src/attached-skills.mjs
+include src/easyicu/webserver/pi_copilot/node_app/src/draft-repair.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/post-tool-finalization.mjs
 include src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs

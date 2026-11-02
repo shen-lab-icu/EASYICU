@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent.acquisition.eicu_first_observed_candidate import (
+from easyicu.research_agent.acquisition.first_icu_stay import (
     REQUIRED_COLUMNS,
     FirstObservedCandidate,
     FirstObservedCandidateError,
