@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 
 import numpy as np
@@ -41,6 +42,11 @@ def test_the_warm_up_runs_once_per_process_in_the_background(monkeypatch):
 
 
 def test_every_valid_export_is_summarized_active_first_and_a_failure_is_not_fatal(monkeypatch, caplog):
+    # Another module's logging config in the same worker can disable or detach
+    # this logger; pin what the assertion reads.
+    monkeypatch.setattr(hosted_warmup._log, "disabled", False)
+    monkeypatch.setattr(hosted_warmup._log, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=hosted_warmup._log.name)
     monkeypatch.setattr(source_store, "load_registry", lambda **_kwargs: {
         "active_path": "/data/b",
         "sources": [
