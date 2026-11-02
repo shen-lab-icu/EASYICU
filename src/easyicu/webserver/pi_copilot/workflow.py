@@ -121,7 +121,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     current_stage: str
     next_action_code: str
     next_actions: List[StopNextAction] = Field(default_factory=list, max_length=17)
-    missing_setup_fields: List[str] = Field(default_factory=list, max_length=16)
+    missing_setup_fields: List[str] = Field(default_factory=list, max_length=20)
     planning_prerequisites_missing: List[str] = Field(
         default_factory=list, max_length=8
     )
@@ -155,6 +155,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: only (``study_family_scope``); the plan step names it instead of a plan.
     study_family_gap: Optional[Mapping[str, Any]] = None
     metadata_only_candidate_with_unresolved_gap: bool = False
+    #: The outcome the conversation proposed but did not save; planning waits
+    #: until the researcher confirms this exact label or names another.
+    unconfirmed_outcome: Optional[str] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -545,6 +548,15 @@ def build_research_workflow_snapshot(
         and planning_data_ready
         and not planning_prerequisites_missing
         and not has_plan
+    )
+    # The only thing between the study and a candidate plan is the outcome the
+    # conversation proposed: the plan step asks for it rather than offering a
+    # plan the launch refuses.
+    outcome_confirmation_required = bool(
+        question_ready
+        and planning_data_ready
+        and not has_plan
+        and planning_prerequisites_missing == ["outcome_confirmation"]
     )
     review_authority = (
         plan_review_authority if isinstance(plan_review_authority, Mapping) else {}
@@ -1132,6 +1144,8 @@ def build_research_workflow_snapshot(
                 if has_plan
                 else "provider_ready_to_generate_plan"
                 if plan_generation_ready
+                else "study_primary_outcome_confirmation_required"
+                if outcome_confirmation_required
                 else "cohort_eligibility_confirmation_required"
                 if eligibility_confirmation_required
                 else "active_export_or_setup_required"
@@ -1283,7 +1297,7 @@ def build_research_workflow_snapshot(
     elif (
         plan_attention_required
         or plan_regeneration_required
-        or (plan_generation_ready and not idea_blocks_execution)
+        or ((plan_generation_ready or outcome_confirmation_required) and not idea_blocks_execution)
     ):
         next_stage = next(row for row in required if row.id == "plan")
     elif not question_ready and not idea_accepted:
@@ -1335,6 +1349,9 @@ def build_research_workflow_snapshot(
         ) if job_status != "running" else [],
         planning_prerequisites_missing=planning_prerequisites_missing,
         missing_setup_fields=missing,
+        unconfirmed_outcome=(
+            str(study_row.get("unconfirmed_outcome") or "").strip()[:160] or None
+        ),
         stages=stages,
         completed_required_stages=completed,
         study_setup_receipt=project_study_setup_receipt(study_row),

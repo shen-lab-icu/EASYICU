@@ -39,7 +39,10 @@ class ScientificSetupAssessment:
     planning_prerequisites_missing: tuple[str, ...]
 
 
-_PLANNING_PREREQUISITE_FIELDS = frozenset({"question", "data_source"})
+# An outcome the conversation proposed but did not save blocks planning: the
+# launch refuses it (study_primary_outcome_confirmation_required), so the plan
+# step asks for it first instead of offering a plan that will be refused.
+_PLANNING_PREREQUISITE_FIELDS = frozenset({"question", "data_source", "outcome_confirmation"})
 _NOT_APPLICABLE_OUTCOMES = frozenset(
     {
         "none",
@@ -357,6 +360,7 @@ class ScientificConfiguration:
             ("cohort", bool(_mapping(self.study.get("cohort")))),
             ("cohort_eligibility", facts.eligibility_stated),
             ("outcome", human_outcome),
+            ("outcome_confirmation", not _clean(self.study.get("unconfirmed_outcome"), 500)),
             *(((("primary_exposure", human_exposure),)) if exposure_required else ()),
             ("analysis_goal", bool(_clean(self.study.get("analysis_goal"), 500))),
             *(
