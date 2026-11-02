@@ -341,7 +341,7 @@ def test_ci_workflow_runs_supported_python_matrix() -> None:
 
     matrix_versions = parsed["jobs"]["test"]["strategy"]["matrix"]["python-version"]
     rendered = matrix_versions if isinstance(matrix_versions, str) else str(matrix_versions)
-    for version in ("3.10", "3.11", "3.12"):
+    for version in ("3.11", "3.12"):
         assert version in rendered, f"CI no longer reaches Python {version}"
 
     assert "python-version: ${{ matrix.python-version }}" in workflow

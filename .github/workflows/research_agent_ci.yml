@@ -71,9 +71,7 @@ concurrency:
 
 # This gate checks the explicitly installed runtime on supported Python versions.
 # Lower-bound requirements let pip resolve a current combination; they do not
-# test the lowest supported versions. On Python 3.10 that combination was not
-# compatible: shap 0.49, the last release for 3.10, cannot parse the vector
-# base_score that xgboost writes from 3.1, so 3.10 also caps xgboost below 3.1.
+# test the lowest supported versions.
 # Preserve the actual resolved environment in the receipts instead of claiming
 # a minimum-version matrix.
 jobs:
@@ -111,8 +109,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Aligned with ci.yml and start_easyicu.sh (3.10-3.12 proven).
-        python-version: ["3.10", "3.11", "3.12"]
+        # Aligned with ci.yml and start_easyicu.sh (3.11-3.12 proven).
+        python-version: ["3.11", "3.12"]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,9 +157,7 @@ jobs:
             "psutil>=5.9" \
             "lifelines>=0.27" \
             "shap>=0.44" \
-            "xgboost>=2.0" \
-            "xgboost<3.1; python_version < '3.11'" \
-            "tomli>=2.0; python_version < '3.11'"
+            "xgboost>=2.0"
           # Editable install of the easyicu package without extras so
           # import easyicu.research_agent succeeds.
           pip install --no-deps -e .

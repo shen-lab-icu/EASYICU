@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Keep the launcher inside the CI-proven interpreter range (ci.yml matrix tops
 # out at 3.12). Newer interpreters are skipped, never selected.
-MIN_PYTHON_CODE=310
+MIN_PYTHON_CODE=311
 MAX_PYTHON_CODE=312
 
 # Match start_easyicu.bat: the child launcher always sees these defaults.
@@ -56,7 +56,7 @@ select_python_bin() {
   best_bin=""
   best_code=0
   PYTHON_CANDIDATES=""
-  for candidate in python3.12 python3.11 python3.10 python3 python; do
+  for candidate in python3.12 python3.11 python3 python; do
     append_python_candidate "$candidate"
   done
   append_conda_python_candidates
@@ -85,9 +85,9 @@ select_python_bin() {
 PYTHON_BIN="$(select_python_bin)"
 
 if [ -z "$PYTHON_BIN" ]; then
-  echo "Python 3.10-3.12 was not found. Checked PATH plus common Conda/Anaconda locations."
+  echo "Python 3.11-3.12 was not found. Checked PATH plus common Conda/Anaconda locations."
   echo "CI proves up to 3.12; newer interpreters are intentionally skipped."
-  echo "If you use Conda, install Python 3.10-3.12 in base or set CONDA_PREFIX before launching."
+  echo "If you use Conda, install Python 3.11-3.12 in base or set CONDA_PREFIX before launching."
   exit 1
 fi
 

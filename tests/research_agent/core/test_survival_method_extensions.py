@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 
@@ -139,6 +140,11 @@ def test_logrank_refuses_an_unclosed_group_comparison(times, events, groups):
         owner.logrank_by_group(times, events, groups)
 
 
+# The competing-risks executor fits Fine-Gray through the local R runtime.
+_needs_rscript = pytest.mark.skipif(shutil.which("Rscript") is None, reason="local Rscript is not installed")
+
+
+@_needs_rscript
 def test_declared_competition_is_owned_and_matches_existing_kernels(tmp_path, monkeypatch):
     step = competing_step()
     assert owner.survival_primary_executor_owns_step(step)
@@ -212,6 +218,7 @@ def test_declared_competitor_lost_to_complete_cases_is_refused(tmp_path, monkeyp
     assert exc.value.reason_code == "survival_competing_event_absent"
 
 
+@_needs_rscript
 def test_competing_plan_is_validated_selected_and_receipted(tmp_path, monkeypatch):
     from easyicu.research_agent.execution.runners.selection import select_standard_executor
     from easyicu.research_agent.gates.family_primary_result import family_primary_result_reconciliation_findings

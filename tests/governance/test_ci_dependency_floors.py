@@ -116,46 +116,6 @@ def test_pyarrow_floor_is_locked_in_both_places() -> None:
     assert _declared_floors()["pyarrow"] == _workflow_floors()["pyarrow"]
 
 
-def test_no_test_module_imports_tomllib_without_a_310_fallback() -> None:
-    """`requires-python = ">=3.10"` but tomllib is stdlib only from 3.11.
-
-    Three test modules imported it unconditionally, so the entire Python 3.10
-    matrix leg died at collection -- before a single test ran, on a version the
-    package publicly claims to support. The failure is invisible locally
-    (development runs 3.11+), which is exactly why it needs a test.
-    """
-
-    offenders: list[str] = []
-    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        if "import tomllib" not in text:
-            continue
-        if "import tomli as tomllib" not in text:
-            offenders.append(str(path.relative_to(REPO_ROOT)))
-
-    assert not offenders, (
-        "import tomllib inside try/except ModuleNotFoundError with a "
-        "`import tomli as tomllib` fallback, or Python 3.10 CI dies at "
-        f"collection: {offenders}"
-    )
-
-
-def test_the_tomli_fallback_is_actually_installed_on_310() -> None:
-    """A fallback to a package nobody installs is not a fallback."""
-
-    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    dev = data["project"]["optional-dependencies"]["dev"]
-    assert any(
-        req.startswith("tomli") and "python_version" in req for req in dev
-    ), "dev extra must ship tomli for the Python versions lacking tomllib"
-
-    workflow = AGENT_WORKFLOW.read_text(encoding="utf-8")
-    assert "tomli" in workflow, (
-        "research_agent CI installs an explicit list without extras, so the "
-        "fallback has to be named there too"
-    )
-
-
 def test_agent_ci_installs_the_mcp_transport_test_runtime() -> None:
     """The agent suite imports the optional official MCP SDK at collection."""
 
@@ -193,12 +153,11 @@ def test_agent_ci_installs_the_webserver_owner_runtime() -> None:
     )
 
 
-def test_optional_sksurv_adapter_does_not_break_python_310_resolution() -> None:
-    """scikit-survival 0.28 requires Python 3.11, while core supports 3.10."""
+def test_python_floor_matches_the_ci_matrices() -> None:
+    """The package supports Python 3.11+, the version the desktop app and the
+    runner image ship; CI must not spend a matrix leg on an unsupported 3.10."""
 
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    adapters = data["project"]["optional-dependencies"]["scientific-adapters"]
-    requirement = next(
-        item for item in adapters if item.startswith("scikit-survival")
-    )
-    assert "python_version >= '3.11'" in requirement
+    assert data["project"]["requires-python"] == ">=3.11"
+    for workflow in (AGENT_WORKFLOW, REPO_ROOT / ".github" / "workflows" / "ci.yml"):
+        assert '"3.10"' not in workflow.read_text(encoding="utf-8"), workflow.name

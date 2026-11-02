@@ -52,7 +52,7 @@ def test_spa_navigation_updates_title_announces_route_and_moves_focus() -> None:
 def test_guided_fullscreen_route_has_one_focusable_page_heading() -> None:
     guided = _asset("js", "screens-guided.js")
 
-    assert '<h1 class="shell-sr-only" tabindex="-1">${t(\'Guided Copilot\', \'研究引导\')}</h1>' in guided
+    assert '<h1 class="shell-sr-only" tabindex="-1">${t(\'Research workspace\', \'研究工作区\')}</h1>' in guided
 
 
 # Every route's own h1, keyed by the module that owns it. This used to cover
