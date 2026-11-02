@@ -297,6 +297,7 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     # Requires the popover owner; takes no other files.
     "popover_fit.test.js": ["popover-menus.js"],
+    "popover_pointer_focus.test.js": ["popover-menus.js"],
     "viz_embedded_workbench.test.js": [],
     "guided_idea_flow.test.js": ["screens-guided-idea.js"],
     "guided_project_handoff.test.js": [
