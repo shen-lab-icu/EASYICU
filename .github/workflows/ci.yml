@@ -144,7 +144,8 @@ jobs:
           git rev-parse HEAD > ci-receipts/commit-sha.txt
           python --version > ci-receipts/python-version.txt
           python -m pip freeze --all > ci-receipts/resolved-requirements.txt
-          pytest --collect-only -q -m "" -p tests.support.figure2_versioned_ci --figure2-current-v4 --figure2-collection-receipt=ci-receipts/current-figure2-collection.json > ci-receipts/collected-tests.txt
+          # python -m puts the checkout on sys.path so -p can import tests.support.
+          python -m pytest --collect-only -q -m "" -p tests.support.figure2_versioned_ci --figure2-current-v4 --figure2-collection-receipt=ci-receipts/current-figure2-collection.json > ci-receipts/collected-tests.txt
           tail -n 1 ci-receipts/collected-tests.txt
 
       - name: Run test suite
@@ -158,7 +159,7 @@ jobs:
           # cores -- pytest-xdist was a declared dev dep that no workflow used.
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
-            pytest -q -m "" -n auto --dist loadfile \
+            python -m pytest -q -m "" -n auto --dist loadfile \
               --ignore=tests/research_agent/execution/test_runner.py \
               -p tests.support.figure2_versioned_ci --figure2-current-v4 \
               --figure2-collection-receipt=ci-receipts/current-figure2-execution-collection.json \
