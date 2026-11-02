@@ -33,10 +33,13 @@ def test_slash_composer_assets_resolve_through_the_static_route() -> None:
     # Direct route ownership check: transport checks in this file run on the lead's Mac.
     static = next(route.app for route in app.routes if isinstance(getattr(route, "app", None), StaticFiles))
     index = _static_html("index.html")
-    for asset in ("js/screens-guided-pi-slash-menu.js", "css/guided-pi-composer-menus.css"):
+    for asset, version in (
+        ("js/screens-guided-pi-slash-menu.js", "20261028-slash1"),
+        ("css/guided-pi-composer-menus.css", "20261102-ui1"),
+    ):
         path, stat = static.lookup_path(asset)
         assert Path(path) == STATIC_DIR / asset and stat is not None
-        assert f"{asset}?v=20261028-slash1" in index
+        assert f"{asset}?v={version}" in index
 
 
 def test_native_favicon_request_is_quiet() -> None:
@@ -192,7 +195,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261027-dmap2" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261029-journey1" in index_html
+    assert "js/screens-extraction.js?v=20261102-ui1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -243,13 +246,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" not in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20261029-journey1" in index_html
+        "js/screens-guided-projects.js?v=20261102-ui2" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20261027-old1" in index_html
+    assert "js/screens-guided.js?v=20261102-ui1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -445,7 +448,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261030-preparation1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20261029-journey1" in index_html
+        "js/screens-guided-projects.js?v=20261102-ui2" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -556,7 +559,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20261027-old1" in index_html
+    assert "js/screens-guided.js?v=20261102-ui1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -988,7 +991,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20261029-journey1" in index_html
     assert "js/screens-settings-extensions.js?v=20261028-set1" in index_html
-    assert "js/screens-settings.js?v=20261029-journey1" in index_html
+    assert "js/screens-settings.js?v=20261102-ui1" in index_html
     assert "js/screens-settings-personalization.js?v=20261026-personal1" in index_html
     assert index_html.index("js/screens-settings-personalization.js") < index_html.index("js/screens-settings.js")
     assert ".settings-cap-panel" in settings_css
@@ -1057,7 +1060,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261028-cohort3" in index_html
+    assert "css/extraction.css?v=20261102-ui1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -2327,12 +2330,12 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20261030-preparation1" in index_html
-    assert "screens-guided-projects.js?v=20261029-journey1" in index_html
+    assert "screens-guided-projects.js?v=20261102-ui2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20261027-old1" in index_html
+    assert "screens-guided.js?v=20261102-ui1" in index_html
     assert "guided.css?v=20261027-old1" in index_html
     assert "guided-projects.css?v=20261027-proj1" in index_html
     assert "gd-rail-heading" in projects_js

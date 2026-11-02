@@ -229,12 +229,13 @@
       <button class="gd-rail-restore" type="button" data-project-rail-toggle aria-label="${t('Show research projects', '显示研究项目栏')}" title="${t('Show research projects', '显示研究项目栏')}">${icon('chevron', 14)}</button>
       <aside class="gd-rail" id="gdResearchProjectRail">
         <nav class="gpi-global-nav" aria-label="${t('EasyICU navigation', 'EasyICU 导航')}">
-          <button type="button" class="gpi-global-brand" data-open="entry" aria-label="${t('New conversation', '新建对话')}" title="${t('New conversation in this project', '在当前项目新建对话')}">${icon('spark', 19)}</button>
-          <button type="button" class="gpi-global-item active" data-gpi-show-projects aria-current="page" aria-expanded="${!projectRailCollapsed}" title="${t('Research projects', '研究项目')}">${icon('folder', 19)}<span>${t('Projects', '项目')}</span></button>
-          <button type="button" class="gpi-global-item" data-open="skills" title="${t('Research skills', '研究技能')}">${icon('layers', 19)}<span>${t('Skills', '技能')}</span></button>
-          <button type="button" class="gpi-global-item" data-open="extraction" title="${t('Data workspace', '数据工作台')}">${icon('grid', 19)}<span>${t('Data', '数据')}</span></button>
+          <button type="button" class="gpi-global-brand" data-open="entry" aria-label="EasyICU" title="${t('New conversation in this project', '在当前项目新建对话')}">${icon('spark', 19)}</button>
+          <button type="button" class="gpi-global-item active" data-gpi-show-projects aria-current="page" aria-expanded="${!projectRailCollapsed}" title="${t('Projects', '项目')}">${icon('folder', 19)}<span>${t('Projects', '项目')}</span></button>
+          <button type="button" class="gpi-global-item" data-open="skills" title="${t('Skills', '技能')}">${icon('layers', 19)}<span>${t('Skills', '技能')}</span></button>
+          <button type="button" class="gpi-global-item" data-open="extraction" title="${t('Data', '数据')}">${icon('grid', 19)}<span>${t('Data', '数据')}</span></button>
           <div class="gpi-global-spacer"></div>
           <div data-update-slot></div>
+          <button type="button" class="gpi-global-item" data-open="tutorial" title="${t('Help', '帮助')}">${icon('help', 18)}<span>${t('Help', '帮助')}</span></button>
           <button type="button" class="gpi-global-item" data-open="settings" title="${t('Settings', '设置')}">${icon('gear', 18)}<span>${t('Settings', '设置')}</span></button>
           <button type="button" class="gpi-global-item" data-lang-toggle title="${t('Switch language', '切换语言')}">${icon('globe', 18)}<span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span></button>
         </nav>
@@ -314,11 +315,11 @@
     const search = oldPicker && typeof oldPicker.querySelector === 'function'
       && oldPicker.dataset.projectId === (activeId || '')
       ? String(oldPicker.querySelector('[data-project-search]')?.value || '') : '';
-    // The project catalog is a selector, not the default reading surface. An
-    // early loading render must not leave every project expanded after URL restore.
+    // The project catalog is a selector, not the default reading surface. The
+    // first screen asks for a question, so the list opens only when chosen;
+    // opening it on load raced the rail's repaint and lost the first click.
     const sameProjectPicker = oldPicker && oldPicker.dataset.projectId === (activeId || '');
-    const pickerOpen = sameProjectPicker ? oldPicker.open
-      : projectManagementActive || (!activeId && !ctx.guidedDrafts.loading);
+    const pickerOpen = sameProjectPicker ? oldPicker.open : projectManagementActive;
     const pickerTitle = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title, t('Choose a project', '选择研究项目'));
     // One control names the project the rail is showing and switches it —
     // the reference's "PROJECT / name" combobox. A research project is the

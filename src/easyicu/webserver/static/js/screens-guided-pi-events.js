@@ -722,6 +722,12 @@
         if (event.target.matches('[data-gpi-input]') && window.EU_COMPOSER_KEYBOARD.enterShouldSend(event)) {
           event.preventDefault(); sendMessage();
         }
+        // The first-screen question sends like the composer; its button owns the action.
+        if (event.target.matches('[data-gpi-first-question]') && window.EU_COMPOSER_KEYBOARD.enterShouldSend(event)) {
+          event.preventDefault();
+          const send = state.host.querySelector('[data-project-from-question]');
+          if (send && !send.disabled) send.click();
+        }
       });
       state.host.addEventListener('submit', event => {
         if (MESSAGE_ACTIONS.handleSubmit(event)) return;

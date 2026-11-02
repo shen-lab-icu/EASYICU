@@ -51,7 +51,7 @@
       const saved = state.sessions.filter(sessionMatchesUiLanguage).map(row => `
       <button class="gpi-session-row" type="button" data-gpi-session="${esc(row.session_id)}">
         <span><strong>${esc(displaySessionTitle(row.title))}</strong><small>${esc(sessionTraceLabel(row))}</small></span>
-        <span>${row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}</span>
+        <span>${row.agent_mode === 'workspace' ? tr('File task', '文件任务') : tr('Research', '研究')}</span>
       </button>`).join('');
       if (state.projectIssue === 'pi_project_study_context_missing') {
         return `
@@ -84,7 +84,7 @@
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('Start research conversation', '开始研究对话')}
         </button>
-        <button class="btn" type="button" data-gpi-new-workspace ${state.creating || state.projectLoading || state.busy ? 'disabled' : ''}>${tr('New artifact task', '新建产物任务')}</button>
+        <button class="btn" type="button" data-gpi-new-workspace ${state.creating || state.projectLoading || state.busy ? 'disabled' : ''}>${tr('New file task', '新建文件任务')}</button>
         <div class="gpi-consent">${iconHtml('shield', 13)}<span>${tr('Study progress is saved automatically. File access can be enabled later and remains limited to this project folder — never patient rows, credentials, or files outside the project.', '研究进度会自动保存；文件操作可稍后开启，且只能访问当前项目目录，不包括患者行级数据、凭据或项目以外的文件。')}</span></div>
         ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Copilot conversations in this project', '当前项目中的研究助手对话')}</div>${saved}</div>` : ''}
         <div class="gpi-secondary-actions">
@@ -93,14 +93,23 @@
       </div>`;
     }
 
+    // Before any project exists the page still opens on a question: sending it
+    // creates a project named after the question and asks it there.
     function projectRequiredPanel() {
       return `
-      <div class="gpi-activate">
-        <div class="gpi-kicker">EASYICU PROJECT · COPILOT CONVERSATIONS</div>
-        <h2>${tr('Select a research project first', '请先选择研究项目')}</h2>
-        <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, evidence, and conversation history in that project.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 会在项目中保存研究配置、运行、证据和对话历史。')}</p>
-        <button class="btn primary gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('Demo: from question to result', '演示：从提问到结果')}</button>
-      </div>`;
+      <section class="gpi-research-start gpi-entry-home gpi-first-question" aria-label="${tr('Start a research conversation', '开始研究对话')}">
+        <header class="gpi-entry-intro">
+          <div class="gpi-entry-title"><h2>${tr('Start an ICU research task', '开始一项 ICU 研究')}</h2></div>
+          <p>${tr('Write your clinical question. EasyICU creates a project for it, which keeps the study setup, runs, evidence and conversations.', '写下你的临床问题。EasyICU 会为它新建一个项目，研究配置、运行、证据和对话都保存在项目里。')}</p>
+        </header>
+        <div class="gpi-compose gpi-entry-compose"><div class="gpi-compose-card">
+          <textarea data-gpi-first-question rows="2" maxlength="12000" aria-label="${tr('Research question', '研究问题')}" placeholder="${tr('What ICU research question do you want to study?', '你想研究什么 ICU 科学问题？')}"></textarea>
+          <div class="gpi-actions"><div class="gpi-action-leading"></div><div class="gpi-action-trailing">
+            <button class="btn primary" type="button" data-project-from-question aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}">${iconHtml('arrow', 15)}</button>
+          </div></div>
+        </div></div>
+        <div class="gpi-secondary-actions"><button class="gpi-link" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Demo: from question to result', '演示：从提问到结果')}</button></div>
+      </section>`;
     }
 
     function restoringPanel() {
@@ -476,10 +485,14 @@
         workspace,
         modelBindingKey: modelMenu ? modelMenu.bindingKey(session, projectId()) : '',
         layout: ASIDE.layoutOptions(),
-        connectionLabel: (separateModels
+        // The pill names one model; an older conversation that pinned a
+        // separate analysis model keeps both names in its tooltip.
+        connectionLabel: (separateModels ? (model.id || researchLabel) : researchLabel)
+          || tr('Model connection unavailable', '模型连接暂不可用'),
+        connectionDetail: separateModels
           ? [model.id ? tr(`Conversation: ${model.id}`, `对话：${model.id}`) : '',
             researchLabel ? tr(`Analysis: ${researchLabel}`, `分析：${researchLabel}`) : ''].filter(Boolean).join(' / ')
-          : researchLabel) || tr('Model connection unavailable', '模型连接暂不可用'),
+          : '',
         connectionTitle: connection
           ? tr('Conversation model', '对话模型')
           : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),

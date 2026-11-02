@@ -105,10 +105,11 @@ test('the project list ends with New project and Open existing project; no separ
   assert.doesNotMatch(owner, /新建 \/ 打开研究项目|data-folder-menu-toggle|data-newstudy|新建空白项目/);
 });
 
-test('an empty project picker remains dismissible and stays closed across a repaint', () => {
+test('an empty project picker starts closed, and a repaint keeps the state the user chose', () => {
   const h = harness();
   h.renderRail();
-  assert.match(h.rail(), /<details class="gd-project-picker" data-project-id="" open data-popover-menu>/);
+  // The first screen asks for a question; the list opens only when chosen.
+  assert.match(h.rail(), /<details class="gd-project-picker" data-project-id="" data-popover-menu>/);
   const oldPicker = { dataset: { projectId: '' }, open: false, querySelector: () => null };
   h.hosts.gdSessions.querySelector = selector => selector === '.gd-project-picker' ? oldPicker : null;
   h.renderRail();

@@ -43,7 +43,7 @@ test('a new project with no session has a visible explicit artifact entry in bot
     });
     const html = view.activatePanel();
     assert.match(html, /class="btn" type="button" data-gpi-new-workspace/);
-    assert.match(html, language === 'zh' ? /新建产物任务/ : /New artifact task/);
+    assert.match(html, language === 'zh' ? /新建文件任务/ : /New file task/);
     assert.match(html, /data-gpi-create/);
     assert.doesNotMatch(html.match(/<button[^>]*data-gpi-new-workspace[^>]*>/)[0], /hidden|disabled/);
     assert.equal(state.session, null); assert.equal(state.draft, 'Keep this draft');

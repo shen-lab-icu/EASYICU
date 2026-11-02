@@ -560,6 +560,19 @@
   function connectFolderHint() {
     return window.EU_EXTRACTION_STUDY_CONTEXT.folderHint(exExpectedDatabase, { t, hostedCopy });
   }
+  // Folders EasyICU already registered are one click away; the folder field
+  // below stays for a new one. A hosted server's sources are the administrator's.
+  function registeredSources() {
+    if (hostedServer()) return [];
+    return ((window.EU_WORKSPACE_REGISTRY || {}).sources || []).filter(row => row && row.ok && row.path);
+  }
+  function registeredSourcesHtml() {
+    const rows = registeredSources();
+    if (!rows.length) return '';
+    return `<div class="ex-connect-registered"><span class="ex-connect-label">${t('Registered data', '已登记的数据')}</span>
+      ${rows.map((row, i) => `<button type="button" class="ex-connect-registered-row" data-ex-registered="${i}">${icon('layers', 14)}<span><strong>${escHtml(row.label || row.database || '')}</strong><small>${escHtml(row.database || '')}</small></span></button>`).join('')}
+    </div>`;
+  }
   function connectState() {
     const opt = (src, ico, tEn, tZh, dEn, dZh) => `
       <button class="modcard" data-ex-src="${src}" style="align-items:flex-start;padding:14px;">
@@ -574,6 +587,7 @@
         </div>
         <div class="cfg-body">
           ${copilotPrefillSummary()}
+          ${registeredSourcesHtml()}
           <label class="ex-connect-label" for="exPathInput">${t('Data folder', '数据文件夹')}</label>
           <div class="path-field editable ex-connect-path">
             <span class="pf-ico">${icon('folder', 14)}</span>
@@ -1862,6 +1876,12 @@
         }
         startScan(null);
       });
+      root.querySelectorAll('[data-ex-registered]').forEach(button => button.addEventListener('click', () => {
+        const row = registeredSources()[Number(button.dataset.exRegistered)];
+        if (!row) return;
+        exPath = row.path;
+        startScan(null);
+      }));
       const manualBtn = root.querySelector('[data-ex-manual]');
       if (manualBtn) manualBtn.addEventListener('click', () => {
         exManualSourceOpen = !exManualSourceOpen;
