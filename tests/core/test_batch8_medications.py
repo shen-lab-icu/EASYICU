@@ -3,8 +3,9 @@
 Added: warfarin, apixaban, enoxaparin, aspirin.
 
 Coverage notes:
-  - apixaban only in SIC (1/6) — MIMIC/AUMC/eICU all use prescriptions/PO charting
-    that's outside inputevents/medication scope; HiRID has no entry.
+  - apixaban in SIC and MIMIC-IV (2/6): MIMIC-IV reads administered eMAR
+    events (2026-11-03 extraction audit 2); MIMIC-III and eICU 2014-15 record
+    none, AUMC/HiRID have no entry.
   - aspirin 6/6 after the 2026-05-27 prescriptions/HiRID audit; MIIV/MIMIC
     still use prescriptions, not inputevents.
 """
@@ -27,7 +28,7 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 # go 5/6 -> 6/6. See test_*_is_pharmacological_class below.
 BATCH8 = [
     ("warfarin",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
-    ("apixaban",   {"sic"},                          1),
+    ("apixaban",   {"sic", "miiv"},                  2),
     ("enoxaparin", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("aspirin",    {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
 ]
@@ -61,7 +62,9 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
-            assert src.get("callback") == "transform_fun(set_val(TRUE))"
+            # An eMAR source keeps given doses first, then marks them TRUE.
+            expected = "emar_administered" if src.get("table") == "emar" else "transform_fun(set_val(TRUE))"
+            assert src.get("callback") == expected
 
 
 @pytest.mark.parametrize("name,_dbs,_cov", BATCH8, ids=[m[0] for m in BATCH8])
@@ -89,11 +92,12 @@ def test_warfarin_sic_uses_vka_class(cdict):
     assert ids == {1657, 1892}
 
 
-def test_apixaban_sic_only(cdict):
-    """apixaban only available in SIC d_references; downstream usage must
-    be aware of single-DB scope."""
+def test_apixaban_sic_and_miiv_emar(cdict):
+    """apixaban: SIC d_references DrugID and MIMIC-IV administered eMAR events;
+    downstream usage must be aware of the two-database scope."""
     sources = set(cdict["apixaban"]["sources"])
-    assert sources == {"sic"}
+    assert sources == {"sic", "miiv"}
+    assert cdict["apixaban"]["sources"]["miiv"][0]["table"] == "emar"
 
 
 def test_enoxaparin_sic_includes_lmwh_class(cdict):

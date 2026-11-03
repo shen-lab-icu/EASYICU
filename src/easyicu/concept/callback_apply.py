@@ -826,6 +826,20 @@ def _apply_callback(
         # eICU sedation scores keep RASS-scale rows only (owner: eicu_sedation_scale).
         return restrict_to_rass_scale(frame, data_source=data_source, concept_name=concept_name)
 
+    if expr == "sicdb_airway_attributed_ventilation":
+        # SICdb ventilator settings count as invasive ventilation only next to
+        # a documented airway; the rule lives in sicdb_ventilation.
+        from .sicdb_ventilation import apply_sicdb_attributed_ventilation
+
+        return apply_sicdb_attributed_ventilation(
+            frame, concept_name=concept_name, data_source=data_source
+        )
+
+    if expr == "emar_administered":
+        from .emar_administration import keep_administered
+
+        return keep_administered(frame, concept_name=concept_name)
+
     if expr == "transform_fun(miiv_age)":
         from .callbacks import miiv_age
 
