@@ -1524,11 +1524,11 @@
      "ids": [
       451,
       456,
-      666,
-      667
+      666
      ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit: removed 667 'HCO3 Std (BGA)' (standard, not actual bicarbonate)."
     }
    ]
   }
@@ -2494,9 +2494,10 @@
   "sources": {
    "aumc": [
     {
-     "ids": 6824,
+     "ids": 10413,
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit: 10413 'MB-Massa (bloed)' (ug/l = ng/mL mass) replaces 6824 CK-MB activity (IE/l)."
     }
    ],
    "eicu": [
@@ -4119,7 +4120,6 @@
     {
      "ids": [
       30043,
-      30125,
       30307
      ],
      "table": "inputevents_cv",
@@ -4131,7 +4131,8 @@
      "boundary_var": "stopped",
      "rate_var": "rate",
      "merge_gap_hours": 5,
-     "callback": "mimic_dur_incv"
+     "callback": "mimic_dur_incv",
+     "_comment": "2026-11-03 extraction audit: removed 30125 Milrinone (it has its own concept)."
     },
     {
      "ids": 221662,
@@ -4160,7 +4161,6 @@
     {
      "ids": [
       30043,
-      30125,
       30307
      ],
      "table": "inputevents_cv",
@@ -4172,7 +4172,8 @@
      "boundary_var": "stopped",
      "rate_var": "rate",
      "merge_gap_hours": 5,
-     "callback": "mimic_dur_incv"
+     "callback": "mimic_dur_incv",
+     "_comment": "2026-11-03 extraction audit: removed 30125 Milrinone (it has its own concept)."
     },
     {
      "ids": 221662,
@@ -4263,13 +4264,13 @@
     {
      "ids": [
       30043,
-      30125,
       30307
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "mimic_rate_cv"
+     "callback": "mimic_rate_cv",
+     "_comment": "2026-11-03 extraction audit: removed 30125 Milrinone (it has its own concept)."
     },
     {
      "ids": 221662,
@@ -4283,13 +4284,13 @@
     {
      "ids": [
       30043,
-      30125,
       30307
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "mimic_rate_cv"
+     "callback": "mimic_rate_cv",
+     "_comment": "2026-11-03 extraction audit: removed 30125 Milrinone (it has its own concept)."
     },
     {
      "ids": 221662,
@@ -6895,9 +6896,13 @@
    ],
    "sic": [
     {
-     "ids": 708,
+     "ids": [
+      708,
+      707
+     ],
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "_comment": "2026-11-03 extraction audit: added 707 'HeartRateEKG' beside 708 'HeartRateSPO2'."
     }
    ]
   }
@@ -10123,11 +10128,11 @@
    "sic": [
     {
      "ids": [
-      469,
-      686
+      469
      ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit: removed 686 'Natrium (BGA)' (d_references notes known validity issues)."
     }
    ]
   }
@@ -11502,21 +11507,25 @@
    "mimic": [
     {
      "ids": [
-      224700
+      224700,
+      686
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 extraction audit: added CareVue 686 'Total PEEP Level'."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
-      224700
+      224700,
+      686
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 extraction audit: added CareVue 686 'Total PEEP Level'."
     }
    ]
   }
@@ -11751,11 +11760,16 @@
    ],
    "miiv": [
     {
-     "ids": 221749,
+     "ids": [
+      221749,
+      229630,
+      229632
+     ],
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "_comment": "2026-11-03 extraction audit: added 229630/229632 'Phenylephrine (50/250)', '(200/250)' (rate in mcg/kg/min like 221749)."
     }
    ],
    "mimic": [
@@ -12891,13 +12905,6 @@
      "table": "labevents",
      "sub_var": "itemid"
     }
-   ],
-   "sic": [
-    {
-     "ids": 598,
-     "table": "laboratory",
-     "sub_var": "LaboratoryID"
-    }
    ]
   }
  },
@@ -13244,61 +13251,54 @@
     {
      "ids": [
       220210,
-      224689,
       224690
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 extraction audit: removed 224689 'Respiratory Rate (spontaneous)': resp is the total rate."
     }
    ],
    "mimic": [
     {
      "ids": [
       618,
-      614,
       615,
-      653,
-      1884,
       3603,
       8113,
       220210,
-      224689,
       224690
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed CareVue 619 Respiratory Rate Set; keep measured/spontaneous/total respiratory-rate signals only. Semantic coverage review added CareVue spontaneous/total/generic respiratory-rate channels 614, 615, 653, 1884, 3603, 8113; high-threshold and respiratory-quotient labels remain excluded."
+     "_comment": "2026-07-03 audit: removed CareVue 619 Respiratory Rate Set; keep measured/spontaneous/total respiratory-rate signals only. Semantic coverage review added CareVue spontaneous/total/generic respiratory-rate channels 614, 615, 653, 1884, 3603, 8113; high-threshold and respiratory-quotient labels remain excluded. | 2026-11-03 extraction audit: removed spontaneous-only rates 614, 653, 1884, 224689: resp is the total rate."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
       618,
-      614,
       615,
-      653,
-      1884,
       3603,
       8113,
       220210,
-      224689,
       224690
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed CareVue 619 Respiratory Rate Set; keep measured/spontaneous/total respiratory-rate signals only. Semantic coverage review added CareVue spontaneous/total/generic respiratory-rate channels 614, 615, 653, 1884, 3603, 8113; high-threshold and respiratory-quotient labels remain excluded."
+     "_comment": "2026-07-03 audit: removed CareVue 619 Respiratory Rate Set; keep measured/spontaneous/total respiratory-rate signals only. Semantic coverage review added CareVue spontaneous/total/generic respiratory-rate channels 614, 615, 653, 1884, 3603, 8113; high-threshold and respiratory-quotient labels remain excluded. | 2026-11-03 extraction audit: removed spontaneous-only rates 614, 653, 1884, 224689: resp is the total rate."
     }
    ],
    "sic": [
     {
      "ids": [
       719,
-      2282
+      2282,
+      2274
      ],
      "table": "data_float_h",
      "sub_var": "DataID",
-     "_comment": "2026-07-04 variant audit: added 2282 'RespRate' (second RespRate channel, 241k rows, median 14; mirrors 719)."
+     "_comment": "2026-07-04 variant audit: added 2282 'RespRate' (second RespRate channel, 241k rows, median 14; mirrors 719). | 2026-11-03 extraction audit: added 2274 'RespRateEKG' (impedance respiratory rate)."
     }
    ]
   }
@@ -14665,11 +14665,10 @@
       "Exhaled TV (patient)",
       "Exhaled Vt",
       "Tidal Volume Observed (VT)",
-      "Tidal Volume, Delivered",
-      "Vt Spontaneous (mL)"
+      "Tidal Volume, Delivered"
      ],
      "callback": "eicu_tidal_volume_mixed_scale",
-     "_comment": "2026-08-03 unit audit: respiratoryCharting has no unit column and these labels mix mL values with L-scale decimals. Normalize per raw row before hourly aggregation using same-stay mL evidence or adult age; preserve explicit paediatric mL and fail closed on ambiguous low values. Settings and RSBI-derived labels remain excluded."
+     "_comment": "2026-08-03 unit audit: respiratoryCharting has no unit column and these labels mix mL values with L-scale decimals. Normalize per raw row before hourly aggregation using same-stay mL evidence or adult age; preserve explicit paediatric mL and fail closed on ambiguous low values. Settings and RSBI-derived labels remain excluded. 2026-11-03 extraction audit: removed 'Vt Spontaneous (mL)'; tidal_vol is the observed total."
     },
     {
      "ids": "TV",
@@ -14692,14 +14691,12 @@
    "miiv": [
     {
      "ids": [
-      224421,
-      224685,
-      224686
+      224685
      ],
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-03 audit: 224684 is Tidal Volume (set), so it belongs only to tidal_vol_set."
+     "_comment": "2026-07-03 audit: 224684 is Tidal Volume (set), so it belongs only to tidal_vol_set. | 2026-11-03 extraction audit: removed spontaneous Vt 224421, 224686: tidal_vol is the observed (machine) tidal volume."
     }
    ],
    "mimic": [
@@ -14707,44 +14704,20 @@
      "ids": [
       65,
       501,
-      502,
-      654,
       681,
       682,
-      684,
-      2094,
       2311,
       2400,
-      2402,
       2408,
       2420,
       2534,
-      2566,
       2998,
-      3003,
-      3004,
-      3045,
-      3050,
-      3083,
-      3086,
       5593,
-      6289,
-      224421,
-      224685,
-      224686
+      224685
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check."
-    },
-    {
-     "ids": [
-      652
-     ],
-     "table": "chartevents",
-     "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 1000), 'ml', 'l')",
-     "_comment": "2026-07-03 semantic coverage review: 652=Spon. Vt (L) (Mech.), valueuom=L; convert to ml before pooling."
+     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check. | 2026-11-03 extraction audit: removed inspiratory 502 and spontaneous-labelled Vt items; tidal_vol is the observed/expired tidal volume. 2026-11-03 extraction audit: removed the spontaneous channel 652 (Spon. Vt (L) (Mech.)); tidal_vol is the observed total."
     }
    ],
    "sic": [
@@ -14762,44 +14735,20 @@
      "ids": [
       65,
       501,
-      502,
-      654,
       681,
       682,
-      684,
-      2094,
       2311,
       2400,
-      2402,
       2408,
       2420,
       2534,
-      2566,
       2998,
-      3003,
-      3004,
-      3045,
-      3050,
-      3083,
-      3086,
       5593,
-      6289,
-      224421,
-      224685,
-      224686
+      224685
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check."
-    },
-    {
-     "ids": [
-      652
-     ],
-     "table": "chartevents",
-     "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 1000), 'ml', 'l')",
-     "_comment": "2026-07-03 semantic coverage review: 652=Spon. Vt (L) (Mech.), valueuom=L; convert to ml before pooling."
+     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check. | 2026-11-03 extraction audit: removed inspiratory 502 and spontaneous-labelled Vt items; tidal_vol is the observed/expired tidal volume. 2026-11-03 extraction audit: removed the spontaneous channel 652 (Spon. Vt (L) (Mech.)); tidal_vol is the observed total."
     }
    ]
   }
@@ -16199,10 +16148,8 @@
       40055,
       40056,
       40057,
-      40065,
       40069,
       40085,
-      40086,
       40094,
       40096,
       40405,
@@ -16236,14 +16183,15 @@
       226567,
       226584,
       227488,
-      227489
+      227489,
+      40651
      ],
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
      "bounds_stage": "post_sum",
      "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
-     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
+     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation. | 2026-11-03 extraction audit: removed 40086 'Drain Out #2 Pigtail' (a drain) and 40065 'OR Out PACU Urine' (OR/PACU urine is not counted for MetaVision either). | 2026-11-03 extraction audit: added 40651 'Urine Out Ureteral Stent #2'."
     }
    ],
    "mimic_demo": [
@@ -16252,10 +16200,8 @@
       40055,
       40056,
       40057,
-      40065,
       40069,
       40085,
-      40086,
       40094,
       40096,
       40405,
@@ -16289,14 +16235,15 @@
       226567,
       226584,
       227488,
-      227489
+      227489,
+      40651
      ],
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
      "bounds_stage": "post_sum",
      "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
-     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
+     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation. | 2026-11-03 extraction audit: removed 40086 'Drain Out #2 Pigtail' (a drain) and 40065 'OR Out PACU Urine' (OR/PACU urine is not counted for MetaVision either). | 2026-11-03 extraction audit: added 40651 'Urine Out Ureteral Stent #2'."
     }
    ],
    "sic": [
@@ -16583,13 +16530,13 @@
     },
     {
      "ids": [
-      467,
-      469
+      467
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids."
+     "callback": "mimiciii_oxygen_device_event",
+     "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids. | 2026-11-03 extraction audit: 467 'O2 Delivery Device' ends ventilation only when it records an oxygen-therapy device (mimic-code classification), not 'Ventilator' or any value; 469 'O2 Delivery Mode' is not part of that classification.",
+     "val_var": "value"
     }
    ],
    "mimic_demo": [
@@ -16605,13 +16552,13 @@
     },
     {
      "ids": [
-      467,
-      469
+      467
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids."
+     "callback": "mimiciii_oxygen_device_event",
+     "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids. | 2026-11-03 extraction audit: 467 'O2 Delivery Device' ends ventilation only when it records an oxygen-therapy device (mimic-code classification), not 'Ventilator' or any value; 469 'O2 Delivery Mode' is not part of that classification.",
+     "val_var": "value"
     }
    ]
   }
@@ -19820,6 +19767,16 @@
      "callback": "vent_mode_control",
      "_comment": "MIMIC-III carevue itemid 720; different value strings from MIMIC-IV",
      "val_var": "value"
+    },
+    {
+     "ids": [
+      223849
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "vent_mode_control",
+     "val_var": "value",
+     "_comment": "2026-11-03 extraction audit: added MetaVision 223849 'Ventilator Mode' (same value strings as MIMIC-IV)."
     }
    ],
    "mimic_demo": [
@@ -19832,6 +19789,16 @@
      "callback": "vent_mode_control",
      "_comment": "MIMIC-III carevue itemid 720; different value strings from MIMIC-IV",
      "val_var": "value"
+    },
+    {
+     "ids": [
+      223849
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "vent_mode_control",
+     "val_var": "value",
+     "_comment": "2026-11-03 extraction audit: added MetaVision 223849 'Ventilator Mode' (same value strings as MIMIC-IV)."
     }
    ],
    "aumc": [
@@ -19899,6 +19866,16 @@
      "callback": "vent_mode_seq",
      "_comment": "MIMIC-III carevue itemid 720; different value strings from MIMIC-IV",
      "val_var": "value"
+    },
+    {
+     "ids": [
+      223849
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "vent_mode_seq",
+     "val_var": "value",
+     "_comment": "2026-11-03 extraction audit: added MetaVision 223849 'Ventilator Mode' (same value strings as MIMIC-IV)."
     }
    ],
    "mimic_demo": [
@@ -19911,6 +19888,16 @@
      "callback": "vent_mode_seq",
      "_comment": "MIMIC-III carevue itemid 720; different value strings from MIMIC-IV",
      "val_var": "value"
+    },
+    {
+     "ids": [
+      223849
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "vent_mode_seq",
+     "val_var": "value",
+     "_comment": "2026-11-03 extraction audit: added MetaVision 223849 'Ventilator Mode' (same value strings as MIMIC-IV)."
     }
    ],
    "aumc": [

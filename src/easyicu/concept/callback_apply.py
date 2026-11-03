@@ -768,6 +768,26 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr == "mimiciii_oxygen_device_event":
+        # 467 "O2 Delivery Device" ends ventilation only when it records an
+        # oxygen-therapy device, using the same reference classification as
+        # mimiciii_chart_ventilation_intervals. "Ventilator" and other values
+        # are not an end (11-03 extraction audit: any value counted).
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError("mimiciii_oxygen_device_event requires the VALUE column")
+        values = frame[value_column].astype("string")
+        oxygen = values.isin(
+            _MIMICIII_CAREVUE_OXYGEN_VALUES | _MIMICIII_METAVISION_OXYGEN_VALUES
+        ).fillna(False)
+        return frame.loc[oxygen.to_numpy()].assign(**{concept_name: True})
+
     if expr == "mimiciii_chart_ventilation_intervals":
         value_column = (
             concept_name

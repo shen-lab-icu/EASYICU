@@ -518,13 +518,16 @@ def test_ventilator_itemids_keep_measured_and_set_semantics_separate() -> None:
     assert 224422 not in vent_rate_mimic
     assert {224688, 224690}.isdisjoint(minute_vol_mimic)
     assert 224687 in minute_vol_mimic
-    assert {614, 615, 653, 1884, 3603, 8113}.issubset(resp_mimic)
-    assert {219, 613, 619, 1635}.isdisjoint(resp_mimic)
-    assert {614, 615, 653, 1884, 3603, 8113}.issubset(resp_mimic_demo)
-    assert {219, 613, 619, 1635}.isdisjoint(resp_mimic_demo)
+    # 11-03 extraction audit: resp is the total rate; a spontaneous-only
+    # channel charted beside the total would pull the hourly value down.
+    assert {615, 3603, 8113}.issubset(resp_mimic)
+    assert {219, 613, 614, 619, 653, 1635, 1884, 224689}.isdisjoint(resp_mimic)
+    assert {615, 3603, 8113}.issubset(resp_mimic_demo)
+    assert {219, 613, 614, 619, 653, 1635, 1884, 224689}.isdisjoint(resp_mimic_demo)
+    assert 224689 not in resp_miiv
 
 
-def test_tidal_volume_semantic_coverage_converts_liter_only_source() -> None:
+def test_tidal_volume_is_the_observed_total_without_spontaneous_channels() -> None:
     concept = _load_json("concept-dict.json")
     measured_mimic_ids = {
         source_id
@@ -532,20 +535,13 @@ def test_tidal_volume_semantic_coverage_converts_liter_only_source() -> None:
         if source.get("table") == "chartevents" and "callback" not in source
         for source_id in source["ids"]
     }
-    converted_mimic_ids = {
-        source_id
-        for source in concept["tidal_vol"]["sources"]["mimic"]
-        if source.get("table") == "chartevents" and "convert_unit" in source.get("callback", "")
-        for source_id in source["ids"]
-    }
 
-    assert {65, 654, 684, 2094, 2311, 2400, 2402, 2408, 2420, 2534, 2566}.issubset(
+    assert {65, 681, 682, 2311, 2400, 2408, 2420, 2534, 2998, 5593, 224685}.issubset(
         measured_mimic_ids
     )
-    assert {2998, 3003, 3004, 3045, 3050, 3083, 3086, 5593, 6289, 224421}.issubset(
-        measured_mimic_ids
-    )
-    assert 652 in converted_mimic_ids
+    # 11-03 extraction audit: spontaneous-only and inspiratory channels were
+    # pooled with the observed total; 652 was the litre-scale spontaneous one.
+    spontaneous = {502, 652, 654, 684, 2094, 2402, 2566, 3003, 3004, 3045, 3050, 3083, 3086, 6289, 224421, 224686}
 
     excluded = {
         639,  # sigh tidal volume, V-mA unit in local data
@@ -563,15 +559,17 @@ def test_tidal_volume_semantic_coverage_converts_liter_only_source() -> None:
         for source_id in source["ids"]
     }
     assert excluded.isdisjoint(all_mimic_tidal_ids)
+    assert spontaneous.isdisjoint(all_mimic_tidal_ids)
 
     assert concept["tidal_vol"]["sources"]["mimic"] == concept["tidal_vol"]["sources"]["mimic_demo"]
 
     eicu_ids = set(concept["tidal_vol"]["sources"]["eicu"][0]["ids"])
-    assert {"Tidal Volume, Delivered", "Vt Spontaneous (mL)"}.issubset(eicu_ids)
+    assert "Tidal Volume, Delivered" in eicu_ids
+    assert "Vt Spontaneous (mL)" not in eicu_ids
     assert "Adult Con Setting Spont Exp Vt" not in eicu_ids
 
     miiv_ids = set(concept["tidal_vol"]["sources"]["miiv"][0]["ids"])
-    assert 224421 in miiv_ids
+    assert miiv_ids == {224685}
 
 
 def test_aumc_tidal_volume_liter_sources_are_converted_to_ml() -> None:

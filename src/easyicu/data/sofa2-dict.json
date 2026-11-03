@@ -867,10 +867,10 @@
       7196,
       12467,
       19929,
-      9126
+      7135
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5)"
+     "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5) | 2026-11-03 extraction audit: removed 9126 (ordercategory 'Niet iv Zalven/Crèmes/Druppels', eye drops). | 2026-11-03 extraction audit: added 7135 Isoprenaline (Isuprel) syringe-pump infusion."
     }
    ],
    "hirid": [
