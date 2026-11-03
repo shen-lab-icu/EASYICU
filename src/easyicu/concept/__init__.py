@@ -5573,7 +5573,7 @@ class ConceptResolver:
                 'hirid_rate', 'hirid_rate_kg', 'hirid_duration',
                 'eicu_rate', 'eicu_rate_kg',
                 'aumc_rate', 'aumc_rate_kg', 'aumc_rate_units', 'aumc_dur',
-                'sic_rate_kg', 'sic_dur',
+                'sic_rate_kg', 'sic_rate_units', 'sic_dur',
                 # 🔧 FIX 2026-02-05: distribute_amount 内部已经处理时间展开，不需要再次 expand
                 # MIMIC-III ins 概念使用 inputevents_mv 的 distribute_amount callback
                 'distribute_amount',
