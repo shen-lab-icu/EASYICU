@@ -96,7 +96,8 @@ def test_censoring_mismatch_uses_source_facts_and_refuses_when_no_complete_alter
     ("miiv", "exact", None, None, None, None),
     ("eicu", "substitution", "icu_death", "patient", "unitdischargestatus", "unitdischargeoffset"),
     ("hirid", "refusal", None, None, None, None),
-    ("aumc", "substitution", "icu_death", "admissions", "destination", "dischargedat"),
+    # AUMC follows survivors after discharge (2026-11-03 audit round 2, R2-03).
+    ("aumc", "substitution", "mort_28d", "derived_outcomes", "mort_28d", "followup_days_28d"),
     ("sic", "refusal", None, None, None, None),
 ])
 def test_default_survival_offers_only_supported_mortality_with_explicit_coordinates(
@@ -367,7 +368,8 @@ def test_missing_time_zero_treatment_and_observation_timing_are_named():
         assert missing in {item.capability for item in decision.missing}
 
 
-@pytest.mark.parametrize("database,expected", [("miiv", "exact"), ("sic", "refusal"), ("mimic", "refusal"), ("eicu", "refusal")])
+# MIMIC-III follow-up exists since R2-03 (death known for survivors).
+@pytest.mark.parametrize("database,expected", [("miiv", "exact"), ("sic", "refusal"), ("mimic", "exact"), ("eicu", "refusal")])
 def test_fixed_horizon_followup_reads_its_existing_registry(database, expected):
     decision = assess_study(research_capability_profile(database), StudyRequirements(
         family="survival", outcome="mort_28d", concepts=("mort_28d", "followup_days_28d"),

@@ -235,7 +235,8 @@ assert catalog.build_catalog()['conceptCoverage']['hr']['audience'] == 'clinical
         ("missing", {}, set()),
         ("cycle", {"cycle": {"concepts": ["cycle"]}}, set()),
         ("aki_reference_status", {"kdigo_aki": {"sources": {"eicu": [{}]}}}, {"eicu"}),
-        ("mort_28d", {}, {"miiv", "miiv_demo", "sic", "sic_demo"}),
+        # R2-03 (2026-11-03): MIMIC-III and AUMC record death for survivors.
+        ("mort_28d", {}, {"miiv", "miiv_demo", "sic", "sic_demo", "mimic", "mimic_demo", "aumc"}),
         ("charlson", {}, {"eicu", "miiv", "mimic", "eicu_demo", "miiv_demo", "mimic_demo"}),
         ("culture_positive", {}, {"eicu", "miiv", "mimic", "eicu_demo", "miiv_demo", "mimic_demo"}),
         ("circ_failure", {"lact": {"sources": {"eicu": [{}]}}}, set()),

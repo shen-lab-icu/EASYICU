@@ -296,7 +296,8 @@ SYNONYM_GROUPS: Tuple[frozenset, ...] = (
             "oxygenation index",
         }
     ),
-    frozenset({"sao2/fio2", "s/f ratio", "sf ratio"}),
+    # safi is SpO2/FiO2 since the 2026-11-03 audit round 2 (G8).
+    frozenset({"spo2/fio2", "spo2/fio2 ratio", "s/f ratio", "sf ratio"}),
     frozenset(
         {"rdw", "red cell distribution width", "red blood cell distribution width"}
     ),

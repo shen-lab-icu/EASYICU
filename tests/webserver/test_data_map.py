@@ -177,7 +177,8 @@ def test_survival_map_agrees_with_default_death_question_and_plan(database, stat
     if status == "substitution":
         proposal = cell["decision"]["substitutions"][0]
         assert proposal["capability"] == "outcome_meaning"
-        assert proposal["substitute"] == ("mort_28d" if database == "sic" else "icu_death")
+        # AUMC follows survivors after discharge (R2-03), as SICdb does.
+        assert proposal["substitute"] == ("mort_28d" if database in {"sic", "aumc"} else "icu_death")
         assert proposal["source_field"]["source"]
     assert cell["decision"] == decision.model_dump(mode="json") == plan_capability_decision(context, plan).model_dump(mode="json")
     gap = study_family_database_gap(study, question=question, database=database)
