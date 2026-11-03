@@ -30,7 +30,10 @@ Per-database evidence (see :data:`SPECIMEN_RULES`):
   recorded non-arterial value, including laboratory status codes such as
   "Vervalt" or "Gestold", drops the gas.
 * SICdb: the laboratory row's own ``LaboratoryType``; 2296 is "Arterial" in
-  ``d_references``.  Rows with an empty type are dropped.
+  ``d_references``.  Rows with an empty type are dropped, except for cases
+  admitted in 2013: the type was not yet recorded then, and those gases are
+  arterial (60,882 PO2 rows, median 82 mmHg, against 33-41 mmHg for untyped
+  rows from 2015).
 
 A sample is arterial only when every non-empty specimen value recorded for it
 is one of the database's arterial codes after trimming and upper-casing
@@ -53,6 +56,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Iterable, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -91,6 +95,12 @@ class SpecimenColumnRule:
 
     column: str
     arterial_codes: frozenset
+    #: Admission years whose untyped rows are kept: the type was not recorded
+    #: yet (audit round 2, G1).  Read from ``year_table.year_column`` by case.
+    untyped_kept_years: frozenset = frozenset()
+    year_table: str = ""
+    year_column: str = ""
+    case_column: str = ""
 
 
 SPECIMEN_RULES = {
@@ -112,7 +122,11 @@ SPECIMEN_RULES = {
         value_column="value", arterial_tokens=frozenset({"ART."}),
         keep_unrecorded=True,
     ),
-    "sic": SpecimenColumnRule(column="LaboratoryType", arterial_codes=frozenset({2296})),
+    "sic": SpecimenColumnRule(
+        column="LaboratoryType", arterial_codes=frozenset({2296}),
+        untyped_kept_years=frozenset({2013}), year_table="cases",
+        year_column="AdmissionYear", case_column="CaseID",
+    ),
 }
 SPECIMEN_RULES["mimic_demo"] = SPECIMEN_RULES["mimic"]
 
@@ -263,17 +277,45 @@ def _restrict_by_records(frame, rule: SpecimenRecordRule, data_source, accepted_
     return frame.loc[keep], audit
 
 
-def _restrict_by_column(frame, rule: SpecimenColumnRule):
+def _untyped_kept(frame, rule: SpecimenColumnRule, data_source) -> np.ndarray:
+    """Rows whose case was admitted in a year before the type was recorded."""
+
+    keep = np.zeros(len(frame), dtype=bool)
+    if not rule.untyped_kept_years or rule.case_column not in frame.columns:
+        return keep
+    try:
+        table = data_source.load_table(
+            rule.year_table, columns=[rule.case_column, rule.year_column], verbose=False
+        )
+    except Exception as exc:
+        raise ArterialSpecimenContractError(
+            "arterial_specimen_year_unavailable",
+            f"{rule.year_table}.{rule.year_column}: {type(exc).__name__}",
+        ) from exc
+    years = getattr(table, "data", table)
+    if rule.year_column not in getattr(years, "columns", ()):
+        # Without the admission year the strict rule stands: untyped rows drop.
+        return keep
+    by_case = years.drop_duplicates(subset=[rule.case_column], keep="last").set_index(
+        rule.case_column
+    )[rule.year_column]
+    year = pd.to_numeric(frame[rule.case_column].map(by_case), errors="coerce")
+    return year.isin(rule.untyped_kept_years).to_numpy()
+
+
+def _restrict_by_column(frame, rule: SpecimenColumnRule, data_source=None):
     codes = pd.to_numeric(frame[rule.column], errors="coerce")
     arterial = codes.isin(rule.arterial_codes).to_numpy()
+    untyped = codes.isna().to_numpy()
+    kept_untyped = untyped & _untyped_kept(frame, rule, data_source) if untyped.any() else untyped
     audit = {
         "rows": int(len(frame)),
         "arterial_rows": int(arterial.sum()),
         "non_arterial_rows_dropped": int((codes.notna().to_numpy() & ~arterial).sum()),
-        "unrecorded_rows": int(codes.isna().sum()),
-        "unrecorded_rows_kept": False,
+        "unrecorded_rows": int(untyped.sum()),
+        "unrecorded_rows_kept": int(kept_untyped.sum()),
     }
-    return frame.loc[arterial], audit
+    return frame.loc[arterial | kept_untyped], audit
 
 
 def restrict_to_arterial_specimens(
@@ -306,7 +348,7 @@ def restrict_to_arterial_specimens(
     if isinstance(rule, SpecimenRecordRule):
         kept, audit = _restrict_by_records(frame, rule, data_source)
     else:
-        kept, audit = _restrict_by_column(frame, rule)
+        kept, audit = _restrict_by_column(frame, rule, data_source)
     kept = kept.copy()
     kept.attrs.update(attrs)
     kept.attrs[AUDIT_ATTR] = audit

@@ -110,3 +110,23 @@ def test_h3_aumc_high_frequency_cvp_drops_non_positive_values():
     by_ids = {tuple(s["ids"]): s for s in _sources("cvp", "aumc")}
     assert by_ids[(20926,)]["callback"] == "transform_fun(na_below(1))"
     assert "callback" not in by_ids[(6655,)]
+
+
+def test_g1_sicdb_keeps_untyped_gases_of_cases_admitted_in_2013():
+    from easyicu.concept.blood_gas_specimen import SPECIMEN_RULES, _restrict_by_column
+
+    class Cases:
+        def load_table(self, name, columns=None, verbose=False):
+            assert name == "cases"
+            return types.SimpleNamespace(data=pd.DataFrame(
+                {"CaseID": [1, 2], "AdmissionYear": [2013, 2018]}))
+
+    frame = pd.DataFrame({"CaseID": [1, 1, 2, 2],
+                          "LaboratoryType": [None, 2296, None, 2297],
+                          "po2": [82.0, 90.0, 35.0, 40.0]})
+    kept, audit = _restrict_by_column(frame, SPECIMEN_RULES["sic"], Cases())
+
+    # 2013: the type was not yet recorded, so untyped gases are arterial.
+    # Later untyped (median 33-41 mmHg) and typed non-arterial rows drop.
+    assert kept["po2"].tolist() == [82.0, 90.0]
+    assert audit["unrecorded_rows_kept"] == 1
