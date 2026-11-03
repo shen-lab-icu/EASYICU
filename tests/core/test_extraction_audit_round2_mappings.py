@@ -130,3 +130,21 @@ def test_g1_sicdb_keeps_untyped_gases_of_cases_admitted_in_2013():
     # Later untyped (median 33-41 mmHg) and typed non-arterial rows drop.
     assert kept["po2"].tolist() == [82.0, 90.0]
     assert audit["unrecorded_rows_kept"] == 1
+
+
+@pytest.mark.parametrize("database", ["mimic", "mimic_demo"])
+def test_k1_carevue_procedure_events_are_rrt_in_the_loaded_overlay(database):
+    import re
+
+    from easyicu.resources import load_dictionary
+
+    # The loader reads rrt from the sofa2 overlay, so the source must be there.
+    sources = load_dictionary(include_sofa2=True)["rrt"].sources[database]
+    [source] = [s for s in sources if s.ids == [582]]
+    assert source.value_var == "value"
+    pattern = re.compile(source.regex, re.IGNORECASE)
+    for event in ("Hemodialysis st", "Hemodialysis end", "CVVHD Start",
+                  "CVVHD D/C", "CAVH Start", "CAVH D/C"):
+        assert pattern.search(event)
+    for other in ("EKG", "Arterial Line Placement", "Hemodialysis cath"):
+        assert not pattern.search(other)
