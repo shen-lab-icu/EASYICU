@@ -9849,7 +9849,7 @@
      "table": "data_float_h",
      "sub_var": "DataID",
      "callback": "sicdb_airway_attributed_ventilation",
-     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py."
+     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py. 2026-11-03 audit round 2 (P1): in ICU units 2-4, a set-rate (2282) or PressureOverPeep (3040) hour under propofol (3057 > 0) is invasive without an airway interval; the airway-only rule stays available as the strict sensitivity rule."
     }
    ]
   }
