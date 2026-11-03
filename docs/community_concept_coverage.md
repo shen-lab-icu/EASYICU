@@ -9,7 +9,7 @@ concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 20 | 25 | 105 |
+| nwicu | 137 | 19 | 26 | 105 |
 | zhejiang_eicu | 128 | 25 | 22 | 112 |
 | jinhua | 135 | 19 | 24 | 109 |
 | zigong | 125 | 19 | 33 | 110 |
@@ -268,7 +268,7 @@ concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
 | `sofa_renal` | outcome | partial | derived | partial | derived |
 | `sofa_resp` | outcome | partial | partial | partial | partial |
 | `spo2` | respiratory | direct | direct | direct | direct |
-| `supp_o2` | respiratory | derived | partial | partial | unavailable |
+| `supp_o2` | respiratory | partial | partial | partial | unavailable |
 | `susp_inf` | outcome | partial | partial | partial | partial |
 | `svo2` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `t4` | chemistry | direct | direct | direct | unavailable |
