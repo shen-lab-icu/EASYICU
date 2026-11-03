@@ -307,3 +307,28 @@ def test_w2_weight_fallbacks_rank_after_admission_weight():
         first = _sources("weight", database)[0]
         assert first["source_channel"] == "admission"
         assert len(_sources("weight", database)) == 3
+
+
+def test_v5_hirid_concurrent_syringes_add_up_in_the_hour():
+    from easyicu.utils.callback_utils import hirid_rate_kg
+
+    frame = pd.DataFrame({
+        "patientid": [1, 1], "givenat": [2.2, 2.7], "infusionid": [10, 11],
+        "givendose": [60.0, 60.0], "doseunit": ["µg", "µg"], "weight": [50.0, 50.0],
+    })
+    out = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
+                        grp_var="infusionid", index_col="givenat", interval_minutes=60.0)
+    assert out["norepi_rate"].tolist() == pytest.approx([120.0 / 60.0 / 50.0])
+
+
+def test_v5_hirid_syringes_within_five_minutes_are_one_episode():
+    from easyicu.utils.callback_utils import hirid_duration
+
+    frame = pd.DataFrame({
+        "patientid": [1] * 6,
+        "givenat": [0.0, 3.5, 3.55, 7.2, 10.0, 12.0],
+        "infusionid": [1, 1, 2, 2, 3, 3],
+    })
+    out = hirid_duration(frame, concept_name="norepi_dur", index_col="givenat", grp_var="infusionid")
+    # Syringe 2 starts 3 minutes after syringe 1 ends; syringe 3 starts 2.8 h later.
+    assert out[["givenat", "norepi_dur"]].values.tolist() == [[0.0, 7.0], [10.0, 2.0]]

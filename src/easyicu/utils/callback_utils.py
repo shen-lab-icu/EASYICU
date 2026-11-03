@@ -5586,10 +5586,11 @@ def hirid_rate_kg(
     else:
         df['_time_bin'] = 0
     
-    # Step 4: Group by (patientid, time_bin, infusionid) and sum doses
+    # Step 4: Group by (patientid, time_bin) and sum doses.  Concurrent
+    # syringes of the drug add up: a syringe change splits the hour's mass
+    # between two infusionids, and the median of their partial rates
+    # understated 11.8% of noradrenaline hours (2026-11-03 audit round 2, V5).
     group_cols = [id_col, '_time_bin']
-    if grp_var and grp_var in df.columns:
-        group_cols.append(grp_var)
     
     # Aggregate the first usable weight per patient.
     weight_map = (
@@ -6303,6 +6304,23 @@ def _expand_hirid_vent_to_hourly(
     return result
 
 
+HIRID_EPISODE_GAP_HOURS = 5.0 / 60.0
+
+
+def _merge_infusion_episodes(spans: pd.DataFrame, id_col: str, gap_hours: float) -> pd.DataFrame:
+    """Merge per-infusion [``_min_time``, ``_max_time``] spans into episodes."""
+    if spans.empty:
+        return spans[[id_col, "_min_time", "_max_time"]]
+    spans = spans.sort_values([id_col, "_min_time"], kind="mergesort").reset_index(drop=True)
+    running_end = spans.groupby(id_col)["_max_time"].cummax()
+    previous_end = running_end.groupby(spans[id_col]).shift()
+    new_episode = previous_end.isna() | (spans["_min_time"] > previous_end + gap_hours)
+    spans["_episode"] = new_episode.astype("int64").groupby(spans[id_col]).cumsum()
+    return spans.groupby([id_col, "_episode"], as_index=False).agg(
+        _min_time=("_min_time", "min"), _max_time=("_max_time", "max")
+    ).drop(columns="_episode")
+
+
 def hirid_duration(
     frame: pd.DataFrame,
     *,
@@ -6398,7 +6416,12 @@ def hirid_duration(
         _min_time=('_time_numeric', 'min'),
         _max_time=('_time_numeric', 'max'),
     )
-    
+    # 2026-11-03 audit round 2 (V5): one syringe is not one administration.
+    # Syringes of the same drug that overlap or follow within 5 minutes are
+    # one episode, as SICdb and AUMC durations are (median 2 h per syringe
+    # against 7.8 h per SICdb episode).
+    result = _merge_infusion_episodes(result, id_col, HIRID_EPISODE_GAP_HOURS)
+
     result[concept_name] = np.floor(result['_max_time']) - np.floor(result['_min_time'])
     
     # Add index_col as the start time (min_time)
