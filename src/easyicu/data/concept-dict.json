@@ -3490,11 +3490,13 @@
     {
      "ids": [
       220051,
-      220180
+      220180,
+      225310
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added."
     }
    ],
    "mimic": [
@@ -7687,6 +7689,10 @@
   "description": "heart rate",
   "omopid": 4239408,
   "category": "vitals",
+  "source_channel_priority": [
+   "monitor",
+   "charted"
+  ],
   "sources": {
    "aumc": [
     {
@@ -7704,14 +7710,34 @@
     {
      "table": "vitalperiodic",
      "val_var": "heartrate",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "monitor"
+    },
+    {
+     "ids": [
+      "Heart Rate"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (H5): nurse-charted 'Heart Rate' fills hours without a vitalperiodic (monitor) value; the monitor value is preferred per hour (source_channel_priority)."
     }
    ],
    "eicu_demo": [
     {
      "table": "vitalperiodic",
      "val_var": "heartrate",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "monitor"
+    },
+    {
+     "ids": [
+      "Heart Rate"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (H5): nurse-charted 'Heart Rate' fills hours without a vitalperiodic (monitor) value; the monitor value is preferred per hour (source_channel_priority)."
     }
    ],
    "hirid": [
@@ -9312,6 +9338,24 @@
      "class_name": "col_itm",
      "source_channel": "nibp",
      "_comment": "2026-11-03 extraction audit 2: vitalaperiodic.noninvasivemean is the cuff mean."
+    },
+    {
+     "ids": [
+      "Invasive BP Mean"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Invasive BP Mean' (arterial line, 39,383 stays; 3,297 without vitalperiodic systemicmean).",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      "Arterial Line MAP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Arterial Line MAP (mmHg)' (6,030 stays).",
+     "source_channel": "invasive"
     }
    ],
    "eicu_demo": [
@@ -9328,6 +9372,24 @@
      "class_name": "col_itm",
      "source_channel": "nibp",
      "_comment": "2026-11-03 extraction audit 2: vitalaperiodic.noninvasivemean is the cuff mean."
+    },
+    {
+     "ids": [
+      "Invasive BP Mean"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Invasive BP Mean' (arterial line, 39,383 stays; 3,297 without vitalperiodic systemicmean).",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      "Arterial Line MAP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Arterial Line MAP (mmHg)' (6,030 stays).",
+     "source_channel": "invasive"
     }
    ],
    "hirid": [
@@ -9866,6 +9928,16 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+    },
+    {
+     "ids": [
+      225
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
     }
    ],
    "mimic_demo": [
@@ -9890,6 +9962,16 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+    },
+    {
+     "ids": [
+      225
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
     }
    ]
   }
@@ -12892,6 +12974,56 @@
      "index_var": "charttime",
      "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; CareVue 505 'PEEP' is the NICU ventilator PEEP (never co-charted with 506 or 686)."
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      12284,
+      12336,
+      8862,
+      16250
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (P4): ventilator-set PEEP, the same items as peep."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      2600
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "_comment": "2026-11-03 audit round 2 (P4): 2600 'Positive end expiratory pressure setting'."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 2278,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "_comment": "2026-11-03 audit round 2 (P4): 2278 RespiratorSetting PEEP, the same item as peep."
+    }
+   ],
+   "eicu": [
+    {
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "ids": [
+      "PEEP",
+      "PEEP/CPAP"
+     ],
+     "_comment": "2026-11-03 audit round 2 (P4): set PEEP, the same sources as peep; eICU charts no total PEEP."
+    },
+    {
+     "ids": "PEEP",
+     "table": "lab",
+     "sub_var": "labname",
+     "_comment": "2026-11-03 audit round 2 (P4): set PEEP, the same sources as peep; eICU charts no total PEEP."
+    }
    ]
   }
  },
@@ -12934,6 +13066,27 @@
      "sub_var": "itemid",
      "index_var": "charttime",
      "_comment": "2026-11-03 extraction audit: added CareVue 686 'Total PEEP Level'."
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      12301
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (P4): 12301 'PEEP tot' (Servo total PEEP after an expiratory hold); 6694/8879 measured end-expiratory pressure equals the set PEEP and is not total PEEP."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      2610
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "_comment": "2026-11-03 audit round 2 (P4): 2610 'Positive end expiratory pressure' (measured)."
     }
    ]
   }
@@ -14839,6 +14992,10 @@
   "description": "respiratory rate",
   "omopid": 4313591,
   "category": "respiratory",
+  "source_channel_priority": [
+   "monitor",
+   "charted"
+  ],
   "sources": {
    "aumc": [
     {
@@ -14858,14 +15015,34 @@
     {
      "table": "vitalperiodic",
      "val_var": "respiration",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "monitor"
+    },
+    {
+     "ids": [
+      "Respiratory Rate"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (H5): nurse-charted 'Respiratory Rate' fills hours without a vitalperiodic (monitor) value; the monitor value is preferred per hour (source_channel_priority)."
     }
    ],
    "eicu_demo": [
     {
      "table": "vitalperiodic",
      "val_var": "respiration",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "monitor"
+    },
+    {
+     "ids": [
+      "Respiratory Rate"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (H5): nurse-charted 'Respiratory Rate' fills hours without a vitalperiodic (monitor) value; the monitor value is preferred per hour (source_channel_priority)."
     }
    ],
    "hirid": [
@@ -15418,10 +15595,10 @@
  },
  "safi": {
   "concepts": [
-   "o2sat",
+   "spo2",
    "fio2"
   ],
-  "description": "SaO2/FiO2",
+  "description": "SpO2/FiO2 (pulse oximetry; 2026-11-03 audit round 2, G8)",
   "category": "respiratory",
   "aggregate": [
    "min",
@@ -15688,11 +15865,13 @@
     {
      "ids": [
       220050,
-      220179
+      220179,
+      225309
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added."
     }
    ],
    "mimic": [
@@ -16010,6 +16189,10 @@
   "description": "oxygen saturation",
   "omopid": 4196147,
   "category": "respiratory",
+  "source_channel_priority": [
+   "monitor",
+   "charted"
+  ],
   "sources": {
    "aumc": [
     {
@@ -16026,7 +16209,17 @@
      "table": "vitalperiodic",
      "val_var": "sao2",
      "unit_val": "%",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "monitor"
+    },
+    {
+     "ids": [
+      "O2 Saturation"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (H5): nurse-charted 'O2 Saturation' fills hours without a vitalperiodic (monitor) value; the monitor value is preferred per hour (source_channel_priority)."
     }
    ],
    "eicu_demo": [
@@ -16034,7 +16227,17 @@
      "table": "vitalperiodic",
      "val_var": "sao2",
      "unit_val": "%",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "monitor"
+    },
+    {
+     "ids": [
+      "O2 Saturation"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (H5): nurse-charted 'O2 Saturation' fills hours without a vitalperiodic (monitor) value; the monitor value is preferred per hour (source_channel_priority)."
     }
    ],
    "hirid": [
@@ -16095,11 +16298,13 @@
  "supp_o2": {
   "concepts": [
    "vent_ind",
-   "fio2"
+   "fio2",
+   "o2_flow"
   ],
   "depends_on": [
    "vent_ind",
-   "fio2"
+   "fio2",
+   "o2_flow"
   ],
   "description": "supplemental oxygen",
   "omopid": 36304401,
@@ -16186,21 +16391,30 @@
     {
      "ids": 50804,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2.",
+     "extra_vars": [
+      "specimen_id"
+     ]
     }
    ],
    "mimic": [
     {
      "ids": 50804,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2."
     }
    ],
    "mimic_demo": [
     {
      "ids": 50804,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2."
     }
    ],
    "sic": [
@@ -23798,14 +24012,54 @@
     {
      "table": "patient",
      "val_var": "admissionweight",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "admission"
+    },
+    {
+     "ids": [
+      "Bodyweight (kg)"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "celllabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (W2): intakeoutput 'Bodyweight (kg)' where patient.admissionweight is missing (7,051 stays)."
+    },
+    {
+     "ids": [
+      "Bodyweight (lb)"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "celllabel",
+     "source_channel": "order",
+     "callback": "convert_unit(binary_op(`*`, 0.45359237), 'kg')",
+     "_comment": "2026-11-03 audit round 2 (W2): intakeoutput 'Bodyweight (lb)' converted to kg, last resort."
     }
    ],
    "eicu_demo": [
     {
      "table": "patient",
      "val_var": "admissionweight",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "admission"
+    },
+    {
+     "ids": [
+      "Bodyweight (kg)"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "celllabel",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (W2): intakeoutput 'Bodyweight (kg)' where patient.admissionweight is missing (7,051 stays)."
+    },
+    {
+     "ids": [
+      "Bodyweight (lb)"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "celllabel",
+     "source_channel": "order",
+     "callback": "convert_unit(binary_op(`*`, 0.45359237), 'kg')",
+     "_comment": "2026-11-03 audit round 2 (W2): intakeoutput 'Bodyweight (lb)' converted to kg, last resort."
     }
    ],
    "hirid": [
@@ -23820,7 +24074,28 @@
     {
      "ids": 226512,
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "admission",
+     "_comment": "2026-11-03 audit round 2 (W2): 226512 Admission Weight (kg) first."
+    },
+    {
+     "ids": [
+      226531
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "admission_lbs",
+     "callback": "convert_unit(binary_op(`*`, 0.45359237), 'kg')",
+     "_comment": "2026-11-03 audit round 2 (W2): 226531 Admission Weight (lbs.) converted to kg where no kg admission weight exists."
+    },
+    {
+     "ids": [
+      224639
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (W2): 224639 Daily Weight (kg) last (5,253 stays lack 226512 but have a fallback)."
     }
    ],
    "mimic": [
@@ -26733,6 +27008,22 @@
      "table": "vitalperiodic",
      "val_var": "systemicmean",
      "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Invasive BP Mean"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Invasive BP Mean' (arterial line, 39,383 stays; 3,297 without vitalperiodic systemicmean)."
+    },
+    {
+     "ids": [
+      "Arterial Line MAP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Arterial Line MAP (mmHg)' (6,030 stays)."
     }
    ],
    "eicu_demo": [
@@ -26740,6 +27031,22 @@
      "table": "vitalperiodic",
      "val_var": "systemicmean",
      "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Invasive BP Mean"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Invasive BP Mean' (arterial line, 39,383 stays; 3,297 without vitalperiodic systemicmean)."
+    },
+    {
+     "ids": [
+      "Arterial Line MAP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "_comment": "2026-11-03 audit round 2 (H5): nursecharting 'Arterial Line MAP (mmHg)' (6,030 stays)."
     }
    ],
    "hirid": [
@@ -27914,6 +28221,60 @@
      "table": "observations",
      "sub_var": "variableid",
      "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      223834
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (G7): 223834 'O2 Flow' (L/min, 74% of ICU stays). 227287 (additional cannula) would need summing per charttime and is not pooled; 227582 is BiPAP flow."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      470,
+      223834
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (G7): CareVue 470 'O2 Flow (lpm)', MetaVision 223834 'O2 Flow' (L/min). 471 (a second flowmeter) and 227287 (additional cannula) would need summing and are not pooled."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      470,
+      223834
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (G7): CareVue 470 'O2 Flow (lpm)', MetaVision 223834 'O2 Flow' (L/min). 471 (a second flowmeter) and 227287 (additional cannula) would need summing and are not pooled."
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "LPM O2"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "_comment": "2026-11-03 audit round 2 (G7): respiratorycharting 'LPM O2' (54,561 stays, median 3 L/min)."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": [
+      "LPM O2"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "_comment": "2026-11-03 audit round 2 (G7): respiratorycharting 'LPM O2' (54,561 stays, median 3 L/min)."
     }
    ]
   }

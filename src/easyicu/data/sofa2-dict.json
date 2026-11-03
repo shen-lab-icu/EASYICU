@@ -831,6 +831,16 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded."
+    },
+    {
+     "ids": [
+      225
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
     }
    ],
    "mimic_demo": [
@@ -855,6 +865,16 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded."
+    },
+    {
+     "ids": [
+      225
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
     }
    ]
   }

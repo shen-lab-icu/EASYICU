@@ -8923,8 +8923,9 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     # PaFi = PaO2/FiO2 ratio (arterial oxygen pressure / inspired oxygen fraction)
     "pafi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="po2", source_col_b="fio2", output_col="pafi",
                                          database=getattr(ctx.data_source.config, 'name', '') if hasattr(ctx.data_source, 'config') and hasattr(ctx.data_source.config, 'name') else None),
-    # SaFi = SpO2/FiO2 ratio (oxygen saturation / inspired oxygen fraction)
-    "safi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="o2sat", source_col_b="fio2", output_col="safi",
+    # SaFi = SpO2/FiO2 ratio.  Pulse oximetry only: o2sat also holds blood-gas
+    # SaO2 (2026-11-03 audit round 2, G8).
+    "safi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="spo2", source_col_b="fio2", output_col="safi",
                                          database=getattr(ctx.data_source.config, 'name', '') if hasattr(ctx.data_source, 'config') and hasattr(ctx.data_source.config, 'name') else None),
     "supp_o2": _callback_supp_o2,
     "supp_o2_aumc": _callback_supp_o2_aumc,

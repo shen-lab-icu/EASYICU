@@ -257,3 +257,53 @@ def test_v2_eicu_volume_rates_give_no_dose(concept):
                           concept_name=concept)
     rates = out.dropna(subset=[concept])[concept]
     assert rates.tolist() == pytest.approx([8.0 / 80.0])
+
+
+def test_p4_peep_set_and_total_have_sources_beyond_mimic():
+    for database in ("aumc", "hirid", "eicu", "sic"):
+        assert _sources("peep_set", database), database
+    assert _ids("peep_total", "aumc") == {12301}
+    assert _ids("peep_total", "hirid") == {2610}
+
+
+def test_p9_carevue_tcpcv_is_pressure_controlled():
+    from easyicu.concept.callbacks import _load_vent_mode_map
+
+    assert _load_vent_mode_map()["mimic"]["map"]["TCPCV"] == {
+        "control": "pressure", "seq": "controlled", "interface": "invasive"}
+
+
+def test_g6_g7_supp_o2_reads_oxygen_flow_everywhere():
+    assert "o2_flow" in DICTIONARY["supp_o2"]["concepts"]
+    assert 223834 in _ids("o2_flow", "miiv")
+    assert {470, 223834} <= _ids("o2_flow", "mimic")
+    assert _ids("o2_flow", "eicu") == {"LPM O2"}
+
+
+def test_g8_safi_is_pulse_oximetry_and_tco2_is_arterial():
+    assert DICTIONARY["safi"]["concepts"] == ["spo2", "fio2"]
+    for database in ("miiv", "mimic"):
+        assert _sources("tco2", database)[0]["callback"] == "arterial_specimen_only"
+
+
+@pytest.mark.parametrize("dictionary", ["concept-dict.json", "sofa2-dict.json"])
+def test_h7_carevue_iabp_setting_is_mechanical_support(dictionary):
+    data = json.loads((Path(__file__).parents[2] / "src/easyicu/data" / dictionary).read_text())
+    assert any(225 in (s.get("ids") or []) for s in data["mech_circ_support"]["sources"]["mimic"])
+
+
+def test_h5_h6_arterial_line_channels():
+    assert {225309} <= _ids("sbp", "miiv") and {225310} <= _ids("dbp", "miiv")
+    invasive = [s for s in _sources("map", "eicu") if s.get("table") == "nursecharting"]
+    assert invasive and {s["source_channel"] for s in invasive} == {"invasive"}
+    for concept in ("hr", "resp", "spo2"):
+        assert DICTIONARY[concept]["source_channel_priority"] == ["monitor", "charted"]
+        channels = {s["table"]: s["source_channel"] for s in _sources(concept, "eicu")}
+        assert channels == {"vitalperiodic": "monitor", "nursecharting": "charted"}
+
+
+def test_w2_weight_fallbacks_rank_after_admission_weight():
+    for database in ("miiv", "eicu"):
+        first = _sources("weight", database)[0]
+        assert first["source_channel"] == "admission"
+        assert len(_sources("weight", database)) == 3
