@@ -1143,6 +1143,36 @@ def _stated_exposure_concept(
     return concept if concept in catalog_by_id else None
 
 
+def stated_exposure_concepts(text: Optional[str], concept: Optional[str] = None) -> frozenset[str]:
+    """Every concept the study's exposure names: its checked concept, else its words.
+
+    The words are read as :func:`_stated_exposure_concept` and
+    :func:`_stated_catalog_concept` read them, without a source catalog, so
+    a setup save can tell a reading that names the exposure itself.
+    """
+
+    from easyicu.webserver.study_intent import (
+        KEYWORD_PROVENANCE,
+        StudyIntentError,
+        catalog_named_concepts,
+        deterministic_intent,
+    )
+
+    named = {item for item in (_clean_text(concept, 160),) if item}
+    value = _clean_text(text, 160)
+    if value:
+        named.add(value)
+        slots = deterministic_intent(value).get("slots")
+        slot = slots.get("exposure") if isinstance(slots, Mapping) else None
+        if isinstance(slot, Mapping) and str(slot.get("provenance") or "") == KEYWORD_PROVENANCE:
+            named.update(item for item in (_clean_text(slot.get("value"), 160),) if item)
+        try:
+            named.update(catalog_named_concepts(value))
+        except StudyIntentError:
+            pass
+    return frozenset(named)
+
+
 def _stated_catalog_concept(
     text: Optional[str], catalog_by_id: Mapping[str, Any]
 ) -> tuple[str, ...]:
