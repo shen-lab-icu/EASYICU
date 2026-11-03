@@ -4202,8 +4202,7 @@ _SOFA1_COMPONENT_NAMES = (
 _NATIVE_EXPORT_EVENT_TIME_COMPANIONS = {DEATH_STATUS: DEATH_TIME_COMPANION}
 
 # Each source's death time is labelled by ``utils.death_time_semantics``, which
-# owns the labels and whether an hour can be read from each.  eICU's is
-# structurally unavailable: its death row sits at the ICU discharge offset.
+# owns the labels and whether an hour can be read from each.
 
 
 def _native_export_physical_value_columns(

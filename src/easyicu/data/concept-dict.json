@@ -3400,13 +3400,16 @@
      "index_var": "dateofdeath",
      "val_var": "dischargedat",
      "callback": "aumc_death",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "extra_vars": [
+      "destination"
+     ]
     }
    ],
    "eicu": [
     {
      "table": "patient",
-     "index_var": "unitdischargeoffset",
+     "index_var": "hospitaldischargeoffset",
      "val_var": "hospitaldischargestatus",
      "callback": "transform_fun(comp_na(`==`, 'Expired'))",
      "class_name": "col_itm"
@@ -3466,7 +3469,8 @@
      "index_var": "OffsetOfDeath",
      "val_var": "OffsetOfDeath",
      "extra_vars": [
-      "HospitalDischargeType"
+      "HospitalDischargeType",
+      "TimeOfStay"
      ],
      "callback": "sic_death",
      "class_name": "col_itm"

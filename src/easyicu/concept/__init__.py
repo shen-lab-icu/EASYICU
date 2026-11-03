@@ -41,6 +41,10 @@ from ..utils import compat
 
 logger = logging.getLogger(__name__)
 
+#: Outcome status concepts recorded after ICU discharge by definition (an
+#: in-hospital death); the loader keeps them past the post-discharge allowance.
+POST_DISCHARGE_OUTCOME_CONCEPTS = frozenset({"death"})
+
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
 
@@ -278,8 +282,13 @@ def _quarantine_rows_outside_icu_episode(
     upper_hours: pd.Series,
     allowed_pre_hours: float,
     db_label: str,
+    keep_post_discharge: bool = False,
 ) -> pd.DataFrame:
     """Drop rows outside ``[-allowed_pre_hours, per-row upper]``.
+
+    ``keep_post_discharge`` drops only the pre-admission side: an outcome
+    status recorded at hospital discharge (eICU in-hospital death) lies past
+    the ICU episode by definition.
 
     2026-09-18 v6: MIMIC-III/IV hospital tables are stay-mapped by rolling
     join, so one ICU stay can attract years of cross-admission events (miiv
@@ -295,7 +304,8 @@ def _quarantine_rows_outside_icu_episode(
     event_hours = pd.to_numeric(event_hours, errors="coerce")
     upper_hours = pd.to_numeric(upper_hours, errors="coerce")
     invalid = event_hours.notna() & (
-        (event_hours < -allowed_pre_hours) | (event_hours > upper_hours)
+        (event_hours < -allowed_pre_hours)
+        | ((event_hours > upper_hours) & (not keep_post_discharge))
     )
     excluded = int(pd.Series(invalid, index=frame.index).fillna(False).sum())
     if excluded:
@@ -3240,10 +3250,11 @@ class ConceptResolver:
                                 general_df = pd.DataFrame(general_df)
                             if 'discharge_status' not in general_df.columns:
                                 raise KeyError("general table has no 'discharge_status' column")
-                            dead_pids = set(general_df.loc[
-                                general_df['discharge_status'].astype(str).str.lower() == 'dead',
-                                'patientid'
-                            ].unique())
+                            _hd_status = general_df['discharge_status'].astype(str).str.lower()
+                            dead_pids = set(general_df.loc[_hd_status == 'dead', 'patientid'].unique())
+                            # 2026-11-03 audit round 2 (R2-03): survivors are
+                            # False at their last observation, not missing.
+                            alive_pids = set(general_df.loc[_hd_status == 'alive', 'patientid'].unique())
                         except Exception as _hd_general_exc:
                             _hd_conn.close()
                             raise ConceptExtractionUnavailable(
@@ -3270,6 +3281,7 @@ class ConceptResolver:
                         )
 
                         _query_pids = deaths_within_cohort(dead_pids, patient_ids)
+                        _alive_pids = deaths_within_cohort(alive_pids, patient_ids)
                         _hd_read_exprs = hirid_observation_read_exprs(
                             data_source.base_path
                         )
@@ -3293,7 +3305,7 @@ class ConceptResolver:
                                     f'{data_source.base_path / "observations"}'
                                 ),
                             )
-                        if _query_pids and _hd_read_exprs is not None:
+                        if (_query_pids or _alive_pids) and _hd_read_exprs is not None:
                             (
                                 _hd_read_expr_fast,
                                 _hd_read_expr_safe,
@@ -3306,7 +3318,7 @@ class ConceptResolver:
                             # (which slowed query planning more than scanning).
                             _hd_conn.register(
                                 "_hirid_death_pids",
-                                pd.DataFrame({"patientid": list(_query_pids)}),
+                                pd.DataFrame({"patientid": list(_query_pids | _alive_pids)}),
                             )
                             _hd_conn.register(
                                 "_hirid_death_ids",
@@ -3342,6 +3354,8 @@ class ConceptResolver:
                                 set(frame['patientid']) if len(frame) else set()
                             )
                             _hd_untimed = set(_query_pids) - _hd_timed
+                            # Deaths only: an untimed survivor stays missing.
+                            _hd_timed = _hd_timed & set(_query_pids)
                             if _hd_untimed:
                                 # Closed before the raise below: this frame is
                                 # about to be left and the connection has no
@@ -3359,7 +3373,7 @@ class ConceptResolver:
                                 timed=len(_hd_timed),
                                 untimed=_hd_untimed,
                             )
-                            frame[concept_name] = True
+                            frame[concept_name] = frame['patientid'].isin(_query_pids)
                         else:
                             frame = pd.DataFrame(columns=['patientid', 'datetime', concept_name])
                         
@@ -5498,6 +5512,7 @@ class ConceptResolver:
                     pre_admission_hours=(
                         self._pre_admission_hours_from_kwargs(kwargs)
                     ),
+                    keep_post_discharge=concept_name in POST_DISCHARGE_OUTCOME_CONCEPTS,
                 )
                 
                 # 🔧 FIX: _align_time_to_admission 可能会删除 intime/outtime 列
@@ -5919,6 +5934,7 @@ class ConceptResolver:
                 pre_admission_hours=(
                     self._pre_admission_hours_from_kwargs(kwargs)
                 ),
+                keep_post_discharge=concept_name in POST_DISCHARGE_OUTCOME_CONCEPTS,
             )
         
         if _select_channels:
@@ -6064,8 +6080,15 @@ class ConceptResolver:
         index_column: str,
         time_columns: Optional[List[str]] = None,
         pre_admission_hours: Optional[float] = None,
+        keep_post_discharge: bool = False,
     ) -> pd.DataFrame:
         """Align time column to ICU admission time as anchor (R ricu as_dt_min).
+
+        ``keep_post_discharge`` keeps events after the post-discharge
+        allowance: an outcome status such as in-hospital death is recorded
+        after ICU discharge by definition (audit round 2, R2-03: SICdb deaths
+        more than 24 h after ICU discharge, and AUMC deaths 24-72 h after it,
+        were dropped, lowering mortality).
         
         Converts absolute time to relative time (hours or minutes since ICU admission).
         This replicates R ricu's behavior where time is relative to admission.
@@ -6296,6 +6319,7 @@ class ConceptResolver:
                             upper_hours=upper_hours,
                             allowed_pre_hours=allowed_pre_hours,
                             db_label="eICU",
+                            keep_post_discharge=keep_post_discharge,
                         )
                     except ValueError:
                         raise
@@ -6449,7 +6473,7 @@ class ConceptResolver:
                     )
                 invalid_time = event_hours.notna() & (
                     (event_hours < -allowed_pre_hours)
-                    | (event_hours > upper_hours)
+                    | ((event_hours > upper_hours) & (not keep_post_discharge))
                 )
                 excluded = int(invalid_time.sum())
                 if excluded:
@@ -6628,7 +6652,7 @@ class ConceptResolver:
                     )
                 invalid_time = event_hours.notna() & (
                     (event_hours < -allowed_pre_hours)
-                    | (event_hours > upper_hours)
+                    | ((event_hours > upper_hours) & (not keep_post_discharge))
                 )
                 excluded = int(invalid_time.sum())
                 if excluded:
@@ -7038,6 +7062,7 @@ class ConceptResolver:
                         upper_hours=upper_hours,
                         allowed_pre_hours=allowed_pre_hours,
                         db_label="MIMIC",
+                        keep_post_discharge=keep_post_discharge,
                     )
             # Normalise dur_var to hours so the index and the duration share a
             # unit. Which conversion applies depends on what the producer
@@ -7245,6 +7270,7 @@ class ConceptResolver:
                         upper_hours=upper_row,
                         allowed_pre_hours=allowed_pre_hours,
                         db_label="MIMIC",
+                        keep_post_discharge=keep_post_discharge,
                     )
 
             _normalize_duration_to_hours(data)

@@ -25,10 +25,13 @@ from typing import Mapping
 
 # A fixed horizon needs post-discharge follow-up of survivors as well as
 # dates of death.  MIMIC-IV censors a null date of death one year after the
-# last hospital discharge, and SICdb records each case's survival observation
-# time.  MIMIC-III and AmsterdamUMCdb record dates of death but no follow-up
-# of survivors, so a horizon there would be defined for the dead only.
-FOLLOWUP_OUTCOME_DATABASES = frozenset({"miiv", "miiv_demo", "sic", "sic_demo"})
+# last hospital discharge; MIMIC-III links Social Security deaths up to 90
+# days after discharge (MetaVision) or four years (CareVue); AmsterdamUMCdb
+# links registry deaths years after discharge; SICdb records each case's
+# survival observation time.  eICU and HiRID record in-hospital death only.
+FOLLOWUP_OUTCOME_DATABASES = frozenset(
+    {"miiv", "miiv_demo", "mimic", "mimic_demo", "aumc", "sic", "sic_demo"}
+)
 # ICU readmission needs every ICU stay of a hospitalisation, in order, from
 # the source's own stay table: MIMIC-IV and MIMIC-III icustays grouped by
 # hadm_id, eICU unit stays grouped by patienthealthsystemstayid.

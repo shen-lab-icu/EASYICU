@@ -656,7 +656,9 @@ def test_native_outcome_preserves_death_time_before_normalising_charttime() -> N
     assert audit["event_time_semantics"].startswith("recorded_dateofdeath")
 
 
-def test_eicu_hospital_death_does_not_claim_icu_discharge_is_death_time() -> None:
+def test_eicu_hospital_death_is_timed_at_hospital_discharge() -> None:
+    # The eICU death row sits at patient.hospitaldischargeoffset (audit round
+    # 2, R2-03), the recorded time of a hospital-discharge death.
     dictionary = api.load_dictionary(include_sofa2=True)
     canonical = api._canonicalise_native_export_frame(
         pd.DataFrame(
@@ -672,7 +674,8 @@ def test_eicu_hospital_death_does_not_claim_icu_discharge_is_death_time() -> Non
         database="eicu",
     )
 
-    assert canonical["death_time"].isna().all()
+    assert canonical["death_time"].iloc[0] == 8.0
+    assert pd.isna(canonical["death_time"].iloc[1])
 
 
 def test_native_renal_publication_drops_untimed_negative_rrt_merge_artifact(

@@ -1268,13 +1268,24 @@ def _apply_callback(
         dod = pd.to_numeric(df[dod_col], errors='coerce')
         dis = pd.to_numeric(df[dis_col], errors='coerce')
         died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)
+        # 2026-11-03 audit round 2 (R2-03): an ICU discharge to 'Overleden'
+        # is a death in the ICU, also without a dateofdeath (57 stays), and
+        # its time is the ICU discharge: dateofdeath is a date and fell
+        # before ICU admission for 12.6% of these deaths.
+        in_icu = pd.Series(False, index=df.index)
+        for c in ('destination', 'Destination'):
+            if c in df.columns:
+                in_icu = df[c].astype('string').str.strip().str.lower().eq('overleden').fillna(False)
+                break
+        died = died | (in_icu & dis.notna())
+        dod = dod.where(~in_icu, dis)
         # 2026-11-03 extraction audit 2: a stay with a recorded ICU discharge
         # and no death within 72h of it is a survivor of this endpoint and is
         # False, as hospital_expire_flag = 0 is on MIMIC and eICU.  The
         # previous ricu convention (survivors NA) left AUMC death all-TRUE.
         # Without a discharge time the endpoint stays unknown (NA).  A
         # survivor's row is timed at ICU discharge, where its status is
-        # established (as eICU's death rows are timed at unit discharge):
+        # established (as eICU's rows are timed at hospital discharge):
         # an untimed row would be dropped by the hourly grid.
         survived = ~died & dis.notna()
         death_values = pd.Series(index=df.index, dtype=object)
@@ -1314,10 +1325,24 @@ def _apply_callback(
             )
         disp = pd.to_numeric(df[disp_col], errors='coerce')
         died = (disp == 2028)  # 2028 = Deceased
+        # 2026-11-03 audit round 2 (R2-03): 2026 = Survived is False, timed at
+        # ICU discharge (cases.TimeOfStay); an unrecorded disposition stays NA.
+        survived = (disp == 2026)
         death_values = pd.Series(index=df.index, dtype=object)
-        death_values[died] = True  # survivors/unknown -> NA (ricu convention)
+        death_values[died] = True
+        death_values[survived] = False
         df[concept_name] = death_values
-        if offset_secs is not None and bool(died.any()):
+        stay_secs = None
+        for c in ['TimeOfStay', 'timeofstay']:
+            if c in df.columns:
+                stay_secs = pd.to_numeric(df[c], errors='coerce')
+                break
+        if stay_secs is None and bool(survived.any()):
+            raise ValueError(
+                "sic_death requires cases.TimeOfStay to time a survivor at ICU discharge"
+            )
+        df['charttime'] = np.nan
+        if bool(survived.any()) or (offset_secs is not None and bool(died.any())):
             # Official SICdb semantics: OffsetOfDeath counts seconds from the
             # primary admission. cases.ICUOffset is the first transfer to an
             # intensive or intermediate care unit; subtract it to express
@@ -1353,14 +1378,26 @@ def _apply_callback(
                     "sic_death requires cases.ICUOffset to express the death "
                     "time on the ICU clock"
                 )
-            missing_origin = died & ~(np.isfinite(icu_offset) & (icu_offset >= 0)).fillna(False)
+            usable_origin = (np.isfinite(icu_offset) & (icu_offset >= 0)).fillna(False)
+            missing_origin = died & ~usable_origin
             if bool(missing_origin.any()):
                 raise ValueError(
                     "sic_death found in-hospital death(s) without a usable "
                     "cases.ICUOffset"
                 )
-            valid_event = np.isfinite(offset_secs).fillna(False)
-            df['charttime'] = ((offset_secs - icu_offset) / 3600.0).where(died & valid_event)
+            if offset_secs is not None:
+                valid_event = np.isfinite(offset_secs).fillna(False)
+                death_hours = ((offset_secs - icu_offset) / 3600.0)
+                df.loc[died & valid_event, 'charttime'] = death_hours[died & valid_event]
+            if stay_secs is not None:
+                # The ICU episode ends at TimeOfStay on the ICUOffset clock,
+                # as the loader's episode bound does.
+                discharge_hours = (stay_secs - icu_offset) / 3600.0
+                timed_survivor = survived & usable_origin
+                df.loc[timed_survivor, 'charttime'] = discharge_hours[timed_survivor]
+        known = (died | (survived & pd.to_numeric(df['charttime'], errors='coerce').notna())).to_numpy()
+        df = df.loc[known].copy()
+        df[concept_name] = died.to_numpy()[known]
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)
@@ -1400,10 +1437,11 @@ def _apply_callback(
                 general_df = pd.DataFrame(general_df)
             if 'discharge_status' not in general_df.columns:
                 raise KeyError("general table has no 'discharge_status' column")
-            dead_pids = set(general_df.loc[
-                general_df['discharge_status'].astype(str).str.lower() == 'dead',
-                id_col
-            ].unique())
+            status = general_df['discharge_status'].astype(str).str.lower()
+            dead_pids = set(general_df.loc[status == 'dead', id_col].unique())
+            # 2026-11-03 audit round 2 (R2-03): survivors are False at their
+            # last observation, not missing (death was all-TRUE).
+            alive_pids = set(general_df.loc[status == 'alive', id_col].unique())
         except Exception as exc:
             raise ConceptExtractionUnavailable(
                 concept_id=concept_name,
@@ -1418,11 +1456,11 @@ def _apply_callback(
         # on the wider set made a cohort of survivors raise, because the
         # database recorded a death somewhere else.
         cohort_dead = deaths_within_cohort(dead_pids, patient_ids)
+        cohort_alive = deaths_within_cohort(alive_pids, patient_ids)
 
         # Reached only after a successful read: the source was legible and
-        # nobody in this cohort died. That is a real answer, so return the
-        # real empty.
-        if not cohort_dead:
+        # nobody in this cohort has a known discharge status.
+        if not cohort_dead and not cohort_alive:
             return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
         
         # Step 2: 🚀 使用 DuckDB 直接聚合获取最后观测时间（避免加载 115M 行）
@@ -1447,7 +1485,7 @@ def _apply_callback(
                     ) = read_exprs
                     conn.register(
                         "_ldd_dead_pids",
-                        pd.DataFrame({"patientid": list(cohort_dead)}),
+                        pd.DataFrame({"patientid": list(cohort_dead | cohort_alive)}),
                     )
                     _ldd_q_tpl = """
                         SELECT obs.patientid, MAX(obs.datetime) AS datetime
@@ -1484,9 +1522,9 @@ def _apply_callback(
                 time_col = 'datetime' if 'datetime' in df.columns else ('charttime' if 'charttime' in df.columns else None)
                 if time_col:
                     last_obs = df.groupby(id_col, as_index=False).agg({time_col: 'max'})
-                    last_obs = last_obs[last_obs[id_col].isin(cohort_dead)]
+                    last_obs = last_obs[last_obs[id_col].isin(cohort_dead | cohort_alive)]
 
-        if last_obs is None or last_obs.empty:
+        if cohort_dead and (last_obs is None or last_obs.empty):
             # ``cohort_dead`` is non-empty here — the general table says these
             # patients died. Returning an empty frame would report zero deaths
             # while the source we just read says otherwise, so the emptiness is
@@ -1508,19 +1546,23 @@ def _apply_callback(
                 cause=aggregation_error,
             )
 
+        if last_obs is None or last_obs.empty:
+            # Survivors only, none timed: their status stays missing.
+            return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
+
         # Some deaths timed, some not: the result under-reports mortality by
         # exactly the shortfall, and nothing downstream can see it happened.
         _refuse_untimed_deaths(
             database='hirid',
             concept_id=concept_name,
             timing_ids=(110, 200),
-            timed=len(last_obs),
+            timed=len(set(last_obs[id_col]) & cohort_dead),
             untimed=cohort_dead - set(last_obs[id_col]),
         )
 
-        # Step 3: Set death = TRUE
+        # Step 3: death = TRUE for the deceased, FALSE for survivors
         result = last_obs.copy()
-        result[concept_name] = True
+        result[concept_name] = result[id_col].isin(cohort_dead)
         
         return result
 

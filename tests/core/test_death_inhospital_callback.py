@@ -83,7 +83,9 @@ def test_sic_death_uses_hospital_discharge_type_not_offset():
             "HospitalDischargeType": [2028, 2028, 2026, 2026, None, 9999],
             # Official SICdb origin: OffsetOfDeath is measured from the primary
             # admission, so the ICU clock requires subtracting ICUOffset.
-            "ICUOffset": [0, 3600, 0, 0, 0, 0],
+            "ICUOffset": [0, 3600, 0, 3600, 0, 0],
+            # The case closes at TimeOfStay, also on the primary-admission clock.
+            "TimeOfStay": [36_000, 36_000, 36_000, 36_000, 36_000, 36_000],
         }
     )
 
@@ -94,11 +96,13 @@ def test_sic_death_uses_hospital_discharge_type_not_offset():
     )
 
     assert int((out["death"] == True).sum()) == 2  # noqa: E712
-    assert pd.isna(out.loc[out["CaseID"] == 4, "death"].iloc[0])
     assert out.loc[out["CaseID"] == 1, "charttime"].iloc[0] == 1.0
     assert out.loc[out["CaseID"] == 2, "charttime"].iloc[0] == 1.0
-    assert pd.isna(out.loc[out["CaseID"] == 4, "charttime"].iloc[0])
-    assert pd.isna(out.loc[out["CaseID"] == 6, "death"].iloc[0])
+    # A survivor is False at ICU discharge, whatever its registry death offset.
+    assert out.set_index("CaseID").loc[[3, 4], "death"].tolist() == [False, False]
+    assert out.loc[out["CaseID"] == 4, "charttime"].iloc[0] == 9.0
+    # An unrecorded or unknown disposition yields no row.
+    assert set(out["CaseID"]) == {1, 2, 3, 4}
 
 
 def test_sic_death_without_icu_offset_fails_closed():
@@ -107,6 +111,7 @@ def test_sic_death_without_icu_offset_fails_closed():
             "CaseID": [1, 2],
             "death": [3600, None],
             "HospitalDischargeType": [2028, 2026],
+            "TimeOfStay": [36_000, 36_000],
         }
     )
 
@@ -121,7 +126,8 @@ def test_sic_death_without_icu_offset_fails_closed():
 @pytest.mark.parametrize("origin", [None, float("nan"), float("inf"), float("-inf"), -1])
 def test_sic_death_with_unusable_care_transfer_origin_fails_closed(origin):
     frame = pd.DataFrame({"CaseID": [1, 2], "death": [7200, None],
-                          "HospitalDischargeType": [2028, 2026], "ICUOffset": [origin, 0]})
+                          "HospitalDischargeType": [2028, 2026], "ICUOffset": [origin, 0],
+                          "TimeOfStay": [36_000, 36_000]})
     with pytest.raises(ValueError, match="ICUOffset"):
         _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
 
@@ -141,6 +147,7 @@ def test_sic_death_loads_icu_offset_from_cases_when_absent():
             "CaseID": [1, 2],
             "death": [7200, 1800],
             "HospitalDischargeType": [2028, 2026],
+            "TimeOfStay": [36_000, 36_000],
         }
     )
 
@@ -160,7 +167,8 @@ def test_sic_death_loads_icu_offset_from_cases_when_absent():
     )
 
     assert out.loc[out["CaseID"] == 1, "charttime"].iloc[0] == 1.0
-    assert pd.isna(out.loc[out["CaseID"] == 2, "charttime"].iloc[0])
+    # The survivor is timed at ICU discharge, not at its registry death offset.
+    assert out.loc[out["CaseID"] == 2, "charttime"].iloc[0] == 10.0
 
 
 def test_sic_death_missing_disposition_fails_closed():
