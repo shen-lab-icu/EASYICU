@@ -237,15 +237,15 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
         # A stay charted in both systems takes the shorter bound.
         dbsource = icu_source.reindex(df.index).astype("string").str.strip().str.lower()
         bound_days = pd.Series(
-            np.where(dbsource.eq("carevue"), 4 * 365.0, 90.0), index=df.index
+            np.where(dbsource.eq("carevue").fillna(False), 4 * 365.0, 90.0), index=df.index
         )
         discharge_days = (df["dischtime"] - df["intime"]).dt.total_seconds() / 86400.0
         documented = (
             df["_merge"].eq("both")
             & df["_dod_absent"].eq(True)
-            & dbsource.isin(["carevue", "metavision", "both"])
+            & dbsource.isin(["carevue", "metavision", "both"]).fillna(False)
             & (discharge_days >= 0)
-        )
+        ).astype(bool)
         df["followup_days"] = (discharge_days + bound_days).where(documented)
     return df.rename(columns={stay_col: "_stay", "intime": "_intime", "outtime": "_outtime"})[
         [

@@ -17,6 +17,8 @@ def _source(database):
     frame = pd.DataFrame({
         "patientunitstayid": [1, 1, 2, 2, 3, 3, 4, 4],
         "unitdischargeoffset": [60.0] * 8,
+        # death sits at the hospital discharge (audit round 2, R2-03).
+        "hospitaldischargeoffset": [600.0] * 8,
         "hospitaldischargestatus": [None, "Unknown", "Expired", None, "Alive", None, "Alive", "Expired"],
     })
     config = load_data_sources().get(database)

@@ -111,8 +111,7 @@ def _events(database, config, concepts, p):
                 time = p["origin"][index] + hour * 3_600_000
                 record.update(admissionid=p["stay"][index], **{time_col: time})
                 record.update(registeredat=time, updatedat=time, stop=time + 3_600_000,
-                              duration=60, tag="+", unit={"map": "mmHg", "lact": "mmol/l", "hgb": "mmol/l",
-                              "crea": "umol/l", "k": "mmol/l", "urine": "ml", "etco2": "Geen"}.get(name, ""), registeredby="synthetic",
+                              duration=60, tag="+", unit=_aumc_unit(name, source), registeredby="synthetic",
                               # A source that declares its volume unit (dextrose
                               # rates) is exported in that unit, not as a dose.
                               dose=.1, doseunit=source.get("required_volume_unit") or "mg",
@@ -187,3 +186,16 @@ def source_tables(database: str, stays: int):
             stem = Path(spec["files"]).stem
             converted = DataConverter.TABLE_NAME_MAP.get(stem, stem)
             yield f"{converted}.parquet", table
+
+
+def _aumc_unit(name, source):
+    """The unit label of an AUMC synthetic row.
+
+    A source converting labelled kPa rows (``convert_unit(..., '^kpa$')``)
+    gets kPa: its values are already divided into kPa, and unlabelled they
+    would be read as mmHg.
+    """
+    if "'^kpa$'" in (source.get("callback") or ""):
+        return "kPa"
+    return {"map": "mmHg", "lact": "mmol/l", "hgb": "mmol/l", "crea": "umol/l",
+            "k": "mmol/l", "urine": "ml", "etco2": "Geen"}.get(name, "")

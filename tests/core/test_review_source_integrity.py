@@ -92,8 +92,12 @@ def test_mortality_parses_date_and_timestamp_without_pandas_2_only_format(monkey
 
 def test_mimic_iii_does_not_borrow_mimic_iv_null_followup_contract(monkeypatch):
     _mortality_tables(monkeypatch, [None, None])
-    # MIMIC-III follows no survivor, so it carries no horizon at all.
-    assert outcomes.load_outcomes("mimic").empty
+    # MIMIC-III follows a survivor only to its own Social Security bound
+    # (90 days after discharge for MetaVision, four years for CareVue).  Without
+    # the ICU system and discharge time no survivor is followed, and the
+    # MIMIC-IV one-year rule for a null date of death is not borrowed.
+    with pytest.raises(ValueError, match="no follow-up"):
+        outcomes.load_outcomes("mimic")
 
 
 def test_demographics_preserves_io_failure(monkeypatch):
