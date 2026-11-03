@@ -56,8 +56,9 @@ def test_community_coverage_audits_every_standard_concept() -> None:
     # Four source-specific respiratory concepts were added on 2026-10-08;
     # dev9's derived icu_stay_is_readmission attribute joined at the merge.
     # 2026-11-03 audit #16/#19 added map_invasive, map_nibp and five diuretic
-    # concepts (unavailable in community sources until validated there).
-    assert coverage["concept_count"] == 286 == len(list(dictionary.keys()))
+    # concepts (unavailable in community sources until validated there), and
+    # the AUMC/HiRID batch added o2_flow.
+    assert coverage["concept_count"] == 287 == len(list(dictionary.keys()))
     assert set(coverage["concepts"]) == set(dictionary.keys())
     assert set(coverage["databases"]) == COMMUNITY_DATABASES
     valid = {"direct", "derived", "partial", "unavailable"}
