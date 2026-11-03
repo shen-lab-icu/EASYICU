@@ -579,6 +579,19 @@
      "class_name": "col_itm"
     }
    ],
+   "hirid": [
+    {
+     "ids": [
+      9990002,
+      9990004
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "hirid_apache_admission",
+     "_comment": "2026-11-03 extraction audit 2 (S8): APACHE II/IV group -> med/surg per HiRID-ICU-Benchmark Table 7 (concept/hirid_admission.py)."
+    }
+   ],
    "miiv": [
     {
      "table": "services",
@@ -4204,6 +4217,18 @@
      "_comment": "2026-07-17 recall: see eicu."
     }
    ],
+   "hirid": [
+    {
+     "ids": [
+      1000331,
+      1001071
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2 (S8): Dilzem retard 120 mg / Diltiazem 60 mg tablets."
+    }
+   ],
    "miiv": [
     {
      "ids": [
@@ -5386,16 +5411,14 @@
    "hirid": [
     {
      "ids": [
-      71,
       1000649,
-      1000650,
-      1000655,
-      1000750
+      1000650
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_duration"
+     "callback": "hirid_duration",
+     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions."
     }
    ],
    "miiv": [
@@ -5579,16 +5602,14 @@
    "hirid": [
     {
      "ids": [
-      71,
       1000649,
-      1000650,
-      1000655,
-      1000750
+      1000650
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_rate_kg"
+     "callback": "hirid_rate_kg",
+     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions."
     }
    ],
    "mimic": [
@@ -5958,7 +5979,7 @@
  },
  "ett_gcs": {
   "class_name": "lgl_cncpt",
-  "description": "tracheostomy",
+  "description": "invasive airway (endotracheal tube or tracheostomy), so the GCS verbal score is not assessable",
   "omopid": 4097216,
   "category": "respiratory",
   "target": "win_tbl",
@@ -11466,6 +11487,15 @@
      "ids": "-polys",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 24000556,
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "_comment": "2026-11-03 extraction audit 2 (S8): segmented neutrophils % (p50 62.9%); 24000550 is not used, its values behave as an absolute count."
     }
    ],
    "miiv": [

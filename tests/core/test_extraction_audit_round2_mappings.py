@@ -337,3 +337,28 @@ def test_v5_hirid_syringes_within_five_minutes_are_one_episode():
 def test_p6_sic_tidal_volume_below_100_ml_is_missing():
     [source] = _sources("tidal_vol", "sic")
     assert source["ids"] == [718] and source["callback"] == "transform_fun(na_below(100))"
+
+
+def test_s8_hirid_items_reach_their_concepts():
+    sofa2 = json.loads((Path(__file__).parents[2] / "src/easyicu/data/sofa2-dict.json").read_text())
+    assert _ids("neut", "hirid") == {24000556}  # 24000550 behaves as an absolute count
+    assert _ids("diltiazem", "hirid") == {1000331, 1001071}
+    assert {1000793} <= set(sofa2["other_vaso"]["sources"]["hirid"][0]["ids"])
+    for concept in ("epi_rate", "epi_dur"):
+        assert _ids(concept, "hirid") == {1000649, 1000650}  # perfusors; no bolus or inhaled rows
+    assert DICTIONARY["ett_gcs"]["description"].startswith("invasive airway")
+
+
+def test_s8_hirid_admission_type_prefers_apache_ii_within_the_first_day():
+    from easyicu.concept.hirid_admission import apache_admission_type
+
+    frame = pd.DataFrame({
+        "patientid": [1, 1, 2, 2, 3, 4, 5],
+        "datetime": [0.0, 30.0, 1.0, 2.0, 0.0, 0.0, 0.0],
+        "variableid": [9990002, 9990002, 9990004, 9990002, 9990004, 9990004, 9990002],
+        "value": [107.0, 98.0, 190.0, 108.0, 206.0, 205.0, 150.0],
+    })
+    out = apache_admission_type(frame, id_col="patientid", time_col="datetime",
+                                item_col="variableid", value_col="value")
+    # 1: the 30 h correction is outside the day; 2: APACHE II wins; 5: unlisted code.
+    assert out.to_dict() == {1: "surg", 2: "surg", 3: "med", 4: "surg"}
