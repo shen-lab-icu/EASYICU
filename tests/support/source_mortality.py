@@ -35,7 +35,7 @@ def source(root, database, *, upper=False):
         tables = {"patient": {"patientunitstayid": [1, 2, 3, 4],
             "age": ["45", "65", "75", "> 89"],
             "unitdischargestatus": ["Expired", "Alive", "Alive", None],
-            "unitdischargeoffset": [1440] * 4,
+            "unitdischargeoffset": [1440] * 4, "hospitaldischargeoffset": [2880] * 4,
             "hospitaldischargestatus": ["Expired", "Expired", "Alive", None]}}
     else:
         identity = "stay_id" if database == "miiv" else "icustay_id"
