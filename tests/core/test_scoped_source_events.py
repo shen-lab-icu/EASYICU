@@ -247,9 +247,11 @@ def test_every_clinical_fetch_has_sql_scope_predicate(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module.duckdb, "connect", Connection)
     extract_miiv_respiratory_events(source, allowed_stay_ids=[20])
-    assert len(fetches) == 3  # One exact-allowed metadata ledger plus two clinical fetches.
+    # One exact-allowed metadata ledger plus three clinical fetches: chart,
+    # lab, and the same-scope 52033 specimen records for arterial o2sat.
+    assert len(fetches) == 4
     domains = [s for s in statements if "CREATE OR REPLACE VIEW source_domain" in s]
-    assert len(domains) == 2
+    assert len(domains) == 3
     assert any("o.stay_id IN (SELECT stay_id FROM requested)" in s for s in domains)
     assert any("o.hadm_id IN (SELECT hadm_id FROM targets)" in s for s in domains)
     assert all("o.itemid IN" in s for s in domains)
@@ -340,10 +342,28 @@ def test_all_known_values_match_frozen_v1_git_object(tmp_path):
         exec(compile(text, "<frozen-source-events-v1>", "exec"), module.__dict__)
         source = write_source(tmp_path, lab=[(101, 501, t, 50816, .5, ".5", "%", i, i)
                                              for i, t in enumerate([-1, 10, 15, 20, 30, 100])])
-        old = module.extract_miiv_respiratory_events(source, allowed_stay_ids=[10,20])
-        new = extract_miiv_respiratory_events(source, allowed_stay_ids=[10,20])
+        # v1 predates the arterial-specimen lab contract of o2sat (2026-11-03),
+        # so the comparison covers the concepts whose contract it can read.
+        kept = [c for c in module.CONCEPTS if c != "o2sat"]
+        old = module.extract_miiv_respiratory_events(source, allowed_stay_ids=[10,20], concepts=kept)
+        new = extract_miiv_respiratory_events(source, allowed_stay_ids=[10,20], concepts=kept)
         pd.testing.assert_frame_equal(old.hourly, new.hourly)
         pd.testing.assert_frame_equal(old.trace, new.trace[old.trace.columns])
         assert old.receipt["source_filter_counts"] == new.receipt["source_filter_counts"]
     finally:
         sys.modules.pop(module.__name__, None)
+
+
+def test_lab_o2sat_keeps_only_samples_whose_specimen_is_arterial(tmp_path):
+    # Same-specimen 52033: 11 ART. (kept), 12 VEN. (dropped), 13 unrecorded
+    # (dropped), 14 ART. plus VEN. (conflict, dropped).
+    lab = [(101, 501, 21 + i, 50817, v, str(v), "%", i, 11 + i) for i, v in enumerate([97., 70., 95., 96.])]
+    lab += [(101, 501, 21, 52033, None, "ART.", None, 20, 11), (101, 501, 22, 52033, None, "VEN.", None, 21, 12),
+            (101, 501, 24, 52033, None, "ART.", None, 22, 14), (101, 501, 24, 52033, None, "VEN.", None, 23, 14)]
+    source = write_source(tmp_path, chart=[], lab=lab)
+    result = extract_miiv_respiratory_events(source, allowed_stay_ids=[20], concepts=["o2sat"])
+    assert result.hourly.dropna(subset=["o2sat"]).o2sat.tolist() == [97.]
+    dropped = {(c["source_item_id"], c["reason"]): c["count"] for c in result.receipt["source_filter_counts"]
+               if c["reason"].endswith("_specimen")}
+    assert dropped == {(50817, "non_arterial_specimen"): 2, (50817, "unrecorded_specimen"): 1}
+    assert [s["specimen"] for s in result.receipt["concept_sources"] if s["table"] == "labevents"] == ["arterial"]

@@ -123,7 +123,9 @@ def _events(database, config, concepts, p):
                 record.update(CaseID=p["stay"][index], PatientID=p["patient"][index],
                               id=np.arange(count) + 1, Offset=time, OffsetEnd=time + 3600,
                               OffsetDrugEnd=time + 3600, IsSingleDose=False, GivenState=1,
-                              Amount=.00036, AmountPerMinute=.000006, Cnt=1)
+                              Amount=.00036, AmountPerMinute=.000006, Cnt=1,
+                              # 2296 = arterial: blood-gas sources keep arterial samples only.
+                              LaboratoryType=2296)
                 if table == "data_range":
                     record["Data"] = "synthetic ventilation"
             rows[table].append(pd.DataFrame(record, index=np.arange(count)))
