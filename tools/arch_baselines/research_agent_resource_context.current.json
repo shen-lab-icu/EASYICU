@@ -1,19 +1,9 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/resources.py"
+      "src/easyicu/research_agent/research_context/outbound.py"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 63365,
-        "was": 63309
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 58957,
-        "was": 58901
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -115,9 +105,16 @@
           "was": 58901
         }
       }
+    },
+    {
+      "reason": "11-03 review R07: outbound.py also suppresses a proportion beside a suppressed small count; only its source digest moves, no size or context growth",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/research_context/outbound.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "User-approved 2026-11-02 reseal: merge main's community profiles and respiratory channels; the merged concept dictionary adds four concepts to the planner vocabulary",
+  "baseline_reason": "11-03 review R07: outbound.py also suppresses a proportion beside a suppressed small count; only its source digest moves, no size or context growth",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -150,7 +147,7 @@
     "src/easyicu/research_agent/planning/study_design_playbook.py": "d8ed48cb61aace3c42b2f5cc3bbc4453d7d4daf9a97d8243a86697b32a26ba6f",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
     "src/easyicu/research_agent/reporting/article_contract.py": "882743dc1beff5ea792ce8cefbb986c89b33ffa8358daa0daaa84c607ddac509",
-    "src/easyicu/research_agent/research_context/outbound.py": "1d5706a7504a722a62375b53ca6626abedfb1afc6332af4d59ce89119ddc6fa5",
+    "src/easyicu/research_agent/research_context/outbound.py": "820ae41d1445864acafe33f806294b37cc835ac5da5b0f60c2d951e1e62daa43",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
