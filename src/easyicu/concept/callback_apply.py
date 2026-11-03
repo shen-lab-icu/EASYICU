@@ -788,7 +788,9 @@ def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
     Audit round 2 (V8, F2): MetaVision ``Rewritten`` rows are superseded
     orders.  The duration sources already dropped them, but the rate and
     volume sources kept them, so rates disagreed with durations and MIMIC-III
-    total intake was 38% too high.
+    total intake was 38% too high.  (D3): eICU ``medication`` orders with
+    ``drugordercancelled`` true were never given.  Statuses compare as
+    lower-case text, so a boolean flag is excluded as ``"true"``.
     """
 
     params = getattr(source, "params", None) or {}
@@ -810,6 +812,9 @@ def _apply_callback(
     data_source: Optional['ICUDataSource'] = None,
     interval: Optional[Union[str, pd.Timedelta]] = None,
 ) -> pd.DataFrame:
+    # A source's excluded statuses (MIMIC Rewritten orders, eICU cancelled
+    # medication orders) are never data, whatever the value callback.
+    frame = _drop_excluded_statuses(frame, source)
     callback = source.callback
     if not callback:
         return frame

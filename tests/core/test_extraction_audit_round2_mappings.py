@@ -203,3 +203,40 @@ def test_v6_hirid_rate_is_hourly_mass_over_60_min_at_any_concept_interval(interv
                            unit_var="doseunit", index_var="givenat")
     out = _apply_callback(frame, source, concept_name="norepi_rate", interval=interval)
     assert out["norepi_rate"].tolist() == pytest.approx([120.0 / 60.0 / 50.0])
+
+
+def test_v3_eicu_other_vaso_reads_hicl_only_vasopressin_and_phenylephrine():
+    from easyicu.resources import load_dictionary
+
+    sources = load_dictionary(include_sofa2=True)["other_vaso"].sources["eicu"]
+    assert any(s.ids == [2839, 2087] and s.sub_var == "drughiclseqno" for s in sources)
+
+
+@pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+def test_d3_every_eicu_medication_source_drops_cancelled_orders(database):
+    from easyicu.resources import load_dictionary
+
+    dictionary = load_dictionary(include_sofa2=True)
+    medication = [
+        (name, source)
+        for name, concept in dictionary.items()
+        for source in concept.sources.get(database, [])
+        if source.table == "medication"
+    ]
+    assert medication
+    for name, source in medication:
+        assert source.params.get("excluded_statuses") == ["true"], name
+        assert source.params.get("status_var") == "drugordercancelled", name
+
+
+def test_d3_cancelled_order_is_dropped_before_any_callback():
+    from easyicu.concept import ConceptSource, _apply_callback
+
+    frame = pd.DataFrame({"drugname": ["heparin", "heparin"], "drugordercancelled": [False, True]})
+    source = ConceptSource.from_mapping({
+        "regex": "heparin", "table": "medication", "sub_var": "drugname",
+        "class_name": "rgx_itm", "callback": "transform_fun(set_val(TRUE))",
+        "excluded_statuses": ["true"], "status_var": "drugordercancelled",
+    })
+    out = _apply_callback(frame, source, concept_name="heparin")
+    assert out["drugordercancelled"].tolist() == [False]

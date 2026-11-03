@@ -889,7 +889,31 @@
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
      "val_var": "drugname",
-     "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate."
+     "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
+    },
+    {
+     "ids": [
+      2839,
+      2087
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "_comment": "2026-11-03 audit round 2 (V3): orders with an empty drugname carry only the HICL: 2839 vasopressin, 2087 phenylephrine (named rows of the same HICL confirm the drug). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -1040,7 +1064,15 @@
      "val_var": "drugname",
      "regex": "haloperidol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "aumc": [
