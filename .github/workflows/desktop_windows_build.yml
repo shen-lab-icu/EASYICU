@@ -64,7 +64,7 @@ jobs:
           if ($installers.Count -ne 1) { throw 'Expected exactly one installer' }
           ./desktop/scripts/smoke_windows.ps1 -Installer $installers[0].FullName -ProfileRoot (Join-Path $env:RUNNER_TEMP 'EasyICU 临床 profile')
       - name: Retain installer and build receipt after successful smoke test
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: EasyICU-windows-x64
           if-no-files-found: error
@@ -73,7 +73,7 @@ jobs:
             ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/build-inputs.json
       - name: Retain synthetic smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: EasyICU-windows-smoke-diagnostics
           if-no-files-found: ignore
@@ -121,7 +121,7 @@ jobs:
           if [ "${#dmgs[@]}" -ne 1 ]; then echo 'Expected exactly one DMG'; exit 1; fi
           python -I desktop/scripts/smoke_macos.py --dmg "${dmgs[0]}" --profile-root "$RUNNER_TEMP/EasyICU 临床 profile"
       - name: Retain DMG and build receipt after successful smoke test
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: EasyICU-macos-arm64
           if-no-files-found: error
@@ -130,7 +130,7 @@ jobs:
             ${{ env.EASYICU_DESKTOP_BUILD_DIR }}/build-inputs.json
       - name: Retain synthetic smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: EasyICU-macos-smoke-diagnostics
           if-no-files-found: ignore
