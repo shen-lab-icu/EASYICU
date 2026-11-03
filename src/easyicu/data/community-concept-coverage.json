@@ -2585,7 +2585,7 @@
           "status": "partial"
         }
       },
-      "description": "hourly fluid balance (total_input_ml - urine) — Phase A, MIIV only"
+      "description": "hourly fluid balance (total_input_ml - urine); emitted only for stays with recorded intake, so a stay without intake capture never becomes -urine. HiRID: hourly input minus total output from its daily counters."
     },
     "fluid_balance_cumulative": {
       "category": "output",
@@ -8046,7 +8046,7 @@
           "status": "unavailable"
         }
       },
-      "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III interval amounts and AUMC drugitems fluid totals are overlap-allocated with exact volume conservation; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. HiRID is unavailable. Per-database intake capture remains source-heterogeneous and requires stratified sensitivity analysis."
+      "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III include enteral/PO feeds; AUMC is IV only; pre-ICU OR/PACU/ED intake is excluded for CareVue), so per-database intake capture requires stratified sensitivity analysis."
     },
     "total_protein": {
       "category": "chemistry",
