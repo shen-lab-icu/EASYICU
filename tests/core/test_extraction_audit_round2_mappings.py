@@ -94,3 +94,19 @@ def test_p5b_aumc_set_tidal_volume_keeps_100_to_1500_ml():
 )
 def test_d2_eicu_hicl_only_diuretic_orders_are_read(concept, hicls):
     assert hicls <= _ids(concept, "eicu")
+
+
+def test_h1_sic_cvp_drops_hours_above_30_mmhg():
+    [source] = _sources("cvp", "sic")
+    assert source["callback"] == "transform_fun(na_above(30))"
+
+
+@pytest.mark.parametrize("concept", ["map", "map_nibp", "map_invasive", "sbp", "dbp"])
+def test_h2_aumc_pressures_at_or_below_zero_are_missing(concept):
+    assert all(s["callback"] == "transform_fun(na_below(1))" for s in _sources(concept, "aumc"))
+
+
+def test_h3_aumc_high_frequency_cvp_drops_non_positive_values():
+    by_ids = {tuple(s["ids"]): s for s in _sources("cvp", "aumc")}
+    assert by_ids[(20926,)]["callback"] == "transform_fun(na_below(1))"
+    assert "callback" not in by_ids[(6655,)]
