@@ -33,7 +33,9 @@ def test_runner_image_workflow_builds_smokes_and_generates_sbom() -> None:
     assert "--cap-drop ALL" in workflow
     assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
     assert "anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26" in workflow
-    assert "src/easyicu/research_agent/execution/kernel_identity.py" in workflow
+    # Every input the Dockerfile copies triggers the gate, in push and PR.
+    for path in ('"src/easyicu/**"', '"pyproject.toml"', '"README.md"'):
+        assert workflow.count(path) == 2, path
     assert "tests/research_agent/authority/test_execution_kernel_identity.py" in workflow
     assert "format: cyclonedx-json" in workflow
 

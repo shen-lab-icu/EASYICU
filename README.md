@@ -4,7 +4,7 @@
 
 > A reproducible infrastructure for cross-database ICU research: standardized concept extraction, clinician-friendly web workflows, scriptable Python APIs, and an **evidence-bound research agent** that traces covered registered claims and holds back claims it cannot verify.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![Version](https://img.shields.io/badge/version-0.1.2-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![Clinical mappings](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
@@ -88,7 +88,7 @@ Recommended entry:
 - Run `./start_easyicu.sh` on Linux
 
 First launch will create a local runtime under `.easyicu-runtime/` and
-install the web dependencies automatically. Use Python 3.10+ for this
+install the web dependencies automatically. Use Python 3.11+ for this
 path.
 
 Default local URL:
@@ -108,7 +108,7 @@ Choose this path if you want to:
 - automate feature extraction
 - build reproducible cohort pipelines in code
 
-Python 3.10+ is recommended for the current packaged dependencies.
+EasyICU requires Python 3.11 or newer (`requires-python = ">=3.11"`).
 
 **Install it to use it** (no clone needed):
 
@@ -126,11 +126,11 @@ Swap the extra in brackets for what you actually need:
 | Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
 | Research-agent HTTP/PDF/image helpers | `easyicu[agentic]` |
 | Official MCP SDK server transports | `easyicu[mcp]` |
-| Current active extras above | `easyicu[all]` |
+| Every extra, including `dev`, `cli`, `methods` and `scientific-adapters` | `easyicu[all]` |
 
-`easyicu[all]` intentionally excludes `easyicu[scientific-adapters]`. Those
-optional causal/survival validation adapters require a separate, explicit
-installation and do not acquire scientific authority merely by being installed.
+`easyicu[all]` includes `easyicu[scientific-adapters]`. Those optional
+causal/survival validation adapters do not acquire scientific authority merely
+by being installed.
 
 The **core install (`easyicu`) already bundles the research-agent's analytical
 stack** (`scikit-learn`, `statsmodels`), so the Python API and the deterministic
@@ -312,7 +312,7 @@ benchmark, and should be described that way.
 
 Create a local development environment and run the current automated checks:
 
-Use Python 3.10+ for the development environment.
+Use Python 3.11+ for the development environment.
 
 ```bash
 python -m venv .venv

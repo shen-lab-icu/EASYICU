@@ -3,7 +3,7 @@
 | 使用方式 | 需要下载 | 本机要求 |
 |---|---|---|
 | 桌面界面 | 对应平台的 EasyICU 安装包 | 安装包说明中的操作系统版本；自带 Python 与 Node |
-| Python API / 浏览器界面 | EasyICU wheel | Python 3.10+；浏览器界面需 `webapp` 依赖 |
+| Python API / 浏览器界面 | EasyICU wheel | Python 3.11+；浏览器界面需 `webapp` 依赖 |
 | 开发或复现检查 | Git 源码仓库 / sdist | Python 与对应开发依赖 |
 
 软件发行以 [GitHub Releases](https://github.com/shen-lab-icu/EASYICU/releases)

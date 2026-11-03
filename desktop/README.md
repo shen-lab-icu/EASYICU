@@ -32,7 +32,7 @@ Requirements for the build machine only:
 - A self-contained Node 22.19+ distribution, such as the official Node archive
   (an nvm installation works). Homebrew's dynamically linked Node is rejected
   because copying that executable alone cannot run on a clinician's Mac.
-- Python 3.11 (the Python library itself continues to support Python 3.10+)
+- Python 3.11 (the Python library also requires Python 3.11+)
 
 Run:
 
