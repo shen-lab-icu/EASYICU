@@ -22,8 +22,10 @@ import pandas as pd
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
 )
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
@@ -414,17 +416,10 @@ def run_prevalence_outcome_figure(
     ci_high = pd.to_numeric(outcome["ci_upper"]).to_numpy() * 100.0
     outcome_events = pd.to_numeric(outcome["events"]).astype(int).to_numpy()
     outcome_denominators = pd.to_numeric(outcome["denominator"]).astype(int).to_numpy()
-    ax_b.errorbar(
-        outcome_pct,
-        positions,
-        xerr=[outcome_pct - ci_low, ci_high - outcome_pct],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        elinewidth=1.0,
-        capsize=2.0,
-        markersize=4.2,
+    draw_interval_rows(
+        ax_b, outcome_pct, ci_low, ci_high, positions, palette=palette, color="blue",
     )
+    style_category_axis(ax_b)
     ax_b.set_yticks(positions)
     ax_b.set_yticklabels(category_labels)
     ax_b.invert_yaxis()

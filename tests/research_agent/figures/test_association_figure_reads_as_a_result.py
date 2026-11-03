@@ -278,7 +278,8 @@ def test_ratio_forest_ticks_span_the_intervals_without_changing_marks(
         boxes = [text.get_window_extent() for text in texts]
         assert all(left.x1 < right.x0 for left, right in zip(boxes, boxes[1:]))
         assert ax.get_xlim() == pytest.approx((min(low, 1.0) / 1.3, max(high, 1.0) * 1.3))
-        markers = [line for line in ax.lines if line.get_marker() == "o"]
+        # The shared interval mark is a square (figures.publication).
+        markers = [line for line in ax.lines if line.get_marker() == "s"]
         assert len(markers) == 1
         assert markers[0].get_xdata().tolist() == original["estimate"].tolist()
         segments = [segment for collection in ax.collections for segment in collection.get_segments()]
@@ -664,7 +665,8 @@ def test_forest_adds_one_typed_reference_without_an_interval_or_source_row(tmp_p
     [fig] = captured_main
     forest = fig.axes[1]
     assert _figure_words(fig).count("<5 (reference)") == 1
-    markers = [(float(x), float(y)) for line in forest.lines if line.get_marker() == "o"
+    # The shared interval mark is a square (figures.publication).
+    markers = [(float(x), float(y)) for line in forest.lines if line.get_marker() == "s"
                for x, y in zip(line.get_xdata(), line.get_ydata())]
     assert markers == [(1.4, 1.0), (2.2, 2.0), (1.0, 0.0)]
     segments = [segment for collection in forest.collections for segment in collection.get_segments()]
@@ -736,12 +738,15 @@ def test_stacked_panels_use_the_page_width_without_borrowing_contrast_margins(
     renderer = fig.canvas.get_renderer()
     risk, forest = fig.axes
     assert risk.get_position().x0 < 0.16
-    assert risk.get_position().width > 0.80
+    # Both panels keep one full-page width less the forest's estimate column,
+    # which sits outside the forest's data area.
+    assert risk.get_position().width > 0.78
     assert risk.get_position().width == pytest.approx(forest.get_position().width, abs=0.005)
     assert risk.get_position().x0 == pytest.approx(forest.get_position().x0, abs=0.005)
     assert fig.get_tightbbox(renderer).width * 25.4 == pytest.approx(183, abs=0.1)
     texts = [t for t in fig.findobj(Text) if t.get_visible() and t.get_text()]
-    assert min(t.get_fontsize() for t in texts) >= 7
+    # 6.5 pt is the house size of tick labels and the estimate column.
+    assert min(t.get_fontsize() for t in texts) >= 6.5
     for text in texts:
         box = text.get_window_extent(renderer)
         assert box.x0 >= -0.5 and box.x1 <= fig.bbox.width + 0.5, text.get_text()

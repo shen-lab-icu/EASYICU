@@ -54,12 +54,18 @@ from ...figures.presentation import (
     presentation_from_panels,
 )
 
+from ...figures.display_labels import display_label, effect_measure_label
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
     configure_ratio_axis,
+    draw_interval_rows,
+    interval_text,
+    label_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
+    style_value_axis,
 )
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
@@ -755,7 +761,7 @@ def run_association_overview_figure(
             prevalence - groups["exposure_ci_low_pct"].to_numpy(dtype=float),
             groups["exposure_ci_high_pct"].to_numpy(dtype=float) - prevalence,
         ],
-        capsize=2,
+        error_kw={"ecolor": palette["ink_2"], "elinewidth": 0.9},
         label="Exposure prevalence",
         color=palette["blue_soft"],
     )
@@ -767,7 +773,7 @@ def run_association_overview_figure(
             risks - groups["ci_low_pct"].to_numpy(dtype=float),
             groups["ci_high_pct"].to_numpy(dtype=float) - risks,
         ],
-        capsize=2,
+        error_kw={"ecolor": palette["ink_2"], "elinewidth": 0.9},
         label="Outcome risk",
         color=palette["orange"],
     )
@@ -784,39 +790,35 @@ def run_association_overview_figure(
         f"{label}\n({int(events)}/{int(denominator)})"
         for label, events, denominator in zip(group_labels, groups["outcome_events"], groups["outcome_denominator"], strict=True)
     ])
-    ax.set_xlabel(_reader_label(exposure))
+    ax.set_xlabel(display_label(exposure))
     ax.set_ylabel("Percent")
     ax.set_title("Absolute prevalence and outcome risk", loc="left", pad=8)
     ax.legend(frameon=False, fontsize=6)
-    add_panel_label(ax, "A", x=-0.13, y=1.04, fontsize=presentation.font_size * 1.1 if presentation else 11)
+    add_panel_label(ax, "A", x=-0.13, y=1.04)
 
     ax = axes[1]
     values = [rows["__estimate"].iloc[index] for index in drawable]
     lows = [rows["__low"].iloc[index] for index in drawable]
     highs = [rows["__high"].iloc[index] for index in drawable]
     y = list(range(len(drawable)))
-    ax.errorbar(
-        values,
-        y,
-        xerr=[
-            [value - low for value, low in zip(values, lows, strict=True)],
-            [high - value for value, high in zip(values, highs, strict=True)],
-        ],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        capsize=2.4,
+    draw_interval_rows(
+        ax, values, lows, highs, y, palette=palette, color="blue", null=scale.null_value,
     )
-    if scale.null_value is not None:
-        ax.axvline(scale.null_value, color=palette["neutral"], linestyle="--", linewidth=0.8)
     if scale.multiplicative and all(value > 0 for value in lows):
         configure_ratio_axis(
             ax, lows=lows, highs=highs, null_value=scale.null_value
         )
     ax.set_yticks(y, [_reader_label(rows["__label"].iloc[index]) for index in drawable])
-    ax.set_xlabel(_reader_label(scale.name))
+    ax.set_ylim(len(y) - 0.5, -0.5)
+    style_category_axis(ax)
+    style_value_axis(ax, grid=True, palette=palette)
+    label_rows(ax, [
+        interval_text(value, low, high, ratio=scale.multiplicative)
+        for value, low, high in zip(values, lows, highs, strict=True)
+    ], y, palette=palette)
+    ax.set_xlabel(f"{effect_measure_label(scale.name)} (95% CI)")
     ax.set_title("Adjusted association", loc="left", pad=8)
-    add_panel_label(ax, "B", x=-0.13, y=1.04, fontsize=presentation.font_size * 1.1 if presentation else 11)
+    add_panel_label(ax, "B", x=-0.13, y=1.04)
     adjustment = _adjustment_note(estimates["covariates"].iloc[0])
     if presentation is not None:
         finish_presented_figure(fig, presentation, base_font_size=7.0)
@@ -974,7 +976,9 @@ def run_adjusted_association_figure(
     # Reserve room for the axis label and estimate rows. The full model
     # declaration is retained in the source-bound reader caption, not drawn
     # as small prose inside the figure.
-    height_mm = 42.0 + 7.0 * len(rows)
+    # A fixed gutter for the title and axis plus a compact pitch per row, so
+    # two rows never float in a frame sized for six.
+    height_mm = 24.0 + 6.0 * len(rows)
     presentation = presentation_from_panels(panels)
     if presentation is None:
         fig, ax = plt.subplots(figsize=(120 / 25.4, height_mm / 25.4))
@@ -986,28 +990,10 @@ def run_adjusted_association_figure(
     estimates = [rows["__estimate"].iloc[i] for i in drawn]
     lows = [rows["__low"].iloc[i] for i in drawn]
     highs = [rows["__high"].iloc[i] for i in drawn]
-    ax.errorbar(
-        estimates,
-        drawn,
-        xerr=[
-            [estimate - low for estimate, low in zip(estimates, lows)],
-            [high - estimate for estimate, high in zip(estimates, highs)],
-        ],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        elinewidth=1.1,
-        capsize=2.4,
-        markersize=4.6,
+    draw_interval_rows(
+        ax, estimates, lows, highs, drawn, palette=palette, color="blue",
+        null=scale.null_value,
     )
-    if scale.null_value is not None:
-        ax.axvline(
-            scale.null_value,
-            color=palette["neutral"],
-            linewidth=0.8,
-            linestyle="--",
-            zorder=0,
-        )
     # A ratio scale is symmetric in the multiplicative sense, so halving and
     # doubling belong at equal distances from the null. Only a recognised ratio
     # scale gets this; an unrecognised one keeps a linear axis rather than a
@@ -1020,26 +1006,18 @@ def run_adjusted_association_figure(
     ax.set_yticks(list(range(len(rows))))
     ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
     ax.set_ylim(len(rows) - 0.5, -0.5)
-    ax.set_xlabel(f"{_reader_label(scale.name)} ({_reader_label(exposure)})")
-    ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
+    ax.set_xlabel(
+        f"{effect_measure_label(scale.name)} (95% CI), {display_label(exposure)}"
+    )
+    style_category_axis(ax)
+    style_value_axis(ax, grid=True, palette=palette)
 
     # The number the paper quotes, printed beside the interval it came from, so
     # a reader never has to infer a value off the axis.
-    for index in drawn:
-        estimate = rows["__estimate"].iloc[index]
-        low = rows["__low"].iloc[index]
-        high = rows["__high"].iloc[index]
-        ax.annotate(
-            f"{estimate:.2f} ({low:.2f}–{high:.2f})",
-            xy=(1.0, index),
-            xycoords=ax.get_yaxis_transform(),
-            xytext=(4, 0),
-            textcoords="offset points",
-            va="center",
-            ha="left",
-            fontsize=6.2,
-            annotation_clip=False,
-        )
+    label_rows(ax, [
+        f"{estimate:.2f} ({low:.2f}–{high:.2f})"
+        for estimate, low, high in zip(estimates, lows, highs)
+    ], drawn, palette=palette)
     for index, ok in enumerate(rows["__drawable"]):
         if ok:
             continue
@@ -1059,7 +1037,7 @@ def run_adjusted_association_figure(
 
     total_n = _finite(frame["n"].iloc[0])
     total_events = _finite(frame["n_events"].iloc[0])
-    subtitle = _reader_label(outcome)
+    subtitle = display_label(outcome)
     if total_n is not None and total_events is not None:
         subtitle += f" — {int(total_events):,} of {int(total_n):,}"
     ax.set_title(subtitle, loc="left", pad=4, fontsize=6.6)
@@ -1073,7 +1051,9 @@ def run_adjusted_association_figure(
         raise ValueError("unsupported_planned_figure_design: chart adjustment declaration disagrees with the source")
     model_note = f"{adjustment} {estimator[:1].upper()}{estimator[1:]} model."
     if presentation is None:
-        fig.subplots_adjust(left=0.30, right=0.72, bottom=0.22, top=0.88)
+        fig.subplots_adjust(
+            left=0.30, right=0.72, bottom=11.0 / height_mm, top=1.0 - 8.0 / height_mm,
+        )
     if presentation is not None:
         finish_presented_figure(fig, presentation, base_font_size=7.0)
     contract = make_figure_contract(

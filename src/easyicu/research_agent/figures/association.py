@@ -197,7 +197,7 @@ def render_continuous_association_figure(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from .publication import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style, curve_kwargs
 
     palette = apply_publication_style()
     panel_count = 2 if risk is not None else 1
@@ -225,9 +225,9 @@ def render_continuous_association_figure(
     upper = curve["ci_high"].to_numpy(float)
     ax = axes[0]
     ax.fill_between(x, lower, upper, color="#DDE8F5", linewidth=0, zorder=1)
-    ax.plot(x, estimate, color=palette.get("blue", "#0F4D92"), linewidth=1.8)
-    ax.axhline(1.0, color="#727A87", linestyle=(0, (3, 3)), linewidth=0.8)
-    ax.axvline(reference, color="#727A87", linestyle=(0, (3, 3)), linewidth=0.8)
+    ax.plot(x, estimate, **curve_kwargs(palette, "blue"))
+    ax.axhline(1.0, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
+    ax.axvline(reference, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
     ax.set_yscale("log")
     ax.set_xlim(float(x.min()), float(x.max()))
     ax.set_ylim(float(lower.min()) * 0.94, float(upper.max()) * 1.04)
@@ -235,7 +235,7 @@ def render_continuous_association_figure(
     ax.set_ylabel(f"{outcome_label} ratio (95% CI)")
     ax.set_title("Exposure–response association", loc="left", pad=6)
     ax.grid(axis="y", color="#E3E6EA", linewidth=0.55, zorder=0)
-    add_panel_label(ax, "A", x=-0.14, y=1.05, fontsize=10.0)
+    add_panel_label(ax, "A", x=-0.14, y=1.05)
 
     panels = [
         {
@@ -265,8 +265,8 @@ def render_continuous_association_figure(
         ax.fill_between(
             risk_x, risk_lower, risk_upper, color="#D9EFEE", linewidth=0, zorder=1
         )
-        ax.plot(risk_x, risk_estimate, color="#248A8D", linewidth=1.8)
-        ax.axvline(reference, color="#727A87", linestyle=(0, (3, 3)), linewidth=0.8)
+        ax.plot(risk_x, risk_estimate, **curve_kwargs(palette, "#248A8D"))
+        ax.axvline(reference, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
         ax.set_xlim(float(risk_x.min()), float(risk_x.max()))
         span = max(float(risk_upper.max() - risk_lower.min()), 0.5)
         ax.set_ylim(
@@ -277,7 +277,7 @@ def render_continuous_association_figure(
         ax.set_ylabel(f"Model-standardised {outcome_label} risk (%)")
         ax.set_title("Model-standardised absolute risk", loc="left", pad=6)
         ax.grid(axis="y", color="#E3E6EA", linewidth=0.55, zorder=0)
-        add_panel_label(ax, "B", x=-0.14, y=1.05, fontsize=10.0)
+        add_panel_label(ax, "B", x=-0.14, y=1.05)
         panels.append(
             {
                 "panel_id": "B",

@@ -261,6 +261,10 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
+        draw_interval_rows,
+        style_category_axis,
+        style_count_axis,
+        style_value_axis,
         make_figure_contract,
         save_publication_figure,
     )
@@ -270,7 +274,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         return None
     n_plot = n_df.dropna(subset=["modeled_analytic_n"]).copy()
     max_rows = max(len(ratio_df), len(rd_df), len(n_plot), 1)
-    figure_height_mm = float(max(88, min(145, 24 + 15 * max_rows)))
+    stacked = not ratio_df.empty and not rd_df.empty
+    # One row of panels gets a fixed gutter plus a compact pitch per row; two
+    # stacked panels keep the taller page.
+    figure_height_mm = float(
+        max(88, min(145, 24 + 15 * max_rows)) if stacked
+        else max(46, min(145, 30 + 9 * max_rows))
+    )
     fig = plt.figure(
         figsize=(183 / 25.4, figure_height_mm / 25.4),
         constrained_layout=False,
@@ -303,8 +313,8 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             width_ratios=[1.42, 0.92] if has_denominator else [1.0],
             left=0.25 if has_denominator else 0.30,
             right=0.98,
-            top=0.90,
-            bottom=0.20,
+            top=1.0 - 9.0 / figure_height_mm,
+            bottom=15.0 / figure_height_mm,
             wspace=0.82,
         )
         effect_axis = fig.add_subplot(grid[0, 0])
@@ -333,37 +343,17 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             _short_figure_label(label)
             for label in data["plot_label"].fillna(data["display_label"]).astype(str)
         ]
-        ax.errorbar(
-            center,
-            y,
-            xerr=[
-                [max(0.0, c - lower) for c, lower in zip(center, lo)],
-                [max(0.0, h - c) for c, h in zip(center, hi)],
-            ],
-            fmt="o",
-            color=color,
-            ecolor=color,
-            elinewidth=1.0,
-            capsize=2.2,
-            markersize=3.9,
-        )
-        ax.axvline(
-            null_value,
-            color=palette.get("neutral", "#8F8F8F"),
-            linestyle="--",
-            linewidth=0.8,
+        draw_interval_rows(
+            ax, center, lo, hi, y, palette=palette, color=color, null=null_value,
+            clip_rounding=True,
         )
         ax.set_yticks(y)
         ax.set_yticklabels(labels)
-        ax.invert_yaxis()
+        ax.set_ylim(len(y) - 0.5, -0.5)
         ax.set_xlabel(xlabel)
         ax.set_title(title, loc="left", pad=4)
-        ax.grid(
-            axis="x",
-            color=palette.get("neutral_light", "#D8D8D8"),
-            linewidth=0.55,
-            alpha=0.8,
-        )
+        style_category_axis(ax)
+        style_value_axis(ax, grid=True, palette=palette)
 
     contract_panels: List[Dict[str, Any]] = []
     next_panel_ord = ord("A")
@@ -433,9 +423,9 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             title=additive_title,
             xlabel=additive_xlabel,
             null_value=0.0,
-            color=palette.get("green", "#008B5E"),
+            color=palette.get("teal", "#42949E"),
         )
-        add_panel_label(ax_rd, panel_id, x=-0.24, y=1.06, fontsize=10.0)
+        add_panel_label(ax_rd, panel_id, x=-0.24, y=1.06)
         contract_panels.append(
             {
                 "panel_id": panel_id,
@@ -459,11 +449,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     if ax_n is not None:
         n_plot = n_plot.reset_index(drop=True)
         y_n = list(range(len(n_plot)))
+        # Neutral bars: a denominator is a count, not a series. A model that
+        # did not converge keeps the lighter track tone.
         colors = [
             (
-                palette.get("blue", "#0F4D92")
+                palette.get("neutral", "#8C929B")
                 if _truthy_figure_value(value)
-                else palette.get("neutral_light", "#D8D8D8")
+                else palette.get("neutral_light", "#E2E5E9")
             )
             for value in n_plot["converged"].fillna(False)
         ]
@@ -494,31 +486,26 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             else pd.Series([pd.NA] * len(n_plot))
         )
         max_n = float(n_plot["modeled_analytic_n"].max())
-        if event_values.notna().any():
-            for row_index, (analytic_n, event_n) in enumerate(
-                zip(n_plot["modeled_analytic_n"], event_values)
-            ):
-                if pd.isna(event_n):
-                    continue
-                ax_n.text(
-                    float(analytic_n) + max_n * 0.015,
-                    row_index,
-                    f"{int(event_n):,} events",
-                    va="center",
-                    fontsize=6.0,
-                    color=palette.get("baseline", "#272727"),
-                )
-            ax_n.set_xlim(0, max_n * 1.29)
-            ax_n.set_xlabel("Analytic sample size")
-        else:
-            ax_n.set_xlabel("Analytic sample size")
+        # Each bar's count is printed once at its end, with its events.
+        for row_index, (analytic_n, event_n) in enumerate(
+            zip(n_plot["modeled_analytic_n"], event_values)
+        ):
+            text = f"{int(analytic_n):,}"
+            if not pd.isna(event_n):
+                text += f" ({int(event_n):,} events)"
+            ax_n.text(
+                float(analytic_n) + max_n * 0.015,
+                row_index,
+                text,
+                va="center",
+                fontsize=6.0,
+                color=palette.get("ink_2", "#4A4F57"),
+            )
+        ax_n.set_xlim(0, max_n * (1.45 if event_values.notna().any() else 1.22))
+        ax_n.set_xlabel("Analytic sample size")
+        style_count_axis(ax_n)
         ax_n.set_title("Model denominator audit", loc="left", pad=4)
-        ax_n.grid(
-            axis="x",
-            color=palette.get("neutral_light", "#D8D8D8"),
-            linewidth=0.55,
-            alpha=0.8,
-        )
+        style_category_axis(ax_n)
         if non_independent_count:
             ax_n.text(
                 0.0,
@@ -530,7 +517,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
                 color=palette.get("neutral", "#8F8F8F"),
             )
         panel_id = _next_panel_id()
-        add_panel_label(ax_n, panel_id, x=-0.24, y=1.06, fontsize=10.0)
+        add_panel_label(ax_n, panel_id, x=-0.24, y=1.06)
         contract_panels.append(
             {
                 "panel_id": panel_id,

@@ -221,11 +221,10 @@ def render_prediction_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from .publication import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style, curve_kwargs
 
     palette = apply_publication_style()
     blue = palette.get("blue", "#0F4D92")
-    neutral = palette.get("neutral", "#8F8F8F")
 
     planned_panels = [
         panel
@@ -251,61 +250,71 @@ def render_prediction_figure(
         display = presentation
     fig, (ax_cal, ax_roc, ax_val), palette = create_presented_axes(3, display)
     blue = palette["blue"]
-    neutral = palette["neutral"]
 
     # A -- calibration (hero)
     ax_cal.plot(
-        [0, 1], [0, 1], color=neutral, linestyle="--", linewidth=0.8, label="Reference"
+        [0, 1], [0, 1], color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6,
+        label="Reference",
     )
+    # Binned points against the diagonal; bins are not joined by a line.
     order = np.argsort(pred.to_numpy())
     ax_cal.plot(
         pred.to_numpy()[order],
         obs.to_numpy()[order],
-        marker="o",
-        markersize=3.4,
+        linestyle="none",
+        marker="s",
+        markersize=4.0,
+        markeredgewidth=0.0,
         color=blue,
-        linewidth=1.2,
+        clip_on=False,
         label="Model",
     )
     ax_cal.set_xlim(0, 1)
     ax_cal.set_ylim(0, 1)
+    ax_cal.set_aspect("equal", adjustable="box")
     ax_cal.set_xlabel("Predicted risk")
     ax_cal.set_ylabel("Observed risk")
     ax_cal.set_title("Calibration", loc="left", pad=4)
     if "brier" in metrics or "brier_score" in metrics:
         brier = metrics.get("brier", metrics.get("brier_score"))
         ax_cal.text(
+            0.96,
             0.04,
-            0.92,
             f"Brier {brier:.3f}",
-            fontsize=6.4,
-            color=palette.get("baseline", "#272727"),
+            transform=ax_cal.transAxes,
+            ha="right",
+            fontsize=6.2,
+            color=palette["ink_2"],
         )
-    add_panel_label(ax_cal, "A", x=-0.2, fontsize=display.font_size * 1.1)
+    add_panel_label(ax_cal, "A", x=-0.2)
 
     # B -- ROC
     fpr_v = fpr.to_numpy()
     tpr_v = tpr.to_numpy()
     ro = np.argsort(fpr_v)
     ax_roc.plot(
-        [0, 1], [0, 1], color=neutral, linestyle="--", linewidth=0.8, label="Reference"
+        [0, 1], [0, 1], color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6,
+        label="Reference",
     )
-    ax_roc.plot(fpr_v[ro], tpr_v[ro], color=blue, linewidth=1.3, label="Model")
+    ax_roc.plot(fpr_v[ro], tpr_v[ro], **curve_kwargs(palette, "blue"), label="Model")
     ax_roc.set_xlim(0, 1)
     ax_roc.set_ylim(0, 1.02)
+    ax_roc.set_box_aspect(1.0)
     ax_roc.set_xlabel("1 - specificity")
     ax_roc.set_ylabel("Sensitivity")
     ax_roc.set_title("Discrimination (ROC)", loc="left", pad=4)
     auroc = metrics.get("auroc", metrics.get("auc", metrics.get("roc_auc")))
     if auroc is not None:
         ax_roc.text(
-            0.4,
-            0.08,
+            0.96,
+            0.04,
             f"AUROC {auroc:.3f}",
-            fontsize=6.6,
-            color=palette.get("baseline", "#272727"),
+            transform=ax_roc.transAxes,
+            ha="right",
+            fontsize=6.2,
+            color=palette["ink_2"],
         )
-    add_panel_label(ax_roc, "B", x=-0.2, fontsize=display.font_size * 1.1)
+    add_panel_label(ax_roc, "B", x=-0.2)
 
     # C -- validation / metric summary
     labels: List[str] = []
@@ -338,7 +347,7 @@ def render_prediction_figure(
     ax_val.set_xticks(range(len(labels)), labels, rotation=20, ha="right", fontsize=6.0)
     ax_val.set_ylim(0, max(1.0, max(values) * 1.15))
     ax_val.set_title("Held-out performance", loc="left", pad=4)
-    add_panel_label(ax_val, "C", x=-0.24, fontsize=display.font_size * 1.1)
+    add_panel_label(ax_val, "C", x=-0.24)
 
     finish_presented_figure(fig, display)
 

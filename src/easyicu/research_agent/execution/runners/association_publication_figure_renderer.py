@@ -16,15 +16,21 @@ from ...contracts.figure_plan import (
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
 )
 from ...figures.publication import (
+    PALETTE_CLINICAL,
     add_panel_label,
     apply_publication_style,
     configure_ratio_axis,
+    draw_interval_rows,
+    interval_text,
+    label_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
+    style_value_axis,
 )
 from ...figures.display_labels import (
-    concise_clinical_level, display_label, grouped_axis_labels, label_lookup, scoped_label_lookup,
-    wrap_axis_tick_labels,
+    concise_clinical_level, display_label, effect_measure_label, grouped_axis_labels,
+    label_lookup, scoped_label_lookup, wrap_axis_tick_labels,
 )
 from ...figures.robustness import (
     ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
@@ -135,28 +141,25 @@ def _forest(
     estimates = frame[estimate_column].to_numpy(dtype=float)
     lows = frame["ci_low"].to_numpy(dtype=float)
     highs = frame["ci_high"].to_numpy(dtype=float)
-    errors = np.vstack([estimates - lows, highs - estimates])
-    ax.errorbar(
-        estimates, positions, xerr=errors, fmt="o", color=color, capsize=2.5,
-        markersize=4.0, elinewidth=1.0,
+    draw_interval_rows(
+        ax, estimates, lows, highs, positions, palette=PALETTE_CLINICAL, color=color,
+        null=1.0 if ratio else None,
     )
     formatter = label_formatter or (lambda value: display_label(value))
     row_labels = [formatter(value) for value in frame[label_column]]
     if reference_label:
         # A categorical ratio's reference is an identity, not a fitted interval.
-        ax.plot([1.0], [0], "o", color=color, markersize=4.0)
-        ax.annotate(
-            "1.00", xy=(1.0, 0), xycoords=("axes fraction", "data"),
-            xytext=(0, 3.5), textcoords="offset points", ha="right", va="bottom",
-            fontsize=7.5, color="#333333",
-        )
+        ax.plot([1.0], [0], "s", color=color, markersize=4.0, markeredgewidth=0.0)
+        label_rows(ax, ["1.00"], [0])
         row_labels.insert(0, f"{reference_label} (reference)")
-    ax.set_yticks(np.arange(len(row_labels)), row_labels, fontsize=7.5)
-    ax.set_ylim(len(row_labels) - 0.4, -0.9)
+    ax.set_yticks(np.arange(len(row_labels)), row_labels, fontsize=7.0)
+    # Half a row of margin either side: the rows sit at a regular pitch.
+    ax.set_ylim(len(row_labels) - 0.5, -0.5)
+    style_category_axis(ax)
+    style_value_axis(ax, grid=True)
     if ratio:
         if (frame[[estimate_column, "ci_low", "ci_high"]] <= 0).any().any():
             raise ValueError("ratio-scale estimates and intervals must be positive")
-        ax.axvline(1.0, color="#777777", linewidth=0.8, linestyle="--")
         low = min(float(lows.min()), 1.0) / 1.3
         high = max(float(highs.max()), 1.0) * 1.3
         configure_ratio_axis(ax, lows=lows, highs=highs)
@@ -165,20 +168,13 @@ def _forest(
         name = names.pop() if len(names) == 1 else "Ratio"
         ax.set_xlabel(f"{name} (95% CI, log scale)")
     else:
-        ax.set_xlabel(_label(next(iter(scales), "estimate")))
-    for position, estimate, low_value, high_value in zip(
-        positions, estimates, lows, highs
-    ):
-        text = (
-            f"{estimate:.2f} ({low_value:.2f}\u2013{high_value:.2f})"
-            if ratio
-            else f"{estimate:.3g} ({low_value:.3g} to {high_value:.3g})"
+        ax.set_xlabel(
+            f"{effect_measure_label(next(iter(scales), 'estimate'))} (95% CI)"
         )
-        ax.annotate(
-            text, xy=(1.0, position), xycoords=("axes fraction", "data"),
-            xytext=(0, 3.5), textcoords="offset points", ha="right", va="bottom",
-            fontsize=7.5, color="#333333",
-        )
+    label_rows(ax, [
+        interval_text(estimate, low_value, high_value, ratio=ratio)
+        for estimate, low_value, high_value in zip(estimates, lows, highs)
+    ], positions)
     ax.set_title(title, loc="left", pad=7)
 
 
@@ -400,13 +396,9 @@ def _draw_absolute_risk_points(
     for position, (index, kind) in enumerate(groups):
         row = frame.loc[index]
         estimate = 100.0 * float(row["estimate"])
-        interval = [
-            [estimate - 100.0 * float(row["ci_low"])],
-            [100.0 * float(row["ci_high"]) - estimate],
-        ]
-        ax.errorbar(
-            position, estimate, yerr=interval, fmt="o", capsize=2.5,
-            markersize=4.0, elinewidth=1.0,
+        draw_interval_rows(
+            ax, [estimate], [100.0 * float(row["ci_low"])], [100.0 * float(row["ci_high"])],
+            [position], palette=PALETTE_CLINICAL, orientation="vertical",
             color=color if kind == "level" or not is_level.any() else neutral,
         )
         name = (
@@ -1549,7 +1541,7 @@ def render_association_publication_figure(
             else "Observed outcome risk (%)"
         )
     ax.set_title(absolute_title, loc="left", pad=7)
-    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
+    add_panel_label(ax, "a", x=-0.12, y=1.04)
 
     adjusted_label = "model_id"
     for candidate in ("contrast", "exposure", "model_id"):
@@ -1594,7 +1586,7 @@ def render_association_publication_figure(
         scope_pattern = re.compile(rf"(?<!\w){re.escape(exposure_label)}(?!\w)", re.IGNORECASE)
         if not all(scope_pattern.search(tick.get_text()) for tick in axes[0, 1].get_yticklabels()):
             axes[0, 1].set_ylabel(exposure_label)
-    add_panel_label(axes[0, 1], "b", x=-0.12, y=1.04, fontsize=8.0)
+    add_panel_label(axes[0, 1], "b", x=-0.12, y=1.04)
 
     if scientific_sensitivity is not None and scientific_sensitivity_key is not None:
         _forest(
@@ -1633,7 +1625,7 @@ def render_association_publication_figure(
         panel_c = ("Measurement missingness", "data_quality", missingness_key)
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no third-panel source")
-    add_panel_label(axes[1, 0], "c", x=-0.12, y=1.04, fontsize=8.0)
+    add_panel_label(axes[1, 0], "c", x=-0.12, y=1.04)
 
     if not show_panel_d:
         panel_d = None
@@ -1679,7 +1671,7 @@ def render_association_publication_figure(
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no fourth-panel source")
     if show_panel_d:
-        add_panel_label(axes[1, 1], "d", x=-0.12, y=1.04, fontsize=8.0)
+        add_panel_label(axes[1, 1], "d", x=-0.12, y=1.04)
     audit_strips = {"Sensitivity-specification status", "Sensitivity-analysis coverage"}
     if (
         show_panel_d

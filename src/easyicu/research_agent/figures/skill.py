@@ -34,8 +34,11 @@ from .publication import (
     add_panel_label,
     apply_publication_style,
     audit_publication_exports,
+    curve_kwargs,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_count_axis,
 )
 from .promotion_contract import contract_promoted_from_source
 from .base import (
@@ -815,28 +818,14 @@ class PublicationFigureSkill:
                 if bool(row.get("is_primary"))
                 else palette.get("baseline", "#272727")
             )
-            ax.errorbar(
-                center,
-                idx,
-                xerr=np.array(
-                    [[max(0.0, center - lo)], [max(0.0, hi - center)]],
-                    dtype=float,
-                ),
-                fmt="o",
-                color=color,
-                ecolor=color,
-                elinewidth=1.0,
-                capsize=2.2,
-                markersize=4.3 if bool(row.get("is_primary")) else 3.8,
-                zorder=3,
+            draw_interval_rows(
+                ax, [center], [lo], [hi], [idx], palette=palette, color=color,
+                clip_rounding=True,
             )
         null_value = axis_meta.get("null_value")
         if null_value is not None:
             ax.axvline(
-                float(null_value),
-                color=palette.get("neutral", "#8F8F8F"),
-                linestyle="--",
-                linewidth=0.8,
+                float(null_value), color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6,
             )
         y_labels = plot_df["label"].astype(str).tolist()
         if typed_distribution:
@@ -925,7 +914,7 @@ class PublicationFigureSkill:
                 )
             elif kind == "missingness":
                 _draw_missingness_panel(side_ax, missingness_df, palette=palette)
-            add_panel_label(side_ax, label, x=-0.12, y=1.04, fontsize=10.0)
+            add_panel_label(side_ax, label, x=-0.12, y=1.04)
 
         predictor = source_exposure or _display_label(
             context.primary_exposure or "the declared exposure", plan.display_labels,
@@ -1294,27 +1283,11 @@ class PublicationFigureSkill:
                 if is_primary
                 else palette.get("baseline", "#272727")
             )
-            ax.errorbar(
-                center,
-                idx,
-                xerr=np.array(
-                    [[max(0.0, center - lo)], [max(0.0, hi - center)]],
-                    dtype=float,
-                ),
-                fmt="o",
-                color=color,
-                ecolor=color,
-                elinewidth=1.0,
-                capsize=2.2,
-                markersize=4.4 if is_primary else 3.6,
-                zorder=3,
+            draw_interval_rows(
+                ax, [center], [lo], [hi], [idx], palette=palette, color=color,
+                clip_rounding=True,
             )
-        ax.axvline(
-            1.0,
-            color=palette.get("neutral", "#8F8F8F"),
-            linestyle="--",
-            linewidth=0.8,
-        )
+        ax.axvline(1.0, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
         ax.set_yticks(y, labels)
         header_y = -0.75
         ax.set_ylim(len(source_df) - 0.5, header_y - 0.15)
@@ -1409,7 +1382,7 @@ class PublicationFigureSkill:
                 handlelength=1.2,
                 borderaxespad=0.0,
             )
-        add_panel_label(ax_counts, "B", x=-0.18, y=1.06, fontsize=10.0)
+        add_panel_label(ax_counts, "B", x=-0.18, y=1.06)
 
         n_summary = axis_summary.dropna(subset=["median_n", "min_n", "max_n"]).copy()
         if n_summary.empty:
@@ -1428,22 +1401,11 @@ class PublicationFigureSkill:
             median_n = n_summary["median_n"].astype(float).to_numpy()
             min_n = n_summary["min_n"].astype(float).to_numpy()
             max_n = n_summary["max_n"].astype(float).to_numpy()
-            ax_n.errorbar(
-                median_n,
-                n_y,
-                xerr=np.vstack(
-                    [
-                        np.maximum(0.0, median_n - min_n),
-                        np.maximum(0.0, max_n - median_n),
-                    ]
-                ),
-                fmt="o",
-                color=palette.get("blue", "#0F4D92"),
-                ecolor=palette.get("blue", "#0F4D92"),
-                elinewidth=1.0,
-                capsize=2.0,
-                markersize=3.8,
+            draw_interval_rows(
+                ax_n, median_n, min_n, max_n, n_y, palette=palette, color="blue",
+                clip_rounding=True,
             )
+            style_count_axis(ax_n)
             ax_n.set_yticks(n_y, n_summary["axis_label"].astype(str).tolist())
             ax_n.invert_yaxis()
             ax_n.set_xlabel("Analytic sample size (n)")
@@ -1456,7 +1418,7 @@ class PublicationFigureSkill:
             )
             if float(max_n.max()) > 0:
                 ax_n.set_xlim(0, float(max_n.max()) * 1.12)
-        add_panel_label(ax_n, "C", x=-0.18, y=1.06, fontsize=10.0)
+        add_panel_label(ax_n, "C", x=-0.18, y=1.06)
 
         contract = make_figure_contract(
             figure_id="easyicu_publication_figure",
@@ -3408,10 +3370,9 @@ def _draw_strata_panel(
         ax.plot(
             x,
             y_values,
-            color=palette.get("blue", "#0F4D92"),
-            linewidth=1.4,
-            marker="o",
-            markersize=3.4,
+            **curve_kwargs(palette, "blue"),
+            marker="s",
+            markersize=4.0,
         )
         if has_intervals:
             ax.errorbar(
@@ -3419,9 +3380,9 @@ def _draw_strata_panel(
                 y_values,
                 yerr=interval_errors,
                 fmt="none",
-                ecolor=palette.get("blue", "#0F4D92"),
+                ecolor=palette.get("ink_2", "#4A4F57"),
                 elinewidth=0.9,
-                capsize=2.0,
+                capsize=0.0,
                 zorder=3,
             )
         if "n" in frame.columns:
@@ -3465,12 +3426,12 @@ def _draw_strata_panel(
             y_values,
             y,
             xerr=interval_errors if has_intervals else None,
-            fmt="o",
+            fmt="s",
             color=palette.get("blue", "#0F4D92"),
-            ecolor=palette.get("blue", "#0F4D92"),
+            ecolor=palette.get("ink_2", "#4A4F57"),
             elinewidth=0.9,
-            capsize=2.0 if has_intervals else 0,
-            markersize=3.8,
+            capsize=0,
+            markersize=4.0,
         )
         labels = frame["score"].astype(str).tolist()
         if "n" in frame.columns:

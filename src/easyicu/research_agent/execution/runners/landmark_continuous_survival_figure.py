@@ -232,8 +232,14 @@ def _render(
         add_panel_label,
         apply_publication_style,
         configure_ratio_axis,
+        curve_kwargs,
+        draw_interval_rows,
+        draw_number_at_risk,
+        km_risk_times,
         make_figure_contract,
         save_publication_figure,
+        style_category_axis,
+        style_count_axis,
     )
 
     palette = apply_publication_style()
@@ -264,13 +270,15 @@ def _render(
         1, 2, width_ratios=(1.3, 1.0),
         left=0.15, right=0.975, top=0.94, bottom=0.07, wspace=0.62,
     )
-    left = outer[0, 0].subgridspec(3, 1, height_ratios=(2.0, 0.78, 1.0), hspace=0.6)
+    left = outer[0, 0].subgridspec(2, 1, height_ratios=(2.78, 1.0), hspace=0.6)
+    # The number-at-risk rows sit directly under their Kaplan-Meier axis.
+    km_block = left[0].subgridspec(2, 1, height_ratios=(2.0, 0.62), hspace=0.2)
     right = outer[0, 1].subgridspec(
         2, 1, height_ratios=(1.2, 1.0 + extra / (0.36 * base_height)), hspace=0.42,
     )
-    ax_km = fig.add_subplot(left[0])
-    ax_risk = fig.add_subplot(left[1])
-    ax_flow = fig.add_subplot(left[2])
+    ax_km = fig.add_subplot(km_block[0])
+    ax_risk = fig.add_subplot(km_block[1], sharex=ax_km)
+    ax_flow = fig.add_subplot(left[1])
     ax_hr = fig.add_subplot(right[0])
     ax_ph = fig.add_subplot(right[1])
 
@@ -295,8 +303,7 @@ def _render(
             rows["time_from_landmark_days"],
             rows["survival_probability"],
             where="post",
-            color=colors[group],
-            linewidth=1.4,
+            **curve_kwargs(palette, colors[group]),
             label=textwrap.fill(labels[group], width=34),
         )
     ax_km.set_ylim(0.0, 1.02)
@@ -308,9 +315,10 @@ def _render(
     )
     ax_km.set_title(km_title, loc="left")
     ax_km.legend(loc="lower left", fontsize=5.8)
-    add_panel_label(ax_km, "a", x=-0.09, fontsize=8.0)
+    add_panel_label(ax_km, "a", x=-0.09)
 
-    risk_times = np.linspace(0.0, horizon, 5)
+    # Number-at-risk columns stand at the Kaplan-Meier axis ticks.
+    risk_times = km_risk_times(ax_km, horizon)
     risk_rows: list[list[str]] = []
     for group in group_ids:
         rows = km_table.loc[km_table["exposure_group"].eq(group)].sort_values(
@@ -321,26 +329,10 @@ def _render(
             seen = rows.loc[rows["time_from_landmark_days"].le(time_point)]
             counts.append(str(int((seen.iloc[-1] if not seen.empty else rows.iloc[0])["at_risk"])))
         risk_rows.append(counts)
-    ax_risk.axis("off")
-    table = ax_risk.table(
-        cellText=risk_rows,
-        rowLabels=(
-            ["Tertile 1", "Tertile 2", "Tertile 3"]
-            if whole_reason is None
-            else ["Risk set"]
-        ),
-        colLabels=[f"{value:g}" for value in risk_times],
-        cellLoc="center",
-        rowLoc="right",
-        bbox=[0.0, 0.0, 1.0, 0.8],
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(5.4)
-    for cell in table.get_celld().values():
-        cell.set_linewidth(0.0)
-    ax_risk.text(
-        -0.02, 0.98, "Number at risk", transform=ax_risk.transAxes,
-        fontsize=6.0, fontweight="bold", va="top",
+    draw_number_at_risk(
+        ax_risk, risk_times, risk_rows,
+        ["Tertile 1", "Tertile 2", "Tertile 3"] if whole_reason is None else ["Risk set"],
+        colors=[colors[group] for group in group_ids], palette=palette, fontsize=5.6,
     )
 
     unit = f" ({sealed.exposure_unit})" if sealed.exposure_unit else ""
@@ -360,13 +352,11 @@ def _render(
         lows = rows["ci_low"].to_numpy(dtype=float)
         highs = rows["ci_high"].to_numpy(dtype=float)
         positions = np.arange(len(rows))
-        ax_hr.errorbar(
-            estimates, positions,
-            xerr=np.vstack((estimates - lows, highs - estimates)),
-            fmt="o", color=palette["blue"], capsize=3, linewidth=1.2,
+        draw_interval_rows(
+            ax_hr, estimates, lows, highs, positions, palette=palette, color="blue", null=1.0,
         )
-        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
         configure_ratio_axis(ax_hr, lows=lows, highs=highs)
+        style_category_axis(ax_hr)
         ax_hr.set_yticks(
             positions,
             [f"{row.interval_start_days:g}–{row.interval_end_days:g} d" for row in rows.itertuples()],
@@ -391,7 +381,7 @@ def _render(
                 curve["spline_ci_high"].to_numpy(dtype=float),
                 color=palette["blue"], alpha=0.18, linewidth=0.0,
             )
-            ax_hr.plot(x, curve["spline_hazard_ratio"], color=palette["blue"], linewidth=1.5)
+            ax_hr.plot(x, curve["spline_hazard_ratio"], **curve_kwargs(palette, "blue"))
             bounds = [curve["spline_ci_low"], curve["spline_ci_high"], *bounds]
         else:
             ax_hr.fill_between(
@@ -401,10 +391,11 @@ def _render(
                 color=palette["neutral"], alpha=0.18, linewidth=0.0,
             )
         ax_hr.plot(
-            x, curve["linear_hazard_ratio"], color=palette["neutral"],
-            linestyle="--", linewidth=1.1,
+            x, curve["linear_hazard_ratio"], **{
+                **curve_kwargs(palette, "neutral"), "linestyle": "--", "linewidth": 0.9,
+            },
         )
-        ax_hr.axhline(1.0, color=palette["neutral"], linestyle=":", linewidth=0.8)
+        ax_hr.axhline(1.0, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
         lows = np.concatenate([np.asarray(item, dtype=float) for item in bounds[0::2]])
         highs = np.concatenate([np.asarray(item, dtype=float) for item in bounds[1::2]])
         _ratio_y_axis(ax_hr, low=float(np.min(lows)), high=float(np.max(highs)))
@@ -412,7 +403,7 @@ def _render(
         ax_hr.set_xlabel(textwrap.fill(exposure_axis, width=48), fontsize=6.4)
         ax_hr.set_ylabel(f"{ratio_words} vs median (95% CI)")
         ax_hr.set_title(curve_title, loc="left")
-    add_panel_label(ax_hr, "b", x=-0.18, y=1.04, fontsize=8.0)
+    add_panel_label(ax_hr, "b", x=-0.18, y=1.04)
 
     stage_labels = {
         "source_rows": "Source records",
@@ -422,7 +413,7 @@ def _render(
     }
     flow = risk_flow.sort_values("stage_order")
     y = np.arange(len(flow))
-    ax_flow.barh(y, flow["count"], color=palette["teal"])
+    ax_flow.barh(y, flow["count"], color=palette["neutral"])
     ax_flow.set_yticks(
         y,
         [
@@ -434,11 +425,12 @@ def _render(
     for index, count in enumerate(flow["count"].astype(int)):
         ax_flow.text(count, index, f"  {count:,}", va="center", ha="left", fontsize=5.6)
     ax_flow.set_xlim(0, max(flow["count"]) * 1.22)
+    style_count_axis(ax_flow)
     ax_flow.invert_yaxis()
     unit_label = sealed.analysis_unit_label
     ax_flow.set_xlabel(f"{unit_label[:1].upper()}{unit_label[1:]} (n)")
     ax_flow.set_title("Risk-set accounting", loc="left")
-    add_panel_label(ax_flow, "c", x=-0.09, y=1.08, fontsize=8.0)
+    add_panel_label(ax_flow, "c", x=-0.09, y=1.08)
 
     required = {"covariate", "p_value", "declared_alpha"}
     if not required.issubset(ph_table.columns):
@@ -485,7 +477,7 @@ def _render(
     )
     ax_ph.set_xlabel(r"Schoenfeld test $-\log_{10}(p)$")
     ax_ph.set_title("Proportional-hazards diagnostics", loc="left")
-    add_panel_label(ax_ph, "d", x=-0.18, y=1.04, fontsize=8.0)
+    add_panel_label(ax_ph, "d", x=-0.18, y=1.04)
 
     panel_sources = {
         panel.panel_id: list(panel.source_products)

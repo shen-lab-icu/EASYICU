@@ -25,8 +25,10 @@ from ..numeric_scalars import coerce_optional_finite_float as _finite
 from .publication import (
     add_panel_label,
     apply_publication_style,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
 )
 
 
@@ -927,17 +929,10 @@ def render_absolute_risk_bundle_from_prior_outputs(
     ci_high = pd.to_numeric(prepared.risk_rows["ci_high"]) * 100.0
     counts = pd.to_numeric(prepared.risk_rows["n"]).astype(int)
     positions = list(range(len(prepared.risk_rows)))
-    ax_a.errorbar(
-        risk_percent,
-        positions,
-        xerr=[risk_percent - ci_low, ci_high - risk_percent],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        elinewidth=1.0,
-        capsize=2.0,
-        markersize=4.2,
+    draw_interval_rows(
+        ax_a, risk_percent, ci_low, ci_high, positions, palette=palette, color="blue",
     )
+    style_category_axis(ax_a)
     ax_a.set_yticks(positions)
     ax_a.set_yticklabels([_wrapped(label) for label in prepared.risk_group_labels])
     ax_a.invert_yaxis()

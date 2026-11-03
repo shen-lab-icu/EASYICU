@@ -18,8 +18,12 @@ from ...contracts.figure_plan import (
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    curve_kwargs,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
+    style_value_axis,
 )
 from ...figures.display_labels import display_label, figure_language_labels
 from ...figures.robustness import (
@@ -514,42 +518,16 @@ def _draw_sensitivity_forest(
     )
     if not positive.size:
         raise ValueError("sensitivity forest requires positive ratio-scale bounds")
-    ax.errorbar(
-        primary_estimates,
-        primary_y,
-        xerr=np.vstack(
-            (
-                np.maximum(primary_estimates - primary_low, 0),
-                np.maximum(primary_high - primary_estimates, 0),
-            )
-        ),
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["blue"],
-        elinewidth=0.85,
-        capsize=1.8,
-        markersize=3.4,
-        label="Primary",
+    draw_interval_rows(
+        ax, primary_estimates, primary_low, primary_high, primary_y,
+        palette=palette, color="blue", null=1.0, log=True, label="Primary",
+        clip_rounding=True,
     )
-    ax.errorbar(
-        sensitivity_estimates,
-        sensitivity_y,
-        xerr=np.vstack(
-            (
-                np.maximum(sensitivity_estimates - sensitivity_low, 0),
-                np.maximum(sensitivity_high - sensitivity_estimates, 0),
-            )
-        ),
-        fmt="s",
-        color=palette["orange"],
-        ecolor=palette["orange"],
-        elinewidth=0.85,
-        capsize=1.8,
-        markersize=3.1,
-        label="Sensitivity",
+    draw_interval_rows(
+        ax, sensitivity_estimates, sensitivity_low, sensitivity_high, sensitivity_y,
+        palette=palette, color="orange", marker="o", label="Sensitivity",
+        clip_rounding=True,
     )
-    ax.axvline(1.0, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
-    ax.set_xscale("log")
     lower_limit = float(positive.min()) / 1.06
     upper_limit = float(positive.max()) * 1.06
     candidate_ticks = (0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0)
@@ -575,6 +553,8 @@ def _draw_sensitivity_forest(
         ],
     )
     ax.set_ylim(len(records) - 0.5, -0.5)
+    style_category_axis(ax)
+    style_value_axis(ax, grid=True, palette=palette)
     ax.set_xlabel("Adjusted odds ratio (95% CI)")
     ax.set_title(
         "Sensitivity to covariate\nfunctional form",
@@ -614,7 +594,7 @@ def _draw_landmark_audits(
     axes[1].set_title("Measurement availability", loc="left")
     axes[1].invert_yaxis()
     for index, axis in enumerate(axes, start=first_panel_index):
-        add_panel_label(axis, chr(ord("a") + index), x=-0.08, y=1.06, fontsize=7.0)
+        add_panel_label(axis, chr(ord("a") + index), x=-0.08, y=1.06)
 
 
 def _run_legacy_landmark_article_figure(
@@ -733,7 +713,7 @@ def _run_legacy_landmark_article_figure(
             height=height,
             color=color,
             xerr=xerr,
-            capsize=2.2,
+            error_kw={"ecolor": palette["ink_2"], "elinewidth": 0.9},
             label=legend_label,
         )
     ax_context.set_yticks(
@@ -745,7 +725,7 @@ def _run_legacy_landmark_article_figure(
     ax_context.set_xlabel("Percent")
     ax_context.set_title("Observed data context", loc="left", pad=7)
     ax_context.legend(frameon=False, fontsize=5.4, loc="lower right")
-    add_panel_label(ax_context, "a", x=-0.15, y=1.04, fontsize=8.0)
+    add_panel_label(ax_context, "a", x=-0.15, y=1.04)
 
     robustness_display = draw_robustness_coverage(
         ax_robustness,
@@ -753,7 +733,7 @@ def _run_legacy_landmark_article_figure(
         color=palette["blue"],
         label_formatter=lambda value: display_label(value),
     )
-    add_panel_label(ax_robustness, "b", x=-0.12, y=1.04, fontsize=8.0)
+    add_panel_label(ax_robustness, "b", x=-0.12, y=1.04)
 
     matrix_display = matrix.copy()
     matrix_display["converged_bool"] = (
@@ -775,7 +755,7 @@ def _run_legacy_landmark_article_figure(
     ax_matrix.set_xticks([])
     ax_matrix.invert_yaxis()
     ax_matrix.set_title("Prespecified checks completed", loc="left", pad=7)
-    add_panel_label(ax_matrix, "c", x=-0.07, y=1.04, fontsize=8.0)
+    add_panel_label(ax_matrix, "c", x=-0.07, y=1.04)
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
     contract = make_figure_contract(
@@ -1072,8 +1052,8 @@ def run_landmark_association_figure(
         alpha=0.50,
         linewidth=0,
     )
-    ax.plot(x, y, color=palette["blue"], linewidth=1.45)
-    ax.axhline(1.0, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
+    ax.plot(x, y, **curve_kwargs(palette, "blue"))
+    ax.axhline(1.0, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
     _configure_ratio_y_axis(ax, lows=low, highs=high)
     references = pd.to_numeric(
         display_curve[reference_column], errors="coerce"
@@ -1116,7 +1096,7 @@ def run_landmark_association_figure(
     ax.tick_params(axis="x", labelbottom=False)
     ax.grid(axis="y", color="#E7EAED", linewidth=0.5)
     ax.set_axisbelow(True)
-    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=7.0)
+    add_panel_label(ax, "a", x=-0.08, y=1.04)
     _draw_exposure_distribution(
         ax_curve_density,
         x=x,
@@ -1166,8 +1146,8 @@ def run_landmark_association_figure(
         alpha=0.72,
         linewidth=0,
     )
-    ax.plot(risk_x, risk_values, color=risk_color, linewidth=1.45)
-    ax.axvline(reference, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
+    ax.plot(risk_x, risk_values, **curve_kwargs(palette, risk_color))
+    ax.axvline(reference, color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
     risk_span = max(float(risk_high.max() - risk_low.min()), 0.5)
     ax.set_ylim(
         max(0.0, float(risk_low.min()) - 0.08 * risk_span),
@@ -1188,7 +1168,7 @@ def run_landmark_association_figure(
     ax.tick_params(axis="x", labelbottom=False)
     ax.grid(axis="y", color="#E7EAED", linewidth=0.5)
     ax.set_axisbelow(True)
-    add_panel_label(ax, "b", x=-0.08, y=1.04, fontsize=7.0)
+    add_panel_label(ax, "b", x=-0.08, y=1.04)
     _draw_exposure_distribution(
         ax_risk_density,
         x=risk_x,
@@ -1207,7 +1187,7 @@ def run_landmark_association_figure(
             sensitivity_contrasts=sensitivity,
             palette=palette,
         )
-        add_panel_label(ax_sensitivity, "c", x=-0.08, y=1.04, fontsize=7.0)
+        add_panel_label(ax_sensitivity, "c", x=-0.08, y=1.04)
 
     if has_audits:
         # Validate the supplementary audit sources even though they do not compete

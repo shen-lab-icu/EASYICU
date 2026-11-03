@@ -277,7 +277,7 @@ def run_cross_sectional_phenotyping_figure(
     ax_projection.set_aspect("equal", adjustable="datalim")
     ax_projection.set_title("Candidate-cluster PCA display", loc="left", pad=7)
     ax_projection.legend(frameon=False, fontsize=6, markerscale=1.8, loc="best", ncols=2 if len(sizes) > 3 else 1)
-    add_panel_label(ax_projection, "a", x=-0.14, y=1.04, fontsize=8.0)
+    add_panel_label(ax_projection, "a", x=-0.14, y=1.04)
 
     centroid_limit = max(1.0, float(np.abs(wide.to_numpy()).max()))
     image = ax_profiles.imshow(
@@ -292,7 +292,7 @@ def run_cross_sectional_phenotyping_figure(
     )
     ax_profiles.set_title("Clinical feature profiles", loc="left", pad=7)
     fig.colorbar(image, ax=ax_profiles, fraction=0.046, pad=0.03, label="Standardised centroid")
-    add_panel_label(ax_profiles, "b", x=-0.18, y=1.04, fontsize=8.0)
+    add_panel_label(ax_profiles, "b", x=-0.18, y=1.04)
 
     ax_stability.bar(
         range(len(stability)), stability_values, color=palette["orange"]
@@ -315,7 +315,7 @@ def run_cross_sectional_phenotyping_figure(
     ax_stability.set_ylabel("Adjusted Rand index")
     ax_stability.set_title("Conditional stability", loc="left", pad=7)
     ax_stability.legend(frameon=False, fontsize=6, loc="best")
-    add_panel_label(ax_stability, "c", x=-0.18, y=1.04, fontsize=8.0)
+    add_panel_label(ax_stability, "c", x=-0.18, y=1.04)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
     titles = {

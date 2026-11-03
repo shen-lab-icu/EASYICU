@@ -34,6 +34,7 @@ from .bound_variable_display import load_bound_variable_descriptions
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    legend_below,
     make_figure_contract,
     save_publication_figure,
 )
@@ -998,18 +999,7 @@ def run_measurement_missingness_figure(
     ax.set_xlim(0, 100)
     ax.set_ylim(len(positions) - 0.5, -0.7)
     ax.set_xlabel("Share of the declared cohort (%)")
-    ax.set_title("Data availability and applicability", pad=16)
-    ax.legend(
-        frameon=False,
-        loc="lower left",
-        bbox_to_anchor=(0.0, 1.0),
-        ncol=3,
-        fontsize=6.3,
-        columnspacing=1.4,
-        handlelength=0.9,
-        handleheight=0.9,
-        borderaxespad=0.1,
-    )
+    ax.set_title("Data availability and applicability")
     # Each row's count reads in its own column to the right of the scale.
     for y, name in zip(positions, variables):
         entry = per_variable[name]
@@ -1036,6 +1026,16 @@ def run_measurement_missingness_figure(
             "Share of the declared cohort (%)\n"
             "Conditional event times are applicable only when the event occurs"
         )
+    # The key sits under the axis label, never on the panel title.
+    legend_below(
+        ax,
+        ncol=3,
+        fontsize=6.3,
+        columnspacing=1.4,
+        handlelength=0.9,
+        handleheight=0.9,
+        borderaxespad=0.1,
+    )
     add_panel_label(ax, "a", x=-0.02, y=1.0)
     fig.subplots_adjust(left=0.2, right=0.8, bottom=0.24, top=0.8)
     canvas = fig.canvas.get_renderer()
