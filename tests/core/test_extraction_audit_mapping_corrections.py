@@ -51,6 +51,7 @@ def _ids(concept: str, database: str, dictionary: dict = CONCEPTS) -> set[int]:
         ("ckmb", "aumc", {6824}, {10413}),  # activity vs mass
         ("peep_total", "mimic", set(), {686, 224700}),
         ("resp", "miiv", {224689}, {220210, 224690}),
+        ("resp", "aumc", {7726, 9654, 12577}, {8874, 12266}),
         ("resp", "mimic", {614, 653, 1884, 224689}, {618, 615, 220210, 224690}),
         ("tidal_vol", "miiv", {224421, 224686}, {224685}),
         ("tidal_vol", "mimic", {502, 652, 684, 654, 224421, 224686}, {681, 682, 224685}),

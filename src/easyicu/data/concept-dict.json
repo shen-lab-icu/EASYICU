@@ -13210,16 +13210,13 @@
      "ids": [
       8874,
       12266,
-      7726,
-      9654,
       13092,
       14455,
-      16613,
-      12577
+      16613
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added spontaneous and arterial/RA/MCA respiratory-rate channels; ventilator Evita frequency remains in vent_rate. 2026-07-04 added 12577 Ademfreq. Spontaan nieuw (new-software-version spontaneous rate)."
+     "_comment": "2026-07-02 source-dictionary audit: added spontaneous and arterial/RA/MCA respiratory-rate channels; ventilator Evita frequency remains in vent_rate. 2026-07-04 added 12577 Ademfreq. Spontaan nieuw (new-software-version spontaneous rate). 2026-11-03 extraction audit: removed the spontaneous-only rates 7726/9654/12577 (Ademfrequentie Spontaan); resp is the total rate."
     }
    ],
    "eicu": [
