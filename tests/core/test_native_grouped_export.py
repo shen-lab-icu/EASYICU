@@ -380,7 +380,7 @@ def test_native_respiratory_removes_supp_o2_orphan_after_time_filter(
     monkeypatch.setattr(
         api,
         "EXTRACT_MODULES",
-        {"respiratory": ["fio2", "supp_o2", "vent_ind"]},
+        {"respiratory": ["fio2", "o2_flow", "supp_o2", "vent_ind"]},
     )
     # A three-day ICU stay has a native upper bound of 96 h (LOS + 24 h).
     pd.DataFrame(
@@ -394,6 +394,7 @@ def test_native_respiratory_removes_supp_o2_orphan_after_time_filter(
             "stay_id": [1, 1, 2, 2, 3, 4, 5, 6],
             "charttime": [96.0, 96.95, 95.0, 95.75, 4.0, 5.0, 6.0, None],
             "fio2": [None, None, None, None, 40.0, None, 21.0, None],
+            "o2_flow": [None, None, None, None, None, None, 0.0, None],
             "supp_o2": [True, None, True, None, True, True, True, True],
             "vent_ind": [None, True, None, True, None, None, None, None],
         }
@@ -427,7 +428,7 @@ def test_native_respiratory_removes_supp_o2_orphan_after_time_filter(
     assert entry["time_axis_audit"]["excluded_rows"] == 1
     assert entry["semantic_audit"]["supp_o2"] == {
         "policy": (
-            "true_supp_o2_requires_canonical_fio2_gt_21_or_"
+            "true_supp_o2_requires_canonical_fio2_gt_21_or_o2_flow_gt_0_or_"
             "hour_bucketed_canonical_vent_ind"
         ),
         "ventilation_time_projection": "floor_to_one_hour",
@@ -453,15 +454,17 @@ def test_native_respiratory_preserves_supported_supp_o2_rows(
     monkeypatch.setattr(
         api,
         "EXTRACT_MODULES",
-        {"respiratory": ["fio2", "supp_o2", "vent_ind"]},
+        {"respiratory": ["fio2", "o2_flow", "supp_o2", "vent_ind"]},
     )
     source = pd.DataFrame(
         {
-            "stay_id": [1, 2, 3, 3],
-            "charttime": [1.25, 2.0, 3.0, 3.5],
-            "fio2": [None, 40.0, None, None],
-            "supp_o2": [True, True, True, None],
-            "vent_ind": [True, None, None, True],
+            "stay_id": [1, 2, 3, 3, 4],
+            "charttime": [1.25, 2.0, 3.0, 3.5, 4.0],
+            "fio2": [None, 40.0, None, None, None],
+            # 2026-11-03 audit round 2 (G6): device flow alone supports it.
+            "o2_flow": [None, None, None, None, 2.0],
+            "supp_o2": [True, True, True, None, True],
+            "vent_ind": [True, None, None, True, None],
         }
     )
     source.to_parquet(tmp_path / "respiratory.parquet", index=False)
@@ -478,6 +481,7 @@ def test_native_respiratory_preserves_supported_supp_o2_rows(
     published = pd.read_parquet(tmp_path / "respiratory.parquet")
     expected = source.copy()
     expected["fio2"] = expected["fio2"].astype("float64")
+    expected["o2_flow"] = expected["o2_flow"].astype("float64")
     expected["supp_o2"] = expected["supp_o2"].astype("boolean")
     expected["vent_ind"] = expected["vent_ind"].astype("boolean")
     pd.testing.assert_frame_equal(published, expected)
@@ -486,7 +490,7 @@ def test_native_respiratory_preserves_supported_supp_o2_rows(
     assert audit["excluded_semantically_invalid"] == 0
     assert audit["empty_rows_removed"] == 0
     assert audit["empty_null_charttime_rows_removed"] == 0
-    assert audit["rows_before"] == audit["rows_after"] == 4
+    assert audit["rows_before"] == audit["rows_after"] == 5
 
 
 def test_native_respiratory_supp_o2_projection_requires_support_columns(

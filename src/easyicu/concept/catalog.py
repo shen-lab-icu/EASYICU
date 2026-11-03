@@ -39,6 +39,7 @@ CONCEPT_DICTIONARY = {
     'fio2': ('Fraction of Inspired Oxygen', '吸入氧浓度', '%'),
     'fio2_chart': ('Charted Inspired Oxygen Fraction', '床旁记录吸入氧浓度', '%'),
     'fio2_lab': ('Blood-Gas Recorded Inspired Oxygen Fraction', '血气记录吸入氧浓度', '%'),
+    'o2_flow': ('Oxygen Device Flow', '氧疗装置流量', 'L/min'),
 
     # 血气分析
     'be': ('Base Excess', '碱剩余', 'mEq/L'),
@@ -452,6 +453,7 @@ CONCEPT_DESCRIPTIONS = {
     'fio2': ('Fraction of inspired oxygen (21-100%)', '吸入氧浓度（21-100%）'),
     'fio2_chart': ('FiO2 from chart records; includes set or analyzed channels, excludes laboratory records', '床旁FiO2记录，包含设置或分析通道，不混入血气记录'),
     'fio2_lab': ('FiO2 documented with blood gas laboratory records; not a bedside setting timestamp', '血气记录FiO2，不等同床旁设置时刻'),
+    'o2_flow': ('Oxygen flow from a non-ventilator device (nasal cannula, mask); a flow above 0 counts as supplemental oxygen', '非呼吸机氧疗装置（鼻导管、面罩）流量；流量大于 0 计为氧疗'),
     'peep_set': ('Explicit PEEP setting channel; excludes total PEEP', '明确设置PEEP通道，不含总PEEP'),
     'peep_total': ('Explicit total PEEP channel; kept separate from set PEEP', '总PEEP通道，与设置PEEP分开'),
     'vent_ind': ('Mechanical ventilation indicator (boolean)', '机械通气指示（布尔值）'),
@@ -578,7 +580,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
     'vitals': ['hr', 'map', 'map_invasive', 'map_nibp', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
-    'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
+    'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'o2_flow', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
     'ventilator': ['peep', 'peep_set', 'peep_total', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
@@ -640,9 +642,6 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     'kdigo_urine_input',
     'kdigo_uo',
     'crrt_mode_input',
-    # Device oxygen flow: an input of supp_o2 on AUMC/HiRID only (2026-11-03
-    # extraction audit 2); MIMIC/eICU flow items are not mapped yet.
-    'o2_flow',
     'potassium',
     'sep3',
 }
@@ -783,6 +782,7 @@ CONCEPT_DB_COVERAGE = {
     'pafi': 5, 'safi': 5, 'urine': 5,
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
     'peep_set': 2, 'peep_total': 2, 'fio2_chart': 2, 'fio2_lab': 2,
+    'o2_flow': 5,  # supp_o2 input: miiv/mimic/eicu/aumc/hirid (2026-11-03 audit round 2, G6/G7)
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 5, 'rrt': 4,
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
     'driving_pres_controlled': 4,  # plateau+mode overlap: miiv/mimic/aumc/hirid
