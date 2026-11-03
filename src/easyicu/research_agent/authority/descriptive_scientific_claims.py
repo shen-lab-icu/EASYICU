@@ -21,6 +21,7 @@ from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..methods.cluster_proportion import (
     patient_weighted_hoeffding_interval,
+    published_wald_tolerance,
     require_wald_group_variation,
 )
 
@@ -210,7 +211,10 @@ def _require_interval_arithmetic(
         expected_high = estimate + z * standard_error
     else:
         raise ValueError(f"{owner}.interval_method is unsupported")
-    if abs(low - expected_low) > 2e-6 or abs(high - expected_high) > 2e-6:
+    # A Wilson bound is rebuilt from exact counts; a Wald bound from the
+    # published, rounded estimate and standard error.
+    tolerance = 2e-6 if method == "wilson" else published_wald_tolerance(z)
+    if abs(low - expected_low) > tolerance or abs(high - expected_high) > tolerance:
         raise ValueError(f"{owner} confidence interval arithmetic is inconsistent")
 
 
