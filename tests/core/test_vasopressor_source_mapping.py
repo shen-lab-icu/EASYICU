@@ -101,3 +101,33 @@ def test_eicu_kg_rate_falls_back_to_the_admission_weight_when_the_row_has_none()
                                                  data_source=SimpleNamespace(load_table=load_table))
     assert calls == [("patient", [[1]])]
     assert result["norepi_rate"].tolist() == [pytest.approx(0.1)]
+
+
+def _sofa2_other_vaso(database: str) -> dict:
+    payload = json.loads(resources.files("easyicu.data").joinpath("sofa2-dict.json").read_text(encoding="utf-8"))
+    return payload.get("concepts", payload)["other_vaso"]["sources"][database][0]
+
+
+@pytest.mark.parametrize("concept", ["norepi_rate", "norepi_dur"])
+def test_sic_norepinephrine_rate_and_duration_ignore_single_dose_pushes(concept):
+    frame = _sic_rows(concept, [0.000008, 0.0004], [0, 1])
+    result = _apply_callback(frame, _dict_source(concept), concept_name=concept, data_source=_sic_source())
+    if concept == "norepi_rate":
+        assert result["norepi_rate"].tolist() == pytest.approx([0.1, 0.1])  # 8 mcg/min / 80 kg
+    else:
+        assert result["norepi_dur"].tolist() == pytest.approx([1.0])
+
+
+def test_sofa2_other_vaso_counts_sic_infusions_of_vasopressin_and_phenylephrine_only():
+    mapping = _sofa2_other_vaso("sic")
+    assert mapping["ids"] == [1550, 1593]
+    frame = pd.DataFrame({"CaseID": 17, "Offset": [7200, 10800], "IsSingleDose": [0, 1],
+                          "DrugID": [1593, 1593], "other_vaso": [0.0001, 0.0001]})
+    result = _apply_callback(frame, ConceptSource.from_mapping(mapping), concept_name="other_vaso",
+                             data_source=_sic_source())
+    assert result["Offset"].tolist() == [7200] and "IsSingleDose" not in result.columns
+
+
+def test_sofa2_other_vaso_matches_neo_synephrine_in_eicu():
+    pattern = re.compile(_sofa2_other_vaso("eicu")["regex"], re.IGNORECASE)
+    assert pattern.search("Neo Synephrine (mcg/min)") and pattern.search("NeoSynephrine (ml/hr)")
