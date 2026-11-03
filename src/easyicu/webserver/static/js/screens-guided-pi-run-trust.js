@@ -94,8 +94,11 @@
     return `<p class="gpi-trust-note" role="alert">${esc(known ? tr(...known) : tr('The records are unavailable right now.', '暂时读不到发送记录。'))}</p>`;
   }
 
-  // One cached view per run_ref; the run-files owner re-renders from it.
+  // One cached view per run_ref; the run-files owner re-renders from it. A
+  // running job keeps sending, so every open shows the cached view at once
+  // and reads the records again; one read per run is in flight at a time.
   const runs = new Map();
+  const reading = new Set();
   function sectionHtml(runRef, open) {
     if (!runRef) return '';
     const cached = runs.get(runRef);
@@ -112,12 +115,13 @@
     });
   }
   async function loadRun(runRef) {
-    if (!runRef || runs.has(runRef) || typeof api().loadRunEgress !== 'function') return;
+    if (!runRef || reading.has(runRef) || typeof api().loadRunEgress !== 'function') return;
+    reading.add(runRef);
     let html;
     try { html = recordsHtml(await api().loadRunEgress(runRef)); } catch (failure) {
       paintFailure(runRef, failureHtml(failure));
       return;
-    }
+    } finally { reading.delete(runRef); }
     runs.set(runRef, { html });
     paintRun(runRef);
   }
