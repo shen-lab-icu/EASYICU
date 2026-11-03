@@ -36,7 +36,7 @@ def test_convert_units_converts_glucose_mg_dl_to_mmol_l() -> None:
             "unit": ["mg/dl", "mg/dl"],
         }
     )
-    out = loader._convert_units(df, target_unit="mmol/l")
+    out = loader._convert_units(df, target_unit="mmol/l", substance="glu")
     assert list(out["unit"]) == ["mmol/l", "mmol/l"]
     assert out["value"].iloc[0] == pytest.approx(10.0, rel=1e-3)
     assert out["value"].iloc[1] == pytest.approx(5.0, rel=1e-3)
@@ -50,7 +50,7 @@ def test_convert_units_handles_mixed_source_units() -> None:
             "unit": ["mg/dl", "mmol/l", "unknown_unit"],
         }
     )
-    out = loader._convert_units(df, target_unit="mmol/l")
+    out = loader._convert_units(df, target_unit="mmol/l", substance="glu")
     # Convertible row is converted.
     assert out.loc[0, "unit"] == "mmol/l"
     assert out.loc[0, "value"] == pytest.approx(10.0, rel=1e-3)
@@ -67,3 +67,14 @@ def test_convert_units_returns_input_when_target_unit_blank() -> None:
     df = pd.DataFrame({"value": [1.0], "unit": ["mg/dl"]})
     out = loader._convert_units(df, target_unit="")
     pd.testing.assert_frame_equal(out, df)
+
+
+def test_a_mass_to_molar_conversion_needs_its_substance() -> None:
+    """11-03 review: a lactate row was converted with the glucose factor."""
+    loader = _make_loader()
+    df = pd.DataFrame({"value": [9.0], "unit": ["mg/dl"]})
+    lactate = loader._convert_units(df, target_unit="mmol/l", substance="lact")
+    assert lactate["value"].iloc[0] == pytest.approx(1.0)
+    # Without a substance the row is left as recorded, not guessed.
+    unnamed = loader._convert_units(df, target_unit="mmol/l")
+    assert unnamed.loc[0, "unit"] == "mg/dl" and unnamed.loc[0, "value"] == 9.0
