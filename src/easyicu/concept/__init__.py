@@ -275,6 +275,40 @@ def _eicu_episode_upper_by_stay(
     return keyed.groupby("stay", sort=False)["upper"].max()
 
 
+_WINDOW_DURATION_COLUMNS = frozenset(
+    {"dur_var", "duration", "dur", "endtime", "end_time", "stop", "end"}
+)
+
+
+def _floor_point_windows_to_interval(
+    frame: pd.DataFrame, index_column: Optional[str], interval
+) -> pd.DataFrame:
+    """Put a window table's duration-less rows on the interval grid.
+
+    Audit round 2 (R2-04): eICU ``mech_vent`` is point evidence (an airway
+    start, a device row) with no auditable stop, so it has no duration and
+    skipped both window expansion and ``change_interval``.  Its rows, and the
+    ``vent_ind`` built from them, stayed at minute offsets (3.25 h) and never
+    met the hourly rows of every other concept: ventilator-parameter hours had
+    no ``vent_ind`` and SOFA respiration scored 2 instead of 3-4.  Each point
+    is evidence for its own hour only; nothing is extended.
+    """
+
+    if (
+        frame.empty
+        or not index_column
+        or index_column not in frame.columns
+        or not pd.api.types.is_numeric_dtype(frame[index_column])
+    ):
+        return frame
+    step = pd.to_timedelta(interval).total_seconds() / 3600.0
+    if step <= 0:
+        return frame
+    out = frame.copy()
+    out[index_column] = np.floor(out[index_column] / step) * step
+    return out.drop_duplicates().reset_index(drop=True)
+
+
 def _quarantine_rows_outside_icu_episode(
     frame: pd.DataFrame,
     *,
@@ -5936,6 +5970,12 @@ class ConceptResolver:
                 ),
                 keep_post_discharge=concept_name in POST_DISCHARGE_OUTCOME_CONCEPTS,
             )
+            if is_win_tbl_target and interval is not None and not (
+                _WINDOW_DURATION_COLUMNS | {f"{concept_name}_dur"}
+            ) & set(combined.columns):
+                combined = _floor_point_windows_to_interval(
+                    combined, index_column, interval
+                )
         
         if _select_channels:
             from .source_channel import RANK_COLUMN, select_preferred_channel
