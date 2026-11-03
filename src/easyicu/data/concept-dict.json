@@ -65,7 +65,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -83,7 +91,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "hirid": [
@@ -809,7 +825,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -818,7 +842,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -1079,7 +1111,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "amiodarone|cordarone",
@@ -1097,7 +1137,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "amiodarone|cordarone",
@@ -1273,7 +1321,14 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: added 'ecotrin' (enteric-coated aspirin brand, +3,883 pts)."
+     "_comment": "2026-07-17 recall: added 'ecotrin' (enteric-coated aspirin brand, +3,883 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -1283,7 +1338,14 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "sic": [
@@ -1777,7 +1839,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -1786,7 +1856,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -2349,7 +2427,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -2358,7 +2444,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -2482,7 +2576,14 @@
      "regex": "(?i)cisatracurium|nimbex",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: 'cisatracurium' in the medication table adds 618 distinct pts over the infusiondrug source (more than doubles)."
+     "_comment": "2026-07-17 recall: 'cisatracurium' in the medication table adds 618 distinct pts over the infusiondrug source (more than doubles). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -2499,7 +2600,14 @@
      "regex": "(?i)cisatracurium|nimbex",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "miiv": [
@@ -2885,7 +2993,14 @@
      "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate)).*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone|solu.?medrol|solu.?cortef|decadron)",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids by drug name (generic and the brand names Solu-Medrol, Solu-Cortef, Decadron); topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and study drugs are excluded."
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids by drug name (generic and the brand names Solu-Medrol, Solu-Cortef, Decadron); topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and study drugs are excluded. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -2900,7 +3015,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: medication rows without a drug name carry only the HICL code. The codes are those the named rows of the same table use for systemic corticosteroids: 2876 and 36808 methylprednisolone (sodium succinate) injection, 2866 and 36875 hydrocortisone sodium succinate injection, 2879 prednisone tablets, 2888 dexamethasone injection, 2889 oral dexamethasone (routes IV/PO)."
+     "_comment": "2026-11-03 extraction audit 2: medication rows without a drug name carry only the HICL code. The codes are those the named rows of the same table use for systemic corticosteroids: 2876 and 36808 methylprednisolone (sodium succinate) injection, 2866 and 36875 hydrocortisone sodium succinate injection, 2879 prednisone tablets, 2888 dexamethasone injection, 2889 oral dexamethasone (routes IV/PO). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "hirid": [
@@ -3536,7 +3658,15 @@
      "sub_var": "drugname",
      "dur_var": "drugstopoffset",
      "callback": "eicu_dex_med",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "(d10|dextrose.+10 ?%).+ml/hr",
@@ -3554,7 +3684,15 @@
      "sub_var": "drugname",
      "dur_var": "drugstopoffset",
      "callback": "eicu_dex_med",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "(d10|dextrose.+10 ?%).+ml/hr",
@@ -3683,7 +3821,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -3692,7 +3838,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "sic": [
@@ -3775,7 +3929,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "dexmedetomidine|precedex",
@@ -3793,7 +3955,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "dexmedetomidine|precedex",
@@ -3886,7 +4056,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -3895,7 +4073,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -3972,7 +4158,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -3989,7 +4183,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -4951,7 +5153,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -4960,7 +5170,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -5840,7 +6058,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "(?<!su)fentanyl",
@@ -5858,7 +6084,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "(?<!su)fentanyl",
@@ -6611,7 +6845,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "ids": [
@@ -6620,7 +6862,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays."
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "regex": "furosem|lasix",
@@ -6638,7 +6887,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "ids": [
@@ -6647,7 +6904,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays."
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "regex": "furosem|lasix",
@@ -7169,7 +7433,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "heparin",
@@ -7187,7 +7459,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "heparin",
@@ -8136,7 +8416,14 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: added brands Trandate/Normodyne (+2,262 pts)."
+     "_comment": "2026-07-17 recall: added brands Trandate/Normodyne (+2,262 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -8146,7 +8433,14 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "miiv": [
@@ -8309,7 +8603,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -8318,7 +8620,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -8397,7 +8707,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -8406,7 +8724,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -8667,7 +8993,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -8676,7 +9010,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -8782,7 +9124,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "mannitol",
@@ -8800,7 +9150,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "mannitol",
@@ -9875,7 +10233,14 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: added brand Merrem (+714 pts)."
+     "_comment": "2026-07-17 recall: added brand Merrem (+714 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -9885,7 +10250,14 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "miiv": [
@@ -10203,7 +10575,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "midazolam|versed",
@@ -10221,7 +10601,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "midazolam|versed",
@@ -10425,7 +10813,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "milrinone|primacor",
@@ -10443,7 +10839,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "milrinone|primacor",
@@ -10663,7 +11067,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "morphine",
@@ -10681,7 +11093,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "morphine",
@@ -10873,7 +11293,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -10882,7 +11310,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -11014,7 +11450,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -11031,7 +11475,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -11124,7 +11576,14 @@
      "regex": "(?i)nitroglycerin.*(d5w|iv|infusion|/hr|gtt)(?!.*(sl|subl|tab|oint|paste|patch))",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: IV nitroglycerin bags in the medication table (~+3,000 pts). STRICT route filter: require d5w/iv/infusion, EXCLUDE sl|subl|tab|oint|paste|patch|nitro-bid (the HiRID oral-capsule lesson -- do not absorb the ~9,776 SL/topical patients)."
+     "_comment": "2026-07-17 recall: IV nitroglycerin bags in the medication table (~+3,000 pts). STRICT route filter: require d5w/iv/infusion, EXCLUDE sl|subl|tab|oint|paste|patch|nitro-bid (the HiRID oral-capsule lesson -- do not absorb the ~9,776 SL/topical patients). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -11141,7 +11600,14 @@
      "regex": "(?i)nitroglycerin.*(d5w|iv|infusion|/hr|gtt)(?!.*(sl|subl|tab|oint|paste|patch))",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "miiv": [
@@ -11986,7 +12452,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -12003,7 +12477,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "table": "infusiondrug",
@@ -12565,7 +13047,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin."
+     "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -12579,7 +13068,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin."
+     "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "aumc": [
@@ -13424,7 +13920,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -13433,7 +13937,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -13550,7 +14062,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "propofol|diprivan",
@@ -13568,7 +14088,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "propofol|diprivan",
@@ -14346,7 +14874,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "rocuronium|esmeron",
@@ -14364,7 +14900,15 @@
      "sub_var": "drugname",
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
      "regex": "rocuronium|esmeron",
@@ -22178,7 +22722,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -22187,7 +22739,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -22911,7 +23471,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "eicu_demo": [
@@ -22920,7 +23488,15 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     }
    ],
    "miiv": [
@@ -26292,7 +26868,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders."
+     "_comment": "2026-11-03 extraction audit 2: named orders. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -26303,7 +26886,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2: 8829 torsemide (admissiondrug: torsemide/Demadex)."
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2: 8829 torsemide (admissiondrug: torsemide/Demadex). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "regex": "furosem|lasix|bumetan|bumex",
@@ -26323,7 +26913,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders."
+     "_comment": "2026-11-03 extraction audit 2: named orders. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -26333,7 +26930,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used)."
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "regex": "furosem|lasix|bumetan|bumex",
@@ -26500,7 +27104,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 audit round 2 (D2): named orders; HICL-only orders are the next source (the earlier note that eICU has only HCTZ was wrong)."
+     "_comment": "2026-11-03 audit round 2 (D2): named orders; HICL-only orders are the next source (the earlier note that eICU has only HCTZ was wrong). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -26516,7 +27127,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 audit round 2 (D2): orders with an empty drugname carry only the HICL; admissiondrug names them: 3649 hydrochlorothiazide, 3663 metolazone, 3646 chlorothiazide, 3662 chlorthalidone, 3665 indapamide, and the HCTZ combinations 3647 triamterene-HCTZ, 131 lisinopril-HCTZ, 9863 losartan-HCTZ."
+     "_comment": "2026-11-03 audit round 2 (D2): orders with an empty drugname carry only the HICL; admissiondrug names them: 3649 hydrochlorothiazide, 3663 metolazone, 3646 chlorothiazide, 3662 chlorthalidone, 3665 indapamide, and the HCTZ combinations 3647 triamterene-HCTZ, 131 lisinopril-HCTZ, 9863 losartan-HCTZ. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -26527,7 +27145,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders (only hydrochlorothiazide occurs in eICU v2.0)."
+     "_comment": "2026-11-03 extraction audit 2: named orders (only hydrochlorothiazide occurs in eICU v2.0). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -26536,7 +27161,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 3649 hydrochlorothiazide (orders with an empty drugname)."
+     "_comment": "2026-11-03 extraction audit 2: 3649 hydrochlorothiazide (orders with an empty drugname). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "hirid": [
@@ -26646,7 +27278,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0)."
+     "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -26655,7 +27294,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname)."
+     "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -26666,7 +27312,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0)."
+     "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "ids": [
@@ -26675,7 +27328,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname)."
+     "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "hirid": [
@@ -26773,7 +27433,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 audit round 2: named orders (none in eICU v2.0 medication)."
+     "_comment": "2026-11-03 audit round 2: named orders (none in eICU v2.0 medication). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "regex": "acetazol|diamox",
@@ -26791,7 +27458,14 @@
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 audit round 2 (D2): 3641 acetazolamide (admissiondrug: acetazolamide/Diamox), orders with an empty drugname."
+     "_comment": "2026-11-03 audit round 2 (D2): 3641 acetazolamide (admissiondrug: acetazolamide/Diamox), orders with an empty drugname. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     }
    ],
    "eicu_demo": [
@@ -26802,7 +27476,14 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders (none in eICU v2.0 medication)."
+     "_comment": "2026-11-03 extraction audit 2: named orders (none in eICU v2.0 medication). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ]
     },
     {
      "regex": "acetazol|diamox",
