@@ -1,7 +1,7 @@
 'use strict';
 
 // Request records read as plain words and never as "nothing sent" when they
-// are missing; a run's records load once when opened; the problem report
+// are missing; a run's records are read again on every open; the problem report
 // downloads through the host and says when it failed.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -70,15 +70,18 @@ test('a missing or unverifiable record never reads as nothing sent', () => {
   assert.match(trust.recordsHtml({ status: 'available', requests: [] }), /还没有向模型发送过请求。/);
 });
 
-test('a run’s records load once when its section opens, and stay for the next render', async () => {
+test('a run’s records are read again on every open, one read at a time, and stay for the next render', async () => {
   const { trust, calls, listeners, section } = harness();
   assert.match(trust.sectionHtml('rr_1', false), /<details class="gpi-run-trust" data-gpi-trust-run="rr_1"><summary>发送给模型的记录<\/summary><div data-gpi-trust-body><\/div><\/details>/);
   const node = section('rr_1');
   listeners.toggle({ target: node });
-  await settle();
   listeners.toggle({ target: node });
   await settle();
   assert.deepEqual(calls, [['run', 'rr_1']]);
+  // A running job keeps sending; reopening must not show a stale record set.
+  listeners.toggle({ target: node });
+  await settle();
+  assert.deepEqual(calls, [['run', 'rr_1'], ['run', 'rr_1']]);
   assert.match(node.body.innerHTML, /制定计划/);
   assert.match(trust.sectionHtml('rr_1', true), /<details class="gpi-run-trust" data-gpi-trust-run="rr_1" open>.*制定计划/s);
 });
