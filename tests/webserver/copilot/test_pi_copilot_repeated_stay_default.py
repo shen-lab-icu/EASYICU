@@ -355,6 +355,17 @@ def test_the_cards_that_move_the_plan_name_the_systems_route(code: str) -> None:
     assert DEFAULT_LINE not in _card(code, {"repeated_stays_system_default": "first_stay"})
 
 
+def test_a_per_hospitalization_first_stay_is_not_called_every_stay() -> None:
+    html = _card(
+        "operator_plan_approval_required",
+        {"repeated_stays_system_default": "patient_clustered_per_hospitalization"},
+    )
+
+    assert DEFAULT_LINE in html
+    assert "每次住院只保留首次 ICU 入住" in html and "按患者聚类" in html
+    assert "保留每次 ICU 入住" not in html and "请在对话里说明" not in html
+
+
 def test_a_card_that_does_not_move_the_plan_names_no_route() -> None:
     html = _card(
         "failed_pipeline_requires_fresh_plan",

@@ -186,13 +186,13 @@ def test_a_group_comparison_on_repeated_patients_asks_for_each_patients_first_st
     """
 
     from easyicu.webserver.pi_copilot.study_context_update import (
-        _message_explicitly_selects_first_stay,
+        message_explicitly_selects_first_stay,
     )
 
     for lang in ("en", "zh"):
         card = _render(lang).split('data-gpi-starter-example="example-mortality-by-sex"', 1)[1]
         prompt = html_text.unescape(re.search(r'data-gpi-starter-compose="([^"]*)"', card).group(1))
-        assert _message_explicitly_selects_first_stay(prompt), (lang, prompt)
+        assert message_explicitly_selects_first_stay(prompt), (lang, prompt)
 
 def test_the_demo_card_is_offered_only_without_a_registered_full_source():
     assert 'class="gpi-starter-demo"' in _render_with("zh", {})

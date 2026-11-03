@@ -203,16 +203,16 @@ _COVARIATE_MODELING_ROLE_TOKENS = frozenset(
 )
 
 
-def _message_explicitly_selects_first_stay(message: str) -> bool:
+def message_explicitly_selects_first_stay(message: str) -> bool:
     """Return whether this user turn explicitly chooses one first ICU stay."""
 
     normalized = str(message or "").casefold()
     return any(
         re.search(pattern, normalized)
         for pattern in (
-            r"首次\s*(?:icu|重症监护)",
+            r"首次\s*(?:入住|进入|转入|入)?\s*(?:icu|重症监护)",
             r"首个\s*(?:icu|重症监护)",
-            r"第一(?:次|个)\s*(?:icu|重症监护)",
+            r"第一(?:次|个)\s*(?:入住|进入|转入|入)?\s*(?:icu|重症监护)",
             r"\bfirst[\s_-]+(?:icu|intensive care)(?:[\s_-]+stay|[\s_-]+admission)?\b",
             r"\bindex[\s_-]+(?:icu|intensive care)(?:[\s_-]+stay|[\s_-]+admission)?\b",
             r"\bone[\s_-]+(?:icu[\s_-]+)?stay[\s_-]+per[\s_-]+patient\b",
@@ -222,7 +222,7 @@ def _message_explicitly_selects_first_stay(message: str) -> bool:
     )
 
 
-def _message_explicitly_selects_all_stays(message: str) -> bool:
+def message_explicitly_selects_all_stays(message: str) -> bool:
     """Return whether this user turn explicitly retains eligible ICU stays."""
 
     normalized = str(message or "").casefold()
@@ -441,7 +441,7 @@ def _turn_chooses_repeated_stay_handling(
         if (
             isinstance(cohort, Mapping)
             and cohort.get("exclude_readmissions") is True
-            and _message_explicitly_selects_first_stay(clause)
+            and message_explicitly_selects_first_stay(clause)
         ) or (
             isinstance(design, Mapping)
             and bool(str(design.get("variance_estimator") or "").strip())
@@ -726,8 +726,8 @@ def _unconfirmed_gated_slots(
         if (
             proposed_preset
             and proposed_preset != current_preset
-            and not _message_explicitly_selects_all_stays(message)
-            and not _message_explicitly_selects_first_stay(message)
+            and not message_explicitly_selects_all_stays(message)
+            and not message_explicitly_selects_first_stay(message)
         ):
             unconfirmed.add("cohort")
 
@@ -1400,7 +1400,7 @@ def update_study_context(
             normalized_preset == "adult_all"
             and current_preset != "adult_all"
             and str(context.user_message or "").strip()
-            and not _message_explicitly_selects_all_stays(context.user_message)
+            and not message_explicitly_selects_all_stays(context.user_message)
         ):
             other_confirmed_change = _has_other_confirmed_change(
                 params,
@@ -1437,7 +1437,7 @@ def update_study_context(
         if (
             normalized_preset == "adult_first"
             and current_preset != "adult_first"
-            and not _message_explicitly_selects_first_stay(context.user_message)
+            and not message_explicitly_selects_first_stay(context.user_message)
         ):
             other_confirmed_change = _has_other_confirmed_change(
                 params,

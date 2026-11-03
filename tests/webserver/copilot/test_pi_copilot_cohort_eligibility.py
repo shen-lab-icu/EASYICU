@@ -239,7 +239,7 @@ def test_choosing_the_all_admissions_option_counts_as_choosing_it() -> None:
     """
 
     from easyicu.webserver.pi_copilot.study_context_update import (
-        _message_explicitly_selects_all_stays as selects_all,
+        message_explicitly_selects_all_stays as selects_all,
     )
 
     by_id = {option["id"]: option for option in cohort_eligibility.ELIGIBILITY_OPTIONS}

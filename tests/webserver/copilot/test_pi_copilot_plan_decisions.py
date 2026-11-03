@@ -1254,6 +1254,12 @@ _PATIENT_CLUSTERED = {
         ),
         ({"analysis_design": {**_PATIENT_CLUSTERED, "cluster_unit": "hospital"}}, None),
         ({"cohort": {"exclude_readmissions": True}}, None),
+        # One first stay per hospitalization still repeats a patient's stays.
+        (
+            {"cohort": {"exclude_readmissions": False,
+                        "first_icu_stay_per_hospitalization": True}},
+            "patient_clustered_per_hospitalization",
+        ),
     ],
 )
 def test_the_card_names_the_systems_route_only_while_the_study_follows_it(
