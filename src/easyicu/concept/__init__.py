@@ -1790,6 +1790,28 @@ class ConceptResolver:
                                 columns={_time_col_out: "charttime"}
                             )
                             _time_col_out = "charttime"
+                        elif (
+                            _db_name.startswith(("mimic", "miiv"))
+                            and _time_col_out in batch_df.columns
+                            and not batch_df.empty
+                        ):
+                            # Audit round 2 (R2-05): the batch output is on
+                            # ICU-relative hours, but it skipped the episode
+                            # window every single-concept load applies.
+                            # MIMIC labevents are stay-mapped by admission,
+                            # so module loads kept labs from -2,487 h to far
+                            # past discharge and fed them to the creatinine
+                            # baseline and KDIGO.  For MIMIC, numeric hours
+                            # are only quarantined, never rescaled.
+                            batch_df = self._align_time_to_admission(
+                                batch_df,
+                                data_source,
+                                [id_col],
+                                _time_col_out,
+                                pre_admission_hours=(
+                                    self._pre_admission_hours_from_kwargs(kwargs)
+                                ),
+                            )
 
                         covered_names = set()
                         for concept_name in batch_itemids:
