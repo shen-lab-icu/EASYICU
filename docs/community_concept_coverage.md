@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **286 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **286 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 20 | 25 | 104 |
-| zhejiang_eicu | 128 | 25 | 22 | 111 |
-| jinhua | 135 | 19 | 24 | 108 |
-| zigong | 125 | 19 | 33 | 109 |
+| nwicu | 137 | 20 | 25 | 105 |
+| zhejiang_eicu | 128 | 25 | 22 | 112 |
+| jinhua | 135 | 19 | 24 | 109 |
+| zigong | 125 | 19 | 33 | 110 |
 
 ## Complete matrix
 
@@ -190,6 +190,7 @@ concept (base dictionary plus SOFA-2 overlay): **286 concepts × 4 databases**.
 | `norepi_equiv` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ntprobnp` | chemistry | direct | unavailable | direct | unavailable |
+| `o2_flow` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `o2sat` | respiratory | direct | direct | direct | direct |
 | `octreotide` | medications | direct | direct | direct | direct |
 | `osmolality` | chemistry | direct | unavailable | unavailable | unavailable |

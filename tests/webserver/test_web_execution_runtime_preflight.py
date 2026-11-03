@@ -594,9 +594,15 @@ def _assert_sic_overlay_profile_keeps_history(profile):
     assert {key for key, value in asdict(v2).items() if value != asdict(overlay)[key]} == {
         "version", "locked_at", "expected_concept_dict_sha"
     }
-    assert profile.version == "20261103-sic-overlay-v3"
-    assert profile.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_03.expected_concept_dict_sha
-    assert {key for key, value in asdict(profile).items() if value != asdict(v2)[key]} == {
+    v3 = profiles.get_submission_profile(f"{profile.name}/20261103-sic-overlay-v3")
+    assert v3.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_03.expected_concept_dict_sha
+    assert {key for key, value in asdict(v3).items() if value != asdict(v2)[key]} == {
+        "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
+    }
+    # The second 2026-11-03 reseal moves both dictionary digests again.
+    assert profile.version == "20261103-sic-overlay-v4"
+    assert profile.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_03_AUDIT2.expected_concept_dict_sha
+    assert {key for key, value in asdict(profile).items() if value != asdict(v3)[key]} == {
         "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
     }
 
