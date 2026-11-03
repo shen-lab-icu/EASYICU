@@ -3948,24 +3948,38 @@ _RISK_PREVIEW_COLUMNS = (
     "outcome_missing_n", "outcome_event_n", "outcome_risk_pct",
     "outcome_risk_ci_low_pct", "outcome_risk_ci_high_pct", "label",
 )
+#: The exposure-outcome distribution writes each rate's interval
+#: (``ci_low_pct``/``ci_high_pct``) and its missing counts after the
+#: exposure-share columns, so the generic twelve dropped exactly what an
+#: answer quoting "rate (95% CI)" needs (11-03 MIMIC walk).  The answer reads
+#: every column here, so this table keeps all of them.
+_DISTRIBUTION_TABLE_COLUMNS = ("row_role", "outcome_rate_pct", "ci_low_pct", "ci_high_pct")
+_DISTRIBUTION_PREVIEW_COLUMNS = (
+    "row_role", "exposure_level", "n_rows", "exposure_denominator", "exposure_pct",
+    "outcome_events", "outcome_denominator", "outcome_missing_n", "outcome_rate_pct",
+    "ci_low_pct", "ci_high_pct", "interval_method", "missing_exposure_excluded_n",
+)
 
 
 def _table_preview_indices(headers: List[str]) -> List[int]:
     """Keep review-critical aggregate columns when a wide table is bounded."""
 
+    distribution = all(name in headers for name in _DISTRIBUTION_TABLE_COLUMNS)
     priority = (
         _ESTIMATE_PREVIEW_COLUMNS
         if all(name in headers for name in _ESTIMATE_TABLE_COLUMNS)
         else _RISK_PREVIEW_COLUMNS if "outcome_risk_pct" in headers
+        else _DISTRIBUTION_PREVIEW_COLUMNS if distribution
         else _TABLE_PREVIEW_PRIORITY_COLUMNS
     )
+    limit = max(_MAX_TABLE_COLUMNS, len(_DISTRIBUTION_PREVIEW_COLUMNS)) if distribution else _MAX_TABLE_COLUMNS
     selected = [
         headers.index(name)
         for name in priority
         if name in headers
-    ][:_MAX_TABLE_COLUMNS]
+    ][:limit]
     for index in range(len(headers)):
-        if len(selected) >= _MAX_TABLE_COLUMNS:
+        if len(selected) >= limit:
             break
         if index not in selected:
             selected.append(index)

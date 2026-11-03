@@ -40,3 +40,21 @@ def test_another_wide_table_keeps_its_own_columns() -> None:
 
     assert _kept(headers) == headers[:12]
     assert _kept(other)[0] == "row_role"
+
+
+# The distribution producer's header, verbatim through its interval columns
+# (11-03 MIMIC walk): the generic twelve stopped before each rate's interval.
+DISTRIBUTION = (
+    "row_role,exposure_level_index,exposure_level,n_rows,exposure_denominator,exposure_pct,"
+    "exposure_ci_low_pct,exposure_ci_high_pct,exposure_standard_error_pct,exposure_interval_covariance,"
+    "exposure_interval_cluster_count,exposure_interval_cluster_size_square_sum,outcome_observed_n,"
+    "outcome_missing_n,outcome_events,outcome_denominator,outcome_rate_pct,ci_low_pct,ci_high_pct,"
+    "outcome_standard_error_pct,missing_exposure_excluded_n,risk_difference_pct,interval_method"
+).split(",")
+
+
+def test_the_distribution_preview_keeps_every_rate_interval_and_missing_count() -> None:
+    kept = _kept(DISTRIBUTION)
+
+    assert kept == list(agent_pipeline_runs._DISTRIBUTION_PREVIEW_COLUMNS)
+    assert {"ci_low_pct", "ci_high_pct", "outcome_missing_n", "missing_exposure_excluded_n"} <= set(kept)

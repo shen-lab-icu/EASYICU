@@ -376,6 +376,8 @@
           denominator: finite(item.record.outcome_denominator),
           missingN: finite(item.record.outcome_missing_n),
           outcomeRatePct: finite(item.record.outcome_rate_pct),
+          outcomeCiLowPct: finite(item.record.ci_low_pct),
+          outcomeCiHighPct: finite(item.record.ci_high_pct),
         };
       });
     // A population-flow ledger is a typed contract.  Audit summaries may also
@@ -403,6 +405,8 @@
     const outcomeN = overall ? finite(overall.record.outcome_denominator) : null;
     const missingOutcomeN = overall ? finite(overall.record.outcome_missing_n) : null;
     const riskPct = overall ? finite(overall.record.outcome_rate_pct) : null;
+    const riskLow = overall ? finite(overall.record.ci_low_pct) : null;
+    const riskHigh = overall ? finite(overall.record.ci_high_pct) : null;
     return {
       claims: [
         claim('cohort.n_stays', sourceN, integerDisplay(sourceN), source),
@@ -414,6 +418,8 @@
         claim('overall_outcome.n', outcomeN, integerDisplay(outcomeN), overall),
         claim('overall_outcome.missing_n', missingOutcomeN, integerDisplay(missingOutcomeN), overall),
         claim('overall_outcome.risk_pct', riskPct, percentDisplay(riskPct), overall),
+        claim('overall_outcome.risk_ci_low_pct', riskLow, percentDisplay(riskLow), overall),
+        claim('overall_outcome.risk_ci_high_pct', riskHigh, percentDisplay(riskHigh), overall),
         ...exposureLevels.map((row, index) => claim(
           `exposures[0].groups[${index}].outcome_risk_pct`,
           row.outcomeRatePct,

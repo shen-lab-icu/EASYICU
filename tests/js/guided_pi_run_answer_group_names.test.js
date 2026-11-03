@@ -15,7 +15,7 @@ const variable = 'synthetic_band';
 const names = [['Below threshold', '阈值以下'], ['At threshold', '达到阈值'], ['Above threshold', '阈值以上']];
 let serial = 0;
 
-async function answer({ language, size = 2, binding = 'model', registry = true, labels = {}, omit = [] }) {
+async function answer({ language, size = 2, binding = 'model', registry = true, labels = {}, omit = [], level = null }) {
   global.EU_LANG = language;
   global.t = (en, zh) => language === 'zh' ? zh : en;
   const levels = Array.from({ length: size }, (_, i) => i + 1);
@@ -25,15 +25,17 @@ async function answer({ language, size = 2, binding = 'model', registry = true, 
       exposure_levels: levels.map(String), exposure_reference_level: '1', outcome: 'synthetic_outcome' },
     { analysis_role: 'secondary', exposure_source: 'decoy_band' },
     ...(binding === 'ambiguous' ? [{ analysis_role: 'primary', exposure_source: 'other_band' }] : [])] }
-      : { exposure_outcome_distribution_spec: { exposure: variable, exposure_levels: levels, outcome: 'synthetic_outcome' } }) },
+      : { exposure_outcome_distribution_spec: { exposure: variable, exposure_levels: levels, outcome: 'synthetic_outcome',
+        ...(level ? { confidence_level: level } : {}) } }) },
   { step_id: 'sensitivity', planned_analysis_role: 'secondary', model_requirements: [
     { analysis_role: 'primary', exposure_source: 'sensitivity_band' },
   ] }] };
   const tables = [{ name: 'risk.csv', produced_by_step: 'risk_context',
     headers: ['row_role', 'exposure_level', 'n_rows', 'exposure_denominator', 'exposure_pct',
-      'outcome_events', 'outcome_denominator', 'outcome_rate_pct'],
-    rows: levels.map(level => ['exposure_level', `${level}.0`, 10, size * 10, 100 / size, level, 10, level * 10])
-      .concat([['overall', '', size * 10, size * 10, 100, eventTotal, size * 10, eventTotal / (size * 10) * 100]]) },
+      'outcome_events', 'outcome_denominator', 'outcome_rate_pct', 'ci_low_pct', 'ci_high_pct'],
+    rows: levels.map(level => ['exposure_level', `${level}.0`, 10, size * 10, 100 / size, level, 10, level * 10,
+      level * 10 - 5, level * 10 + 5])
+      .concat([['overall', '', size * 10, size * 10, 100, eventTotal, size * 10, eventTotal / (size * 10) * 100, 4.5, 31.25]]) },
   { name: 'estimate.csv', produced_by_step: 'primary', evidence_id: 'synthetic_estimate',
     sha256: 'b'.repeat(64), source_status: 'current',
     headers: ['fit_status', 'estimate', 'ci_low', 'ci_high', 'effect_scale', 'is_primary_contrast',
@@ -81,7 +83,7 @@ for (const language of ['zh', 'en']) {
           ? '在 Synthetic ICU 的 20 个 ICU 入住记录中，达到阈值有 10 个（50.00%）。'
           : '10 (50.00%) were in the group “At threshold”'));
         assert.ok(html.includes(language === 'zh'
-          ? '结局：达到阈值组 20.00%（2/10），阈值以下组 10.00%（1/10）；总体 15.00%。'
+          ? '结局：达到阈值组 20.00%（2/10），阈值以下组 10.00%（1/10）；总体 15.00%（3/20）。'
           : '20.00% (2/10) in “At threshold” vs 10.00% (1/10) in “Below threshold”'));
       } else {
         assert.ok(html.indexOf(expected[0]) < html.indexOf(expected[1]));
@@ -126,5 +128,22 @@ for (const language of ['zh', 'en']) {
       assert.equal(summary.exposureLevels[1].label, `${variable}=2`);
       assert.ok(summary.estimates[0].label.includes(`${variable}=2`));
     }
+  });
+}
+
+// The 11-03 MIMIC walk asked for each rate with its 95% CI; the run computed
+// the intervals, but the answer quoted the rates alone.
+for (const language of ['zh', 'en']) {
+  test(`${language}: each rate is quoted with the interval at the plan's level`, async () => {
+    const { html } = await answer({ language, binding: 'distribution', level: 0.95 });
+    assert.ok(html.includes(language === 'zh'
+      ? '结局：达到阈值组 20.00%（2/10；95% CI 15.00%–25.00%），阈值以下组 10.00%（1/10；95% CI 5.00%–15.00%）；总体 15.00%（3/20；95% CI 4.50%–31.25%）。'
+      : '20.00% (2/10; 95% CI 15.00%–25.00%) in “At threshold” vs 10.00% (1/10; 95% CI 5.00%–15.00%) in “Below threshold”; overall 15.00% (3/20; 95% CI 4.50%–31.25%)'), html);
+  });
+  test(`${language}: an interval without a stated level is not quoted as one`, async () => {
+    const { html } = await answer({ language, binding: 'distribution' });
+    assert.ok(html.includes(language === 'zh'
+      ? '结局：达到阈值组 20.00%（2/10），阈值以下组 10.00%（1/10）；总体 15.00%（3/20）。'
+      : '20.00% (2/10) in “At threshold” vs 10.00% (1/10) in “Below threshold”; overall 15.00% (3/20)'), html);
   });
 }
