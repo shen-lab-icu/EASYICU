@@ -17,9 +17,11 @@ from pathlib import Path
 import pytest
 
 from easyicu.webserver import research_pipeline_run_preparation as preparation
+from easyicu.webserver import study_contexts
 from easyicu.webserver.research_launch_scientific import (
     _metadata_only_planning_coordinates,
     exposure_subgroup_variables,
+    record_without_exposure_subgroups,
     stated_exposure_concepts,
     without_exposure_subgroups,
 )
@@ -98,5 +100,25 @@ def test_a_study_saved_with_the_conflict_plans_without_it():
     # stop, so every later reader of the launch study sees it without them.
     source = Path(preparation.__file__).read_text(encoding="utf-8")
     launch = source.split("def _prepare_scientific_launch(", 1)[1].split("\ndef ", 1)[0]
-    assert launch.index("study = without_exposure_subgroups(study)") < launch.index(
+    assert launch.index("study = dict(record_without_exposure_subgroups(study))") < launch.index(
         "stop_unrecorded_stated_variables(study)")
+
+
+def test_the_launch_saves_the_study_it_plans_so_the_plan_is_current():
+    """MIMIC-IV walk 11-03: the plan bound the cleared study while the saved
+    study kept the subgroup, and the page offered to plan again."""
+
+    saved = study_contexts.upsert_context({
+        "id": "exposure-subgroup-study", "question": QUESTION, "primary_exposure": "性别",
+        "stated_subgroups": [{"variable": "性别", "words": "请按性别分组", "concept": "sex",
+                              "source_status": "available"}],
+    }, _server_question_wording_write=True)
+    planned = record_without_exposure_subgroups(saved)
+    stored = study_contexts.get_context("exposure-subgroup-study")
+    assert planned["stated_subgroups"] == stored["stated_subgroups"] == []
+    assert planned["revision"] == stored["revision"] == saved["revision"] + 1
+    assert (study_contexts.scientific_configuration_sha256(planned)
+            == study_contexts.scientific_configuration_sha256(stored))
+    # Nothing to clear writes nothing; a write that lost the race keeps the study.
+    assert record_without_exposure_subgroups(stored) is stored
+    assert record_without_exposure_subgroups(saved) is saved

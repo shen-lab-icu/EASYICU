@@ -1201,6 +1201,39 @@ def without_exposure_subgroups(study: Mapping[str, Any]) -> dict[str, Any]:
     ]}
 
 
+def record_without_exposure_subgroups(study: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Save ``study`` without its exposure's own subgroups, as a launch plans it.
+
+    A plan binds the configuration it was planned on, so the saved study must
+    hold the same subgroups; otherwise the page reads the new plan as stale
+    (MIMIC-IV walk 11-03).  Returns the study unchanged when it has none, or
+    when another write won since the launch read it.
+    """
+
+    from easyicu.webserver import study_contexts
+
+    cleared = without_exposure_subgroups(study)
+    if cleared.get("stated_subgroups") == study.get("stated_subgroups"):
+        return study
+    try:
+        saved = study_contexts.upsert_context(
+            {"id": str(study.get("id") or ""), "stated_subgroups": cleared["stated_subgroups"]},
+            active=True,
+            expected_revision=int(study.get("revision") or 0),
+            require_revision=True,
+            lifecycle_write=False,
+            # The host's own stated-variable reading, as the save tool writes it.
+            _server_question_wording_write=True,
+        )
+    except study_contexts.StudyContextError:
+        return study
+    return {
+        **cleared,
+        "stated_subgroups": saved.get("stated_subgroups"),
+        "revision": saved.get("revision", study.get("revision")),
+    }
+
+
 def _stated_catalog_concept(
     text: Optional[str], catalog_by_id: Mapping[str, Any]
 ) -> tuple[str, ...]:
