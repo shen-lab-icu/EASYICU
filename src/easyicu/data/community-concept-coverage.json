@@ -5355,7 +5355,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Positive End Expiratory Pressure"
+      "description": "Positive end-expiratory pressure set on the ventilator (same sources as peep_set); total or measured PEEP is peep_total"
     },
     "peep_set": {
       "category": "ventilator",
