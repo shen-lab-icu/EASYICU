@@ -6800,13 +6800,20 @@ def report_rewrite_ready(
     """Whether a report-only rewrite of that run still holds its approved configuration.
 
     Runs that finished before the configuration was kept for this stop have
-    none, so no rewrite is offered for them.
+    none, so no rewrite is offered for them; nor for a run whose sealed
+    report inputs changed, which the rewrite would refuse at once.
     """
+    from easyicu.research_agent.reporting.registered_report_inputs import (
+        registered_report_inputs_intact,
+    )
+
     try:
         target = _resolve_execution_resume_wrapper(
             study=study, project_root=project_root, source_run_id=source_run_id, report_only=True,
         )
-        return load_recovery_seed(target.wrapper_dir) is not None
+        return load_recovery_seed(target.wrapper_dir) is not None and registered_report_inputs_intact(
+            target.wrapper_dir / "pipeline" / target.pipeline_run_id,
+        )
     except (ResearchPipelineRunError, WebReviewRecoveryError):
         return False
 

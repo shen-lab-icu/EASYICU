@@ -2154,24 +2154,7 @@ def _draft_manuscript(
         plan=execute_result.plan,
         findings=findings,
     )
-    scaffold_path = run_dir / "manuscript_scaffold.md"
-    scaffold_path.write_text(scaffold, encoding="utf-8")
-    if evidence.get("manuscript_scaffold_raw") is None or scaffold.strip():
-        from .manuscript_sections import manuscript_writer_contract_sha256
-
-        evidence.register_file(
-            kind="log",
-            description="Manuscript scaffold (raw, with {evidence:*} placeholders).",
-            source_path=scaffold_path,
-            evidence_id="manuscript_scaffold_raw",
-            producer="writer",
-            generation_mode="llm",
-            prompt_pack_version=prompt_version,
-            metadata={
-                "writer_contract_sha256": manuscript_writer_contract_sha256(),
-            },
-            on_sha_change="new_id",
-        )
+    _store_raw_scaffold(run_dir, scaffold, evidence=evidence, prompt_version=prompt_version)
     return _DraftStageResult(
         current_verified_evidence_records=current_verified_evidence_records,
         current_evidence_names=current_evidence_names,
@@ -2180,6 +2163,37 @@ def _draft_manuscript(
         scaffold=scaffold,
         reader_tables=reader_tables,
         absent_owner_claim_targets=absent_owner_claim_targets,
+    )
+
+
+def _store_raw_scaffold(run_dir: Path, scaffold: str, *, evidence, prompt_version) -> None:
+    """Write and seal the Writer's raw draft.
+
+    A Writer that never reached its service returns an empty draft.  An
+    earlier draft already sealed here stays in place with its live copy:
+    blanking that copy alone left the two unequal, and the report-only
+    rewrite offered for exactly this stop then refused every attempt
+    (11-03 MIMIC walk).
+    """
+
+    if evidence.get("manuscript_scaffold_raw") is not None and not scaffold.strip():
+        return
+    from .manuscript_sections import manuscript_writer_contract_sha256
+
+    scaffold_path = run_dir / "manuscript_scaffold.md"
+    scaffold_path.write_text(scaffold, encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Manuscript scaffold (raw, with {evidence:*} placeholders).",
+        source_path=scaffold_path,
+        evidence_id="manuscript_scaffold_raw",
+        producer="writer",
+        generation_mode="llm",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "writer_contract_sha256": manuscript_writer_contract_sha256(),
+        },
+        on_sha_change="new_id",
     )
 
 

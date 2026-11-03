@@ -44,12 +44,16 @@ from easyicu.research_agent.schema import (
     ArtifactConsumptionContract,
 )
 
-INPUT_KEY = "table:exposure_outcome_distribution"
-STEP_ID = "04_drug_readmission_distribution_figure"
-PRODUCT = "exposure_overview"
-EXPOSURE = "anticoagulant_exposed"
-OUTCOME = "readmitted_30d"
-
+from tests.support.exposure_outcome_distribution_cases import (
+    EXPOSURE,
+    INPUT_KEY,
+    OUTCOME,
+    PRODUCT,
+    RENDER_STEP_ID as STEP_ID,
+    bound_table as _bound,
+    produced_table as _produced_table,
+    render as _render,
+)
 
 def _step(**updates) -> AnalysisStep:
     payload = {
@@ -65,125 +69,6 @@ def _step(**updates) -> AnalysisStep:
     }
     payload.update(updates)
     return AnalysisStep.model_validate(payload)
-
-
-def _produced_table(
-    tmp_path: Path,
-    monkeypatch,
-    *,
-    frame: pd.DataFrame | None = None,
-    spec_updates: dict | None = None,
-) -> Path:
-    """Build the product with the real producer, not a hand-written fixture."""
-
-    if frame is None:
-        frame = pd.DataFrame(
-            {
-                EXPOSURE: [1] * 10 + [0] * 10,
-                OUTCOME: (
-                    [1, 1, 1, 0, 0, 0, 0, 0, 0, None]
-                    + [1, 0, 0, 0, 0, 0, 0, 0, 0, None]
-                ),
-            }
-        )
-    parent = tmp_path / "parent"
-    parent_out = parent / "steps" / "03_parent" / "outputs"
-    parent_out.mkdir(parents=True)
-    cohort = parent / "cohort.parquet"
-    frame.to_parquet(cohort, index=False)
-    digest = hashlib.sha256(cohort.read_bytes()).hexdigest()
-    (parent / "resolved_inputs.json").write_text(
-        json.dumps(
-            {
-                "step_id": "03_parent",
-                "inputs": {
-                    "artifact:analysis_cohort": {
-                        "relative_path": "cohort.parquet",
-                        "sha256": digest,
-                        "declared_kind": "artifact",
-                        "product": "analysis_cohort",
-                        "product_contract": {
-                            "columns": list(frame.columns),
-                            "row_count": int(len(frame)),
-                        },
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("STEP_OUT_DIR", str(parent_out))
-    monkeypatch.setenv("EASYICU_RUN_DIR", str(parent))
-    monkeypatch.setenv(
-        "EASYICU_RESOLVED_INPUTS_JSON", str(parent / "resolved_inputs.json")
-    )
-    run_exposure_outcome_distribution_from_env(
-        spec_payload={
-            "exposure": EXPOSURE,
-            "exposure_levels": [0, 1],
-            "outcome": OUTCOME,
-            "outcome_levels": [0, 1],
-            "outcome_positive_value": 1,
-            "level_match_policy": "exact_typed",
-            "denominator_policy": "all_declared_rows",
-            "missing_outcome_policy": "structural_absence_is_non_event",
-            "confidence_level": 0.95,
-            **(spec_updates or {}),
-        },
-        typed_cohort_input="artifact:analysis_cohort",
-    )
-    return parent_out / "exposure_outcome_distribution.csv"
-
-
-def _bound(
-    tmp_path: Path, table: Path, *, rows: int | None = None
-) -> tuple[Path, dict]:
-    run_dir = tmp_path / "run"
-    (run_dir / "inputs").mkdir(parents=True, exist_ok=True)
-    bound = run_dir / "inputs" / "exposure_outcome_distribution.csv"
-    bound.write_bytes(table.read_bytes())
-    digest = hashlib.sha256(bound.read_bytes()).hexdigest()
-    frame = pd.read_csv(bound)
-    manifest = {
-        "step_id": STEP_ID,
-        "inputs": {
-            INPUT_KEY: {
-                "relative_path": "inputs/exposure_outcome_distribution.csv",
-                "sha256": digest,
-                "declared_kind": "table",
-                "evidence_kind": "table",
-                "product": "exposure_outcome_distribution",
-                "evidence_id": "ev-distribution",
-                "identity_row": {
-                    "input_key": INPUT_KEY,
-                    "declared_kind": "table",
-                    "product": "exposure_outcome_distribution",
-                    "evidence_id": "ev-distribution",
-                    "sha256": digest,
-                },
-                "product_contract": {
-                    "columns": list(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS),
-                    "row_count": rows if rows is not None else int(len(frame)),
-                },
-                "consumption_contract": {
-                    "input_key": INPUT_KEY,
-                    "mode": "all_rows",
-                    "artifact_sha256": digest,
-                },
-            }
-        },
-    }
-    return run_dir, manifest
-
-
-def _render(run_dir: Path, manifest: dict, out_dir: Path):
-    return run_exposure_outcome_distribution_figure(
-        out_dir=out_dir,
-        run_dir=run_dir,
-        resolved_inputs=manifest,
-        step_id=STEP_ID,
-        figure_product=PRODUCT,
-    )
 
 
 @pytest.mark.parametrize("levels", [[0, 1], [1, 0]])
@@ -231,7 +116,7 @@ def test_a_chinese_display_label_keeps_the_sealed_group_name_in_the_caption(tmp_
     monkeypatch.setattr(sys.modules[__name__], "EXPOSURE", "lactate_tertile")
     monkeypatch.setattr(sys.modules[__name__], "OUTCOME", "icu_readmission")
     frame = pd.DataFrame({EXPOSURE: [1] * 10 + [2] * 10, OUTCOME: [0, 1] * 10})
-    table = _produced_table(tmp_path, monkeypatch, frame=frame,
+    table = _produced_table(tmp_path, monkeypatch, frame=frame, exposure=EXPOSURE, outcome=OUTCOME,
                             spec_updates={"exposure_levels": [1, 2]})
     run_dir, manifest = _bound(tmp_path, table)
     manifest.update(grouped_context_manifest(run_dir))

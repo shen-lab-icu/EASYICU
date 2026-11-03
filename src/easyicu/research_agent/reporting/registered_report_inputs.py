@@ -146,16 +146,35 @@ def _registered_plan_and_context(
     return plan, context
 
 
+_REPORT_REPAIR_INPUTS = (
+    ("research_context.json", "research_context"),
+    ("analysis_plan.json", "analysis_plan"),
+    ("preplan_literature_bundle.json", "preplan_literature_bundle"),
+    ("manuscript_scaffold.md", "manuscript_scaffold_raw"),
+)
+
+
+def registered_report_inputs_intact(run_dir: Path) -> bool:
+    """Whether every report-repair input still equals its sealed record.
+
+    The same check :func:`prepare_registered_report_repair` makes first, so
+    a rewrite is offered only where it can start.
+    """
+
+    try:
+        evidence = ReadOnlyReportEvidence(Path(run_dir).resolve(strict=True))
+        for name, evidence_id in _REPORT_REPAIR_INPUTS:
+            evidence.verify_input(name, evidence_id)
+    except (WriterOnlyMigrationError, OSError, ValueError):
+        return False
+    return True
+
+
 def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | None = None) -> PreparedWriterOnlyMigration:
     """Require sealed inputs and completed analysis before any Writer call."""
 
     evidence = ReadOnlyReportEvidence(Path(run_dir).resolve(strict=True))
-    for name, evidence_id in (
-        ("research_context.json", "research_context"),
-        ("analysis_plan.json", "analysis_plan"),
-        ("preplan_literature_bundle.json", "preplan_literature_bundle"),
-        ("manuscript_scaffold.md", "manuscript_scaffold_raw"),
-    ):
+    for name, evidence_id in _REPORT_REPAIR_INPUTS:
         evidence.verify_input(name, evidence_id)
     # Reporting caches can change after a failed Writer without a corresponding
     # new seal in older runs. Never trust those mutable caches as authority.
@@ -312,4 +331,4 @@ def build_registered_report_reader(run_dir: Path, manuscript: str) -> dict:
     )
 
 
-__all__ = ["prepare_registered_report_repair", "bind_registered_report_numbers", "build_registered_report_reader"]
+__all__ = ["prepare_registered_report_repair", "registered_report_inputs_intact", "bind_registered_report_numbers", "build_registered_report_reader"]

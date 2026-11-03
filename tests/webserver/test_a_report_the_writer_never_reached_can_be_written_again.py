@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.reporting import registered_report_inputs
 from easyicu.webserver import agent_pipeline_runs, agent_runs
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.agent_pipeline_runs import ResearchPipelineRunError, writer_never_reached
@@ -121,6 +122,52 @@ def test_no_rewrite_is_offered_without_the_kept_configuration(history, monkeypat
     # A run that finished before this stop kept its configuration has none.
     assert ready() is False
     monkeypatch.setattr(agent_pipeline_runs, "_resolve_execution_resume_wrapper", lambda **_kwargs: type(
-        "Target", (), {"wrapper_dir": root})())
+        "Target", (), {"wrapper_dir": root, "pipeline_run_id": "run_pipeline"})())
     monkeypatch.setattr(agent_pipeline_runs, "load_recovery_seed", lambda _wrapper: object())
+    checked = []
+    monkeypatch.setattr(registered_report_inputs, "registered_report_inputs_intact",
+                        lambda run_dir: checked.append(run_dir) or True)
     assert ready() is True
+    assert checked == [root / "pipeline" / "run_pipeline"]
+    # Sealed inputs that no longer match would refuse the rewrite at once.
+    monkeypatch.setattr(registered_report_inputs, "registered_report_inputs_intact", lambda _run_dir: False)
+    assert ready() is False
+
+
+def _sealed_draft(run_dir: Path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.reporting.write_phase import _store_raw_scaffold
+
+    evidence = EvidenceStore(run_dir)
+    store = lambda text: _store_raw_scaffold(  # noqa: E731
+        run_dir, text, evidence=evidence, prompt_version="synthetic")
+    return evidence, store
+
+
+def test_a_writer_that_never_reached_its_service_keeps_the_sealed_draft(tmp_path):
+    evidence, store = _sealed_draft(tmp_path)
+    store("## Results\n\nSynthetic draft {evidence:result}.\n")
+    sealed = (tmp_path / "manuscript_scaffold.md").read_bytes()
+
+    store("")
+
+    # The live copy still equals its seal, so the rewrite can start.
+    assert (tmp_path / "manuscript_scaffold.md").read_bytes() == sealed
+    reader = registered_report_inputs.ReadOnlyReportEvidence(tmp_path)
+    assert reader.verify_input("manuscript_scaffold.md", "manuscript_scaffold_raw") == sealed
+    assert registered_report_inputs.registered_report_inputs_intact(tmp_path) is False  # other inputs absent here
+
+
+def test_a_new_draft_still_replaces_and_reseals_the_old_one(tmp_path):
+    evidence, store = _sealed_draft(tmp_path)
+    store("first draft\n")
+    store("second draft\n")
+    reader = registered_report_inputs.ReadOnlyReportEvidence(tmp_path)
+    assert reader.verify_input("manuscript_scaffold.md", "manuscript_scaffold_raw") == b"second draft\n"
+
+
+def test_a_first_empty_draft_is_still_recorded(tmp_path):
+    evidence, store = _sealed_draft(tmp_path)
+    store("")
+    assert (tmp_path / "manuscript_scaffold.md").read_text() == ""
+    assert evidence.get("manuscript_scaffold_raw") is not None
