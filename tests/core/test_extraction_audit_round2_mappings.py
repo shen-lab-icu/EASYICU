@@ -390,3 +390,8 @@ def test_s6_albumin_brand_names_match():
     [named] = [s for s in _sources("albumin_iv", "eicu") if s.get("sub_var") == "drugname"]
     for name in ("BUMINATE", "albumin human", "Albumin (Human) (PLASBUMIN-5) 5% infusion 25 g"):
         assert re.search(named["regex"], name)
+
+
+def test_g5_pafi_pairs_the_lowest_pao2_with_the_median_fio2_of_the_hour():
+    assert DICTIONARY["pafi"]["concepts"] == ["po2", "fio2"]
+    assert DICTIONARY["pafi"]["aggregate"] == ["min", "median"]
