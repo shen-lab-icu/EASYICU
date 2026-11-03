@@ -57,7 +57,10 @@ def test_diuretic_concepts_are_registered_per_database():
     assert fe.maximum == 2000
     for database, sources in fe.sources.items():
         for source in sources:
-            assert source.callback == "furosemide_equivalent"
+            # MIMIC-IV eMAR doses go through their own owner first (audit
+            # round 2, D1), which then applies the same conversion.
+            assert source.callback in {"furosemide_equivalent", "emar_furosemide_equivalent"}
+            assert source.callback == "furosemide_equivalent" or source.table == "emar"
             assert source.params["fe_drug"] in {"furosemide", "bumetanide", "torasemide"}
     # eICU records diuretic boluses as orders without administered amounts.
     assert "eicu" not in fe.sources
@@ -82,12 +85,13 @@ def test_audit_19_items_are_mapped():
     assert 229639 in ids("loop_diuretic", "miiv")
     assert 3660 in ids("furosemide", "eicu", "medication", "drughiclseqno")
     assert 3664 in ids("loop_diuretic", "eicu", "medication", "drughiclseqno")
-    # MIMIC-IV eMAR is not used (its loader ignores the stay filter); the
-    # class flags read prescriptions, as aspirin does.
-    for name in ["furosemide", *FLAGS]:
-        assert all(s.table != "emar" for s in dictionary.get(name).sources["miiv"])
+    # The MIMIC-IV class flags are administered eMAR events, not prescription
+    # orders (2026-11-03 audit round 2, D3; the eMAR load is stay-filtered:
+    # 2,000 stays peak below 3 GB resident).
     for name in FLAGS:
-        assert any(s.table == "prescriptions" for s in dictionary.get(name).sources["miiv"])
+        sources = dictionary.get(name).sources["miiv"]
+        assert all(s.table != "prescriptions" for s in sources)
+        assert any(s.table == "emar" and s.callback == "emar_administered" for s in sources)
     assert 1000428 in ids("thiazide_diuretic", "hirid")
     assert {7011, 20177} <= ids("potassium_sparing_diuretic", "aumc")
     assert 6804 in ids("acetazolamide", "aumc")
