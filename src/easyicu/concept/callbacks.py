@@ -5640,16 +5640,11 @@ def _callback_vaso_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """R ricu vaso_ind callback 的精确复制.
-    
-    R ricu 的 vaso_ind 回调有一个特殊行为：
-    1. 计算 pmax(dopa_dur, norepi_dur, dobu_dur, epi_dur) 作为 vaso_ind 列
-    2. 调用 expand(res, index_var(res), "vaso_ind")
-    3. 由于 "vaso_ind" 列已存在，expand 直接使用它作为 end_var
-    4. 这导致 seq(starttime, duration) 而不是 seq(starttime, starttime+duration)
-    5. R 的 seq(1, 4.18, 1) = 1,2,3,4（不包含超过 4.18 的值）
-    
-    我们需要精确复制这个行为。
+    """Vasopressor indicator: every hour an administration episode covers.
+
+    Takes pmax(dopa_dur, norepi_dur, dobu_dur, epi_dur) per episode start and
+    expands seq(start, start + duration, 1). ricu's own callback used the
+    duration as the end time (seq(start, duration)); that is not reproduced.
     """
     # When upstream concepts request hourly alignment (ctx.interval != None),
     # the duration tables may already have their start times floored to the hour.
@@ -5758,50 +5753,29 @@ def _callback_vaso_ind(
             value_column="vaso_ind",
         )
 
-    # R ricu vaso_ind 的特殊行为：
-    # 1. vaso_ind 列被设置为 pmax(durations)，即 duration 值
-    # 2. expand(res, index_var(res), "vaso_ind") 被调用
-    # 3. 由于 "vaso_ind" 列已存在，expand 直接使用它作为 end_var
-    # 4. 所以实际执行的是 seq(starttime, duration) 而不是 seq(starttime, starttime+duration)
-    # 5. R 的 seq(1, 4.18, 1) = [1, 2, 3, 4] (不包含超过 4.18 的值)
-    # 6. R 的 seq(0, 0, 1) = [0] (当 start=end 时返回单个值)
-    #
-    # 我们需要模拟这个行为：对于每一行，生成从 start_hour 到 floor(duration_hour) 的序列
-    # 注意：R seq(a, b, 1) 生成的是 a, a+1, a+2, ... 直到 <= b
-    
+    # Each administration covers the hours seq(start, start + duration, 1).
+    # ricu's vaso_ind passed pmax(duration) to expand() as the *end* time,
+    # i.e. seq(start, duration), which drops every episode that starts later
+    # than it lasts (2026-11-03 extraction audit round 2, R2-02: SICdb
+    # vaso_ind covered 44% of norepinephrine-rate hours, MIIV/HiRID/MIMIC-III
+    # 11-21%). The start keeps its hour; k = 0..floor(duration).
+    starts = valid_rows["__start_hours"].to_numpy(dtype="float64")
+    durations = valid_rows["__duration_hours"].to_numpy(dtype="float64")
+    keep = np.isfinite(starts) & np.isfinite(durations) & (durations >= 0)
+    starts, durations = starts[keep], durations[keep]
+    counts = np.floor(durations + 1e-9).astype("int64") + 1
+    hours = np.repeat(np.floor(starts), counts) + (
+        np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
+    )
     expanded_records: list[tuple] = []
-    for _, row in valid_rows.iterrows():
-        start_hours = row["__start_hours"]
-        duration_hours = row["__duration_hours"]
-        # R expand 只检查 start <= end，所以 duration >= 0 都可以
-        if pd.isna(start_hours) or pd.isna(duration_hours) or duration_hours < 0:
-            continue
-        id_values = tuple(row[col] for col in id_columns) if id_columns else tuple()
-        
-        # R ricu 的行为：seq(start, duration, 1)
-        # 例如：start=0, duration=0 → seq(0, 0, 1) = [0]
-        # 例如：start=1, duration=4.18 → seq(1, 4.18, 1) = [1, 2, 3, 4]
-        # 例如：start=1, duration=6.05 → seq(1, 6.05, 1) = [1, 2, 3, 4, 5, 6]
-        start_int = int(start_hours)
-        # R 的 seq 行为：生成 start, start+1, start+2, ... 直到值 <= end
-        # 所以最大值是 start + floor(end - start) = start + floor(duration - start + start) 的最大整数 <= duration
-        # 简化：最大值是 floor(duration)，但不能小于 start
-        end_int = int(duration_hours)  # floor(duration)
-        
-        # 当 start > duration 时，R 会返回空（不满足 start <= end）
-        # 但前面的 valid_mask 已经处理了 duration >= 0 的情况
-        # 实际上对于 vaso_ind，start 和 duration 应该都 >= 0
-        if start_int > duration_hours + 1e-9:
-            # start > duration，跳过（R expand 的 start <= end 条件）
-            continue
-        
-        # 生成序列 [start_int, start_int+1, ..., end_int] 如果 end_int >= start_int
-        # R seq(1, 4.18, 1) 意味着 seq(start=1, to=4.18, by=1)
-        # 结果是 [1, 2, 3, 4] 因为 5 > 4.18
-        for hour in range(start_int, end_int + 1):
-            if hour <= duration_hours + 1e-9:  # 包含 duration_hours 本身（如果是整数）
-                expanded_records.append((*id_values, float(hour)))
-    
+    if len(hours):
+        id_frame = valid_rows.loc[keep, list(id_columns)] if id_columns else None
+        if id_frame is not None:
+            repeated_ids = id_frame.loc[id_frame.index.repeat(counts)].reset_index(drop=True)
+            expanded_records = list(zip(*[repeated_ids[c] for c in id_columns], hours.astype(float)))
+        else:
+            expanded_records = [(float(h),) for h in hours]
+
     if not expanded_records:
         return _as_icutbl(
             pd.DataFrame(columns=empty_cols),
