@@ -82,8 +82,9 @@ def test_device_oxygen_flow_feeds_supplemental_oxygen_on_aumc_and_hirid():
     for database in ("aumc", "hirid"):
         (source,) = CONCEPTS["supp_o2"]["sources"][database]
         assert source["concepts"] == ["vent_ind", "fio2", "o2_flow"]
-    # An input concept, not yet an exported catalog column.
-    assert "o2_flow" in HIDDEN_DICTIONARY_CONCEPTS and "o2_flow" not in CONCEPT_DICTIONARY
+    # Audit round 2 (G6): published in the respiratory module, so native-v2
+    # publication can verify flow-backed supp_o2 claims.
+    assert "o2_flow" not in HIDDEN_DICTIONARY_CONCEPTS and "o2_flow" in CONCEPT_DICTIONARY
 
 
 def test_mixed_venous_callback_parses_and_requires_a_rule():

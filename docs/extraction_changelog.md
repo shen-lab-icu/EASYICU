@@ -102,6 +102,9 @@ answers is in brackets.
   - Set and total PEEP for AUMC, HiRID, eICU and SICdb.
   - MIMIC-III TCPCV is pressure-controlled ventilation.
   - `o2_flow` for MIIV, MIMIC-III and eICU, and `supp_o2` depends on it.
+  - The native-v2 export publishes `o2_flow` in the respiratory module. Its
+    `supp_o2` check now accepts flow > 0 L/min as support; before, it dropped
+    flow-only claims (eICU demo: 6,651 TRUE hours, 874 rows).
   - `safi` is SpO₂/FiO₂; MIIV/MIMIC-III `tco2` keeps arterial samples.
   - eICU vital signs fill hours without a monitor value from nurse charting.
   - MIIV `sbp`/`dbp` add the arterial line 225309/225310.

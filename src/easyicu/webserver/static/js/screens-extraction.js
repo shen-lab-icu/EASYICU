@@ -98,7 +98,7 @@
     ['SOFA-1 scores', 'SOFA-1 评分', 7, false, false],
     ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, false, false],
     ['Sepsis shared', 'Sepsis 共享概念', 5, false, false],
-    ['Respiratory', '呼吸系统', 17, false, false],
+    ['Respiratory', '呼吸系统', 18, false, false],
     ['Ventilator', '呼吸机参数', 17, false, false],
     ['Blood gas', '血气分析', 9, false, false],
     ['Lab — Hematology', '实验室-血液学', 25, false, false],

@@ -5478,8 +5478,9 @@ def _enforce_native_export_supp_o2_support(
     guard. A ventilation point just beyond ``LOS + 24 h`` can therefore be
     removed while its hour-bucketed ``supp_o2`` row remains inside the allowed
     interval. Re-evaluate support against the canonical file so every true
-    claim is backed by either FiO2 > 21% at that key or a true ventilation
-    indicator in the corresponding one-hour bucket.
+    claim is backed by FiO2 > 21% or a device oxygen flow > 0 L/min at that
+    key, or by a true ventilation indicator in the corresponding one-hour
+    bucket.
 
     The global support join is spillable and bounded. Rows made completely
     empty by clearing an orphan are removed as well; native-v2 must not publish
@@ -5494,7 +5495,7 @@ def _enforce_native_export_supp_o2_support(
 
     target_schema = pq.read_schema(path)
     names = list(target_schema.names)
-    required = {"stay_id", "charttime", "fio2", "supp_o2", "vent_ind"}
+    required = {"stay_id", "charttime", "fio2", "o2_flow", "supp_o2", "vent_ind"}
     if "supp_o2" not in names:
         return None
     missing_support_columns = required - set(names)
@@ -5567,6 +5568,7 @@ def _enforce_native_export_supp_o2_support(
                             s.supp_o2 IS TRUE
                             AND NOT (
                                 coalesce(s.fio2 > 21.0, FALSE)
+                                OR coalesce(s.o2_flow > 0.0, FALSE)
                                 OR coalesce(v._vent_support, FALSE)
                             )
                         ) AS _orphan_supp_o2,
@@ -5662,7 +5664,7 @@ def _enforce_native_export_supp_o2_support(
 
     return {
         "policy": (
-            "true_supp_o2_requires_canonical_fio2_gt_21_or_"
+            "true_supp_o2_requires_canonical_fio2_gt_21_or_o2_flow_gt_0_or_"
             "hour_bucketed_canonical_vent_ind"
         ),
         "ventilation_time_projection": "floor_to_one_hour",

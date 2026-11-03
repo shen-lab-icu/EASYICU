@@ -172,7 +172,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # the repeat-stay restriction reads. 326 -> 327.
     # 2026-10-08 (main): four explicit MIIV/MIMIC respiratory source
     # channels. 327 -> 331.
-    assert len(CONCEPT_DICTIONARY) == 338
+    # 2026-11-03 audit round 2 (G6): o2_flow, the supp_o2 device-flow input,
+    # is published in the respiratory module. 338 -> 339.
+    assert len(CONCEPT_DICTIONARY) == 339
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
