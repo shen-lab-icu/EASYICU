@@ -23,6 +23,11 @@ from .prompt_variables import (
 )
 
 SUPPRESSED_COUNT = "suppressed"
+# Proportions of a count; a measured rate (heart_rate, infusion_rate) is not one.
+_PROPORTION_NAME = re.compile(
+    r"(?:^|_)(?:fraction|frac|pct|percent|percentage|proportion|share|prevalence|incidence"
+    r"|(?:event|outcome|missing|mortality|death|response|positivity|complete)_rate)(?:_|$)"
+)
 _METADATA_COUNTS = frozenset({
     "n_unique", "n_columns", "source_count", "module_count", "file_count",
     "returned_count", "artifact_count", "table_count",
@@ -44,12 +49,22 @@ def project_outbound_counts(value: Any, *, key: str = "", parent: str = "") -> A
     retain their semantics. Apply this after each owner's allow-list projection.
     """
     if isinstance(value, Mapping):
-        return {
+        projected = {
             name: project_outbound_counts(
                 item, key="count" if key in {"counts", "icd_counts"} else str(name), parent=key,
             )
             for name, item in value.items()
         }
+        # An exact proportion beside its denominator restores a suppressed
+        # count (0.025 x 120 = 3, 11-03 review), so it is suppressed with it.
+        if any(projected[name] == SUPPRESSED_COUNT and item != SUPPRESSED_COUNT
+               for name, item in value.items()):
+            projected = {
+                name: SUPPRESSED_COUNT if _PROPORTION_NAME.search(str(name))
+                and isinstance(item, (int, float)) and not isinstance(item, bool) else item
+                for name, item in projected.items()
+            }
+        return projected
     if isinstance(value, (list, tuple)):
         return [project_outbound_counts(item, key=key, parent=parent) for item in value]
     if (parent, key) in _METADATA_COUNT_PATHS:
