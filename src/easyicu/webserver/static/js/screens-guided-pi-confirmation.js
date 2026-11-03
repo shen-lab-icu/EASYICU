@@ -874,12 +874,20 @@
         : '';
       // The repeated-stay route the system chose on its own, as the host
       // states it for the plan under review; the card does not infer it.
-      const repeatedStaysDefault = SYSTEM_DEFAULT_CARDS.has(confirmation.code)
-        && review && review.repeated_stays_system_default === 'patient_clustered'
-        ? `<div class="gpi-confirmation-data-status is-compact is-system-default"><strong>${esc(tr('Repeat ICU stays · system default', '重复 ICU 入住 · 系统默认'))}</strong><small>${esc(tr(
-          'Every ICU stay is kept and uncertainty is clustered by patient. To study each patient’s first ICU stay instead, say so in the conversation.',
-          '保留每次 ICU 入住，并按患者聚类计算不确定性。如果只想研究每位患者的首次 ICU 入住，请在对话里说明。',
-        ))}</small></div>`
+      const repeatedStaysRoute = SYSTEM_DEFAULT_CARDS.has(confirmation.code) && review
+        ? {
+          patient_clustered: tr(
+            'Every ICU stay is kept and uncertainty is clustered by patient. To study each patient’s first ICU stay instead, say so in the conversation.',
+            '保留每次 ICU 入住，并按患者聚类计算不确定性。如果只想研究每位患者的首次 ICU 入住，请在对话里说明。',
+          ),
+          patient_clustered_per_hospitalization: tr(
+            'Each hospitalization keeps its first ICU stay; one patient’s hospitalizations are clustered by patient for uncertainty.',
+            '每次住院只保留首次 ICU 入住；同一患者的多次住院按患者聚类计算不确定性。',
+          ),
+        }[review.repeated_stays_system_default]
+        : '';
+      const repeatedStaysDefault = repeatedStaysRoute
+        ? `<div class="gpi-confirmation-data-status is-compact is-system-default"><strong>${esc(tr('Repeat ICU stays · system default', '重复 ICU 入住 · 系统默认'))}</strong><small>${esc(repeatedStaysRoute)}</small></div>`
         : '';
       const flowSteps = Array.isArray(confirmation.flowSteps) && confirmation.flowSteps.length
         ? `<div class="gpi-confirmation-flow-overview">

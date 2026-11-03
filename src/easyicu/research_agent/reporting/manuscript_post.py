@@ -883,6 +883,7 @@ _SEMANTIC_HINTS = (
         (
             re.compile(r"ci[_:. -]*(low|lower|high|higher|upper)", re.IGNORECASE),
             re.compile(r"(low|lower|high|higher|upper)[_:. -]*ci", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])ci\[[01]\]$", re.IGNORECASE),
         ),
     ),
     (
@@ -1042,7 +1043,21 @@ def _candidate_claims_for_value(
         distance = _claim_numeric_distance(claim, value_str)
         if distance is not None:
             candidates.append((claim, distance))
-    return candidates
+    # A value that rounds to the printed digits outranks one that is only
+    # inside the tolerance window: 5.487 is 5.48689, not a nearby 5.48378.
+    displayed = [item for item in candidates if _rounds_to_literal(item[0], value_str)]
+    return displayed or candidates
+
+
+def _rounds_to_literal(claim: NumericClaim, value_str: str) -> bool:
+    parsed = _parsed_numeric_literal(value_str)
+    if parsed is None:
+        return False
+    printed, has_percent = parsed
+    places = _display_decimal_places(value_str)
+    half_digit = 0.5 * (10 ** -places) * (1 + 1e-9)
+    values = [claim.canonical, claim.canonical * 100.0] if has_percent else [claim.canonical]
+    return any(abs(value - printed) <= half_digit for value in values)
 
 
 def _is_bibliographic_year_context(
@@ -1160,7 +1175,8 @@ def _contextual_source_score(context: str, claim: NumericClaim) -> int:
             score += 6
 
     if re.search(r"\b(?:confidence\s+interval|ci)\b", text):
-        if re.search(r"primary_or_ci_(?:low|lower|high|upper)$", source):
+        # primary_or_ci[0] is the same interval as primary_or_ci_low.
+        if re.search(r"primary_or_ci(?:_(?:low|lower|high|upper)|\[[01]\])$", source):
             score += 6
         elif re.search(r"primary_ci_(?:low|lower|high|upper)$", source):
             score += 4

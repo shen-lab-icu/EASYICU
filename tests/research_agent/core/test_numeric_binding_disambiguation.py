@@ -626,3 +626,74 @@ def test_range_context_prefers_robustness_range_claim(ra, tmp_path: Path) -> Non
 
     assert untraced == []
     assert binding_map["claim_1"].source_field == "range_low"
+
+
+
+_ROBUSTNESS_PRIMARY_SENTENCE = (
+    "After adjustment for patient age and patient sex, lactate at 5.02 versus "
+    "1.8 mmol/L was positively associated with in hospital mortality (odds "
+    "ratio; this point contrast only, not a summary of the nonlinear curve; "
+    "patient cluster robust Wald interval; noncausal association, 3.412; "
+    "95% CI, 2.123 to 5.484)."
+)
+
+
+def _register_robustness_summary(store) -> None:
+    """The registry of a signed landmark robustness summary; rows carry ``OR``."""
+    from easyicu.research_agent.reporting.manuscript_post import NumericEffectScale
+
+    lower, upper, sensitivity_upper = 2.1231023037212844, 5.483778472994508, 5.486890
+    for field, value, typed in (
+        ("primary_ci_low", lower, False),
+        ("primary_estimate_interval[0]", lower, False),
+        ("primary_or_ci[0]", lower, True),
+        ("reportable_model_contrasts.contrasts[1].lower", lower, True),
+        ("robustness_panel.rows[0].ci_low", lower, True),
+        ("robustness_panel.rows[2].ci_low", lower, True),
+        ("robustness_rows[0].ci_low", lower, True),
+        ("primary_or_ci[1]", upper, True),
+        ("robustness_rows[0].ci_high", upper, True),
+        ("robustness_panel.rows[5].ci_high", sensitivity_upper, True),
+    ):
+        store.register_numeric_claim(
+            value=f"{value:.6g}",
+            canonical=value,
+            evidence_id="e_robustness_summary",
+            step_id="robustness_replay",
+            source_field=field,
+            effect_scale=NumericEffectScale.ODDS_RATIO if typed else None,
+        )
+
+
+def test_cluster_robust_interval_binds_the_primary_interval_not_a_robustness_row(
+    ra, tmp_path: Path
+) -> None:
+    """"cluster robust Wald interval" names a variance estimator, not a row."""
+    from easyicu.research_agent.reporting import manuscript_post as mp
+
+    store = ra.EvidenceStore(tmp_path)
+    _register_robustness_summary(store)
+
+    claim, ambiguous = mp._select_numeric_claim(
+        candidates=mp._candidate_claims_for_value(store, "2.123"),
+        context=_ROBUSTNESS_PRIMARY_SENTENCE,
+        previous_step_id="robustness_replay",
+        prose_effect_scale=mp.NumericEffectScale.ODDS_RATIO,
+        prose_estimand=mp.NumericEstimand.CONFIDENCE_INTERVAL_LOWER,
+    )
+
+    assert not ambiguous
+    assert claim is not None and claim.source_field == "primary_or_ci[0]"
+
+
+def test_a_value_that_rounds_to_the_printed_digits_outranks_a_tolerance_match(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.reporting import manuscript_post as mp
+
+    store = ra.EvidenceStore(tmp_path)
+    _register_robustness_summary(store)
+
+    fields = {claim.source_field for claim, _ in mp._candidate_claims_for_value(store, "5.487")}
+
+    assert fields == {"robustness_panel.rows[5].ci_high"}

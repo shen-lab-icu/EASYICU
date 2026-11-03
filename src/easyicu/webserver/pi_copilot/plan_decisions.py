@@ -801,8 +801,10 @@ def repeated_stays_system_default_route(study: Mapping[str, Any]) -> str | None:
     """The system-default repeated-stay route the plan card names, if any.
 
     ``"patient_clustered"`` while the study keeps every stay with
-    patient-clustered inference and the system chose it; a later design or
-    population names none.
+    patient-clustered inference and the system chose it;
+    ``"patient_clustered_per_hospitalization"`` when a declared restriction
+    keeps each hospitalization's first stay, so one patient's admissions still
+    repeat; a later design or per-patient first stay names none.
     """
 
     confirmations = study.get("confirmations")
@@ -819,7 +821,13 @@ def repeated_stays_system_default_route(study: Mapping[str, Any]) -> str | None:
         or _first_stay_restriction_bound(study)
     ):
         return None
-    return "patient_clustered"
+    try:
+        per_hospitalization = primary_cohort.first_icu_stay_per_hospitalization_only(
+            study.get("cohort")
+        )
+    except primary_cohort.PrimaryCohortContractError:
+        return None
+    return "patient_clustered_per_hospitalization" if per_hospitalization else "patient_clustered"
 
 
 #: The design the repeated-stay route compiles: every stay, clustered by patient.

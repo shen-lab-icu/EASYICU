@@ -30,6 +30,27 @@ from easyicu.webserver import primary_cohort, study_contexts
 STOP = "population_inclusion_requires_extraction"
 
 
+_HOSPITAL_SCOPE = (
+    r"每(?:一)?(?:次|个)?(?:住院|入院|住院期间)",
+    r"(?:每|各)(?:次|个)?(?:医院)?住院",
+    r"\b(?:per|each|every|within each|within every)\s+"
+    r"(?:hospitali[sz]ation|hospital(?:\s+admission|\s+stay))s?\b",
+)
+_PATIENT_SCOPE = (
+    r"每(?:一)?(?:位|名|个)?(?:患者|病人)",
+    r"(?:患者|病人)(?:各自|分别|每人)",
+    r"每人",
+    r"\b(?:each|every)\s+patient(?:'s)?\b",
+    r"\bper\s+patient\b",
+    r"\bpatients?'\s+first\b",
+)
+
+
+def _names_scope(text: str, patterns: Sequence[str]) -> bool:
+    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return any(re.search(pattern, folded) for pattern in patterns)
+
+
 def _patient_first_wording_conflicts_with_hospitalization(quote: str) -> bool:
     """Detect an explicit per-patient first-stay quote typed as per-hospitalization.
 
@@ -38,25 +59,58 @@ def _patient_first_wording_conflicts_with_hospitalization(quote: str) -> bool:
     it does not derive a patient identity, a first-stay order, or a new criterion.
     An explicit per-hospitalization qualifier remains a hospitalization rule.
     """
-    text = unicodedata.normalize("NFKC", str(quote or "")).casefold()
-    hospital_scope = (
-        r"每(?:一)?(?:次|个)?(?:住院|入院|住院期间)",
-        r"(?:每|各)(?:次|个)?(?:医院)?住院",
-        r"\b(?:per|each|every|within each|within every)\s+"
-        r"(?:hospitali[sz]ation|hospital(?:\s+admission|\s+stay))s?\b",
-    )
-    if any(re.search(pattern, text) for pattern in hospital_scope):
+    if _names_scope(quote, _HOSPITAL_SCOPE):
         return False
-    patient_scope = (
-        r"每(?:一)?(?:位|名|个)?(?:患者|病人)",
-        r"(?:患者|病人)(?:各自|分别|每人)",
-        r"每人",
-        r"\b(?:each|every)\s+patient(?:'s)?\b",
-        r"\bper\s+patient\b",
-        r"\bpatients?'\s+first\b",
-    )
     first = r"(?:首次|第一次|首个|\bfirst\b)"
-    return bool(re.search(first, text) and any(re.search(pattern, text) for pattern in patient_scope))
+    text = unicodedata.normalize("NFKC", str(quote or "")).casefold()
+    return bool(re.search(first, text) and _names_scope(quote, _PATIENT_SCOPE))
+
+
+def stated_first_stay_planning_default(study: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The first-stay scope a first candidate plan is drafted with.
+
+    A question that states a first ICU stay is otherwise compiled into a
+    criterion the unrestricted study cannot apply: the plan stops on it, this
+    module's proposal adds the scope, and a second plan follows.  When the
+    question's own words select a first ICU stay and the study has no
+    population scope yet, the first plan uses the scope the bound source
+    supports: each patient's first stay where the source orders a patient's
+    stays, else the first stay within each hospitalization where that is the
+    source's substitute.  Wording that names the hospitalization, or names the
+    patient on a source that cannot order a patient's stays, stays with the
+    Planner and the proposal.  ``None`` leaves the study unchanged.
+    """
+    from easyicu.webserver import raw_source_authority
+
+    from .study_context_update import (
+        message_explicitly_selects_all_stays,
+        message_explicitly_selects_first_stay,
+    )
+
+    question = str(study.get("question") or "")
+    cohort = dict(study.get("cohort") or {})
+    confirmations = study.get("confirmations")
+    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
+    if (
+        not message_explicitly_selects_first_stay(question)
+        or message_explicitly_selects_all_stays(question)
+        or _names_scope(question, _HOSPITAL_SCOPE)
+        or {"preset", "exclude_readmissions", "first_icu_stay_per_hospitalization"} & set(cohort)
+        or {"plan_repeated_stays_first", "plan_repeated_stays_clustered"} & set(confirmations)
+    ):
+        return None
+    source = study.get("data_source")
+    database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
+    substitutes = raw_source_authority.patient_first_icu_stay_substitutes(database) or ()
+    if raw_source_authority.source_identity_capability_profiles(database)["first_icu_stay"]:
+        cohort["exclude_readmissions"] = True
+    elif substitutes[:1] == ("first_icu_stay_per_hospitalization",) and not _names_scope(
+        question, _PATIENT_SCOPE
+    ):
+        cohort["first_icu_stay_per_hospitalization"] = True
+    else:
+        return None
+    return {"cohort": cohort}
 
 
 def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None:

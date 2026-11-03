@@ -312,6 +312,25 @@ def _with_repeated_stays_default(study: Dict[str, Any], *, path: str) -> Dict[st
     except source_identity_authority.PatientGroupingAuthorityError:
         grouping = None
     patch = plan_decisions.repeated_stays_planning_default(study, source_groups_stays=grouping is not None)
+    return _with_planning_default(study, patch, label="repeated-stay")
+
+
+def _with_stated_first_stay(study: Dict[str, Any]) -> Dict[str, Any]:
+    """Draft a first plan with the first-stay scope its question states.
+
+    Without it, the plan stops on the stated criterion and the population
+    proposal starts a second plan (population_preparation owns the rule).
+    """
+
+    from easyicu.webserver.pi_copilot import population_preparation
+
+    patch = population_preparation.stated_first_stay_planning_default(study)
+    return _with_planning_default(study, patch, label="stated first-stay")
+
+
+def _with_planning_default(
+    study: Dict[str, Any], patch: Optional[Mapping[str, Any]], *, label: str
+) -> Dict[str, Any]:
     if patch is None:
         return study
     try:
@@ -322,7 +341,7 @@ def _with_repeated_stays_default(study: Dict[str, Any], *, path: str) -> Dict[st
             lifecycle_write=False,
         )
     except context_store.StudyContextError as exc:
-        _LOG.info("repeated-stay planning default not applied: %s", exc.detail.get("error"))
+        _LOG.info("%s planning default not applied: %s", label, exc.detail.get("error"))
         return study
 
 
@@ -427,6 +446,7 @@ def submit_research_run(
             and request.intent == "candidate_plan" and request.planner_start_mode == "fresh"
             and request.plan_change_request is None
             and not request.plan_revision_source_run_id and not request.execution_resume_source_run_id):
+        study_context = _with_stated_first_stay(study_context)
         study_context = _with_repeated_stays_default(study_context, path=path)
     database = source.get("database") if isinstance(source, Mapping) else None
     prepared_manifest = dataio.prepared_export_manifest_path(Path(path).expanduser())
