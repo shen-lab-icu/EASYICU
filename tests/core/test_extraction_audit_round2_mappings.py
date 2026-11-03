@@ -402,3 +402,9 @@ def test_h4_hirid_cuff_pressure_fills_hours_without_an_arterial_line(concept, in
     assert DICTIONARY[concept]["source_channel_priority"] == ["invasive", "nibp"]
     channels = {s["source_channel"]: s["ids"] for s in _sources(concept, "hirid")}
     assert channels == {"invasive": [invasive], "nibp": [cuff]}
+
+
+def test_p5_aumc_tidal_volume_is_expiratory():
+    ids = _ids("tidal_vol", "aumc")
+    assert not ids & {12277, 12360}  # inspiratory channels
+    assert {12275, 12358} <= ids

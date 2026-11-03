@@ -11803,7 +11803,6 @@
       9663,
       9668,
       12273,
-      12276,
       12357,
       12374,
       12578,
@@ -11811,7 +11810,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage. 2026-07-04 within-concept variant audit: added 12578 MVe Spontaan nieuw (new-software-version channel, ~14M rows; distribution matches mapped 8875 Mv Spontaan). | 2026-07-17 official-code audit (mechanical_ventilation.ipynb cell 21 lists 12374 MinVent, l/min): ADDED 12374. We already pull the other Bipap Vision channels (6698->pip, 12373->tidal_vol), so excluding its minute volume was internally inconsistent."
+     "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage. 2026-07-04 within-concept variant audit: added 12578 MVe Spontaan nieuw (new-software-version channel, ~14M rows; distribution matches mapped 8875 Mv Spontaan). | 2026-07-17 official-code audit (mechanical_ventilation.ipynb cell 21 lists 12374 MinVent, l/min): ADDED 12374. We already pull the other Bipap Vision channels (6698->pip, 12373->tidal_vol), so excluding its minute volume was internally inconsistent. | 2026-11-03 extraction audit round 2 (P5): removed the inspiratory 12276. Spontaneous minute-volume channels stay pooled, as in eICU and MIMIC-III (2026-07 semantic review); in controlled breaths they can read 0."
     }
    ],
    "eicu": [
@@ -11849,12 +11848,11 @@
       3049,
       3259,
       6078,
-      6932,
-      6934
+      6932
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed respiratory-rate itemids 224688/224690; added 224687 Minute Volume; semantic coverage review added MIMIC-III measured/spontaneous/inhaled/exhaled minute-volume CareVue labels, excluding set/alarm/low-limit labels."
+     "_comment": "2026-07-03 audit: removed respiratory-rate itemids 224688/224690; added 224687 Minute Volume; semantic coverage review added MIMIC-III measured/spontaneous/inhaled/exhaled minute-volume CareVue labels, excluding set/alarm/low-limit labels. | 2026-11-03 extraction audit round 2 (P5): removed 6934 'inhaled ve' (inspiratory)."
     }
    ],
    "sic": [
@@ -11880,12 +11878,11 @@
       3049,
       3259,
       6078,
-      6932,
-      6934
+      6932
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed respiratory-rate itemids 224688/224690; added 224687 Minute Volume; semantic coverage review added MIMIC-III measured/spontaneous/inhaled/exhaled minute-volume CareVue labels, excluding set/alarm/low-limit labels."
+     "_comment": "2026-07-03 audit: removed respiratory-rate itemids 224688/224690; added 224687 Minute Volume; semantic coverage review added MIMIC-III measured/spontaneous/inhaled/exhaled minute-volume CareVue labels, excluding set/alarm/low-limit labels. | 2026-11-03 extraction audit round 2 (P5): removed 6934 'inhaled ve' (inspiratory)."
     }
    ]
   }
@@ -17652,16 +17649,14 @@
     {
      "ids": [
       12275,
-      12277,
       16243,
       8872,
       12373,
-      12358,
-      12360
+      12358
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "added 16243 Zephyros Vte (ml) per audit 2026-05-27; 2026-07-02 added spirometer and secondary inspiratory/expiratory tidal-volume channels; 2026-07-03 added 12373 Vt (Bipap Vision), already recorded in ml."
+     "_comment": "added 16243 Zephyros Vte (ml) per audit 2026-05-27; 2026-07-02 added spirometer and secondary inspiratory/expiratory tidal-volume channels; 2026-07-03 added 12373 Vt (Bipap Vision), already recorded in ml. | 2026-11-03 extraction audit round 2 (P5): removed 12277 Insp. Vt and 12360 (inspiratory channels): the concept is the expiratory tidal volume (12277 vs 12275 Exp.: p05 -94, p95 +122 mL over 15.6M same-time pairs)."
     },
     {
      "ids": [
