@@ -13444,8 +13444,9 @@
   "category": "respiratory",
   "aggregate": [
    "min",
-   "max"
+   "median"
   ],
+  "_comment": "2026-11-03 extraction audit round 2 (G5): FiO2 is the hourly median, not the hourly maximum. HiRID charts FiO2 about every 2 minutes, and the hour's highest FiO2 paired with its lowest PaO2 put 37% of P/F rows more than 5% below the median-FiO2 value (HiRID 800 patients: P/F median 184 -> 221 mmHg; AUMC 215 -> 220; MIIV and eICU change <2%). PaO2 stays the hourly minimum.",
   "callback": "pafi",
   "class_name": "rec_cncpt"
  },
