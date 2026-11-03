@@ -2,7 +2,7 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "98143ab3b0b6b3a3e4f00753a9c0134d48c3289662e02dd3d72811dd1aff9ebe",
+  "concept_dict_sha256": "6a112c791b91de7ba25fd3a18d4cee0418a6c189b7291c9e374dbc944dfd059d",
   "sofa2_dict_sha256": "30e7349cfb336961ac8832e0721276edff7bca75e4a85bb4313121afc9806d2d",
   "total_concepts": 268,
   "new_this_round": [],

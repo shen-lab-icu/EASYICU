@@ -12044,7 +12044,8 @@
   ],
   "min": 0,
   "max": 40,
-  "description": "Positive end-expiratory pressure set on the ventilator (same sources as peep_set); total or measured PEEP is peep_total",
+  "description": "Positive End Expiratory Pressure",
+  "_comment": "2026-11-03 extraction audit 3: the ventilator setting in every database, from the same sources as peep_set; total or measured PEEP is peep_total",
   "omopid": 4353936,
   "category": "ventilator",
   "sources": {

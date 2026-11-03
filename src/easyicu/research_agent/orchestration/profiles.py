@@ -811,7 +811,7 @@ E1_PROGRESSIVE_PLANNER_CANARY_2026_11_03_AUDIT3 = replace(
     version="20261103-audit3", locked_at="2026-11-03T22:00:00Z",
     # User-requested third 2026-11-03 reseal of the concept dictionary
     # (sofa2-dict.json unchanged).
-    expected_concept_dict_sha="98143ab3b0b6b3a3e4f00753a9c0134d48c3289662e02dd3d72811dd1aff9ebe",
+    expected_concept_dict_sha="6a112c791b91de7ba25fd3a18d4cee0418a6c189b7291c9e374dbc944dfd059d",
 )
 
 E1_REVIEWED_DEMO_2026_11_03_AUDIT3 = replace(
