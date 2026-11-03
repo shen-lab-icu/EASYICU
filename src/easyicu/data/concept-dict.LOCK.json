@@ -2,9 +2,9 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "1a845edd899619181055925db9ae938380f7bc1bdfe91c6d8420c591ee3a5b04",
-  "sofa2_dict_sha256": "4beb1d80d83a1f3818858d6b5df9339b6a8ee4e9d15e190705b45b74fc3f30cb",
-  "total_concepts": 260,
+  "concept_dict_sha256": "03b952466da3a40d36cdc460250d362b4370cfef62c9c1fde0b0139b2ee15b22",
+  "sofa2_dict_sha256": "30e7349cfb336961ac8832e0721276edff7bca75e4a85bb4313121afc9806d2d",
+  "total_concepts": 268,
   "new_this_round": [],
   "pending_foundation_changes": [],
   "previous_published_lock": {
@@ -128,6 +128,10 @@
     {
       "git_commit": "621fe0619c1e67bcd7ba6a87dbaff8725a3331f9",
       "change": "User-approved 2026-11-03 reseal of concept-dict.json and sofa2-dict.json after the six-database extraction audit: arterial-only blood gases, total-only resp/tidal_vol/peep_total, MIMIC-III MetaVision ventilator mode and oxygen-device vent_end, corrected vasopressor/urine/SICdb/AUMC item mappings, SICdb continuous infusions only, HiRID fluid counters, MIMIC-III CareVue intake and MIMIC-III/AUMC RRT evidence."
+    },
+    {
+      "git_commit": "b29644204373066e5011477404e9ee24144d3687",
+      "change": "User-approved 2026-11-03 second reseal of concept-dict.json and sofa2-dict.json after the remaining extraction audit items: eICU urine/RASS/cuff blood pressure/nursing temperature/phenytoin, MIMIC-III ICU readmission and CareVue products, MIMIC-III prescriptions admission-scoped rolling join, SICdb airway-attributed ventilation and native KDIGO AKI, HiRID airway, MIMIC-IV eMAR administered corticosteroid/apixaban, invasive-preferred MAP channels, furosemide-equivalent diuretics and the AUMC mapping corrections (new o2_flow concept)."
     }
   ]
 }

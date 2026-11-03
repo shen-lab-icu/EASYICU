@@ -1,5 +1,5 @@
 {
-  "concept_count": 286,
+  "concept_count": 287,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -4928,6 +4928,28 @@
       },
       "description": "N-terminal pro-B-type natriuretic peptide (NT-proBNP)"
     },
+    "o2_flow": {
+      "category": "respiratory",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "oxygen flow delivered by a non-ventilator device (nasal cannula, mask), L/min"
+    },
     "o2sat": {
       "category": "respiratory",
       "databases": {
@@ -8200,7 +8222,7 @@
           "status": "unavailable"
         }
       },
-      "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III include enteral/PO feeds; AUMC is IV only; pre-ICU OR/PACU/ED intake is excluded for CareVue), so per-database intake capture requires stratified sensitivity analysis."
+      "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III include enteral/PO feeds; AUMC is IV only; pre-admission, cath-lab, OR, PACU and ED intake is excluded for MIIV, MIMIC-III MetaVision and CareVue), so per-database intake capture requires stratified sensitivity analysis."
     },
     "total_protein": {
       "category": "chemistry",
@@ -8961,25 +8983,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 24,
-      "unavailable": 108
+      "unavailable": 109
     },
     "nwicu": {
       "derived": 20,
       "direct": 137,
       "partial": 25,
-      "unavailable": 104
+      "unavailable": 105
     },
     "zhejiang_eicu": {
       "derived": 25,
       "direct": 128,
       "partial": 22,
-      "unavailable": 111
+      "unavailable": 112
     },
     "zigong": {
       "derived": 19,
       "direct": 125,
       "partial": 33,
-      "unavailable": 109
+      "unavailable": 110
     }
   },
   "databases": [
