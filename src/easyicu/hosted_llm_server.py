@@ -41,7 +41,7 @@ from typing import Any, Iterator, Sequence
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.concurrency import run_in_threadpool
+from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
 try:
@@ -796,7 +796,10 @@ async def _bounded_streaming_response(request: Request, upstream_payload: dict):
 
     async def _release_after(iterator):
         try:
-            for chunk in iterator:
+            # The upstream iterator blocks on the network; read each chunk in
+            # the threadpool so one slow stream cannot stall health checks
+            # and every other request on this worker (11-03 review).
+            async for chunk in iterate_in_threadpool(iterator):
                 yield chunk
         finally:
             # Runs on client disconnect too, so an abandoned stream cannot
