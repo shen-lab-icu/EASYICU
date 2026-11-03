@@ -3048,7 +3048,13 @@ def _apply_callback(
                     pass
             elif isinstance(interval, pd.Timedelta):
                 interval_minutes = interval.total_seconds() / 60.0
-        
+        # 2026-11-03 audit round 2 (V6): a HiRID givendose is the amount given
+        # since the infusion's previous record, not per minute.  Dividing it by
+        # a one-minute interval (the *60 concepts load their rates at
+        # 00:01:00) inflated the SOFA cardiovascular doses about 20-fold over
+        # the exported hourly rates.  The rate is the hourly mass over 60 min.
+        interval_minutes = max(interval_minutes, 60.0)
+
         return hirid_rate_kg(
             frame,
             concept_name=concept_name,
