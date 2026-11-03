@@ -203,6 +203,19 @@ class ConversionStatus:
     SKIPPED = "skipped"  # Already in parquet format
 
 
+class ConversionStopped(Exception):
+    """Conversion stopped between files because its caller asked it to.
+
+    ``results`` holds the receipts of the files finished before the stop. No
+    manifest is written and post-conversion indexing does not run, because
+    the folder is not completely converted.
+    """
+
+    def __init__(self, results: Dict[str, Dict[str, Any]]) -> None:
+        super().__init__("conversion_stopped")
+        self.results = results
+
+
 class DataConverter:
     """
     Converts CSV/CSV.GZ files to Parquet format for faster loading.
@@ -3272,6 +3285,7 @@ class DataConverter:
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         cluster_by_patient: Optional[bool] = None,
         register_manifest: Optional[Callable[[Dict[str, Any]], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Convert all CSV files to Parquet.
@@ -3298,6 +3312,10 @@ class DataConverter:
                 only worth it for patient-centric query workloads. Default None
                 reads env ``EASYICU_CLUSTER_BY_PATIENT`` (1/true to enable);
                 otherwise off.
+            should_stop: Optional callable checked before each file starts.
+                When it returns true, unstarted files are skipped and
+                :class:`ConversionStopped` is raised with the finished
+                receipts; a file already being written is allowed to finish.
 
         Returns:
             Dictionary of conversion results
@@ -3389,34 +3407,57 @@ class DataConverter:
             except Exception as e:  # noqa: BLE001 — UI callback must not abort conversion
                 logger.warning(f"progress_callback raised: {e}")
 
+        def _stopping() -> bool:
+            return bool(should_stop is not None and should_stop())
+
+        stopped = False
         # Use parallel conversion for multiple files
         if len(files_to_convert) > 1 and self.parallel_workers > 1:
+            def _convert_unless_stopped(csv_path: Path) -> Optional[Dict[str, Any]]:
+                return None if _stopping() else self._convert_file(csv_path)
+
             with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
                 future_map = {
-                    executor.submit(self._convert_file, csv_path): csv_path
+                    executor.submit(_convert_unless_stopped, csv_path): csv_path
                     for csv_path in files_to_convert
                 }
 
                 done = 0
                 for future in as_completed(future_map):
                     csv_path = future_map[future]
+                    if future.cancelled():
+                        # Never started because a stop was requested.
+                        stopped = True
+                        continue
                     try:
                         result = future.result()
-                        results[self._status_key(csv_path)] = result
                     except Exception as e:
                         result = {
                             'status': ConversionStatus.FAILED,
                             'error': str(e),
                         }
-                        results[self._status_key(csv_path)] = result
+                    if result is None:
+                        stopped = True
+                        continue
+                    results[self._status_key(csv_path)] = result
                     done += 1
                     _emit(csv_path, result, done)
+                    if _stopping():
+                        stopped = True
+                        for pending in future_map:
+                            pending.cancel()
         else:
             # Sequential conversion
             for done, csv_path in enumerate(files_to_convert, start=1):
+                if _stopping():
+                    stopped = True
+                    break
                 result = self._convert_file(csv_path)
                 results[self._status_key(csv_path)] = result
                 _emit(csv_path, result, done)
+        if stopped:
+            self._invalidate_dir_caches()
+            raise ConversionStopped(results)
         # 🚀 perf A1/A2: drop bucket/shard cache so a subsequent call sees
         # the new shards/buckets written by this run.
         self._invalidate_dir_caches()

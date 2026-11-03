@@ -41,7 +41,7 @@ def test_bad_rows_survive_conversion_job_and_cached_replay(monkeypatch, status, 
     class FakeConverter:
         def __init__(self, **kw):
             pass
-        def convert_all(self, *, force, progress_callback):
+        def convert_all(self, *, force, progress_callback, should_stop=None):
             res = {"status": status, "bad_rows_skipped": 7, "row_count": 9}
             if emit:
                 progress_callback({"status": status, "file": "synthetic.csv", "result": res})
