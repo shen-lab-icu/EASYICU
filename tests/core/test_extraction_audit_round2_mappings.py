@@ -148,3 +148,21 @@ def test_k1_carevue_procedure_events_are_rrt_in_the_loaded_overlay(database):
         assert pattern.search(event)
     for other in ("EKG", "Arterial Line Placement", "Hemodialysis cath"):
         assert not pattern.search(other)
+
+
+def test_p3_plateau_above_pip_or_at_peep_gives_no_driving_pressure():
+    from easyicu.callbacks import driving_pressure
+
+    times = [0.0, 60.0, 120.0, 240.0]
+    plateau = pd.DataFrame({"stay_id": 1, "charttime": times, "plateau_pres": [22.0, 30.0, 8.0, 25.0]})
+    peep = pd.DataFrame({"stay_id": 1, "charttime": times, "peep": [8.0, 8.0, 8.0, 8.0]})
+    pip = pd.DataFrame({"stay_id": 1, "charttime": [0.0, 60.0, 120.0], "pip": [28.0, 26.0, 20.0]})
+    out = driving_pressure(plateau, peep, pip=pip)
+    # 60: plateau 30 > PIP 26 + 1; 120: plateau at PEEP; 240: no PIP within 1 h, kept.
+    assert out.set_index("charttime")["driving_pres"].to_dict() == {0.0: 14.0, 240.0: 17.0}
+    assert len(driving_pressure(plateau, peep)) == 3
+
+
+@pytest.mark.parametrize("concept", ["driving_pres", "driving_pres_controlled"])
+def test_p3_driving_pressure_loads_pip(concept):
+    assert "pip" in DICTIONARY[concept]["concepts"]
