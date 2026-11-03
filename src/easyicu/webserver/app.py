@@ -171,7 +171,14 @@ def _acquire_web_deployment_lease() -> None:
             # Individual review recovery queries still fail closed. The job
             # journal itself must load successfully before accepting new jobs.
             pass
-        durable_research.start_service(state_paths.state_root())
+        # Starlette runs this handler on the event loop's thread, where DBOS
+        # refuses its synchronous calls.  Relaunch re-dispatches an active job
+        # and asks its workflow status, so a restart during a run failed to
+        # start (preview 11-03).  The service starts on a worker thread.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="durable-research-start") as starter:
+            starter.submit(durable_research.start_service, state_paths.state_root()).result()
     except BaseException:
         from easyicu.webserver import durable_research
         if durable_research.stop_service():
