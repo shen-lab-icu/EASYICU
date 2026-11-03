@@ -5497,7 +5497,10 @@ def hirid_rate_kg(
             This affects the rate calculation:
             - interval=60min: groups data by hour, sums doses, rate = sum/60/weight
             - interval=1min: each point is independent, rate = dose/1/weight
-              (this results in 60x higher values, matching R ricu's behavior)
+              (60x higher, R ricu's behaviour).  The concept dispatcher never
+              passes less than 60 min: a givendose is the amount since the
+              previous record, so a per-minute division is not a rate
+              (2026-11-03 audit round 2, V6).
     
     Then expand intervals to hourly time points.
     """

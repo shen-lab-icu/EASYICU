@@ -186,3 +186,20 @@ def test_w1_mimic_weight_prefers_admission_weight_per_stay():
     # Stay 1 keeps its admission weight across hours; stay 2 its charted weight;
     # stay 3 has no usable value, so the bounds filter decides.
     assert kept["charttime"].tolist() == [0.0, 50.0, 5.0, 1.0]
+
+
+@pytest.mark.parametrize("interval", [None, "00:01:00", "01:00:00"])
+def test_v6_hirid_rate_is_hourly_mass_over_60_min_at_any_concept_interval(interval):
+    # A givendose is the amount since the infusion's previous record; the
+    # *60 concepts load their rates at 00:01:00, which once divided it by one
+    # minute and inflated the SOFA cardiovascular doses about 20-fold.
+    from easyicu.concept import ConceptSource, _apply_callback
+
+    frame = pd.DataFrame({
+        "patientid": [1, 1], "givenat": [2.1, 2.6], "infusionid": [10, 10],
+        "givendose": [60.0, 60.0], "doseunit": ["µg", "µg"], "weight": [50.0, 50.0],
+    })
+    source = ConceptSource(callback="hirid_rate_kg", value_var="givendose",
+                           unit_var="doseunit", index_var="givenat")
+    out = _apply_callback(frame, source, concept_name="norepi_rate", interval=interval)
+    assert out["norepi_rate"].tolist() == pytest.approx([120.0 / 60.0 / 50.0])
