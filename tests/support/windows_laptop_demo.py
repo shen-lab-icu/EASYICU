@@ -39,6 +39,10 @@ def _mimic_iii_rows() -> dict[str, list[dict]]:
     for name in ("icustays", "chartevents"):
         for row in rows[name]:
             row["icustay_id"] = row.pop("stay_id")
+    for row in rows["icustays"]:
+        # MIMIC-III follow-up depends on the documentation system (90 days
+        # after discharge for MetaVision), as in the real demo release.
+        row["dbsource"] = "metavision"
     return rows
 
 

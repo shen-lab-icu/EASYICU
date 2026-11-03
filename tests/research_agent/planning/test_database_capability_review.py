@@ -409,7 +409,9 @@ def test_icu_survival_reviews_its_discharge_proxy_before_approval(tmp_path, monk
     ("miiv", "exact", "exact", None, None),
     ("eicu", "substitution", "substitution", "icu_death", "icu_discharge_proxy"),
     ("hirid", "refusal", "refusal", "icu_death", "last_observation_proxy"),
-    ("aumc", "substitution", "substitution", "icu_death", "icu_discharge_proxy"),
+    # AUMC follows survivors after discharge (2026-11-03 audit round 2,
+    # R2-03), so hospital death is offered as fixed-horizon mortality.
+    ("aumc", "substitution", "substitution", "mort_28d", "followup_days_28d"),
     ("sic", "refusal", "refusal", None, None),
 ])
 @pytest.mark.parametrize("outcome", ["icu_death", "death"])
@@ -453,12 +455,12 @@ def test_survival_question_scope_and_review_agree_for_each_mortality(
         assert substitutions == ({"event_time": timing} if database in {"eicu", "hirid", "aumc"} else {})
     else:
         assert substitutions == ({"outcome_meaning": hospital_meaning, "event_time": hospital_time}
-                                 | ({"censor_time": "followup_days_28d" if database == "sic" else "icu_discharge"}
+                                 | ({"censor_time": "followup_days_28d" if database in {"sic", "aumc"} else "icu_discharge"}
                                     if expected == "substitution" else {})
                                  if hospital_meaning else {})
 
 
-@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "icu_death"), ("sic", "mort_28d")])
+@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "mort_28d"), ("sic", "mort_28d")])
 def test_default_survival_offer_requires_applied_endpoint_and_digest_bound_approval(tmp_path, database, endpoint):
     from easyicu.databases.research_substitutions import bind_source_substitutions, source_binding
     from easyicu.research_agent.schema import ConceptDescriptor
