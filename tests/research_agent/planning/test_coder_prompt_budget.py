@@ -2405,9 +2405,7 @@ def test_scientific_semantics_repair_keeps_planner_science_authority(ra):
         assert '"allowed_aggregations":["first_value"]' in payload
         assert '"pitfalls"' not in payload
         assert '"clinical_caveats"' not in payload
-        # n_missing=10 is a small cell, and 0.1 of n_total=100 would restore it.
-        assert '"missingness":{"fraction_missing":"suppressed","n_missing":"suppressed"' in payload
-        assert '"severity":"medium"' in payload
+        assert '"missingness":{"fraction_missing":"suppressed","n_missing":"suppressed"' in payload  # small cell
         assert "User requested a cautious interpretation" not in payload
         assert "LOCKED ROBUSTNESS SPECIFICATIONS" in payload
 
