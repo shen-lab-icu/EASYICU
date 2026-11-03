@@ -56,7 +56,9 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
-            assert src.get("callback") == "transform_fun(set_val(TRUE))"
+            # MIMIC-III prescriptions without a time sit at noon of their day
+            # (extraction audit round 2, D5); the value is still TRUE.
+            assert src.get("callback") in ("transform_fun(set_val(TRUE))", "mimic_prescription_noon")
 
 
 @pytest.mark.parametrize("name,_dbs,_cov", BATCH6, ids=[m[0] for m in BATCH6])

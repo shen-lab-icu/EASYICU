@@ -342,7 +342,8 @@ def test_p6_sic_tidal_volume_below_100_ml_is_missing():
 def test_s8_hirid_items_reach_their_concepts():
     sofa2 = json.loads((Path(__file__).parents[2] / "src/easyicu/data/sofa2-dict.json").read_text())
     assert _ids("neut", "hirid") == {24000556}  # 24000550 behaves as an absolute count
-    assert _ids("diltiazem", "hirid") == {1000331, 1001071}
+    # HiRID has only oral diltiazem; the concept is IV elsewhere (2026-07-17 decision).
+    assert "hirid" not in DICTIONARY["diltiazem"]["sources"]
     assert {1000793} <= set(sofa2["other_vaso"]["sources"]["hirid"][0]["ids"])
     for concept in ("epi_rate", "epi_dur"):
         assert _ids(concept, "hirid") == {1000649, 1000650}  # perfusors; no bolus or inhaled rows

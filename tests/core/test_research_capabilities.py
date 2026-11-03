@@ -106,7 +106,8 @@ def test_los_and_admission_type_require_their_actual_source():
     for key in ("hirid", "aumc", "sic"):
         assert not research_capability_profile(key).hospital_los
     assert not research_capability_profile("hirid").icu_los
-    assert not research_capability_profile("hirid").admission_type
+    # HiRID admission type comes from the APACHE group (audit round 2, S8).
+    assert research_capability_profile("hirid").admission_type
     assert not research_capability_profile("sic").admission_type
     assert research_capability_profile("aumc").icu_los
 
