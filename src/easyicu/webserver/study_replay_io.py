@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 import errno
 import hashlib
 import json
@@ -13,6 +12,8 @@ import shutil
 import stat
 import tempfile
 from typing import Any
+
+from easyicu.runtime.platform_compat import PlatformCapabilityError, secure_directory_tree
 
 from .study_replay_policy import ReplayExportError, secret_values
 
@@ -45,25 +46,28 @@ def relative_parts(relative: str) -> tuple[str, ...]:
 
 
 def read_snapshot(root: Path, relative: str, *, optional: bool = False) -> bytes | None:
-    """Open each directory without following links; hash and parse these bytes."""
+    """Open each directory without following links; hash and parse these bytes.
+
+    The pinned-directory owner does this on POSIX (``openat`` with
+    ``O_NOFOLLOW``) and on Windows (rename-denying handles that refuse reparse
+    points); the POSIX-only flags used here before raised AttributeError on
+    Windows (11-03 review).
+    """
     parts = relative_parts(relative)
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
-        with ExitStack() as stack:
-            descriptor = os.open(root, flags | os.O_DIRECTORY)
-            stack.callback(os.close, descriptor)
-            for part in parts[:-1]:
-                descriptor = os.open(part, flags | os.O_DIRECTORY, dir_fd=descriptor)
-                stack.callback(os.close, descriptor)
-            descriptor = os.open(parts[-1], flags, dir_fd=descriptor)
-            stack.callback(os.close, descriptor)
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode):
-                raise ReplayExportError("replay_path_forbidden")
-            if info.st_size > MAX_FILE_BYTES:
-                raise ReplayExportError("replay_size_limit")
-            with os.fdopen(os.dup(descriptor), "rb") as handle:
-                raw = handle.read(MAX_FILE_BYTES + 1)
+        with secure_directory_tree(Path(root).resolve(), parts[:-1], create=False) as directory:
+            descriptor = directory.open(parts[-1], os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                                        | getattr(os, "O_BINARY", 0))
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ReplayExportError("replay_path_forbidden")
+                if info.st_size > MAX_FILE_BYTES:
+                    raise ReplayExportError("replay_size_limit")
+                with os.fdopen(os.dup(descriptor), "rb") as handle:
+                    raw = handle.read(MAX_FILE_BYTES + 1)
+            finally:
+                os.close(descriptor)
             if len(raw) > MAX_FILE_BYTES:
                 raise ReplayExportError("replay_size_limit")
             return raw
@@ -71,6 +75,8 @@ def read_snapshot(root: Path, relative: str, *, optional: bool = False) -> bytes
         if optional:
             return None
         raise ReplayExportError("replay_file_unavailable") from None
+    except PlatformCapabilityError:
+        raise ReplayExportError("replay_path_forbidden") from None
     except OSError as exc:
         code = (
             "replay_path_forbidden"

@@ -137,6 +137,7 @@ class DurableResearchService:
     @staticmethod
     def _require_handoff_deployment_lease() -> None:
         """Require this process to own the selected Web deployment lock."""
+        from easyicu.runtime.platform_compat import read_at
         from easyicu.webserver import deployment_lease
         handle = deployment_lease._HANDLE
         path = deployment_lease.state_paths.state_root() / 'webserver-single-process.lock'
@@ -145,7 +146,7 @@ class DurableResearchService:
                 raise ValueError
             opened, selected = os.fstat(handle.fileno()), path.stat()
             if (not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (selected.st_dev, selected.st_ino)
-                    or os.pread(handle.fileno(), 64, 0).decode().strip() != str(os.getpid())):
+                    or read_at(handle.fileno(), 64, 0).decode().strip() != str(os.getpid())):
                 raise ValueError
         except (OSError, ValueError, UnicodeError) as exc:
             raise DurableResearchError('preparation_handoff_deployment_lease_missing') from exc

@@ -397,6 +397,22 @@ def open_nofollow(
         return _windows_open_nofollow(selected, flags, mode)
 
 
+def read_at(descriptor: int, size: int, offset: int) -> bytes:
+    """Read without moving the shared offset: ``pread`` on POSIX.
+
+    Windows has no ``os.pread``; the owner's offset is restored after a
+    positioned read, so it must not be used concurrently on one descriptor.
+    """
+    if hasattr(os, "pread"):
+        return os.pread(descriptor, size, offset)
+    current = os.lseek(descriptor, 0, os.SEEK_CUR)
+    try:
+        os.lseek(descriptor, offset, os.SEEK_SET)
+        return os.read(descriptor, size)
+    finally:
+        os.lseek(descriptor, current, os.SEEK_SET)
+
+
 def fsync_directory(path: Path) -> None:
     """Windows: file fsync + atomic rename, without directory durability."""
     if not is_windows():
