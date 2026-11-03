@@ -153,13 +153,16 @@ def test_laboratory_channels_preserve_repeated_stay_identity(
                           "outtime": [t + pd.Timedelta(hours=12) for t in starts]})
     stays.to_parquet(tmp_path / "icustays.parquet", index=False)
     records = []
-    for subject, admission, start, fraction, oxygen in zip(
-        [101, 101, 102], [501, 501, 502], starts, [.4, .8, .99], [70., 90., 120.],
+    for specimen, subject, admission, start, fraction, oxygen in zip(
+        [1, 2, 3], [101, 101, 102], [501, 501, 502], starts, [.4, .8, .99], [70., 90., 120.],
     ):
-        for item, value, unit in [(50816, fraction, "%"), (50821, oxygen, "mm Hg")]:
-            records.append(dict(subject_id=subject, hadm_id=admission,
-                                charttime=start + pd.Timedelta(minutes=5),
-                                itemid=item, valuenum=value, value=str(value), valueuom=unit))
+        # Arterial specimen type: MIMIC-IV 52033 by specimen_id, MIMIC-III 50800 by time.
+        for item, value, unit in [(50816, fraction, "%"), (50821, oxygen, "mm Hg"),
+                                  (52033, "ART.", None), (50800, "ART", None)]:
+            records.append(dict(subject_id=subject, hadm_id=admission, specimen_id=specimen,
+                                charttime=start + pd.Timedelta(minutes=5), itemid=item,
+                                valuenum=pd.to_numeric(value, errors="coerce"),
+                                value=str(value), valueuom=unit))
     lab = pd.DataFrame(records)
     lab["storetime"] = lab.charttime
     (tmp_path / "labevents").mkdir()

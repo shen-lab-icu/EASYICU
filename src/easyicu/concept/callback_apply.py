@@ -57,6 +57,10 @@ import numpy as np
 import pandas as pd
 
 from .schema import ConceptSource
+from .blood_gas_specimen import (
+    parse_arterial_specimen_callback,
+    restrict_to_arterial_specimens,
+)
 from .errors import ConceptExtractionUnavailable
 from .loader import _get_concept_bounds
 from .expr_parser import (
@@ -754,6 +758,26 @@ def _apply_callback(
         return frame
 
     expr = callback.strip()
+
+    arterial_only, inner_callback = parse_arterial_specimen_callback(expr)
+    if arterial_only:
+        # The specimen rule is owned by blood_gas_specimen; the wrapped value
+        # callback (for example a kPa conversion) then runs on arterial rows.
+        frame = restrict_to_arterial_specimens(
+            frame, data_source=data_source, concept_name=concept_name
+        )
+        if inner_callback is None:
+            return frame
+        return _apply_callback(
+            frame,
+            replace(source, callback=inner_callback),
+            concept_name,
+            unit_column,
+            resolver=resolver,
+            patient_ids=patient_ids,
+            data_source=data_source,
+            interval=interval,
+        )
 
     if expr == "transform_fun(miiv_age)":
         from .callbacks import miiv_age

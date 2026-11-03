@@ -52,3 +52,7 @@ PYTHONPATH=src python -m pytest -q --disable-warnings tests/core/test_arterial_b
 ```
 
 相关完整 suite 只选逐文件审阅的合成/目录合同测试；不跑数据访问边界未知的广域 fast suite。测试覆盖无标本/空类型/重复类型/冲突、跨 hadm 污染、未许可证据、全部物理多对多、4h 等号/未来排除/同刻 ties、storetime 缺失/反序、未知出口、字典范围、SQL/Python 过滤、文件变更、无 PO₂ 空输出，以及多标本打乱顺序后的逐格一致性。测试数量、SHA 与独立复核见配套实施收据。
+
+## 2026-11-03 补充：通用血气概念改为仅动脉标本
+
+上文“未修改通用 `po2/pafi` 概念”的表述适用于本接口建立时。此后通用 `po2`、`pco2`、`ph`、`sao2` 的 MIIV/MIMIC-III/AUMC/SICdb 实验室来源经字典回调 `arterial_specimen_only` 只保留动脉标本，规则所有者为 `src/easyicu/concept/blood_gas_specimen.py`：MIIV 同 `specimen_id` 的 52033 必须唯一为 `ART.`（无类型记录者排除）；MIMIC-III 同 subject/charttime 的 50800 必须为 `ART`（无记录者排除，未复现 mimic-code 的标本预测模型）；AUMC 同 admissionid/measuredat 的 11646 必须为 `ART.`/`Art.`（无记录者保留）；SICdb 要求 `LaboratoryType = 2296`。本接口的 `DIRECT_ARTERIAL` 判定复用同一 MIIV 标本代码集合，其字典映射核对相应地期望 po2 带该回调。
