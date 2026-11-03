@@ -479,7 +479,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )"
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -495,7 +502,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )"
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -1728,11 +1742,11 @@
      "ids": [
       451,
       456,
-      666,
-      667
+      666
      ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 audit round 2 (G9): 667 removed, as it was from bicar."
     }
    ]
   }
@@ -4295,7 +4309,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -4314,7 +4335,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -4576,7 +4604,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -4596,7 +4631,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -5318,7 +5360,6 @@
    "mimic": [
     {
      "ids": [
-      30044,
       30119,
       30309
      ],
@@ -5328,17 +5369,33 @@
      "callback": "mimic_rate_cv"
     },
     {
+     "ids": [
+      30044
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30044 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
      "ids": 221289,
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
     {
      "ids": [
-      30044,
       30119,
       30309
      ],
@@ -5348,11 +5405,28 @@
      "callback": "mimic_rate_cv"
     },
     {
+     "ids": [
+      30044
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30044 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
      "ids": 221289,
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -5906,7 +5980,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -5925,7 +6006,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "eicu": [
@@ -10234,7 +10322,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -10250,7 +10345,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "eicu": [
@@ -11159,13 +11261,13 @@
      "ids": [
       1000462,
       1000656,
-      1000657,
-      1000658
+      1000657
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_duration"
+     "callback": "hirid_duration",
+     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline)."
     }
    ],
    "miiv": [
@@ -11359,19 +11461,18 @@
      "ids": [
       1000462,
       1000656,
-      1000657,
-      1000658
+      1000657
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_rate_kg"
+     "callback": "hirid_rate_kg",
+     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline)."
     }
    ],
    "mimic": [
     {
      "ids": [
-      30047,
       30120
      ],
      "table": "inputevents_cv",
@@ -11380,17 +11481,33 @@
      "callback": "mimic_rate_cv"
     },
     {
+     "ids": [
+      30047
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30047 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
      "ids": 221906,
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
     {
      "ids": [
-      30047,
       30120
      ],
      "table": "inputevents_cv",
@@ -11399,11 +11516,28 @@
      "callback": "mimic_rate_cv"
     },
     {
+     "ids": [
+      30047
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30047 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
      "ids": 221906,
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -11436,11 +11570,11 @@
    "aumc": [
     {
      "ids": [
-      6709,
-      8903
+      6709
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (G3): 8903 'SO2' is a blood-gas saturation (also mixed- and central-venous samples), not pulse oximetry; removed."
     },
     {
      "ids": 12311,
@@ -11951,8 +12085,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+     "callback": "arterial_specimen_only(convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$'))",
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py. 2026-11-03 audit round 2 (G4): 21213 PCO2 (bloed) is charted in kPa; labelled kPa rows are converted to mmHg as for po2."
     }
    ],
    "eicu": [
@@ -12510,7 +12644,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -12533,7 +12674,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -13557,7 +13705,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic_demo": [
@@ -13573,7 +13728,14 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "hirid": [
@@ -15187,11 +15349,11 @@
    "aumc": [
     {
      "ids": [
-      6709,
-      8903
+      6709
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 audit round 2 (G3): 8903 'SO2' is a blood-gas saturation (also mixed- and central-venous samples), not pulse oximetry; removed."
     }
    ],
    "eicu": [
@@ -15729,8 +15891,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "combine_callbacks(convert_unit(binary_op(`*`, 1000), 'ml'), transform_fun(na_above(1999)))",
-     "_comment": "2026-11-03 extraction audit 2: restored 8851 'Tidal Volume (Set)' (Draeger Evita): values are litres despite the 'ml' label (p05/p50/p95 0.43/0.57/2.0, like VTe 8871 which is already x1000), so x1000. 2.0 L is the Evita knob maximum, charted in 28% of rows mostly in pressure-controlled/CPAP modes where no volume is set; it is dropped, not a 2000 mL setting. 12289 'Volume (Set)' l/min / 12283 rate is not mapped: it equals 12291 where both exist and is a delivered setting only in volume modes."
+     "callback": "combine_callbacks(convert_unit(binary_op(`*`, 1000), 'ml'), transform_fun(na_above(1500)), transform_fun(na_below(100)))",
+     "_comment": "2026-11-03 extraction audit 2: restored 8851 'Tidal Volume (Set)' (Draeger Evita): values are litres despite the 'ml' label (p05/p50/p95 0.43/0.57/2.0, like VTe 8871 which is already x1000), so x1000. 2.0 L is the Evita knob maximum, charted in 28% of rows mostly in pressure-controlled/CPAP modes where no volume is set; it is dropped, not a 2000 mL setting. 12289 'Volume (Set)' l/min / 12283 rate is not mapped: it equals 12291 where both exist and is a delivered setting only in volume modes. 2026-11-03 audit round 2 (P5b): values outside 100-1,500 mL (170 zeros, 420 above 1,500 of 9,972) are dropped."
     }
    ],
    "eicu": [
@@ -16156,9 +16318,14 @@
      "callback": "distribute_volume_hourly",
      "end_var": "endtime",
      "extra_vars": [
-      "endtime"
+      "endtime",
+      "statusdescription"
      ],
-     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake."
+     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake.",
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "ids": [
@@ -18682,9 +18849,14 @@
      "callback": "distribute_volume_hourly",
      "end_var": "endtime",
      "extra_vars": [
-      "endtime"
+      "endtime",
+      "statusdescription"
      ],
-     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake."
+     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake.",
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "ids": [
@@ -26017,12 +26189,13 @@
     {
      "ids": [
       3660,
-      3664
+      3664,
+      8829
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used)."
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2: 8829 torsemide (admissiondrug: torsemide/Demadex)."
     },
     {
      "regex": "furosem|lasix|bumetan|bumex",
@@ -26219,16 +26392,23 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders (only hydrochlorothiazide occurs in eICU v2.0)."
+     "_comment": "2026-11-03 audit round 2 (D2): named orders; HICL-only orders are the next source (the earlier note that eICU has only HCTZ was wrong)."
     },
     {
      "ids": [
-      3649
+      131,
+      3646,
+      3647,
+      3649,
+      3662,
+      3663,
+      3665,
+      9863
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 3649 hydrochlorothiazide (orders with an empty drugname)."
+     "_comment": "2026-11-03 audit round 2 (D2): orders with an empty drugname carry only the HICL; admissiondrug names them: 3649 hydrochlorothiazide, 3663 metolazone, 3646 chlorothiazide, 3662 chlorthalidone, 3665 indapamide, and the HCTZ combinations 3647 triamterene-HCTZ, 131 lisinopril-HCTZ, 9863 losartan-HCTZ."
     }
    ],
    "eicu_demo": [
@@ -26485,7 +26665,7 @@
      "val_var": "drugname",
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: named orders (none in eICU v2.0 medication)."
+     "_comment": "2026-11-03 audit round 2: named orders (none in eICU v2.0 medication)."
     },
     {
      "regex": "acetazol|diamox",
@@ -26495,6 +26675,15 @@
      "callback": "transform_fun(set_val(TRUE))",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: 'Diamox (ml/hr)' (<10 stays)."
+    },
+    {
+     "ids": [
+      3641
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (D2): 3641 acetazolamide (admissiondrug: acetazolamide/Diamox), orders with an empty drugname."
     }
    ],
    "eicu_demo": [
