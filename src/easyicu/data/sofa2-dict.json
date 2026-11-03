@@ -845,18 +845,20 @@
     {
      "table": "medication",
      "sub_var": "drugname",
-     "regex": "vasopressin|phenylephrine|milrinone|angiotensin",
+     "regex": "vasopressin|phenylephrine|neo[- ]?synephrine|neosynsprine|milrinone|angiotensin",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "val_var": "drugname"
+     "val_var": "drugname",
+     "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate."
     },
     {
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "regex": "vasopressin|phenylephrine|milrinone|angiotensin",
+     "regex": "vasopressin|phenylephrine|neo[- ]?synephrine|neosynsprine|milrinone|angiotensin",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "val_var": "drugname"
+     "val_var": "drugname",
+     "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate."
     }
    ],
    "aumc": [
@@ -912,10 +914,14 @@
      "table": "medication",
      "sub_var": "DrugID",
      "ids": [
-      1550
+      1550,
+      1593
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "1550=Vasopressin"
+     "_comment": "1550=Vasopressin, 1593=Phenylephrin. 2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus.",
+     "extra_vars": [
+      "IsSingleDose"
+     ]
     }
    ],
    "mimic_demo": [

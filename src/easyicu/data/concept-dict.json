@@ -3937,7 +3937,11 @@
      "table": "medication",
      "sub_var": "DrugID",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_dur"
+     "callback": "sic_dur",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -4047,7 +4051,11 @@
      "sub_var": "DrugID",
      "val_var": "AmountPerMinute",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_rate_kg"
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -4218,7 +4226,11 @@
      "table": "medication",
      "sub_var": "DrugID",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_dur"
+     "callback": "sic_dur",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -4321,7 +4333,11 @@
      "sub_var": "DrugID",
      "val_var": "AmountPerMinute",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_rate_kg"
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -4894,7 +4910,11 @@
      "table": "medication",
      "sub_var": "DrugID",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_dur"
+     "callback": "sic_dur",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -5016,7 +5036,11 @@
      "sub_var": "DrugID",
      "val_var": "AmountPerMinute",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_rate_kg"
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -10676,7 +10700,11 @@
      "table": "medication",
      "sub_var": "DrugID",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_dur"
+     "callback": "sic_dur",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }
@@ -10807,7 +10835,11 @@
      "sub_var": "DrugID",
      "val_var": "AmountPerMinute",
      "stop_var": "OffsetDrugEnd",
-     "callback": "sic_rate_kg"
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
   }

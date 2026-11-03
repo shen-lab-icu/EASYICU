@@ -124,6 +124,17 @@ def _patient_id_column(frame: pd.DataFrame, data_source=None) -> Optional[str]:
 _SIC_SINGLE_DOSE_FLAG = "IsSingleDose"
 
 
+def _declared_extra_vars(source: ConceptSource) -> list:
+    extra_vars = source.params.get("extra_vars", []) if source.params else []
+    return [extra_vars] if isinstance(extra_vars, str) else list(extra_vars or [])
+
+
+def _without_single_dose_flag(source: ConceptSource) -> ConceptSource:
+    params = dict(source.params or {})
+    params["extra_vars"] = [v for v in _declared_extra_vars(source) if v != _SIC_SINGLE_DOSE_FLAG]
+    return replace(source, params=params)
+
+
 def _drop_sic_single_doses(frame: pd.DataFrame, source: ConceptSource, concept_name: str) -> pd.DataFrame:
     """Keep only SICdb continuous-infusion rows when the source declares the flag.
 
@@ -133,10 +144,7 @@ def _drop_sic_single_doses(frame: pd.DataFrame, source: ConceptSource, concept_n
     a pump rate. A source opts in through ``extra_vars``; a declared flag that
     did not reach the callback is a loader failure, not "all continuous".
     """
-    extra_vars = source.params.get("extra_vars", []) if source.params else []
-    if isinstance(extra_vars, str):
-        extra_vars = [extra_vars]
-    if _SIC_SINGLE_DOSE_FLAG not in extra_vars:
+    if _SIC_SINGLE_DOSE_FLAG not in _declared_extra_vars(source):
         return frame
     if _SIC_SINGLE_DOSE_FLAG not in frame.columns:
         raise ValueError(
@@ -784,6 +792,13 @@ def _apply_callback(
         return frame
 
     expr = callback.strip()
+
+    # A SICdb medication source that declares IsSingleDose keeps continuous
+    # rows only, whatever its value callback; nested callbacks then see a
+    # source without the declaration and do not filter (or fail) again.
+    if _SIC_SINGLE_DOSE_FLAG in _declared_extra_vars(source):
+        frame = _drop_sic_single_doses(frame, source, concept_name)
+        source = _without_single_dose_flag(source)
 
     arterial_only, inner_callback = parse_arterial_specimen_callback(expr)
     if arterial_only:
@@ -3356,8 +3371,6 @@ def _apply_callback(
                 if candidate in frame.columns:
                     stop_var = candidate
                     break
-
-        frame = _drop_sic_single_doses(frame, source, concept_name)
 
         if expr == "sic_rate_units":
             if val_var in frame.columns:
