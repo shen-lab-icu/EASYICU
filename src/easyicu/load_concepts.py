@@ -1334,7 +1334,8 @@ class ConceptLoader:
         
         # 4. 单位转换（如果需要）
         if hasattr(concept, 'unit') and concept.unit and 'unit' in data.columns:
-            data = self._convert_units(data, concept.unit)
+            # The concept names the substance a mass/molar conversion needs.
+            data = self._convert_units(data, concept.unit, substance=getattr(concept, 'name', None))
         
         return data
     

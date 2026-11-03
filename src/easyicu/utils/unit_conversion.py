@@ -19,13 +19,23 @@ class UnitConverter:
         ('f', 'c'): lambda x: (x - 32) * 5/9,
         ('c', 'f'): lambda x: x * 9/5 + 32,
         
+        # Mass <-> molar concentration depends on the substance, so these
+        # are keyed by it. They used to be substance-free defaults (glucose,
+        # creatinine) that also converted lactate, calcium or bilirubin with
+        # the wrong factor (11-03 review); without a substance they refuse.
         # 葡萄糖: mg/dL <-> mmol/L (molecular weight: 180.16)
-        ('mg/dl', 'mmol/l'): lambda x: x / 18.016,
-        ('mmol/l', 'mg/dl'): lambda x: x * 18.016,
+        ('mg/dl', 'mmol/l', 'glucose'): lambda x: x / 18.016,
+        ('mmol/l', 'mg/dl', 'glucose'): lambda x: x * 18.016,
         
         # 肌酐: mg/dL <-> µmol/L
-        ('mg/dl', 'umol/l'): lambda x: x * 88.4,
-        ('umol/l', 'mg/dl'): lambda x: x / 88.4,
+        ('mg/dl', 'umol/l', 'creatinine'): lambda x: x * 88.4,
+        ('umol/l', 'mg/dl', 'creatinine'): lambda x: x / 88.4,
+        
+        # Per-decilitre to per-litre is a pure scale change.
+        ('mmol/dl', 'mmol/l'): lambda x: x * 10,
+        ('mmol/l', 'mmol/dl'): lambda x: x / 10,
+        ('meq/dl', 'meq/l'): lambda x: x * 10,
+        ('meq/l', 'meq/dl'): lambda x: x / 10,
         
         # 尿素: mg/dL <-> mmol/L
         ('mg/dl', 'mmol/l', 'urea'): lambda x: x / 2.8,
@@ -146,7 +156,8 @@ class UnitConverter:
         'celsius': ['c', 'deg c', '°c', 'centigrade'],
         'kelvin': ['k'],
         'mg/dl': ['mg/100ml', 'mg%', 'mg per dl'],
-        'mmol/l': ['mmol/dl', 'mm'],
+        'mmol/l': ['mm'],
+        'mmol/dl': [],
         'umol/l': ['µmol/l', 'micromol/l'],
         'g/dl': ['g/100ml', 'g%'],
         'g/l': ['grams/l'],
@@ -171,11 +182,35 @@ class UnitConverter:
         'sec': ['second', 'seconds', 's'],
         'week': ['weeks', 'wk', 'wks'],
         'ng': ['nanogram', 'nanograms'],
-        'meq/l': ['meq/dl', 'milliequivalent/l'],
-        'kcal': ['kilocalorie', 'kilocalories', 'cal'],
+        'meq/l': ['milliequivalent/l'],
+        'meq/dl': [],
+        'kcal': ['kilocalorie', 'kilocalories'],
         'kj': ['kilojoule', 'kilojoules'],
     }
     
+    # Concept names that name a substance in CONVERSIONS.
+    SUBSTANCE_ALIASES = {
+        'glu': 'glucose', 'crea': 'creatinine', 'lact': 'lactate', 'bili': 'bilirubin',
+        'ca': 'calcium', 'mg': 'magnesium', 'phos': 'phosphate', 'urea': 'urea', 'bun': 'bun',
+        'chol': 'cholesterol', 'tri': 'triglyceride', 'plt': 'platelet', 'fio2': 'fio2',
+        'alb': 'protein', 'tp': 'protein',
+    }
+
+    @classmethod
+    def normalize_substance(cls, substance: Optional[str]) -> Optional[str]:
+        if not substance:
+            return None
+        name = str(substance).lower().strip()
+        return cls.SUBSTANCE_ALIASES.get(name, name)
+
+    @classmethod
+    def _converter(cls, from_norm: str, to_norm: str, substance: Optional[str]):
+        """A substance's own conversion first, then a substance-free one."""
+        named = cls.normalize_substance(substance)
+        if named and (from_norm, to_norm, named) in cls.CONVERSIONS:
+            return cls.CONVERSIONS[(from_norm, to_norm, named)]
+        return cls.CONVERSIONS.get((from_norm, to_norm))
+
     @classmethod
     def normalize_unit(cls, unit: str) -> str:
         """
@@ -225,15 +260,7 @@ class UnitConverter:
         if from_norm == to_norm:
             return True
         
-        # 不带物质名的转换
-        if (from_norm, to_norm) in cls.CONVERSIONS:
-            return True
-        
-        # 带物质名的转换
-        if substance and (from_norm, to_norm, substance.lower()) in cls.CONVERSIONS:
-            return True
-        
-        return False
+        return cls._converter(from_norm, to_norm, substance) is not None
     
     @classmethod
     def convert(cls, value: Union[float, np.ndarray], 
@@ -267,15 +294,7 @@ class UnitConverter:
         if from_norm == to_norm:
             return value
         
-        # 查找转换函数
-        converter = None
-        
-        # 尝试不带物质名
-        if (from_norm, to_norm) in cls.CONVERSIONS:
-            converter = cls.CONVERSIONS[(from_norm, to_norm)]
-        # 尝试带物质名
-        elif substance and (from_norm, to_norm, substance.lower()) in cls.CONVERSIONS:
-            converter = cls.CONVERSIONS[(from_norm, to_norm, substance.lower())]
+        converter = cls._converter(from_norm, to_norm, substance)
         
         if converter is None:
             raise ValueError(
