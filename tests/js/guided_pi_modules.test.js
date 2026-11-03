@@ -156,17 +156,20 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_family_result_contract_unwritable' }), /固定时间内发生/);
   assert.match(runFailureZh('research_pipeline_progressive_compile_failed', lateCohort), /把时间零点后移/);
   const familyStop = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_family_spec_accepted_baseline_grouping_unsupported' });
-  assert.match(familyStop, /progressive_family_spec_accepted_baseline_grouping_unsupported/);
+  // The failure receipt keeps the code; the sentence points to it (11-03).
+  assert.doesNotMatch(familyStop, /progressive_family_spec_accepted_baseline_grouping_unsupported/);
+  assert.match(familyStop, /failure receipt names the check/);
   assert.match(familyStop, /no analysis was run/);
   assert.doesNotMatch(familyStop, /variable level or model term/);
-  // Any other candidate-plan stop says only what is true of every such stop,
-  // with its code; the compile sentence is true only of a variable or level
-  // the data cannot resolve.
+  // Any other candidate-plan stop says only what is true of every such stop
+  // and points to the failure receipt, which keeps its code; the compile
+  // sentence is true only of a variable or level the data cannot resolve.
   const planStop = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' });
-  assert.match(planStop, /EasyICU check of the candidate plan \(code: progressive_step_invalid\)/);
+  assert.match(planStop, /EasyICU check of the candidate plan; no analysis was run\. The failure receipt names the check\./);
+  assert.doesNotMatch(planStop, /progressive_step_invalid/);
   assert.match(planStop, /no analysis was run/);
   assert.doesNotMatch(planStop, /variable level or model term/);
-  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /候选计划没有通过 EasyICU 的检查/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /候选计划没有通过 EasyICU 的一项检查.*失败回执/);
   // Each adjustment refusal reaches a planning stop under its progressive_ code.
   const adjustmentStops = {
     progressive_family_spec_stated_adjustment_unavailable: [
