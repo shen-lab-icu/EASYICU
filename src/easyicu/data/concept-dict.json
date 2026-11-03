@@ -16718,7 +16718,8 @@
      ],
      "table": "data_float_h",
      "sub_var": "DataID",
-     "_comment": " | 2026-07-17 official-code audit: restricted to 718 'TV (exp)' (542,402 rows/18,336 stays). 717 'TV (insp)' (413,704/8,445) removed — pooling inspiratory and expiratory TV into one concept mixes two different measurements; expiratory TV is the delivered-volume convention used by the other DBs."
+     "_comment": " | 2026-07-17 official-code audit: restricted to 718 'TV (exp)' (542,402 rows/18,336 stays). 717 'TV (insp)' (413,704/8,445) removed — pooling inspiratory and expiratory TV into one concept mixes two different measurements; expiratory TV is the delivered-volume convention used by the other DBs. | 2026-11-03 audit round 2 (P6): values below 100 mL are not tidal volumes (14,733 rows); in 2013 admissions 718 holds minute-volume-sized values (median about 4.7 L) or values below 50, so the bounds remove them. The 2013 tidal volume exists only as inspiratory 717, which stays out of this expiratory concept.",
+     "callback": "transform_fun(na_below(100))"
     }
    ],
    "mimic_demo": [
