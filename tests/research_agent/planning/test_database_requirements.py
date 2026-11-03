@@ -194,7 +194,7 @@ def test_every_source_allows_an_exact_study_and_refuses_a_known_unmapped_concept
     profile = research_capability_profile(database)
     exact = assess_study(profile, StudyRequirements(family="descriptive_epidemiology", concepts=("hr",)))
     assert exact.status == "exact"
-    concept = "d_dimer" if database == "sic" else "apixaban"
+    concept = "d_dimer" if database == "sic" else "saps3"
     refused = assess_study(profile, StudyRequirements(family="descriptive_epidemiology", concepts=(concept,)))
     assert refused.status == "refusal"
     assert refused.missing[0].code == "required_concept_unmapped"

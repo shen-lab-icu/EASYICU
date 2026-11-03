@@ -1979,7 +1979,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage(monk
     assert catalog["conceptCoverage"]["hr"]["data_audit_databases"] == 6
     assert catalog["conceptCoverage"]["abx"]["declared_databases"] == supported
     assert "data_audit_databases" not in catalog["conceptCoverage"]["abx"]
-    assert catalog["conceptCoverage"]["icu_unit_type"]["declared_databases"] == ["eicu", "nwicu"]
+    assert catalog["conceptCoverage"]["icu_unit_type"]["declared_databases"] == ["miiv", "mimic", "eicu", "aumc", "sic", "nwicu"]
     assert catalog["conceptCoverage"]["sofa2_resp"]["kind"] == "derived"
     assert catalog["conceptCoverage"]["sofa2_resp"]["declared_databases"]
     # An outcome the outcome owner supports in no database is not supported
@@ -1988,8 +1988,8 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage(monk
     coverage = catalog["conceptCoverage"]
     assert coverage["vent_free_days_28"]["kind"] == "unsupported"
     assert coverage["vent_free_days_28"]["unavailable_reason"] == "outcome_concept_structurally_unavailable"
-    assert coverage["icu_readmission"]["declared_databases"] == ["miiv", "eicu"]
-    assert coverage["icu_stay_is_readmission"]["declared_databases"] == ["miiv", "eicu"]
+    assert coverage["icu_readmission"]["declared_databases"] == ["miiv", "mimic", "eicu"]
+    assert coverage["icu_stay_is_readmission"]["declared_databases"] == ["miiv", "mimic", "eicu"]
     assert coverage["icu_free_days_28"]["declared_databases"] == ["miiv"]
     for key in ("mort_28d", "icu_readmission", "icu_stay_is_readmission", "icu_free_days_28"):
         assert coverage[key]["kind"] == "derived"
