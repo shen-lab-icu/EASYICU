@@ -7864,6 +7864,7 @@ def _callback_kdigo_aki(
     """Build public-reference and source-native AKI layers for renal export."""
     from easyicu.scores.aki_profiles import (
         build_renal_aki_bundle,
+        load_native_case_labels,
         rrt_modalities_complete,
         rrt_sources_resolved,
     )
@@ -7956,6 +7957,11 @@ def _callback_kdigo_aki(
             'acute_rrt_input' in tables
             and rrt_modalities_complete(database)
             and rrt_sources_resolved(ctx.data_source)
+        ),
+        native_case_labels=load_native_case_labels(
+            database,
+            getattr(ctx.data_source, "base_path", None),
+            patient_ids=_normalize_patient_ids(ctx.patient_ids, id_col),
         ),
     )
     
