@@ -45,6 +45,22 @@ def require_wald_group_variation(events: int, denominator: int) -> None:
         )
 
 
+def published_wald_tolerance(critical: float) -> float:
+    """How far a published Wald bound may sit from one rebuilt from published values.
+
+    A producer rounds each bound from its full-precision estimate and standard
+    error.  A consumer rebuilds it from the estimate and standard error as
+    published, each rounded to six decimals, and may round again.  The bound
+    moves by at most half a unit in the sixth decimal per rounding: both
+    bounds, the estimate, and the standard error scaled by ``critical``.
+    A fixed 2e-6 refused about one patient-clustered table in nine
+    (MIMIC-IV walk 11-03); an interval with wrong arithmetic is off by far
+    more than this bound.
+    """
+
+    return 0.5e-6 * (3.0 + abs(float(critical))) + 1e-9
+
+
 def patient_weighted_hoeffding_interval(
     events: int,
     denominator: int,

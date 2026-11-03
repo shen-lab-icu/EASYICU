@@ -31,6 +31,7 @@ import pandas as pd
 from ...contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ...methods.cluster_proportion import (
     patient_weighted_hoeffding_interval,
+    published_wald_tolerance,
     require_wald_group_variation,
 )
 from ...contracts.figure_plan import (
@@ -406,7 +407,8 @@ def _declared_risk_difference(
     critical = statistics.NormalDist().inv_cdf(1.0 - (1.0 - confidence_level) / 2.0)
     expected_low = round(expected_estimate - critical * float(standard_error), 6)
     expected_high = round(expected_estimate + critical * float(standard_error), 6)
-    if abs(float(low) - expected_low) > 2e-6 or abs(float(high) - expected_high) > 2e-6:
+    tolerance = published_wald_tolerance(critical)
+    if abs(float(low) - expected_low) > tolerance or abs(float(high) - expected_high) > tolerance:
         raise ValueError(
             "risk-difference interval is not its declared Wald-normal arithmetic"
         )
@@ -581,9 +583,10 @@ def _validate_marginal_interval(
     expected_high = round(
         min(100.0, float(expected_estimate) + critical * standard_error), 6
     )
+    tolerance = published_wald_tolerance(critical)
     if (
-        abs(float(row[low_key]) - expected_low) > 2e-6
-        or abs(float(row[high_key]) - expected_high) > 2e-6
+        abs(float(row[low_key]) - expected_low) > tolerance
+        or abs(float(row[high_key]) - expected_high) > tolerance
     ):
         raise ValueError(
             f"a {label} interval is not its patient-cluster Wald arithmetic"

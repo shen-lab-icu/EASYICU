@@ -41,6 +41,7 @@ import statsmodels.api as sm
 
 from ...methods.cluster_proportion import (
     patient_weighted_hoeffding_interval,
+    published_wald_tolerance,
     require_wald_group_variation,
 )
 from ...authority.plausibility import FlagOnlyPlausibilityScope
@@ -1211,9 +1212,10 @@ def _verify_product(
         expected_high = round(
             min(100.0, float(estimate) + critical * standard_error), 6
         )
+        tolerance = published_wald_tolerance(critical)
         if (
-            abs(float(row[low_key]) - expected_low) > 2e-6
-            or abs(float(row[high_key]) - expected_high) > 2e-6
+            abs(float(row[low_key]) - expected_low) > tolerance
+            or abs(float(row[high_key]) - expected_high) > tolerance
         ):
             raise RuntimeError(
                 f"{label} interval is not its patient-cluster Wald arithmetic"
@@ -1357,9 +1359,10 @@ def _verify_product(
     assert critical is not None
     expected_low = round(expected_difference - critical * standard_error, 6)
     expected_high = round(expected_difference + critical * standard_error, 6)
+    tolerance = published_wald_tolerance(critical)
     if (
-        abs(float(rows[0]["risk_difference_ci_low_pct"]) - expected_low) > 2e-6
-        or abs(float(rows[0]["risk_difference_ci_high_pct"]) - expected_high) > 2e-6
+        abs(float(rows[0]["risk_difference_ci_low_pct"]) - expected_low) > tolerance
+        or abs(float(rows[0]["risk_difference_ci_high_pct"]) - expected_high) > tolerance
     ):
         raise RuntimeError(
             "risk-difference interval is not its point estimate plus/minus the "
