@@ -205,6 +205,7 @@ def make_report_only_run_runner(
         study=study_context,
         project_root=project_root,
         source_run_id=execution_resume_source_run_id,
+        report_only=True,
     )
     seed = pipeline_owner.load_recovery_seed(target.wrapper_dir)
     if seed is None:

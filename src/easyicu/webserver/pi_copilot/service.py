@@ -2916,6 +2916,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                         self._transition_quick_question(active_tool_context)
                         if regenerate_target is None else ""
                     )
+                    active_tool_context.quick_question_offered = True
                 self.replay_store.start_turn(
                     session_id=record.session_id,
                     project_id=str(record.project_id),

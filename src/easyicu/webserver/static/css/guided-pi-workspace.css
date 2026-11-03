@@ -253,6 +253,12 @@
 .gd-project-picker>summary small{display:block;margin-bottom:5px;color:var(--ink-3);font-size:11px}
 .gd-project-picker>summary span{display:block;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
 .gd-project-picker>summary i{position:absolute;right:12px;top:25px;font-style:normal}
+/* Between the stacked and desktop layouts the switcher takes the heading's
+   free width and keeps the project name on one line (full name in title). */
+@media(min-width:921px) and (max-width:1180px){
+ .gd-main.gpi-workspace .gd-rail-heading .gd-rail-list{flex:1 1 auto;min-width:0}
+ .gd-main.gpi-workspace .gd-project-picker>summary span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
 .gd-project-picker[open]>summary i{transform:rotate(180deg)}
 .gd-project-picker-list{max-height:46vh;overflow-y:auto;overscroll-behavior:contain;padding-top:6px}
 .gpi-conversations{flex:1 1 auto;min-height:100px;overflow-y:auto;padding:8px 14px 20px;border-top:1px solid var(--hair)}

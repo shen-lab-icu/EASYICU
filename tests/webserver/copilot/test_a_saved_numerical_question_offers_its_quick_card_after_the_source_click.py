@@ -227,7 +227,8 @@ def test_the_question_binding_is_the_transition_hosts_alone(conversation):
     )) == ""
 
 
-def submit(service, record, request: dict[str, Any], *, quick_question: str, job_id: str = "job-transition"):
+def submit(service, record, request: dict[str, Any], *, quick_question: str, job_id: str = "job-transition",
+           offered: bool = False):
     service.replay_store.start_turn(session_id=record.session_id, project_id=record.project_id,
                                     job_id=job_id, allowed_actions=[], message_origin="host_transition")
     context = ToolExecutionContext(
@@ -237,6 +238,7 @@ def submit(service, record, request: dict[str, Any], *, quick_question: str, job
         authority_validator=lambda binding: service._binding_stale_details(binding, project_id=record.project_id),
     )
     context.quick_question = quick_question
+    context.quick_question_offered = offered
     try:
         return execute_tool("easyicu_quick_answer", {"reading": request}, context)
     finally:
@@ -255,6 +257,22 @@ def test_a_reading_that_rewords_the_researchers_question_is_not_qualified(conver
     assert "question_mismatch" in proposal["expand"]["reading"]["ambiguities"]
     with pytest.raises(PiCopilotError, match="quick_question_unbound"):
         submit(service, record, reading(), quick_question="", job_id="job-unbound")
+
+
+def test_an_offered_question_that_needs_a_full_study_adds_no_card(conversation):
+    # 11-03 eICU walk: the adjusted OR question was offered, the host found
+    # it needs a full study, and a 「改为完整研究」 card repeated what the
+    # conversation was already doing.  The offer now ends without a card.
+    service, record, _ = conversation
+    adjusted = {**reading(), "adjustments": ["age", "sex"]}
+    result = submit(service, record, adjusted, quick_question=QUESTION, offered=True)
+    assert (result["status"], result["code"]) == ("ok", "quick_full_study_continues")
+    assert "quick_answer" not in result["details"]
+    assert service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"] == []
+    # A question typed in the conversation keeps its card and remedy.
+    typed = submit(service, record, adjusted, quick_question=QUESTION, job_id="job-typed")
+    proposal = typed["details"]["quick_answer"]["proposal"]
+    assert (proposal["status"], proposal["reason"]) == ("full_study", "quick_requires_adjusted_study")
 
 
 # The Node side: the transition's host reply and its one tool call.

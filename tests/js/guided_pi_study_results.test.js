@@ -56,6 +56,15 @@ const shortHtml = outcome.render(shortManuscript, workflow);
 assert.match(shortHtml, /Analysis complete/);
 assert.ok(shortHtml.includes('Analysis complete. The manuscript draft still needs revision.'));
 assert.doesNotMatch(shortHtml, /data-gpi-run-outcome-retry/);
+// 11-03 walk: the Writer never reached the model service. The host offers a
+// report-only rewrite; no other manuscript stop shows it.
+const unreached = { ...shortManuscript,
+  manuscript_outcome: { status: 'not_passed', reason_code: 'writer_provider_transport_unavailable' } };
+const rewriteHtml = outcome.render(unreached, { ...workflow, report_rewrite_available: true });
+assert.match(rewriteHtml, /data-gpi-run-outcome-retry="report_only"[^>]*>[^<]*Write the report again \(analysis is not rerun\)/);
+assert.doesNotMatch(outcome.render(unreached, workflow), /data-gpi-run-outcome-retry/);
+assert.doesNotMatch(outcome.render({ ...unreached, manuscript_ready: true },
+  { ...workflow, report_rewrite_available: true }), /Write the report again/);
 assert.ok(outcome.collection(shortManuscript, workflow).some(row => row.artifact === 'result_tables.json'));
 assert.ok(!outcome.collection(shortManuscript, workflow).some(row => row.artifact === 'article_report.json'));
 assert.doesNotMatch(outcome.render(latest, workflow), /data-manuscript-outcome/);
