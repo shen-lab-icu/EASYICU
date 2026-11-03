@@ -1411,9 +1411,11 @@ def mimic_rate_mv(
     
     from ..io.ts_utils import expand
     
-    # Infer ID columns if not provided
+    # Infer the ICU-stay identifier if not provided.  Only the primary stay id
+    # may key the admission-time join in expand(): row/subject/order ids
+    # would attach another row's or another stay's intime.
     if id_cols is None:
-        id_cols = [col for col in data.columns if 'id' in col.lower()]
+        id_cols = _mimic_duration_id_cols(data, None)
     
     # Infer index variable (time column)
     time_cols = [col for col in data.columns if 'time' in col.lower() and col != stop_var]
@@ -5343,6 +5345,108 @@ def aumc_dur(
     # source minutes here avoids both a second /60 conversion and the old error
     # of flooring the absolute clock before subtracting admission time.
     return episodes[id_cols + [start_col, concept_name]].reset_index(drop=True)
+
+
+def sic_dur(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    index_var: Optional[str],
+    stop_var: Optional[str],
+    icu_origins: Optional[pd.DataFrame],
+    merge_gap_minutes: float = 5.0,
+) -> pd.DataFrame:
+    """Build canonical SICdb continuous-infusion episodes.
+
+    SICdb ``medication`` rows carry explicit ``Offset``/``OffsetDrugEnd``
+    intervals (seconds from the primary admission) but no order or infusion
+    identifier: a running infusion is documented as consecutive rate segments.
+    The canonical episode contract matches the other explicit-interval sources
+    (AUMC ``aumc_dur``, MIMIC MetaVision ``mimic_dur_inmv``):
+
+    * within each ICU stay and drug concept, merge overlapping segments and
+      segments separated by at most ``merge_gap_minutes``;
+    * report each episode's exact span in hours; and
+    * index each episode by its exact ICU-relative start in hours
+      (``Offset - cases.ICUOffset``), the clock ``sic_rate_kg`` uses for the
+      matching rate concept.
+
+    The callback is invoked once per drug concept, so ``concept_name`` is the
+    drug component of the stay-plus-drug grouping.  Collapsing every
+    administration of a stay into one ``min(start)``..``max(stop)`` span is not
+    an episode: it bridges treatment gaps and leaves one row per stay.
+    """
+
+    id_cols = [
+        col
+        for col in ("CaseID", "stay_id", "icustay_id", "patientunitstayid", "admissionid", "patientid")
+        if col in frame.columns
+    ][:1]
+    start_col = index_var if index_var and index_var in frame.columns else None
+    result_cols = list(dict.fromkeys([*id_cols, start_col or "Offset", concept_name]))
+
+    if frame.empty:
+        return pd.DataFrame(columns=result_cols)
+    if not stop_var or stop_var not in frame.columns:
+        raise ValueError("sic_dur requires a declared stop-offset column")
+    if not start_col:
+        raise ValueError("sic_dur requires a start-offset column")
+    if not id_cols:
+        raise ValueError("sic_dur requires an ICU stay identifier (CaseID)")
+    try:
+        merge_gap_minutes = float(merge_gap_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sic_dur merge_gap_minutes must be numeric") from exc
+    if not np.isfinite(merge_gap_minutes) or merge_gap_minutes < 0:
+        raise ValueError("sic_dur merge_gap_minutes must be finite and non-negative")
+
+    id_col = id_cols[0]
+    df = frame.loc[:, list(dict.fromkeys([id_col, start_col, stop_var]))].copy()
+    df[start_col] = pd.to_numeric(df[start_col], errors="coerce")
+    df[stop_var] = pd.to_numeric(df[stop_var], errors="coerce")
+    df = df.loc[
+        df[id_col].notna()
+        & df[start_col].notna()
+        & df[stop_var].notna()
+        & df[stop_var].gt(df[start_col])
+    ]
+    if df.empty:
+        return pd.DataFrame(columns=result_cols)
+
+    if icu_origins is None or not {id_col, "ICUOffset"}.issubset(icu_origins.columns):
+        raise ValueError("sic_dur requires cases.ICUOffset for the ICU clock origin")
+    origins = icu_origins[[id_col, "ICUOffset"]].drop_duplicates(subset=[id_col], keep="last")
+    df = df.merge(origins, on=id_col, how="left", validate="many_to_one")
+    origin = pd.to_numeric(df["ICUOffset"], errors="coerce")
+    if origin.isna().any():
+        raise ValueError("sic_dur requires cases.ICUOffset for every case")
+    df[start_col] = df[start_col] - origin
+    df[stop_var] = df[stop_var] - origin
+
+    # Merge against the running maximum stop so nested segments stay inside
+    # their episode: [0, 60], [20, 30], [55, 90] minutes is one episode.
+    gap_seconds = merge_gap_minutes * 60.0
+    df = df.sort_values([id_col, start_col, stop_var], kind="stable")
+    running_stop = df.groupby(id_col, dropna=False)[stop_var].cummax()
+    previous_running_stop = running_stop.groupby(df[id_col], dropna=False).shift()
+    new_episode = previous_running_stop.isna() | df[start_col].gt(
+        previous_running_stop + gap_seconds
+    )
+    df["__episode"] = new_episode.groupby(df[id_col], dropna=False).cumsum()
+    episodes = (
+        df.groupby([id_col, "__episode"], as_index=False, dropna=False)
+        .agg(**{start_col: (start_col, "min"), "__episode_end": (stop_var, "max")})
+        .sort_values([id_col, start_col], kind="stable")
+    )
+    episodes[concept_name] = (
+        (episodes["__episode_end"] - episodes[start_col]).astype(float) / 3600.0
+    )
+    episodes[start_col] = episodes[start_col].astype(float) / 3600.0
+    result = episodes[[id_col, start_col, concept_name]].reset_index(drop=True)
+    # Declare the already ICU-relative clock so the central SICdb aligner does
+    # not subtract ICUOffset or rescale seconds a second time.
+    result.attrs["easyicu_time_columns"] = {start_col: "icu_relative_hours"}
+    return result
 
 
 def hirid_rate_kg(

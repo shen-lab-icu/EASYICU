@@ -2268,8 +2268,22 @@ def _apply_callback(
     # Handle mimic_rate_mv callback (for infusion rates)
     if expr.strip() == "mimic_rate_mv":
         from ..utils.callback_utils import mimic_rate_mv
-        # Call the callback with appropriate parameters
-        id_cols = [col for col in frame.columns if 'id' in col.lower()]
+        # Only the PRIMARY ICU-stay identifier aligns an infusion with its
+        # admission clock.  MIMIC-III inputevents_mv also carries row_id,
+        # subject_id, hadm_id, itemid, cgid, orderid and linkorderid; icustays
+        # shares row_id/subject_id/hadm_id, so picking the first "id" column
+        # joined intime by row number (MIMIC-III) -- or, for a frame carrying
+        # subject_id, by patient across stays -- dropping or misaligning rows.
+        primary_id_candidates = ['icustay_id', 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+        id_cols = None
+        for cand in primary_id_candidates:
+            if cand in frame.columns:
+                id_cols = [cand]
+                break
+        if id_cols is None:
+            if frame.empty:
+                return frame
+            raise ValueError("mimic_rate_mv requires an ICU stay identifier")
         # stop_var is stored in params dict
         stop_var = source.params.get('stop_var', None) if source.params else None
         unit_col = source.unit_var if hasattr(source, 'unit_var') else None
@@ -2293,17 +2307,11 @@ def _apply_callback(
                     icustays = icustays_result
                     
                 if icustays is not None and len(icustays) > 0:
-                    # Find ID column
-                    id_col = None
-                    for col in id_cols:
-                        if col in icustays.columns:
-                            id_col = col
-                            break
-                    if id_col is not None:
-                        # Filter to patients in the current frame
-                        patient_ids_in_frame = frame[id_col].unique() if id_col in frame.columns else None
-                        if patient_ids_in_frame is not None:
-                            admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+                    id_col = id_cols[0]
+                    if id_col in icustays.columns:
+                        # Filter to stays in the current frame
+                        patient_ids_in_frame = frame[id_col].unique()
+                        admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
             except Exception:
                 pass  # Fail silently - will use fallback floor behavior
         
@@ -3207,66 +3215,43 @@ def _apply_callback(
             frame = frame.drop(columns=['weight'], errors='ignore')
         return frame
 
-    # Handle SICdb sic_dur callback
-    # R ricu logic: calc_dur(x, val_var, index_var(x), stop_var, grp_var)
+    # Handle SICdb sic_dur callback: per-episode durations on the ICU clock,
+    # the same contract as the other explicit-interval sources (aumc_dur,
+    # mimic_dur_inmv).  See utils.callback_utils.sic_dur.
     if expr == "sic_dur":
-        val_var = source.value_var or concept_name
+        from ..utils.callback_utils import sic_dur
+
         index_var = source.index_var
         stop_var = source.params.get("stop_var") if source.params else None
-        grp_var = source.params.get("grp_var") if source.params else None
-        
+        merge_gap_minutes = (
+            source.params.get("merge_gap_minutes", 5.0) if source.params else 5.0
+        )
         if not stop_var:
             for candidate in ["OffsetDrugEnd", "stop", "endtime"]:
                 if candidate in frame.columns:
                     stop_var = candidate
                     break
-        
         if not index_var:
             for candidate in ["Offset", "OffsetDrugStart", "start", "charttime"]:
                 if candidate in frame.columns:
                     index_var = candidate
                     break
-        
-        if stop_var and stop_var in frame.columns and index_var and index_var in frame.columns:
-            frame = frame.copy()
-            # Use standard patient-level ID columns only (not row-level id, bucket_id, PatientID etc.)
-            _PATIENT_ID_COLS = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
-            id_cols = [c for c in _PATIENT_ID_COLS if c in frame.columns]
-            
-            # Group by ID (and optionally grp_var)
-            group_cols = list(id_cols)
-            if grp_var and grp_var in frame.columns:
-                group_cols = id_cols + [grp_var]
-            
-            if group_cols:
-                # Calculate duration = max(stop) - min(start) per group
-                agg_df = frame.groupby(group_cols).agg({
-                    index_var: 'min',
-                    stop_var: 'max'
-                }).reset_index()
-                
-                # SICdb medication.Offset is in seconds → convert to hours
-                # Duration = floor(max_stop/3600) - floor(min_start/3600)
-                # This matches R ricu's change_interval(hours(1)) behavior
-                min_start = pd.to_numeric(agg_df[index_var], errors='coerce')
-                max_stop = pd.to_numeric(agg_df[stop_var], errors='coerce')
-                start_hours = (min_start // 3600).astype(int)
-                stop_hours = (max_stop // 3600).astype(int)
-                agg_df[val_var] = stop_hours - start_hours
-                agg_df[index_var] = start_hours
-                
-                # If grp_var was used, set index to min per patient and pick max duration
-                if grp_var and grp_var in frame.columns and id_cols:
-                    min_idx = agg_df.groupby(id_cols)[index_var].transform('min')
-                    agg_df[index_var] = min_idx
-                    agg_df = agg_df.sort_values(val_var, ascending=False).drop_duplicates(
-                        subset=id_cols + [index_var], keep='first')
-                
-                # Keep only required columns
-                result_cols = id_cols + [index_var, val_var]
-                frame = agg_df[[c for c in result_cols if c in agg_df.columns]]
-        
-        return frame
+
+        icu_origins = None
+        if not frame.empty and "CaseID" in frame.columns:
+            if data_source is None:
+                raise ValueError("sic_dur requires a data source for cases.ICUOffset")
+            cases = data_source.load_table("cases", columns=["CaseID", "ICUOffset"], verbose=False)
+            icu_origins = cases.data if hasattr(cases, "data") else cases
+
+        return sic_dur(
+            frame,
+            concept_name=concept_name,
+            index_var=index_var,
+            stop_var=stop_var,
+            icu_origins=icu_origins,
+            merge_gap_minutes=merge_gap_minutes,
+        )
 
     # Handle sic_rate_mass(target_unit = "mcg/hour") — SIC non-kg mass-rate
     # for sedatives/analgesics where AmountPerMinute is actually total dose
