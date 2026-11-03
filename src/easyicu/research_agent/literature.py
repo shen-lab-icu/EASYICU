@@ -3460,8 +3460,16 @@ class LiteratureAgent:
                 self.bound_seed.research_question.strip()
                 == context.research_question.strip()
             )
+            # A reviewed bundle carries this context's curated pack (method
+            # sources, database papers), already merged above.  Those are not
+            # search results: screening them as one excluded STROBE and RECORD,
+            # and the descriptive template had no method source to cite
+            # (MIMIC-IV walk 11-03, progressive_outline_scientific_citation_missing).
+            curated_keys = {record.key for record in baseline}
             bound_decisions: Dict[str, LiteratureScreeningDecision] = {}
             for record in self.bound_seed.citations:
+                if record.key in curated_keys:
+                    continue
                 reviewed_decision = reviewed_decisions.get(record.key)
                 reviewed_card = reviewed_cards.get(record.key)
                 if (
@@ -3493,6 +3501,8 @@ class LiteratureAgent:
                 (self.bound_seed.prisma or {}).get("duplicates_removed") or 0
             )
             for rec in self.bound_seed.citations:
+                if rec.key in curated_keys:
+                    continue
                 decision = bound_decisions[rec.key]
                 if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
                     duplicates += 1

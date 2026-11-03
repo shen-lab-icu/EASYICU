@@ -598,3 +598,22 @@ def test_method_card_is_immutable() -> None:
         card.requirement = "rewritten"  # type: ignore[misc]
 
     assert isinstance(card, MethodCard)
+
+
+def test_a_reviewed_bundle_seeds_its_own_question_with_its_method_sources_citable() -> None:
+    """MIMIC-IV walk 11-03: a prepared run seeded with the candidate's reviewed
+    bundle screened its curated STROBE and RECORD records as search results and
+    excluded them, so the descriptive template had no method source to cite."""
+
+    from easyicu.research_agent.literature import manuscript_citable_keys
+
+    context = _context()
+    reviewed = build_preplan_literature_bundle(context)
+    method_keys = {row["key"] for row in method_literature_citations()}
+    assert method_keys <= set(manuscript_citable_keys(reviewed))
+
+    seeded = build_preplan_literature_bundle(context, bound_seed=reviewed)
+
+    assert method_keys <= set(manuscript_citable_keys(seeded))
+    assert not method_keys & {row.citation_key for row in seeded.screening_decisions}
+    assert [row.key for row in seeded.citations] == [row.key for row in reviewed.citations]
