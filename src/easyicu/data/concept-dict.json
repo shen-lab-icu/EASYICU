@@ -4642,18 +4642,6 @@
      "_comment": "2026-07-17 recall: see eicu."
     }
    ],
-   "hirid": [
-    {
-     "ids": [
-      1000331,
-      1001071
-     ],
-     "table": "pharma",
-     "sub_var": "pharmaid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2 (S8): Dilzem retard 120 mg / Diltiazem 60 mg tablets."
-    }
-   ],
    "miiv": [
     {
      "ids": [
@@ -28067,7 +28055,8 @@
   "aggregate": [
    "max",
    "min",
-   "first"
+   "first",
+   "max"
   ],
   "callback": "driving_pressure_controlled",
   "class_name": "rec_cncpt",

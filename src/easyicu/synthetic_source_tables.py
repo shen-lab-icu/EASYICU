@@ -91,6 +91,9 @@ def _events(database, config, concepts, p):
                 value = category_values(name, source, count, database)
             if database == "hirid" and name in {"mech_vent", "vent_mode", "vent_breath_seq"}:
                 value = np.ones(count)
+            if database == "hirid" and name == "adm":
+                # APACHE II 98 / APACHE IV 190 are medical admission groups.
+                value = np.full(count, 98. if item == 9990002 else 190.)
             record = {value_col: value}
             if source.get("sub_var"):
                 record[source["sub_var"]] = item if item is not None else {

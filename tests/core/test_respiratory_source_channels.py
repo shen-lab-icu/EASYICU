@@ -124,8 +124,17 @@ def test_actual_loader_keeps_alarms_and_respiratory_channels_separate(
 
 def test_source_contracts_do_not_invent_cross_database_support():
     dictionary = load_dictionary(include_sofa2=True)
+    mimic = {"miiv", "mimic", "mimic_demo"}
+    # Audit round 2 P4/P9: set and total PEEP channels mapped from each
+    # database's own ventilator items; FiO2 channels stay MIMIC-only.
+    expected = {
+        "peep_set": mimic | {"aumc", "eicu", "hirid", "sic"},
+        "peep_total": mimic | {"aumc", "hirid"},
+        "fio2_chart": mimic,
+        "fio2_lab": mimic,
+    }
     for name in CHANNELS[2:]:
-        assert set(dictionary.get(name).sources) == {"miiv", "mimic", "mimic_demo"}
+        assert set(dictionary.get(name).sources) == expected[name]
     for database in ["miiv", "mimic", "mimic_demo"]:
         for saturation in ["spo2", "o2sat"]:
             assert all(226253 not in source.ids for source in dictionary.get(saturation).sources[database])

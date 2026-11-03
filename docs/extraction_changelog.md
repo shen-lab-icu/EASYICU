@@ -118,7 +118,9 @@ answers is in brackets.
   - `adm` comes from the APACHE II/IV group (HiRID-ICU-Benchmark Table 7;
     II 107-114 and IV 199-205 surgical).
   - `neut` reads 24000556.
-  - Terlipressin 1000793 is `other_vaso`; diltiazem 1000331/1001071 are mapped.
+  - Terlipressin 1000793 is `other_vaso`. Diltiazem stays unmapped for HiRID:
+    the 2026-07-17 concept is intravenous only, and HiRID 1000331/1001071 are oral.
+  - `driving_pres_controlled` aggregates have one entry per component.
   - `epi_rate`/`epi_dur` keep the perfusor items 1000649/1000650.
   - `ett_gcs` is described as an invasive airway.
 - **[S1]** SICdb `adv_resp` reuses the invasive-ventilation windows of

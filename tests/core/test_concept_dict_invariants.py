@@ -121,7 +121,10 @@ def test_ambiguous_cross_database_mappings_are_not_exported(concept_dict):
     """Semantic uncertainty must become explicit unavailability, not plausible data."""
     assert "aumc" not in concept_dict["adh_rate"]["sources"]
     assert "aumc" not in concept_dict["d_dimer"]["sources"]
-    assert "hirid" not in concept_dict["neut"]["sources"]
+    # 2026-11-03 audit round 2 (S8): HiRID neut reads 24000556, segmented
+    # neutrophils per 100 leukocytes (median about 63%); 24000550 behaves as an
+    # absolute count and stays unmapped.
+    assert [s["ids"] for s in concept_dict["neut"]["sources"]["hirid"]] == [24000556]
     assert "hirid" not in concept_dict["lymph"]["sources"]
 
     for dataset in ("miiv", "mimic", "mimic_demo"):

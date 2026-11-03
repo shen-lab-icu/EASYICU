@@ -63,7 +63,13 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
             sources = [sources]
         for src in sources:
             # An eMAR source keeps given doses first, then marks them TRUE.
-            expected = "emar_administered" if src.get("table") == "emar" else "transform_fun(set_val(TRUE))"
+            # MIMIC-III prescriptions without a time sit at noon (audit round 2, D5).
+            if src.get("table") == "emar":
+                expected = "emar_administered"
+            elif src.get("table") == "prescriptions" and db in ("mimic", "mimic_demo"):
+                expected = "mimic_prescription_noon"
+            else:
+                expected = "transform_fun(set_val(TRUE))"
             assert src.get("callback") == expected
 
 
