@@ -20,6 +20,11 @@ import numpy as np
 import pandas as pd
 
 from . import source_events as scoped
+from ..concept.blood_gas_specimen import (
+    ARTERIAL_SPECIMEN_CALLBACK,
+    SPECIMEN_RULES,
+    is_arterial_specimen,
+)
 from ..resources import load_dictionary, package_path
 from ..utils.callback_utils import percent_as_numeric
 
@@ -243,7 +248,11 @@ def _pair_tables(events, audit):
         elif len(tokens) > 1:
             state = "CONFLICTING_TYPES"
         else:
-            state = "DIRECT_ARTERIAL" if tokens == ["ART."] else "OTHER_RECORDED_TYPE"
+            state = (
+                "DIRECT_ARTERIAL"
+                if is_arterial_specimen(tokens, SPECIMEN_RULES["miiv"].arterial_tokens)
+                else "OTHER_RECORDED_TYPE"
+            )
         arterial = state == "DIRECT_ARTERIAL"
         pvals = related.loc[
             related.itemid.eq(50821) & related.dictionary_in_range, "converted_value"
@@ -424,8 +433,12 @@ def extract_miiv_arterial_blood_gas(data_source, *, allowed_stay_ids: Sequence[i
         ("fio2_chart", "chartevents", 223835),
     ]:
         sources = dictionary[name].for_data_source(data_source.config)
+        # The generic po2 source is restricted to ART. specimens by the same
+        # token rule (concept.blood_gas_specimen) that certifies a type here.
         expected_callback = (
-            None if name == "po2" else "transform_fun(percent_as_numeric)"
+            ARTERIAL_SPECIMEN_CALLBACK
+            if name == "po2"
+            else "transform_fun(percent_as_numeric)"
         )
         if (
             dictionary[name].callback is not None

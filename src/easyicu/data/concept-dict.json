@@ -11269,7 +11269,9 @@
       21213
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -11298,14 +11300,21 @@
     {
      "ids": 50818,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "mimic": [
     {
      "ids": 50818,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -11322,7 +11331,9 @@
     {
      "ids": 50818,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -11339,7 +11350,12 @@
     {
      "ids": 687,
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only LaboratoryType 2296 (Arterial in d_references); rows with an empty type are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ]
   }
@@ -11544,7 +11560,9 @@
       12310
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -11574,72 +11592,73 @@
      "ids": 50820,
      "table": "labevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
-      220274,
       223830
      ],
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains."
     }
    ],
    "mimic": [
     {
      "ids": 50820,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
       780,
-      860,
       1126,
-      1673,
-      3777,
-      3839,
-      4202,
       4753,
-      220274,
       223830
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
     }
    ],
    "mimic_demo": [
     {
      "ids": 50820,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
       780,
-      860,
       1126,
-      1673,
-      3777,
-      3839,
-      4202,
       4753,
-      220274,
       223830
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
     }
    ],
    "sic": [
     {
      "ids": 688,
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only LaboratoryType 2296 (Arterial in d_references); rows with an empty type are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ]
   }
@@ -12289,8 +12308,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$')",
-     "_comment": "AUMC official legacy pO2_FiO2_estimated.sql converts kPa (unitid 152) to mmHg before evaluation. Convert labelled kPa rows before bounds and pooling; preserve labelled mmHg values. This changes the loader, not sealed historical exports."
+     "callback": "arterial_specimen_only(convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$'))",
+     "_comment": "AUMC official legacy pO2_FiO2_estimated.sql converts kPa (unitid 152) to mmHg before evaluation. Convert labelled kPa rows before bounds and pooling; preserve labelled mmHg values. This changes the loader, not sealed historical exports. 2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -12320,53 +12339,64 @@
      "ids": 50821,
      "table": "labevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "mimic": [
     {
      "ids": 50821,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
-      490,
       779,
       3785,
       3837
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2)."
     }
    ],
    "mimic_demo": [
     {
      "ids": 50821,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
-      490,
       779,
       3785,
       3837
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2)."
     }
    ],
    "sic": [
     {
      "ids": [
-      664,
       689
      ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only LaboratoryType 2296 (Arterial in d_references); rows with an empty type are excluded. Rule owner: concept/blood_gas_specimen.py. Removed 664 PO2 (T) (BGA), the temperature-corrected duplicate of 689."
     }
    ]
   }
@@ -13818,7 +13848,8 @@
      "ids": 12311,
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(binary_op(`*`, 100))"
+     "callback": "arterial_specimen_only(transform_fun(binary_op(`*`, 100)))",
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -13852,7 +13883,12 @@
     {
      "ids": 50817,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "mimic": [
@@ -13867,7 +13903,9 @@
     {
      "ids": 50817,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "mimic_demo": [
@@ -13882,7 +13920,9 @@
     {
      "ids": 50817,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "sic": [
@@ -13893,7 +13933,12 @@
       690
      ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only LaboratoryType 2296 (Arterial in d_references); rows with an empty type are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ]
   }
