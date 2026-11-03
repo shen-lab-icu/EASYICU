@@ -13,6 +13,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 import pandas as pd
 
+from easyicu.concept.definition_identity import optional_dictionary_files_fingerprint
 from easyicu.content_identity import data_path_fingerprint
 
 #: Environment variable carrying the secret for ``.trusted.pkl`` HMAC signing.
@@ -58,6 +59,7 @@ def _compute_hmac(payload: bytes, key: bytes, cache_name: str) -> str:
     signer.update(b"\0")
     signer.update(payload)
     return signer.hexdigest()
+
 
 
 def get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
@@ -122,6 +124,9 @@ def load_concept_cached_impl(
             exclude_dir=resolved_cache_dir,
         ),
         **kwargs,
+        # The dictionary's content and the computation version, not its
+        # path: an edit at the same path must recompute (11-03 review).
+        "dictionary_identity": optional_dictionary_files_fingerprint(kwargs.get("dict_path")),
     }
     cache_key = get_cache_key_fn(concept_list, source, **cache_params)
     cache_file = resolved_cache_dir / (

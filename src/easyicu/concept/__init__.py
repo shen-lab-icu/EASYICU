@@ -695,19 +695,12 @@ class ConceptResolver:
         return sorted(self.dictionary.keys())
 
     def _compute_dictionary_signature(self) -> str:
-        payload: Dict[str, object] = {}
-        for name, definition in self.dictionary.items():
-            payload[name] = {
-                "callback": definition.callback,
-                "aggregate": definition.aggregate,
-                "sub_concepts": definition.sub_concepts,
-                "sources": {
-                    key: [asdict(source) for source in sources]
-                    for key, sources in definition.sources.items()
-                },
-            }
-        encoded = json.dumps(payload, sort_keys=True, default=_safe_serialize).encode("utf-8")
-        return hashlib.sha1(encoded).hexdigest()
+        # Every field of every definition: a changed bound, unit, interval or
+        # lookback must miss the disk cache (11-03 review: only callbacks,
+        # aggregates, sub-concepts and sources were signed).
+        from .definition_identity import definition_fingerprint
+
+        return definition_fingerprint(self.dictionary)
 
     def clear_table_cache(self, keep_concept_cache: bool = False) -> None:
         """Clear cached source tables.
@@ -8853,9 +8846,6 @@ class ConceptResolver:
         kwargs: Dict[str, object],
     ) -> str:
         """Build a cache key for a concept based on all relevant parameters."""
-        import hashlib
-        import json
-        
         source_identity = None
         if self.cache_dir is not None and self.use_pickle:
             identify = getattr(data_source, "cache_source_identity", None)

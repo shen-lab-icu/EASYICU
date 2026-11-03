@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional
 
@@ -144,6 +144,10 @@ class ConceptSource:
             target=str(target) if target is not None else None,
             params=payload,
         )
+
+
+#: List fields whose empty overlay value inherits the base definition.
+_OVERLAY_EMPTY_LIST_INHERITS = frozenset({"sub_concepts", "levels", "depends_on"})
 
 
 @dataclass
@@ -319,67 +323,21 @@ class ConceptDictionary:
             for source_name, entries in incoming.sources.items():
                 merged_sources[source_name] = copy.deepcopy(entries)
 
-            def _pick(new_value, old_value, *, allow_empty: bool = False):
-                if allow_empty:
-                    return copy.deepcopy(new_value) if new_value is not None else copy.deepcopy(old_value)
-                if isinstance(new_value, list):
-                    return copy.deepcopy(new_value) if new_value else copy.deepcopy(old_value)
-                return new_value if new_value not in (None,) else old_value
-
-            merged_definition = ConceptDefinition(
-                name=name,
-                sources=merged_sources,
-                units=_pick(incoming.units, current.units, allow_empty=True),
-                minimum=incoming.minimum if incoming.minimum is not None else current.minimum,
-                maximum=incoming.maximum if incoming.maximum is not None else current.maximum,
-                description=incoming.description if incoming.description is not None else current.description,
-                category=incoming.category if incoming.category is not None else current.category,
-                target=incoming.target if incoming.target is not None else current.target,
-                interval=incoming.interval if incoming.interval is not None else current.interval,
-                aggregate=incoming.aggregate if incoming.aggregate is not None else current.aggregate,
-                class_name=incoming.class_name if incoming.class_name is not None else current.class_name,
-                callback=incoming.callback if incoming.callback is not None else current.callback,
-                sub_concepts=_pick(incoming.sub_concepts, current.sub_concepts),
-                levels=_pick(incoming.levels, current.levels),
-                keep_components=(
-                    incoming.keep_components
-                    if incoming.keep_components is not None
-                    else current.keep_components
-                ),
-                omop_id=incoming.omop_id if incoming.omop_id is not None else current.omop_id,
-                clinical_status=(
-                    incoming.clinical_status
-                    if incoming.clinical_status is not None
-                    else current.clinical_status
-                ),
-                canonical_definition=(
-                    incoming.canonical_definition
-                    if incoming.canonical_definition is not None
-                    else current.canonical_definition
-                ),
-                requires_explicit_opt_in=(
-                    incoming.requires_explicit_opt_in
-                    if incoming.requires_explicit_opt_in is not None
-                    else current.requires_explicit_opt_in
-                ),
-                definition_source=(
-                    incoming.definition_source
-                    if incoming.definition_source is not None
-                    else current.definition_source
-                ),
-                definition_version=(
-                    incoming.definition_version
-                    if incoming.definition_version is not None
-                    else current.definition_version
-                ),
-                clinical_contract_id=(
-                    incoming.clinical_contract_id
-                    if incoming.clinical_contract_id is not None
-                    else current.clinical_contract_id
-                ),
-                family=incoming.family if incoming.family is not None else current.family,
-                depends_on=_pick(incoming.depends_on, current.depends_on),
-            )
+            # Every field merges by one rule, so a field added to the
+            # definition can never be dropped by an overlay that only edits
+            # another one (``pre_admission_lookback_hours`` was, 11-03 review).
+            merged_fields: Dict[str, object] = {"name": name, "sources": merged_sources}
+            for item in fields(ConceptDefinition):
+                if item.name in merged_fields:
+                    continue
+                new_value = getattr(incoming, item.name)
+                old_value = getattr(current, item.name)
+                if item.name in _OVERLAY_EMPTY_LIST_INHERITS:
+                    # An empty list in an overlay means "not specified".
+                    merged_fields[item.name] = copy.deepcopy(new_value if new_value else old_value)
+                else:
+                    merged_fields[item.name] = copy.deepcopy(new_value if new_value is not None else old_value)
+            merged_definition = ConceptDefinition(**merged_fields)
 
             self._concepts[name] = merged_definition
 

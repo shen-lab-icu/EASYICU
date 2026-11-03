@@ -811,6 +811,11 @@ def _get_global_loader(
         dict_key = tuple(map(str, dict_path))
     else:
         dict_key = str(dict_path)
+    if dict_key is not None:
+        # A loader built from the old file contents is not this dictionary.
+        from easyicu.concept.definition_identity import optional_dictionary_files_fingerprint
+
+        dict_key = (dict_key, optional_dictionary_files_fingerprint(dict_path))
 
     # 🚀 只比较影响加载器初始化的关键参数，忽略运行时参数（如 verbose）
     # 这允许在多次调用之间复用加载器，共享缓存
