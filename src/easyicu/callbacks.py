@@ -3250,6 +3250,7 @@ def driving_pressure(
     peep: pd.DataFrame,
     match_win: pd.Timedelta = pd.Timedelta(hours=1),
     database: str = None,
+    pip: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Calculate driving pressure (Plateau Pressure - PEEP).
     
@@ -3262,6 +3263,8 @@ def driving_pressure(
         peep: DataFrame with PEEP measurements (cmH2O)
         match_win: Time window for matching plateau and PEEP (default: 1 hour)
         database: Database name (optional)
+        pip: Optional peak inspiratory pressure (cmH2O). A plateau above the
+            nearest PIP + 1 cmH2O is not a plateau and gives no driving pressure.
         
     Returns:
         DataFrame with driving_pres column (cmH2O)
@@ -3379,9 +3382,12 @@ def driving_pressure(
     
     # Calculate driving pressure - use .values to avoid index alignment issues
     result['driving_pres'] = result['plateau_pres'].values - result['peep'].values
-    
-    # Keep only valid values
+
+    # Keep only valid values: a plateau at or below PEEP is not a plateau.
     result = result[result['driving_pres'].notna() & (result['driving_pres'] > 0)]
+
+    if pip is not None and not pip.empty and not result.empty:
+        result = _drop_plateau_above_pip(result, pip, id_cols, time_col, match_win)
     
     # Select output columns
     output_cols = id_cols + [time_col, 'driving_pres']
@@ -3389,6 +3395,42 @@ def driving_pressure(
     
     return result
 
+
+
+def _drop_plateau_above_pip(
+    result: pd.DataFrame,
+    pip: pd.DataFrame,
+    id_cols: list,
+    time_col: str,
+    match_win: pd.Timedelta,
+) -> pd.DataFrame:
+    """Drop rows whose plateau exceeds the nearest PIP by more than 1 cmH2O."""
+    if time_col not in pip.columns or not all(c in pip.columns for c in id_cols):
+        return result
+    pip_val = 'pip' if 'pip' in pip.columns else next(
+        (c for c in pip.columns if c not in id_cols + [time_col]), None)
+    if pip_val is None:
+        return result
+    left = result.reset_index(drop=True).copy()
+    left['_row'] = np.arange(len(left))
+    right = pip[id_cols + [time_col, pip_val]].rename(columns={pip_val: '_pip'})
+    right = right.dropna(subset=[time_col, '_pip'])
+    if right.empty:
+        return result
+    if pd.api.types.is_datetime64_any_dtype(left[time_col]):
+        tolerance = match_win
+    else:
+        tolerance = match_win.total_seconds() / 60
+        for col in id_cols + [time_col]:
+            left[col] = pd.to_numeric(left[col], errors='coerce').astype('float64')
+            right[col] = pd.to_numeric(right[col], errors='coerce').astype('float64')
+    matched = pd.merge_asof(
+        left.sort_values(time_col), right.sort_values(time_col),
+        on=time_col, by=id_cols, tolerance=tolerance, direction='nearest',
+    )
+    above = set(matched.loc[matched['plateau_pres'] > matched['_pip'] + 1, '_row'])
+    keep = ~np.isin(np.arange(len(left)), list(above))
+    return result.reset_index(drop=True)[keep]
 
 # --- Public cross-package alias (thin wrapper, no logic change) ---
 # Private name kept for backward compatibility; cross-package callers must

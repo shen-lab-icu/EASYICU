@@ -7739,11 +7739,14 @@ def _callback_driving_pressure(
         database = getattr(ctx.data_source.config, 'name', None)
     
     # Call the driving_pressure function
+    pip_df = tables.get('pip')
+    pip_df = getattr(pip_df, 'data', pip_df)
     result = driving_pressure(
         plateau_pres=plateau_df,
         peep=peep_df,
         match_win=pd.Timedelta(hours=1),
-        database=database
+        database=database,
+        pip=pip_df,
     )
     
     if result.empty:
@@ -7799,6 +7802,7 @@ def _callback_driving_pressure_controlled(
         return d.data if hasattr(d, "data") else d
 
     plateau_df, peep_df, seq_df = _df(tables.get("plateau_pres")), _df(tables.get("peep")), _df(tables.get("vent_breath_seq"))
+    pip_df = _df(tables.get("pip"))
 
     def _empty():
         return ICUTable(
@@ -7813,7 +7817,7 @@ def _callback_driving_pressure_controlled(
     if hasattr(ctx, "data_source") and ctx.data_source and hasattr(ctx.data_source, "config"):
         database = getattr(ctx.data_source.config, "name", None)
     dp = driving_pressure(plateau_pres=plateau_df, peep=peep_df,
-                          match_win=pd.Timedelta(hours=1), database=database)
+                          match_win=pd.Timedelta(hours=1), database=database, pip=pip_df)
     if dp is None or dp.empty:
         return _empty()
 

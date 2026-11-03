@@ -4675,7 +4675,8 @@
   "category": "ventilator",
   "concepts": [
    "plateau_pres",
-   "peep"
+   "peep",
+   "pip"
   ],
   "callback": "driving_pressure",
   "class_name": "rec_cncpt",
@@ -25965,7 +25966,8 @@
   "concepts": [
    "plateau_pres",
    "peep",
-   "vent_breath_seq"
+   "vent_breath_seq",
+   "pip"
   ],
   "aggregate": [
    "max",
