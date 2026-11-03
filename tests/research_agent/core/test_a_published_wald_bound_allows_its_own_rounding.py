@@ -25,8 +25,7 @@ from easyicu.research_agent.authority.descriptive_scientific_claims import (
 )
 from easyicu.research_agent.methods.cluster_proportion import published_wald_tolerance
 
-from . import test_exposure_outcome_distribution_executor as executor_case
-from . import test_exposure_outcome_distribution_render as render_case
+from tests.support import exposure_outcome_distribution_cases as case
 
 _DEPENDENCE = {
     "variance_estimator": "cluster_robust", "cluster_unit": "patient",
@@ -43,8 +42,8 @@ def _cohort(seed: int) -> pd.DataFrame:
         exposed = rng.randint(0, 1)
         for stay in range(rng.randint(1, 3)):
             rows.append({
-                executor_case.EXPOSURE: exposed,
-                executor_case.OUTCOME: int(rng.random() < 0.15 + 0.1 * exposed),
+                case.EXPOSURE: exposed,
+                case.OUTCOME: int(rng.random() < 0.15 + 0.1 * exposed),
                 "opaque_row_identity": f"p{patient:03d}:s{stay + 1}",
             })
     return pd.DataFrame(rows)
@@ -59,36 +58,30 @@ def test_the_bound_is_the_published_rounding_and_no_wider() -> None:
 # Seeds whose tables the fixed 2e-6 refused (outcome risk or risk difference).
 @pytest.mark.parametrize("seed", [16, 38, 45, 57, 75])
 def test_a_clustered_table_passes_every_consumer(monkeypatch, tmp_path: Path, seed: int) -> None:
-    summary = executor_case._run(
+    summary = case.run_executor(
         monkeypatch, tmp_path / "executor", _cohort(seed),
         risk_difference_contrast=_CONTRAST, dependence=_DEPENDENCE,
     )
     assert summary["status"] == "ok"
     assert derive_descriptive_claim_payloads(summary)
-    table = render_case._produced_table(
+    table = case.produced_table(
         tmp_path / "render", monkeypatch,
-        frame=_cohort(seed).rename(columns={
-            executor_case.EXPOSURE: render_case.EXPOSURE,
-            executor_case.OUTCOME: render_case.OUTCOME,
-        }),
+        frame=_cohort(seed),
         spec_updates={"risk_difference_contrast": _CONTRAST, "dependence": _DEPENDENCE},
     )
-    run_dir, manifest = render_case._bound(tmp_path / "render", table)
-    render_case._render(run_dir, manifest, tmp_path / "render" / "out")
+    run_dir, manifest = case.bound_table(tmp_path / "render", table)
+    case.render(run_dir, manifest, tmp_path / "render" / "out")
 
 
 def test_a_wrong_interval_is_still_refused(monkeypatch, tmp_path: Path) -> None:
-    table = render_case._produced_table(
+    table = case.produced_table(
         tmp_path, monkeypatch,
-        frame=_cohort(16).rename(columns={
-            executor_case.EXPOSURE: render_case.EXPOSURE,
-            executor_case.OUTCOME: render_case.OUTCOME,
-        }),
+        frame=_cohort(16),
         spec_updates={"risk_difference_contrast": _CONTRAST, "dependence": _DEPENDENCE},
     )
     produced = pd.read_csv(table)
     produced["risk_difference_ci_high_pct"] = produced["risk_difference_ci_high_pct"] + 1e-5
     produced.to_csv(table, index=False)
-    run_dir, manifest = render_case._bound(tmp_path, table)
+    run_dir, manifest = case.bound_table(tmp_path, table)
     with pytest.raises(ValueError, match="Wald-normal arithmetic"):
-        render_case._render(run_dir, manifest, tmp_path / "out")
+        case.render(run_dir, manifest, tmp_path / "out")

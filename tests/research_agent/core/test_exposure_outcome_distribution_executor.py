@@ -60,22 +60,14 @@ from easyicu.research_agent.schema import (
 from easyicu.research_agent.contracts.claim_ceiling import DescriptiveClaimContract
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
 
-STEP_ID = "03_drug_readmission_distribution"
-EXPOSURE = "anticoagulant_exposed"
-OUTCOME = "readmitted_30d"
-
-_SPEC = {
-    "exposure": EXPOSURE,
-    "exposure_levels": [0, 1],
-    "outcome": OUTCOME,
-    "outcome_levels": [0, 1],
-    "outcome_positive_value": 1,
-    "level_match_policy": "exact_typed",
-    "denominator_policy": "all_declared_rows",
-    "missing_outcome_policy": "structural_absence_is_non_event",
-    "confidence_level": 0.95,
-}
-
+from tests.support.exposure_outcome_distribution_cases import (
+    EXECUTOR_SPEC as _SPEC,
+    EXECUTOR_STEP_ID as STEP_ID,
+    EXPOSURE,
+    OUTCOME,
+    executor_cohort as _cohort,
+    run_executor as _run,
+)
 
 def test_counts_only_spec_emits_no_uncertainty() -> None:
     spec = ExposureOutcomeDistributionSpec.model_validate(
@@ -135,56 +127,6 @@ def _step(**updates) -> AnalysisStep:
     }
     payload.update(updates)
     return AnalysisStep.model_validate(payload)
-
-
-def _cohort(tmp_path: Path, frame: pd.DataFrame) -> tuple[Path, Path]:
-    """Write a digest-bound cohort and its resolved-inputs manifest."""
-
-    run_dir = tmp_path / "run"
-    out_dir = run_dir / "steps" / STEP_ID / "outputs"
-    out_dir.mkdir(parents=True)
-    cohort_path = run_dir / "cohort.parquet"
-    frame.to_parquet(cohort_path, index=False)
-    digest = hashlib.sha256(cohort_path.read_bytes()).hexdigest()
-    manifest = {
-        "step_id": STEP_ID,
-        "inputs": {
-            "artifact:analysis_cohort": {
-                "relative_path": "cohort.parquet",
-                "sha256": digest,
-                "declared_kind": "artifact",
-                "product": "analysis_cohort",
-                "evidence_id": "ev-cohort",
-                "identity_row": {
-                    "input_key": "artifact:analysis_cohort",
-                    "declared_kind": "artifact",
-                    "product": "analysis_cohort",
-                    "evidence_id": "ev-cohort",
-                    "sha256": digest,
-                },
-                "product_contract": {
-                    "columns": list(frame.columns),
-                    "row_count": int(len(frame)),
-                },
-            }
-        },
-    }
-    manifest_path = run_dir / "resolved_inputs.json"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    return run_dir, out_dir
-
-
-def _run(monkeypatch, tmp_path: Path, frame: pd.DataFrame, **spec_updates) -> dict:
-    run_dir, out_dir = _cohort(tmp_path, frame)
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
-    monkeypatch.setenv(
-        "EASYICU_RESOLVED_INPUTS_JSON", str(run_dir / "resolved_inputs.json")
-    )
-    return run_exposure_outcome_distribution_from_env(
-        spec_payload={**_SPEC, **spec_updates},
-        typed_cohort_input="artifact:analysis_cohort",
-    )
 
 
 def _table(summary: dict, root: Path) -> pd.DataFrame:
