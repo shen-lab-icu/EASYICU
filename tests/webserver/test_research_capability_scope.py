@@ -9,7 +9,9 @@ KEYS = ("mimic", "mimic_demo", "miiv", "miiv_demo", "eicu", "eicu_demo", "hirid"
 
 @pytest.mark.parametrize("database,outcome,censor", [
     ("eicu", "icu_death", "icu_discharge"),
-    ("aumc", "icu_death", "icu_discharge"),
+    # AUMC follows survivors after discharge (2026-11-03 audit round 2,
+    # R2-03), so hospital death is offered as fixed-horizon mortality.
+    ("aumc", "mort_28d", "followup_days_28d"),
 ])
 def test_generic_survival_scope_keeps_databases_with_a_named_substitution(database, outcome, censor):
     from easyicu.databases.research_capabilities import research_capability_profile

@@ -6426,7 +6426,8 @@
  },
  "ett_gcs": {
   "class_name": "lgl_cncpt",
-  "description": "invasive airway (endotracheal tube or tracheostomy), so the GCS verbal score is not assessable",
+  "description": "invasive airway (endotracheal tube or tracheostomy)",
+    "_comment": "2026-11-03 audit round 2 (S8): an invasive airway makes the GCS verbal score not assessable.",
   "omopid": 4097216,
   "category": "respiratory",
   "target": "win_tbl",
@@ -16593,7 +16594,8 @@
    "spo2",
    "fio2"
   ],
-  "description": "SpO2/FiO2 (pulse oximetry; 2026-11-03 audit round 2, G8)",
+  "description": "SpO2/FiO2",
+    "_comment": "2026-11-03 audit round 2 (G8): pulse oximetry only; o2sat also holds blood-gas SaO2.",
   "category": "respiratory",
   "aggregate": [
    "min",
