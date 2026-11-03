@@ -23,6 +23,10 @@ buckets, whatever interval the caller requests, so a native-resolution load
 and an hourly load make the same selection and coarser intervals aggregate
 already-selected hours.
 
+A static (``id_tbl``) concept such as weight has no hour to select in: the
+best channel with a usable value is chosen once per patient, so a charted
+daily weight fills in only for stays without an admission weight.
+
 A database whose sources declare no channel at all is loaded unchanged (a
 community database with one undifferentiated MAP column, for example).
 Declaring a channel on some sources but not on others, or a channel that is
@@ -145,30 +149,35 @@ def select_preferred_channel(
     minimum: Optional[float] = None,
     maximum: Optional[float] = None,
     time_in_hours: bool = True,
+    per_stay: bool = False,
 ) -> pd.DataFrame:
     """Keep, per patient and hour, only the best channel with a usable value.
 
     ``time_in_hours`` states that a numeric ``time_column`` is hours since
     admission (the aligned case).  For an unaligned numeric clock, whose unit
     is database-specific, the channel cannot be bucketed and a contract error
-    is raised rather than silently returning pooled channels.
+    is raised rather than silently returning pooled channels.  ``per_stay``
+    selects once per patient (static concepts) and needs no time column.
     """
 
     if RANK_COLUMN not in frame.columns:
         return frame
     if frame.empty:
         return frame.drop(columns=[RANK_COLUMN])
-    if not time_column or time_column not in frame.columns:
-        raise SourceChannelContractError("source_channel_time_missing", str(time_column))
-    times = frame[time_column]
-    if pd.api.types.is_numeric_dtype(times) and not time_in_hours:
-        raise SourceChannelContractError(
-            "source_channel_unaligned_numeric_time",
-            "channel preference needs admission-aligned hours",
-        )
-    bucket = _hour_bucket(times)
-    if bucket is None:
-        raise SourceChannelContractError("source_channel_time_type", str(times.dtype))
+    if per_stay:
+        bucket = pd.Series(0.0, index=frame.index)
+    else:
+        if not time_column or time_column not in frame.columns:
+            raise SourceChannelContractError("source_channel_time_missing", str(time_column))
+        times = frame[time_column]
+        if pd.api.types.is_numeric_dtype(times) and not time_in_hours:
+            raise SourceChannelContractError(
+                "source_channel_unaligned_numeric_time",
+                "channel preference needs admission-aligned hours",
+            )
+        bucket = _hour_bucket(times)
+        if bucket is None:
+            raise SourceChannelContractError("source_channel_time_type", str(times.dtype))
     keys = [col for col in id_columns if col in frame.columns]
     if not keys:
         raise SourceChannelContractError("source_channel_id_missing", repr(list(id_columns)))

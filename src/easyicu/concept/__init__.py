@@ -2416,6 +2416,8 @@ class ConceptResolver:
         from .source_channel import validate_sources as _validate_channel_sources
 
         _select_channels = _validate_channel_sources(definition, sources)
+        # A static concept (weight) selects its channel once per patient.
+        _channel_per_stay = getattr(definition, "target", None) == "id_tbl"
         if _select_channels:
             from .source_channel import one_source_per_channel
 
@@ -5585,8 +5587,20 @@ class ConceptResolver:
                 
                 # 如果 index_column 变成 None，跳过后续的 interval 处理
                 if index_column is None:
-                    from .source_channel import drop_rank
+                    from .source_channel import RANK_COLUMN, drop_rank
 
+                    if _select_channels and RANK_COLUMN in combined.columns:
+                        from .source_channel import select_preferred_channel
+
+                        combined = select_preferred_channel(
+                            combined,
+                            value_column=concept_name,
+                            id_columns=id_columns,
+                            time_column=None,
+                            minimum=definition.minimum,
+                            maximum=definition.maximum,
+                            per_stay=True,
+                        )
                     combined = drop_rank(combined)
                     # 返回不带 interval 处理的数据
                     return ICUTable(
@@ -5922,6 +5936,7 @@ class ConceptResolver:
                     minimum=definition.minimum,
                     maximum=definition.maximum,
                     time_in_hours=align_to_admission,
+                    per_stay=_channel_per_stay,
                 )
 
             # Create ICUTable temporarily to use change_interval
@@ -6011,6 +6026,7 @@ class ConceptResolver:
                     minimum=definition.minimum,
                     maximum=definition.maximum,
                     time_in_hours=align_to_admission,
+                    per_stay=_channel_per_stay,
                 )
 
         if signed_sum_bounds and concept_name in combined.columns:

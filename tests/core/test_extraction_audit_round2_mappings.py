@@ -166,3 +166,23 @@ def test_p3_plateau_above_pip_or_at_peep_gives_no_driving_pressure():
 @pytest.mark.parametrize("concept", ["driving_pres", "driving_pres_controlled"])
 def test_p3_driving_pressure_loads_pip(concept):
     assert "pip" in DICTIONARY[concept]["concepts"]
+
+
+def test_w1_mimic_weight_prefers_admission_weight_per_stay():
+    from easyicu.concept.source_channel import RANK_COLUMN, select_preferred_channel
+
+    assert DICTIONARY["weight"]["source_channel_priority"][0] == "admission"
+    [admission] = [s for s in _sources("weight", "mimic") if s["source_channel"] == "admission"]
+    assert admission["ids"] == [762, 226512]
+    assert 4183 not in _ids("weight", "mimic")
+    frame = pd.DataFrame({
+        "icustay_id": [1, 1, 1, 2, 2, 3],
+        "charttime": [0.0, 30.0, 50.0, 5.0, 40.0, 1.0],
+        "weight": [80.0, 84.0, None, 70.0, 72.0, 600.0],
+        RANK_COLUMN: [0, 2, 0, 2, 3, 0],
+    })
+    kept = select_preferred_channel(frame, value_column="weight", id_columns=["icustay_id"],
+                                    time_column=None, minimum=1, maximum=500, per_stay=True)
+    # Stay 1 keeps its admission weight across hours; stay 2 its charted weight;
+    # stay 3 has no usable value, so the bounds filter decides.
+    assert kept["charttime"].tolist() == [0.0, 50.0, 5.0, 1.0]
