@@ -316,11 +316,14 @@ def _methodology_dictionary() -> Optional[object]:
     overlay. Whether a concept is computed must be read from the same scope:
     SOFA-2 scores are filed under ``outcome`` like SOFA, and judged against a
     dictionary without them they read as endpoints instead of derived scores.
+    It is read through the resources owner: the deprecated ``src_name`` alias
+    warns, and where warnings are errors that warning made this scope fall
+    back to one without SOFA-2, tagging SOFA-2 scores as leakage.
     """
     try:
-        from easyicu.concept.loader import load_dictionary
+        from easyicu.resources import load_dictionary
 
-        return load_dictionary(src_name="sic", include_sofa2=True)
+        return load_dictionary(include_sofa2=True, source_name="sic")
     except Exception:
         return None
 
