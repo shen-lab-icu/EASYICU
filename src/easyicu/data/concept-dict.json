@@ -823,6 +823,17 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30008,
+      30009,
+      30181
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue albumin (d_items: 30008 Albumin 5%, 30009 Albumin 25%, 30181 Serum Albumin 5%; amountuom ml). OR Albumin (44952) is not mapped, like MetaVision, whose albumin items exclude 226365 OR Colloid Intake; other free-text albumin labels each cover <10 stays."
     }
    ],
    "mimic_demo": [
@@ -836,6 +847,17 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30008,
+      30009,
+      30181
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue albumin (d_items: 30008 Albumin 5%, 30009 Albumin 25%, 30181 Serum Albumin 5%; amountuom ml). OR Albumin (44952) is not mapped, like MetaVision, whose albumin items exclude 226365 OR Colloid Intake; other free-text albumin labels each cover <10 stays."
     }
    ],
    "sic": [
@@ -1746,6 +1768,16 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30030,
+      30338
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue sodium bicarbonate (d_items: 30030 Sodium Bicarbonate, 30338 Sodium Bicarb Drip; amountuom mEq/ml). Free-text bicarbonate labels each cover <10 stays and are not mapped."
     }
    ],
    "mimic_demo": [
@@ -1759,6 +1791,16 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30030,
+      30338
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue sodium bicarbonate (d_items: 30030 Sodium Bicarbonate, 30338 Sodium Bicarb Drip; amountuom mEq/ml). Free-text bicarbonate labels each cover <10 stays and are not mapped."
     }
    ],
    "hirid": [
@@ -3725,6 +3767,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30167
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue dexmedetomidine (d_items: 30167 Precedex; rateuom mcgkghr)."
     }
    ],
    "mimic_demo": [
@@ -3735,6 +3786,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30167
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue dexmedetomidine (d_items: 30167 Precedex; rateuom mcgkghr)."
     }
    ],
    "sic": [
@@ -3891,6 +3951,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30115
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue diltiazem (d_items: 30115 Diltiazem; amountuom mg, rateuom mghr)."
     }
    ],
    "mimic_demo": [
@@ -3901,6 +3970,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30115
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue diltiazem (d_items: 30115 Diltiazem; amountuom mg, rateuom mghr)."
     }
    ],
    "sic": [
@@ -5288,6 +5366,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30117
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue esmolol (d_items: 30117 Esmolol; rateuom mcgkgmin)."
     }
    ],
    "mimic_demo": [
@@ -5298,6 +5385,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30117
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue esmolol (d_items: 30117 Esmolol; rateuom mcgkgmin)."
     }
    ],
    "sic": [
@@ -5847,6 +5943,17 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30005,
+      30180,
+      30103
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30005 Fresh Frozen Plasma, 30180 Fresh Froz Plasma, 30103 OR FFP; amountuom ml). 30103 mirrors MetaVision 226367 OR FFP Intake. Free-text FFP drip/GTT/PACU/ER labels each cover <10 stays and are not mapped; plasmapheresis and Plasma-Lyte labels are not FFP."
     }
    ],
    "mimic_demo": [
@@ -5859,6 +5966,17 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30005,
+      30180,
+      30103
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30005 Fresh Frozen Plasma, 30180 Fresh Froz Plasma, 30103 OR FFP; amountuom ml). 30103 mirrors MetaVision 226367 OR FFP Intake. Free-text FFP drip/GTT/PACU/ER labels each cover <10 stays and are not mapped; plasmapheresis and Plasma-Lyte labels are not FFP."
     }
    ],
    "eicu": [
@@ -6803,14 +6921,20 @@
       920,
       1394,
       3485,
-      4187,
-      4188,
       3486,
       226707
      ],
      "table": "chartevents",
      "sub_var": "itemid",
      "callback": "convert_unit(binary_op(`*`, 2.54), 'cm', '^in')"
+    },
+    {
+     "ids": [
+      4188
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: CareVue NICU 4188 'Length in cm' holds centimetres (median 43) but its valueuom says 'Inches', so the unit-driven inch conversion above multiplied it by 2.54 (~109 cm). Its partner 4187 'Length Calc Inches' holds the same length in inches (4188/4187 = 2.540 in 148,862 same-time pairs) with valueuom 'cm' and was left unconverted (~17 cm). 4188 is therefore read as cm without conversion, and 4187 (a computed duplicate) is not mapped. 3485/3486 carry correct units and stay in the source above."
     }
    ],
    "mimic_demo": [
@@ -6819,14 +6943,20 @@
       920,
       1394,
       3485,
-      4187,
-      4188,
       3486,
       226707
      ],
      "table": "chartevents",
      "sub_var": "itemid",
      "callback": "convert_unit(binary_op(`*`, 2.54), 'cm', '^in')"
+    },
+    {
+     "ids": [
+      4188
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: CareVue NICU 4188 'Length in cm' holds centimetres (median 43) but its valueuom says 'Inches', so the unit-driven inch conversion above multiplied it by 2.54 (~109 cm). Its partner 4187 'Length Calc Inches' holds the same length in inches (4188/4187 = 2.540 in 148,862 same-time pairs) with valueuom 'cm' and was left unconverted (~17 cm). 4188 is therefore read as cm without conversion, and 4187 (a computed duplicate) is not mapped. 3485/3486 carry correct units and stay in the source above."
     }
    ],
    "sic": [
@@ -8393,6 +8523,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30027
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue magnesium (d_items: 30027 Magnesium Sulfate; amountuom gm/ml, IV routes)."
     }
    ],
    "mimic_demo": [
@@ -8405,6 +8544,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30027
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue magnesium (d_items: 30027 Magnesium Sulfate; amountuom gm/ml, IV routes)."
     }
    ],
    "sic": [
@@ -10636,6 +10784,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30178
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue nicardipine (d_items: 30178 Nicardipine; amountuom mg)."
     }
    ],
    "mimic_demo": [
@@ -10646,6 +10803,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30178
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue nicardipine (d_items: 30178 Nicardipine; amountuom mg)."
     }
    ]
   }
@@ -11301,6 +11467,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30133
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue octreotide (d_items: 30133 Sandostatin; rateuom mcghr)."
     }
    ],
    "mimic_demo": [
@@ -11311,6 +11486,15 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30133
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue octreotide (d_items: 30133 Sandostatin; rateuom mcghr)."
     }
    ],
    "sic": [
@@ -11365,6 +11549,18 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30001,
+      30004,
+      30179,
+      30104
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30001 Packed RBC's, 30004 Washed PRBC's, 30179 PRBC's, 30104 OR Packed RBC's; amountuom ml). 30104 mirrors the MetaVision OR/PACU items already in this concept. Free-text CareVue labels (ER/PACU/pre-admit PRBC) each cover <10 stays and are not mapped."
     }
    ],
    "mimic_demo": [
@@ -11377,6 +11573,18 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30001,
+      30004,
+      30179,
+      30104
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30001 Packed RBC's, 30004 Washed PRBC's, 30179 PRBC's, 30104 OR Packed RBC's; amountuom ml). 30104 mirrors the MetaVision OR/PACU items already in this concept. Free-text CareVue labels (ER/PACU/pre-admit PRBC) each cover <10 stays and are not mapped."
     }
    ],
    "sic": [
@@ -12443,21 +12651,47 @@
    "mimic": [
     {
      "ids": [
-      225170
+      225170,
+      226369,
+      227071
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 226369 OR Platelet Intake and 227071 PACU Platelet Intake (d_items, mL) added, mirroring ffp (226367/227072), packed_rbc (226368/227070) and the MIMIC-IV source."
+    },
+    {
+     "ids": [
+      30006,
+      30105
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30006 Platelets, 30105 OR Platelets; amountuom ml). 30105 mirrors MetaVision 226369 OR Platelet Intake."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
-      225170
+      225170,
+      226369,
+      227071
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 226369 OR Platelet Intake and 227071 PACU Platelet Intake (d_items, mL) added, mirroring ffp (226367/227072), packed_rbc (226368/227070) and the MIMIC-IV source."
+    },
+    {
+     "ids": [
+      30006,
+      30105
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30006 Platelets, 30105 OR Platelets; amountuom ml). 30105 mirrors MetaVision 226369 OR Platelet Intake."
     }
    ],
    "sic": [
@@ -12881,6 +13115,17 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30026,
+      30297,
+      30029
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue IV potassium (d_items: 30026 KCL, 30297 Potassium Chloride, 30029 Potassium Phosphate; amountuom mEq/ml, IV routes). 30299 Potassium Acetate is not mapped because the MetaVision source likewise excludes 222139 Potassium ACEtate (concept = KCl or K-phosphate). Free-text KCl/KPhos labels (maintenance fluids with added KCl, CVVH KCl) each cover <10 stays and are not mapped."
     }
    ],
    "mimic_demo": [
@@ -12894,6 +13139,17 @@
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "ids": [
+      30026,
+      30297,
+      30029
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue IV potassium (d_items: 30026 KCL, 30297 Potassium Chloride, 30029 Potassium Phosphate; amountuom mEq/ml, IV routes). 30299 Potassium Acetate is not mapped because the MetaVision source likewise excludes 222139 Potassium ACEtate (concept = KCl or K-phosphate). Free-text KCl/KPhos labels (maintenance fluids with added KCl, CVVH KCl) each cover <10 stays and are not mapped."
     }
    ],
    "sic": [
@@ -15403,7 +15659,7 @@
   "min": 0,
   "max": 10000,
   "aggregate": "sum",
-  "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III include enteral/PO feeds; AUMC is IV only; pre-ICU OR/PACU/ED intake is excluded for CareVue), so per-database intake capture requires stratified sensitivity analysis.",
+  "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III include enteral/PO feeds; AUMC is IV only; pre-admission, cath-lab, OR, PACU and ED intake is excluded for MIIV, MIMIC-III MetaVision and CareVue), so per-database intake capture requires stratified sensitivity analysis.",
   "category": "output",
   "sources": {
    "miiv": [
@@ -15481,19 +15737,6 @@
       226058,
       226059,
       226089,
-      226361,
-      226363,
-      226364,
-      226365,
-      226367,
-      226368,
-      226369,
-      226370,
-      226371,
-      226372,
-      226375,
-      226376,
-      226377,
       226452,
       226453,
       226875,
@@ -15501,9 +15744,6 @@
       226880,
       226881,
       226882,
-      227070,
-      227071,
-      227072,
       227090,
       227518,
       227522,
@@ -15566,7 +15806,8 @@
      "end_var": "endtime",
      "extra_vars": [
       "endtime"
-     ]
+     ],
+     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission/Non-ICU Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake."
     }
    ],
    "mimic": [
@@ -15642,19 +15883,6 @@
       226058,
       226059,
       226089,
-      226361,
-      226363,
-      226364,
-      226365,
-      226367,
-      226368,
-      226369,
-      226370,
-      226371,
-      226372,
-      226375,
-      226376,
-      226377,
       226452,
       226453,
       226875,
@@ -15662,9 +15890,6 @@
       226880,
       226881,
       226882,
-      227070,
-      227071,
-      227072,
       227091,
       227370,
       227518,
@@ -15714,7 +15939,8 @@
      "end_var": "endtime",
      "extra_vars": [
       "endtime"
-     ]
+     ],
+     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake."
     },
     {
      "ids": [
@@ -18183,19 +18409,6 @@
       226058,
       226059,
       226089,
-      226361,
-      226363,
-      226364,
-      226365,
-      226367,
-      226368,
-      226369,
-      226370,
-      226371,
-      226372,
-      226375,
-      226376,
-      226377,
       226452,
       226453,
       226875,
@@ -18203,9 +18416,6 @@
       226880,
       226881,
       226882,
-      227070,
-      227071,
-      227072,
       227091,
       227370,
       227518,
@@ -18255,7 +18465,8 @@
      "end_var": "endtime",
      "extra_vars": [
       "endtime"
-     ]
+     ],
+     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake."
     },
     {
      "ids": [
