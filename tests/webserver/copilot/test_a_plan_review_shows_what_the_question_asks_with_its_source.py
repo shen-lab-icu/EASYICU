@@ -539,6 +539,15 @@ def test_the_card_names_each_requirement_and_its_source() -> None:
     assert f'data-resource="{REVIEW}"' in html
 
 
+def test_a_stated_sentence_ends_once() -> None:
+    """MIMIC-IV walk 11-03: 「报告各组的比例和 95% 置信区间。」 read 「…。。尚需核对」."""
+
+    review = _review(judged=[_row("r3", "attested", kind="estimand", quote="报告各组的比例和 95% 置信区间。")])
+    html = _notes_html(_notes(review), link=False)
+    assert "计划中写明：报告各组的比例和 95% 置信区间。尚需核对。" in html
+    assert "。。" not in html
+
+
 def test_unstated_concepts_ask_the_reviewer_what_to_check() -> None:
     notes = _notes(
         _review(
