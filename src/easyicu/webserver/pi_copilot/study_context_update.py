@@ -2351,6 +2351,25 @@ def update_study_context(
             except (ValueError, OSError) as exc:
                 unread.append({"variable": "", "reason": str(exc)})
                 patch.pop(field, None)
+    # A subgroup modifies the exposure's effect, so the exposure's own levels
+    # (「请按性别分组」 when sex is the exposure) are the groups the study
+    # compares, never a subgroup of itself.  MIMIC-IV walk 11-03 saved sex as
+    # both; the subgroup excluded it as the exposure and the descriptive plan
+    # had no grouping to report.
+    exposure_subgroups: list[str] = []
+    if patch.get("stated_subgroups"):
+        from easyicu.webserver.research_launch_scientific import stated_exposure_concepts
+
+        exposure_concepts = stated_exposure_concepts(
+            patch.get("primary_exposure", (current or {}).get("primary_exposure")),
+            patch.get("primary_exposure_concept", (current or {}).get("primary_exposure_concept")),
+        )
+        exposure_subgroups = [
+            item["variable"] for item in patch["stated_subgroups"] if item.get("concept") in exposure_concepts
+        ]
+        patch["stated_subgroups"] = [
+            item for item in patch["stated_subgroups"] if item.get("concept") not in exposure_concepts
+        ]
     from easyicu.webserver.unread_stated_variables import (
         UNREAD_STATED_VARIABLES_FIELD, pending_unread, unread_records,
     )
@@ -2589,6 +2608,11 @@ def update_study_context(
                 + ". Once a data source is bound, look each up with "
                 "easyicu_list_source_concepts and save it again with concept."
             )
+    if exposure_subgroups:
+        summary += (
+            " stated_subgroups not recorded: " + "; ".join(exposure_subgroups)
+            + " is the study's exposure; its levels are the groups the study compares."
+        )
     summary += _causal_receipt_text(causal_receipt)
     summary += _family_receipt_text(family_receipt)
     summary += _variance_receipt_text(variance_receipt)

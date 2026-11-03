@@ -140,6 +140,11 @@ test('a question that is not quick says why and offers the full study, never a c
   assert.match(html, /需要调整其他因素/);
   assert.match(html, /class="btn primary sm" type="button" data-gpi-quick-expand="qa_1"/);
   assert.doesNotMatch(html, /data-gpi-quick-approve/);
+  // Every kind of full study the host qualification names has its own reason.
+  for (const [reason, pattern] of [['quick_requires_interval_study', /需要报告置信区间/], ['quick_requires_prediction_study', /需要建立预测模型/],
+    ['quick_requires_causal_study', /涉及因果效应/], ['quick_requires_clustering_study', /需要识别患者分型/]]) {
+    assert.match(rendered(cards, attachment({ proposal: { status: 'full_study', reason, expand: {} } })), pattern);
+  }
   const unknown = rendered(cards, attachment({ proposal: { status: 'stopped', reason: 'quick_unlisted_code', expand: {} } }));
   assert.match(unknown, /这个问题不适合快速回答/);
   assert.doesNotMatch(unknown, /quick_unlisted_code/);
