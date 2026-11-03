@@ -883,6 +883,15 @@ def _apply_callback(
             frame, source=source, concept_name=concept_name, data_source=data_source
         )
 
+    if expr == "hirid_apache_admission":
+        # HiRID admission type from the APACHE group (owner: hirid_admission).
+        from .hirid_admission import apply_apache_admission
+
+        return apply_apache_admission(
+            frame, source=source, concept_name=concept_name,
+            id_col="patientid", time_col=source.index_var or "datetime",
+        )
+
     if expr == "emar_administered":
         from .emar_administration import keep_administered
 
