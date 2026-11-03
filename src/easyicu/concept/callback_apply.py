@@ -125,7 +125,8 @@ _SIC_SINGLE_DOSE_FLAG = "IsSingleDose"
 
 
 def _declared_extra_vars(source: ConceptSource) -> list:
-    extra_vars = source.params.get("extra_vars", []) if source.params else []
+    params = getattr(source, "params", None) or {}
+    extra_vars = params.get("extra_vars", [])
     return [extra_vars] if isinstance(extra_vars, str) else list(extra_vars or [])
 
 
