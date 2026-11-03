@@ -424,6 +424,34 @@
      "_comment": "229268=Circuit Configuration (155), 229270=Flow ECMO (147), 229277=Speed ECMO (147), 229278=Sweep ECMO (146), 229280=FiO2 ECMO (146), 229274=Oxygenator visible (150), 229266=Cannula sites (150), 228193=Oxygenator/ECMO (41), 224660=ECMO Hemodynamics (5)"
     }
    ],
+   "mimic": [
+    {
+     "ids": [
+      228193,
+      224660,
+      2957,
+      3265
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays)."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      228193,
+      224660,
+      2957,
+      3265
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays)."
+    }
+   ],
    "eicu": [
     {
      "table": "treatment",
@@ -456,6 +484,18 @@
      "regex": "ECMO|extracorporeal",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2023,
+      2024
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references SignalFloat 2023 'ECMO PumpSpeed' (U/min) and 2024 'ECMO BloodFlow' (L/min). A running pump (value > 0) is ECMO in use; a charted 0 is a stopped circuit (FALSE). 2025 'ECMO FI' (sweep-gas FiO2) alone does not establish flow."
     }
    ]
   }

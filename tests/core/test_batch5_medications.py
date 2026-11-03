@@ -5,7 +5,7 @@ Added: bicarbonate, dextrose50, ffp, platelets.
 Coverage after the 2026-05-27 audit:
   - bicarbonate: 6/6 (HiRID/SIC added)
   - dextrose50:  5/6 (HiRID added; no AUMC; distinct from the dex rec_cncpt)
-  - ffp:         5/6 (HiRID/AUMC added; no SIC)
+  - ffp:         6/6 (HiRID/AUMC added; SICdb Octaplas 2026-11-03)
   - platelets:   5/6 (HiRID added; no eICU)
 
 Design decisions enforced by tests:
@@ -29,7 +29,7 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 BATCH5 = [
     ("bicarbonate", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("dextrose50",  {"miiv", "mimic", "eicu", "hirid", "sic"},         5),
-    ("ffp",         {"miiv", "mimic", "eicu", "aumc", "hirid"},        5),
+    ("ffp",         {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     # 2026-07-17: platelets gained eICU via intakeOutput (3,668 stays). It had been
     # marked eICU-absent because the *medication* table has no blood products -- true,
     # but that made the column a constant FALSE rather than an honest gap.
@@ -117,11 +117,11 @@ def test_dextrose50_distinct_from_dex_rec(cdict):
         assert dex_unit == "ml/hr"
 
 
-def test_ffp_aumc_added_but_sic_still_absent(cdict):
-    """AUMC FFP was added by the 2026-05-27 audit; SIC remains absent."""
-    sources = set(cdict["ffp"]["sources"])
+def test_ffp_aumc_and_sic_plasma_items(cdict):
+    """AUMC FFP was added by the 2026-05-27 audit; SICdb's plasma product is
+    Octaplas (d_references Fluid 2047), added by the 2026-11-03 audit 2."""
     assert cdict["ffp"]["sources"]["aumc"][0]["ids"] == [7367]
-    assert "sic" not in sources
+    assert cdict["ffp"]["sources"]["sic"][0]["ids"] == [2047]
 
 
 def test_platelets_eicu_uses_intakeoutput_not_medication(cdict):

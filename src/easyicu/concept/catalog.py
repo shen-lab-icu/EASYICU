@@ -760,23 +760,23 @@ CONCEPT_DB_COVERAGE = {
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
     'anion_gap': 6, 'pulse_pressure': 6,
     'age': 6, 'sex': 6, 'weight': 6, 'height': 6, 'death': 6, 'los_icu': 6,
-    'icu_unit_type': 1,
+    'icu_unit_type': 4,  # eICU, MIIV, MIMIC-III, SICdb (2026-11-03 audit 2)
     'sofa': 6, 'sofa2': 6, 'gcs': 6,
     'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
     'pafi': 5, 'safi': 5, 'urine': 5,
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
     'peep_set': 2, 'peep_total': 2, 'fio2_chart': 2, 'fio2_lab': 2,
-    'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
+    'mech_vent': 3, 'vent_ind': 3, 'ecmo': 5, 'rrt': 4,
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
     'driving_pres_controlled': 4,  # plateau+mode overlap: miiv/mimic/aumc/hirid
     'furosemide': 6,
     'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 5,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
     'mannitol': 5, 'amiodarone': 6, 'milrinone': 6, 'rocuronium': 5,
-    # Rate concepts (2026-05-13): HiRID pharma has no propofol reference;
-    # SIC removed pending AmountPerMinute unit audit (see
-    # audit_reports/sic_amount_per_minute_unit_audit_20260513.md)
-    'propofol_rate': 4,
+    # Rate concepts (2026-05-13). 2026-11-03 audit 2: HiRID Disoprivan
+    # infusions and SICdb's native hourly dose 3057 (not AmountPerMinute, see
+    # audit_reports/sic_amount_per_minute_unit_audit_20260513.md) added.
+    'propofol_rate': 6,
     # MIIV+MIMIC only for now; other DBs need non-kg mass-rate callback (TODO)
     'fentanyl_rate': 5,
     'midazolam_rate': 5,
@@ -799,7 +799,7 @@ CONCEPT_DB_COVERAGE = {
     # Batch 5 (2026-05-13; round-3 additions audited 2026-05-27)
     'bicarbonate': 6,
     'dextrose50': 5,
-    'ffp': 5,
+    'ffp': 6,
     'platelets': 6,
     # Batch 6 (2026-05-13; prescriptions/HiRID/AUMC additions audited 2026-05-27)
     'levetiracetam': 6,
@@ -814,7 +814,7 @@ CONCEPT_DB_COVERAGE = {
     'nicardipine': 4,
     # Batch 8 (2026-05-14; prescriptions/HiRID additions audited 2026-05-27)
     'warfarin': 6,
-    'apixaban': 1,
+    'apixaban': 2,  # SICdb + MIMIC-IV eMAR
     'enoxaparin': 6,
     'aspirin': 6,
     'insulin': 5,  # MIIV+MIMIC+eICU+AUMC+HiRID

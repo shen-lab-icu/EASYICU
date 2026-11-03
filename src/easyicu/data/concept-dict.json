@@ -594,6 +594,39 @@
      "val_var": "unittype",
      "class_name": "col_itm"
     }
+   ],
+   "miiv": [
+    {
+     "table": "icustays",
+     "val_var": "first_careunit",
+     "class_name": "col_itm",
+     "_comment": "2026-11-03 extraction audit 2: the unit where this ICU stay began (icustays.first_careunit), the counterpart of eICU patient.unittype. MIMIC-IV names, e.g. 'Medical Intensive Care Unit (MICU)'."
+    }
+   ],
+   "mimic": [
+    {
+     "table": "icustays",
+     "val_var": "first_careunit",
+     "class_name": "col_itm",
+     "_comment": "2026-11-03 extraction audit 2: the unit where this ICU stay began (icustays.FIRST_CAREUNIT: MICU, SICU, CCU, CSRU, TSICU, NICU), the counterpart of eICU patient.unittype."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "table": "icustays",
+     "val_var": "first_careunit",
+     "class_name": "col_itm",
+     "_comment": "2026-11-03 extraction audit 2: the unit where this ICU stay began (icustays.FIRST_CAREUNIT: MICU, SICU, CCU, CSRU, TSICU, NICU), the counterpart of eICU patient.unittype."
+    }
+   ],
+   "sic": [
+    {
+     "table": "cases",
+     "val_var": "HospitalUnit",
+     "class_name": "col_itm",
+     "callback": "apply_map(c(`2` = 'intermediate care ward (INIC)',\n                     `3` = 'intensive care ward (CWIN)',\n                     `4` = 'intensive care ward (INBD)',\n                     `5` = 'mixed intermediate care ward with NIV (INID)'))",
+     "_comment": "2026-11-03 extraction audit 2: cases.HospitalUnit, labelled with SICdb d_references HospitalUnit ReferenceValue/ReferenceDescription: 2 INIC '9 bed intermediate care ward', 3 CWIN '14 bed intensive care ward', 4 INBD '9 bed intensive care ward', 5 INID '9 bed mixed ward (intermediate care, non-invasive-ventilation possible)'. These four codes hold every case of the release."
+    }
    ]
   }
  },
@@ -1141,6 +1174,20 @@
      "table": "medication",
      "sub_var": "DrugID",
      "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "miiv": [
+    {
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)apixaban|eliquis",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "event_txt"
+     ],
+     "callback": "emar_administered",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV emar apixaban, administered events only (owner concept/emar_administration.py); full source 2,088 ICU stays with an administration inside the stay."
     }
    ]
   }
@@ -2737,6 +2784,31 @@
      "callback": "transform_fun(set_val(TRUE))"
     }
    ],
+   "eicu": [
+    {
+     "table": "medication",
+     "sub_var": "drugname",
+     "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate)).*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone|solu.?medrol|solu.?cortef|decadron)",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids by drug name (generic and the brand names Solu-Medrol, Solu-Cortef, Decadron); topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and study drugs are excluded."
+    },
+    {
+     "ids": [
+      2876,
+      36808,
+      2866,
+      36875,
+      2879,
+      2888,
+      2889
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: medication rows without a drug name carry only the HICL code. The codes are those the named rows of the same table use for systemic corticosteroids: 2876 and 36808 methylprednisolone (sodium succinate) injection, 2866 and 36875 hydrocortisone sodium succinate injection, 2879 prednisone tablets, 2888 dexamethasone injection, 2889 oral dexamethasone (routes IV/PO)."
+    }
+   ],
    "hirid": [
     {
      "ids": [
@@ -2759,6 +2831,73 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "miiv": [
+    {
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate))\\s*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone)",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "event_txt"
+     ],
+     "callback": "emar_administered",
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-IV emar: only administered events (event_txt Administered, Delayed/Partial Administered, Administered in Other Location, Started, Delayed Started, Restarted) count; full source 9,872 ICU stays with an administration inside the stay. Owner: concept/emar_administration.py."
+    }
+   ],
+   "mimic": [
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate))\\s*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone)",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-III has no eMAR: prescriptions (order start date) as the MIMIC dexamethasone concept reads them."
+    },
+    {
+     "ids": [
+      30069
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 30069 'Solumedrol' (CareVue inputevents_cv; 123 ICU stays)."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate))\\s*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone)",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-III has no eMAR: prescriptions (order start date) as the MIMIC dexamethasone concept reads them."
+    },
+    {
+     "ids": [
+      30069
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 30069 'Solumedrol' (CareVue inputevents_cv; 123 ICU stays)."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1525,
+      1506,
+      1397,
+      1524,
+      1751
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Drug 1525 Hydrocortison, 1506 MethylPREDNIsolon, 1397 PredniSOLON, 1524 DEXAmethason, 1751 Fludrocortison (systemic corticosteroids, as HiRID/AUMC map them). Inhaled budesonide (1571/1727) is not systemic and is excluded."
     }
    ]
   }
@@ -4393,6 +4532,34 @@
      "_comment": "2026-07-03 audit: synchronized with SOFA-2 ECMO coverage; includes circuit configuration, flow/speed/sweep/FiO2, oxygenator/cannula indicators, and legacy ECMO hemodynamics."
     }
    ],
+   "mimic": [
+    {
+     "ids": [
+      228193,
+      224660,
+      2957,
+      3265
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays)."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      228193,
+      224660,
+      2957,
+      3265
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays)."
+    }
+   ],
    "eicu": [
     {
      "table": "treatment",
@@ -4442,6 +4609,18 @@
      "regex": "ECMO|extracorporeal",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2023,
+      2024
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references SignalFloat 2023 'ECMO PumpSpeed' (U/min) and 2024 'ECMO BloodFlow' (L/min). A running pump (value > 0) is ECMO in use; a charted 0 is a stopped circuit (FALSE). 2025 'ECMO FI' (sweep-gas FiO2) alone does not establish flow."
     }
    ]
   }
@@ -5384,6 +5563,20 @@
      "target": "ts_tbl",
      "callback": "combine_callbacks(\n               transform_fun(set_val(TRUE)),\n               ts_to_win_tbl(mins(1L))\n             )"
     }
+   ],
+   "sic": [
+    {
+     "ids": [
+      720,
+      3041
+     ],
+     "table": "data_range",
+     "sub_var": "DataID",
+     "value_var": "DataID",
+     "dur_var": "OffsetEnd",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: an endotracheal tube or tracheal cannula in place (SICdb d_references Airway 720 EndotrachealTube, 3041 TrachealCannula; data_range Offset..OffsetEnd), the airway that makes the GCS verbal response unassessable whether or not the ventilator is running."
+    }
    ]
   }
  },
@@ -5714,6 +5907,17 @@
      "sub_var": "itemid",
      "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit",
      "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2047
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Fluid 2047 'Octaplas' (ml), pooled solvent/detergent-treated plasma given in place of fresh frozen plasma."
     }
    ]
   }
@@ -6466,6 +6670,14 @@
      "table": "labevents",
      "sub_var": "itemid",
      "_comment": "2026-07-03 module coverage audit: MIMIC-III d_labitems 50805 = Carboxyhemoglobin, Blood Gas."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 660,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Laboratory 660 'CO-Hämoglobin (BGA)' (%), the blood-gas analyser channel the other databases map (MIMIC 50805)."
     }
    ]
   }
@@ -8943,7 +9155,8 @@
      "target": "ts_tbl",
      "interval": "00:01:00",
      "class_name": "hrd_itm",
-     "callback": "combine_callbacks(hirid_vent,\n                                           apply_map(c(`1` = 'invasive',\n                                                       `2` = 'invasive',\n                                                       `3` = 'noninvasive',\n                                                       `4` = 'noninvasive',\n                                                       `5` = 'noninvasive',\n                                                       `6` = 'noninvasive')))"
+     "callback": "combine_callbacks(hirid_vent,\n                                           apply_map(c(`1` = 'invasive',\n                                                       `2` = 'invasive',\n                                                       `3` = 'noninvasive',\n                                                       `4` = 'noninvasive',\n                                                       `5` = 'noninvasive',\n                                                       `6` = NA)))",
+     "_comment": "2026-11-03 extraction audit 2: ordinal_vars_ref 15001552 code 6 is '-' (no airway recorded), not a non-invasive interface (3 Maske, 4 Helm, 5 Mundstueck); it is now missing. The row still closes the previous record's window in hirid_vent."
     }
    ],
    "eicu": [
@@ -9204,14 +9417,28 @@
    "sic": [
     {
      "ids": [
-      720,
-      3041
+      720
      ],
      "table": "data_range",
      "sub_var": "DataID",
      "value_var": "DataID",
      "dur_var": "OffsetEnd",
-     "callback": "apply_map(c(`720` = 'invasive',\n                                     `3041` = 'invasive'),\n                                   var = 'sub_var')"
+     "callback": "apply_map(c(`720` = 'invasive'),\n                                   var = 'sub_var')",
+     "_comment": "2026-11-03 extraction audit 2: an endotracheal-tube interval (d_references Airway 720 EndotrachealTube) is invasive ventilation as a whole. A tracheal-cannula interval (3041) no longer is: a tracheostomy off the ventilator is not ventilation, so its hours come from the second source only where a ventilator setting is charted."
+    },
+    {
+     "ids": [
+      2278,
+      2282,
+      2284,
+      3040,
+      2285,
+      3121
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "sicdb_airway_attributed_ventilation",
+     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py."
     }
    ]
   }
@@ -9360,6 +9587,14 @@
      "ids": 50814,
      "table": "labevents",
      "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": 661,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Laboratory 661 'Met-Hämoglobin (BGA)' (%), as MIMIC 50814."
     }
    ]
   }
@@ -12900,6 +13135,28 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "callback": "mimic_rate_mv"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      208,
+      1001050
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "_comment": "2026-11-03 extraction audit 2: HiRID pharma 208 and 1001050 'Disoprivan 2%' infusions (2,168,479 rows in 48,592 infusionids; 17,386 rows in 195), read per infusionid as for norepi_rate (mg converted to mcg, per kg per minute). The BOLUS items 1000691/1000699/1001052 and 'Disoprivan 1%' 1000491/1001053, which carry about one row per infusionid (single doses), are excluded."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 3057,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "transform_fun(binary_op(`*`, 16666.6667))",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references DrugDosagePerHour 3057 'PropofolPerHourWeight' (g/h/kg), SICdb's own hourly weight-normalised propofol dose; x 1e6 / 60 = mcg/kg/min."
     }
    ]
   }
@@ -21734,6 +21991,18 @@
      "callback": "transform_fun(set_val(TRUE))"
     }
    ],
+   "miiv": [
+    {
+     "ids": [
+      225792,
+      224385
+     ],
+     "table": "procedureevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: the start of invasive ventilation, as the MIMIC-IV vent_end extubation items (225468/225477/227194) end it. MIMIC-IV d_items procedureevents 225792 'Invasive Ventilation' (2-Ventilation; starttime) and 224385 'Intubation' (1-Intubation/Extubation). Non-invasive ventilation 225794 is not a start of this concept. vent_ind keeps reading the mech_vent windows."
+    }
+   ],
    "mimic": [
     {
      "ids": [
@@ -23698,6 +23967,14 @@
      "sub_var": "variableid",
      "class_name": "hrd_itm"
     }
+   ],
+   "sic": [
+    {
+     "ids": 571,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Laboratory 571 'NT-proBNP (ZL)' (pg/ml), the concept's unit."
+    }
    ]
   }
  },
@@ -23711,16 +23988,26 @@
   "sources": {
    "mimic": [
     {
-     "ids": 226,
+     "ids": [
+      226,
+      220765,
+      227989
+     ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: added MetaVision 220765 'Intra Cranial Pressure' and 227989 'Intra Cranial Pressure #2' (MIMIC-III d_items: chartevents, mmHg, Numeric; the same items MIMIC-IV maps); 226 'ICP' is CareVue only."
     }
    ],
    "mimic_demo": [
     {
-     "ids": 226,
+     "ids": [
+      226,
+      220765,
+      227989
+     ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: added MetaVision 220765 'Intra Cranial Pressure' and 227989 'Intra Cranial Pressure #2' (MIMIC-III d_items: chartevents, mmHg, Numeric; the same items MIMIC-IV maps); 226 'ICP' is CareVue only."
     }
    ],
    "eicu": [
@@ -23779,6 +24066,14 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "SVO2",
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 extraction audit 2: eICU nursecharting 'SVO2' (label and name SVO2; 90,852 rows in 2,723 stays, median 65 %)."
     }
    ],
    "mimic": [
@@ -24573,6 +24868,14 @@
      "ids": "prealbumin",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "sic": [
+    {
+     "ids": 382,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Laboratory 382 'Präalbumin (ZL)' (mg/dl, the concept's unit; full-source median 20.7). The concept-level note that SICdb has no prealbumin item predates this mapping."
     }
    ]
   }

@@ -43,23 +43,15 @@ def test_propofol_rate_is_mcg_kg_min(propofol_rate_entry):
     assert propofol_rate_entry["category"] == "medications"
 
 
-def test_propofol_rate_covers_four_main_databases(propofol_rate_entry):
-    """HiRID pharma reference has no propofol entry. SIC was removed pending
-    an audit of per-DrugID ``AmountPerMinute`` unit semantics — DrugID 1499
-    (Propofol 1%) stores bolus totals in that column while DrugID 1549
-    (Propofol 2%) stores genuine per-minute rates. Applying ``sic_rate_kg``
-    uniformly produced accidentally-plausible but unit-mixed output; see
-    ``audit_reports/sic_amount_per_minute_unit_audit_20260513.md``."""
+def test_propofol_rate_covers_all_six_main_databases(propofol_rate_entry):
+    """2026-11-03 extraction audit 2: HiRID's pharma reference does list
+    propofol (208/1001050 'Disoprivan 2%' infusions), and SICdb ships its own
+    hourly weight-normalised dose (data_float_h 3057 PropofolPerHourWeight),
+    which avoids the per-DrugID ``AmountPerMinute`` ambiguity that removed the
+    earlier SIC medication source (DrugID 1499 stores bolus totals in that
+    column); see ``audit_reports/sic_amount_per_minute_unit_audit_20260513.md``."""
     sources = set(propofol_rate_entry["sources"].keys())
-    main = sources & MAIN_DBS
-    assert main == {"miiv", "mimic", "eicu", "aumc"}, (
-        f"Expected 4-DB main coverage (miiv, mimic, eicu, aumc), got: {sorted(main)}"
-    )
-    assert "hirid" not in sources
-    assert "sic" not in sources, (
-        "SIC source removed pending AmountPerMinute unit audit — do not re-add "
-        "without first validating DrugID 1499/1549 unit convention."
-    )
+    assert sources & MAIN_DBS == {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
 def test_aumc_uses_itemid_7480_and_aumc_rate_kg(propofol_rate_entry):
@@ -117,11 +109,18 @@ def test_eicu_regex_and_ml_to_mcg(propofol_rate_entry):
     assert src["weight_var"] == "patientweight"
 
 
-def test_sic_uses_both_concentration_drugids(propofol_rate_entry):
-    """SIC source was REMOVED pending an audit of AmountPerMinute unit
-    semantics (see SIC audit report). Guard rail: do not silently re-add."""
-    sources = propofol_rate_entry["sources"]
-    assert "sic" not in sources
+def test_sic_reads_the_native_hourly_dose_not_amount_per_minute(propofol_rate_entry):
+    """Guard rail: SICdb medication AmountPerMinute (DrugID 1499/1549) has
+    mixed unit semantics; only the native hourly dose 3057 (g/h/kg) is read."""
+    (sic,) = propofol_rate_entry["sources"]["sic"]
+    assert sic["table"] == "data_float_h" and sic["ids"] == 3057
+    assert sic["callback"] == "transform_fun(binary_op(`*`, 16666.6667))"
+
+
+def test_hirid_reads_infusions_not_boluses(propofol_rate_entry):
+    (hirid,) = propofol_rate_entry["sources"]["hirid"]
+    assert set(hirid["ids"]) == {208, 1001050}
+    assert hirid["grp_var"] == "infusionid" and hirid["callback"] == "hirid_rate_kg"
 
 
 def test_demo_mirrors_full_eicu_and_mimic(propofol_rate_entry):
@@ -154,4 +153,4 @@ def test_registered_in_webapp_catalog():
     assert "Propofol" in en
     assert "丙泊酚" in zh
     assert unit == "mcg/kg/min"
-    assert CONCEPT_DB_COVERAGE.get("propofol_rate") == 4
+    assert CONCEPT_DB_COVERAGE.get("propofol_rate") == 6
