@@ -2486,8 +2486,8 @@ class ConceptResolver:
                 elif source.table == 'services' and db_name in ['mimic', 'miiv', 'mimic_demo']:
                     # services 表使用 stay_id/icustay_id，datasource 会自动转换为 hadm_id
                     effective_id_var = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
-                elif source.table in ['microbiologyevents', 'd_labitems', 'prescriptions'] and db_name in ['mimic', 'miiv', 'mimic_demo']:
-                    # 其他 hosp 表使用 subject_id
+                elif source.table in ['microbiologyevents', 'd_labitems', 'prescriptions', 'emar'] and db_name in ['mimic', 'miiv', 'mimic_demo']:
+                    # 其他 hosp 表使用 subject_id（emar 无 id_var 默认值，否则整表读取）
                     effective_id_var = 'subject_id'
                 elif not effective_id_var:
                     # 如果没有配置 id_var，尝试检测常见的ID列
