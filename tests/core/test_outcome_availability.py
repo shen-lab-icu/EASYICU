@@ -20,6 +20,7 @@ def test_database_specific_outcome_support_is_directional() -> None:
     mimic_icu_free = structural_outcome_unavailability("icu_free_days_28", "miiv")
     eicu_icu_free = structural_outcome_unavailability("icu_free_days_28", "eicu")
     mimic_iii_readmission = structural_outcome_unavailability("icu_readmission", "mimic")
+    sic_readmission = structural_outcome_unavailability("icu_readmission", "sic")
 
     assert mimic_vfd is not None
     assert mimic_vfd.reason_code == "outcome_concept_structurally_unavailable"
@@ -33,8 +34,12 @@ def test_database_specific_outcome_support_is_directional() -> None:
     assert mimic_icu_free is None
     assert eicu_icu_free is not None
     assert eicu_icu_free.supported_databases == ("miiv", "miiv_demo")
-    assert mimic_iii_readmission is not None
-    assert mimic_iii_readmission.supported_databases == ("eicu", "eicu_demo", "miiv", "miiv_demo")
+    # MIMIC-III icustays carries hadm_id/intime/outtime like MIMIC-IV.
+    assert mimic_iii_readmission is None
+    assert sic_readmission is not None
+    assert sic_readmission.supported_databases == (
+        "eicu", "eicu_demo", "miiv", "miiv_demo", "mimic", "mimic_demo",
+    )
     # The readmitted-stay attribute and the readmission outcome read the same
     # ICU stay sequence, so they are supported in the same databases.
     for database in ("miiv", "eicu", "sic", "aumc", "hirid", "mimic"):

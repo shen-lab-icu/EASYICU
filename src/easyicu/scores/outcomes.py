@@ -20,10 +20,10 @@ Trial-style endpoints that the concept layer did not previously expose:
   the patient (this one, later ones, other admissions) within those 28 days.
   Unknown day-28 survival or an ICU stay without a discharge time in the
   window leaves it missing.
-* ``icu_readmission`` (MIMIC-IV, eICU) — the outcome: after this stay's ICU
+* ``icu_readmission`` (MIMIC-IV, MIMIC-III, eICU) — the outcome: after this stay's ICU
   episode the patient returned to an ICU in the same hospitalisation.  A
   patient who died in that episode was not at risk, so it is missing for them.
-* ``icu_stay_is_readmission`` (MIMIC-IV, eICU) — a stay attribute, not an
+* ``icu_stay_is_readmission`` (MIMIC-IV, MIMIC-III, eICU) — a stay attribute, not an
   outcome: this stay belongs to a later ICU episode of its hospitalisation.
   The repeat-stay sensitivity analysis restricts on it.
 
@@ -419,7 +419,10 @@ def _icu_stay_sequence(database: str, data_path) -> pd.DataFrame:
     db = normalize_database_key(database)
     profile = get_database_profile(db.removesuffix("_demo"))
     stays = _raw_table(db, data_path, profile.stay_table)
-    if db.startswith("miiv"):
+    # MIMIC-III icustays has MIMIC-IV's shape (hadm_id, intime, outtime) in
+    # upper case; both read the same hospitalisation clock.
+    mimic_family = db.startswith(("miiv", "mimic"))
+    if mimic_family:
         stays = lower_cols(stays)
         needed = (profile.stay_id_col, "hadm_id", "intime", "outtime")
     else:
@@ -429,7 +432,7 @@ def _icu_stay_sequence(database: str, data_path) -> pd.DataFrame:
     if missing:
         raise ValueError("icu_readmission_source_field_missing:" + ",".join(missing))
     require_unique_keys(stays, [profile.stay_id_col], table=profile.stay_table)
-    if db.startswith("miiv"):
+    if mimic_family:
         epoch = pd.Timestamp(0)
         start = (_parse_source_dates(stays["intime"]) - epoch).dt.total_seconds() / 60
         end = (_parse_source_dates(stays["outtime"]) - epoch).dt.total_seconds() / 60
