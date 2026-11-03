@@ -30,9 +30,11 @@ from typing import Mapping
 # of survivors, so a horizon there would be defined for the dead only.
 FOLLOWUP_OUTCOME_DATABASES = frozenset({"miiv", "miiv_demo", "sic", "sic_demo"})
 # ICU readmission needs every ICU stay of a hospitalisation, in order, from
-# the source's own stay table: MIMIC-IV icustays grouped by hadm_id, eICU unit
-# stays grouped by patienthealthsystemstayid.
-ICU_READMISSION_DATABASES = frozenset({"miiv", "miiv_demo", "eicu", "eicu_demo"})
+# the source's own stay table: MIMIC-IV and MIMIC-III icustays grouped by
+# hadm_id, eICU unit stays grouped by patienthealthsystemstayid.
+ICU_READMISSION_DATABASES = frozenset(
+    {"miiv", "miiv_demo", "mimic", "mimic_demo", "eicu", "eicu_demo"}
+)
 # ICU-free days to day 28 need every ICU stay of a patient in that window and
 # survival to day 28: MIMIC-IV has both (icustays by subject_id, and the
 # one-year death follow-up above).
