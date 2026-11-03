@@ -3,15 +3,25 @@
 Trial-style endpoints that the concept layer did not previously expose:
 
 * ``mort_28d`` / ``mort_90d`` / ``mort_365d`` — fixed-horizon mortality
-  measured from **ICU admission** (intime). A horizon needs post-discharge
-  follow-up of survivors as well as dates of death: MIMIC-IV
-  (``patients.dod``, censored one year after the last hospital discharge)
-  and SICdb (``cases.OffsetOfDeath`` with each case's survival observation
-  time) carry both. MIMIC-III and AmsterdamUMCdb record dates of death but
-  no follow-up of survivors, so a horizon there would be defined for the
-  dead only; eICU and HiRID carry only in-hospital mortality (use the
-  existing ``death`` concept). These horizons are returned empty for them,
-  by design, not as an error.
+  measured from **ICU admission** (intime), all-cause, including deaths
+  after hospital discharge (so a stay can be ``mort_28d`` without the
+  in-hospital ``death``). A horizon needs post-discharge follow-up of
+  survivors as well as dates of death. A survivor without a recorded death
+  is censored at its source's follow-up bound, and a horizon beyond that
+  bound stays missing:
+
+  - MIMIC-IV ``patients.dod``: one year after the last hospital discharge;
+  - MIMIC-III ``patients.dod`` (Social Security linkage): 90 days after the
+    hospital discharge for MetaVision stays, four years for CareVue stays;
+  - AmsterdamUMCdb ``admissions.dateofdeath`` (registry linkage, deaths
+    recorded years after discharge in both admission-year groups): one year
+    from ICU admission; a death in the ICU is timed at ``dischargedat``;
+  - SICdb ``cases.OffsetOfDeath`` with each case's survival observation
+    category (six months or one year from the primary admission).
+
+  eICU and HiRID carry only in-hospital mortality (use the existing
+  ``death`` concept). These horizons are returned empty for them, by
+  design, not as an error.
 * ``followup_days_28d`` / ``followup_days_90d`` /
   ``followup_days_365d`` — the event-or-administrative-censoring time paired
   with each fixed-horizon endpoint. Unknown follow-up remains missing.
@@ -149,13 +159,17 @@ def _parse_source_dates(values: pd.Series) -> pd.Series:
 
 
 def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
-    """MIMIC-IV: stay_id + days_from_icu_admit_to_death + los."""
+    """MIMIC-IV/III: ICU stay + days_from_icu_admit_to_death + los + follow-up."""
     icu = lower_cols(_raw_table(database, data_path, "icustays"))
     stay_col = "stay_id" if "stay_id" in icu.columns else "icustay_id"
     # Mortality needs no discharge time; without one ICU-free days are unknown.
     if "outtime" not in icu.columns:
         icu["outtime"] = None
-    icu = icu[["subject_id", "hadm_id", stay_col, "intime", "outtime", "los"]].copy()
+    if "dbsource" not in icu.columns:
+        icu["dbsource"] = None
+    icu = icu[
+        ["subject_id", "hadm_id", stay_col, "intime", "outtime", "los", "dbsource"]
+    ].copy()
     require_unique_keys(icu, [stay_col], table="icustays")
     icu["intime"] = _parse_source_dates(icu["intime"])
     icu["outtime"] = pd.to_datetime(_parse_source_dates(icu["outtime"]), errors="coerce")
@@ -169,9 +183,10 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     pat["dod"] = _parse_source_dates(pat["dod"])
     if (pat["dod"].isna() & ~pat["_dod_absent"]).any():
         raise ValueError("patients.dod contains non-empty unparseable death dates")
-    adm = lower_cols(_raw_table(database, data_path, "admissions"))[
-        ["hadm_id", "deathtime"]
-    ].copy()
+    adm = lower_cols(_raw_table(database, data_path, "admissions"))
+    if "dischtime" not in adm.columns:
+        adm["dischtime"] = None
+    adm = adm[["hadm_id", "deathtime", "dischtime"]].copy()
     require_unique_keys(adm, ["hadm_id"], table="admissions")
     deathtime_absent = adm["deathtime"].isna() | adm["deathtime"].astype(
         "string"
@@ -181,8 +196,10 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
         raise ValueError(
             "admissions.deathtime contains non-empty unparseable death times"
         )
+    adm["dischtime"] = pd.to_datetime(_parse_source_dates(adm["dischtime"]), errors="coerce")
     df = icu.merge(pat, on="subject_id", how="left", validate="many_to_one", indicator=True)
     df = df.merge(adm, on="hadm_id", how="left", validate="many_to_one")
+    icu_source = df.pop("dbsource")
     # MIMIC patients.dod is a DATE, not a death timestamp; admissions.deathtime
     # records the time of a death in that hospital admission.  Time a death by
     # its recorded time when the stay's own admission records one at or after
@@ -213,6 +230,23 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     # Do not borrow the MIMIC-IV 2.0+ contract for failed joins or date
     # parsing failures. Those do not establish follow-up.
     df["followup_days"] = np.where(documented_absence, 365.0, np.nan)
+    if database in {"mimic", "mimic_demo"}:
+        # MIMIC-III patients.dod holds Social Security deaths up to 90 days
+        # after the hospital discharge for MetaVision patients and up to four
+        # years for CareVue patients (MIMIC-III patients table documentation).
+        # A stay charted in both systems takes the shorter bound.
+        dbsource = icu_source.reindex(df.index).astype("string").str.strip().str.lower()
+        bound_days = pd.Series(
+            np.where(dbsource.eq("carevue"), 4 * 365.0, 90.0), index=df.index
+        )
+        discharge_days = (df["dischtime"] - df["intime"]).dt.total_seconds() / 86400.0
+        documented = (
+            df["_merge"].eq("both")
+            & df["_dod_absent"].eq(True)
+            & dbsource.isin(["carevue", "metavision", "both"])
+            & (discharge_days >= 0)
+        )
+        df["followup_days"] = (discharge_days + bound_days).where(documented)
     return df.rename(columns={stay_col: "_stay", "intime": "_intime", "outtime": "_outtime"})[
         [
             "_stay",
@@ -267,6 +301,35 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
         df["followup_days"] = source_bound.where(
             valid_origin & ~unusable_death & (source_bound >= 0)
         ).to_numpy()
+    # Moving the bound to the ICU transfer leaves it a few hours short of a
+    # horizon equal to the category (median transfer 2 h after admission).
+    # Accept a shortfall under one day: censoring every such survivor would
+    # define the one-year horizon for the dead only.
+    df["followup_grace_days"] = 1.0
+    df["hadm_id"] = np.nan
+    return df
+
+
+def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
+    adm = lower_cols(_raw_table(database, data_path, "admissions")).reset_index(drop=True)
+    require_unique_keys(adm, ["admissionid"], table="admissions")
+    df = pd.DataFrame({"_stay": adm["admissionid"].values})
+    # admittedat is the 0 reference; dateofdeath / dischargedat are ms offsets.
+    admit = pd.to_numeric(adm.get("admittedat", 0), errors="coerce").fillna(0)
+    discharge = pd.to_numeric(adm.get("dischargedat"), errors="coerce")
+    dod = pd.to_numeric(adm["dateofdeath"], errors="coerce")
+    # A death in the ICU (destination "Overleden") is timed at the ICU
+    # discharge: dateofdeath is a registry date, often hours before it, and
+    # some such deaths carry none.  This is the ``death`` concept's rule.
+    destination = adm.get("destination", pd.Series(pd.NA, index=adm.index))
+    in_icu = destination.astype("string").str.strip().str.lower().eq("overleden").fillna(False)
+    dod = dod.where(~(in_icu & discharge.notna()), discharge)
+    df["days_to_death"] = (dod - admit) / 86400000.0  # ms -> days
+    df["los_days"] = (discharge - admit) / 86400000.0
+    # dateofdeath links registry deaths up to years after discharge in both
+    # admission-year groups (2003-2009 and 2010-2016); survivors are taken as
+    # followed for one year from ICU admission and no further.
+    df["followup_days"] = np.where(dod.isna(), 365.0, np.nan)
     df["hadm_id"] = np.nan
     return df
 
@@ -274,6 +337,9 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
 _STAY_OUT_COL = {
     "miiv": "stay_id",
     "miiv_demo": "stay_id",
+    "mimic": "icustay_id",
+    "mimic_demo": "icustay_id",
+    "aumc": "admissionid",
     "sic": "CaseID",
     "sic_demo": "CaseID",
 }
@@ -307,10 +373,12 @@ def _load_followup_outcomes(
             )
         return pd.DataFrame()
 
-    if db in ("miiv", "miiv_demo"):
+    if db in ("miiv", "miiv_demo", "mimic", "mimic_demo"):
         base = _mimic_stay_death_days(database, data_path)
     elif db in ("sic", "sic_demo"):
         base = _sic_stay_death_days(database, data_path)
+    elif db == "aumc":
+        base = _aumc_stay_death_days(database, data_path)
     else:  # pragma: no cover - guarded by FOLLOWUP_OUTCOME_DATABASES
         return pd.DataFrame()
 
@@ -321,6 +389,10 @@ def _load_followup_outcomes(
         base.get("followup_days", pd.Series(np.nan, index=base.index)),
         errors="coerce",
     ).to_numpy()
+    grace_days = pd.to_numeric(
+        base.get("followup_grace_days", pd.Series(0.0, index=base.index)),
+        errors="coerce",
+    ).fillna(0.0).to_numpy()
     # A survivor reaches a horizon only through follow-up.  Without follow-up
     # for any stay that records no death, every survivor would be missing and
     # the horizon would be defined for the dead only.
@@ -332,7 +404,7 @@ def _load_followup_outcomes(
     for name, horizon in _HORIZONS.items():
         died_by = has_death & (dtd <= horizon) & (dtd >= 0)
         known_alive = (has_death & (dtd > horizon)) | (
-            ~has_death & (followup_days >= horizon)
+            ~has_death & (followup_days + grace_days >= horizon)
         )
         endpoint = pd.array([pd.NA] * len(base), dtype="boolean")
         endpoint[died_by] = True

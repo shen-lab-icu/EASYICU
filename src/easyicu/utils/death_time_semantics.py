@@ -7,13 +7,14 @@ claim, so the export labels it in the outcome file's time-axis audit
 
 * MIMIC (III and IV): the death time the admission records;
 * SICdb: the recorded offset of death, for a death at hospital discharge;
-* AmsterdamUMCdb: the recorded date of death, for a death up to 72 h after
-  ICU discharge, as a proxy;
+* AmsterdamUMCdb: the ICU discharge time for a death in the ICU, else the
+  recorded date of death, for a death up to 72 h after ICU discharge, as a
+  proxy;
 * HiRID: kept, but labelled a proxy: its ricu-compatible death callback places
   a recorded death at the last observation of variables 110/200;
-* eICU: indexed by the ICU discharge offset while its status is
-  hospital-discharge mortality.  That coordinate is no time of death, so the
-  export issues none (``structurally_unavailable``).
+* eICU: the recorded hospital discharge offset, for a death at hospital
+  discharge (``patient.hospitaldischargeoffset``, minutes from unit
+  admission).
 
 This module owns that vocabulary and the one reading a consumer needs from it:
 whether a label's time is recorded to the hour or finer, so a window of hours
@@ -47,6 +48,9 @@ _RECORDED_DEATHTIME = "recorded_deathtime"
 _RECORDED_OFFSET_OF_DEATH = "recorded_offset_of_death_for_hospital_discharge_death"
 _DATE_OF_DEATH_PROXY = "recorded_dateofdeath_for_72h_post_icu_discharge_death_proxy"
 _LAST_OBSERVATION_PROXY = "last_recorded_observation_proxy_for_dead_discharge"
+_RECORDED_HOSPITAL_DISCHARGE_OFFSET = (
+    "recorded_hospital_discharge_offset_for_hospital_discharge_death"
+)
 
 #: The label for an export that names no database: the source's own event
 #: time, whose resolution nothing records.
@@ -62,6 +66,8 @@ NATIVE_EXPORT_DEATH_TIME_SEMANTICS: Mapping[str, str] = MappingProxyType(
         "mimic": _RECORDED_DEATHTIME,
         "mimic_demo": _RECORDED_DEATHTIME,
         "aumc": _DATE_OF_DEATH_PROXY,
+        "eicu": _RECORDED_HOSPITAL_DISCHARGE_OFFSET,
+        "eicu_demo": _RECORDED_HOSPITAL_DISCHARGE_OFFSET,
         "hirid": _LAST_OBSERVATION_PROXY,
         "sic": _RECORDED_OFFSET_OF_DEATH,
         "sic_demo": _RECORDED_OFFSET_OF_DEATH,
@@ -71,7 +77,11 @@ NATIVE_EXPORT_DEATH_TIME_SEMANTICS: Mapping[str, str] = MappingProxyType(
 #: Labels whose time is recorded to the hour or finer: a recorded timestamp,
 #: or a recorded offset in seconds.
 DEATH_TIME_READ_TO_THE_HOUR = frozenset(
-    {_RECORDED_DEATHTIME, _RECORDED_OFFSET_OF_DEATH}
+    {
+        _RECORDED_DEATHTIME,
+        _RECORDED_OFFSET_OF_DEATH,
+        _RECORDED_HOSPITAL_DISCHARGE_OFFSET,
+    }
 )
 #: Labels whose time no window of hours can be read by: a date, a proxy, a
 #: time of unrecorded resolution, or none.

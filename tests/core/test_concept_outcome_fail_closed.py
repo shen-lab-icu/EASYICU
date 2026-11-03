@@ -107,7 +107,8 @@ def test_a_cohort_with_no_deaths_still_returns_an_empty_result():
     result = _apply(_GeneralSource(general=general))
 
     assert isinstance(result, pd.DataFrame)
-    assert result.empty
+    # Survivors are False at their last observation (audit round 2, R2-03).
+    assert not result["death"].astype(bool).any()
 
 
 def test_a_cohort_of_survivors_is_zero_even_when_the_database_records_deaths(tmp_path):
@@ -132,7 +133,8 @@ def test_a_cohort_of_survivors_is_zero_even_when_the_database_records_deaths(tmp
     )
 
     assert isinstance(result, pd.DataFrame)
-    assert result.empty
+    assert result["patientid"].tolist() == [1]
+    assert result["death"].tolist() == [False]
 
 
 def test_a_dead_patient_in_the_cohort_still_fails_closed(tmp_path):
@@ -169,7 +171,8 @@ def test_a_dict_cohort_selector_narrows_the_same_way(tmp_path):
         patient_ids={"patientid": [1]},
     )
 
-    assert result.empty
+    assert result["patientid"].tolist() == [1]
+    assert result["death"].tolist() == [False]
 
 
 def test_deaths_dropped_for_want_of_a_timestamp_fail_closed(tmp_path):
@@ -297,8 +300,8 @@ def test_a_successful_read_still_produces_the_death_rows(tmp_path):
     general = pd.DataFrame({"patientid": [1, 2], "discharge_status": ["dead", "alive"]})
     result = _apply(_GeneralSource(general=general, base_path=tmp_path))
 
-    assert list(result["patientid"]) == [1]
-    assert bool(result["death"].iloc[0]) is True
+    assert list(result["patientid"]) == [1, 2]
+    assert result["death"].tolist() == [True, False]
 
 
 def test_hirid_death_accepts_flat_numbered_observation_shards(tmp_path):
@@ -324,9 +327,12 @@ def test_hirid_death_accepts_flat_numbered_observation_shards(tmp_path):
         frame=pd.DataFrame(),
     )
 
-    assert result["patientid"].tolist() == [1]
-    assert result["datetime"].tolist() == [pd.Timestamp("2026-01-02")]
-    assert result["death"].tolist() == [True]
+    assert result["patientid"].tolist() == [1, 2]
+    assert result["datetime"].tolist() == [
+        pd.Timestamp("2026-01-02"),
+        pd.Timestamp("2026-01-03"),
+    ]
+    assert result["death"].tolist() == [True, False]
 
 
 def test_hirid_death_accepts_cross_platform_path_with_apostrophe(tmp_path):

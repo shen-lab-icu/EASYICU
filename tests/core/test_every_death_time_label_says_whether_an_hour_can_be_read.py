@@ -57,7 +57,7 @@ def test_every_label_is_read_to_the_hour_or_not_exactly_once() -> None:
         ("sic", True),  # a recorded offset of death, in seconds
         ("aumc", False),  # a date of death, as a proxy
         ("hirid", False),  # the last observation, as a proxy
-        ("eicu", False),  # no death time is issued
+        ("eicu", True),  # a recorded hospital discharge offset, in minutes
         ("", False),  # no database named: the source's own time, resolution unknown
     ],
 )
