@@ -865,6 +865,15 @@ def _apply_callback(
             frame, concept_name=concept_name, data_source=data_source
         )
 
+    if expr == "emar_furosemide_equivalent":
+        # MIMIC-IV eMAR loop-diuretic doses, deduplicated against inputevents
+        # (owner: emar_diuretics; conversion: diuretics).
+        from .emar_diuretics import apply_emar_furosemide_equivalent
+
+        return apply_emar_furosemide_equivalent(
+            frame, source=source, concept_name=concept_name, data_source=data_source
+        )
+
     if expr == "eicu_order_exposure_duration":
         # eICU vasopressor orders of stays that chart no infusion are exposure
         # spans (owner: eicu_vasopressor_orders).

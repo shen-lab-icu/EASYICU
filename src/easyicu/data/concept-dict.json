@@ -27064,13 +27064,16 @@
      "_comment": "2026-11-03 extraction audit 2: 221794/228340 Furosemide (Lasix), 229639 'Bumetanide (Bumex)' (d_items, mg)."
     },
     {
-     "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
-     "table": "prescriptions",
-     "sub_var": "drug",
-     "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+     "extra_vars": [
+      "event_txt"
+     ],
+     "callback": "emar_administered",
+     "_comment": "2026-11-03 audit round 2 (D3): exposure is an administered eMAR event (owner concept/emar_administration.py), not a prescription order: MIIV had loop-diuretic orders without any administration in 3,488 stays, thiazide 5,413 orders against 3,093 given, acetazolamide 1,418 against 469."
     }
    ],
    "mimic": [
@@ -27271,13 +27274,16 @@
    ],
    "miiv": [
     {
-     "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
-     "table": "prescriptions",
-     "sub_var": "drug",
-     "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+     "extra_vars": [
+      "event_txt"
+     ],
+     "callback": "emar_administered",
+     "_comment": "2026-11-03 audit round 2 (D3): exposure is an administered eMAR event (owner concept/emar_administration.py), not a prescription order: MIIV had loop-diuretic orders without any administration in 3,488 stays, thiazide 5,413 orders against 3,093 given, acetazolamide 1,418 against 469."
     }
    ],
    "mimic": [
@@ -27441,13 +27447,16 @@
    ],
    "miiv": [
     {
-     "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
-     "table": "prescriptions",
-     "sub_var": "drug",
-     "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+     "extra_vars": [
+      "event_txt"
+     ],
+     "callback": "emar_administered",
+     "_comment": "2026-11-03 audit round 2 (D3): exposure is an administered eMAR event (owner concept/emar_administration.py), not a prescription order: MIIV had loop-diuretic orders without any administration in 3,488 stays, thiazide 5,413 orders against 3,093 given, acetazolamide 1,418 against 469."
     }
    ],
    "mimic": [
@@ -27593,13 +27602,16 @@
    ],
    "miiv": [
     {
-     "regex": "acetazol|diamox",
-     "table": "prescriptions",
-     "sub_var": "drug",
-     "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)acetazol|diamox",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+     "extra_vars": [
+      "event_txt"
+     ],
+     "callback": "emar_administered",
+     "_comment": "2026-11-03 audit round 2 (D3): exposure is an administered eMAR event (owner concept/emar_administration.py), not a prescription order: MIIV had loop-diuretic orders without any administration in 3,488 stays, thiazide 5,413 orders against 3,093 given, acetazolamide 1,418 against 469."
     }
    ],
    "mimic": [
@@ -27736,7 +27748,7 @@
      "val_var": "amount",
      "unit_var": "amountuom",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: IV amount (amountuom mg); 'dose'-unit rows (<10) are dropped. eMAR administrations are exposure-only: eMAR and inputevents can record the same ICU dose and cannot be de-duplicated reliably."
+     "_comment": "2026-11-03 extraction audit 2: IV amount (amountuom mg); 'dose'-unit rows (<10) are dropped. Round 2 (D1): eMAR doses are added by the emar sources below, which drop an eMAR dose that this inputevents source already records within 60 min."
     },
     {
      "ids": [
@@ -27750,6 +27762,51 @@
      "unit_var": "amountuom",
      "fe_route": "iv",
      "_comment": "2026-11-03 extraction audit 2: IV amount mg x 40."
+    },
+    {
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)^\\s*(furosemide|lasix)",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "event_txt",
+      "emar_id",
+      "pharmacy_id"
+     ],
+     "callback": "emar_furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "_comment": "2026-11-03 audit round 2 (D1): MIMIC-IV eMAR administrations (dose_given summed over emar_detail; route from emar_detail, else the prescriptions order), dropped when inputevents has the same drug within 60 min of the dose (owner concept/emar_diuretics.py)."
+    },
+    {
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)^\\s*(bumetanide|bumex)",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "event_txt",
+      "emar_id",
+      "pharmacy_id"
+     ],
+     "callback": "emar_furosemide_equivalent",
+     "fe_drug": "bumetanide",
+     "_comment": "2026-11-03 audit round 2 (D1): MIMIC-IV eMAR administrations (dose_given summed over emar_detail; route from emar_detail, else the prescriptions order), dropped when inputevents has the same drug within 60 min of the dose (owner concept/emar_diuretics.py)."
+    },
+    {
+     "table": "emar",
+     "sub_var": "medication",
+     "val_var": "medication",
+     "regex": "(?i)^\\s*(torsemide|torasemide|demadex)",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "event_txt",
+      "emar_id",
+      "pharmacy_id"
+     ],
+     "callback": "emar_furosemide_equivalent",
+     "fe_drug": "torasemide",
+     "_comment": "2026-11-03 audit round 2 (D1): MIMIC-IV eMAR administrations (dose_given summed over emar_detail; route from emar_detail, else the prescriptions order), dropped when inputevents has the same drug within 60 min of the dose (owner concept/emar_diuretics.py)."
     }
    ],
    "mimic": [
