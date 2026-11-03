@@ -36,6 +36,21 @@ assert.ok(!literature.includes('<img src=x'));
 assert.ok(!literature.includes('href="javascript:'));
 assert.equal(context.globalThis.pwned, false);
 
+const variables = renderer.render({
+  renderer: 'variable_sources', previewable: true, kind: 'log', evidence_id: 'research_context',
+  sha256: 'a'.repeat(64), value: { columns: 2, omitted: 3, rows: [
+    { column: 'lact_max', concept: 'lact', table: 'lab', selector: 'labname', items: ['lactate'], value_column: 'labresult',
+      unit: 'mmol/L', aggregation: 'max', window: { origin: 'icu_admission', start_hours: 0, end_hours: 24 } },
+    { column: 'sex', concept: '<img src=x onerror=bad()>', table: 'patient', items: [], value_column: 'gender' },
+  ] },
+}, {});
+assert.ok(variables.includes('Where each variable comes from'));
+assert.ok(variables.includes('<code>lact_max</code>') && variables.includes('labname = lactate'));
+assert.ok(variables.includes('value: <code>labresult</code>') && variables.includes('ICU admission 0–24 h'));
+assert.ok(variables.includes('3 more source rows are kept in the run record.'));
+assert.ok(variables.includes('&lt;img src=x') && !variables.includes('<img src=x'));
+assert.equal(renderer.title({ renderer: 'variable_sources' }), 'Variable definitions');
+
 const code = renderer.render({
   renderer: 'code', previewable: true, kind: 'code', evidence_id: 'code_1',
   sha256: 'a'.repeat(64), text: '<img src=x onerror="globalThis.pwned=true">\nestimate = 1.2',

@@ -162,6 +162,9 @@
     const parts = [];
     if (node.kind === 'statistic' && typeof facts.method === 'string') parts.push(esc(facts.method));
     if (node.kind === 'analysis_input' && rows) parts.push(esc(t(`${rows} rows`, `${rows} 行`)));
+    // A step that read several registered tables, all from this population.
+    const tables = lineageCount(facts.tables);
+    if (node.kind === 'analysis_input' && tables) parts.push(esc(t(`${tables} registered tables from one population`, `${tables} 份已登记数据表，来自同一研究人群`)));
     if (node.kind === 'cohort') {
       if (rows) parts.push(esc(t(`${rows} included`, `纳入 ${rows} 例`)));
       const start = facts.window_start_hours;

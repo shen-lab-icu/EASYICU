@@ -293,3 +293,92 @@ def test_a_legacy_source_without_registration_fields_stays_missing(tmp_path):
     assert chain[-1]["missing_reason"] == "source_identity_not_recorded"
     assert "official_sha256_matches" not in chain[-1]["facts"]
     assert "concept_count" not in chain[4]["facts"]
+
+
+def _with_second_input(context, fingerprint, summary):
+    # Two result tables; a declared cohort product would be preferred alone.
+    summary["input_bindings"][0]["input_key"] = "table:synthetic_subset"
+    summary["input_bindings"].append({
+        "input_key": "table:synthetic_estimates", "evidence_id": "cohort",
+        "sha256": context["materialized_inputs"]["cohort"]["cohort_sha256"], "loaded": True, "row_count": 8,
+    })
+
+
+def test_several_verified_inputs_from_one_population_keep_the_chain(tmp_path):
+    chain = project(source_store(tmp_path, change=_with_second_input, derived=True))["lineage"]
+    assert [node["status"] for node in chain] == ["current"] * 6
+    assert chain[1]["facts"] == {"tables": 2}
+    # No single table to open.
+    assert chain[1]["evidence_id"] is None and chain[1]["sha256"] is None
+
+
+def test_the_row_a_number_comes_from_names_its_one_input(tmp_path):
+    def change(context, fingerprint, summary):
+        _with_second_input(context, fingerprint, summary)
+        summary["rows"] = [{"evidence_id": "derived_cohort", "estimate": 2.5}]
+
+    store = source_store(tmp_path, change=change, derived=True)
+    store.register_numeric_claim(value="2.5", canonical=2.5, evidence_id="summary",
+                                 step_id="estimate", source_field="rows[0].estimate")
+    manuscript = (
+        "The synthetic estimate was 2.5[^value].\n\n"
+        "[^value]: value=2.5; step=estimate; field=rows[0].estimate; evidence=summary\n"
+    )
+    chain = build_manuscript_provenance(manuscript=manuscript, evidence=store, verify="mark")["claims"][0]["lineage"]
+    assert [node["status"] for node in chain] == ["current"] * 6
+    assert chain[1]["evidence_id"] == "derived_cohort" and chain[1]["facts"] == {"rows": 8}
+
+
+def test_one_unverifiable_input_among_several_stays_ambiguous(tmp_path):
+    def change(context, fingerprint, summary):
+        _with_second_input(context, fingerprint, summary)
+        summary["input_bindings"][1]["sha256"] = "c" * 64
+
+    chain = project(source_store(tmp_path, change=change, derived=True))["lineage"]
+    assert chain[1]["missing_reason"] == "analysis_input_ambiguous"
+    assert all(node["status"] == "missing" for node in chain[2:])
+
+
+@pytest.mark.parametrize("descends", [True, False])
+def test_a_host_cohort_reaches_the_run_cohort_only_through_its_verified_authority(
+    tmp_path, monkeypatch, descends,
+):
+    from easyicu.research_agent.intake import materialized_metadata
+
+    calls = []
+
+    def answer(root, **kwargs):
+        calls.append(kwargs)
+        return descends
+
+    monkeypatch.setattr(materialized_metadata, "materialized_cohort_descends_from", answer)
+
+    def change(context, fingerprint, summary):
+        table = tmp_path / "analysis.parquet"
+        table.write_bytes(b"synthetic-host-analysis-cohort")
+        # Registered with no input edge, as the host materialiser does.
+        record = store_holder["store"].register_file(
+            source_path=table, evidence_id="analysis_cohort", kind="table",
+            description="Synthetic host cohort", producer="cohort_repair", generation_mode="llm",
+            metadata={"materialized_cohort_authority_ref": {"sha256": "f" * 64}},
+        )
+        summary["input_bindings"][0].update(evidence_id=record.evidence_id, sha256=record.sha256)
+
+    store_holder = {}
+    original = EvidenceStore.__init__
+
+    def remember(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        store_holder.setdefault("store", self)
+
+    monkeypatch.setattr(EvidenceStore, "__init__", remember)
+    store = source_store(tmp_path, change=change)
+    chain = project(store)["lineage"]
+
+    assert calls and calls[0]["authority_sha256"] == "f" * 64
+    assert calls[0]["cohort_sha256"] == store.get("analysis_cohort").sha256
+    assert calls[0]["ancestor_cohort_sha256"] == store.get("cohort").sha256
+    if descends:
+        assert [node["status"] for node in chain] == ["current"] * 6
+    else:
+        assert chain[2]["missing_reason"] == "cohort_input_unlinked"

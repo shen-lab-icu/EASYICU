@@ -710,3 +710,67 @@ def test_reviewer_markdown_reference_opens_only_verified_json_sibling(
         assert build_evidence_preview(tmp_path, refs[0]["evidence_id"], digest)["renderer"] == "json"
     else:
         assert not any(ref["evidence_id"] == "review_json" for ref in refs)
+
+
+def _research_context(*, filler: int = 0, path: str = "/home/private/cohort.parquet") -> bytes:
+    binding = {
+        "metadata": {
+            "source_concept": "lact", "canonical_unit": "mmol/L", "aggregation": "max",
+            "source_lineage": [{"database": "eicu_demo", "table": "lab", "selector_variable": "labname",
+                                "item_ids": ["lactate", 51], "value_variable": "labresult",
+                                "time_variable": "labresultoffset", "callback": None}],
+        },
+        "derivation_window": {"origin": "icu_admission", "start_hours": 0.0, "end_hours": 24.0},
+        "representation_transform": "window_numeric_max",
+    }
+    return json.dumps({
+        "cohort": {"provenance": {"cohort_path": path}},
+        "materialized_inputs": {"cohort": {"column_bindings": {
+            "lact_max": {"binding": binding, "binding_sha256": "a" * 64},
+            "../escape": {"binding": binding},
+        }}},
+        "padding": "x" * filler,
+    }).encode()
+
+
+def test_the_research_context_opens_as_its_variable_sources(tmp_path: Path) -> None:
+    raw = _research_context(filler=600_000)
+    _, digest = _register(
+        tmp_path, evidence_id="research_context", kind="log",
+        name="research_context__research_context.json", content=raw,
+        produced_by_step=None, producer="pipeline",
+    )
+    preview = build_evidence_preview(tmp_path, "research_context", digest)
+
+    assert len(raw) > 512 * 1024
+    assert preview["renderer"] == "variable_sources" and preview["previewable"]
+    assert preview["value"]["columns"] == 2 and preview["value"]["omitted"] == 0
+    [row] = preview["value"]["rows"]
+    assert row["column"] == "lact_max" and row["concept"] == "lact"
+    assert row["table"] == "lab" and row["selector"] == "labname"
+    assert row["items"] == ["lactate", "51"]
+    assert row["value_column"] == "labresult" and row["unit"] == "mmol/L" and row["aggregation"] == "max"
+    assert row["window"] == {"origin": "icu_admission", "start_hours": 0.0, "end_hours": 24.0}
+    # The context's other content, host paths included, never reaches the browser.
+    assert "/home/private" not in json.dumps(preview["value"]) and "padding" not in json.dumps(preview["value"])
+
+
+def test_only_the_pipelines_digest_pinned_context_gets_the_variable_view(tmp_path: Path) -> None:
+    raw = _research_context()
+    _, digest = _register(
+        tmp_path, evidence_id="research_context", kind="log",
+        name="research_context__research_context.json", content=raw,
+        produced_by_step=None, producer="runner",
+    )
+    assert build_evidence_preview(tmp_path, "research_context", digest)["renderer"] != "variable_sources"
+
+    other = tmp_path / "other"
+    path, digest = _register(
+        other, evidence_id="research_context", kind="log",
+        name="research_context__research_context.json", content=raw,
+        produced_by_step=None, producer="pipeline",
+    )
+    path.write_bytes(raw.replace(b"labname", b"labNAME"))
+    with pytest.raises(EvidencePreviewError) as exc:
+        build_evidence_preview(other, "research_context", digest)
+    assert exc.value.code == "evidence_preview_digest_mismatch"

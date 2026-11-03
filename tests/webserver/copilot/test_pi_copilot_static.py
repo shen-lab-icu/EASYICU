@@ -73,7 +73,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-demo-walkthrough.css?v=20261026-demo3" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
-        "js/screens-guided-pi-evidence-preview.js?v=20261102-contrast1" in index
+        "js/screens-guided-pi-evidence-preview.js?v=20261103-variables1" in index
     )
     assert (
         "js/screens-guided-pi-technical-report.js?v=20261022-plain3"

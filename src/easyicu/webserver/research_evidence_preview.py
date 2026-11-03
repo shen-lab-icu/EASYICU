@@ -24,6 +24,10 @@ from typing import Any, Dict, Iterable, Mapping
 SCHEMA_VERSION = "easyicu.web-evidence-preview/2"
 MAX_PREVIEW_BYTES = 512 * 1024
 MAX_LITERATURE_SOURCE_BYTES = 4 * 1024 * 1024
+#: The run's research context carries every column's dictionary binding; only
+#: its projected variable sources reach the browser, never the file itself.
+MAX_RESEARCH_CONTEXT_BYTES = 16 * 1024 * 1024
+MAX_VARIABLE_SOURCE_ROWS = 64
 MAX_TABLE_ROWS = 100
 MAX_TABLE_COLUMNS = 24
 
@@ -799,6 +803,30 @@ def _json_preview(base: Mapping[str, Any], raw: bytes) -> Dict[str, Any]:
     return {**base, "renderer": "json", "previewable": True, "value": value}
 
 
+def _variable_sources_preview(base: Mapping[str, Any], raw: bytes) -> Dict[str, Any] | None:
+    """Where each analysis variable comes from, as the step trace projects it."""
+
+    from easyicu.webserver.run_step_trace import column_source_rows
+
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    cohort = value.get("materialized_inputs") if isinstance(value, Mapping) else None
+    cohort = cohort.get("cohort") if isinstance(cohort, Mapping) else None
+    columns = cohort.get("column_bindings") if isinstance(cohort, Mapping) else None
+    if not isinstance(columns, Mapping) or not columns:
+        return None
+    rows, omitted = column_source_rows(
+        {name: entry.get("binding") for name, entry in columns.items() if isinstance(entry, Mapping)},
+        limit=MAX_VARIABLE_SOURCE_ROWS,
+    )
+    return {
+        **base, "renderer": "variable_sources", "previewable": True,
+        "value": {"rows": rows, "omitted": omitted, "columns": len(columns)},
+    }
+
+
 def _checked_literature_result(result: Dict[str, Any]) -> Dict[str, Any]:
     """Scan the whole projection, including the metadata-only fallback."""
 
@@ -924,6 +952,22 @@ def build_evidence_preview(
                 "The evidence file digest no longer matches its registry record.",
             )
         return _literature_cards_preview(base, raw)
+    if (
+        clean_id == "research_context"
+        and kind == "log"
+        and suffix == ".json"
+        and record.get("producer") == "pipeline"
+        and size <= MAX_RESEARCH_CONTEXT_BYTES
+    ):
+        raw = _read_regular_file(path, max_bytes=MAX_RESEARCH_CONTEXT_BYTES)
+        if hashlib.sha256(raw).hexdigest() != registered_sha:
+            raise EvidencePreviewError(
+                "evidence_preview_digest_mismatch",
+                "The evidence file digest no longer matches its registry record.",
+            )
+        variables = _variable_sources_preview(base, raw)
+        if variables is not None:
+            return variables
     if suffix in _RAW_TABLE_SUFFIXES or size > MAX_PREVIEW_BYTES:
         if _sha256_file(path) != registered_sha:
             raise EvidencePreviewError(
