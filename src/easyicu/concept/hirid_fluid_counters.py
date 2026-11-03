@@ -19,9 +19,16 @@ observations (2026-11-03) established their semantics from the data:
 Hourly volumes are therefore derived from counter increments, never from the
 counter level. Within one 12:00-anchored day the increment is the rise of the
 running maximum, which is non-negative and sums to the day's highest reading;
-an intra-day downward correction does not count twice. Each increment is
-allocated over the interval since the previous reading of the same day (or
-since the 12:00 restart) with exact volume conservation.
+an intra-day downward correction does not count twice. A reading below half
+of the running maximum is an off-schedule restart, not a correction: the
+running maximum restarts from it (round-2 audit F1: 43 reset-like drops of
+530 intra-day decreases in a 10% sample; ignoring them lost 4.6% of output).
+Each increment is allocated over the interval since the previous reading of
+the same day (or since the 12:00 restart) with exact volume conservation.
+
+A net balance needs both counters on the same 12:00-anchored day; a day with
+only one counter has no balance (round-2 audit F1: 6.2% of patient-days were
+input-only and read as +input).
 """
 
 from __future__ import annotations
@@ -37,6 +44,27 @@ COUNTER_RESET_HOUR = 12
 # Readings above 100 L in one day are the int64/float overflow sentinels seen
 # in the export (~9.2e18 and ~9.2e31), not volumes.
 MAX_DAILY_COUNTER_ML = 100_000.0
+#: A reading below this share of the running maximum restarts the counter.
+RESTART_FRACTION = 0.5
+
+
+def _restart_aware_increments(ids: np.ndarray, days: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Increment of each reading over its block's running maximum.
+
+    Rows are sorted by stay and time.  A new stay or 12:00 day starts a block;
+    so does a reading below ``RESTART_FRACTION`` of the running maximum.
+    """
+    out = np.zeros(len(values), dtype=float)
+    peak = 0.0
+    for i in range(len(values)):
+        if i == 0 or ids[i] != ids[i - 1] or days[i] != days[i - 1]:
+            peak = 0.0
+        elif values[i] < RESTART_FRACTION * peak:
+            peak = 0.0
+        if values[i] > peak:
+            out[i] = values[i] - peak
+            peak = values[i]
+    return out
 
 
 def counter_increments(
@@ -78,11 +106,9 @@ def counter_increments(
     offset = pd.Timedelta(hours=reset_hour)
     data["day_start"] = (data["end"] - offset).dt.normalize() + offset
     group = [id_col, "day_start"]
-    running_max = data.groupby(group, sort=False)["value"].cummax()
-    previous_max = running_max.groupby(
-        [data[id_col], data["day_start"]], sort=False
-    ).shift(1).fillna(0.0)
-    data["volume"] = running_max - previous_max
+    data["volume"] = _restart_aware_increments(
+        data[id_col].to_numpy(), data["day_start"].to_numpy(), data["value"].to_numpy(dtype=float)
+    )
     previous_time = data.groupby(group, sort=False)["end"].shift(1)
     data["start"] = previous_time.fillna(data["day_start"])
     return data[columns].reset_index(drop=True)
@@ -197,6 +223,14 @@ def hirid_counter_frame(
         both = set(inflow[id_col]) & set(outflow[id_col])
         if not both:
             return pd.DataFrame(columns=output_columns)
+        offset = pd.Timedelta(hours=COUNTER_RESET_HOUR)
+        reading_day = (pd.to_datetime(absolute["_abs_time"], errors="coerce") - offset).dt.normalize() + offset
+        counted = pd.to_numeric(absolute[value_col], errors="coerce").between(0, MAX_DAILY_COUNTER_ML)
+        days = pd.DataFrame({id_col: absolute[id_col], "day": reading_day, "item": items}).loc[counted]
+        per_day = days.groupby([id_col, "day"])["item"].agg(
+            lambda s: {INPUT_COUNTER_ID, OUTPUT_COUNTER_ID} <= set(s)
+        )
+        complete_days = set(per_day.index[per_day.to_numpy(dtype=bool)])
         merged = pd.merge(
             inflow.loc[inflow[id_col].isin(both)],
             outflow.loc[outflow[id_col].isin(both)],
@@ -207,7 +241,13 @@ def hirid_counter_frame(
         merged[concept_name] = merged["volume_in"].fillna(0.0) - merged[
             "volume_out"
         ].fillna(0.0)
-        hourly = merged[[id_col, "hour", concept_name]]
+        # The day of an hour is the 12:00 day of its clock start.
+        clock = pd.to_datetime(merged[id_col].map(origins), errors="coerce") + pd.to_timedelta(
+            merged["hour"], unit="h"
+        )
+        hour_day = (clock - offset).dt.normalize() + offset
+        keep = [key in complete_days for key in zip(merged[id_col], hour_day)]
+        hourly = merged.loc[keep, [id_col, "hour", concept_name]]
     else:
         parts = [volume(int(c)) for c in sorted(items.dropna().unique())]
         parts = [p for p in parts if not p.empty]

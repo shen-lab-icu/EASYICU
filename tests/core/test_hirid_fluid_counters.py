@@ -183,3 +183,32 @@ def test_dictionary_reads_the_counters_through_the_owner_callbacks():
     )
     assert result["datetime"].tolist() == [0.0]
     assert result["total_input_ml"].tolist() == pytest.approx([40.0])
+
+
+def test_a_drop_below_half_the_running_maximum_is_an_off_schedule_restart():
+    readings = _readings(
+        1,
+        OUTPUT_COUNTER_ID,
+        ["2020-01-01 13:00", "2020-01-01 15:00", "2020-01-01 16:00", "2020-01-01 18:00", "2020-01-01 19:00"],
+        # 800 -> 650 is a correction; 650 -> 50 restarts the counter.
+        [400.0, 800.0, 650.0, 50.0, 250.0],
+    )
+    out = counter_increments(readings, id_col="patientid", time_col="datetime", value_col="value")
+    assert out["volume"].tolist() == [400.0, 400.0, 0.0, 50.0, 200.0]
+
+
+def test_net_balance_is_missing_on_a_day_with_only_the_input_counter():
+    readings = pd.concat(
+        [
+            _readings(1, INPUT_COUNTER_ID, ["2020-01-01 10:00", "2020-01-01 14:00"], [100.0, 200.0]),
+            _readings(1, OUTPUT_COUNTER_ID, ["2020-01-01 10:00"], [50.0]),
+        ],
+        ignore_index=True,
+    )
+    out = hirid_counter_frame(
+        _relative(readings), concept_name="fluid_balance", origins=ORIGINS,
+        value_col="value", time_col="datetime", net_balance=True,
+    )
+    # The 12:00-13:00 day before admission has both counters; the next day has input only.
+    hours = out["datetime"].tolist()
+    assert hours and max(hours) < 2.5
