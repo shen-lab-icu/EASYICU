@@ -332,3 +332,8 @@ def test_v5_hirid_syringes_within_five_minutes_are_one_episode():
     out = hirid_duration(frame, concept_name="norepi_dur", index_col="givenat", grp_var="infusionid")
     # Syringe 2 starts 3 minutes after syringe 1 ends; syringe 3 starts 2.8 h later.
     assert out[["givenat", "norepi_dur"]].values.tolist() == [[0.0, 7.0], [10.0, 2.0]]
+
+
+def test_p6_sic_tidal_volume_below_100_ml_is_missing():
+    [source] = _sources("tidal_vol", "sic")
+    assert source["ids"] == [718] and source["callback"] == "transform_fun(na_below(100))"
