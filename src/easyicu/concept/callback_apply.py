@@ -121,6 +121,32 @@ def _patient_id_column(frame: pd.DataFrame, data_source=None) -> Optional[str]:
     return None
 
 
+_SIC_SINGLE_DOSE_FLAG = "IsSingleDose"
+
+
+def _drop_sic_single_doses(frame: pd.DataFrame, source: ConceptSource, concept_name: str) -> pd.DataFrame:
+    """Keep only SICdb continuous-infusion rows when the source declares the flag.
+
+    SICdb ``medication`` single doses (``IsSingleDose`` = 1) are one-minute
+    pushes whose ``AmountPerMinute`` equals the whole bolus ``Amount``; only
+    continuous rows (``IsSingleDose`` = 0, ``Amount`` = rate x minutes) carry
+    a pump rate. A source opts in through ``extra_vars``; a declared flag that
+    did not reach the callback is a loader failure, not "all continuous".
+    """
+    extra_vars = source.params.get("extra_vars", []) if source.params else []
+    if isinstance(extra_vars, str):
+        extra_vars = [extra_vars]
+    if _SIC_SINGLE_DOSE_FLAG not in extra_vars:
+        return frame
+    if _SIC_SINGLE_DOSE_FLAG not in frame.columns:
+        raise ValueError(
+            f"sic_single_dose_flag_missing: {concept_name} declares "
+            f"{_SIC_SINGLE_DOSE_FLAG} but the loaded medication rows lack it"
+        )
+    flag = pd.to_numeric(frame[_SIC_SINGLE_DOSE_FLAG].astype("object").replace({True: 1, False: 0}), errors="coerce")
+    return frame.loc[flag == 0].drop(columns=[_SIC_SINGLE_DOSE_FLAG])
+
+
 def _duckdb_sql_path_literal(path) -> str:
     """Quote a filesystem path for a DuckDB SQL string literal."""
 
@@ -3313,23 +3339,33 @@ def _apply_callback(
             target_unit=target_unit,
         )
 
-    # Handle SICdb sic_rate_kg callback
-    # R ricu logic: add_weight + multiply by 10^6 / weight + expand
-    if expr == "sic_rate_kg":
+    # Handle SICdb sic_rate_kg / sic_rate_units callbacks
+    # R ricu logic: add_weight + multiply by 10^6 / weight + expand.
+    # ``sic_rate_units`` is the same continuous-infusion path for drugs whose
+    # AmountPerMinute is already a units/min rate (vasopressin, IE/min): no
+    # mass conversion and no weight scaling.
+    if expr in ("sic_rate_kg", "sic_rate_units"):
         val_var = source.value_var or concept_name
         # Fix: source.value_var may have been renamed to concept_name during loading
         if val_var not in frame.columns and concept_name in frame.columns:
             val_var = concept_name
         stop_var = source.params.get("stop_var") if source.params else None
-        
+
         if not stop_var:
             for candidate in ["OffsetDrugEnd", "stop", "endtime"]:
                 if candidate in frame.columns:
                     stop_var = candidate
                     break
-        
+
+        frame = _drop_sic_single_doses(frame, source, concept_name)
+
+        if expr == "sic_rate_units":
+            if val_var in frame.columns:
+                frame = frame.copy()
+                frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+                frame = frame.drop(columns=['weight'], errors='ignore')
         # Try to add weight
-        if 'weight' not in frame.columns and resolver is not None and data_source is not None:
+        elif 'weight' not in frame.columns and resolver is not None and data_source is not None:
             try:
                 _PATIENT_ID_COLS_W = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
                 id_cols = [c for c in _PATIENT_ID_COLS_W if c in frame.columns]
@@ -3355,16 +3391,25 @@ def _apply_callback(
                                 weight_agg = weight_df.groupby(weight_id_col)['weight'].first().reset_index()
                                 frame = frame.merge(weight_agg, on=weight_id_col, how='left')
             except Exception:
-                pass
-        
+                logger.warning("SICdb %s: weight lookup failed; rates without weight are dropped", concept_name)
+
         # Convert source grams/min to mcg/kg/min using the weight concept's kg.
-        if 'weight' in frame.columns and val_var in frame.columns:
+        # A row without a usable weight has no mcg/kg/min value: keeping the raw
+        # g/min number would publish a ~1e-5 "rate" under the kg unit.
+        if expr == "sic_rate_kg" and val_var in frame.columns:
             frame = frame.copy()
             frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
-            frame['weight'] = pd.to_numeric(frame['weight'], errors='coerce')
-            mask = frame['weight'] > 0
-            frame.loc[mask, val_var] = frame.loc[mask, val_var] * 1e6 / frame.loc[mask, 'weight']
+            weight = (
+                pd.to_numeric(frame['weight'], errors='coerce')
+                if 'weight' in frame.columns
+                else pd.Series(np.nan, index=frame.index)
+            )
+            mask = weight > 0
+            frame.loc[mask, val_var] = frame.loc[mask, val_var] * 1e6 / weight[mask]
+            frame.loc[~mask, val_var] = np.nan
             frame = frame.drop(columns=['weight'], errors='ignore')
+        if val_var in frame.columns:
+            frame = frame[frame[val_var].notna()]
         
         # Expand time range: convert each (start, stop) interval into hourly rows
         index_var = source.index_var

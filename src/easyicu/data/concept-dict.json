@@ -495,6 +495,20 @@
      "stop_var": "endtime",
      "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )"
     }
+   ],
+   "sic": [
+    {
+     "ids": 1550,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sic_rate_units",
+     "_comment": "1550=Vasopressin (d_references unit IE). Continuous rows (IsSingleDose=0) carry Amount = AmountPerMinute x minutes, so AmountPerMinute is IE/min = units/min; one-minute single doses are excluded."
+    }
    ]
   }
  },
@@ -10522,7 +10536,7 @@
    ],
    "eicu": [
     {
-     "regex": "^norepi",
+     "regex": "(?i)^(?:norepi|levophed)",
      "table": "infusiondrug",
      "sub_var": "drugname",
      "callback": "eicu_duration(gap_length = hours(5L))",
@@ -10531,7 +10545,7 @@
    ],
    "eicu_demo": [
     {
-     "regex": "^norepi",
+     "regex": "(?i)^(?:norepi|levophed)",
      "table": "infusiondrug",
      "sub_var": "drugname",
      "callback": "eicu_duration(gap_length = hours(5L))",
@@ -10716,7 +10730,7 @@
    ],
    "eicu": [
     {
-     "regex": "^norepi.*\\(.+\\)$",
+     "regex": "(?i)^(?:norepi|levophed).*\\(.+\\)$",
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
@@ -10726,7 +10740,7 @@
    ],
    "eicu_demo": [
     {
-     "regex": "^norepi.*\\(.+\\)$",
+     "regex": "(?i)^(?:norepi|levophed).*\\(.+\\)$",
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
@@ -11850,6 +11864,20 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "callback": "mimic_rate_mv"
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1593,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sic_rate_kg",
+     "_comment": "1593=Phenylephrin (d_references unit g). Continuous rows (IsSingleDose=0) carry AmountPerMinute in g/min like norepinephrine; one-minute single-dose pushes (most 1593 rows) are excluded."
     }
    ]
   }

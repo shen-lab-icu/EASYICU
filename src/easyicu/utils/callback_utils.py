@@ -3706,7 +3706,7 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # Load weight from patient table if data_source is available
         if data_source is not None and frame['_weight'].isna().any():
             try:
-                from .datasource import FilterSpec, FilterOp
+                from ..datasource import FilterSpec, FilterOp
                 
                 # Determine ID column
                 id_col = None
@@ -3746,7 +3746,7 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
                         frame.loc[mask, '_weight'] = frame.loc[mask, '_loaded_weight']
                         frame = frame.drop(columns=['_loaded_weight'], errors='ignore')
             except Exception as e:
-                logging.debug(f"Failed to load weight from patient table: {e}")
+                logging.warning("eICU kg-rate weight fallback failed; non-per-kg rates without patientweight are dropped: %s", e)
         
         frame['_weight'] = pd.to_numeric(frame['_weight'], errors='coerce')
         frame.loc[frame['_weight'] <= 0, '_weight'] = np.nan
@@ -3789,9 +3789,17 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # Step 4: nanograms/ → mcg/ (÷1000)
         _ng = _unit_s.str.startswith('nanograms/').values & ~_invalid.values
         _val[_ng] /= 1000
+        if _ng.any():
+            _unit_arr[_ng] = np.array(['mcg' + u[len('nanograms'):] for u in _unit_arr[_ng]])
+
+        # Only a recognised dose rate survives: an unknown or non-dose unit
+        # (or a drugname without one) is exposure evidence, never a guessed rate.
+        _unit_final = pd.Series(_unit_arr)
+        _unrecognised = ~_unit_final.isin(['mcg/min', 'mcg/kg/min']).values & ~_invalid.values
+        _val[_unrecognised] = np.nan
+        _invalid = _invalid | _unrecognised
 
         # Step 5: non-/kg/ units → ÷weight
-        _unit_final = pd.Series(_unit_arr)
         _no_kg = ~_unit_final.str.contains('/kg/', na=False).values & ~_invalid.values
         _missing_weight = _no_kg & _wt_bad
         _val[_missing_weight] = np.nan
@@ -4054,6 +4062,9 @@ def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
             work["unit_var"] = np.nan
 
         work = _normalize_units(work, val_var, "unit_var")
+        # Rows without a recognised dose unit count as exposure elsewhere,
+        # never as a guessed units/min rate.
+        work.loc[~work["unit_var"].str.lower().eq("units/min"), val_var] = np.nan
 
         # Expand into hourly windows so that easyicu matches ricu's exposure logic.
         expanded = expand_intervals(work, keep_vars=[val_var, "unit_var"])
