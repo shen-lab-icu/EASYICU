@@ -3723,6 +3723,10 @@
   "description": "diastolic blood pressure",
   "omopid": 4154790,
   "category": "vitals",
+  "source_channel_priority": [
+   "invasive",
+   "nibp"
+  ],
   "sources": {
    "aumc": [
     {
@@ -3764,10 +3768,24 @@
    ],
    "hirid": [
     {
-     "ids": 120,
+     "ids": [
+      120
+     ],
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit round 2 (H4): 120 invasive diastolic arterial pressure."
+    },
+    {
+     "ids": [
+      620
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit round 2 (H4): 620 non-invasive diastolic arterial pressure; used in an hour without an invasive value, as for map 110/610."
     }
    ],
    "miiv": [
@@ -16806,6 +16824,10 @@
   "description": "systolic blood pressure",
   "omopid": 4152194,
   "category": "vitals",
+  "source_channel_priority": [
+   "invasive",
+   "nibp"
+  ],
   "sources": {
    "aumc": [
     {
@@ -16847,10 +16869,24 @@
    ],
    "hirid": [
     {
-     "ids": 100,
+     "ids": [
+      100
+     ],
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit round 2 (H4): 100 invasive systolic arterial pressure."
+    },
+    {
+     "ids": [
+      600
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit round 2 (H4): 600 non-invasive systolic arterial pressure; used in an hour without an invasive value, as for map 110/610."
     }
    ],
    "miiv": [

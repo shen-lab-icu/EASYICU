@@ -395,3 +395,10 @@ def test_s6_albumin_brand_names_match():
 def test_g5_pafi_pairs_the_lowest_pao2_with_the_median_fio2_of_the_hour():
     assert DICTIONARY["pafi"]["concepts"] == ["po2", "fio2"]
     assert DICTIONARY["pafi"]["aggregate"] == ["min", "median"]
+
+
+@pytest.mark.parametrize(("concept", "invasive", "cuff"), [("sbp", 100, 600), ("dbp", 120, 620)])
+def test_h4_hirid_cuff_pressure_fills_hours_without_an_arterial_line(concept, invasive, cuff):
+    assert DICTIONARY[concept]["source_channel_priority"] == ["invasive", "nibp"]
+    channels = {s["source_channel"]: s["ids"] for s in _sources(concept, "hirid")}
+    assert channels == {"invasive": [invasive], "nibp": [cuff]}
