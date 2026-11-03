@@ -1,6 +1,8 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [],
+    "source_digest_changes": [
+      "src/easyicu/data/concept-dict.json"
+    ],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -154,9 +156,16 @@
       "reason": "User-requested third 2026-11-03 reseal of concept-dict.json (arterial-only base excess, D-dimer FEU to DDU, set-only PEEP)",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "2026-11-03 fourth concept-dict reseal (extraction audit round 2)",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "User-requested third 2026-11-03 reseal of concept-dict.json (arterial-only base excess, D-dimer FEU to DDU, set-only PEEP)",
+  "baseline_reason": "2026-11-03 fourth concept-dict reseal (extraction audit round 2)",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -167,7 +176,7 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "6a112c791b91de7ba25fd3a18d4cee0418a6c189b7291c9e374dbc944dfd059d",
+    "src/easyicu/data/concept-dict.json": "60fe4dec61e5c879185f2605e7fe5a6d582396e78c4391a8f5d77defee74033e",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
     "src/easyicu/data/sofa2-dict.json": "30e7349cfb336961ac8832e0721276edff7bca75e4a85bb4313121afc9806d2d",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",

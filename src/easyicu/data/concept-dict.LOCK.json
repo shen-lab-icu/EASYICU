@@ -2,7 +2,7 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "6a112c791b91de7ba25fd3a18d4cee0418a6c189b7291c9e374dbc944dfd059d",
+  "concept_dict_sha256": "60fe4dec61e5c879185f2605e7fe5a6d582396e78c4391a8f5d77defee74033e",
   "sofa2_dict_sha256": "30e7349cfb336961ac8832e0721276edff7bca75e4a85bb4313121afc9806d2d",
   "total_concepts": 268,
   "new_this_round": [],
@@ -136,6 +136,10 @@
     {
       "git_commit": "0e65c69273af52357c9e89f400d0951a63384183",
       "change": "User-requested 2026-11-03 third reseal of concept-dict.json: arterial-only base excess (MIMIC-III/IV, AUMCdb) and AUMCdb blood-gas bicarbonate, MIMIC D-dimer FEU rows converted to DDU (FEU / 2), and peep restricted to the ventilator setting (as peep_set) in MIMIC-III/IV, AUMCdb and HiRID."
+    },
+    {
+      "git_commit": "181345855b5787152e886a95efe6beb30fe26de7",
+      "change": "User-requested 2026-11-03 fourth reseal of concept-dict.json (extraction audit round 2): death known for survivors and timed at hospital/ICU discharge (HiRID, SICdb, AUMCdb Overleden, eICU hospitaldischargeoffset); HiRID noradrenaline bolus out of infusions; MIMIC-III MetaVision Rewritten orders out of rates and intake, CareVue mcg/min rates per kg; AUMCdb PaCO2 kPa conversion, blood-gas SO2 out of SpO2, set tidal volume 100-1500 mL; SICdb bicarb 667 out; eICU HICL-only thiazide/torsemide/acetazolamide orders."
     }
   ]
 }
