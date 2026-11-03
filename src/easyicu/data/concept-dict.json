@@ -74,6 +74,41 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4042,
+      4044,
+      4045,
+      4157,
+      4704,
+      6071,
+      6334,
+      8259,
+      8466,
+      8738,
+      10093,
+      10132,
+      12383,
+      12384,
+      26808,
+      26809,
+      32900,
+      35282,
+      37021,
+      37442
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (121,206 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -100,6 +135,41 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4042,
+      4044,
+      4045,
+      4157,
+      4704,
+      6071,
+      6334,
+      8259,
+      8466,
+      8738,
+      10093,
+      10132,
+      12383,
+      12384,
+      26808,
+      26809,
+      32900,
+      35282,
+      37021,
+      37442
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (121,206 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "hirid": [
@@ -834,7 +904,7 @@
   "sources": {
    "eicu": [
     {
-     "regex": "(?i)\\balbumin\\s+(human\\s+)?[245]\\s*%|albumin\\s+(human\\s+)?(5|25)",
+     "regex": "(?i)\\balbumin\\s+(human\\s+)?[245]\\s*%|albumin\\s+(human\\s+)?(5|25)|\\balbumin\\s+human\\b|\\balbumin\\s*\\(human\\)|buminate|plasbumin|albutein|albuked|flexbumin",
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
@@ -847,11 +917,27 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2728
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (17,307 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
     {
-     "regex": "(?i)\\balbumin\\s+(human\\s+)?[245]\\s*%|albumin\\s+(human\\s+)?(5|25)",
+     "regex": "(?i)\\balbumin\\s+(human\\s+)?[245]\\s*%|albumin\\s+(human\\s+)?(5|25)|\\balbumin\\s+human\\b|\\balbumin\\s*\\(human\\)|buminate|plasbumin|albutein|albuked|flexbumin",
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
@@ -864,6 +950,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2728
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (17,307 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -1135,6 +1237,23 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      83,
+      17793
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (19,674 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "amiodarone|cordarone",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -1159,6 +1278,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      83,
+      17793
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (19,674 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "amiodarone|cordarone",
@@ -1342,6 +1478,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      1820
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (18,608 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -1359,6 +1511,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      1820
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (18,608 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "sic": [
@@ -1861,6 +2029,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      523
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,181 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -1878,6 +2062,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      523
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,181 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -2449,6 +2649,24 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      582,
+      585,
+      37109
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (20,587 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -2466,6 +2684,24 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      582,
+      585,
+      37109
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (20,587 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -2597,6 +2833,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      10278
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,863 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -2621,6 +2873,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      10278
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,863 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -3017,18 +3285,21 @@
     },
     {
      "ids": [
-      2876,
-      36808,
       2866,
-      36875,
+      2875,
+      2876,
       2879,
       2888,
-      2889
+      2889,
+      34381,
+      36808,
+      36875,
+      38176
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: medication rows without a drug name carry only the HICL code. The codes are those the named rows of the same table use for systemic corticosteroids: 2876 and 36808 methylprednisolone (sodium succinate) injection, 2866 and 36875 hydrocortisone sodium succinate injection, 2879 prednisone tablets, 2888 dexamethasone injection, 2889 oral dexamethasone (routes IV/PO). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "_comment": "2026-11-03 extraction audit 2: medication rows without a drug name carry only the HICL code. The codes are those the named rows of the same table use for systemic corticosteroids: 2876 and 36808 methylprednisolone (sodium succinate) injection, 2866 and 36875 hydrocortisone sodium succinate injection, 2879 prednisone tablets, 2888 dexamethasone injection, 2889 oral dexamethasone (routes IV/PO). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. 2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (820 rows in eICU v2.0). Cancelled orders are dropped.",
      "excluded_statuses": [
       "true"
      ],
@@ -3845,6 +4116,25 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2888,
+      2889,
+      34381,
+      38176
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,848 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -3862,6 +4152,25 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2888,
+      2889,
+      34381,
+      38176
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,848 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "sic": [
@@ -3955,6 +4264,23 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      20971,
+      40230
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (8,655 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "dexmedetomidine|precedex",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -3979,6 +4305,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      20971,
+      40230
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (8,655 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "dexmedetomidine|precedex",
@@ -4080,6 +4423,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      926
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (9,875 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -4097,6 +4456,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      926
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (9,875 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -4184,6 +4559,22 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      182
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (23,071 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "table": "infusiondrug",
      "sub_var": "drugname",
      "regex": "(?i)diltiazem|cardizem",
@@ -4207,6 +4598,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      182
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (23,071 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "table": "infusiondrug",
@@ -5189,6 +5596,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      3960,
+      7878
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (15,534 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -5206,6 +5630,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      3960,
+      7878
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (15,534 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -6094,6 +6535,25 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      1747,
+      3953,
+      6438,
+      22724
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,648 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "(?<!su)fentanyl",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -6118,6 +6578,25 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      1747,
+      3953,
+      6438,
+      22724
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,648 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "(?<!su)fentanyl",
@@ -7469,6 +7948,26 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      2808,
+      2810,
+      8643,
+      33314,
+      33442
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (48,111 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "heparin",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -7493,6 +7992,26 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2808,
+      2810,
+      8643,
+      33314,
+      33442
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (48,111 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "heparin",
@@ -8473,6 +8992,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      2095
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,800 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -8490,6 +9025,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      2095
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,800 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -8661,6 +9212,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      20952,
+      38373
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (13,062 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -8678,6 +9246,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      20952,
+      38373
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (13,062 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -8765,6 +9350,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4846
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (16,487 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -8782,6 +9383,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4846
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (16,487 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -9051,6 +9668,24 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      610,
+      6306,
+      11249
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (31,567 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -9068,6 +9703,24 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      610,
+      6306,
+      11249
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (31,567 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -10346,6 +10999,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      11254
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (5,369 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -10363,6 +11032,22 @@
      "extra_vars": [
       "drugordercancelled"
      ]
+    },
+    {
+     "ids": [
+      11254
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (5,369 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -10691,6 +11376,25 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      1619,
+      10329,
+      24523,
+      34908
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (14,889 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "midazolam|versed",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -10715,6 +11419,25 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      1619,
+      10329,
+      24523,
+      34908
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (14,889 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "midazolam|versed",
@@ -11183,6 +11906,24 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      1694,
+      11265,
+      25277
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (29,601 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "morphine",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -11207,6 +11948,24 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      1694,
+      11265,
+      25277
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (29,601 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "morphine",
@@ -11407,6 +12166,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      1988
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,269 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -11424,6 +12199,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      1988
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,269 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -11575,6 +12366,23 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      183,
+      35779
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,179 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "table": "infusiondrug",
      "sub_var": "drugname",
      "regex": "(?i)nicardipine|cardene",
@@ -11598,6 +12406,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      183,
+      35779
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,179 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "table": "infusiondrug",
@@ -12657,6 +13482,22 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      22008
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (12,952 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "table": "infusiondrug",
      "sub_var": "drugname",
      "regex": "(?i)pantoprazole|protonix",
@@ -12680,6 +13521,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      22008
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (12,952 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "table": "infusiondrug",
@@ -14196,6 +15053,26 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      7844,
+      14772,
+      14778,
+      17791,
+      25281
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,197 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -14213,6 +15090,26 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      7844,
+      14772,
+      14778,
+      17791,
+      25281
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,197 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -14340,6 +15237,22 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      4842
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,063 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "propofol|diprivan",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -14364,6 +15277,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4842
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,063 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "propofol|diprivan",
@@ -15176,6 +16105,22 @@
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
     {
+     "ids": [
+      8963
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,418 rows in eICU v2.0). Cancelled orders are dropped."
+    },
+    {
      "regex": "rocuronium|esmeron",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -15200,6 +16145,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      8963
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,418 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "regex": "rocuronium|esmeron",
@@ -23060,6 +24021,25 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4042,
+      8466,
+      10093,
+      37442
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (36,392 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -23077,6 +24057,25 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4042,
+      8466,
+      10093,
+      37442
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (36,392 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [
@@ -23809,6 +24808,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2812
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (22,456 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "eicu_demo": [
@@ -23826,6 +24841,22 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      2812
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (22,456 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "miiv": [

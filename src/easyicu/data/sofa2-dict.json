@@ -947,8 +947,10 @@
     },
     {
      "ids": [
+      2087,
       2839,
-      2087
+      35517,
+      35587
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
@@ -960,7 +962,7 @@
       "true"
      ],
      "status_var": "drugordercancelled",
-     "_comment": "2026-11-03 audit round 2 (V3): orders with an empty drugname carry only the HICL: 2839 vasopressin, 2087 phenylephrine (named rows of the same HICL confirm the drug). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+     "_comment": "2026-11-03 audit round 2 (V3): orders with an empty drugname carry only the HICL: 2839 vasopressin, 2087 phenylephrine (named rows of the same HICL confirm the drug). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. 2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,487 rows in eICU v2.0). Cancelled orders are dropped."
     },
     {
      "table": "infusiondrug",
@@ -1121,6 +1123,23 @@
       "drugordercancelled"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+    },
+    {
+     "ids": [
+      4137,
+      14015
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled"
+     ],
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,300 rows in eICU v2.0). Cancelled orders are dropped."
     }
    ],
    "aumc": [

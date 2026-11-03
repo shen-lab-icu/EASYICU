@@ -209,7 +209,7 @@ def test_v3_eicu_other_vaso_reads_hicl_only_vasopressin_and_phenylephrine():
     from easyicu.resources import load_dictionary
 
     sources = load_dictionary(include_sofa2=True)["other_vaso"].sources["eicu"]
-    assert any(s.ids == [2839, 2087] and s.sub_var == "drughiclseqno" for s in sources)
+    assert any(s.sub_var == "drughiclseqno" and {2839, 2087} <= set(s.ids or ()) for s in sources)
 
 
 @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
@@ -371,3 +371,22 @@ def test_s1_sic_advanced_support_reuses_the_invasive_ventilation_windows():
     assert tube["ids"] == [720] and tube["dur_var"] == "OffsetEnd"
     assert settings["ids"] == vent_settings["ids"]
     assert settings["callback"].startswith("combine_callbacks(sicdb_airway_attributed_ventilation")
+
+
+@pytest.mark.parametrize(("concept", "hicl"), [
+    ("heparin", 2810), ("albumin_iv", 2728), ("vancomycin", 4042), ("abx", 4042),
+    ("propofol", 4842), ("warfarin", 2812), ("diltiazem", 182),
+])
+def test_s6_eicu_orders_without_a_drug_name_match_by_hicl(concept, hicl):
+    for database in ("eicu", "eicu_demo"):
+        hicl_sources = [s for s in _sources(concept, database) if s.get("sub_var") == "drughiclseqno"]
+        assert any(hicl in s["ids"] for s in hicl_sources), database
+        assert all(s["status_var"] == "drugordercancelled" for s in hicl_sources)
+
+
+def test_s6_albumin_brand_names_match():
+    import re
+
+    [named] = [s for s in _sources("albumin_iv", "eicu") if s.get("sub_var") == "drugname"]
+    for name in ("BUMINATE", "albumin human", "Albumin (Human) (PLASBUMIN-5) 5% infusion 25 g"):
+        assert re.search(named["regex"], name)
