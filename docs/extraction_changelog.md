@@ -111,6 +111,9 @@ answers is in brackets.
 - **[V5]** HiRID infusion rates add concurrent syringes in the hour, and
   syringes less than 5 minutes apart are one episode (`2441cf22b`).
 - **[P6]** SICdb tidal volume below 100 mL is missing (`04efe52ae`).
+- **[P5]** AUMC `tidal_vol` is expiratory (12277/12360 out). Inspiratory
+  minute volume (AUMC 12276, MIMIC-III 6934) is out of `minute_vol`;
+  spontaneous minute volume stays pooled (`9b01621e0`).
 - **[S8]** HiRID (`86bfe7228`):
   - `adm` comes from the APACHE II/IV group (HiRID-ICU-Benchmark Table 7;
     II 107-114 and IV 199-205 surgical).

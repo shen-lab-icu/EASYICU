@@ -1,8 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/data/sofa2-dict.json"
+      "src/easyicu/data/concept-dict.json"
     ],
     "summary_changes": {}
   },
@@ -177,9 +176,16 @@
         "src/easyicu/data/sofa2-dict.json"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Fifth 2026-11-03 reseal rebound after P5 (AUMC/MIMIC-III ventilation volume channels)",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Fifth 2026-11-03 reseal (extraction audit round 2 M items): concept-dict and sofa2-dict digests, audit5 profiles, new owner modules hirid_admission and the specimen/counter updates",
+  "baseline_reason": "Fifth 2026-11-03 reseal rebound after P5 (AUMC/MIMIC-III ventilation volume channels)",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -190,7 +196,7 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "e31aa3379cf9bad2bf666dab57e979a7cbba667d820e8b0b77ea1786d0ea7768",
+    "src/easyicu/data/concept-dict.json": "00061edfdbe54845c15747d2b760dc0cec83a6cd8419fb61c223e96b549dbbe4",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
     "src/easyicu/data/sofa2-dict.json": "ea49fb4cb839d9ac36b7ae03515bacd5446c316b05b93ac2ef877e48509c56f8",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
