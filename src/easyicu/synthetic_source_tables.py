@@ -50,6 +50,8 @@ def _demographics(database, p):
             "EstimatedSurvivalObservationTime": 3077, "Sex": np.where(p["male"], 735, 736),
             "WeightOnAdmission": np.round(p["weight"] / 5) * 5000, "HeightOnAdmission": 174.,
             "AgeOnAdmission": np.minimum(90, np.round(p["age"] / 5) * 5), "saps3": 30 + p["severity"] * 10,
+            # SICdb HospitalUnit codes 3/4 are its two intensive care wards.
+            "HospitalUnit": 3 + p["stay"] % 2,
             "AdmissionYear": 2020, "OffsetAfterFirstAdmission": np.where(
                 np.r_[False, p["patient"][1:] == p["patient"][:-1]], 240 * 3600, 0)}
 
@@ -117,7 +119,8 @@ def _events(database, config, concepts, p):
                               doserateunit="uur", doserateperkg=False,
                               doseunitid="10", doserateunitid="4", iscontinuous=True,
                               orderid=np.arange(count) + 1, islabresult=True,
-                              fluidin=50., solutionadministered=50.)
+                              fluidin=50., solutionadministered=50.,
+                              administered=.1, administeredunit="mg")
             else:
                 time = (6 + p["stay"][index] % 4 * 3) * 3600 + hour * 3600
                 record.update(CaseID=p["stay"][index], PatientID=p["patient"][index],

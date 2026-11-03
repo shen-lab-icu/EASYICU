@@ -5044,6 +5044,16 @@ class ConceptResolver:
             # DEBUG: 检查combined是否有dur_var
             if DEBUG_MODE and 'dur_var' in combined.columns:
                 print(f"   🔍 DEBUG: combined有dur_var列, 行数={len(combined)}")
+
+        # A bounded (numeric) concept whose sources returned no rows keeps a
+        # numeric value column; an untyped empty table must not make it object.
+        if (
+            combined.empty
+            and concept_name in combined.columns
+            and combined[concept_name].dtype == object
+            and (getattr(definition, 'minimum', None) is not None or getattr(definition, 'maximum', None) is not None)
+        ):
+            combined[concept_name] = combined[concept_name].astype('float64')
         
         # DEBUG
         # Standardize time column name for eICU BEFORE any processing
