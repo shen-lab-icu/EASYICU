@@ -640,6 +640,9 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     'kdigo_urine_input',
     'kdigo_uo',
     'crrt_mode_input',
+    # Device oxygen flow: an input of supp_o2 on AUMC/HiRID only (2026-11-03
+    # extraction audit 2); MIMIC/eICU flow items are not mapped yet.
+    'o2_flow',
     'potassium',
     'sep3',
 }
@@ -774,7 +777,7 @@ CONCEPT_DB_COVERAGE = {
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
     'anion_gap': 6, 'pulse_pressure': 6,
     'age': 6, 'sex': 6, 'weight': 6, 'height': 6, 'death': 6, 'los_icu': 6,
-    'icu_unit_type': 4,  # eICU, MIIV, MIMIC-III, SICdb (2026-11-03 audit 2)
+    'icu_unit_type': 5,  # eICU, MIIV, MIMIC-III, SICdb, AUMC (2026-11-03 audit 2)
     'sofa': 6, 'sofa2': 6, 'gcs': 6,
     'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
     'pafi': 5, 'safi': 5, 'urine': 5,
@@ -824,7 +827,7 @@ CONCEPT_DB_COVERAGE = {
     'octreotide': 5,
     'neostigmine': 4,
     # Batch 7 (2026-05-14; HiRID/eICU additions audited 2026-05-27)
-    'phenytoin': 5,
+    'phenytoin': 6,  # + AUMC 7222 (2026-11-03 audit 2)
     'labetalol': 6,
     'esmolol': 6,
     'diltiazem': 5,

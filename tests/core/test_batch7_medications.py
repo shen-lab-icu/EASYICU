@@ -3,7 +3,7 @@
 Added: phenytoin, labetalol, esmolol, diltiazem, nicardipine.
 
 Coverage after the 2026-05-27 audit:
-  - phenytoin:   5/6 (eICU admissionDrug + HiRID added; AUMC still absent)
+  - phenytoin:   6/6 (eICU admissionDrug + HiRID added; AUMC 7222 added 2026-11-03)
   - labetalol:   6/6 (HiRID added)
   - esmolol:     6/6 (HiRID added; eICU is in infusionDrug not medication)
   - diltiazem:   6/6 (HiRID added)
@@ -21,7 +21,7 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
 BATCH7 = [
-    ("phenytoin",   {"miiv", "mimic", "eicu", "hirid", "sic"},        5),
+    ("phenytoin",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("labetalol",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("esmolol",     {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     # 2026-07-17: HiRID source REMOVED. This concept is IV diltiazem everywhere else
@@ -103,11 +103,11 @@ def test_nicardipine_excludes_sic(cdict):
     assert "sic" not in cdict["nicardipine"]["sources"]
 
 
-def test_phenytoin_uses_eicu_in_icu_medication_but_excludes_aumc(cdict):
-    sources = set(cdict["phenytoin"]["sources"])
-    assert "aumc" not in sources
+def test_phenytoin_uses_eicu_in_icu_medication_and_aumc_drugitems(cdict):
     # 2026-11-03 audit 2: admissionDrug is the pre-admission list; in-ICU orders are medication HICLs.
     assert [s["table"] for s in cdict["phenytoin"]["sources"]["eicu"]] == ["medication"]
+    # AUMC drugitems 7222 'Fenytoine (Diphantoine)'.
+    assert cdict["phenytoin"]["sources"]["aumc"][0]["ids"] == [7222]
     assert cdict["phenytoin"]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"
 
 

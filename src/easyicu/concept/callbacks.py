@@ -4543,6 +4543,9 @@ def _callback_supp_o2(
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
     """
+    Supplemental oxygen: ventilated, FiO2 > 21 %, or (where a database declares
+    the ``o2_flow`` input) an oxygen device flow > 0 L/min.
+
     R ricu logic:
     res <- merge(res[[fio2_var]], expand(res[[vent_var]], aggregate = "any"), all = TRUE)
     res <- res[, c("supp_o2", vent_var, fio2_var) := list(
@@ -4624,10 +4627,30 @@ def _callback_supp_o2(
     result['supp_o2'] = True
     
     # Select output columns
-    output_cols = [c for c in id_columns if c in result.columns] + [fio2_index, 'supp_o2']
-    result = result[output_cols].drop_duplicates()
-    
+    output_cols = list(id_columns) + [fio2_index, 'supp_o2']
+    result = result.reindex(columns=output_cols)
+
+    # A database that declares an oxygen-flow input (sources.<db> concepts)
+    # also counts any charted device flow > 0 L/min as supplemental oxygen.
+    flow_tbl = tables.get("o2_flow")
+    if flow_tbl is not None and not flow_tbl.data.empty:
+        flow_rows = _positive_o2_flow_rows(flow_tbl, id_columns, fio2_index)
+        if not flow_rows.empty:
+            result = pd.concat([result, flow_rows[output_cols]], ignore_index=True)
+    result = result.drop_duplicates()
+
     return _as_icutbl(result, id_columns=id_columns, index_column=fio2_index, value_column="supp_o2")
+
+
+def _positive_o2_flow_rows(flow_tbl, id_columns, time_column: str) -> pd.DataFrame:
+    """Rows (id, time, supp_o2=True) where an oxygen device flow is > 0."""
+    df = flow_tbl.data
+    index = flow_tbl.index_column if flow_tbl.index_column in df.columns else time_column
+    value = flow_tbl.value_column if flow_tbl.value_column in df.columns else "o2_flow"
+    flow = pd.to_numeric(df[value], errors="coerce")
+    rows = df.loc[flow > 0, [*id_columns, index]].rename(columns={index: time_column})
+    rows = rows.assign(supp_o2=True)
+    return rows.reset_index(drop=True)
 
 def _callback_supp_o2_aumc(
     tables: Dict[str, ICUTable],

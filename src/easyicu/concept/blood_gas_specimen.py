@@ -37,12 +37,20 @@ is one of the database's arterial codes after trimming and upper-casing
 (MIMIC-IV ``ART.``, MIMIC-III ``ART``, AUMCdb ``ART.``/``Art.``).  Conflicting
 records (``ART.`` plus ``VEN.``) are not arterial.  Venous values are excluded,
 not reassigned to venous concepts: the venous site is not recorded.
+
+The same rule selects *mixed-venous* samples for ``svo2`` with the callback
+``mixed_venous_specimen_only`` where a database names that specimen
+(:data:`MIXED_VENOUS_TOKENS`; AUMCdb ``GEM.VEN.``/``Gem. ven.``, "gemengd
+veneus", median saturation 67%).  Only recorded mixed-venous samples are
+kept: a gas without a specimen record is mostly arterial.  Plain venous
+samples (``Ven.``) are not ScvO2: the site (central or peripheral) is not
+recorded.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Optional, Tuple
 
 import pandas as pd
@@ -50,7 +58,9 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 ARTERIAL_SPECIMEN_CALLBACK = "arterial_specimen_only"
+MIXED_VENOUS_SPECIMEN_CALLBACK = "mixed_venous_specimen_only"
 AUDIT_ATTR = "arterial_specimen_audit"
+MIXED_VENOUS_AUDIT_ATTR = "mixed_venous_specimen_audit"
 
 
 class ArterialSpecimenContractError(ValueError):
@@ -106,18 +116,35 @@ SPECIMEN_RULES = {
 }
 SPECIMEN_RULES["mimic_demo"] = SPECIMEN_RULES["mimic"]
 
+# Recorded specimen values that name a mixed-venous (pulmonary artery) sample,
+# after trimming and upper-casing.  AUMCdb freetext 11646 (2026-11-03 audit 2:
+# 'GEM.VEN.' 4,900 and 'Gem. ven.' 3,526 O2-saturation samples, median 0.67).
+MIXED_VENOUS_TOKENS = {
+    "aumc": frozenset({"GEM.VEN.", "GEM. VEN.", "GEM.VEN"}),
+}
 
-def parse_arterial_specimen_callback(expr: str) -> Tuple[bool, Optional[str]]:
-    """Return ``(applies, inner_callback)`` for a dictionary callback string."""
 
+def _parse_wrapper(expr: str, name: str) -> Tuple[bool, Optional[str]]:
     text = (expr or "").strip()
-    if text == ARTERIAL_SPECIMEN_CALLBACK:
+    if text == name:
         return True, None
-    prefix = ARTERIAL_SPECIMEN_CALLBACK + "("
+    prefix = name + "("
     if text.startswith(prefix) and text.endswith(")"):
         inner = text[len(prefix):-1].strip()
         return True, inner or None
     return False, None
+
+
+def parse_arterial_specimen_callback(expr: str) -> Tuple[bool, Optional[str]]:
+    """Return ``(applies, inner_callback)`` for a dictionary callback string."""
+
+    return _parse_wrapper(expr, ARTERIAL_SPECIMEN_CALLBACK)
+
+
+def parse_mixed_venous_specimen_callback(expr: str) -> Tuple[bool, Optional[str]]:
+    """``(applies, inner_callback)`` for ``mixed_venous_specimen_only[(...)]``."""
+
+    return _parse_wrapper(expr, MIXED_VENOUS_SPECIMEN_CALLBACK)
 
 
 def normalize_specimen_token(value: object) -> str:
@@ -148,15 +175,24 @@ def _normalized_tokens(values: pd.Series) -> pd.Series:
     return values.map(normalize_specimen_token).astype(object)
 
 
-def _record_status(specimens: pd.DataFrame, rule: SpecimenRecordRule) -> pd.DataFrame:
-    """One row per specimen key with ``recorded`` and ``arterial`` flags."""
+def _record_status(
+    specimens: pd.DataFrame,
+    rule: SpecimenRecordRule,
+    accepted_tokens: Optional[frozenset] = None,
+) -> pd.DataFrame:
+    """One row per specimen key with ``recorded`` and ``arterial`` flags.
 
+    ``arterial`` means every recorded value is in ``accepted_tokens``
+    (default: the rule's arterial tokens).
+    """
+
+    accepted = rule.arterial_tokens if accepted_tokens is None else accepted_tokens
     tokens = _normalized_tokens(specimens[rule.value_column])
     recorded = tokens.ne("")
     frame = specimens.loc[:, list(rule.keys)].copy()
     frame["_recorded"] = recorded.to_numpy()
     frame["_non_arterial"] = (
-        recorded & ~tokens.isin(rule.arterial_tokens)
+        recorded & ~tokens.isin(accepted)
     ).to_numpy()
     grouped = frame.groupby(list(rule.keys), dropna=True, sort=False)
     status = grouped[["_recorded", "_non_arterial"]].any().reset_index()
@@ -203,10 +239,12 @@ def _align_key_dtypes(frame: pd.DataFrame, status: pd.DataFrame, keys) -> pd.Dat
     return status
 
 
-def _restrict_by_records(frame, rule: SpecimenRecordRule, data_source):
+def _restrict_by_records(frame, rule: SpecimenRecordRule, data_source, accepted_tokens=None):
     if data_source is None:
         raise ArterialSpecimenContractError("arterial_specimen_data_source_missing")
-    status = _record_status(_load_specimen_records(frame, rule, data_source), rule)
+    status = _record_status(
+        _load_specimen_records(frame, rule, data_source), rule, accepted_tokens
+    )
     status = _align_key_dtypes(frame, status, rule.keys)
     keyed = frame.loc[:, list(rule.keys)].reset_index(drop=True)
     joined = keyed.merge(status, on=list(rule.keys), how="left", sort=False)
@@ -279,8 +317,55 @@ def restrict_to_arterial_specimens(
     return kept
 
 
+def restrict_to_mixed_venous_specimens(
+    frame: pd.DataFrame,
+    *,
+    data_source,
+    concept_name: str,
+) -> pd.DataFrame:
+    """Keep only rows whose recorded specimen is mixed venous (see module doc).
+
+    Unlike the arterial rule, a gas without a specimen record is dropped.
+    """
+
+    database = getattr(getattr(data_source, "config", None), "name", None)
+    rule = SPECIMEN_RULES.get(database)
+    tokens = MIXED_VENOUS_TOKENS.get(database)
+    if not isinstance(rule, SpecimenRecordRule) or tokens is None:
+        raise ArterialSpecimenContractError(
+            "mixed_venous_specimen_rule_missing", f"database={database!r}"
+        )
+    missing = [c for c in (*rule.keys, rule.patient_column) if c not in frame.columns]
+    if missing:
+        raise ArterialSpecimenContractError(
+            "mixed_venous_specimen_keys_missing",
+            f"concept={concept_name} database={database} missing={missing}",
+        )
+    if frame.empty:
+        return frame
+    attrs = dict(frame.attrs)
+    unrecorded_policy = replace(rule, keep_unrecorded=False)
+    kept, audit = _restrict_by_records(frame, unrecorded_policy, data_source, tokens)
+    audit = {
+        "rows": audit["rows"],
+        "mixed_venous_rows": audit["arterial_rows"],
+        "other_specimen_rows_dropped": audit["non_arterial_rows_dropped"],
+        "unrecorded_rows_dropped": audit["unrecorded_rows"],
+    }
+    kept = kept.copy()
+    kept.attrs.update(attrs)
+    kept.attrs[MIXED_VENOUS_AUDIT_ATTR] = audit
+    logger.info(
+        "Mixed-venous specimen restriction concept=%s database=%s audit=%s",
+        concept_name, database, audit,
+    )
+    return kept
+
+
 __all__ = [
     "ARTERIAL_SPECIMEN_CALLBACK",
+    "MIXED_VENOUS_SPECIMEN_CALLBACK",
+    "MIXED_VENOUS_TOKENS",
     "ArterialSpecimenContractError",
     "SPECIMEN_RULES",
     "SpecimenColumnRule",
@@ -288,5 +373,7 @@ __all__ = [
     "is_arterial_specimen",
     "normalize_specimen_token",
     "parse_arterial_specimen_callback",
+    "parse_mixed_venous_specimen_callback",
     "restrict_to_arterial_specimens",
+    "restrict_to_mixed_venous_specimens",
 ]

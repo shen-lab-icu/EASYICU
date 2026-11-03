@@ -59,7 +59,9 @@ import pandas as pd
 from .schema import ConceptSource
 from .blood_gas_specimen import (
     parse_arterial_specimen_callback,
+    parse_mixed_venous_specimen_callback,
     restrict_to_arterial_specimens,
+    restrict_to_mixed_venous_specimens,
 )
 from .eicu_sedation_scale import RASS_SCALE_CALLBACK, restrict_to_rass_scale
 from .errors import ConceptExtractionUnavailable
@@ -803,12 +805,16 @@ def _apply_callback(
         source = _without_single_dose_flag(source)
 
     arterial_only, inner_callback = parse_arterial_specimen_callback(expr)
-    if arterial_only:
+    mixed_venous_only, mixed_inner = parse_mixed_venous_specimen_callback(expr)
+    if arterial_only or mixed_venous_only:
         # The specimen rule is owned by blood_gas_specimen; the wrapped value
-        # callback (for example a kPa conversion) then runs on arterial rows.
-        frame = restrict_to_arterial_specimens(
-            frame, data_source=data_source, concept_name=concept_name
+        # callback (for example a kPa conversion) then runs on the kept rows.
+        restrict = (
+            restrict_to_arterial_specimens if arterial_only
+            else restrict_to_mixed_venous_specimens
         )
+        inner_callback = inner_callback if arterial_only else mixed_inner
+        frame = restrict(frame, data_source=data_source, concept_name=concept_name)
         if inner_callback is None:
             return frame
         return _apply_callback(
@@ -1262,9 +1268,20 @@ def _apply_callback(
         dod = pd.to_numeric(df[dod_col], errors='coerce')
         dis = pd.to_numeric(df[dis_col], errors='coerce')
         died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)
+        # 2026-11-03 extraction audit 2: a stay with a recorded ICU discharge
+        # and no death within 72h of it is a survivor of this endpoint and is
+        # False, as hospital_expire_flag = 0 is on MIMIC and eICU.  The
+        # previous ricu convention (survivors NA) left AUMC death all-TRUE.
+        # Without a discharge time the endpoint stays unknown (NA).  A
+        # survivor's row is timed at ICU discharge, where its status is
+        # established (as eICU's death rows are timed at unit discharge):
+        # an untimed row would be dropped by the hourly grid.
+        survived = ~died & dis.notna()
         death_values = pd.Series(index=df.index, dtype=object)
-        death_values[died] = True  # survivors -> NA (ricu convention)
+        death_values[died] = True
+        death_values[survived] = False
         df[concept_name] = death_values
+        df[dod_col] = dod.where(~survived, dis)
         return df
 
     # 🔧 SICdb death callback — in-hospital mortality via HospitalDischargeType.
@@ -1904,6 +1921,18 @@ def _apply_callback(
         if val_col in frame.columns:
             series = pd.to_numeric(frame[val_col], errors='coerce')
             frame[val_col] = series.where(series >= threshold)
+        return frame
+
+    # transform_fun(na_above(<threshold>)): values above a ceiling are a device
+    # sentinel (e.g. a knob parked at its maximum), not a measurement.
+    match = re.fullmatch(r"transform_fun\(na_above\(\s*(-?\d+(?:\.\d+)?)\s*\)\)", expr)
+    if match:
+        threshold = float(match.group(1))
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            series = pd.to_numeric(frame[val_col], errors='coerce')
+            frame[val_col] = series.where(series <= threshold)
         return frame
 
     # Handle aggregate_fun('sum', 'units') - aggregate by sum and set unit

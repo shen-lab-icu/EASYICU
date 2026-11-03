@@ -627,6 +627,14 @@
      "callback": "apply_map(c(`2` = 'intermediate care ward (INIC)',\n                     `3` = 'intensive care ward (CWIN)',\n                     `4` = 'intensive care ward (INBD)',\n                     `5` = 'mixed intermediate care ward with NIV (INID)'))",
      "_comment": "2026-11-03 extraction audit 2: cases.HospitalUnit, labelled with SICdb d_references HospitalUnit ReferenceValue/ReferenceDescription: 2 INIC '9 bed intermediate care ward', 3 CWIN '14 bed intensive care ward', 4 INBD '9 bed intensive care ward', 5 INID '9 bed mixed ward (intermediate care, non-invasive-ventilation possible)'. These four codes hold every case of the release."
     }
+   ],
+   "aumc": [
+    {
+     "table": "admissions",
+     "val_var": "location",
+     "class_name": "col_itm",
+     "_comment": "2026-11-03 extraction audit 2: admissions.location: IC (intensive care), MC (medium care, a step-down unit like eICU 'SDU/Step down') or both in order of stay (IC&MC, MC&IC)."
+    }
    ]
   }
  },
@@ -1180,7 +1188,17 @@
    "min"
   ],
   "callback": "anion_gap",
-  "class_name": "rec_cncpt"
+  "class_name": "rec_cncpt",
+  "sources": {
+   "aumc": [
+    {
+     "ids": 9559,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: 9559 'Anion-Gap (bloed)' mmol/l, the blood-gas analyser value: on 338,589 samples it equals Na 10284 - Cl 14413 - HCO3 9992 of the same sample (median difference 0, p05/p95 -0.8/+0.8; not the +K variant). AUMC's lab panel has no bicarbonate, so the generic na - cl - bicar recipe paired lab chloride with blood-gas sodium/bicarbonate from different samples (median 5.8 vs 8.0)."
+    }
+   ]
+  }
  },
  "apixaban": {
   "class_name": "lgl_cncpt",
@@ -1927,10 +1945,11 @@
   "sources": {
    "aumc": [
     {
-     "ids": 6812,
+     "ids": 18361,
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')"
+     "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+     "_comment": "2026-11-03 extraction audit 2: 18361 'Gecon.Bili (bloed)' umol/l x 0.058467 (1/17.104) -> mg/dL; same-hour ratio to total bilirubin median 0.71. Removed 6812 'Bilirubine geconjugeerd': its same-hour ratio to total bilirubin (umol/l) is 0.018, i.e. it is not umol/l (mostly mg/dL with some umol/l rows), so no single conversion is correct."
     }
    ],
    "eicu": [
@@ -2673,6 +2692,12 @@
      "ids": 9930,
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": 14413,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: 14413 'Cl (onv.ISE) (bloed)' mmol/l (blood-gas ISE chloride); same-hour ratio to lab chloride 9930 is 1.00 (p05/p95 0.96/1.04)."
     }
    ],
    "eicu": [
@@ -4783,6 +4808,13 @@
      "table": "listitems",
      "sub_var": "itemid",
      "callback": "apply_map( c(`Niet` = 1, `Op pijn` = 2, `Op aanspreken` = 3, `Spontaan` = 4) )"
+    },
+    {
+     "ids": 16628,
+     "table": "listitems",
+     "sub_var": "itemid",
+     "callback": "apply_map( c(`Niet` = 1, `Op pijn` = 2, `Op aanspreken` = 3, `Spontaan` = 4) )",
+     "_comment": "2026-11-03 extraction audit 2: MCA_Eye (same answer list as A_Eye 13077), completing the MCA triplet whose MCA_Motoriek 16634 is mapped in mgcs."
     }
    ],
    "eicu": [
@@ -4952,6 +4984,12 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "blood_cell_ratio"
+    },
+    {
+     "ids": 11790,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: 11790 'Eo % (bloed)', already a percentage."
     }
    ],
    "eicu": [
@@ -12379,6 +12417,17 @@
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin."
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7222
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: drugitems 7222 'Fenytoine (Diphantoine)'."
+    }
    ]
   }
  },
@@ -12484,7 +12533,19 @@
      "callback": "sic_rate_kg",
      "_comment": "1593=Phenylephrin (d_references unit g). Continuous rows (IsSingleDose=0) carry AmountPerMinute in g/min like norepinephrine; one-minute single-dose pushes (most 1593 rows) are excluded."
     }
-   ]
+   ],
+  "aumc": [
+  {
+  "ids": 19929,
+  "table": "drugitems",
+  "sub_var": "itemid",
+  "rel_weight": "doserateperkg",
+  "rate_uom": "doserateunit",
+  "stop_var": "stop",
+  "callback": "aumc_rate_kg",
+  "_comment": "2026-11-03 extraction audit 2: drugitems 19929 'Fenylefrine' syringe-pump infusion, same rate callback as norepi_rate 7229; bolus rows without a dose rate are dropped by aumc_rate_kg."
+  }
+  ]
   }
  },
  "phos": {
@@ -15207,10 +15268,24 @@
     {
      "concepts": [
       "vent_ind",
-      "fio2"
+      "fio2",
+      "o2_flow"
      ],
      "callback": "supp_o2",
-     "class_name": "rec_cncpt"
+     "class_name": "rec_cncpt",
+     "_comment": "2026-11-03 extraction audit 2: AUMC charts non-ventilator oxygen as numericitems 8845 'O2 l/min' (via o2_flow); a flow > 0 L/min is supplemental oxygen, as are ventilation and FiO2 > 21%."
+    }
+   ],
+   "hirid": [
+    {
+     "concepts": [
+      "vent_ind",
+      "fio2",
+      "o2_flow"
+     ],
+     "callback": "supp_o2",
+     "class_name": "rec_cncpt",
+     "_comment": "2026-11-03 extraction audit 2: HiRID charts nasal-cannula and mask oxygen flow (15001525, 15001555, l/min) via o2_flow; a flow > 0 L/min is supplemental oxygen, as are ventilation and FiO2 > 21%."
     }
    ]
   }
@@ -15317,6 +15392,18 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "_comment": "2026-07-04 recall audit: added 13058 'Temp Rectaal' (core site, 387k rows); blood/bladder/esophagus already present. Peripheral sites (skin/axillary/groin) remain excluded."
+    },
+    {
+     "ids": [
+      13060,
+      13062,
+      13059,
+      13061,
+      14047
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: temp pools measurement sites in the other databases (HiRID 400 axillary with 410 core; MIMIC/eICU temperature items carry no site), so AUMC adds 13060 Temp Axillair, 13062 Temp Oor, 13059 Temp Lies, 13061 Temp Oraal and 14047 PiCCO blood temperature (all degC). Same-hour difference to core sites: median -0.4 (axillary), -0.2 (groin), 0 (ear/oral/PiCCO). Skin, toe and set/heater temperatures stay excluded."
     }
    ],
    "eicu": [
@@ -15619,6 +15706,15 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "_comment": "2026-07-04 dropped 8851 (median 0.57 mL, near-zero noise; dragged pooled median to ~2) and 9646 (1 row). 12291 'Teugvolume (Set)' is the real set-TV channel (317k rows, median 450 mL)."
+    },
+    {
+     "ids": [
+      8851
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "combine_callbacks(convert_unit(binary_op(`*`, 1000), 'ml'), transform_fun(na_above(1999)))",
+     "_comment": "2026-11-03 extraction audit 2: restored 8851 'Tidal Volume (Set)' (Draeger Evita): values are litres despite the 'ml' label (p05/p50/p95 0.43/0.57/2.0, like VTe 8871 which is already x1000), so x1000. 2.0 L is the Evita knob maximum, charted in 28% of rows mostly in pressure-controlled/CPAP modes where no volume is set; it is dropped, not a 2000 mL setting. 12289 'Volume (Set)' l/min / 12283 rate is not mapped: it equals 12291 where both exist and is a delivered setting only in volume modes."
     }
    ],
    "eicu": [
@@ -22129,6 +22225,18 @@
      "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids. | 2026-11-03 extraction audit: 467 'O2 Delivery Device' ends ventilation only when it records an oxygen-therapy device (mimic-code classification), not 'Ventilator' or any value; 469 'O2 Delivery Mode' is not part of that classification.",
      "val_var": "value"
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      9328
+     ],
+     "table": "processitems",
+     "sub_var": "itemid",
+     "index_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: processitems 9328 'Beademen' stop time (no open-ended episodes)."
+    }
    ]
   }
  },
@@ -22473,6 +22581,17 @@
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))"
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      9328
+     ],
+     "table": "processitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: processitems 9328 'Beademen' (invasive ventilation episodes, 18,471 with start and stop) start time. NIV 10740 and Tracheostoma 12635 are not ventilation episodes of the same kind."
+    }
    ]
   }
  },
@@ -22495,6 +22614,13 @@
      "table": "listitems",
      "sub_var": "itemid",
      "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Georiënteerd` = 5) )"
+    },
+    {
+     "ids": 16640,
+     "table": "listitems",
+     "sub_var": "itemid",
+     "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Georiënteerd` = 5) )",
+     "_comment": "2026-11-03 extraction audit 2: MCA_Verbal (same answer list as A_Verbal 13066). NICE EMV 19635-19640 are not mapped: one registry value per admission (94-96% constant) re-registered up to dozens of times across the stay (median 46-70 h after admission, 30-40% of rows in the first 24 h), so as timed observations they would copy the first-day worst score into later hours."
     }
    ],
    "eicu": [
@@ -23238,6 +23364,14 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      12023
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: 12023 'LD (bloed)' E/l (= U/L), the current-system LDH; same-hour ratio to 6838 is 1.00."
     }
    ]
   }
@@ -24119,6 +24253,13 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": 14260,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "blood_cell_ratio",
+     "_comment": "2026-11-03 extraction audit 2: 14260 'Monocyten (bloed)' 10^9/l: absolute count converted to % of WBC, as basos/eos/lymph/neut do with their absolute counts."
     }
    ],
    "sic": [
@@ -24365,6 +24506,17 @@
      "sub_var": "itemid",
      "_comment": "2026-07-17: wired. 220765 'Intra Cranial Pressure' + 227989 'Intra Cranial Pressure #2' (both chartevents, mmHg, Numeric - verified in d_items). Official mimic-code mimic-iv/concepts/measurement/icp.sql uses exactly these two with valuenum>0 AND valuenum<100, matching our 0-100 bound. The previous _comment claiming MIMIC-IV has 'no clean ICP value item' was false."
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      8835,
+      13940
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: 8835 'Intracraniele druk' and 13940 'Intracraniele druk(2)' mmHg. 19358 (labelled cmH2O) is not mapped: at the same timestamp it equals 8835 (ratio 1.00), so its unit is not established."
+    }
    ]
   }
  },
@@ -24422,6 +24574,13 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": 12311,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "mixed_venous_specimen_only(transform_fun(binary_op(`*`, 100)))",
+     "_comment": "2026-11-03 extraction audit 2: blood-gas O2 saturation 12311 (fraction) x100 where freetext 11646 'Afname (bloed)' at the same admissionid and measuredat records a mixed-venous sample (GEM.VEN./Gem. ven.: 8,426 samples, 3,048 admissions, median 0.67). Plain venous 'Ven.' samples are not mapped to scvo2: the venous site is not recorded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "hirid": [
@@ -25000,6 +25159,15 @@
      "table": "lab",
      "sub_var": "labname"
     }
+   ],
+   "aumc": [
+    {
+     "ids": 10054,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 5.585), 'µg/dL')",
+     "_comment": "2026-11-03 extraction audit 2: 10054 'Fe (bloed)' umol/l x 5.585 (Fe 55.845 g/mol) -> ug/dL."
+    }
    ]
   }
  },
@@ -25046,6 +25214,15 @@
      "ids": "TIBC",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "aumc": [
+    {
+     "ids": 10055,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 5.585), 'µg/dL')",
+     "_comment": "2026-11-03 extraction audit 2: 10055 'TYBC (bloed)' umol/l x 5.585 -> ug/dL."
     }
    ]
   }
@@ -25100,6 +25277,15 @@
      "ids": "transferrin",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "aumc": [
+    {
+     "ids": 9981,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 100), 'mg/dL')",
+     "_comment": "2026-11-03 extraction audit 2: 9981 'Transferrine (bloed)' g/l x 100 -> mg/dL."
     }
    ]
   }
@@ -26560,6 +26746,39 @@
      "fe_amount_unit": "g",
      "fe_route": "iv",
      "_comment": "2026-11-03 extraction audit 2: Amount in g x 1000 x 2 (any route)."
+    }
+   ]
+  }
+ },
+ "o2_flow": {
+  "unit": [
+   "L/min",
+   "l/min"
+  ],
+  "min": 0,
+  "max": 80,
+  "description": "oxygen flow delivered by a non-ventilator device (nasal cannula, mask), L/min",
+  "category": "respiratory",
+  "_comment": "2026-11-03 extraction audit 2: input to supp_o2 for databases that chart device oxygen flow. AUMC 8845 'O2 l/min' [l/min] (aumc_item_dict); HiRID 15001525 'Oxygen administration by nasal cannula' and 15001555 'Oxygen administration by mask' [l/min] (hirid_variable_reference). Not an exported catalog concept yet: MIMIC/eICU flow items are unmapped.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8845
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      15001525,
+      15001555
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
     }
    ]
   }

@@ -50,7 +50,10 @@ def test_aumc_death_matches_ricu_72h_window():
 
     died = out["death"] == True  # noqa: E712
     assert int(died.sum()) == 2
-    assert pd.isna(out.loc[out["admissionid"] == 3, "death"].iloc[0])
+    # A death 200 days after ICU discharge is not this endpoint: a survivor
+    # (False, as on MIMIC/eICU), not missing.
+    assert out.loc[out["admissionid"] == 3, "death"].iloc[0] is False
+    assert int((out["death"] == False).sum()) == n - 2  # noqa: E712
 
 
 def test_aumc_death_is_row_local_for_high_mortality_cohort():
