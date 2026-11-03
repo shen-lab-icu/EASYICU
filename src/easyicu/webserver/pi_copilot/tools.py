@@ -310,6 +310,35 @@ def _bound_context(binding: AuthorityBinding) -> Optional[Dict[str, Any]]:
     return study_contexts.get_active_context()
 
 
+def _session_job(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> tuple[str, Optional[Any], Optional[Dict[str, Any]]]:
+    """Resolve a job only if this conversation owns it.
+
+    JobManager is process-global, so a model-supplied ``job_id`` could name
+    another conversation's extraction or analysis. Only the session's bound
+    job and its bound study's active job belong to this conversation.
+    """
+
+    binding = context.session.binding
+    job_id = str(params.get("job_id") or binding.active_job_id or "").strip()
+    if not job_id:
+        return "", None, None
+    owned = {str(binding.active_job_id or "").strip()}
+    if job_id not in owned:
+        study = _bound_context(binding)
+        owned.add(str((study or {}).get("active_job_id") or "").strip())
+    if job_id not in owned:
+        return job_id, None, _result(
+            context,
+            status="blocked",
+            code="easyicu_job_not_bound_to_session",
+            summary="That EasyICU job does not belong to this conversation, so it was not inspected or changed.",
+            owner="easyicu.webserver.jobs",
+        )
+    return job_id, jobs.MANAGER.get(job_id), None
+
+
 def _run_rows(context: ToolExecutionContext) -> Sequence[Dict[str, Any]]:
     project_root = research_pipeline_project_root(
         context.session.binding.study_context_id
@@ -1931,11 +1960,10 @@ def _inspect_capability(
 def _inspect_run(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    job_id = str(
-        params.get("job_id") or context.session.binding.active_job_id or ""
-    ).strip()
+    job_id, job, foreign = _session_job(context, params)
+    if foreign is not None:
+        return foreign
     if job_id:
-        job = jobs.MANAGER.get(job_id)
         if job:
             return _result(
                 context,
@@ -4264,11 +4292,10 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
     # node_app/src/main.mjs nor tool_catalog.json exposes a ``decision``
     # argument, and _require_catalog_args rejects one before dispatch, so
     # this tool can only reattach to a live job.
-    job_id = str(
-        params.get("job_id") or context.session.binding.active_job_id or ""
-    ).strip()
+    job_id, job, foreign = _session_job(context, params)
+    if foreign is not None:
+        return foreign
     if job_id:
-        job = jobs.MANAGER.get(job_id)
         if job:
             return _result(
                 context,
@@ -4300,10 +4327,9 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
 
 
 def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
-    job_id = str(
-        params.get("job_id") or context.session.binding.active_job_id or ""
-    ).strip()
-    job = jobs.MANAGER.get(job_id) if job_id else None
+    job_id, job, foreign = _session_job(context, params)
+    if foreign is not None:
+        return foreign
     if not job:
         return _result(
             context,
