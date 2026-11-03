@@ -15,21 +15,35 @@ conservative one: a setting hour is invasive ventilation only when it falls in
 (or within one hour of) a documented airway interval.  An endotracheal tube
 interval is invasive ventilation as a whole (as before); a tracheal cannula
 counts only in the hours a ventilator setting is charted, because a
-tracheostomy without the ventilator is not ventilation.  Setting hours away
-from any airway are not attributed; their count is kept on the frame's
-``attrs`` so the extraction can report it.  ``FIO2`` (2283) alone does not
-establish positive-pressure ventilation and is not read.
+tracheostomy without the ventilator is not ventilation.  ``FIO2`` (2283) alone
+does not establish positive-pressure ventilation and is not read.
+
+Many intubated patients (mostly after cardiac surgery) have settings but no
+airway interval (2026-11-03 extraction audit round 2, P1: 11,769 cases).  In
+the intensive care units 2-4 (``cases.HospitalUnit``; unit 5 is the mixed ward
+that also runs NIV), a setting hour with a set rate (2282) or a
+PressureOverPeep (3040) while propofol is running (3057 > 0) is therefore
+invasive ventilation too: a sedated patient on a set rate is not on NIV.
+``attributed_ventilation_windows`` without ``sedated_hours`` is the strict
+airway-only rule, kept for sensitivity analyses.  Setting hours attributed by
+neither rule are counted on the frame's ``attrs`` so the extraction can report
+them.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
 AIRWAY_ITEMS = (720, 3041)
 SETTING_ITEMS = (2278, 2282, 2284, 3040, 2285, 3121)
+#: Settings that, under propofol in an ICU unit, mean controlled ventilation.
+CONTROLLED_SETTING_ITEMS = (2282, 3040)
+PROPOFOL_ITEM = 3057
+#: cases.HospitalUnit codes of the intensive care units (5 is the NIV ward).
+ICU_UNITS = (2, 3, 4)
 #: Charting tolerance around an airway interval, in seconds.
 AIRWAY_TOLERANCE_SECONDS = 3600
 HOUR = 3600
@@ -44,13 +58,17 @@ def attributed_ventilation_windows(
     concept_name: str,
     id_col: str = "CaseID",
     time_col: str = "Offset",
+    sedated_hours: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Merge airway-attributed setting hours into invasive windows.
 
     ``settings`` carries ``id_col`` and ``time_col`` (seconds); ``airway``
-    carries ``id_col``, ``Offset`` and ``OffsetEnd`` (seconds).  The result has
-    one row per run of consecutive attributed hours: ``time_col`` (run start,
-    seconds), ``dur_var`` (seconds) and ``concept_name`` = ``'invasive'``.
+    carries ``id_col``, ``Offset`` and ``OffsetEnd`` (seconds).
+    ``sedated_hours`` (``id_col`` and hour index ``_h``) are setting hours
+    attributed without an airway (see the module docstring); ``None`` is the
+    strict airway-only rule.  The result has one row per run of consecutive
+    attributed hours: ``time_col`` (run start, seconds), ``dur_var`` (seconds)
+    and ``concept_name`` = ``'invasive'``.
     """
     from ..table.duration import UNIT_SECONDS, set_dur_var_unit
 
@@ -71,7 +89,11 @@ def attributed_ventilation_windows(
     pairs = hours.merge(spans[[id_col, "_a0", "_a1"]].dropna(), on=id_col, how="inner")
     start = pairs["_h"] * HOUR
     overlap = (start < pairs["_a1"]) & (start + HOUR > pairs["_a0"])
-    attributed = pairs.loc[overlap, [id_col, "_h"]].drop_duplicates()
+    attributed = pairs.loc[overlap, [id_col, "_h"]]
+    if sedated_hours is not None and not sedated_hours.empty:
+        sedated = hours.merge(sedated_hours[[id_col, "_h"]].drop_duplicates(), on=[id_col, "_h"])
+        attributed = pd.concat([attributed, sedated], ignore_index=True)
+    attributed = attributed.drop_duplicates()
     unattributed = len(hours) - len(attributed)
     attributed = attributed.sort_values([id_col, "_h"], kind="mergesort")
     new_run = attributed.groupby(id_col)["_h"].diff().ne(1)
@@ -123,13 +145,67 @@ def apply_sicdb_attributed_ventilation(
         raise ValueError(f"sicdb_airway_columns_missing:{sorted(missing)}")
     airway = airway.loc[airway["DataID"].isin(AIRWAY_ITEMS)]
     return attributed_ventilation_windows(
-        frame, airway, concept_name=concept_name, id_col=id_col, time_col=time_col
+        frame, airway, concept_name=concept_name, id_col=id_col, time_col=time_col,
+        sedated_hours=_sedated_controlled_hours(frame, data_source, cases, id_col, time_col),
     )
+
+
+def _sedated_controlled_hours(
+    frame: pd.DataFrame, data_source: Any, cases: list, id_col: str, time_col: str
+) -> pd.DataFrame:
+    """Hours of ICU-unit cases with a set rate or PressureOverPeep under propofol."""
+    from ..datasource import FilterOp, FilterSpec
+
+    empty = pd.DataFrame(columns=[id_col, "_h"])
+    if "DataID" not in frame.columns:
+        raise ValueError("sicdb_setting_item_column_missing:DataID")
+    controlled = frame.loc[frame["DataID"].isin(CONTROLLED_SETTING_ITEMS), [id_col, time_col]]
+    if controlled.empty:
+        return empty
+    units = data_source.load_table(
+        "cases",
+        columns=[id_col, "HospitalUnit"],
+        filters=[FilterSpec(id_col, FilterOp.IN, cases)],
+        verbose=False,
+    )
+    units = units.data if hasattr(units, "data") else units
+    icu_cases = units.loc[units["HospitalUnit"].isin(ICU_UNITS), id_col]
+    controlled = controlled.loc[controlled[id_col].isin(icu_cases)]
+    if controlled.empty:
+        return empty
+    propofol = data_source.load_table(
+        "data_float_h",
+        columns=[id_col, "DataID", "Offset", "Val"],
+        filters=[
+            FilterSpec("DataID", FilterOp.IN, [PROPOFOL_ITEM]),
+            FilterSpec(id_col, FilterOp.IN, pd.unique(controlled[id_col]).tolist()),
+        ],
+        verbose=False,
+    )
+    propofol = propofol.data if hasattr(propofol, "data") else propofol
+    propofol = propofol.loc[
+        propofol["DataID"].eq(PROPOFOL_ITEM) & (pd.to_numeric(propofol["Val"], errors="coerce") > 0)
+    ]
+    return _hour_index(controlled, id_col, time_col).merge(
+        _hour_index(propofol, id_col, "Offset"), on=[id_col, "_h"]
+    )
+
+
+def _hour_index(frame: pd.DataFrame, id_col: str, time_col: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            id_col: frame[id_col].to_numpy(),
+            "_h": np.floor(pd.to_numeric(frame[time_col], errors="coerce") / HOUR),
+        }
+    ).dropna().drop_duplicates()
 
 
 __all__ = [
     "AIRWAY_ITEMS",
     "CALLBACK",
+    "CONTROLLED_SETTING_ITEMS",
+    "ICU_UNITS",
+    "PROPOFOL_ITEM",
     "SETTING_ITEMS",
     "apply_sicdb_attributed_ventilation",
     "attributed_ventilation_windows",

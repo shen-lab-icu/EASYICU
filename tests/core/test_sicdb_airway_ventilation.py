@@ -67,3 +67,22 @@ def test_dictionary_reads_the_tube_whole_and_the_cannula_only_with_settings():
     assert set(settings["ids"]) == {2278, 2282, 2284, 3040, 2285, 3121}
     ett = dictionary["ett_gcs"]["sources"]["sic"][0]
     assert ett["ids"] == [720, 3041] and ett["dur_var"] == "OffsetEnd"
+
+
+def test_sedated_set_rate_hours_in_icu_units_count_without_an_airway():
+    # 2026-11-03 extraction audit round 2 (P1): case 2 has no airway, but its
+    # hours 1-2 have a set rate under propofol in an ICU unit.
+    settings = pd.concat([_settings(1, [9, 10]), _settings(2, [0, 1, 2, 3])])
+    airway = pd.DataFrame({"CaseID": [1], "Offset": [10 * H], "OffsetEnd": [20 * H]})
+    sedated = pd.DataFrame({"CaseID": [2, 2, 2], "_h": [1.0, 2.0, 7.0]})
+
+    out = attributed_ventilation_windows(
+        settings, airway, concept_name="mech_vent", sedated_hours=sedated
+    )
+
+    # Hour 7 has no setting, so it is not ventilation.
+    assert out[["CaseID", "Offset", "dur_var"]].values.tolist() == [
+        [1, 9 * H, 2 * H], [2, H, 2 * H]]
+    assert out.attrs[UNATTRIBUTED_ATTR] == 2
+    strict = attributed_ventilation_windows(settings, airway, concept_name="mech_vent")
+    assert strict["CaseID"].tolist() == [1]
