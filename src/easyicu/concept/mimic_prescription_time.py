@@ -10,6 +10,14 @@ adding the bare number 720 to their integer form moved the order by 720
 microseconds, kept it at midnight, and turned the column into an epoch integer
 that only a later guard converted back.  ICU-relative numeric indexes in
 EasyICU are hours.
+
+Every MIMIC-III prescription concept uses this placement (2026-11-03 audit
+round 2, D5): at midnight an order written on the day of ICU admission sat
+about ten hours before the drug was given and read as pre-ICU exposure.
+Non-antibiotic sources declare ``mimic_prescription_noon``, the same rule.
+The time is still a calendar day, so these concepts are day-level exposure
+and do not support an hourly landmark; a multi-day order marks its first day
+only.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from __future__ import annotations
 import pandas as pd
 
 PRESCRIPTION_DAY_OFFSET_MINUTES = 720
+PRESCRIPTION_NOON_CALLBACK = "mimic_prescription_noon"
 
 
 def shift_index_minutes(values: pd.Series, minutes: int = PRESCRIPTION_DAY_OFFSET_MINUTES) -> pd.Series:
