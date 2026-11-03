@@ -2949,9 +2949,11 @@ class ConceptResolver:
                                                         f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
                                                     )
                                                     _convert_unit_callback_for_duckdb = True
-                                        # Query: GROUP BY patient, MEDIAN(value)
+                                        # Query: GROUP BY patient, MEDIAN(value). The alias keeps
+                                        # the configured id spelling: DuckDB returns a column as
+                                        # the file spells it (MIMIC-III exports ICUSTAY_ID).
                                         _idtbl_sql = f"""
-                                            SELECT {_idtbl_id_col},
+                                            SELECT {_idtbl_id_col} AS "{_idtbl_id_col}",
                                                    MEDIAN({_idtbl_val_expr}) AS {concept_name}
                                             FROM {_idtbl_read_expr}
                                             WHERE {_idtbl_where} {_idtbl_pid_filter}
