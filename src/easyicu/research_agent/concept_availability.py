@@ -655,9 +655,10 @@ def _explain_concept_availability_cached(
         )
 
     dependencies = _concept_dependencies(definition)
-    from easyicu.concept_output_sources import required_recipe_concepts
+    from easyicu.concept_output_sources import recipe_measurement_concepts, required_recipe_concepts
 
     required = required_recipe_concepts(definition.callback, db)
+    measurements = recipe_measurement_concepts(definition.callback)
     dependencies = _unique([*dependencies, *required])
     if not dependencies:
         return ConceptDatabaseAvailability(
@@ -697,7 +698,11 @@ def _explain_concept_availability_cached(
     # Name both the intermediate recipe and the actual unavailable input.
     missing_dependencies = _unique([*missing_dependencies, *(dep for cell in blocked_required
                                                              for dep in cell.missing_dependencies)])
-    if blocked_required:
+    # A recipe whose every measurement input is blocked yields no value even
+    # when a modifier input is mapped.
+    measurement_cells = [cell for cell in dep_cells if cell.concept in measurements]
+    no_measurement = bool(measurement_cells) and all(cell.status == "blocked" for cell in measurement_cells)
+    if blocked_required or no_measurement:
         status = "blocked"
         reason = "required_dependency_blocked"
     elif not missing_dependencies and not degraded_dependencies:
@@ -718,7 +723,10 @@ def _explain_concept_availability_cached(
         available=status != "blocked",
         direct_source=False,
         reason=reason,
-        structural_unavailable=any(_cell_is_structural_unavailable(cell) for cell in blocked_required),
+        structural_unavailable=any(
+            _cell_is_structural_unavailable(cell)
+            for cell in [*blocked_required, *(measurement_cells if no_measurement else [])]
+        ),
         available_dependencies=available_dependencies,
         degraded_dependencies=degraded_dependencies,
         missing_dependencies=missing_dependencies,

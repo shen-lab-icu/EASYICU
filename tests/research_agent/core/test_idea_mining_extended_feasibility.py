@@ -43,10 +43,11 @@ def index() -> ExtendedFeasibilityIndex:
 
 # ---- Case 2: dictionary / cross-DB reachability -----------------------
 def test_cross_db_construct_resolves_to_other_db(index):
-    # apixaban is a dictionary concept only for SIC, not miiv
-    hit = index.resolve_construct_cross_db("apixaban")
+    # saps3 is a dictionary concept only for SIC, not miiv (apixaban gained
+    # a MIMIC-IV eMAR source in the 2026-11-03 audit)
+    hit = index.resolve_construct_cross_db("saps3")
     assert hit is not None
-    assert hit.concept == "apixaban"
+    assert hit.concept == "saps3"
     assert "sic" in hit.databases
     assert hit.in_current_db is False
 
@@ -62,7 +63,7 @@ def test_cross_db_unknown_construct_returns_none(index):
 
 def test_reconsider_other_db_downgrades_to_hold(index):
     idea = _FakeIdea(
-        population="ICU patients", exposure_or_predictor="apixaban", outcome="mortality"
+        population="ICU patients", exposure_or_predictor="saps3", outcome="mortality"
     )
     verdict = index.reconsider(idea=idea, candidate=None)
     assert verdict is not None

@@ -198,6 +198,17 @@ def required_recipe_concepts(callback: str | None, database: str) -> tuple[str, 
                  if parameter.default is Parameter.empty and name not in {"id_cols", "index_col"})
 
 
+#: Recipes that produce no value unless at least one of these inputs is
+#: present. A modifier alone (``ett_gcs`` marks the verbal response as
+#: unassessable) cannot make a Glasgow Coma Scale.
+_RECIPE_MEASUREMENT_INPUTS = {"gcs": ("egcs", "mgcs", "vgcs", "tgcs")}
+
+
+def recipe_measurement_concepts(callback: str | None) -> tuple[str, ...]:
+    """Inputs of which a recipe needs at least one to produce a value."""
+    return _RECIPE_MEASUREMENT_INPUTS.get(str(callback or ""), ())
+
+
 class ConceptLoadPlanReason(str, Enum):
     INVALID_COLLECTION = "concept_load_plan.invalid_collection"
     EMPTY_REQUEST = "concept_load_plan.empty_request"

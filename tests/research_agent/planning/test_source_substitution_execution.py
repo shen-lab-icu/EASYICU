@@ -27,7 +27,7 @@ def test_exact_association_and_refusal_remain_distinct(database, tmp_path):
     require_approved_database_capabilities(result, tmp_path)
     refused = compiled.model_copy(update={"steps": []})
     original = json.loads(ctx.user_preferences.data_constraints)
-    original["database_study_requirements"]["concepts"] = ["d_dimer" if database == "sic" else "apixaban"]
+    original["database_study_requirements"]["concepts"] = ["d_dimer" if database == "sic" else "saps3"]
     invalid = ctx.model_copy(update={"user_preferences": UserPreferences(data_constraints=json.dumps(original))})
     with pytest.raises(CapabilityApprovalError, match="study_capability_refused"):
         require_approved_database_capabilities(SimpleNamespace(context=invalid, plan=refused, evidence=result.evidence), tmp_path)
