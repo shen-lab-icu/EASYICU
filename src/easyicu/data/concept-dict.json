@@ -14623,6 +14623,17 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays)."
+    },
+    {
+     "ids": [
+      582
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "regex": "^(Hemodialysis st|Hemodialysis end|CVVHD Start|CVVHD D/C|CAVH Start|CAVH D/C)$",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (K1): CareVue 582 'Procedures' records intermittent haemodialysis, CVVHD and CAVH start/stop events, as mimic-code rrt.sql reads them (Hemodialysis st/end, CVVHD Start/D/C, CAVH Start/D/C; 363 stays without other RRT evidence). Other 582 procedures (EKG, line placement, ...) are not RRT and are dropped."
     }
    ],
    "sic": [
@@ -14740,6 +14751,17 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays)."
+    },
+    {
+     "ids": [
+      582
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "regex": "^(Hemodialysis st|Hemodialysis end|CVVHD Start|CVVHD D/C|CAVH Start|CAVH D/C)$",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 audit round 2 (K1): CareVue 582 'Procedures' records intermittent haemodialysis, CVVHD and CAVH start/stop events, as mimic-code rrt.sql reads them (Hemodialysis st/end, CVVHD Start/D/C, CAVH Start/D/C; 363 stays without other RRT evidence). Other 582 procedures (EKG, line placement, ...) are not RRT and are dropped."
     }
    ]
   }
