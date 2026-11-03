@@ -2,7 +2,7 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "00061edfdbe54845c15747d2b760dc0cec83a6cd8419fb61c223e96b549dbbe4",
+  "concept_dict_sha256": "879356ba04d89926f4c15d69b2288959e5e77494b79e547cf9b8452135b1d5f4",
   "sofa2_dict_sha256": "ea49fb4cb839d9ac36b7ae03515bacd5446c316b05b93ac2ef877e48509c56f8",
   "total_concepts": 268,
   "new_this_round": [],
@@ -142,8 +142,8 @@
       "change": "User-requested 2026-11-03 fourth reseal of concept-dict.json (extraction audit round 2): death known for survivors and timed at hospital/ICU discharge (HiRID, SICdb, AUMCdb Overleden, eICU hospitaldischargeoffset); HiRID noradrenaline bolus out of infusions; MIMIC-III MetaVision Rewritten orders out of rates and intake, CareVue mcg/min rates per kg; AUMCdb PaCO2 kPa conversion, blood-gas SO2 out of SpO2, set tidal volume 100-1500 mL; SICdb bicarb 667 out; eICU HICL-only thiazide/torsemide/acetazolamide orders; SICdb CVP above 30 mmHg and AUMCdb pressures at or below 0 mmHg dropped."
     },
     {
-      "git_commit": "9b01621e033c697aeb4e3a2a8cbafdd87ea4fdc8",
-      "change": "User-requested 2026-11-03 fifth reseal of concept-dict.json and sofa2-dict.json (extraction audit round 2, H and M items): MIMIC-III CareVue 582 RRT evidence; plateau above PIP out of driving pressure; further weight channels (MIMIC-III, MIIV, eICU) chosen per stay; SICdb sedated controlled-setting hours as invasive ventilation; MIMIC-III prescriptions at noon; eICU cancelled orders dropped, other_vaso HICL, ml/hr noradrenaline without concentration unconverted, noradrenaline order spans as exposure, HICL for 32 drug concepts; MIMIC-IV eMAR diuretic doses and exposures; set/total PEEP, o2_flow, supp_o2 dependency, safi SpO2/FiO2, arterial tco2, eICU nurse-charted vitals, MIIV arterial-line sbp/dbp, CareVue IABP; HiRID summed concurrent syringes, adm from APACHE groups, neut 24000556, terlipressin, diltiazem, adrenaline perfusors only, cuff sbp/dbp channel; SICdb tidal volume below 100 mL missing and adv_resp from ventilation windows; P/F with the hourly median FiO2; AUMCdb 2003-2008 specimen site 7432; AUMCdb inspiratory tidal volume and AUMCdb/MIMIC-III inspiratory minute volume out."
+      "git_commit": "fb09aea7adcfd12953795d87350a2e41a4d99484",
+      "change": "User-requested 2026-11-03 fifth reseal of concept-dict.json and sofa2-dict.json (extraction audit round 2, H and M items): MIMIC-III CareVue 582 RRT evidence; plateau above PIP out of driving pressure; further weight channels (MIMIC-III, MIIV, eICU) chosen per stay; SICdb sedated controlled-setting hours as invasive ventilation; MIMIC-III prescriptions at noon; eICU cancelled orders dropped, other_vaso HICL, ml/hr noradrenaline without concentration unconverted, noradrenaline order spans as exposure, HICL for 32 drug concepts; MIMIC-IV eMAR diuretic doses and exposures; set/total PEEP, o2_flow, supp_o2 dependency, safi SpO2/FiO2, arterial tco2, eICU nurse-charted vitals, MIIV arterial-line sbp/dbp, CareVue IABP; HiRID summed concurrent syringes, adm from APACHE groups, neut 24000556, terlipressin, adrenaline perfusors only, cuff sbp/dbp channel; SICdb tidal volume below 100 mL missing and adv_resp from ventilation windows; P/F with the hourly median FiO2; AUMCdb 2003-2008 specimen site 7432; AUMCdb inspiratory tidal volume and AUMCdb/MIMIC-III inspiratory minute volume out; driving_pres_controlled aggregate arity."
     }
   ]
 }
