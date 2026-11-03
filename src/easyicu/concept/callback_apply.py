@@ -865,6 +865,15 @@ def _apply_callback(
             frame, concept_name=concept_name, data_source=data_source
         )
 
+    if expr == "eicu_order_exposure_duration":
+        # eICU vasopressor orders of stays that chart no infusion are exposure
+        # spans (owner: eicu_vasopressor_orders).
+        from .eicu_vasopressor_orders import apply_order_exposure
+
+        return apply_order_exposure(
+            frame, source=source, concept_name=concept_name, data_source=data_source
+        )
+
     if expr == "emar_administered":
         from .emar_administration import keep_administered
 
