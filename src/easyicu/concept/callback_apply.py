@@ -3269,9 +3269,12 @@ def _apply_callback(
                 if candidate in frame.columns:
                     index_col = candidate
                     break
-        # Shift time forward by 720 minutes (12 hours)
+        # Move the date-only order to noon (720 minutes) in the index's own
+        # type; see concept.mimic_prescription_time.
         if index_col and index_col in frame.columns:
-            frame[index_col] = pd.to_numeric(frame[index_col], errors='coerce') + 720
+            from .mimic_prescription_time import shift_index_minutes
+
+            frame[index_col] = shift_index_minutes(frame[index_col])
         # Set value to TRUE
         frame[concept_name] = True
         return frame

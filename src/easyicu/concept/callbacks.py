@@ -2275,10 +2275,11 @@ def _callback_mimic_abx_presc(
     id_columns = input_table.id_columns
     index_column = input_table.index_column or ctx.index_column
     
-    # Shift time forward by 720 minutes (12 hours)
+    # Move the date-only order to noon (720 minutes) in the index's own type.
     if index_column and index_column in data.columns:
-        # Assuming time is in minutes (or convert if needed)
-        data[index_column] = pd.to_numeric(data[index_column], errors='coerce') + 720
+        from .mimic_prescription_time import shift_index_minutes
+
+        data[index_column] = shift_index_minutes(data[index_column])
     
     # Set value to TRUE
     data['abx'] = True

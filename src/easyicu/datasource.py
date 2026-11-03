@@ -1130,8 +1130,19 @@ class ICUDataSource:
         # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
         # MIMIC-III 的 id 列是 icustay_id，需要补全
         target_id_col = 'icustay_id' if self.config.name in ('mimic', 'mimic_demo') else 'stay_id'
+        if (
+            defaults.id_var == 'hadm_id'
+            and target_id_col in frame.columns
+            and 'hadm_id' in frame.columns
+        ):
+            # A hospital table keyed by hadm_id may still carry the source's
+            # own partial ICU-stay column (MIMIC-III prescriptions.icustay_id
+            # is empty for 35% of rows: orders outside its own date rule).
+            # The table's identifier is hadm_id, so stays are assigned by the
+            # rolling join below, never by that partial column.
+            frame = frame.drop(columns=[target_id_col])
         has_target_id = target_id_col in frame.columns and not frame[target_id_col].isna().all()
-        
+
         if not has_target_id and 'hadm_id' in frame.columns:
             # ⚠️ 问题：对于 hospital tables (如 labevents), 原表没有 stay_id/icustay_id，需要通过 hadm_id join icustays 补全
             # 但 join 会引入该 hadm_id 的所有 stay_id (同一住院可能多次ICU入住)
@@ -1225,7 +1236,9 @@ class ICUDataSource:
                     #
                     # 当同一 hadm_id 有多个 stay_id 时，需要使用真正的 rolling join
                     time_col = None
-                    for cand in ['charttime', 'storetime', 'starttime', 'specimen_time']:
+                    # The table's own index is the fallback for tables with
+                    # none of these columns (MIMIC-III prescriptions: startdate).
+                    for cand in ['charttime', 'storetime', 'starttime', 'specimen_time', index_column]:
                         if cand in frame.columns:
                             time_col = cand
                             break
