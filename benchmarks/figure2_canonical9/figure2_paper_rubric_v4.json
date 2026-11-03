@@ -100,6 +100,7 @@
     "src/easyicu/concept/callbacks.py",
     "src/easyicu/concept/catalog.py",
     "src/easyicu/concept/data_source_contract.py",
+    "src/easyicu/concept/definition_identity.py",
     "src/easyicu/concept/errors.py",
     "src/easyicu/concept/export_metadata.py",
     "src/easyicu/concept/expr_parser.py",
@@ -1512,7 +1513,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "ae517b5d31ce8fd5714a2bb47c588a580271329e08d2350cf88dda0cc04d6909",
+  "scorer_tree_sha256": "63db86a819c91a538cc5e2d747fc0ac5bd0f115083e108a83ac215f682b71305",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
