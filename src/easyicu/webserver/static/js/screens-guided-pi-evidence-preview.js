@@ -18,6 +18,7 @@
   function title(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
     if (p.renderer === 'literature_cards') return tr('Literature candidates', '文献候选');
+    if (p.renderer === 'variable_sources') return tr('Variable definitions', '变量定义');
     if (recordPurpose(p.display_name)) return recordPurpose(p.display_name);
     if (p.renderer === 'json' && p.kind !== 'statistic') return tr('Evidence record', '证据记录');
     return text(p.display_name || p.evidence_id || tr('Evidence', '证据'), 160);
@@ -27,6 +28,7 @@
     const labels = {
       code: tr('Code', '代码'), json: 'JSON', table: tr('Table', '表格'),
       literature_cards: tr('Literature', '文献'),
+      variable_sources: tr('Data dictionary', '数据字典'),
       metadata: tr('File', '文件'),
     };
     return labels[renderer] || tr('File', '文件');
@@ -453,12 +455,42 @@
     }).join('');
     return `<section class="gpi-evidence-literature"><h3>${esc(tr('Recorded literature candidates', '已记录的文献候选'))}</h3><p>${esc(tr('These are the candidates recorded for this run. Relevance and support for each claim still require review.', '这里显示本次运行记录的候选；相关性及每项论点是否得到支持仍需审阅。'))}</p>${value.searched_at ? `<p>${esc(tr('Search time: ', '检索时间：') + text(value.searched_at, 80))}</p>` : ''}${shortfalls.length ? `<p>${esc(tr('Evidence coverage remains incomplete.', '文献覆盖尚未满足目标。'))}</p><ul>${shortfalls.map(item => `<li>${esc(text(item.role, 80))}: ${esc(String(item.actual))} / ${esc(String(item.target))}</li>`).join('')}</ul>` : ''}${items || `<p>${esc(tr('No reviewable evidence cards were recorded.', '未记录可审阅的证据卡。'))}</p>`}${value.cards_truncated ? `<p>${esc(tr('Additional cards are not shown in this bounded preview.', '有界预览未显示其余证据卡。'))}</p>` : ''}${Number(value.suppressed_ambiguous_cards || 0) ? `<p>${esc(tr('Some ambiguous records were withheld.', '部分记录因对应关系不明确而未显示。'))}</p>` : ''}</section>`;
   }
+  // Where each analysis variable comes from in the source database, as the
+  // host projected it from the run's dictionary bindings (one row per source).
+  function variableSourcesView(payload) {
+    const value = payload.value && typeof payload.value === 'object' ? payload.value : {};
+    const rows = Array.isArray(value.rows) ? value.rows.filter(row => row && typeof row === 'object').slice(0, 64) : [];
+    const cell = item => esc(text(item, 240)) || esc(tr('Not recorded', '未记录'));
+    const selector = row => {
+      const items = Array.isArray(row.items) ? row.items.slice(0, 16).map(item => text(item, 80)).join(', ') : '';
+      const match = items || text(row.selector_regex, 240);
+      return row.selector ? `${cell(row.selector)} = ${cell(match)}` : (match ? cell(match) : '—');
+    };
+    const windowText = row => {
+      const w = row.window && typeof row.window === 'object' ? row.window : null;
+      if (!w || !Number.isFinite(w.start_hours) || !Number.isFinite(w.end_hours)) return '—';
+      const origin = w.origin === 'icu_admission' ? tr('ICU admission', 'ICU 入住') : text(w.origin, 80);
+      return esc(`${origin} ${w.start_hours}–${w.end_hours} ${tr('h', '小时')}`);
+    };
+    const field = row => [row.value_column, row.time_column, row.unit_column].some(Boolean)
+      ? [[tr('value', '数值'), row.value_column], [tr('time', '时间'), row.time_column], [tr('unit', '单位'), row.unit_column]]
+        .filter(([, name]) => name).map(([label, name]) => `${esc(label)}: <code>${esc(text(name, 160))}</code>`).join('<br>')
+      : '—';
+    const body = rows.map(row => `<tr><th scope="row"><code>${cell(row.column)}</code></th><td>${cell(row.concept)}</td><td><code>${cell(row.table)}</code></td><td>${selector(row)}</td><td>${field(row)}</td><td>${row.unit ? cell(row.unit) : '—'}</td><td>${row.aggregation ? cell(row.aggregation) : '—'}</td><td>${windowText(row)}</td></tr>`).join('');
+    const omitted = Number.isSafeInteger(value.omitted) && value.omitted > 0
+      ? `<p>${esc(tr(`${value.omitted} more source rows are kept in the run record.`, `另有 ${value.omitted} 条来源记录保留在运行记录中。`))}</p>` : '';
+    return `<section class="gpi-evidence-statistic"><div class="gpi-evidence-statistic-section"><h3>${esc(tr('Where each variable comes from', '每个变量的来源'))}</h3>${rows.length ? `<div class="gpi-evidence-table-wrap" tabindex="0"><table class="gpi-evidence-table"><thead><tr>${[
+      tr('Variable', '变量'), tr('Concept', '概念'), tr('Source table', '来源表'), tr('Selector', '筛选条件'),
+      tr('Source fields', '来源字段'), tr('Unit', '单位'), tr('Summary', '汇总'), tr('Window', '时间窗'),
+    ].map(label => `<th scope="col">${esc(label)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>${omitted}</div>` : `<p>${esc(tr('No variable sources were recorded.', '未记录变量来源。'))}</p>`}</div></section>`;
+  }
   function render(payload, locator) {
     const p = payload && typeof payload === 'object' ? payload : {};
     const isStatistic = p.previewable && p.renderer === 'json' && p.kind === 'statistic' && !recordPurpose(p.display_name);
     let body = metadataView(p);
     if (p.previewable && p.renderer === 'code') body = codeView(p);
     else if (p.previewable && p.renderer === 'literature_cards') body = literatureCardsView(p);
+    else if (p.previewable && p.renderer === 'variable_sources') body = variableSourcesView(p);
     else if (isStatistic) {
       const selected = selectedNumberView(p, locator);
       const wholeFile = statisticView(p);
@@ -469,7 +501,7 @@
     }
     else if (p.previewable && p.renderer === 'json') body = reviewRecordView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
-    const summaryFirst = p.previewable && (p.renderer === 'json' || p.renderer === 'literature_cards');
+    const summaryFirst = p.previewable && ['json', 'literature_cards', 'variable_sources'].includes(p.renderer);
     return `<div class="gpi-evidence-view">${summaryFirst ? body : ''}${recordView(p)}${recordedGenerationView(p)}${declaredLineageView(p)}${fileAuditView(p, locator)}${runAuthorityView(p)}${summaryFirst ? '' : body}</div>`;
   }
 

@@ -735,3 +735,21 @@ def test_runner_records_do_not_displace_results_at_the_output_cap(run_dir: Path)
     assert names[0] == "step_summary.json"
     assert "table_one.csv" in names and "figure.png" in names
     assert len(names) == run_step_trace.MAX_OUTPUT_FILES and detail["more_output_count"] > 0
+
+
+def test_a_cohort_authority_larger_than_a_step_summary_is_still_read(tmp_path) -> None:
+    """A real eICU export's authority is ~0.4 MB of concept snapshots, not rows."""
+    from easyicu.webserver import run_step_trace
+
+    raw = json.dumps({"schema_version": "easyicu.materialized_cohort_authority/1",
+                       "snapshots": ["concept" * 8] * 8000}).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    name = f"cohort_authority.sha256-{digest}.json"
+    (tmp_path / name).write_bytes(raw)
+    reference = {"file": name, "sha256": digest, "size": len(raw)}
+
+    assert len(raw) > run_step_trace.MAX_SUMMARY_BYTES
+    assert run_step_trace._receipt_reference(tmp_path, reference, "cohort_authority")["schema_version"] == (
+        "easyicu.materialized_cohort_authority/1"
+    )
+    assert run_step_trace._receipt_reference(tmp_path, {**reference, "size": len(raw) - 1}, "cohort_authority") == {}

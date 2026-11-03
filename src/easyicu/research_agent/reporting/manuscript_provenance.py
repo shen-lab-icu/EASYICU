@@ -393,6 +393,7 @@ class _ClaimLineage:
         self.evidence = evidence
         self.records = records
         self.cache: dict[str, tuple[str, str | None, dict[str, Any]]] = {}
+        self.derived: dict[tuple[str, str], bool] = {}
 
     def _read(self, evidence_id: str) -> tuple[str, str | None, dict[str, Any]]:
         if evidence_id in self.cache:
@@ -449,10 +450,75 @@ class _ClaimLineage:
             seen.add(current.evidence_id)
             if self._read(current.evidence_id)[0] != "current":
                 continue
-            if current.sha256 == digest:
+            if current.sha256 == digest or self._derived_from(current, digest):
                 return True
             pending.extend(self.records[key] for key in current.inputs if key in self.records)
         return False
+
+    def _derived_from(self, record: EvidenceRecord, digest: str) -> bool:
+        """A host-materialized cohort names its parent through its verified authority."""
+
+        key = (record.evidence_id, digest)
+        if key not in self.derived:
+            from easyicu.research_agent.intake.materialized_metadata import (
+                materialized_cohort_descends_from,
+            )
+
+            ref = (record.metadata or {}).get("materialized_cohort_authority_ref")
+            authority = ref.get("sha256") if isinstance(ref, Mapping) else None
+            self.derived[key] = bool(_lineage_digest(authority)) and materialized_cohort_descends_from(
+                self.evidence.root,
+                authority_sha256=authority,
+                cohort_sha256=record.sha256,
+                ancestor_cohort_sha256=digest,
+            )
+        return self.derived[key]
+
+    def _row_binding(
+        self, claim: NumericClaim, summary: Mapping[str, Any], bindings: Sequence[Mapping[str, Any]],
+    ) -> list[Mapping[str, Any]]:
+        """The one loaded input that the claim's own result row names, if any.
+
+        A step reading several tables can record, per result row, the table the
+        row came from (``robustness_rows[0].evidence_id``).  Only an id that is
+        one of this step's loaded inputs counts.
+        """
+
+        named = {row.get("evidence_id"): row for row in bindings
+                 if row.get("loaded") is True and _lineage_token(row.get("evidence_id"))}
+        node: Any = summary
+        owners: list[Mapping[str, Any]] = []
+        for part in re.findall(r"[^.\[\]]+", claim.source_field or ""):
+            if isinstance(node, Mapping):
+                node = node.get(part)
+            elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+                node = node[int(part)]
+            else:
+                return []
+            if isinstance(node, Mapping):
+                owners.append(node)
+        for owner in reversed(owners):
+            if owner.get("evidence_id") in named:
+                return [named[owner["evidence_id"]]]
+        return []
+
+    def _input_node(self, binding: Mapping[str, Any]) -> dict[str, Any]:
+        if binding.get("loaded") is not True:
+            return {"kind": "analysis_input", "status": "missing", "sha256": None, "evidence_id": None,
+                    "facts": {}, "missing_reason": "analysis_input_not_loaded"}
+        input_id = _lineage_token(binding.get("evidence_id")) or ""
+        node, _ = self._node("analysis_input", input_id)
+        if node["status"] != "current":
+            return node
+        if self.records[input_id].kind != "table":
+            node.update(status="missing", missing_reason="analysis_input_not_table")
+        elif not _lineage_digest(binding.get("sha256")):
+            node.update(status="missing", missing_reason="input_digest_not_recorded")
+        elif node["sha256"] != binding["sha256"]:
+            node.update(status="stale", missing_reason="input_digest_mismatch")
+        else:
+            _lineage_count(node["facts"], "rows", binding.get("row_count"))
+        return node
 
     def _input_bindings(self, summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         bindings = summary.get("input_bindings")
@@ -493,33 +559,36 @@ class _ClaimLineage:
                 "method_not_recorded" if method is None else "method_not_displayable"
             )
         bindings = self._input_bindings(summary)
-        if len(bindings) != 1:
+        if len(bindings) > 1:
+            bindings = self._row_binding(claim, summary, bindings) or bindings
+        # Only a step that declares what it read can have several inputs; one
+        # archived digest matching equal-byte records is still a choice.
+        declared = isinstance(summary.get("input_bindings"), list)
+        if not bindings or (len(bindings) > 1 and not (declared and all(
+                _lineage_token(row.get("evidence_id")) for row in bindings))):
             nodes[1]["missing_reason"] = "analysis_input_ambiguous" if bindings else "analysis_input_not_recorded"
             return nodes
-        binding = bindings[0]
-        if binding.get("loaded") is not True:
-            nodes[1]["missing_reason"] = "analysis_input_not_loaded"
+        # Several verified tables that all descend from the run's cohort prove
+        # the population even when the number cannot name one of them.
+        inputs = [self._input_node(row) for row in bindings]
+        failed = next((node for node in inputs if node["status"] != "current"), None)
+        if failed is not None:
+            if len(inputs) == 1:
+                nodes[1] = failed
+            else:
+                nodes[1]["missing_reason"] = "analysis_input_ambiguous"
             return nodes
-        input_id = _lineage_token(binding.get("evidence_id")) or ""
-        nodes[1], _ = self._node("analysis_input", input_id)
-        if nodes[1]["status"] != "current":
-            return nodes
-        if self.records[input_id].kind != "table":
-            nodes[1].update(status="missing", missing_reason="analysis_input_not_table")
-            return nodes
-        if not _lineage_digest(binding.get("sha256")):
-            nodes[1].update(status="missing", missing_reason="input_digest_not_recorded")
-            return nodes
-        if nodes[1]["sha256"] != binding["sha256"]:
-            nodes[1].update(status="stale", missing_reason="input_digest_mismatch")
-            return nodes
-        _lineage_count(nodes[1]["facts"], "rows", binding.get("row_count"))
+        nodes[1] = inputs[0] if len(inputs) == 1 else {
+            "kind": "analysis_input", "status": "current", "sha256": None, "evidence_id": None,
+            "facts": {"tables": len(inputs)}, "missing_reason": None,
+        }
         capsule_node, capsule = self._node("cohort", "run_input_capsule")
         if capsule_node["status"] != "current":
             nodes[2] = capsule_node
             return nodes
         cohort_sha = _lineage_digest(capsule.get("cohort_sha256"))
-        if not cohort_sha or not self._reaches_cohort(self.records[input_id], cohort_sha):
+        if not cohort_sha or not all(
+                self._reaches_cohort(self.records[node["evidence_id"]], cohort_sha) for node in inputs):
             nodes[2]["missing_reason"] = "cohort_input_unlinked"
             return nodes
         context_id = _lineage_token(capsule.get("context_evidence_id")) or ""

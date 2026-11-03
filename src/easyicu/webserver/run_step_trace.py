@@ -49,6 +49,10 @@ MAX_OUTPUT_FILES = 24
 MAX_AUDIT_BYTES = 8_000_000
 MAX_INDEX_BYTES = 4 * 1024 * 1024
 MAX_SUMMARY_BYTES = 256 * 1024
+#: A cohort authority carries its export's per-module concept snapshots, so it
+#: grows with the concepts exported (about 0.4 MB for 19 eICU modules), never
+#: with patient rows; it is digest-checked metadata.
+MAX_RECEIPT_REFERENCE_BYTES = 4 * 1024 * 1024
 MAX_HASH_BYTES = 16 * 1024 * 1024
 #: An ICU database's stays fit well below this; a larger count is not one.
 MAX_STAY_COUNT = 10_000_000
@@ -1165,7 +1169,7 @@ def _receipt_reference(root: Path, reference: Any, prefix: str) -> Mapping[str, 
     if not _SHA256.fullmatch(digest) or ref.get("file") != f"{prefix}.sha256-{digest}.json":
         return {}
     path = _child(root, ref["file"])
-    raw = _read_bounded(path, MAX_SUMMARY_BYTES) if path else None
+    raw = _read_bounded(path, MAX_RECEIPT_REFERENCE_BYTES) if path else None
     if raw is None or type(ref.get("size")) is not int or len(raw) != ref["size"]:
         return {}
     if hashlib.sha256(raw).hexdigest() != digest:
@@ -1176,40 +1180,55 @@ def _receipt_reference(root: Path, reference: Any, prefix: str) -> Mapping[str, 
         return {}
 
 
+def column_source_rows(columns: Any, *, limit: int) -> Tuple[List[Dict[str, Any]], int]:
+    """Browser-safe source rows for concept column bindings, at most ``limit``.
+
+    One row per declared source of each column: its concept, source table,
+    selector and item ids, value/time/unit columns, unit, aggregation and
+    window.  Rows past ``limit`` are counted, never shown.
+    """
+    concepts: List[Dict[str, Any]] = []
+    omitted = 0
+    for column, binding in _mapping(columns).items():
+        entry = _mapping(binding)
+        metadata = _mapping(entry.get("metadata"))
+        if not _receipt_name(column) or not metadata:
+            continue
+        window = _mapping(entry.get("derivation_window"))
+        bounds = [window.get(key) for key in ("start_hours", "end_hours")]
+        timed = all(type(n) in {float, int} and math.isfinite(n) for n in bounds)
+        for source in _list(metadata.get("source_lineage")) or [{}]:
+            if len(concepts) >= limit:
+                omitted += 1
+                continue
+            lineage = _mapping(source)
+            concepts.append({
+                "column": column, "concept": _receipt_name(metadata.get("source_concept")),
+                "table": _receipt_name(lineage.get("table")),
+                "selector": _receipt_name(lineage.get("selector_variable")),
+                "items": [text for item in _list(lineage.get("item_ids"))[:16]
+                          if (text := _receipt_item_id(item))],
+                "selector_regex": _receipt_text(lineage.get("selector_regex")),
+                "value_column": _receipt_name(lineage.get("value_variable")),
+                "time_column": _receipt_name(lineage.get("time_variable")),
+                "unit_column": _receipt_name(lineage.get("unit_variable")),
+                "unit": _receipt_text(metadata.get("canonical_unit")),
+                "aggregation": _receipt_name(metadata.get("aggregation")),
+                "transform": _receipt_text(entry.get("representation_transform")),
+                "callback": _receipt_text(lineage.get("callback")),
+                "window": {"origin": _receipt_name(window.get("origin")),
+                           "start_hours": bounds[0], "end_hours": bounds[1]} if timed else None,
+            })
+    return concepts, omitted
+
+
 def _receipt_concepts(sidecar: Mapping[str, Any]) -> Tuple[List[Dict[str, Any]], int]:
     concepts: List[Dict[str, Any]] = []
     omitted = 0
     for file in _list(sidecar.get("files")):
-        for column, binding in _mapping(_mapping(file).get("columns")).items():
-            entry = _mapping(binding)
-            metadata = _mapping(entry.get("metadata"))
-            if not _receipt_name(column) or not metadata:
-                continue
-            window = _mapping(entry.get("derivation_window"))
-            bounds = [window.get(key) for key in ("start_hours", "end_hours")]
-            timed = all(type(n) in {float, int} and math.isfinite(n) for n in bounds)
-            for source in _list(metadata.get("source_lineage")) or [{}]:
-                if len(concepts) >= 32:
-                    omitted += 1
-                    continue
-                lineage = _mapping(source)
-                concepts.append({
-                    "column": column, "concept": _receipt_name(metadata.get("source_concept")),
-                    "table": _receipt_name(lineage.get("table")),
-                    "selector": _receipt_name(lineage.get("selector_variable")),
-                    "items": [text for item in _list(lineage.get("item_ids"))[:16]
-                              if (text := _receipt_item_id(item))],
-                    "selector_regex": _receipt_text(lineage.get("selector_regex")),
-                    "value_column": _receipt_name(lineage.get("value_variable")),
-                    "time_column": _receipt_name(lineage.get("time_variable")),
-                    "unit_column": _receipt_name(lineage.get("unit_variable")),
-                    "unit": _receipt_text(metadata.get("canonical_unit")),
-                    "aggregation": _receipt_name(metadata.get("aggregation")),
-                    "transform": _receipt_text(entry.get("representation_transform")),
-                    "callback": _receipt_text(lineage.get("callback")),
-                    "window": {"origin": _receipt_name(window.get("origin")),
-                               "start_hours": bounds[0], "end_hours": bounds[1]} if timed else None,
-                })
+        rows, more = column_source_rows(_mapping(file).get("columns"), limit=32 - len(concepts))
+        concepts.extend(rows)
+        omitted += more
     return concepts, omitted
 
 

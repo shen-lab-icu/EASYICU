@@ -153,3 +153,12 @@ test('only the exact source artifact receives the selected number locator', () =
       'a different artifact must not inherit the scalar locator');
   }
 });
+
+test('a number from a step that read several tables names their count, not one table', () => {
+  const lineage = fullChain();
+  lineage[1] = node('analysis_input', 'current', { sha256: null, evidence_id: null, facts: { tables: 4 } });
+  const items = chainOf(view(lineage));
+  assert.match(items[1], /class="is-current"[\s\S]*4 registered tables from one population/);
+  assert.doesNotMatch(items[1], /<button/, 'no single table is offered as the source');
+  assert.match(chainOf(view(lineage, 'zh'))[1], /4 份已登记数据表，来自同一研究人群/);
+});

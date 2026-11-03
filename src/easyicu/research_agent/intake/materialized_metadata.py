@@ -2166,6 +2166,41 @@ def _local_authority_reference(
     return reference, _read_authority(path, reference=reference)
 
 
+#: Longest parent chain a lineage reader follows; real runs use two or three.
+_MAX_AUTHORITY_ANCESTORS = 16
+
+
+def materialized_cohort_descends_from(
+    root: Path,
+    *,
+    authority_sha256: str,
+    cohort_sha256: str,
+    ancestor_cohort_sha256: str,
+) -> bool:
+    """Whether a cohort's verified authority in ``root`` derives from an ancestor cohort.
+
+    The authority named by ``authority_sha256`` must describe ``cohort_sha256``;
+    each step follows only the parent its verified authority names, never a
+    scan.  Any missing, altered or non-canonical authority answers ``False``.
+    """
+
+    current: Optional[str] = authority_sha256
+    expected: Optional[str] = cohort_sha256
+    seen: set[str] = set()
+    while current and current not in seen and len(seen) < _MAX_AUTHORITY_ANCESTORS:
+        seen.add(current)
+        try:
+            _, authority = _local_authority_reference(Path(root), authority_sha256=current)
+        except (MaterializedMetadataError, OSError):
+            return False
+        if expected is not None and authority.cohort_sha256 != expected:
+            return False
+        if authority.cohort_sha256 == ancestor_cohort_sha256:
+            return True
+        expected, current = None, authority.parent_authority_sha256
+    return False
+
+
 #: The host's receipt for a universe restricted to each patient's first ICU stay.
 FIRST_ICU_STAY_RESTRICTION_SCHEMA = "easyicu.first_icu_stay_restriction/1"
 FIRST_ICU_STAY_PER_HOSPITALIZATION_RESTRICTION_SCHEMA = (
