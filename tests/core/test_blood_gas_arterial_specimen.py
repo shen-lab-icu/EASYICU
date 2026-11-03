@@ -48,9 +48,9 @@ def test_miiv_ph_drops_venous_lab_and_venous_chart_channels(tmp_path, scan):
 @pytest.mark.parametrize("database", ["mimic", "mimic_demo"])
 def test_mimic_iii_matches_specimen_type_by_subject_and_charttime(tmp_path, database, scan):
     source, id_column = mimic_source(tmp_path, database)
-    # MIX, unrecorded and ART+VEN are excluded; 490 (alveolar PAO2, 300 mmHg)
-    # is no longer a PaO2 channel while 779 "Arterial PaO2" is.
-    assert hourly(source, id_column, "po2", parquet_scan=scan) == {0.0: 90.0, 5.0: 110.0}
+    # MIX and ART+VEN are excluded, an unrecorded gas is kept; 490 (alveolar
+    # PAO2, 300 mmHg) is no longer a PaO2 channel while 779 "Arterial PaO2" is.
+    assert hourly(source, id_column, "po2", parquet_scan=scan) == {0.0: 90.0, 2.0: 80.0, 5.0: 110.0}
 
 
 @READERS
