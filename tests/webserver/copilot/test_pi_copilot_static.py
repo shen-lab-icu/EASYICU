@@ -63,7 +63,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-header.js?v=20261102-ui1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20261102-ui1" in index
     assert "css/workspace-canvas.css?v=20261022-winfont1" in index
-    assert "css/guided-pi-workspace.css?v=20261029-followup1" in index
+    assert "css/guided-pi-workspace.css?v=20261103-picker1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert index.index("css/guided-pi-skin.css?") < index.index("css/guided-pi-task-list.css?v=20261029-journey4")
     assert index.index("js/screens-guided-pi-task-table.js?v=20261028-ux1") < index.index("js/screens-guided-pi.js?")
@@ -85,7 +85,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-preview.js?v=20261030-video3" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20261102-firststay1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20261103-rewrite1" in index
     assert "js/screens-guided-pi-result-append.js?v=20261102-plain1" in index
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "js/screens-guided-pi-activity.js?v=20261030-progress3" in index
@@ -140,7 +140,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261027-dc1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261030-shared-capacity2" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261103-source-pending1" in index
     assert "js/screens-guided-pi.js?v=20261102-ui1" in index
     assert "js/screens-guided.js?v=20261102-ui1" in index
     assert (

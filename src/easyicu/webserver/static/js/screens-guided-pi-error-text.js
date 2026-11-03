@@ -1191,6 +1191,10 @@
           'The analysis data changed while the run was in progress, so the run stopped.',
           '运行期间分析数据发生了变化，本次运行已停止。',
         ),
+        pi_session_data_source_confirmation_required: tr(
+          'This conversation has not confirmed its data source yet. Confirm it on the data source card below.',
+          '本次对话还没有确认数据源，请在下方数据源卡片中确认。',
+        ),
         research_pipeline_database_required: tr(
           'No confirmed database was available for this run.',
           '这次运行没有已确认的数据库。',

@@ -141,6 +141,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
     analysis_validation_retry_available: bool = False
+    #: The Writer never reached the model service; the sealed analysis may be
+    #: written up again without rerunning it.
+    report_rewrite_available: bool = False
     latest_attempt_failure: Optional[PreservedPlanFailure] = None
     #: Path-free retry assessment for a failed approved execution: whether a
     #: retry could change the outcome, and the counts and codes saying why.
@@ -971,6 +974,12 @@ def build_research_workflow_snapshot(
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )
+    report_rewrite_available = bool(
+        analysis_outputs_available
+        and agent_pipeline_runs.writer_never_reached(run_row)
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
     # Offering "resume this plan" is narrower than seeding a fresh planning run
     # from a preserved prefix (PLANNER_CHECKPOINT_GATE_REASONS): only a
     # budget-exhausted plan is itself still intact.
@@ -1371,6 +1380,7 @@ def build_research_workflow_snapshot(
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
         analysis_validation_retry_available=(analysis_validation_retry_available),
+        report_rewrite_available=report_rewrite_available,
         latest_attempt_failure=latest_attempt_failure,
         execution_retry=(
             dict(execution_retry)
@@ -1839,6 +1849,12 @@ def build_project_workflow_projection(
         snapshot = snapshot.model_copy(update={
             "source_boundary_review": _source_boundary_review(study, registry, exact_bound_study_id),
         })
+    if snapshot.report_rewrite_available and not agent_pipeline_runs.report_rewrite_ready(
+        study=study,
+        project_root=research_pipeline_project_root(clean_study_id or None),
+        source_run_id=str((latest_run or {}).get("run_id") or ""),
+    ):
+        snapshot = snapshot.model_copy(update={"report_rewrite_available": False})
     if projected_study is not study:
         snapshot = snapshot.model_copy(
             update={

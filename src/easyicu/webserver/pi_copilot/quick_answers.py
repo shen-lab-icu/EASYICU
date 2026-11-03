@@ -28,6 +28,12 @@ def submit_quick_question(context: ToolExecutionContext, params) -> dict:
     if context.quick_answer_submit is None:
         raise error("quick_conversation_required")
     attachment = context.quick_answer_submit(context, reading)
+    if attachment is None:
+        return PiToolResult(
+            status="ok", code="quick_full_study_continues", summary="",
+            owner="easyicu.webserver.quick_answer", details={},
+            authority=context.session.binding.model_dump(mode="json"),
+        ).model_dump(mode="json")
     proposal = attachment["proposal"]
     return PiToolResult(
         status="blocked" if proposal["status"] == "stopped" else "ok",
@@ -128,6 +134,10 @@ class QuickAnswerService:
             except QuickStop as exc:
                 raise error(exc.code) from exc
             context.assert_authority_fresh()
+            # The offered question already continues as a full study, so a
+            # card that only says so would repeat the conversation.
+            if context.quick_question_offered and proposal.status == "full_study":
+                return None
             row = {
                 "quick_answer_id": identity, "session_id": record.session_id,
                 "project_id": record.project_id, "message_job_id": message_job_id,

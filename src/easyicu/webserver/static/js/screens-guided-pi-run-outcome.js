@@ -523,6 +523,11 @@
           : tr('Repair and revalidate', '修复并重新校验');
         primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="${validated && numericVerified ? 'restore' : 'validation_repair'}">${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
       }
+      // The Writer never reached the model service: write the sealed results
+      // up again; nothing in the analysis runs again.
+      if (workflow && workflow.report_rewrite_available === true && !manuscriptReady) {
+        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="report_only">${iconHtml('refresh', 13)} ${esc(tr('Write the report again (analysis is not rerun)', '重新撰写论文稿（不重跑分析）'))}</button>`);
+      }
       if (!primaryActions.length && !detailActions.length) return '';
       const manuscript = latestRun.manuscript_outcome;
       const manuscriptNotice = validated && manuscript && manuscript.status === 'not_passed' && !manuscriptReady

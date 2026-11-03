@@ -526,6 +526,8 @@ class ToolExecutionContext:
         # transition rebinds it to the saved question in the researcher's
         # typed words, or to nothing (quick_answers.py).
         self.quick_question = self.user_message
+        # True only for that transition: its study is already a full study.
+        self.quick_question_offered = False
         self.bind_question_wording_context(
             user_turns if user_turns is not None else (
                 [{"text": self.user_message, "message_origin": "typed"}] if self.user_message else []

@@ -5817,6 +5817,33 @@ class _CandidatePlanMaterializationAuthority:
     patient_grouping_steps: tuple[str, ...] = ()
     primary_cohort_definition: Optional[Mapping[str, Any]] = None
     source_time_axis: Any = None
+    # The literature the candidate was planned on, bound by its checkpoint.
+    preplan_literature: Optional[dict[str, Any]] = None
+
+
+def _reviewed_candidate_literature(checkpoint: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The package-bound Planner plans again on the literature the researcher reviewed.
+
+    The candidate checkpoint binds its plan handoff, which carries the exact
+    pre-plan bundle.  Seeding the preparation run with it replaces a second
+    live search (11-03 eICU walk: 3.4 minutes, twice) whose results could
+    differ from the reviewed plan.  A checkpoint without a handoff seeds
+    nothing, and the run searches as before.
+    """
+    if "plan_handoff" not in checkpoint:
+        return None
+    from easyicu.research_agent.literature import LiteratureBundle
+    from easyicu.research_agent.orchestration.human_review_checkpoint import HumanReviewCheckpoint
+
+    try:
+        raw = HumanReviewCheckpoint.model_validate(checkpoint).plan_handoff.get("preplan_literature")
+        bundle = LiteratureBundle.model_validate(raw) if raw is not None else None
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan's reviewed literature failed its checkpoint binding.",
+        ) from exc
+    return bundle.model_dump(mode="json") if bundle is not None else None
 
 
 def _require_no_unsigned_case_duration(review):
@@ -6303,6 +6330,7 @@ def _load_candidate_plan_materialization_authority(
         exposure_groupings=exposure_groupings,
         patient_grouping_steps=steps_needing_patient_groups(plan),
         source_time_axis=source_time_axis,
+        preplan_literature=_reviewed_candidate_literature(checkpoint),
     )
 
 
@@ -6592,13 +6620,37 @@ def _execution_resume_acquisition_projection(
     )
 
 
+WRITER_TRANSPORT_UNAVAILABLE = "writer_provider_transport_unavailable"
+
+
+def writer_never_reached(row: Mapping[str, Any]) -> bool:
+    """A completed analysis whose Writer could not reach the model service.
+
+    Its sealed results stand; only the report is missing, so a report-only
+    rewrite is its one remedy (11-03 eICU walk: a proxy outage during the
+    Writer left a validated analysis with no draft and no way to retry).
+    """
+    outcome = row.get("manuscript_outcome")
+    return bool(
+        _clean_text(row.get("run_status"), 80) == "completed"
+        and isinstance(outcome, Mapping)
+        and outcome.get("status") == "not_passed"
+        and outcome.get("reason_code") == WRITER_TRANSPORT_UNAVAILABLE
+    )
+
+
 def _resolve_execution_resume_wrapper(
     *,
     study: Mapping[str, Any],
     project_root: Optional[str],
     source_run_id: str,
+    report_only: bool = False,
 ) -> _ExecutionResumeTarget:
-    """Resolve one failed, approved execution checkpoint for exact-plan retry."""
+    """Resolve one failed, approved execution checkpoint for exact-plan retry.
+
+    A report-only rewrite may also resume a completed run whose Writer never
+    reached the model service; no analysis step runs again on that path.
+    """
 
     root = Path(str(project_root or "")).expanduser().resolve()
     history = agent_runs.list_run_history(
@@ -6627,11 +6679,12 @@ def _resolve_execution_resume_wrapper(
             "research_pipeline_execution_retry_configuration_superseded",
             "The study configuration changed after approval; generate a new plan.",
         )
-    if _clean_text(
+    failed_execution = _clean_text(
         source_row.get("gate_reason"), 160
-    ) not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS or _clean_text(
+    ) in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS and _clean_text(
         source_row.get("run_status"), 80
-    ) not in {"blocked", "failed"}:
+    ) in {"blocked", "failed"}
+    if not failed_execution and not (report_only and writer_never_reached(source_row)):
         raise ResearchPipelineRunError(
             "research_pipeline_execution_retry_source_not_failed_execution",
             "Only a failed-closed approved execution can resume without replanning.",
@@ -6725,6 +6778,23 @@ def _resolve_execution_resume_wrapper(
         pipeline_config_sha256=str(checkpoint.pipeline_config_sha256),
         resume_from_step_id=resume_from_step_id or None,
     )
+
+
+def report_rewrite_ready(
+    *, study: Mapping[str, Any], project_root: Optional[str], source_run_id: str,
+) -> bool:
+    """Whether a report-only rewrite of that run still holds its approved configuration.
+
+    Runs that finished before the configuration was kept for this stop have
+    none, so no rewrite is offered for them.
+    """
+    try:
+        target = _resolve_execution_resume_wrapper(
+            study=study, project_root=project_root, source_run_id=source_run_id, report_only=True,
+        )
+        return load_recovery_seed(target.wrapper_dir) is not None
+    except (ResearchPipelineRunError, WebReviewRecoveryError):
+        return False
 
 
 def execution_resume_checkpoint(
@@ -6867,15 +6937,22 @@ def _cleanup_recovery_after_projection(
     wrapper_dir: Path,
     projection: Mapping[str, Any],
 ) -> None:
-    """Keep retry authority for failed execution; prune it after a true finish."""
+    """Keep retry authority for failed execution; prune it after a true finish.
+
+    A finish whose Writer never reached the model service keeps it too: a
+    report-only rewrite resumes from it.
+    """
 
     gate = projection.get("gate")
-    reason = gate.get("reason") if isinstance(gate, Mapping) else None
-    if reason not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS:
+    gate = gate if isinstance(gate, Mapping) else {}
+    if gate.get("reason") not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS:
         from easyicu.webserver.research_append_source import retain_completed_append_source
 
         retain_completed_append_source(wrapper_dir=wrapper_dir, projection=projection)
-        _remove_local_recovery(wrapper_dir)
+        manuscript = gate.get("manuscript_outcome")
+        if not (isinstance(manuscript, Mapping)
+                and manuscript.get("reason_code") == WRITER_TRANSPORT_UNAVAILABLE):
+            _remove_local_recovery(wrapper_dir)
 
 
 def _materialization_concept_roster(
@@ -7884,6 +7961,11 @@ def make_research_pipeline_run_runner(
                     )
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
+            reviewed_literature = candidate_authority.preplan_literature if candidate_authority else None
+            # A bundle read for another question seeds nothing.
+            if bound_preplan_literature is None and reviewed_literature is not None and str(
+                    reviewed_literature.get("research_question") or "").strip() == question.strip():
+                bound_preplan_literature = reviewed_literature
             if development_resume_literature is not None:
                 bound_preplan_literature = development_resume_literature
             live_pubmed_requested = (

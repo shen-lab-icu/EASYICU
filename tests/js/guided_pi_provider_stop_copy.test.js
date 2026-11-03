@@ -32,6 +32,12 @@ for (const language of ['zh', 'en']) {
       }
     }
   }
+  test(`${language}: a step waiting for the source says so without its code`, () => {
+    // 11-03 walk: a new conversation's interpret step showed the raw code.
+    const text = runFailureText('pi_session_data_source_confirmation_required');
+    assert.equal(text, tr('This conversation has not confirmed its data source yet. Confirm it on the data source card below.',
+      '本次对话还没有确认数据源，请在下方数据源卡片中确认。'));
+  });
   test(`${language}: unrelated failures retain their existing top line`, () => {
     const html = stop.render({ savedRuns: [{ run_status: 'failed', gate_reason: 'research_pipeline_execution_failed',
       gate_detail: { reason_code: 'pipeline_operation_raised', runner_kind: 'not_started' } }] });
