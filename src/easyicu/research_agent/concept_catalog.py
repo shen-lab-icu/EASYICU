@@ -450,10 +450,13 @@ def _bracket_aliases(description: str) -> List[str]:
     "Precedex", "Dexdor"; "(IMV/NIV/HFNC/CPAP/BiPAP)" -> each mode. Dosing,
     routes, percentages, and formulae ("(5%, 20%)", "(Na - Cl - HCO3)",
     "(any route)") are filtered out: a fragment must be purely alphabetic and
-    carry no noise word.
+    carry no noise word. Only the clinical head before " — " is read: the
+    tail holds per-database implementation notes and indications ("MIIV",
+    "PACU", "excludes sufentanil", "ileus"), which are not synonyms.
     """
     out: List[str] = []
-    for inner in re.findall(r"\(([^)]+)\)", description):
+    head = re.split(r"\s+—\s+", description, maxsplit=1)[0]
+    for inner in re.findall(r"\(([^)]+)\)", head):
         for part in re.split(r"[/,;]", inner):
             name = part.strip().strip(".")
             if len(name) < 3 or not re.fullmatch(r"[A-Za-z][A-Za-z \-]+", name):
