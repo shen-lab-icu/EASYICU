@@ -205,13 +205,401 @@ class NumericClaim:
         return cls(**clean)
 
 
+# ---------------------------------------------------------------------------
+# Quantity kind: what a number counts or measures
+# ---------------------------------------------------------------------------
+#
+# Equal value is not identity. A run that registered ``median_age=60`` and
+# ``n_deaths=12`` let "the cohort included 60 patients" bind to the median age
+# and "the median age was 12.0 years" bind to the death count: once the cited
+# evidence left one equal-valued candidate, it was accepted with a footnote.
+# The effect-scale identity above already refuses an OR printed as an HR; this
+# generalises the same idea to the descriptive quantities a cohort reports.
+#
+# A kind is inferred only when the words make it explicit. An unknown kind on
+# either side stays permissive, so a field or sentence the vocabulary does not
+# cover keeps binding exactly as before; only a known-versus-known mismatch is
+# refused.
+
+
+class NumericQuantityKind(str, enum.Enum):
+    """The kind of quantity a manuscript number or a registered field reports."""
+
+    COUNT = "count"
+    AGE = "age"
+    DURATION = "duration"
+    PROPORTION = "proportion"
+
+
+#: Time units that make a short integer a measured quantity ("7 days").
+_PROSE_TIME_UNIT_PATTERN = (
+    r"(?:years?|yrs?|days?|d|hours?|hrs?|h|minutes?|mins?|weeks?|wks?"
+    r"|months?|mos?)(?![\w-])"
+)
+_PROSE_ZH_TIME_UNIT_PATTERN = r"(?:岁|天|小时|周|个月|月|分钟)"
+#: A unit used as the adjective of an endpoint names a horizon, exactly like
+#: the hyphenated "28-day mortality" the recogniser never bound.
+_PROSE_HORIZON_NOUN_PATTERN = (
+    r"\s+(?:all[-\s]cause\s+|in[-\s]hospital\s+|icu\s+)?"
+    r"(?:mortality|survival|death|readmission|outcome|endpoint|horizon"
+    r"|window|landmark)"
+)
+_PROSE_ZH_HORIZON_PATTERN = (
+    r"(?:内|以内|之内|后|以后|之后|前|以前|之前|死亡率|病死率|生存率)"
+)
+#: Statistic words that make the next short integer a reported value.
+_PROSE_STATISTIC_RE = re.compile(
+    r"(?:\b(?:median|mean|average|aged?|ages|duration|LOS|IQR|SD"
+    r"|interquartile\s+range|standard\s+deviation"
+    r"|length\s+of\s+(?:icu\s+|hospital\s+)?stay)\b"
+    r"|中位数|中位|均值|平均|年龄|住院时间|住院天数|四分位|标准差)",
+    re.I,
+)
+#: ``n = 42`` / ``N=42`` / ``n: 42`` in any spacing or case.
+_PROSE_N_EQUALS_BEFORE_RE = re.compile(r"(?:^|(?<![A-Za-z_]))[nN]\s*[=:]\s*$")
+#: Words that make the next integer a label, ordinal or identifier rather
+#: than a quantity ("day 28", "Section 2", "stage 4", "第28天").
+_PROSE_LABEL_BEFORE_RE = re.compile(
+    r"(?:\b(?:arm|class|cohort|day|grade|group|level|phase|quartile|quintile"
+    r"|stage|step|tercile|tier|type|week|year|section|figure|fig\.?|table"
+    r"|appendix|supplement|chapter|panel|model|version|wave|visit|cycle"
+    r"|round|item|criterion|scenario|landmark)\s*"
+    r"|第\s*)$",
+    re.I,
+)
+#: A time coordinate, not a measured quantity ("at 28 days", "within 24 h").
+_PROSE_TIME_COORDINATE_BEFORE_RE = re.compile(
+    r"\b(?:at|within|by|after|before|until|beyond|first|last|initial)\s+"
+    r"(?:the\s+)?(?:first\s+|initial\s+|last\s+)?$",
+    re.I,
+)
+_PROSE_RANGE_TAIL = r"(?:\s*(?:[-–—]|to\b)\s*\d+(?:\.\d+)?)?\s*\)?"
+#: A time unit anchored to a clinical event names a window or horizon
+#: ("0-24 h after ICU admission", "28 days from onset"), not a measured value.
+_PROSE_ANCHORED_TIME_AFTER_RE = re.compile(
+    _PROSE_RANGE_TAIL + r"\s*" + _PROSE_TIME_UNIT_PATTERN
+    + r"\s+(?:after|before|from|of|since|following|post|prior\s+to|relative\s+to)\s+"
+    r"(?:the\s+)?(?:first\s+)?[“\"‘']?(?:icu\s+|hospital\s+|study\s+)?"
+    r"(?:admission|onset|baseline|randomi[sz]ation|enrol(?:l)?ment|inclusion"
+    r"|discharge|intubation|start|index|time\s+zero|landmark|diagnosis"
+    r"|surgery|exposure)\b",
+    re.I,
+)
+_PROSE_UNIT_AFTER_RE = re.compile(
+    _PROSE_RANGE_TAIL + r"\s*(?:" + _PROSE_TIME_UNIT_PATTERN + r"(?!"
+    + _PROSE_HORIZON_NOUN_PATTERN + r")"
+    r"|" + _PROSE_ZH_TIME_UNIT_PATTERN + r"(?!" + _PROSE_ZH_HORIZON_PATTERN + r"))",
+    re.I,
+)
+_PROSE_RANGE_LOW_BEFORE_RE = re.compile(
+    r"(?<![\w.])(?P<low>\d+(?:\.\d+)?)\s*(?:[-–—]|to)\s*$"
+)
+#: The dispersion printed in parentheses after a value: "mean 42 (12)".
+_PROSE_PARENTHESISED_AFTER_VALUE_RE = re.compile(
+    r"(?<![\w.])(?P<low>\d+(?:\.\d+)?)\s*\(\s*$"
+)
+#: Digits fused to a name ("SOFA-2", "IL6") are part of the name.
+_IDENTIFIER_DIGITS_RE = re.compile(r"(?<=[A-Za-z])[-–]?\d+")
+_STANDALONE_NUMBER_RE = re.compile(r"\d")
+_CLAUSE_BOUNDARY_RE = re.compile(r"[.!?;](?=\s)|[。！？；]|\n")
+
+
+def _clause_before(text: str, start: int, *, width: int = 80) -> str:
+    window = text[max(0, start - width) : start]
+    return _CLAUSE_BOUNDARY_RE.split(window)[-1]
+
+
+def _gap_has_no_other_number(gap: str) -> bool:
+    return _STANDALONE_NUMBER_RE.search(_IDENTIFIER_DIGITS_RE.sub("", gap)) is None
+
+
+def _statistic_governs(before: str) -> bool:
+    """Whether a statistic word governs the number that ends ``before``."""
+
+    matches = list(_PROSE_STATISTIC_RE.finditer(before))
+    if not matches:
+        return False
+    gap = before[matches[-1].end() :]
+    if not _gap_has_no_other_number(gap) or len(gap) > 32:
+        return False
+    return len(re.findall(r"[A-Za-z]+(?:-[A-Za-z0-9]+)*", gap)) <= 3
+
+
+def short_integer_reports_quantity(text: str, start: int, end: int) -> bool:
+    """Whether a 1-2 digit integer in prose reports a clinical quantity.
+
+    The prose recogniser exempts short integers because most of them are
+    labels: Section 2, SOFA-2, stage 4, day 28. A reported value is told apart
+    by its phrase, never its digits: a time unit after it ("42 years",
+    "7 days", "42 岁") unless the unit is anchored to an event as a window
+    ("0-24 h after ICU admission"), a statistic word governing it ("the
+    median age was 42", "年龄中位数为42"), an explicit ``N = 42``, the far
+    end of a range whose near end is itself a reported value ("IQR 3-7"), or
+    the dispersion in parentheses after one ("mean 42 (12)").
+    """
+
+    before = _clause_before(text, start)
+    if _PROSE_LABEL_BEFORE_RE.search(before):
+        return False
+    if _PROSE_N_EQUALS_BEFORE_RE.search(before):
+        return True
+    if _PROSE_TIME_COORDINATE_BEFORE_RE.search(before):
+        return False
+    if _PROSE_ANCHORED_TIME_AFTER_RE.match(text, end):
+        return _statistic_governs(before)
+    if _PROSE_UNIT_AFTER_RE.match(text, end):
+        return True
+    range_low = _PROSE_RANGE_LOW_BEFORE_RE.search(before)
+    value_before = _PROSE_PARENTHESISED_AFTER_VALUE_RE.search(before)
+    low = range_low or value_before
+    if low is not None:
+        low_start = start - len(before) + low.start("low")
+        low_end = start - len(before) + low.end("low")
+        literal = low.group("low")
+        if "." in literal:
+            return True
+        if len(literal) > 2:
+            # A long range end is a value; a long integer before a parenthesis
+            # may be a citation year ("2024 (3)").
+            return range_low is not None
+        return short_integer_reports_quantity(text, low_start, low_end)
+    return _statistic_governs(before)
+
+
+_PROSE_COUNT_AFTER_RE = re.compile(
+    _PROSE_RANGE_TAIL
+    + r"\s*(?:(?:icu|hospital)\s+)?"
+    r"(?:patients?|stays?|admissions?|encounters?|subjects?|participants?"
+    r"|cases?|controls?|deaths?|events?|episodes?|observations?|records?"
+    r"|rows?|individuals?|centres?|centers?|sites?|hospitals?)\b(?!-)"
+    r"|\s*(?:例|名|位|人)(?!年|日|天)",
+    re.I,
+)
+_PROSE_PERCENT_AFTER_RE = re.compile(r"\s*(?:%|percent\b|per\s?cent\b)", re.I)
+_PROSE_AGE_UNIT_AFTER_RE = re.compile(
+    _PROSE_RANGE_TAIL + r"\s*(?:岁|years?\s+old\b)", re.I
+)
+_PROSE_YEARS_AFTER_RE = re.compile(
+    _PROSE_RANGE_TAIL + r"\s*(?:years?|yrs?)(?![\w-])", re.I
+)
+_PROSE_OTHER_TIME_AFTER_RE = re.compile(
+    _PROSE_RANGE_TAIL
+    + r"\s*(?:(?:days?|d|hours?|hrs?|h|minutes?|mins?|weeks?|wks?|months?|mos?)"
+    r"(?![\w-])|天|小时|周|个月|月|分钟)",
+    re.I,
+)
+_PROSE_KIND_WORDS: Tuple[Tuple[NumericQuantityKind, "re.Pattern[str]"], ...] = (
+    (NumericQuantityKind.AGE, re.compile(r"\b(?:age|aged|ages)\b|年龄", re.I)),
+    (
+        NumericQuantityKind.DURATION,
+        re.compile(
+            r"\b(?:length\s+of\s+(?:icu\s+|hospital\s+)?stay|LOS|duration"
+            r"|follow-?\s?up)\b|住院时间|住院天数|时长|随访时间",
+            re.I,
+        ),
+    ),
+    (
+        NumericQuantityKind.COUNT,
+        re.compile(r"(?<![A-Za-z_])[nN]\s*[=:]|\bnumber\s+of\b|例数|人数", re.I),
+    ),
+    (
+        NumericQuantityKind.PROPORTION,
+        re.compile(
+            r"\b(?:rate|proportion|percentage|prevalence|incidence)\b"
+            r"|发生率|比例|患病率",
+            re.I,
+        ),
+    ),
+)
+
+
+def _kind_named_before(before: str) -> Optional[NumericQuantityKind]:
+    """The kind named by the nearest kind word that governs the number."""
+
+    nearest: Optional[Tuple[int, NumericQuantityKind]] = None
+    for kind, pattern in _PROSE_KIND_WORDS:
+        for match in pattern.finditer(before):
+            if nearest is None or match.end() > nearest[0]:
+                nearest = (match.end(), kind)
+    if nearest is None or not _gap_has_no_other_number(before[nearest[0] :]):
+        return None
+    return nearest[1]
+
+
+def prose_quantity_kind(
+    text: str, *, start: int, end: int
+) -> Optional[NumericQuantityKind]:
+    """Classify one numeric mention by the words that state what it is.
+
+    Mention-local, like the effect scale: "120 patients with a median age of
+    60 years" reports a count and an age in one sentence.
+    """
+
+    value = text[start:end]
+    if value.endswith("%") or _PROSE_PERCENT_AFTER_RE.match(text, end):
+        return NumericQuantityKind.PROPORTION
+    if _PROSE_COUNT_AFTER_RE.match(text, end):
+        return NumericQuantityKind.COUNT
+    if _PROSE_AGE_UNIT_AFTER_RE.match(text, end):
+        return NumericQuantityKind.AGE
+    before = _clause_before(text, start)
+    named = _kind_named_before(before)
+    if _PROSE_OTHER_TIME_AFTER_RE.match(text, end):
+        return NumericQuantityKind.DURATION
+    if _PROSE_YEARS_AFTER_RE.match(text, end):
+        # Years measure both an age and a follow-up; only the governing word
+        # says which.
+        return (
+            named
+            if named in (NumericQuantityKind.AGE, NumericQuantityKind.DURATION)
+            else None
+        )
+    return named
+
+
+_FIELD_NON_QUANTITY_TOKENS = frozenset(
+    {
+        "or", "hr", "rr", "ratio", "coef", "coefficient", "beta", "auc", "auroc",
+        "auprc", "p", "pvalue", "difference", "diff", "effect", "z", "t",
+        "statistic", "chi2", "se", "stderr", "brier", "estimate", "ci",
+    }
+)
+_FIELD_PROPORTION_TOKENS = frozenset(
+    {
+        "rate", "rates", "proportion", "percentage", "percent", "pct", "prevalence",
+        "incidence", "fraction", "frac", "share",
+    }
+)
+_FIELD_COUNT_MARKER_TOKENS = frozenset(
+    {"n", "count", "counts", "number", "num", "denominator", "numerator", "size"}
+)
+_FIELD_STATUS_TOKENS = frozenset(
+    {
+        "missing", "missingness", "nonmissing", "excluded", "included",
+        "available", "complete", "dropped", "removed", "retained", "eligible",
+        "imputed", "observed",
+    }
+)
+_FIELD_AGE_TOKENS = frozenset({"age", "aged", "ages"})
+_FIELD_DURATION_TOKENS = frozenset({"los", "duration", "followup"})
+_FIELD_COUNT_NOUN_TOKENS = frozenset(
+    {
+        "patients", "stays", "admissions", "encounters", "subjects",
+        "participants", "cases", "controls", "deaths", "events", "episodes",
+        "observations", "records", "rows", "individuals", "centres", "centers",
+        "sites", "hospitals",
+    }
+)
+_FIELD_TIME_UNIT_TOKENS = frozenset(
+    {"days", "day", "d", "hours", "hour", "h", "hrs", "minutes", "mins",
+     "weeks", "months"}
+)
+
+
+def _field_tokens(text: str) -> Tuple[str, List[str]]:
+    normalized = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    normalized = normalized.replace("follow_up", "followup")
+    normalized = normalized.replace("length_of_stay", "los")
+    return normalized, [token for token in normalized.split("_") if token]
+
+
+#: A name part that makes the field something other than a cohort quantity
+#: (an effect, a test statistic) or leaves its kind open ("missing").
+_NEUTRAL_PART = "neutral"
+
+
+def _kind_of_field_part(text: str, *, leaf: bool) -> Tuple[Optional[Any], bool]:
+    """Return ``(kind or _NEUTRAL_PART or None, explicit_marker)`` for a name part.
+
+    A counted noun names a count only in the leaf: an ancestor such as
+    ``rows[3]`` or ``events`` is the container the statistic was read from.
+    """
+
+    _normalized, tokens = _field_tokens(text)
+    present = set(tokens)
+    if present & _FIELD_NON_QUANTITY_TOKENS:
+        return _NEUTRAL_PART, False
+    if present & _FIELD_PROPORTION_TOKENS:
+        return NumericQuantityKind.PROPORTION, True
+    if present & _FIELD_COUNT_MARKER_TOKENS:
+        return NumericQuantityKind.COUNT, True
+    if present & _FIELD_STATUS_TOKENS:
+        # "age_missing" may count the stays or report their fraction.
+        return _NEUTRAL_PART, False
+    if present & _FIELD_AGE_TOKENS:
+        return NumericQuantityKind.AGE, False
+    if present & _FIELD_DURATION_TOKENS:
+        return NumericQuantityKind.DURATION, False
+    if leaf and present & _FIELD_COUNT_NOUN_TOKENS:
+        return NumericQuantityKind.COUNT, False
+    if present & _FIELD_TIME_UNIT_TOKENS:
+        return NumericQuantityKind.DURATION, False
+    return None, False
+
+
+def source_field_quantity_kind(source_field: str) -> Optional[NumericQuantityKind]:
+    """Infer a registered field's quantity kind from its explicit name.
+
+    The part nearest the leaf that names a kind decides it: "cohort.n_stays"
+    and "table_one.age.median" both name theirs. An ancestor naming a
+    different kind or a status leaves the name open ("missingness.age" may be
+    a fraction of stays), unless the deciding part carries an explicit count
+    or proportion marker ("complete_case_flow.n_complete_case").
+    """
+
+    source = str(source_field or "").strip()
+    if not source:
+        return None
+    parts = [part for part in re.split(r"[.\[\]]+", source) if part]
+    signals = [
+        signal
+        for signal in (
+            _kind_of_field_part(part, leaf=index == len(parts) - 1)
+            for index, part in enumerate(parts)
+        )
+        if signal[0] is not None
+    ]
+    if not signals:
+        return None
+    kind, explicit = signals[-1]
+    if kind == _NEUTRAL_PART:
+        return None
+    if not explicit and any(other is not kind for other, _ in signals[:-1]):
+        return None
+    return kind
+
+
+def quantity_kind_refuses_claim(
+    prose_kind: Optional[NumericQuantityKind], claim: "NumericClaim"
+) -> bool:
+    """Whether a mention of ``prose_kind`` must not bind to ``claim``.
+
+    Unknown on either side is permissive. A count must be a whole number, so a
+    counted mention never binds a fractional value whatever its field name.
+    """
+
+    if prose_kind is None:
+        return False
+    if prose_kind is NumericQuantityKind.COUNT and not float(
+        claim.canonical
+    ).is_integer():
+        return True
+    field_kind = source_field_quantity_kind(claim.source_field)
+    return field_kind is not None and field_kind is not prose_kind
+
+
 __all__ = [
     "contrast_exposure_coordinate",
     "NumericClaim",
     "NumericEffectScale",
     "NumericEstimand",
+    "NumericQuantityKind",
     "coerce_numeric_effect_scale",
     "infer_numeric_claim_identity",
+    "prose_quantity_kind",
+    "quantity_kind_refuses_claim",
+    "short_integer_reports_quantity",
+    "source_field_quantity_kind",
 ]
 
 

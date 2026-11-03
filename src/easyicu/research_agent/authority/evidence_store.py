@@ -63,7 +63,7 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from .evidence_snapshot import (
     EVIDENCE_AUTHORITY_FILENAME,
@@ -94,6 +94,7 @@ from .numeric_claim_identity import (
     NumericClaim as NumericClaim,
     NumericEffectScale as NumericEffectScale,
     NumericEstimand as NumericEstimand,
+    short_integer_reports_quantity,
 )
 from .scientific_claims import (
     ScientificClaim,
@@ -528,7 +529,7 @@ _ZH_COUNTED_PATTERN = (
     r"|(?:个|起|次)(?:事件|中心|医院|站点|队列)"
 )
 
-_NUMERIC_IN_PROSE_RE = re.compile(
+_NUMERIC_IN_PROSE_PATTERN = re.compile(
     r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
     r"(?:"  # --- Unicode scientific notation: 1 × 10⁻⁵² ---
@@ -585,9 +586,53 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     # count. Scoped to this branch only: the general numeric form must keep
     # matching both ends of "0.71-0.82".
     r"(?!\s*[-–])"
+    r"|"  # --- short-integer quantity candidate ---
+    # Any other 1-2 digit integer that is not fused to a name ("SOFA-2",
+    # "IL6") or a percent level ("95% CI"). It is only a *candidate*: the
+    # matcher below keeps it when its phrase reports a quantity ("42 years",
+    # "the median age was 42", "N=42", "IQR 3-7") and drops it as a label
+    # otherwise ("Section 2", "day 28", "stage 4").
+    r"(?P<short_quantity>"
+    r"(?<![A-Za-z_\d.])"
+    r"(?:(?<![-–—])|(?<=\d[-–—])|(?<=\d\s[-–—])|(?<=\d[-–—]\s)|(?<=\d\s[-–—]\s))"
+    r"\d{1,2}(?!\s*%)"
+    r")"
     r")"
     r"(?![A-Za-z_\d]|\.\d)"  # not followed by identifier / decimal continuation
 )
+
+
+class _ProseNumberMatcher:
+    """The prose number recogniser: one regex plus a phrase check.
+
+    A short integer's role is decided by the words around it, which a
+    fixed-width lookbehind cannot express ("the median length of stay was 7").
+    The regex proposes every short-integer candidate; this keeps the ones whose
+    phrase reports a quantity. Every other branch is returned unchanged.
+
+    MEASURED (external review): "The median age was 42 years
+    {evidence:cohort_stats}." and "N=42 {evidence:cohort_stats}." passed the
+    STRICT chain with zero bindings and no finding, while "n=42" and
+    "42 patients" were refused -- the gate keyed on lowercase ``n=`` and count
+    nouns only.
+    """
+
+    def __init__(self, pattern: "re.Pattern[str]") -> None:
+        self._pattern = pattern
+        self.pattern = pattern.pattern
+
+    def finditer(self, text: str) -> Iterator["re.Match[str]"]:
+        for match in self._pattern.finditer(text):
+            if match.group("short_quantity") is None or short_integer_reports_quantity(
+                text, match.start("value"), match.end("value")
+            ):
+                yield match
+
+    def search(self, text: str) -> Optional["re.Match[str]"]:
+        return next(self.finditer(text), None)
+
+
+_NUMERIC_IN_PROSE_RE = _ProseNumberMatcher(_NUMERIC_IN_PROSE_PATTERN)
 
 
 def prose_requires_numeric_provenance(text: str) -> bool:
