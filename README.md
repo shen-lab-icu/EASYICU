@@ -22,6 +22,8 @@ EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It prov
 
 > **Respiratory source correction (2026-10-08):** MIMIC-IV and MIMIC-III `spo2`/`o2sat` no longer map the SpO2 alarm-limit item. New `peep_set`, `peep_total`, `fio2_chart`, and `fio2_lab` channels separate source definitions; legacy `peep`/`fio2` retain their mixed-source definitions. Existing exports are not rewritten. See the [source and synthetic-validation receipt](docs/validation/respiratory_source_channel_repair.md).
 
+> **MAP channels and diuretics (2026-11-03):** `map` now uses the arterial-line value of an ICU hour when one exists and the cuff value otherwise, instead of pooling both; new `map_invasive` and `map_nibp` expose each channel, and MIMIC-III item 6702 (Arterial BP Mean #2) is mapped. `furosemide` covers every route, and new `loop_diuretic`, `thiazide_diuretic`, `potassium_sparing_diuretic`, `acetazolamide` and `loop_diuretic_furosemide_eq` (mg IV furosemide equivalent; Brater, N Engl J Med 1998) cover the diuretic classes. Existing exports are not rewritten.
+
 An opt-in MIIV [scoped event extraction API](docs/validation/miiv_scoped_source_events_v2.md) now returns exact-stay hourly values, private raw-event lineage and source receipts. The legacy `load_concepts` interface remains unchanged.
 
 ## Why EasyICU

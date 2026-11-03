@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **279 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **286 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,16 +9,17 @@ concept (base dictionary plus SOFA-2 overlay): **279 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 20 | 25 | 97 |
-| zhejiang_eicu | 128 | 25 | 22 | 104 |
-| jinhua | 135 | 19 | 24 | 101 |
-| zigong | 125 | 19 | 33 | 102 |
+| nwicu | 137 | 20 | 25 | 104 |
+| zhejiang_eicu | 128 | 25 | 22 | 111 |
+| jinhua | 135 | 19 | 24 | 108 |
+| zigong | 125 | 19 | 33 | 109 |
 
 ## Complete matrix
 
 | Concept | Category | NWICU | Zhejiang eICU | Jinhua | Zigong |
 |---|---|---|---|---|---|
 | `abx` | medications | direct | direct | direct | direct |
+| `acetazolamide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `acute_rrt_input` | renal | derived | derived | derived | unavailable |
 | `adh_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `adm` | demographics | unavailable | unavailable | unavailable | unavailable |
@@ -145,6 +146,8 @@ concept (base dictionary plus SOFA-2 overlay): **279 concepts × 4 databases**.
 | `ldl` | chemistry | direct | direct | direct | direct |
 | `levetiracetam` | medications | direct | unavailable | direct | direct |
 | `lipase` | chemistry | direct | unavailable | direct | unavailable |
+| `loop_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
+| `loop_diuretic_furosemide_eq` | medications | unavailable | unavailable | unavailable | unavailable |
 | `lorazepam` | medications | direct | direct | unavailable | direct |
 | `los_hosp` | outcome | direct | direct | direct | unavailable |
 | `los_icu` | outcome | direct | unavailable | direct | direct |
@@ -152,6 +155,8 @@ concept (base dictionary plus SOFA-2 overlay): **279 concepts × 4 databases**.
 | `magnesium_iv` | medications | direct | direct | direct | direct |
 | `mannitol` | medications | direct | direct | direct | unavailable |
 | `map` | vitals | unavailable | unavailable | unavailable | direct |
+| `map_invasive` | vitals | unavailable | unavailable | unavailable | unavailable |
+| `map_nibp` | vitals | unavailable | unavailable | unavailable | unavailable |
 | `mch` | hematology | direct | direct | direct | direct |
 | `mchc` | hematology | direct | direct | direct | direct |
 | `mcv` | hematology | direct | direct | direct | direct |
@@ -215,6 +220,7 @@ concept (base dictionary plus SOFA-2 overlay): **279 concepts × 4 databases**.
 | `po2` | blood gas | unavailable | direct | direct | direct |
 | `potassium` | chemistry | direct | unavailable | direct | direct |
 | `potassium_iv` | medications | direct | direct | direct | direct |
+| `potassium_sparing_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
 | `prealbumin` | chemistry | unavailable | direct | direct | direct |
 | `propofol` | medications | direct | direct | direct | direct |
 | `propofol_rate` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -268,6 +274,7 @@ concept (base dictionary plus SOFA-2 overlay): **279 concepts × 4 databases**.
 | `tco2` | blood gas | direct | direct | direct | direct |
 | `temp` | vitals | direct | direct | direct | direct |
 | `tgcs` | neurological | unavailable | unavailable | unavailable | unavailable |
+| `thiazide_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
 | `tibc` | chemistry | direct | unavailable | direct | unavailable |
 | `tidal_vol` | ventilator | direct | direct | unavailable | direct |
 | `tidal_vol_set` | ventilator | unavailable | direct | unavailable | direct |

@@ -20,6 +20,8 @@ EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包�
 
 > **呼吸来源修正（2026-10-08）：** MIMIC-IV 和 MIMIC-III 的 `spo2`/`o2sat` 已移除 SpO2 报警下限项目；新增 `peep_set`、`peep_total`、`fio2_chart`、`fio2_lab` 分源通道。旧 `peep`/`fio2` 保留原混合来源定义，既有导出不会自动重写。详见[来源与合成验证收据](docs/validation/respiratory_source_channel_repair.md)。
 
+> **MAP 通道与利尿剂（2026-11-03）：** `map` 在同一 ICU 小时内有动脉导管值时取动脉值，否则取袖带值，不再混合汇总；新增 `map_invasive`、`map_nibp` 分通道概念，并映射 MIMIC-III 6702（Arterial BP Mean #2）。`furosemide` 覆盖所有给药途径；新增 `loop_diuretic`、`thiazide_diuretic`、`potassium_sparing_diuretic`、`acetazolamide` 与 `loop_diuretic_furosemide_eq`（静脉呋塞米当量 mg；Brater, N Engl J Med 1998）。既有导出不会自动重写。
+
 新增可选的 MIIV [限定 stay 逐事件提取接口](docs/validation/miiv_scoped_source_events_v2.md)，返回小时值、私有原始事件追踪与来源收据；原 `load_concepts` 接口保持兼容。
 
 ## 为什么是 EasyICU

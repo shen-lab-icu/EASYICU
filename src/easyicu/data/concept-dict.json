@@ -6434,9 +6434,10 @@
  },
  "furosemide": {
   "class_name": "lgl_cncpt",
-  "description": "furosemide (Lasix) administration — IV bolus or continuous infusion",
+  "description": "furosemide (Lasix) administration, any route (IV bolus, continuous infusion or enteral)",
   "category": "medications",
   "aggregate": "max",
+  "_comment": "2026-11-03 extraction audit 2: widened to any route (audit #19: HiRID tablets, SICdb combination, eICU orders identified only by HICL 3660). MIMIC-IV and MIMIC-III record IV administrations only (inputevents); MIMIC-IV eMAR enteral administrations are not mapped because its loader path ignores the stay filter and reads the full table, and MIMIC-III prescriptions are orders (they feed loop_diuretic instead).",
   "sources": {
    "aumc": [
     {
@@ -6458,6 +6459,15 @@
      "class_name": "rgx_itm"
     },
     {
+     "ids": [
+      3660
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays."
+    },
+    {
      "regex": "furosem|lasix",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -6476,6 +6486,15 @@
      "class_name": "rgx_itm"
     },
     {
+     "ids": [
+      3660
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays."
+    },
+    {
      "regex": "furosem|lasix",
      "table": "infusiondrug",
      "sub_var": "drugname",
@@ -6487,13 +6506,15 @@
    "hirid": [
     {
      "ids": [
+      4,
       482,
       1000232,
       1000747
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: added 4 'Lasix 40 mg tabl' (413 rows/197 patients, route p os/p.ms); the concept is any-route, as eICU orders, AUMC and SICdb items already include enteral furosemide."
     }
    ],
    "miiv": [
@@ -6548,11 +6569,13 @@
    "sic": [
     {
      "ids": [
-      1417
+      1417,
+      1654
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: added 1654 'Furosemid+Spironolacton' (315 rows/139 cases, d_references)."
     }
    ]
   }
@@ -8731,133 +8754,216 @@
   "description": "mean arterial pressure",
   "omopid": 4239021,
   "category": "vitals",
+  "source_channel_priority": [
+   "invasive",
+   "nibp"
+  ],
+  "_comment": "2026-11-03 extraction audit 2: within each hour since ICU admission an arterial-line (invasive) value is used when one is recorded, else the cuff (nibp) value; the channels are never pooled in one median (owner concept/source_channel.py). The channels alone are map_invasive and map_nibp.",
   "sources": {
    "aumc": [
     {
      "ids": [
       6642,
-      6679,
       8843
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added non-invasive mean blood pressure channel. | 2026-07-17 official-code audit (amsterdamumcdb/sql/common/legacy/mean_abp.sql uses 6642/6679/8843): ADDED 8843 'ABP gemiddeld II' (second arterial line). MAP feeds SOFA-cardio and the M4 state; omitting it dropped MAP for patients with a 2nd/femoral art line."
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: invasive channel: 6642 'ABP gemiddeld', 8843 'ABP gemiddeld II' (aumc_item_dict, mmHg). 2026-07-02 source-dictionary audit: added non-invasive mean blood pressure channel. | 2026-07-17 official-code audit (amsterdamumcdb/sql/common/legacy/mean_abp.sql uses 6642/6679/8843): ADDED 8843 'ABP gemiddeld II' (second arterial line). MAP feeds SOFA-cardio and the M4 state; omitting it dropped MAP for patients with a 2nd/femoral art line."
+    },
+    {
+     "ids": [
+      6679
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: cuff channel: 6679 'Niet invasieve bloeddruk gemiddeld' (aumc_item_dict, mmHg)."
     }
    ],
    "eicu": [
     {
      "table": "vitalperiodic",
      "val_var": "systemicmean",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: vitalperiodic.systemicmean is the arterial-line (systemic) mean."
     },
     {
      "table": "vitalaperiodic",
      "val_var": "noninvasivemean",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: vitalaperiodic.noninvasivemean is the cuff mean."
     }
    ],
    "eicu_demo": [
     {
      "table": "vitalperiodic",
      "val_var": "systemicmean",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: vitalperiodic.systemicmean is the arterial-line (systemic) mean."
     },
     {
      "table": "vitalaperiodic",
      "val_var": "noninvasivemean",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: vitalaperiodic.noninvasivemean is the cuff mean."
     }
    ],
    "hirid": [
     {
      "ids": [
-      110,
+      110
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: 110 'Invasive mean arterial pressure' (hirid_variable_reference)."
+    },
+    {
+     "ids": [
       610
      ],
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: 610 'Non-invasive mean arterial pressure' (hirid_variable_reference)."
     }
    ],
    "miiv": [
     {
      "ids": [
       220052,
-      220181,
       225312
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: 220052 'Arterial Blood Pressure mean', 225312 'ART BP Mean' (d_items, Routine Vital Signs, mmHg)."
+    },
+    {
+     "ids": [
+      220181
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: 220181 'Non Invasive Blood Pressure mean' (d_items, mmHg)."
     }
    ],
    "mimic": [
     {
      "ids": [
       52,
-      438,
-      443,
-      456,
-      6072,
-      1321,
+      2294,
       2309,
       2353,
       2369,
       2544,
+      2647,
+      2732,
       2770,
       2974,
       3067,
       5680,
+      5702,
+      5731,
       5804,
       6399,
       6579,
+      6590,
       6605,
+      6653,
+      6702,
+      6927,
       220052,
-      220181,
       225312
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: added MIMIC-III CareVue generic/femoral/radial/sheath arterial MAP channels; HFO/TCPCV airway MAP labels remain excluded."
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: arterial-line channel by d_items label: 52 'Arterial BP Mean', 6702 'Arterial BP Mean #2' (ADDED: 18,880 rows/477 stays, median 76 mmHg), femoral/radial/sheath/A-line MAP labels, and the remaining CareVue arterial-mean labels 2294 'ART MEAN', 2647 'art mean', 2732 'Femoral ABP (Mean)', 5702 'FEM ART MEAN', 5731 'FEMORAL ABP MEAN', 6590 'arterial mean #2', 6653 'femoral abp mean', 6927 'Arterial Mean #3' (ADDED, each <10 stays); MetaVision 220052/225312. REMOVED: 6072 is 'vision fields' (no numeric value); 438 'MAP' and 1321 'map' (10 rows each, <10 stays) do not say which channel they are. IABP mean (224/224322) stays out of map. 2026-07-03 audit: added MIMIC-III CareVue generic/femoral/radial/sheath arterial MAP channels; HFO/TCPCV airway MAP labels remain excluded."
+    },
+    {
+     "ids": [
+      443,
+      456,
+      220181
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: cuff channel by d_items label: 456 'NBP Mean', 443 'Manual BP Mean(calc)', 220181 'Non Invasive Blood Pressure mean'. NICU cuff items 3312-3324 remain unmapped (NICU is outside the adult MAP scope and their units are mislabelled)."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
       52,
-      438,
-      443,
-      456,
-      6072,
-      1321,
+      2294,
       2309,
       2353,
       2369,
       2544,
+      2647,
+      2732,
       2770,
       2974,
       3067,
       5680,
+      5702,
+      5731,
       5804,
       6399,
       6579,
+      6590,
       6605,
+      6653,
+      6702,
+      6927,
       220052,
-      220181,
       225312
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: added MIMIC-III CareVue generic/femoral/radial/sheath arterial MAP channels; HFO/TCPCV airway MAP labels remain excluded."
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: arterial-line channel by d_items label: 52 'Arterial BP Mean', 6702 'Arterial BP Mean #2' (ADDED: 18,880 rows/477 stays, median 76 mmHg), femoral/radial/sheath/A-line MAP labels, and the remaining CareVue arterial-mean labels 2294 'ART MEAN', 2647 'art mean', 2732 'Femoral ABP (Mean)', 5702 'FEM ART MEAN', 5731 'FEMORAL ABP MEAN', 6590 'arterial mean #2', 6653 'femoral abp mean', 6927 'Arterial Mean #3' (ADDED, each <10 stays); MetaVision 220052/225312. REMOVED: 6072 is 'vision fields' (no numeric value); 438 'MAP' and 1321 'map' (10 rows each, <10 stays) do not say which channel they are. IABP mean (224/224322) stays out of map. 2026-07-03 audit: added MIMIC-III CareVue generic/femoral/radial/sheath arterial MAP channels; HFO/TCPCV airway MAP labels remain excluded."
+    },
+    {
+     "ids": [
+      443,
+      456,
+      220181
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: cuff channel by d_items label: 456 'NBP Mean', 443 'Manual BP Mean(calc)', 220181 'Non Invasive Blood Pressure mean'. NICU cuff items 3312-3324 remain unmapped (NICU is outside the adult MAP scope and their units are mislabelled)."
     }
    ],
    "sic": [
     {
      "ids": [
-      703,
+      703
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "source_channel": "invasive",
+     "_comment": "2026-11-03 extraction audit 2: 703 'BloodPressureArterialMAP' (d_references, mmHg)."
+    },
+    {
+     "ids": [
       706
      ],
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "source_channel": "nibp",
+     "_comment": "2026-11-03 extraction audit 2: 706 'BloodPressureNIMAP' (d_references, mmHg)."
     }
    ]
   }
@@ -25460,5 +25566,1002 @@
   "class_name": "rec_cncpt",
   "target": "ts_tbl",
   "_comment": "2026-07-17 new. Mode-conditioned driving pressure — the physiologically valid form. vent_breath_seq (harmonised, MIMIC-IV/III/AUMC/HiRID) is forward-filled to a per-hour state in the callback (mode persists until changed). On AUMC ~66% of ventilated hours are non-controlled, where the plain driving_pres is a mode artifact; this concept keeps only the controlled hours. eICU/SIC carry no mode source so this is empty there."
+ },
+ "map_invasive": {
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 0,
+  "max": 250,
+  "description": "mean arterial pressure from an arterial line (invasive channel of map)",
+  "category": "vitals",
+  "_comment": "2026-11-03 extraction audit 2: the invasive channel of map, listed per database from each source dictionary's labels (audit #16).",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6642,
+      8843
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "systemicmean",
+     "class_name": "col_itm"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "systemicmean",
+     "class_name": "col_itm"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      110
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220052,
+      225312
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      52,
+      2294,
+      2309,
+      2353,
+      2369,
+      2544,
+      2647,
+      2732,
+      2770,
+      2974,
+      3067,
+      5680,
+      5702,
+      5731,
+      5804,
+      6399,
+      6579,
+      6590,
+      6605,
+      6653,
+      6702,
+      6927,
+      220052,
+      225312
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      52,
+      2294,
+      2309,
+      2353,
+      2369,
+      2544,
+      2647,
+      2732,
+      2770,
+      2974,
+      3067,
+      5680,
+      5702,
+      5731,
+      5804,
+      6399,
+      6579,
+      6590,
+      6605,
+      6653,
+      6702,
+      6927,
+      220052,
+      225312
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      703
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "map_nibp": {
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 0,
+  "max": 250,
+  "description": "mean arterial pressure from a non-invasive (oscillometric or manual) cuff (cuff channel of map)",
+  "category": "vitals",
+  "_comment": "2026-11-03 extraction audit 2: the cuff channel of map, listed per database from each source dictionary's labels (audit #16).",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6679
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalaperiodic",
+     "val_var": "noninvasivemean",
+     "class_name": "col_itm"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalaperiodic",
+     "val_var": "noninvasivemean",
+     "class_name": "col_itm"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      610
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220181
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      443,
+      456,
+      220181
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      443,
+      456,
+      220181
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      706
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "loop_diuretic": {
+  "class_name": "lgl_cncpt",
+  "description": "loop diuretic administration (furosemide, bumetanide, torasemide, ethacrynic acid), any route",
+  "category": "medications",
+  "aggregate": "max",
+  "_comment": "2026-11-03 extraction audit 2: new class flag (audit #19). Items checked in each database's own dictionary; name regexes avoid 'bumet' (matches nabumetone).",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7244,
+      6882
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 7244 'Furosemide (Lasix)', 6882 'Bumetanide (Burinex)' (aumc_item_dict); AUMCdb has no torasemide item."
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders."
+    },
+    {
+     "ids": [
+      3660,
+      3664
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used)."
+    },
+    {
+     "regex": "furosem|lasix|bumetan|bumex",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: infusions (Furosemide/Bumetanide mg/hr and ml/hr)."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders."
+    },
+    {
+     "ids": [
+      3660,
+      3664
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used)."
+    },
+    {
+     "regex": "furosem|lasix|bumetan|bumex",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: infusions (Furosemide/Bumetanide mg/hr and ml/hr)."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      4,
+      482,
+      1000232,
+      1000747,
+      1000520,
+      1000521,
+      1000522,
+      1000986
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: furosemide 4 'Lasix 40 mg tabl', 482 'Lasix Perfusor', 1000232, 1000747; torasemide 1000520 'Torem Inj', 1000521/1000522/1000986 'Torem Tbl' (hirid_variable_reference)."
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      221794,
+      228340,
+      229639
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 221794/228340 Furosemide (Lasix), 229639 'Bumetanide (Bumex)' (d_items, mg)."
+    },
+    {
+     "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MetaVision furosemide (d_items)."
+    },
+    {
+     "ids": [
+      30123,
+      41518,
+      43047,
+      45275,
+      46197,
+      46554,
+      46690,
+      46771
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: CareVue 30123 'Lasix'; free-form 41518 'bumex', 43047 'BUMEX 12mg/500ml', 45275 'Bumetanide', 46197 'BUMEX', 46554 'Bumex', 46690 'bumetanide', 46771 'Ethacrynate Sodium' (d_items)."
+    },
+    {
+     "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. CareVue furosemide boluses appear only here."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: MetaVision furosemide (d_items)."
+    },
+    {
+     "ids": [
+      30123,
+      41518,
+      43047,
+      45275,
+      46197,
+      46554,
+      46690,
+      46771
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: CareVue 30123 'Lasix'; free-form 41518 'bumex', 43047 'BUMEX 12mg/500ml', 45275 'Bumetanide', 46197 'BUMEX', 46554 'Bumex', 46690 'bumetanide', 46771 'Ethacrynate Sodium' (d_items)."
+    },
+    {
+     "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. CareVue furosemide boluses appear only here."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1417,
+      1450,
+      1654
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 1417 'FUROsemid', 1450 'Torasemid', 1654 'Furosemid+Spironolacton' (d_references)."
+    }
+   ]
+  }
+ },
+ "thiazide_diuretic": {
+  "class_name": "lgl_cncpt",
+  "description": "thiazide or thiazide-like diuretic administration (hydrochlorothiazide, chlorothiazide, metolazone, chlortalidone, indapamide, xipamide; fixed combinations included), any route",
+  "category": "medications",
+  "aggregate": "max",
+  "_comment": "2026-11-03 extraction audit 2: new class flag (audit #19).",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      9062
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 9062 'Hydrochloorthiazide (Esidrex)' (aumc_item_dict)."
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders (only hydrochlorothiazide occurs in eICU v2.0)."
+    },
+    {
+     "ids": [
+      3649
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 3649 hydrochlorothiazide (orders with an empty drugname)."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders (only hydrochlorothiazide occurs in eICU v2.0)."
+    },
+    {
+     "ids": [
+      3649
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 3649 hydrochlorothiazide (orders with an empty drugname)."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000428,
+      1000524,
+      1000787,
+      1001083
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 1000428 'Metolazon Tbl', 1000524 'Dyrenium comp.' (triamterene+HCT), 1000787/1001083 'Moduretic mite' (amiloride+HCT) (hirid_variable_reference)."
+    }
+   ],
+   "miiv": [
+    {
+     "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+    }
+   ],
+   "mimic": [
+    {
+     "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1398,
+      1811,
+      1832,
+      1409,
+      1642,
+      1646,
+      1650,
+      1675,
+      1676,
+      1677,
+      1684,
+      1686,
+      1724,
+      1779,
+      1784,
+      1808,
+      1825,
+      1905,
+      1920,
+      1951,
+      1953
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 1398 'Xipamid', 1811 'Hydrochlorothiazid', 1832 'Indapamid' and every HCT fixed combination in d_references (with valsartan, lisinopril, bisoprolol, enalapril, ramipril, eprosartan, amilorid, irbesartan, amlodipin/valsartan, losartan, candesartan)."
+    }
+   ]
+  }
+ },
+ "potassium_sparing_diuretic": {
+  "class_name": "lgl_cncpt",
+  "description": "potassium-sparing diuretic administration (spironolactone, eplerenone, potassium canrenoate, amiloride, triamterene; fixed combinations included), any route",
+  "category": "medications",
+  "aggregate": "max",
+  "_comment": "2026-11-03 extraction audit 2: new class flag (audit #19).",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7011,
+      20177
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 7011 'Spironolacton (Aldactone)', 20177 'Eplerenon (Inspra)' (aumc_item_dict)."
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0)."
+    },
+    {
+     "ids": [
+      2901
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname)."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0)."
+    },
+    {
+     "ids": [
+      2901
+     ],
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname)."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000505,
+      1000506,
+      1000877,
+      1000636,
+      1000524,
+      1000787,
+      1001083
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: Aldactone 1000505/1000506/1000877, 1000636 'Soldactone Amp.' (potassium canrenoate), 1000524 'Dyrenium comp.' (triamterene), 1000787/1001083 'Moduretic' (amiloride) (hirid_variable_reference)."
+    }
+   ],
+   "miiv": [
+    {
+     "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+    }
+   ],
+   "mimic": [
+    {
+     "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1443,
+      1704,
+      1471,
+      1452,
+      1654,
+      1686,
+      1779
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 1443 'Spironolacton', 1704 'Eplerenon', 1471 'Kaliumcanrenoat', 1452 'Triamteren', 1654 'Furosemid+Spironolacton', 1686/1779 HCT+Amilorid (d_references)."
+    }
+   ]
+  }
+ },
+ "acetazolamide": {
+  "class_name": "lgl_cncpt",
+  "description": "acetazolamide (carbonic anhydrase inhibitor) administration, any route",
+  "category": "medications",
+  "aggregate": "max",
+  "_comment": "2026-11-03 extraction audit 2: new flag (audit #19).",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6804
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 6804 'Acetazolamide (Diamox)' (aumc_item_dict)."
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "acetazol|diamox",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders (none in eICU v2.0 medication)."
+    },
+    {
+     "regex": "acetazol|diamox",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: 'Diamox (ml/hr)' (<10 stays)."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "acetazol|diamox",
+     "table": "medication",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: named orders (none in eICU v2.0 medication)."
+    },
+    {
+     "regex": "acetazol|diamox",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: 'Diamox (ml/hr)' (<10 stays)."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      438,
+      1000254
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 438 'Diamox inj 500 mg/5ml', 1000254 'Diamox Tbl 250 mg' (hirid_variable_reference)."
+    }
+   ],
+   "miiv": [
+    {
+     "regex": "acetazol|diamox",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-IV prescriptions (hosp, drug names counted 2026-11-03); orders timed at starttime, exposure only, as for aspirin. eMAR is not used: the MIMIC-IV emar loader path does not apply the stay filter and reads the full 26.8M-row table (about 9 GB RSS per load)."
+    }
+   ],
+   "mimic": [
+    {
+     "regex": "acetazol|diamox",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "regex": "acetazol|diamox",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "transform_fun(set_val(TRUE))",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1619
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2: 1619 'Acetazolamid' (d_references)."
+    }
+   ]
+  }
+ },
+ "loop_diuretic_furosemide_eq": {
+  "unit": "mg",
+  "min": 0,
+  "max": 2000,
+  "description": "loop diuretic dose in mg intravenous furosemide equivalent, summed per hour at administration start (IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395)",
+  "category": "medications",
+  "aggregate": "sum",
+  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) and MIMIC-III CareVue (no bolus record) have none; MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7244
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "administered",
+     "unit_var": "administeredunit",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "fe_route_var": "ordercategory",
+     "fe_oral_values": [
+      "Niet iv Circulatie/Diurese",
+      "Niet iv Overig"
+     ],
+     "_comment": "2026-11-03 extraction audit 2: administered mg; route from ordercategory ('Niet iv ...' = enteral, counted at half; 'Injecties'/'Spuitpompen' = IV)."
+    },
+    {
+     "ids": [
+      6882
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "bumetanide",
+     "val_var": "administered",
+     "unit_var": "administeredunit",
+     "fe_route": "iv",
+     "_comment": "2026-11-03 extraction audit 2: administered mg x 40 (any route)."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      4,
+      482,
+      1000232,
+      1000747
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "givendose",
+     "unit_var": "doseunit",
+     "extra_vars": [
+      "route"
+     ],
+     "fe_route_var": "route",
+     "fe_oral_values": [
+      "p os",
+      "p.ms",
+      "p.o"
+     ],
+     "_comment": "2026-11-03 extraction audit 2: givendose mg; route column 'p os'/'p.ms'/'p.o' = enteral (half), iv/cv = IV."
+    },
+    {
+     "ids": [
+      1000520,
+      1000521,
+      1000522,
+      1000986
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "torasemide",
+     "val_var": "givendose",
+     "unit_var": "doseunit",
+     "fe_route": "iv",
+     "_comment": "2026-11-03 extraction audit 2: givendose mg x 2 (any route)."
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "fe_route": "iv",
+     "_comment": "2026-11-03 extraction audit 2: IV amount (amountuom mg); 'dose'-unit rows (<10) are dropped. eMAR administrations are exposure-only: eMAR and inputevents can record the same ICU dose and cannot be de-duplicated reliably."
+    },
+    {
+     "ids": [
+      229639
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "bumetanide",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "fe_route": "iv",
+     "_comment": "2026-11-03 extraction audit 2: IV amount mg x 40."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "fe_route": "iv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ],
+     "_comment": "2026-11-03 extraction audit 2: MetaVision IV amount mg; 'Rewritten' rows are superseded entries and are excluded. CareVue records furosemide infusions (30123) but not boluses, so CareVue stays have no dose source."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "fe_route": "iv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ],
+     "_comment": "2026-11-03 extraction audit 2: MetaVision IV amount mg; 'Rewritten' rows are superseded entries and are excluded. CareVue records furosemide infusions (30123) but not boluses, so CareVue stays have no dose source."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1417
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "Amount",
+     "fe_amount_unit": "g",
+     "fe_route": "iv",
+     "_comment": "2026-11-03 extraction audit 2: Amount in g (d_references unit 'g'); SICdb records no route, so furosemide is counted as IV (an upper bound for enteral doses)."
+    },
+    {
+     "ids": [
+      1450
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "torasemide",
+     "val_var": "Amount",
+     "fe_amount_unit": "g",
+     "fe_route": "iv",
+     "_comment": "2026-11-03 extraction audit 2: Amount in g x 1000 x 2 (any route)."
+    }
+   ]
+  }
  }
 }

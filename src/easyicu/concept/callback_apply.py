@@ -840,6 +840,19 @@ def _apply_callback(
 
         return keep_administered(frame, concept_name=concept_name)
 
+    if expr == "furosemide_equivalent":
+        # Loop-diuretic dose equivalence is owned by concept/diuretics.py
+        # (2026-11-03 extraction audit #19).
+        from .diuretics import furosemide_equivalent
+
+        return furosemide_equivalent(
+            frame,
+            concept_name=concept_name,
+            value_var=source.value_var,
+            unit_var=source.unit_var,
+            params=source.params,
+        )
+
     if expr == "transform_fun(miiv_age)":
         from .callbacks import miiv_age
 

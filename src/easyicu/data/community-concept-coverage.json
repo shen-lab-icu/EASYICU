@@ -1,5 +1,5 @@
 {
-  "concept_count": 279,
+  "concept_count": 286,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -26,6 +26,28 @@
         }
       },
       "description": "antibiotics"
+    },
+    "acetazolamide": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "acetazolamide (carbonic anhydrase inhibitor) administration, any route"
     },
     "acute_rrt_input": {
       "category": "renal",
@@ -2682,7 +2704,7 @@
           "status": "direct"
         }
       },
-      "description": "furosemide (Lasix) administration — IV bolus or continuous infusion"
+      "description": "furosemide (Lasix) administration, any route (IV bolus, continuous infusion or enteral)"
     },
     "gcs": {
       "category": "neurological",
@@ -3624,6 +3646,50 @@
       },
       "description": "lipase (blood)"
     },
+    "loop_diuretic": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "loop diuretic administration (furosemide, bumetanide, torasemide, ethacrynic acid), any route"
+    },
+    "loop_diuretic_furosemide_eq": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "loop diuretic dose in mg intravenous furosemide equivalent, summed per hour at administration start (IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395)"
+    },
     "lorazepam": {
       "category": "medications",
       "databases": {
@@ -3798,6 +3864,50 @@
         }
       },
       "description": "mean arterial pressure"
+    },
+    "map_invasive": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "mean arterial pressure from an arterial line (invasive channel of map)"
+    },
+    "map_nibp": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "mean arterial pressure from a non-invasive (oscillometric or manual) cuff (cuff channel of map)"
     },
     "mch": {
       "category": "hematology",
@@ -5617,6 +5727,28 @@
         }
       },
       "description": "intravenous potassium (KCl or K-phosphate) replacement"
+    },
+    "potassium_sparing_diuretic": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "potassium-sparing diuretic administration (spironolactone, eplerenone, potassium canrenoate, amiloride, triamterene; fixed combinations included), any route"
     },
     "prealbumin": {
       "category": "chemistry",
@@ -7930,6 +8062,28 @@
       },
       "description": "GCS total"
     },
+    "thiazide_diuretic": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "thiazide or thiazide-like diuretic administration (hydrochlorothiazide, chlorothiazide, metolazone, chlortalidone, indapamide, xipamide; fixed combinations included), any route"
+    },
     "tibc": {
       "category": "chemistry",
       "databases": {
@@ -8807,25 +8961,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 24,
-      "unavailable": 101
+      "unavailable": 108
     },
     "nwicu": {
       "derived": 20,
       "direct": 137,
       "partial": 25,
-      "unavailable": 97
+      "unavailable": 104
     },
     "zhejiang_eicu": {
       "derived": 25,
       "direct": 128,
       "partial": 22,
-      "unavailable": 104
+      "unavailable": 111
     },
     "zigong": {
       "derived": 19,
       "direct": 125,
       "partial": 33,
-      "unavailable": 102
+      "unavailable": 109
     }
   },
   "databases": [
