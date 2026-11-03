@@ -484,3 +484,17 @@ def test_build_available_catalog_populates_methodology(tmp_path, monkeypatch):
     # norepi is a medication -> treatment caution attached from the dictionary.
     assert by_id["norepi"].category == "medications"
     assert "treatment" in by_id["norepi"].methodology
+
+
+def test_the_catalog_reads_scores_as_derived_where_warnings_are_errors():
+    # The methodology scope came from a deprecated alias that warns.  Where a
+    # test (or a caller) turns warnings into errors, the scope fell back to a
+    # dictionary without SOFA-2 and the menu tagged SOFA-2 scores as leakage.
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        catalog = build_database_capability_catalog("mimiciv")
+    tagged = {c.concept_id: c.methodology for c in catalog.concepts}
+    assert "leakage" not in tagged["sofa2"]
+    assert "derived" in tagged["sofa2"]
