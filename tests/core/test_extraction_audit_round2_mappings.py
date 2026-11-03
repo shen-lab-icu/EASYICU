@@ -240,3 +240,20 @@ def test_d3_cancelled_order_is_dropped_before_any_callback():
     })
     out = _apply_callback(frame, source, concept_name="heparin")
     assert out["drugordercancelled"].tolist() == [False]
+
+
+@pytest.mark.parametrize("concept", ["norepi_rate", "epi_rate", "phn_rate"])
+def test_v2_eicu_volume_rates_give_no_dose(concept):
+    from easyicu.concept import ConceptSource, _apply_callback
+
+    [source] = _sources(concept, "eicu")
+    assert source["callback"] == "eicu_rate_kg(ml_to_mcg = NA)"
+    frame = pd.DataFrame({
+        "patientunitstayid": [1, 1], "infusionoffset": [60, 120],
+        "drugname": ["Norepinephrine (ml/hr)", "Norepinephrine (mcg/min)"],
+        "drugrate": [10.0, 8.0], "patientweight": [80.0, 80.0],
+    })
+    out = _apply_callback(frame, ConceptSource.from_mapping(dict(source, value_var="drugrate")),
+                          concept_name=concept)
+    rates = out.dropna(subset=[concept])[concept]
+    assert rates.tolist() == pytest.approx([8.0 / 80.0])

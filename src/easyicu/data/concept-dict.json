@@ -5558,8 +5558,9 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
-     "callback": "eicu_rate_kg(ml_to_mcg = 40)",
-     "class_name": "rgx_itm"
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
     }
    ],
    "eicu_demo": [
@@ -5568,8 +5569,9 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
-     "callback": "eicu_rate_kg(ml_to_mcg = 40)",
-     "class_name": "rgx_itm"
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
     }
    ],
    "hirid": [
@@ -11922,8 +11924,9 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
-     "callback": "eicu_rate_kg(ml_to_mcg = 32)",
-     "class_name": "rgx_itm"
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
     }
    ],
    "eicu_demo": [
@@ -11932,8 +11935,9 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
-     "callback": "eicu_rate_kg(ml_to_mcg = 32)",
-     "class_name": "rgx_itm"
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
     }
    ],
    "hirid": [
@@ -13106,8 +13110,9 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
-     "callback": "eicu_rate_kg(ml_to_mcg = 200)",
-     "class_name": "rgx_itm"
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
     }
    ],
    "eicu_demo": [
@@ -13116,8 +13121,9 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "weight_var": "patientweight",
-     "callback": "eicu_rate_kg(ml_to_mcg = 200)",
-     "class_name": "rgx_itm"
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
     }
    ],
    "miiv": [
