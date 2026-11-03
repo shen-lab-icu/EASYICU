@@ -482,7 +482,13 @@ def load_circ_failure(
     if df.empty:
         return df
     
-    # Merge optional concepts
+    # Merge optional concepts.  Vasoactive/inotropic rate concepts are
+    # event-sparse: a loaded stream has rows only while that drug is infused.
+    # A core timepoint with no record in a loaded stream is therefore "not
+    # infused" (rate 0), not unknown; otherwise every hour off a drug would
+    # be unknown and no stay could ever be scored.  A record that exists but
+    # carries a missing rate stays unknown, and a stream that could not be
+    # loaded at all stays outside the evidence (column absent).
     loaded_optional = []
     for concept in optional_concepts:
         if concept in loaded_dfs:
@@ -491,7 +497,14 @@ def load_circ_failure(
                 mcols = [c for c in merge_cols if c in opt_df.columns]
                 if mcols:
                     opt_df = opt_df[mcols + [concept]]
-                    df = pd.merge(df, opt_df, on=mcols, how='left')
+                    df = pd.merge(
+                        df, opt_df, on=mcols, how='left',
+                        indicator='_drug_record',
+                    )
+                    df[concept] = df[concept].mask(
+                        df['_drug_record'].eq('left_only'), 0.0
+                    )
+                    df = df.drop(columns=['_drug_record'])
                     loaded_optional.append(concept)
     
     if verbose and loaded_optional:

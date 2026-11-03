@@ -85,7 +85,7 @@ def test_preloaded_missing_rate_remains_unknown_without_being_reloaded():
     assert pd.isna(result["circ_failure"].iloc[1])
 
 
-def test_partially_supplied_optional_stream_preserves_unmatched_unknowns(monkeypatch):
+def test_partially_supplied_optional_stream_treats_unmatched_hours_as_not_infused(monkeypatch):
     preloaded = _complete_preloaded_data(
         levo_rate=[1.0, 0.0, 0.0], theo_rate=[0.0, 1.0, 0.0],
     )
@@ -104,11 +104,41 @@ def test_partially_supplied_optional_stream_preserves_unmatched_unknowns(monkeyp
     assert len(calls) == 1
     assert calls[0]["concepts"] == ["norepi_rate"]
     assert calls[0]["patient_ids"] == [1]
+    # A rate stream has rows only while the drug runs: an hour with no
+    # record in a loaded stream is "not infused", not unknown.
     pd.testing.assert_series_equal(
         result["circ_event"].reset_index(drop=True),
-        pd.Series([1, pd.NA, pd.NA], dtype="Int64", name="circ_event"),
+        pd.Series([1, 1, 0], dtype="Int64", name="circ_event"),
     )
-    assert result["circ_failure"].isna().tolist() == [False, True, True]
+    assert result["circ_failure"].tolist() == [True, True, False]
+
+
+def test_sparse_vasopressor_streams_still_score_drug_free_hours():
+    """Real rate concepts cover only infusion hours (all-NA circ_failure bug)."""
+    preloaded = {
+        "lact": _concept_frame("lact", [3.0, 3.0, 1.0]),
+        "map": _concept_frame("map", [60.0, 80.0, 60.0]),
+    }
+    # Every other drug was infused only in another stay.
+    for name in (
+        "epi_rate", "adh_rate", "dobu_rate", "dopa_rate", "phn_rate",
+        "milrinone", "levo_rate", "theo_rate",
+    ):
+        preloaded[name] = pd.DataFrame(
+            {"stay_id": [2], "charttime": [0], name: [5.0]}
+        )
+    # Norepinephrine at the first hour only.
+    preloaded["norepi_rate"] = _concept_frame(
+        "norepi_rate", [0.2, 0.0, 0.0]
+    ).iloc[:1]
+
+    result = load_circ_failure(
+        "miiv", preloaded_data=preloaded, use_rolling_window=False, verbose=False,
+    ).sort_values("charttime")
+
+    assert result["circ_event"].tolist() == [3, 0, 0]
+    assert result["circ_failure"].tolist() == [True, False, False]
+    assert result["norepi_rate"].tolist() == [0.2, 0.0, 0.0]
 
 
 def test_rolling_window_does_not_promote_event_from_single_drugged_point():
