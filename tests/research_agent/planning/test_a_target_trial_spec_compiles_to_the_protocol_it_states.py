@@ -970,10 +970,12 @@ def test_a_database_without_a_capture_statement_is_refused(database: str) -> Non
     assert trial.capture_entries == ()
 
 
-def test_eicu_is_refused_for_its_endpoint_and_its_death_time_as_well() -> None:
+def test_eicu_is_refused_for_its_endpoint_but_reads_its_death_time_to_the_hour() -> None:
     # The context carries mort_28d, its follow-up and a death time, as an
     # export with structural placeholder columns does: the owners, not the
-    # columns' presence, decide what the database supports.
+    # columns' presence, decide what the database supports.  eICU death sits
+    # at the hospital discharge offset (minutes), which an hour can be read
+    # from (2026-11-03 audit round 2, R2-03); the endpoint still blocks.
     context = _ctx(database="eicu")
     assert {"mort_28d", "followup_days_28d", "death_time"} <= {
         variable.name for variable in context.variables
@@ -984,7 +986,6 @@ def test_eicu_is_refused_for_its_endpoint_and_its_death_time_as_well() -> None:
     assert {item.element: item.reason for item in trial.blocking} == {
         "treatment": "tte_treatment_capture_undeclared",
         "outcome": "tte_endpoint_unsupported",
-        "death_time": "tte_death_time_not_hourly",
     }
 
 

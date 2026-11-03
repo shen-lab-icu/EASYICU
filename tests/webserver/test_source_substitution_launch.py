@@ -48,7 +48,7 @@ def test_preparing_a_candidate_twice_does_not_lose_original_unit_or_outcome():
     assert prepare_source_population(candidate) == candidate
 
 
-@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "icu_death")])
+@pytest.mark.parametrize("database,endpoint", [("eicu", "icu_death"), ("aumc", "mort_28d")])
 def test_survival_preparation_retains_the_default_request_and_proposes_the_supported_endpoint(database, endpoint):
     original = study(database)
     original["analysis_design"] = {"analysis_family": "survival", "analysis_unit": "icu_stay"}
