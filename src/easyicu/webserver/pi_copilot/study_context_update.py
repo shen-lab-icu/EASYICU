@@ -2351,25 +2351,18 @@ def update_study_context(
             except (ValueError, OSError) as exc:
                 unread.append({"variable": "", "reason": str(exc)})
                 patch.pop(field, None)
-    # A subgroup modifies the exposure's effect, so the exposure's own levels
-    # (「请按性别分组」 when sex is the exposure) are the groups the study
-    # compares, never a subgroup of itself.  MIMIC-IV walk 11-03 saved sex as
-    # both; the subgroup excluded it as the exposure and the descriptive plan
-    # had no grouping to report.
-    exposure_subgroups: list[str] = []
+    # The exposure's own levels are never recorded as its subgroup
+    # (``exposure_subgroup_variables``); other stated subgroups stay.
+    exposure_subgroups: tuple[str, ...] = ()
     if patch.get("stated_subgroups"):
-        from easyicu.webserver.research_launch_scientific import stated_exposure_concepts
-
-        exposure_concepts = stated_exposure_concepts(
-            patch.get("primary_exposure", (current or {}).get("primary_exposure")),
-            patch.get("primary_exposure_concept", (current or {}).get("primary_exposure_concept")),
+        from easyicu.webserver.research_launch_scientific import (
+            exposure_subgroup_variables,
+            without_exposure_subgroups,
         )
-        exposure_subgroups = [
-            item["variable"] for item in patch["stated_subgroups"] if item.get("concept") in exposure_concepts
-        ]
-        patch["stated_subgroups"] = [
-            item for item in patch["stated_subgroups"] if item.get("concept") not in exposure_concepts
-        ]
+
+        study = {**dict(current or {}), **patch}
+        exposure_subgroups = exposure_subgroup_variables(study)
+        patch["stated_subgroups"] = without_exposure_subgroups(study)["stated_subgroups"]
     from easyicu.webserver.unread_stated_variables import (
         UNREAD_STATED_VARIABLES_FIELD, pending_unread, unread_records,
     )

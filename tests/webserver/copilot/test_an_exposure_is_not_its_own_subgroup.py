@@ -6,16 +6,22 @@ stated subgroup.  A subgroup is excluded as the exposure, so the launch
 projected none, no descriptive template fit, and the plan stopped with
 ``progressive_article_required_roles_missing``.  The setup save now keeps the
 exposure and does not record its own levels as a subgroup; any other stated
-subgroup is kept.  Synthetic catalogs only; no rows are read.
+subgroup is kept.  A study saved before this is planned without its
+exposure's own subgroup.  Synthetic catalogs only; no rows are read.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from easyicu.webserver import research_pipeline_run_preparation as preparation
 from easyicu.webserver.research_launch_scientific import (
     _metadata_only_planning_coordinates,
+    exposure_subgroup_variables,
     stated_exposure_concepts,
+    without_exposure_subgroups,
 )
 from easyicu.webserver.unread_stated_variables import UNREAD_STATED_VARIABLES_FIELD
 
@@ -78,3 +84,19 @@ def test_without_the_subgroup_the_launch_projects_sex_as_the_grouping():
     )
     assert coordinates["primary_exposure"] == "sex"
     assert coordinates["target_outcome"] == "death"
+
+
+def test_a_study_saved_with_the_conflict_plans_without_it():
+    saved = {"primary_exposure": "性别", "stated_subgroups": [
+        {"variable": "性别", "words": "请按性别分组", "concept": "sex", "source_status": "available"},
+        {"variable": "年龄", "words": "按年龄", "concept": "age", "source_status": "available"},
+    ]}
+    assert exposure_subgroup_variables(saved) == ("性别",)
+    assert [item["variable"] for item in without_exposure_subgroups(saved)["stated_subgroups"]] == ["年龄"]
+    assert without_exposure_subgroups({"primary_exposure": "乳酸", **{"stated_subgroups": []}})["stated_subgroups"] == []
+    # A new plan reads the study through this owner before any stated-variable
+    # stop, so every later reader of the launch study sees it without them.
+    source = Path(preparation.__file__).read_text(encoding="utf-8")
+    launch = source.split("def _prepare_scientific_launch(", 1)[1].split("\ndef ", 1)[0]
+    assert launch.index("study = without_exposure_subgroups(study)") < launch.index(
+        "stop_unrecorded_stated_variables(study)")

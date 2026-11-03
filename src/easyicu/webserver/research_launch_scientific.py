@@ -1173,6 +1173,34 @@ def stated_exposure_concepts(text: Optional[str], concept: Optional[str] = None)
     return frozenset(named)
 
 
+def exposure_subgroup_variables(study: Mapping[str, Any]) -> tuple[str, ...]:
+    """The stated subgroups that name the study's own exposure.
+
+    A subgroup modifies the exposure's effect, so the exposure's own levels
+    (「请按性别分组」 when sex is the exposure) are the groups the study
+    compares, never a subgroup of itself.  MIMIC-IV walk 11-03 saved sex as
+    both; the subgroup excluded it as the exposure and the descriptive plan
+    had no grouping to report.
+    """
+
+    subgroups = study.get("stated_subgroups") or ()
+    if not subgroups:
+        return ()
+    exposure = stated_exposure_concepts(study.get("primary_exposure"), study.get("primary_exposure_concept"))
+    return tuple(item["variable"] for item in subgroups if item.get("concept") in exposure)
+
+
+def without_exposure_subgroups(study: Mapping[str, Any]) -> dict[str, Any]:
+    """``study`` without the stated subgroups :func:`exposure_subgroup_variables` names."""
+
+    dropped = set(exposure_subgroup_variables(study))
+    if not dropped:
+        return dict(study)
+    return {**study, "stated_subgroups": [
+        item for item in study["stated_subgroups"] if item["variable"] not in dropped
+    ]}
+
+
 def _stated_catalog_concept(
     text: Optional[str], catalog_by_id: Mapping[str, Any]
 ) -> tuple[str, ...]:
