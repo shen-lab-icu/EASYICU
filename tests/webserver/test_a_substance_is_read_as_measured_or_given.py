@@ -41,6 +41,7 @@ _LAB_MODULES = ("blood_gas", "chemistry", "hematology")
 _NOT_GIVEN_FORMS = {
     ("na", "bicarbonate"),  # sodium bicarbonate is bicarbonate given
     ("cl", "ketamine"),  # 氯 in 氯胺酮 is no chloride
+    ("k", "potassium_sparing_diuretic"),  # a diuretic class, not potassium given
 }
 #: A substance given named otherwise than its level.
 _NAMED_OTHERWISE = {("rbc", "packed_rbc"), ("glu", "dex"), ("glu", "dextrose50")}
