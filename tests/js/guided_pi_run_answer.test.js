@@ -91,7 +91,7 @@ const outcome = modules.require('runOutcome').create({
   for (let turn = 0; turn < 5; turn += 1) await new Promise(resolve => setImmediate(resolve));
   const card = outcome.render(latest, workflow);
   assert.match(card, /在 MIMIC-IV 的 94,458 个 ICU 入住记录中，「记录Sepsis-3脓毒症诊断」有 31,596 个（33\.45%）。/);
-  assert.match(card, /院内死亡状态：「记录Sepsis-3脓毒症诊断」组 15\.74%（4,974\/31,596），「未记录Sepsis-3脓毒症诊断」组 10\.14%（6,376\/62,862）；总体 12\.02%。/);
+  assert.match(card, /院内死亡状态：「记录Sepsis-3脓毒症诊断」组 15\.74%（4,974\/31,596），「未记录Sepsis-3脓毒症诊断」组 10\.14%（6,376\/62,862）；总体 12\.02%（11,350\/94,458）。/);
   assert.match(card, /这是未调整的描述性比较，不能说明因果/);
   // Every answer reads in one order: the finding, the data it rests on, how
   // to read it.

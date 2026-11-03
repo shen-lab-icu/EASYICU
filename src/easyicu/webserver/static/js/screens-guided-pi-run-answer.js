@@ -447,6 +447,7 @@
       const tables = Array.isArray(payload('result_tables.json').tables) ? payload('result_tables.json').tables : [];
       const total = claim('exposure_distribution.n_total') || claim('n_total');
       const overallRisk = claim('overall_outcome.risk_pct');
+      const shown = row => row && row.display_value != null ? String(row.display_value) : '';
       // The database as readers know it ("eICU v2.0"), which the host states
       // beside the registered label; that label can carry an export id.
       const source = context.source && typeof context.source === 'object'
@@ -482,7 +483,13 @@
           levelLabel: labels[`${row.variable}=${JSON.stringify(row.level)}`] || row.level })),
         answerSources: summary.answerSources || [],
         total: total && total.display_value != null ? String(total.display_value) : '',
-        overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
+        overallRisk: shown(overallRisk),
+        // The overall rate keeps its own counts and interval, as each group does.
+        overallEvents: shown(claim('overall_outcome.event_n')),
+        overallN: shown(claim('overall_outcome.n')),
+        overallLow: shown(claim('overall_outcome.risk_ci_low_pct')),
+        overallHigh: shown(claim('overall_outcome.risk_ci_high_pct')),
+        confidenceLevel: finite(spec && spec.confidence_level),
         estimate: primaryEstimate(summary, claims, labels),
         stratified: summary.stratified ? { ...summary.stratified,
           label: readerLabel(labels, summary.stratified.variable) || conceptName(summary.stratified.variable) || summary.stratified.variable,
@@ -651,12 +658,27 @@
         }
         if (unplaced) sentences.push(unplaced);
         if (focal.outcomeRatePct != null && reference.outcomeRatePct != null) {
-          const part = row => tr(
-            `${percent(row.outcomeRatePct)} (${count(row.events)}/${count(row.denominator)}) in “${row.label}”`,
-            `${name(row)}组 ${percent(row.outcomeRatePct)}（${count(row.events)}/${count(row.denominator)}）`,
-          );
+          // A rate the run gave an interval for is quoted with it; the
+          // interval's level is the plan's, never assumed.
+          const level = view.confidenceLevel > 0 && view.confidenceLevel < 1
+            ? `${Number((view.confidenceLevel * 100).toFixed(1))}% CI` : '';
+          const interval = (low, high) => level && low !== '' && high !== '' ? `${level} ${low}–${high}` : '';
+          const detail = (...pieces) => {
+            const text = pieces.filter(Boolean).join(tr('; ', '；'));
+            return text ? tr(` (${text})`, `（${text}）`) : '';
+          };
+          const part = row => {
+            const facts = detail(`${count(row.events)}/${count(row.denominator)}`,
+              interval(percent(row.outcomeCiLowPct), percent(row.outcomeCiHighPct)));
+            return tr(
+              `${percent(row.outcomeRatePct)}${facts} in “${row.label}”`,
+              `${name(row)}组 ${percent(row.outcomeRatePct)}${facts}`,
+            );
+          };
           const outcome = view.outcomeLabel || tr('Outcome', '结局');
-          const overall = view.overallRisk ? tr(`; overall ${view.overallRisk}`, `；总体 ${view.overallRisk}`) : '';
+          const counts = view.overallEvents && view.overallN ? `${view.overallEvents}/${view.overallN}` : '';
+          const overallDetail = detail(counts, interval(view.overallLow, view.overallHigh));
+          const overall = view.overallRisk ? tr(`; overall ${view.overallRisk}${overallDetail}`, `；总体 ${view.overallRisk}${overallDetail}`) : '';
           sentences.push(tr(
             `${outcome}: ${part(focal)} vs ${part(reference)}${overall}.`,
             `${outcome}：${part(focal)}，${part(reference)}${overall}。`,
