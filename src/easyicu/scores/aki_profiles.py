@@ -445,6 +445,7 @@ def build_renal_aki_bundle(
     interval: Optional[pd.Timedelta] = None,
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
     rrt_source_complete: bool = False,
+    native_case_labels: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Build the renal export's reference, quality, and native AKI layers.
 
@@ -452,6 +453,10 @@ def build_renal_aki_bundle(
     explicit profile API but are not broadcast onto a dynamic hourly table.
     This prevents a first-168-hour endpoint from silently becoming an early
     predictor.  Their profile and non-embedding reason are still exported.
+
+    ``native_case_labels`` carries SICdb's own ``KDIGO_AKI_168`` field
+    (:mod:`easyicu.scores.sicdb_native_aki`): each case's stage is published
+    once, on the hour its 168-hour window closes, and nowhere earlier.
     """
 
     normalized_database = _normalize_database(database)
@@ -556,6 +561,14 @@ def build_renal_aki_bundle(
             "source-native profile remains available through apply_aki_profile; "
             "it is not repeated across earlier hourly rows"
         )
+        if (
+            normalized_database == "sic"
+            and native_case_labels is not None
+            and not native_case_labels.empty
+        ):
+            result = _place_case_labels_at_window_close(
+                result, native_case_labels, resolved_id, resolved_time
+            )
     else:
         native_kwargs = dict(common_kwargs)
         if normalized_database == "miiv":
@@ -656,6 +669,65 @@ def build_renal_aki_bundle(
     )
 
 
+def _place_case_labels_at_window_close(
+    result: pd.DataFrame,
+    labels: pd.DataFrame,
+    id_col: str,
+    time_col: str,
+) -> pd.DataFrame:
+    """Publish a case-level native stage on its window-close hour only.
+
+    Every other row keeps the not-embedded receipt; a labelled row may be a
+    new hour the dynamic components never reached.
+    """
+    from .sicdb_native_aki import NATIVE_STAGE, WINDOW_CLOSE_HOURS
+
+    case_id = "CaseID" if "CaseID" in labels else id_col
+    placed = pd.DataFrame(
+        {
+            id_col: labels[case_id].to_numpy(),
+            time_col: labels[WINDOW_CLOSE_HOURS].to_numpy(),
+            "_native_stage": pd.array(labels[NATIVE_STAGE], dtype="Int64"),
+        }
+    )
+    if id_col in result and pd.api.types.is_numeric_dtype(result[id_col]):
+        placed[id_col] = placed[id_col].astype(result[id_col].dtype)
+    if time_col in result and pd.api.types.is_numeric_dtype(result[time_col]):
+        placed[time_col] = placed[time_col].astype(result[time_col].dtype)
+    stamp = {
+        column: result[column].iloc[0]
+        for column in (
+            "aki_source_native_profile",
+            "aki_source_native_authority",
+            "aki_source_native_reliability_grade",
+            "aki_source_native_fidelity",
+        )
+    }
+    merged = result.merge(
+        placed, on=[id_col, time_col], how="outer", validate="one_to_one", sort=False
+    )
+    for column, value in stamp.items():
+        merged[column] = value
+    labelled = merged["_native_stage"].notna()
+    merged["aki_stage_source_native"] = merged["_native_stage"].astype("Int64")
+    merged["aki_source_native"] = (
+        merged["aki_stage_source_native"].gt(0).where(labelled).astype("boolean")
+    )
+    merged["aki_source_native_status"] = (
+        "case_level_native_field_published_at_window_close"
+    )
+    merged["aki_source_native_ascertainment"] = np.where(
+        labelled, "native_field", "not_embedded_before_window_close"
+    )
+    merged["aki_source_native_reason"] = np.where(
+        labelled,
+        "SICdb KDIGO_AKI_168 (data_ref FieldID 3113): maximum stage over the "
+        "first 168 ICU hours, published on the hour that window closes",
+        "the case-level native label is published only on its window-close hour",
+    )
+    return merged.drop(columns="_native_stage")
+
+
 #: Databases whose ``rrt`` concept maps every RRT modality the source records --
 #: continuous, intermittent and peritoneal -- so a complete search that finds
 #: no event is a negative.  The mappings follow the audited concept dictionary:
@@ -746,6 +818,23 @@ def rrt_source_receipt(
     )
 
 
+def load_native_case_labels(
+    database: str,
+    data_path: Any,
+    *,
+    patient_ids: Optional[Iterable[Any]] = None,
+) -> Optional[pd.DataFrame]:
+    """The database's own case-level AKI field, where the source ships one.
+
+    Only SICdb does (``KDIGO_AKI_168``); every other database returns ``None``.
+    """
+    if _normalize_database(str(database or "")) != "sic" or data_path is None:
+        return None
+    from .sicdb_native_aki import load_sicdb_native_case_labels
+
+    return load_sicdb_native_case_labels(data_path, patient_ids=patient_ids)
+
+
 def load_renal_aki_bundle(
     database: str,
     *,
@@ -817,6 +906,9 @@ def load_renal_aki_bundle(
     urine_df = rename_value(urine_df, "kdigo_urine_input", "urine")
     rrt_df = rename_value(rrt_df, "acute_rrt_input", "rrt")
     crrt_df = rename_value(crrt_df, "crrt_mode_input", "rrt")
+    native_case_labels = load_native_case_labels(
+        database, data_path, patient_ids=patient_ids
+    )
     if rrt_source_complete is None:
         rrt_source_complete = data_path is not None and rrt_source_receipt(
             database,
@@ -837,6 +929,7 @@ def load_renal_aki_bundle(
         time_unit="hours",
         interval=pd.Timedelta(hours=1),
         rrt_source_complete=rrt_source_complete,
+        native_case_labels=native_case_labels,
     )
 
 

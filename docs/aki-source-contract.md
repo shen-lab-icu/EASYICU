@@ -53,6 +53,14 @@ hourly renal rows. The dynamic export records their profile, time scale,
 future-information flag, and non-embedding reason. Their explicit profile APIs
 remain available for appropriately timed case-level compatibility analyses.
 
+SICdb ships the maintainers' result for every case (`data_ref` FieldID 3113,
+`KDIGO_AKI_168`; RefID 3115-3118 = stage 0-3). When the renal bundle reads a
+bound SICdb source, that field is published once per case on the hour its
+window closes (168 h after ICU admission, or the ICU discharge hour for a
+shorter stay), with status
+`case_level_native_field_published_at_window_close` and ascertainment
+`native_field`. Every earlier row keeps a missing native stage.
+
 ## Component source contracts
 
 - MIMIC-IV follows the pinned MIT-LCP urine-output mapping, including GU
