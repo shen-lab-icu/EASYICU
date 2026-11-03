@@ -2345,6 +2345,22 @@ class ConceptResolver:
         _block_duckdb_value_transform = _pool_decision.block_value_transform
         _block_duckdb_same_table = _pool_decision.block_same_table
         _block_duckdb_multi_numeric = _pool_decision.block_multi_numeric
+        # Ranked measurement channels (e.g. arterial line over cuff MAP) are
+        # stamped per source here and selected per hour after alignment.
+        from .source_channel import validate_sources as _validate_channel_sources
+
+        _select_channels = _validate_channel_sources(definition, sources)
+        if _select_channels:
+            from .source_channel import one_source_per_channel
+
+            if one_source_per_channel(sources):
+                # Each ranked channel is one source, so a per-source hourly
+                # aggregate (with the requested aggregator, on the
+                # admission-relative grid) is that channel's value and the
+                # hourly selection then picks one channel: no pooled median
+                # is formed, so the raw-pooling block does not apply.
+                _block_duckdb_same_table = False
+                _block_duckdb_multi_numeric = False
 
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
@@ -3552,6 +3568,12 @@ class ConceptResolver:
                     skip_resample = (
                         has_callback
                         or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2", "po2"})
+                        # Ranked channels (MAP) are selected per ICU-relative
+                        # hour and then aggregated with the requested
+                        # function; a median pre-sample on the absolute clock
+                        # would shift AUMC hours and turn SOFA's hourly
+                        # minimum into a median (2026-11-03 audit #16).
+                        or _select_channels
                     )
                     
                     if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
@@ -4953,6 +4975,10 @@ class ConceptResolver:
                 source_frame=frame,
             )
             
+            if _select_channels:
+                from .source_channel import stamp_rank
+
+                frame_subset = stamp_rank(frame_subset, definition, source)
             frames.append(frame_subset)
 
         combined_dur_unit = None
@@ -5402,6 +5428,9 @@ class ConceptResolver:
         
         # 如果数据为空，返回空 ICUTable
         if combined.empty:
+            from .source_channel import drop_rank
+
+            combined = drop_rank(combined)
             return ICUTable(
                 data=combined,
                 id_columns=id_columns,
@@ -5473,6 +5502,9 @@ class ConceptResolver:
                 
                 # 如果 index_column 变成 None，跳过后续的 interval 处理
                 if index_column is None:
+                    from .source_channel import drop_rank
+
+                    combined = drop_rank(combined)
                     # 返回不带 interval 处理的数据
                     return ICUTable(
                         data=combined.reset_index(drop=True),
@@ -5796,6 +5828,19 @@ class ConceptResolver:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined = combined.dropna(subset=[concept_name])
 
+            if _select_channels:
+                from .source_channel import select_preferred_channel
+
+                combined = select_preferred_channel(
+                    combined,
+                    value_column=concept_name,
+                    id_columns=id_columns,
+                    time_column=index_column,
+                    minimum=definition.minimum,
+                    maximum=definition.maximum,
+                    time_in_hours=align_to_admission,
+                )
+
             # Create ICUTable temporarily to use change_interval
             temp_table = ICUTable(
                 data=combined,
@@ -5864,6 +5909,20 @@ class ConceptResolver:
                 ),
             )
         
+        if _select_channels:
+            from .source_channel import RANK_COLUMN, select_preferred_channel
+
+            if RANK_COLUMN in combined.columns:
+                combined = select_preferred_channel(
+                    combined,
+                    value_column=concept_name,
+                    id_columns=id_columns,
+                    time_column=index_column,
+                    minimum=definition.minimum,
+                    maximum=definition.maximum,
+                    time_in_hours=align_to_admission,
+                )
+
         if signed_sum_bounds and concept_name in combined.columns:
             from .signed_volume import bound_signed_total
 

@@ -172,7 +172,7 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # the repeat-stay restriction reads. 326 -> 327.
     # 2026-10-08 (main): four explicit MIIV/MIMIC respiratory source
     # channels. 327 -> 331.
-    assert len(CONCEPT_DICTIONARY) == 331
+    assert len(CONCEPT_DICTIONARY) == 338
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -754,10 +754,8 @@ def test_mimic_legacy_vital_channels_keep_semantic_boundaries() -> None:
     concept = _load_json("concept-dict.json")
 
     for dataset in ("mimic", "mimic_demo"):
-        map_ids = set(concept["map"]["sources"][dataset][0]["ids"])
+        map_ids = {i for source in concept["map"]["sources"][dataset] for i in source["ids"]}
         assert {
-            438,
-            1321,
             2309,
             2353,
             2369,
@@ -772,6 +770,9 @@ def test_mimic_legacy_vital_channels_keep_semantic_boundaries() -> None:
             6605,
         }.issubset(map_ids)
         assert {672, 1199, 2522}.isdisjoint(map_ids)
+        # 2026-11-03 audit 2: 6072 is 'vision fields'; 438 'MAP' and 1321 'map'
+        # (10 rows each) name no channel, so they are not ranked MAP sources.
+        assert {438, 1321, 6072}.isdisjoint(map_ids)
 
         spo2_ids = set(concept["spo2"]["sources"][dataset][0]["ids"])
         o2sat_ids = set(concept["o2sat"]["sources"][dataset][0]["ids"])

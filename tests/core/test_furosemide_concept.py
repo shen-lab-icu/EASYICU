@@ -1,8 +1,11 @@
 """Structural regression tests for the ``furosemide`` concept.
 
-The concept is a ``lgl_cncpt`` indicating IV bolus or continuous-infusion
-furosemide (Lasix) administration, mirroring the pattern of ``cort`` and
-``abx``. Item IDs were ground-truthed against each database's local
+The concept is a ``lgl_cncpt`` indicating furosemide (Lasix) administration
+by any route, mirroring the pattern of ``cort`` and ``abx``.  The 2026-11-03
+extraction audit (#19) made it any-route: eICU medication orders and AUMC
+items already include enteral furosemide, so HiRID tablets (4), the SICdb
+furosemide+spironolactone product (1654) and eICU orders identified only by
+HICL 3660 were added.  MIMIC-IV/III keep IV administrations (inputevents). Item IDs were ground-truthed against each database's local
 reference dictionary on 2026-05-12:
 
 * AUMC drugitems.itemid: 7244
@@ -82,7 +85,9 @@ def test_mimic_source_covers_both_carevue_and_metavision(furosemide_entry):
 def test_eicu_source_uses_drugname_regex(furosemide_entry):
     """eICU has free-text drug names — match by regex on drugname."""
     eicu = furosemide_entry["sources"]["eicu"]
-    tables = {src["table"]: src for src in eicu}
+    tables = {src["table"]: src for src in eicu if "regex" in src}
+    hicl = [src for src in eicu if src.get("sub_var") == "drughiclseqno"]
+    assert [src["ids"] for src in hicl] == [[3660]]
     assert "medication" in tables
     assert "infusiondrug" in tables
     for tbl in ("medication", "infusiondrug"):
@@ -91,32 +96,27 @@ def test_eicu_source_uses_drugname_regex(furosemide_entry):
         assert tables[tbl]["class_name"] == "rgx_itm"
 
 
-def test_hirid_source_uses_pharma_table_iv_only(furosemide_entry):
-    """HiRID pharma IDs include IV bolus (1000747), perfusor (482), and IV
-    injection (1000232) — oral tablets (id 4) are intentionally excluded."""
+def test_hirid_source_uses_pharma_table_all_routes(furosemide_entry):
+    """HiRID pharma IDs: IV bolus (1000747), perfusor (482), IV injection
+    (1000232) and the oral tablet 'Lasix 40 mg tabl' (4)."""
     hirid = furosemide_entry["sources"]["hirid"]
     assert len(hirid) == 1
     assert hirid[0]["table"] == "pharma"
     assert hirid[0]["sub_var"] == "pharmaid"
-    assert set(hirid[0]["ids"]) == {482, 1000232, 1000747}
-    # Oral tablet (id 4) intentionally excluded
-    assert 4 not in hirid[0]["ids"]
+    assert set(hirid[0]["ids"]) == {4, 482, 1000232, 1000747}
 
 
 def test_sic_source_uses_medication_drugid(furosemide_entry):
-    """SIC ``DrugID`` 1417 = FUROsemid (single drug). 1654 (combo with
-    spironolactone) intentionally excluded."""
+    """SIC ``DrugID`` 1417 = FUROsemid, 1654 = Furosemid+Spironolacton."""
     sic = furosemide_entry["sources"]["sic"]
     assert len(sic) == 1
     assert sic[0]["table"] == "medication"
     assert sic[0]["sub_var"] == "DrugID"
-    assert sic[0]["ids"] == [1417]
-    # Combo product intentionally excluded
-    assert 1654 not in sic[0]["ids"]
+    assert sic[0]["ids"] == [1417, 1654]
 
 
 def test_all_sources_use_set_val_true_callback(furosemide_entry):
-    """Logical concept: every source must emit ``transform_fun(set_val(TRUE))``."""
+    """Logical concept: every source emits TRUE."""
     for db, sources in furosemide_entry["sources"].items():
         for src in sources:
             assert src["callback"] == "transform_fun(set_val(TRUE))", (

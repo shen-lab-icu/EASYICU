@@ -197,6 +197,12 @@ POINT_EVENT_CONCEPTS = {
     "warfarin", "apixaban", "enoxaparin",         # Anticoagulants
     "aspirin",                                    # Antiplatelet
     "insulin",                                    # Insulin (boolean companion to ins rate)
+    # Diuretic family (2026-11-03 extraction audit #19)
+    "loop_diuretic", "thiazide_diuretic",
+    "potassium_sparing_diuretic", "acetazolamide",
+    # A dose attributed to its start: expanding over a source end time would
+    # repeat the same milligrams in every hour of the infusion.
+    "loop_diuretic_furosemide_eq",
 }
 
 # 时长概念（已编码持续时间，不需要展开）

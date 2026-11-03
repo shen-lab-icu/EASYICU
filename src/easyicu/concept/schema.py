@@ -179,6 +179,8 @@ class ConceptDefinition:
     definition_version: Optional[str] = None
     clinical_contract_id: Optional[str] = None
     pre_admission_lookback_hours: Optional[float] = None
+    #: Ranked measurement channels (best first); see ``source_channel``.
+    source_channel_priority: Optional[List[str]] = None
 
     @classmethod
     def from_name_and_payload(
@@ -258,6 +260,11 @@ class ConceptDefinition:
             ),
             family=payload.get("family"),
             depends_on=depends_list,
+            source_channel_priority=(
+                [str(item) for item in payload["source_channel_priority"]]
+                if payload.get("source_channel_priority")
+                else None
+            ),
         )
 
     def for_data_source(self, config: DataSourceConfig) -> List[ConceptSource]:

@@ -12,6 +12,8 @@ CONCEPT_DICTIONARY = {
     'hr': ('Heart Rate', '心率', 'bpm'),
     'map': ('Mean Arterial Pressure', '平均动脉压', 'mmHg'),
     'sbp': ('Systolic Blood Pressure', '收缩压', 'mmHg'),
+    'map_invasive': ('Invasive Mean Arterial Pressure', '有创平均动脉压', 'mmHg'),
+    'map_nibp': ('Non-invasive (Cuff) Mean Arterial Pressure', '无创（袖带）平均动脉压', 'mmHg'),
     'dbp': ('Diastolic Blood Pressure', '舒张压', 'mmHg'),
     'pulse_pressure': ('Pulse Pressure (SBP - DBP)', '脉压差 (收缩压 - 舒张压)', 'mmHg'),
     'cvp': ('Central Venous Pressure', '中心静脉压', 'mmHg'),
@@ -98,6 +100,11 @@ CONCEPT_DICTIONARY = {
     'epi_dur': ('Epinephrine Duration', '肾上腺素持续时间', 'hours'),
     'epi_rate': ('Epinephrine Rate', '肾上腺素速率', 'mcg/kg/min'),
     'furosemide': ('Furosemide (Lasix)', '呋塞米 (速尿)', 'boolean'),
+    'loop_diuretic': ('Loop Diuretic', '袢利尿剂', 'boolean'),
+    'loop_diuretic_furosemide_eq': ('Loop Diuretic Dose (IV Furosemide Equivalent)', '袢利尿剂剂量（静脉呋塞米当量）', 'mg'),
+    'thiazide_diuretic': ('Thiazide-type Diuretic', '噻嗪类利尿剂', 'boolean'),
+    'potassium_sparing_diuretic': ('Potassium-sparing Diuretic', '保钾利尿剂', 'boolean'),
+    'acetazolamide': ('Acetazolamide', '乙酰唑胺', 'boolean'),
     'propofol': ('Propofol (Diprivan)', '丙泊酚', 'boolean'),
     'propofol_rate': ('Propofol Rate', '丙泊酚速率', 'mcg/kg/min'),
     'midazolam': ('Midazolam (Versed)', '咪达唑仑', 'boolean'),
@@ -425,7 +432,14 @@ CONCEPT_DESCRIPTIONS = {
 
     # Vitals
     'hr': ('Heart rate in beats per minute', '每分钟心跳次数'),
-    'map': ('Mean arterial pressure = (SBP + 2×DBP) / 3', '平均动脉压 = (收缩压 + 2×舒张压) / 3'),
+    'map': ('Mean arterial pressure; within each hour the arterial-line value is used when recorded, else the cuff value (never pooled)', '平均动脉压；每小时有动脉置管测值时用有创值，否则用袖带值（不混合取中位数）'),
+    'map_invasive': ('Arterial-line mean arterial pressure only', '仅动脉置管（有创）平均动脉压'),
+    'map_nibp': ('Oscillometric cuff mean arterial pressure only', '仅无创袖带平均动脉压'),
+    'loop_diuretic': ('Any loop diuretic administration: furosemide, bumetanide, torasemide or ethacrynic acid', '任一袢利尿剂给药：呋塞米、布美他尼、托拉塞米或依他尼酸'),
+    'loop_diuretic_furosemide_eq': ('Loop diuretic dose in mg IV furosemide equivalent (Brater 1998: IV furosemide 40 mg = bumetanide 1 mg = torasemide 20 mg; oral furosemide counts half), summed per hour at administration start; databases that record administered amounts only', '袢利尿剂剂量，折算为静脉呋塞米当量 mg（Brater 1998：静脉呋塞米 40 mg = 布美他尼 1 mg = 托拉塞米 20 mg；口服呋塞米按一半计），按给药开始时间每小时求和；仅限记录实际给药量的数据库'),
+    'thiazide_diuretic': ('Thiazide or thiazide-like diuretic exposure (hydrochlorothiazide, chlorothiazide, metolazone, chlortalidone, indapamide, xipamide, incl. fixed combinations)', '噻嗪类或类噻嗪利尿剂暴露（氢氯噻嗪、氯噻嗪、美托拉宗、氯噻酮、吲达帕胺、希帕胺，含复方制剂）'),
+    'potassium_sparing_diuretic': ('Potassium-sparing diuretic exposure: spironolactone, eplerenone, potassium canrenoate, amiloride, triamterene (incl. fixed combinations)', '保钾利尿剂暴露：螺内酯、依普利酮、坎利酸钾、阿米洛利、氨苯蝶啶（含复方制剂）'),
+    'acetazolamide': ('Acetazolamide (carbonic anhydrase inhibitor) administration', '乙酰唑胺（碳酸酐酶抑制剂）给药'),
     'sbp': ('Systolic blood pressure (peak pressure during heartbeat)', '收缩压（心脏收缩时的最高压力）'),
     'dbp': ('Diastolic blood pressure (pressure between heartbeats)', '舒张压（心脏舒张时的最低压力）'),
     'pulse_pressure': ('Pulse pressure = SBP - DBP; narrow (<25) suggests shock/tamponade, wide (>60) suggests sepsis/aortic regurgitation', '脉压差 = 收缩压 - 舒张压；窄脉压(<25)提示休克/心包填塞，宽脉压(>60)提示脓毒症/主动脉瓣关闭不全'),
@@ -563,14 +577,14 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
-    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
+    'vitals': ['hr', 'map', 'map_invasive', 'map_nibp', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
     'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
     'ventilator': ['peep', 'peep_set', 'peep_total', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
-    'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
+    'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'loop_diuretic', 'loop_diuretic_furosemide_eq', 'thiazide_diuretic', 'potassium_sparing_diuretic', 'acetazolamide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
     'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria',
               # Current AKI contract: one public-reference phenotype plus a
               # parallel source-native comparison or explicit unavailable
@@ -770,6 +784,9 @@ CONCEPT_DB_COVERAGE = {
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
     'driving_pres_controlled': 4,  # plateau+mode overlap: miiv/mimic/aumc/hirid
     'furosemide': 6,
+    'map_invasive': 6, 'map_nibp': 6,
+    'loop_diuretic': 6, 'loop_diuretic_furosemide_eq': 5,
+    'thiazide_diuretic': 6, 'potassium_sparing_diuretic': 6, 'acetazolamide': 6,
     'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 5,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
     'mannitol': 5, 'amiodarone': 6, 'milrinone': 6, 'rocuronium': 5,

@@ -89,7 +89,7 @@
   const MODS = [
     // —— recommended core ——
     ['Demographics', '人口统计', 8, false, true],
-    ['Vital signs', '生命体征', 12, false, true],
+    ['Vital signs', '生命体征', 14, false, true],
     ['Lab — Chemistry', '实验室-生化', 49, false, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 10, false, true],
     ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, false, true],
@@ -103,7 +103,7 @@
     ['Blood gas', '血气分析', 9, false, false],
     ['Lab — Hematology', '实验室-血液学', 25, false, false],
     ['Vasopressors', '血管活性药物', 17, false, false],
-    ['Other medications', '其他药物', 49, false, false],
+    ['Other medications', '其他药物', 54, false, false],
     ['Renal & urine output', '肾脏与尿量', 57, false, false],
     ['Neurological', '神经系统', 14, false, false],
     ['Circulatory', '循环系统', 10, false, false],
