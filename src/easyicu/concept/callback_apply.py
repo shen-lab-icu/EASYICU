@@ -61,6 +61,7 @@ from .blood_gas_specimen import (
     parse_arterial_specimen_callback,
     restrict_to_arterial_specimens,
 )
+from .eicu_sedation_scale import RASS_SCALE_CALLBACK, restrict_to_rass_scale
 from .errors import ConceptExtractionUnavailable
 from .loader import _get_concept_bounds
 from .expr_parser import (
@@ -820,6 +821,10 @@ def _apply_callback(
             data_source=data_source,
             interval=interval,
         )
+
+    if expr == RASS_SCALE_CALLBACK:
+        # eICU sedation scores keep RASS-scale rows only (owner: eicu_sedation_scale).
+        return restrict_to_rass_scale(frame, data_source=data_source, concept_name=concept_name)
 
     if expr == "transform_fun(miiv_age)":
         from .callbacks import miiv_age
@@ -2615,9 +2620,11 @@ def _apply_callback(
         if len(args) < 2:
             raise ValueError(f"eicu_rate_units requires two arguments, got '{expr}'")
 
-        def _arg_to_float(text: str) -> float:
+        def _arg_to_float(text: str) -> Optional[float]:
+            # NA: no constant conversion; rows charted in that unit stay missing.
             part = text.split("=", 1)[1] if "=" in text else text
-            return float(_parse_literal(part.strip()))
+            value = _parse_literal(part.strip())
+            return None if value is None or value is pd.NA else float(value)
 
         ml_to_mcg = _arg_to_float(args[0])
         mcg_to_units = _arg_to_float(args[1])
