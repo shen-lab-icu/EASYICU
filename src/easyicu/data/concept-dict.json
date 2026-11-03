@@ -10822,7 +10822,8 @@
      "ids": 12311,
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(binary_op(`*`, 100))"
+     "callback": "arterial_specimen_only(transform_fun(binary_op(`*`, 100)))",
+     "_comment": "2026-11-03 extraction audit: lab SaO2 keeps only arterial specimens, as in sao2 (rule owner concept/blood_gas_specimen.py)."
     }
    ],
    "eicu": [
@@ -10876,7 +10877,12 @@
     {
      "ids": 50817,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 extraction audit: lab SaO2 keeps only arterial specimens, as in sao2 (rule owner concept/blood_gas_specimen.py)."
     }
    ],
    "mimic": [
@@ -10895,7 +10901,9 @@
     {
      "ids": 50817,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 extraction audit: lab SaO2 keeps only arterial specimens, as in sao2 (rule owner concept/blood_gas_specimen.py)."
     }
    ],
    "mimic_demo": [
@@ -10914,7 +10922,9 @@
     {
      "ids": 50817,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 extraction audit: lab SaO2 keeps only arterial specimens, as in sao2 (rule owner concept/blood_gas_specimen.py)."
     }
    ],
    "sic": [
@@ -10930,7 +10940,12 @@
       690
      ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ],
+     "_comment": "2026-11-03 extraction audit: lab SaO2 keeps only arterial specimens, as in sao2 (rule owner concept/blood_gas_specimen.py)."
     }
    ]
   }
@@ -11314,7 +11329,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -11333,7 +11348,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -11615,7 +11630,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -11635,7 +11650,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -12353,7 +12368,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -12372,7 +12387,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -13905,7 +13920,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "mimic_demo": [
@@ -13922,7 +13937,7 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS, conflicting and unrecorded specimens are excluded (mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "sic": [

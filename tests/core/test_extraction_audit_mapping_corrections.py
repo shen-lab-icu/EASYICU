@@ -112,3 +112,15 @@ def test_mimic_iii_metavision_modes_use_the_mimic_iv_strings():
     seq = apply_vent_mode_frame(frame, "value", "mimic_demo", "seq", "vent_breath_seq")
     assert control["vent_mode"].tolist() == ["dual_adaptive", "pressure"]
     assert seq["vent_breath_seq"].tolist() == ["assisted", "spontaneous"]
+
+
+@pytest.mark.parametrize("database", ["aumc", "miiv", "mimic", "mimic_demo", "sic"])
+def test_o2sat_lab_saturation_follows_the_arterial_specimen_rule_of_sao2(database):
+    def lab(concept):
+        return {
+            tuple(s["ids"]) if isinstance(s["ids"], list) else (s["ids"],): (s.get("callback"), s.get("extra_vars"))
+            for s in CONCEPTS[concept]["sources"][database]
+            if "arterial_specimen_only" in (s.get("callback") or "")
+        }
+
+    assert lab("sao2") and lab("o2sat") == lab("sao2")

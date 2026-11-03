@@ -55,4 +55,4 @@ PYTHONPATH=src python -m pytest -q --disable-warnings tests/core/test_arterial_b
 
 ## 2026-11-03 补充：通用血气概念改为仅动脉标本
 
-上文“未修改通用 `po2/pafi` 概念”的表述适用于本接口建立时。此后通用 `po2`、`pco2`、`ph`、`sao2` 的 MIIV/MIMIC-III/AUMC/SICdb 实验室来源经字典回调 `arterial_specimen_only` 只保留动脉标本，规则所有者为 `src/easyicu/concept/blood_gas_specimen.py`：MIIV 同 `specimen_id` 的 52033 必须唯一为 `ART.`（无类型记录者排除）；MIMIC-III 同 subject/charttime 的 50800 必须为 `ART`（无记录者排除，未复现 mimic-code 的标本预测模型）；AUMC 同 admissionid/measuredat 的 11646 必须为 `ART.`/`Art.`（无记录者保留）；SICdb 要求 `LaboratoryType = 2296`。本接口的 `DIRECT_ARTERIAL` 判定复用同一 MIIV 标本代码集合，其字典映射核对相应地期望 po2 带该回调。
+上文“未修改通用 `po2/pafi` 概念”的表述适用于本接口建立时。此后通用 `po2`、`pco2`、`ph`、`sao2` 的 MIIV/MIMIC-III/AUMC/SICdb 实验室来源经字典回调 `arterial_specimen_only` 只保留动脉标本，规则所有者为 `src/easyicu/concept/blood_gas_specimen.py`：MIIV 同 `specimen_id` 的 52033 必须唯一为 `ART.`（无类型记录者排除）；MIMIC-III 同 subject/charttime 的 50800 必须为 `ART`（无记录者保留：约四分之一 50821 无记录、中位 108 mmHg，排除会使约 30% stay 失去 PaO₂；未复现 mimic-code 的标本预测模型）；AUMC 同 admissionid/measuredat 的 11646 必须为 `ART.`/`Art.`（无记录者保留）；SICdb 要求 `LaboratoryType = 2296`。本接口的 `DIRECT_ARTERIAL` 判定复用同一 MIIV 标本代码集合，其字典映射核对相应地期望 po2 带该回调。
