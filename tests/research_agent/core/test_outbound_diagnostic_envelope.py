@@ -504,7 +504,8 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
     ):
         assert required in outbound
     analyzer_prompt = _all_prompt_text(analyzer)
-    assert '"mortality_fraction": 0.2' in analyzer_prompt
+    # n=10 is suppressed, so its proportion would reveal the count (2 deaths).
+    assert '"mortality_fraction": "suppressed"' in analyzer_prompt
     assert '"group": "__easyicu_category__"' in analyzer_prompt
 
 
@@ -532,7 +533,7 @@ def test_step_summary_projection_rejects_numeric_phi_and_unknown_structure():
     assert projected == {
         "status": "ok",
         "n": "suppressed",
-        "mortality_fraction": 0.2,
+        "mortality_fraction": "suppressed",
     }
 
 

@@ -484,7 +484,7 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         ),
         capability=(
             "Gray K-sample comparison of cumulative incidence functions "
-            "under competing risks (port of the cmprsk crstm kernel)"
+            "under competing risks, with IPCW censoring adjustment"
         ),
         families=("time_to_event", "survival"),
         fallback="log-rank on the event of interest with a competing-risk caveat",
