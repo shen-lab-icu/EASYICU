@@ -23117,6 +23117,12 @@
   "max": 500,
   "target": "id_tbl",
   "description": "patient weight",
+  "source_channel_priority": [
+   "admission",
+   "admission_lbs",
+   "charted",
+   "order"
+  ],
   "omopid": 4099154,
   "category": "demographics",
   "sources": {
@@ -23161,22 +23167,82 @@
     {
      "ids": [
       762,
-      4183,
       226512
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "admission",
+     "_comment": "2026-11-03 audit round 2 (W1): admission weight (CareVue 762 Admit Wt, MetaVision 226512 Admission Weight kg) stays first. 4183 (NICU birth weight, VALUENUM always empty) removed."
+    },
+    {
+     "ids": [
+      226531
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "admission_lbs",
+     "callback": "convert_unit(binary_op(`*`, 0.45359237), 'kg')",
+     "_comment": "2026-11-03 audit round 2 (W1): MetaVision 226531 Admission Weight (lbs.), converted to kg; used only when no kg admission weight is charted."
+    },
+    {
+     "ids": [
+      763,
+      224639,
+      580,
+      581
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (W1): charted weights (763/224639 Daily Weight, 580 Previous Weight, 581 Previous WeightF, all kg) fill in for stays without an admission weight."
+    },
+    {
+     "table": "inputevents_mv",
+     "val_var": "patientweight",
+     "class_name": "col_itm",
+     "source_channel": "order",
+     "_comment": "2026-11-03 audit round 2 (W1): MetaVision infusion orders carry the weight used for dosing; last resort."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
       762,
-      4183,
       226512
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "admission",
+     "_comment": "2026-11-03 audit round 2 (W1): admission weight (CareVue 762 Admit Wt, MetaVision 226512 Admission Weight kg) stays first. 4183 (NICU birth weight, VALUENUM always empty) removed."
+    },
+    {
+     "ids": [
+      226531
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "admission_lbs",
+     "callback": "convert_unit(binary_op(`*`, 0.45359237), 'kg')",
+     "_comment": "2026-11-03 audit round 2 (W1): MetaVision 226531 Admission Weight (lbs.), converted to kg; used only when no kg admission weight is charted."
+    },
+    {
+     "ids": [
+      763,
+      224639,
+      580,
+      581
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "charted",
+     "_comment": "2026-11-03 audit round 2 (W1): charted weights (763/224639 Daily Weight, 580 Previous Weight, 581 Previous WeightF, all kg) fill in for stays without an admission weight."
+    },
+    {
+     "table": "inputevents_mv",
+     "val_var": "patientweight",
+     "class_name": "col_itm",
+     "source_channel": "order",
+     "_comment": "2026-11-03 audit round 2 (W1): MetaVision infusion orders carry the weight used for dosing; last resort."
     }
    ],
    "sic": [
