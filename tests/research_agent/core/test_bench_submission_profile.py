@@ -791,15 +791,15 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         assert profile.pipeline_options()["planner_strategy"] == "family_spec_v1"
     assert current_public_profile.planner_only is True
     assert current_reviewed_profile.planner_only is False
-    # The 0922 coordinates remain frozen; cal1b and the 2026-11-02 reseal
-    # advance only CURRENT refs.
+    # The 0922 coordinates remain frozen; cal1b and the 2026-11-02/11-03
+    # reseals advance only CURRENT refs.
     for ref, frozen in (
         (CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF, current_public_profile),
         (CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF, current_reviewed_profile),
         (CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF, current_live_profile),
         (CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF, current_live_reviewed_profile),
     ):
-        assert ref == f"{frozen.name}/20261102"
+        assert ref == f"{frozen.name}/20261103"
     assert prior_public_profile.expected_concept_dict_sha == (
         FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260903"]
     )

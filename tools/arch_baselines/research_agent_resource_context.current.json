@@ -1,7 +1,8 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/research_context/outbound.py"
+      "src/easyicu/data/concept-dict.json",
+      "src/easyicu/data/sofa2-dict.json"
     ],
     "summary_changes": {}
   },
@@ -112,9 +113,17 @@
         "src/easyicu/research_agent/research_context/outbound.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "User-approved 2026-11-03 reseal of concept-dict.json and sofa2-dict.json after the six-database extraction audit",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json",
+        "src/easyicu/data/sofa2-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "11-03 review R07: outbound.py also suppresses a proportion beside a suppressed small count; only its source digest moves, no size or context growth",
+  "baseline_reason": "User-approved 2026-11-03 reseal of concept-dict.json and sofa2-dict.json after the six-database extraction audit",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -125,9 +134,9 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "40945cb67e00c09ed5e4aed0fae71360b2bb45d7557fe8cacc2ba527ff2e0c5c",
+    "src/easyicu/data/concept-dict.json": "1a845edd899619181055925db9ae938380f7bc1bdfe91c6d8420c591ee3a5b04",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
-    "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
+    "src/easyicu/data/sofa2-dict.json": "4beb1d80d83a1f3818858d6b5df9339b6a8ee4e9d15e190705b45b74fc3f30cb",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
     "src/easyicu/research_agent/agents/plan_payload.py": "aad4b7206bbe99dd170e2663c1d4d3054e2843cad0e7e384348ae9f2fcb0308e",
     "src/easyicu/research_agent/agents/planner.py": "5d01bba07f26e0f2bee94cc0fd6df758c11212aec1b231a4dab28ec758fa66d2",
