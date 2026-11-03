@@ -3966,19 +3966,25 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
     
     return callback
 
-def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
+def eicu_rate_units_callback(
+    ml_to_mcg: Optional[float], mcg_to_units: Optional[float]
+) -> Callable:
     """Convert eICU medication rates to units/min (R ricu eicu_rate_units).
 
     Args:
-        ml_to_mcg: Conversion factor from millilitres to micrograms.
-        mcg_to_units: Conversion factor from micrograms to drug-specific units.
+        ml_to_mcg: Conversion factor from millilitres to micrograms, or
+            ``None`` when the drug's concentration is not a single constant:
+            volume-charted rows (``ml/hr``) then stay missing.
+        mcg_to_units: Conversion factor from micrograms to drug-specific
+            units, or ``None`` when mass-charted rows (``mg/``, ``mcg/``) are
+            not a dose of this unit-dosed drug: they then stay missing.
 
     Returns:
         Callback that normalises rate units and expands durations to hourly intervals.
     """
 
-    if ml_to_mcg <= 0 or mcg_to_units <= 0:
-        raise ValueError("Conversion factors must be positive numbers")
+    if any(f is not None and not f > 0 for f in (ml_to_mcg, mcg_to_units)):
+        raise ValueError("Conversion factors must be positive numbers or None")
 
     def _normalize_units(frame: pd.DataFrame, val_var: str, unit_col: str) -> pd.DataFrame:
         work = frame.copy()
@@ -4008,7 +4014,7 @@ def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
 
         # 4) 'ml/' -> 'mcg/' using concentration factor
         mask = work[unit_col].str.contains(r"^ml/", case=False, na=False)
-        if mask.any():
+        if mask.any() and ml_to_mcg is not None:
             work.loc[mask, val_var] = work.loc[mask, val_var] * ml_to_mcg
             work.loc[mask, unit_col] = work.loc[mask, unit_col].str.replace(
                 r"^ml/", "mcg/", regex=True, flags=re.IGNORECASE
@@ -4016,7 +4022,7 @@ def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
 
         # 5) 'mcg/' -> 'units/' using microgram-to-unit factor
         mask = work[unit_col].str.contains(r"^mcg/", case=False, na=False)
-        if mask.any():
+        if mask.any() and mcg_to_units is not None:
             work.loc[mask, val_var] = work.loc[mask, val_var] * mcg_to_units
             work.loc[mask, unit_col] = work.loc[mask, unit_col].str.replace(
                 r"^mcg/", "units/", regex=True, flags=re.IGNORECASE

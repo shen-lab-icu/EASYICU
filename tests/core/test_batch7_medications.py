@@ -103,10 +103,11 @@ def test_nicardipine_excludes_sic(cdict):
     assert "sic" not in cdict["nicardipine"]["sources"]
 
 
-def test_phenytoin_uses_eicu_admissiondrug_but_excludes_aumc(cdict):
+def test_phenytoin_uses_eicu_in_icu_medication_but_excludes_aumc(cdict):
     sources = set(cdict["phenytoin"]["sources"])
     assert "aumc" not in sources
-    assert cdict["phenytoin"]["sources"]["eicu"][0]["table"] == "admissiondrug"
+    # 2026-11-03 audit 2: admissionDrug is the pre-admission list; in-ICU orders are medication HICLs.
+    assert [s["table"] for s in cdict["phenytoin"]["sources"]["eicu"]] == ["medication"]
     assert cdict["phenytoin"]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"
 
 
