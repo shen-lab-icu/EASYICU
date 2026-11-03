@@ -28,7 +28,10 @@ Per-database evidence (see :data:`SPECIMEN_RULES`):
   ``measuredat``.  A gas without a specimen record is kept (most AUMC gases
   are arterial and the specimen item is not charted for every gas); every
   recorded non-arterial value, including laboratory status codes such as
-  "Vervalt" or "Gestold", drops the gas.
+  "Vervalt" or "Gestold", drops the gas.  Gases of the 2003-2008 era record
+  the site in list item 7432 "Afnameplaats" instead (``Arterieel``, ``PAP``,
+  ``Centrale lijn``, ``Perifeer veneus``; 11646 is on 1.65% of those gases,
+  7432 on 96.4%), read at the same keys (audit round 2, G2).
 * SICdb: the laboratory row's own ``LaboratoryType``; 2296 is "Arterial" in
   ``d_references``.  Rows with an empty type are dropped, except for cases
   admitted in 2013: the type was not yet recorded then, and those gases are
@@ -87,6 +90,9 @@ class SpecimenRecordRule:
     value_column: str
     arterial_tokens: frozenset
     keep_unrecorded: bool
+    #: Further specimen records at the same keys (another item or table).
+    #: Their values are classified with the same token sets.
+    also: Tuple["SpecimenRecordRule", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,8 +125,14 @@ SPECIMEN_RULES = {
     "aumc": SpecimenRecordRule(
         table="freetextitems", item_column="itemid", item_id=11646,
         keys=("admissionid", "measuredat"), patient_column="admissionid",
-        value_column="value", arterial_tokens=frozenset({"ART."}),
+        value_column="value", arterial_tokens=frozenset({"ART.", "ARTERIEEL"}),
         keep_unrecorded=True,
+        also=(SpecimenRecordRule(
+            table="listitems", item_column="itemid", item_id=7432,
+            keys=("admissionid", "measuredat"), patient_column="admissionid",
+            value_column="value", arterial_tokens=frozenset({"ARTERIEEL"}),
+            keep_unrecorded=True,
+        ),),
     ),
     "sic": SpecimenColumnRule(
         column="LaboratoryType", arterial_codes=frozenset({2296}),
@@ -132,9 +144,10 @@ SPECIMEN_RULES["mimic_demo"] = SPECIMEN_RULES["mimic"]
 
 # Recorded specimen values that name a mixed-venous (pulmonary artery) sample,
 # after trimming and upper-casing.  AUMCdb freetext 11646 (2026-11-03 audit 2:
-# 'GEM.VEN.' 4,900 and 'Gem. ven.' 3,526 O2-saturation samples, median 0.67).
+# 'GEM.VEN.' 4,900 and 'Gem. ven.' 3,526 O2-saturation samples, median 0.67)
+# and list item 7432 'PAP' (pulmonary artery, 2003-2008 era).
 MIXED_VENOUS_TOKENS = {
-    "aumc": frozenset({"GEM.VEN.", "GEM. VEN.", "GEM.VEN"}),
+    "aumc": frozenset({"GEM.VEN.", "GEM. VEN.", "GEM.VEN", "PAP"}),
 }
 
 
@@ -256,9 +269,11 @@ def _align_key_dtypes(frame: pd.DataFrame, status: pd.DataFrame, keys) -> pd.Dat
 def _restrict_by_records(frame, rule: SpecimenRecordRule, data_source, accepted_tokens=None):
     if data_source is None:
         raise ArterialSpecimenContractError("arterial_specimen_data_source_missing")
-    status = _record_status(
-        _load_specimen_records(frame, rule, data_source), rule, accepted_tokens
+    records = pd.concat(
+        [_load_specimen_records(frame, source, data_source) for source in (rule, *rule.also)],
+        ignore_index=True,
     )
+    status = _record_status(records, rule, accepted_tokens)
     status = _align_key_dtypes(frame, status, rule.keys)
     keyed = frame.loc[:, list(rule.keys)].reset_index(drop=True)
     joined = keyed.merge(status, on=list(rule.keys), how="left", sort=False)

@@ -104,7 +104,7 @@ def _aumc(tmp_path):
         [
             # O2 saturation (fraction) with specimens below; 12534 SvO2 Vigilance.
             (5, 12311, 0.98, "Geen"), (65, 12311, 0.66, "Geen"), (125, 12311, 0.74, "Geen"),
-            (185, 12311, 0.97, "Geen"), (245, 12311, 0.70, "Geen"),
+            (185, 12311, 0.97, "Geen"), (245, 12311, 0.70, "Geen"), (305, 12311, 0.64, "Geen"),
             # Set tidal volume: litres; 2.0 L is the Evita knob maximum.
             (5, 8851, 0.45, "ml"), (65, 8851, 2.0, "ml"), (125, 12291, 480.0, "ml"),
             # Analyser anion gap.
@@ -126,6 +126,14 @@ def _aumc(tmp_path):
     freetext["itemid"] = 11646
     freetext["item"] = "Afname (bloed)"
     _write(freetext, tmp_path / "freetextitems.parquet")
+    # 2003-2008 era site record (list item 7432 "Afnameplaats").
+    _write(
+        pd.DataFrame({
+            "admissionid": [1], "itemid": [7432], "item": ["Afnameplaats"], "value": ["PAP"],
+            "valueid": [2], "measuredat": [305 * MINUTE],
+        }),
+        tmp_path / "listitems.parquet",
+    )
     _write(
         pd.DataFrame({
             "admissionid": [1, 9], "itemid": [9328, 9328], "item": ["Beademen"] * 2,
@@ -146,8 +154,9 @@ def _aumc(tmp_path):
 
 def test_svo2_keeps_only_recorded_mixed_venous_blood_gases(tmp_path):
     source, id_column = _aumc(tmp_path)
-    # ART. (98), plain venous Ven. (74) and the unrecorded gas (97) are not SvO2.
-    assert hourly(source, id_column, "svo2") == {1.0: 66.0, 4.0: 70.0}
+    # ART. (98), plain venous Ven. (74) and the unrecorded gas (97) are not SvO2;
+    # the old-era list item 7432 "PAP" (pulmonary artery, 64) is.
+    assert hourly(source, id_column, "svo2") == {1.0: 66.0, 4.0: 70.0, 5.0: 64.0}
 
 
 def test_set_tidal_volume_restores_litre_item_without_its_parked_maximum(tmp_path):
