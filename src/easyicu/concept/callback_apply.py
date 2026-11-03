@@ -3490,7 +3490,11 @@ def _apply_callback(
                     expanded_rows.append(new_row)
             
             if expanded_rows:
+                id_dtypes = {c: frame[c].dtype for c in id_cols}
                 frame = pd.DataFrame(expanded_rows)
+                # iterrows() upcasts an all-numeric row to float; keep the
+                # stay identifier in its source dtype.
+                frame = frame.astype({c: d for c, d in id_dtypes.items() if c in frame.columns})
                 frame.attrs["easyicu_time_columns"] = {index_var: "icu_relative_hours"}
                 # 🔧 FIX 2026-03-11: Do NOT hardcode median aggregation here!
                 # Previously this did groupby(...).agg({val_var: 'median'}) which pre-aggregated

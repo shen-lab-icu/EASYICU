@@ -20,6 +20,11 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..concept.blood_gas_specimen import (
+    ARTERIAL_SPECIMEN_CALLBACK,
+    SPECIMEN_RULES,
+    is_arterial_specimen,
+)
 from ..datasource import ICUDataSource
 from ..resources import load_dictionary, package_path
 from ..utils.callback_utils import percent_as_numeric
@@ -223,6 +228,28 @@ def _read_scoped_events(conn, paths: list[Path], table: str, itemids: list[int])
     return frame, counts
 
 
+def _keep_arterial_specimens(events: pd.DataFrame, specimens: pd.DataFrame, items: list[int]):
+    """Drop gases whose same-specimen 52033 record is not uniquely arterial.
+
+    The rule and its codes are owned by concept.blood_gas_specimen (MIIV:
+    ``ART.``; an unrecorded or conflicting specimen is not arterial). Dropped
+    events are counted per item and reason, like the SQL scope filters.
+    """
+    tokens = specimens.groupby("specimen_id")["raw_value"].agg(list) if not specimens.empty else pd.Series(dtype=object)
+    arterial_ids = {sid for sid, values in tokens.items()
+                    if is_arterial_specimen(values, SPECIMEN_RULES["miiv"].arterial_tokens)}
+    recorded_ids = {sid for sid, values in tokens.items()
+                    if is_arterial_specimen(values, SPECIMEN_RULES["miiv"].arterial_tokens) is not None}
+    gas = (events.source_table == "labevents") & events.itemid.isin(items)
+    arterial = events.specimen_id.isin(arterial_ids)
+    drop = gas & ~arterial
+    reason = np.where(events.specimen_id.isin(recorded_ids), "non_arterial_specimen", "unrecorded_specimen")
+    dropped = [dict(source_table="labevents", source_item_id=int(item), reason=why, count=int(n))
+               for (item, why), n in events.loc[drop].assign(_reason=reason[drop.to_numpy()])
+               .groupby(["itemid", "_reason"]).size().items()]
+    return events.loc[~drop].reset_index(drop=True), dropped
+
+
 def _transform(events: pd.DataFrame, specs: list[dict], hashes: dict, interval: float) -> pd.DataFrame:
     parts = []
     for spec in specs:
@@ -303,12 +330,18 @@ def extract_miiv_respiratory_events(
     for name in concepts:
         definition = dictionary[name]
         for source in definition.for_data_source(data_source.config):
+            # A lab source restricted to arterial specimens keeps its numeric
+            # value; the specimen rule (concept.blood_gas_specimen) is applied
+            # to the scoped events below, not as a value callback.
+            arterial = source.callback == ARTERIAL_SPECIMEN_CALLBACK and source.table == "labevents"
             if (source.table not in {"chartevents", "labevents"} or source.sub_var != "itemid"
-                or source.callback not in {None, "transform_fun(percent_as_numeric)"}
+                or (source.callback not in {None, "transform_fun(percent_as_numeric)"} and not arterial)
                 or definition.callback is not None or definition.minimum is None or definition.maximum is None):
                 raise SourceEventContractError("unsupported_dictionary_contract")
             specs.append(dict(concept=name, table=source.table, ids=list(source.ids),
-                              callback=source.callback, min=definition.minimum, max=definition.maximum,
+                              callback=None if arterial else source.callback,
+                              specimen="arterial" if arterial else None,
+                              min=definition.minimum, max=definition.maximum,
                               units=definition.units))
     clock_candidates = [data_source.base_path / "icustays.parquet", data_source.base_path / "icu/icustays.parquet"]
     clock_paths = [p.resolve() for p in clock_candidates if p.is_file()]
@@ -316,7 +349,12 @@ def extract_miiv_respiratory_events(
         raise SourceEventContractError("one_icustays_parquet_required")
     sources = {table: _files(data_source, table, sorted({i for s in specs if s['table'] == table for i in s['ids']}))
                for table in sorted({s['table'] for s in specs})}
+    specimen_rule = SPECIMEN_RULES["miiv"]
+    arterial_items = sorted({i for s in specs if s["specimen"] == "arterial" for i in s["ids"]})
+    specimen_paths = _files(data_source, specimen_rule.table, [specimen_rule.item_id]) if arterial_items else []
     files = [("icustays", p) for p in clock_paths] + [(table, p) for table, paths in sources.items() for p in paths]
+    files += [(f"{specimen_rule.table}:specimen", p) for p in specimen_paths
+              if (specimen_rule.table, p) not in files]
     hashes = {str(p): _sha(p) for _, p in files}
     conn = duckdb_spill.connect(":memory:", config={"threads": 1})
     try:
@@ -331,6 +369,10 @@ def extract_miiv_respiratory_events(
             frames.append(frame)
             counts.extend(table_counts)
         events = pd.concat(frames, ignore_index=True)
+        if arterial_items:
+            specimens, _ = _read_scoped_events(conn, specimen_paths, specimen_rule.table, [specimen_rule.item_id])
+            events, dropped = _keep_arterial_specimens(events, specimens, arterial_items)
+            counts.extend(dropped)
     finally:
         conn.close()
     if not set(events.stay_id) <= set(allowed):
