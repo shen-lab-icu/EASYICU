@@ -535,7 +535,7 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
         if is_hosted():
             unavailable()
         require_path(raw_path)
-        from easyicu.io.data_converter import ConversionStatus, DataConverter
+        from easyicu.io.data_converter import ConversionStatus, ConversionStopped, DataConverter
 
         # Construction can raise ValueError on a bad path/database — let it
         # propagate so JobManager marks the job failed with the message.
@@ -569,7 +569,26 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
                 }
             )
 
-        results = converter.convert_all(force=False, progress_callback=cb)
+        try:
+            results = converter.convert_all(
+                force=False,
+                progress_callback=cb,
+                should_stop=lambda: bool(getattr(job, "cancel_requested", False)),
+            )
+        except ConversionStopped as stopped:
+            # JobManager records the job as cancelled; the folder is not
+            # ready for analysis, and a re-run skips the finished files.
+            finished = stopped.results
+            return {
+                "converted": sum(r.get("status") == ConversionStatus.COMPLETED for r in finished.values()),
+                "failed": sum(r.get("status") == ConversionStatus.FAILED for r in finished.values()),
+                "skipped": 0,
+                "total_files": len(finished),
+                "nothing_to_do": False,
+                "cancelled_at": "conversion",
+                "data_quality_status": "partial",
+                "ready_for_analysis": False,
+            }
         # Include cached conversion receipts too: no callback is emitted for an
         # entirely cached run, and skipped files can still contain dropped rows.
         if hasattr(converter, "get_conversion_status"):
