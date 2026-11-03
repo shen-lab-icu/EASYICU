@@ -168,7 +168,7 @@ def survival_group_products(
                     "statistic": gray.statistic, "df": gray.df, "p_value": gray.p_value,
                     "n": gray.n, "n_events": gray.n_interest, "n_competing": gray.n_competing,
                     "method": gray.method, "claim_ceiling": gray.claim_ceiling,
-                    "censoring_weights": "pooled",
+                    "censoring_weights": "group_specific_km",
                 }]), FINE_GRAY_PRODUCT: estimates},
         details={"fine_gray": fg.receipt, "gray_claim_ceiling": gray.claim_ceiling,
                  "logrank_status": "replaced_by_gray_for_competing_events",

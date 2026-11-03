@@ -4,11 +4,10 @@ Validity anchors:
 
 * GEE/MixedLM/GAM are thin statsmodels wrappers: every fit is crossed
   against a direct package call (params/SE agreement is the floor).
-* Gray's test has no package reference (lifelines ships none), so it is
-  self-evidenced by two hard properties: degeneracy to the lifelines
-  multivariate log-rank without competition (p tolerance 1e-6), and the
-  hand-worked 4-subject example (statistic exactly 8/13, see
-  ``methods/gray_test.py`` for the step-by-step arithmetic).
+* Gray's test is a port of cmprsk's ``crstm.f``; the values asserted here
+  were produced by the compiled original kernel (see
+  ``tests/research_agent/core/test_gray_test_matches_the_cmprsk_kernel.py``
+  for the reference and the wider oracle set).
 * The nomogram never fits: points -> total -> probability must reproduce
   the model's own link arithmetic (tolerance 1e-9).
 """
@@ -67,7 +66,7 @@ _GAM_Y_BIN = (
     < 1.0 / (1.0 + np.exp(-(0.3 * np.sin(2.0 * _GAM_X1) + 0.8 * _GAM_X2)))
 ).astype(float)
 
-# Hand-worked Gray example from methods/gray_test.py docstring:
+# Four-subject Gray example (cmprsk crstm: score -1/6, variance 55/72):
 # A1: T=1 cause 2 | B1: T=2 cause 1 | A2: T=3 cause 1 | B2: T=4 cause 1
 _GRAY_HAND_T = [1.0, 2.0, 3.0, 4.0]
 _GRAY_HAND_E = [2, 1, 1, 1]
@@ -251,20 +250,21 @@ def test_mixed_effects_fail_closed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gray_hand_computed_competing_risk_example() -> None:
+def test_gray_four_subject_example_matches_cmprsk_kernel() -> None:
     from scipy import stats as scipy_stats
 
     res = gray_test(_GRAY_HAND_T, _GRAY_HAND_E, _GRAY_HAND_G)
-    # Hand arithmetic in methods/gray_test.py: Z_A = -2/3, V_AA = 13/18.
-    assert res.statistic == pytest.approx(8.0 / 13.0, abs=1e-12)
-    assert res.p_value == pytest.approx(scipy_stats.chi2.sf(8.0 / 13.0, 1), abs=1e-12)
+    # Compiled cmprsk crstm: s_A = -1/6, vs = 55/72, statistic 2/55.
+    assert res.statistic == pytest.approx(2.0 / 55.0, abs=1e-12)
+    assert res.p_value == pytest.approx(0.8487665010168555, abs=1e-10)
+    assert res.p_value == pytest.approx(scipy_stats.chi2.sf(2.0 / 55.0, 1), abs=1e-12)
     assert res.df == 1
-    assert tuple(res.group_scores) == pytest.approx((-2.0 / 3.0, 2.0 / 3.0), abs=1e-12)
+    assert tuple(res.group_scores) == pytest.approx((-1.0 / 6.0, 1.0 / 6.0), abs=1e-12)
     assert res.n_interest == 3 and res.n_competing == 1 and res.n_censored == 0
     assert res.claim_ceiling == "analysis_only"
 
-    # The carry-over is genuinely active: censoring the competing event as a
-    # plain log-rank does must give a *different* answer here.
+    # Treating the competing event as censoring (a plain log-rank) must
+    # give a different answer here.
     from lifelines.statistics import logrank_test
 
     durations = pd.Series(_GRAY_HAND_T)
@@ -276,17 +276,19 @@ def test_gray_hand_computed_competing_risk_example() -> None:
         event_observed_A=[v for v, flag in zip(cause1, is_a) if flag],
         event_observed_B=[v for v, flag in zip(cause1, is_a) if not flag],
     )
-    assert abs(float(lr.test_statistic) - res.statistic) > 0.05
+    # Log-rank with the competing event censored is 1/17; Gray's is 2/55.
+    assert float(lr.test_statistic) == pytest.approx(1.0 / 17.0, abs=1e-12)
+    assert abs(float(lr.test_statistic) - res.statistic) > 0.02
     _assert_canonical_stable(res, gray_kernel.result_sha256)
 
 
-def test_gray_degenerates_to_logrank_without_competition() -> None:
-    from lifelines.statistics import multivariate_logrank_test
-
+def test_gray_without_competition_matches_cmprsk_kernel() -> None:
+    # No competing events: the score is the log-rank score, but Gray's
+    # variance is not the hypergeometric log-rank variance, so the values
+    # are the compiled crstm outputs rather than a lifelines comparison.
     res = gray_test(_GRAY_T, _GRAY_C, _GRAY_G)
-    ref = multivariate_logrank_test(_GRAY_T, _GRAY_G, _GRAY_C)
-    assert res.p_value == pytest.approx(float(ref.p_value), abs=1e-6)
-    assert res.statistic == pytest.approx(float(ref.test_statistic), abs=1e-6)
+    assert res.statistic == pytest.approx(0.011861710865900451, abs=1e-10)
+    assert res.p_value == pytest.approx(0.913272699668979, abs=1e-10)
 
     three_groups = np.where(
         np.arange(_GRAY_N) % 3 == 0,
@@ -294,9 +296,9 @@ def test_gray_degenerates_to_logrank_without_competition() -> None:
         np.where(np.arange(_GRAY_N) % 3 == 1, "B", "C"),
     )
     res3 = gray_test(_GRAY_T, _GRAY_C, three_groups)
-    ref3 = multivariate_logrank_test(_GRAY_T, three_groups, _GRAY_C)
     assert res3.df == 2
-    assert res3.p_value == pytest.approx(float(ref3.p_value), abs=1e-6)
+    assert res3.statistic == pytest.approx(2.0457818046420386, abs=1e-10)
+    assert res3.p_value == pytest.approx(0.35955400077559907, abs=1e-10)
 
     again = gray_test(_GRAY_T, _GRAY_C, _GRAY_G)
     assert canonical_json(res.to_json()) == canonical_json(again.to_json())

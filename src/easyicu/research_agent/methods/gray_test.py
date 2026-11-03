@@ -1,85 +1,52 @@
 """Gray's K-sample test for cumulative incidence functions (analysis only).
 
-Hand-rolled implementation (wrap-vs-rewrite rule, reason 1: ``lifelines``
-0.30 ships no Gray test, so there is no package quantity to wrap; reason 3:
-every risk-set step is auditable here). The statistic follows Gray (1988):
-a weighted log-rank-type score over the cause of interest, computed on
-*subdistribution* risk sets in which subjects who already failed from the
-competing cause are retained with inverse-probability-of-censoring weights
-(Fine & Gray 1999 weighting), with Gray's rho-family time weight
-``W(t) = S(t-)^rho`` (default ``rho=0``, i.e. Gray's test proper, ``W=1``).
+This kernel is a NumPy port of the score and variance routine that CRAN
+``cmprsk`` uses for its ``cuminc()`` K-sample test: subroutines ``crstm`` and
+``crst`` in ``src/crstm.f`` (Robert Gray, GPL; port reference: cmprsk
+2.2-12, ``crstm.f`` sha256
+``a359f29936573aebe84a56abdf91edf26cf7e46464f473c1b8b85ff1b650b829``).
+``lifelines`` ships no Gray test, so there is no Python package quantity to
+wrap; the oracle values in
+``tests/research_agent/core/test_gray_test_matches_the_cmprsk_kernel.py``
+were produced by compiling that Fortran file with gfortran and calling it on
+each fixture, so the port is checked against the original kernel rather
+than against its own arithmetic.
 
-Score construction (``K`` groups, cause of interest ``c``, competing cause
-``c'``). At each distinct time ``t_j`` with a cause-``c`` event:
+Statistic (Gray 1988). Subjects are sorted by time and processed one
+distinct time at a time. For each group ``k`` the kernel keeps the
+left-continuous all-cause Kaplan-Meier ``S_k(t-)`` and the left-continuous
+cause-of-interest cumulative incidence ``F_k(t-)``. With ``Y_k`` the
+ordinary risk set (``T >= t``), ``R_k = Y_k (1 - F_k(t-)) / S_k(t-)`` and
+``d_k`` the cause-of-interest events at ``t``, the score for group ``k``
+accumulates ``W(t) (d_k - d R_k / sum_r R_r)``. Groups whose ordinary risk
+set is empty contribute nothing at that time. The time weight is
+``W(t) = (1 - F(t-))^rho`` where ``F`` is the pooled cumulative incidence
+of the event of interest (``rho=0`` gives ``W=1``). The covariance is
+Gray's asymptotic estimator, including the correction terms for censoring
+and for competing events (``crst`` arrays ``a``, ``c``, ``v2`` and
+``v3``); it is *not* a log-rank hypergeometric variance, so even without
+competing events the result is close to, but not identical with, a
+log-rank test.
 
-* modified risk set per group
-  ``Y*_ij = #{T >= t_j, group i} + sum G(t_j)/G(T_l)`` over group-``i``
-  subjects with ``T_l < t_j`` and a competing event, where ``G`` is the
-  pooled Kaplan-Meier estimate of the censoring distribution
-  (right-continuous step; identically 1 when nothing is censored);
-* observed ``d_ij`` and expected ``e_ij = d_j Y*_ij / Y*_j`` cause-``c``
-  events, accumulated as ``Z_i += W_j (d_ij - e_ij)``;
-* covariance accumulated in log-rank form,
-  ``V[i,l] += f_j W_j^2 (delta_il Y*_ij - Y*_ij Y*_lj / Y*_j)`` with
-  ``f_j = ((Y*_j - d_j)/(Y*_j - 1)) d_j / Y*_j^2`` (the ``Y*_j = 1`` case
-  takes the same ``1`` that the ``inf -> 1`` replacement gives there).
+The test statistic is ``s' V^{-1} s`` over the first ``K-1`` groups on
+``K-1`` degrees of freedom, as ``cuminc()`` computes it. ``cuminc()``
+reports a statistic of ``-1`` when ``V`` is singular; this kernel refuses
+instead (:class:`GrayTestError`). A single stratum is supported (the
+public signature has no strata argument).
 
-The test statistic is ``Z' pinv(V) Z`` on the first ``K-1`` groups with
-``K-1`` degrees of freedom — the same algebraic shape as the lifelines
-multivariate log-rank, which is exactly why property (a) below holds.
-
-Because no R/cmp rsk reference is available in this environment, validity is
-self-evidenced by two hard properties (both covered by tests):
-
-(a) *Degeneracy.* With no competing event the carried set is empty, so the
-    modified risk sets equal the standard risk sets and ``W = 1``; the
-    algebra above is then term-for-term the lifelines multivariate log-rank
-    on the cause-``c`` indicator, and the p-values must agree (tolerance
-    1e-6 in the test).
-(b) *Hand-worked competing-risk example.* Four subjects, ``1`` = interest,
-    ``2`` = competing, groups ``A``/``B``::
-
-        A1: T=1 cause 2 | B1: T=2 cause 1 | A2: T=3 cause 1 | B2: T=4 cause 1
-
-    Nothing is censored, so every IPCW weight is exactly ``G/G = 1`` while
-    the carry-over is still exercised (at ``t=2`` group A has one subject
-    under follow-up but a subdistribution risk set of two — a plain
-    log-rank censoring the competing event would use one). Step by step:
-
-    * ``t=2``: ``Y*_A=2, Y*_B=2, Y*=4``, ``d=1`` (B1).
-      ``E_A=E_B=0.5``; ``Z_A += -0.5``, ``Z_B += +0.5``.
-      ``f = (3/3)(1/16) = 1/16``; ``V_AA += (1/16)(2)(2) = 1/4``.
-    * ``t=3``: ``Y*_A=2`` (A2 plus carried A1), ``Y*_B=1``, ``Y*=3``,
-      ``d=1`` (A2). ``E_A=2/3``; ``Z_A += +1/3``.
-      ``f = (2/2)(1/9) = 1/9``; ``V_AA += (1/9)(2)(1) = 2/9``.
-    * ``t=4``: ``Y*_A=1`` (carried A1), ``Y*_B=1``, ``Y*=2``, ``d=1``
-      (B2). ``E_A=0.5``; ``Z_A += -0.5``.
-      ``f = (1/1)(1/4) = 1/4``; ``V_AA += (1/4)(1)(1) = 1/4``.
-
-    Totals: ``Z_A = -1/2 + 1/3 - 1/2 = -2/3``,
-    ``V_AA = 1/4 + 2/9 + 1/4 = 13/18``, so
-    ``chi2 = (4/9)/(13/18) = 8/13`` on 1 df
-    (``p = chi2.sf(8/13, 1) ~= 0.4328``). The test pins ``8/13`` to 1e-12.
-
-Determinism contract: pure NumPy arithmetic on sorted unique times with
+Determinism contract: pure NumPy arithmetic on stably sorted times with
 deterministic label ordering; no RNG is involved, so rerunning with
 identical inputs yields byte-identical :meth:`GrayTestResult.to_json`.
 
 Fail-closed inputs (all raise :class:`GrayTestError`, a ``ValueError``):
 
-* event codes outside ``{0, 1, 2}`` (0 = censored, 1 = event of interest,
-  2 = competing) or a non-integral code;
-* no observed event of interest (the test would have an empty risk set);
+* event codes outside ``{0, 1, 2}`` (0 = censored, 1 and 2 = the two
+  causes) or a non-integral code;
+* no observed event of interest;
 * a single distinct group;
 * an empty input, negative or non-finite durations, length mismatches;
-* a censoring-KM value of zero at a needed time (IPCW weights undefined);
-* a non-positive modified risk set at a cause-``c`` event time.
-
-Known limitation (documented, not silently worked around): the censoring
-distribution ``G`` is pooled across groups, as in Gray's original proposal.
-If censoring depends strongly on group, the IPCW weights are misspecified
-and the test can mis-lead; that setting needs a group-stratified extension
-this kernel does not claim.
+* a singular score covariance (``cuminc()`` would print ``-1``);
+* any non-finite intermediate value.
 
 Claim ceiling: ``analysis_only``. A group comparison of cumulative
 incidence is not reportable evidence of a group effect without a
@@ -89,8 +56,8 @@ References
 ----------
 Gray RJ. "A class of K-sample tests for comparing the cumulative incidence
 of a competing risk." *Ann Stat* 1988;16(3):1141-1154.
-Fine JP, Gray RJ. "A proportional hazards model for the subdistribution of
-a competing risk." *J Am Stat Assoc* 1999;94(446):496-509.
+Gray RJ. cmprsk: Subdistribution Analysis of Competing Risks. R package
+version 2.2-12, ``src/crstm.f``.
 """
 
 from __future__ import annotations
@@ -153,36 +120,125 @@ def _coerce_events(events: object, n: int) -> np.ndarray:
     return codes
 
 
-def _censoring_km_right_continuous(
-    times: np.ndarray, is_censored: np.ndarray
-) -> Dict[float, float]:
-    """Pooled KM of the censoring distribution as a right-continuous step."""
+def _crst_single_stratum(
+    times: np.ndarray,
+    cause: np.ndarray,
+    group: np.ndarray,
+    n_groups: int,
+    rho: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Port of cmprsk ``crst`` for one stratum.
 
-    curve: Dict[float, float] = {}
-    survival = 1.0
-    for moment in sorted(set(times.tolist())):
-        at_risk = int(np.sum(times >= moment))
-        censored_here = int(np.sum((times == moment) & is_censored))
-        if at_risk <= 0:  # pragma: no cover - defensive; a subject sits at its own time
-            raise GrayTestError("empty risk set while estimating the censoring curve")
-        survival *= (at_risk - censored_here) / at_risk
-        curve[float(moment)] = float(survival)
-    return curve
+    ``times`` must be sorted ascending; ``cause`` is 0 (censored), 1 (event
+    of interest) or 2 (any other cause); ``group`` holds 0-based group
+    indices. Returns the scores of all ``n_groups`` groups (``crst`` itself
+    returns the first ``n_groups - 1``; the last is computed by the same
+    update) and the ``(n_groups-1)``-square covariance of the first
+    ``n_groups - 1`` scores. Comments name the Fortran arrays and labels.
+    """
 
+    ng = n_groups
+    ng1 = ng - 1
+    n = int(times.shape[0])
+    rs = np.bincount(group, minlength=ng).astype(float)  # ordinary risk sets
+    score = np.zeros(ng, dtype=float)
+    v = np.zeros((ng1, ng1), dtype=float)  # packed lower triangle in Fortran
+    f1m = np.zeros(ng, dtype=float)  # left-continuous group CIF
+    f1 = np.zeros(ng, dtype=float)  # right-continuous group CIF
+    skmm = np.ones(ng, dtype=float)  # left-continuous group all-cause KM
+    skm = np.ones(ng, dtype=float)  # right-continuous group all-cause KM
+    v3 = np.zeros(ng, dtype=float)
+    v2 = np.zeros((ng1, ng), dtype=float)
+    c = np.zeros((ng, ng), dtype=float)
+    fm = 0.0  # left-continuous pooled CIF
+    f = 0.0  # right-continuous pooled CIF
 
-def _eventfree_km_left_continuous(
-    times: np.ndarray, any_event: np.ndarray
-) -> Dict[float, float]:
-    """Pooled event-free survival just *before* each time (for rho weights)."""
+    ll = 0
+    while ll < n:
+        lu = ll
+        while lu + 1 < n and not times[lu + 1] > times[ll]:
+            lu += 1
+        d = np.zeros((3, ng), dtype=float)  # d(0:2, ng)
+        np.add.at(d, (cause[ll : lu + 1], group[ll : lu + 1]), 1.0)
+        nd1 = float(np.sum(d[1]))
+        nd2 = float(np.sum(d[2]))
+        if nd1 > 0.0 or nd2 > 0.0:
+            live = rs > 0.0
+            tr = 0.0
+            tq = 0.0
+            for i in range(ng):  # label 60
+                if not live[i]:
+                    continue
+                td = d[1, i] + d[2, i]
+                skm[i] = skmm[i] * (rs[i] - td) / rs[i]
+                f1[i] = f1m[i] + (skmm[i] * d[1, i]) / rs[i]
+                tr += rs[i] / skmm[i]
+                tq += rs[i] * (1.0 - f1m[i]) / skmm[i]
+            f = fm + nd1 / tr
+            fb = (1.0 - fm) ** rho
+            a = np.zeros((ng, ng), dtype=float)
+            for i in range(ng):  # labels 66/67
+                if not live[i]:
+                    continue
+                t1 = rs[i] / skmm[i]
+                a[i, i] = fb * t1 * (1.0 - t1 / tr)
+                if a[i, i] != 0.0:
+                    c[i, i] += a[i, i] * nd1 / (tr * (1.0 - fm))
+                for j in range(i + 1, ng):
+                    if not live[j]:
+                        continue
+                    a[i, j] = -fb * t1 * rs[j] / (skmm[j] * tr)
+                    if a[i, j] != 0.0:
+                        c[i, j] += a[i, j] * nd1 / (tr * (1.0 - fm))
+            for i in range(1, ng):  # labels 68/69: mirror the upper triangle
+                for j in range(i):
+                    a[i, j] = a[j, i]
+                    c[i, j] = c[j, i]
+            for i in range(ng):  # label 74 (crst stops at ng-1)
+                if not live[i]:
+                    continue
+                score[i] += fb * (
+                    d[1, i] - nd1 * rs[i] * (1.0 - f1m[i]) / (skmm[i] * tq)
+                )
+            if nd1 > 0.0:  # labels 72/70/71
+                for k in range(ng):
+                    if not live[k]:
+                        continue
+                    t4 = 1.0
+                    if skm[k] > 0.0:
+                        t4 = 1.0 - (1.0 - f) / skm[k]
+                    t5 = 1.0
+                    if nd1 > 1.0:
+                        t5 = 1.0 - (nd1 - 1.0) / (tr * skmm[k] - 1.0)
+                    t3 = t5 * skmm[k] * nd1 / (tr * rs[k])
+                    v3[k] += t4 * t4 * t3
+                    t1 = a[:ng1, k] - t4 * c[:ng1, k]
+                    v2[:, k] += t1 * t4 * t3
+                    v += np.outer(t1, t1) * t3
+            if nd2 > 0.0:  # labels 82/80/81
+                for k in range(ng):
+                    if skm[k] <= 0.0 or d[2, k] <= 0.0:
+                        continue
+                    t4 = (1.0 - f) / skm[k]
+                    t5 = 1.0
+                    if d[2, k] > 1.0:
+                        t5 = 1.0 - (d[2, k] - 1.0) / (rs[k] - 1.0)
+                    t3 = t5 * ((skmm[k] ** 2) * d[2, k]) / (rs[k] ** 2)
+                    v3[k] += t4 * t4 * t3
+                    t1 = t4 * c[:ng1, k]
+                    v2[:, k] -= t1 * t4 * t3
+                    v += np.outer(t1, t1) * t3
+        # label 90: leave this time
+        np.subtract.at(rs, group[ll : lu + 1], 1.0)
+        fm = f
+        f1m = f1.copy()
+        skmm = skm.copy()
+        ll = lu + 1
 
-    left: Dict[float, float] = {}
-    survival = 1.0
-    for moment in sorted(set(times.tolist())):
-        left[float(moment)] = float(survival)
-        at_risk = int(np.sum(times >= moment))
-        failed_here = int(np.sum((times == moment) & any_event))
-        survival *= (at_risk - failed_here) / at_risk
-    return left
+    # label 30: add the censoring/competing correction terms
+    cu = c[:ng1, :]
+    v += (cu * v3) @ cu.T + cu @ v2.T + v2 @ cu.T
+    return score, v
 
 
 @dataclass(frozen=True)
@@ -203,7 +259,7 @@ class GrayTestResult:
     event_of_interest: int
     competing_event: int
     claim_ceiling: str = "analysis_only"
-    method: str = "gray_k_sample_score_ipcw"
+    method: str = "gray_1988_k_sample_cmprsk_crstm"
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -243,10 +299,11 @@ def gray_test(
 ) -> GrayTestResult:
     """Run Gray's K-sample test for the cause-``event_of_interest`` CIFs.
 
-    ``events`` uses 0 for right-censoring, 1 for the event of interest and
-    2 for the competing event. ``groups`` holds one label per subject.
-    ``rho >= 0`` selects Gray's rho-family time weight
-    ``W(t) = S(t-)^rho``; ``rho=0`` is Gray's test proper.
+    ``events`` uses 0 for right-censoring and 1/2 for the two causes;
+    ``event_of_interest`` picks which cause is compared and the other is the
+    competing event. ``groups`` holds one label per subject. ``rho >= 0``
+    selects Gray's time weight ``W(t) = (1 - F(t-))^rho`` on the pooled
+    cumulative incidence of the event of interest, as in ``cuminc()``.
     """
 
     if isinstance(event_of_interest, bool) or event_of_interest not in (1, 2):
@@ -283,81 +340,29 @@ def gray_test(
     n_competing = int(np.sum(codes == competing))
     n_censored = int(np.sum(codes == 0))
 
-    censor_curve = _censoring_km_right_continuous(times, codes == 0)
-    eventfree_left = _eventfree_km_left_continuous(times, codes != 0)
-
-    score = np.zeros(n_groups, dtype=float)
-    observed_total = np.zeros(n_groups, dtype=float)
-    cov = np.zeros((n_groups, n_groups), dtype=float)
-
-    cause_times = sorted(set(times[codes == code].tolist()))
-    for moment in cause_times:
-        under_followup = (times >= moment).astype(float)
-        weight = 1.0 if rho_value == 0.0 else float(eventfree_left[float(moment)]) ** rho_value
-        if not np.isfinite(weight):
-            raise GrayTestError("Gray rho weight is non-finite")
-        risk = np.zeros(n_groups, dtype=float)
-        for pos in range(n_groups):
-            in_group = group_pos == pos
-            risk[pos] = float(np.sum(under_followup[in_group] > 0.0))
-            past_competing = (times[in_group] < moment) & (
-                codes[in_group] == competing
-            )
-            for past in times[in_group][past_competing].tolist():
-                denom = censor_curve[float(past)]
-                if denom <= 0.0:
-                    raise GrayTestError(
-                        "censoring KM is zero at a competing-event time; "
-                        "IPCW weights are undefined here"
-                    )
-                risk[pos] += censor_curve[float(moment)] / denom
-        risk_total = float(np.sum(risk))
-        if not np.isfinite(risk_total) or risk_total <= 0.0:
-            raise GrayTestError("empty subdistribution risk set at a cause event time")
-        at_moment = times == moment
-        observed = np.zeros(n_groups, dtype=float)
-        for pos in range(n_groups):
-            observed[pos] = float(
-                np.sum(at_moment & (codes == code) & (group_pos == pos))
-            )
-        events_now = float(np.sum(observed))
-        score += weight * (observed - events_now * risk / risk_total)
-        observed_total += observed
-        if events_now > 0.0:
-            if risk_total <= 1.0:
-                factor = events_now / risk_total**2
-            else:
-                factor = (
-                    (risk_total - events_now)
-                    / (risk_total - 1.0)
-                    * events_now
-                    / risk_total**2
-                )
-            scaled = factor * weight * weight
-            # Log-rank covariance on the (modified) risk sets: off-diagonal
-            # -f W^2 Y_i Y_l, diagonal f W^2 Y_i (Y* - Y_i). This mirrors the
-            # lifelines multivariate-log-rank matrix algebra term for term,
-            # which is what makes the no-competition degeneracy exact.
-            for i in range(n_groups):
-                for ell in range(n_groups):
-                    cov[i, ell] += scaled * (
-                        (risk_total * risk[i] if i == ell else 0.0)
-                        - risk[i] * risk[ell]
-                    )
-
+    order = np.argsort(times, kind="stable")
+    cause = np.where(codes == code, 1, np.where(codes == competing, 2, 0))
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        score, cov = _crst_single_stratum(
+            times[order], cause[order], group_pos[order], n_groups, rho_value
+        )
     reduced_score = score[:-1]
-    reduced_cov = cov[:-1, :-1]
-    if not (np.all(np.isfinite(reduced_score)) and np.all(np.isfinite(reduced_cov))):
+    if not (np.all(np.isfinite(score)) and np.all(np.isfinite(cov))):
         raise GrayTestError("Gray score computation produced non-finite values")
+    # cuminc() takes a QR of the covariance and reports -1 unless it has full
+    # rank; refuse instead of inventing a statistic.
+    if np.linalg.matrix_rank(cov) < n_groups - 1:
+        raise GrayTestError(
+            "Gray score covariance is singular; the K-sample statistic is undefined"
+        )
     try:
-        inverse = np.linalg.pinv(reduced_cov)
-    except np.linalg.LinAlgError as exc:  # pragma: no cover - pinv rarely raises
+        statistic = float(reduced_score @ np.linalg.solve(cov, reduced_score))
+    except np.linalg.LinAlgError as exc:  # pragma: no cover - rank checked above
         raise GrayTestError(f"Gray covariance inversion failed: {exc}") from exc
-    statistic = float(reduced_score @ inverse @ reduced_score)
     if not np.isfinite(statistic) or statistic < 0.0:
         # Tiny negative values are floating-point noise around a true zero
         # (identical CIFs); anything clearly negative is a bug, fail closed.
-        if statistic > -1e-12:
+        if np.isfinite(statistic) and statistic > -1e-12:
             statistic = 0.0
         else:
             raise GrayTestError("Gray statistic is inadmissible (negative)")
