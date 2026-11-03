@@ -36,3 +36,16 @@ for (const language of ['zh', 'en']) {
     }
   });
 }
+
+// 11-03 MIMIC walk: a refused report-only rewrite showed its code in a toast.
+for (const language of ['zh', 'en']) {
+  test(`${language}: a refused report-only rewrite reads plainly`, () => {
+    const errors = owner(language);
+    for (const code of ['WRITER_ONLY_REGISTERED_INPUT_CHANGED', 'WRITER_ONLY_SOURCE_CHANGED', 'WRITER_ONLY_STUDY_CHANGED',
+      'WRITER_ONLY_PLAN_RESULTS_INCOMPLETE']) {
+      const text = errors.errorText({ code, message: code });
+      assert.match(text, language === 'zh' ? /只重写.*报告.*重新运行分析/ : /report.*alone.*Run the analysis again|rewriting the report alone.*run the analysis again/);
+      assert.doesNotMatch(text, /WRITER_ONLY|（|\(/);
+    }
+  });
+}

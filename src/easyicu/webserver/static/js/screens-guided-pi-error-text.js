@@ -85,6 +85,10 @@
       if (/^pi_credential_/.test(error.code || '')) return tr('EasyICU cannot access the saved model credential. Unlock the system credential store, or reconnect in Connection settings. Your question is saved.', 'EasyICU 无法读取已保存的模型凭据。请解锁系统凭据库，或在「连接设置」中重新连接；原问题已保留。');
       if (/^result_append_(source_changed|execution_failed|unavailable)$/.test(error.code || '')) return runFailureText(error.code);
       if (error.code === 'study_stated_variable_unrecorded') return runFailureText(error.code);
+      // A report-only rewrite reuses the sealed analysis; when that is no
+      // longer possible, say so plainly instead of naming the refusal code.
+      if (error.code === 'WRITER_ONLY_STUDY_CHANGED') return tr('The study setup changed after this analysis, so its report cannot be rewritten alone. Run the analysis again for the current setup.', '这次分析之后研究设置已经改变，不能只重写它的报告；请按当前设置重新运行分析。');
+      if (/^WRITER_ONLY_(REGISTERED_INPUT|SOURCE|CURRENT_REVISION)_CHANGED$|^WRITER_ONLY_(COMPLETED_ANALYSIS_REQUIRED|PLAN_RESULTS_INCOMPLETE|REPORT_PROJECTION_REFRESH_REQUIRED)$/.test(error.code || '')) return tr('This run’s saved results no longer support rewriting the report alone. Its results stay as they are; run the analysis again to write a new draft.', '这次运行保存的结果已不支持只重写报告。已有结果保持不变；如需新稿，请重新运行分析。');
       if (error.code === 'job_interrupted_by_server_restart') return tr('The server restarted before this task finished. Review its saved state before continuing.', '服务器在任务完成前重启了，请核对保存的状态后再继续。');
       if (error.code === 'pi_followup_queue_full') return tr('Up to four follow-ups can wait. Remove one or wait for the current reply.', '最多排队四条消息，请移除一条或等待当前回复。');
       if (error.code === 'pi_followup_action_requires_idle' || error.code === 'pi_followup_plain_message_required') return tr('Queue a question or comment here. Send approvals, action requests, and source changes after the reply finishes.', '这里可排队提问或补充说明；请在当前回复结束后发送批准、执行请求或数据源变更。');
