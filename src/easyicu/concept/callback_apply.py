@@ -2717,7 +2717,10 @@ def _apply_callback(
     if match:
         from ..utils.callback_utils import eicu_rate_kg_callback
         
-        ml_to_mcg = float(match.group(1))
+        # ``NA`` (2026-11-03 audit round 2, V2): ml/hr rows have no recorded
+        # concentration, so they give no dose and stay exposure evidence.
+        _ml_arg = match.group(1).strip()
+        ml_to_mcg = float("nan") if _ml_arg.upper() == "NA" else float(_ml_arg)
         callback_fn = eicu_rate_kg_callback(ml_to_mcg)
         
         # Get necessary variables

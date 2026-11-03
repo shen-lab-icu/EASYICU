@@ -3780,8 +3780,14 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         if _mg.any():
             _unit_arr[_mg] = np.array(['mcg' + u[2:] for u in _unit_arr[_mg]])
 
-        # Step 3: ml/ → mcg/ (×ml_to_mcg)
+        # Step 3: ml/ → mcg/ (×ml_to_mcg).  A NaN factor means the volume
+        # rate has no known concentration: no dose, exposure only (audit
+        # round 2, V2: measured eICU concentrations differ by hospital).
         _ml = _unit_s.str.startswith('ml/').values & ~_invalid.values
+        if np.isnan(ml_to_mcg):
+            _val[_ml] = np.nan
+            _invalid = _invalid | pd.Series(_ml, index=_invalid.index)
+            _ml = np.zeros_like(_ml)
         _val[_ml] *= ml_to_mcg
         if _ml.any():
             _unit_arr[_ml] = np.array(['mcg' + u[2:] for u in _unit_arr[_ml]])
