@@ -781,6 +781,25 @@ def _normalize_eicu_tidal_volume_frame(
     return out
 
 
+
+def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
+    """Drop rows whose status a source excludes (``excluded_statuses``).
+
+    Audit round 2 (V8, F2): MetaVision ``Rewritten`` rows are superseded
+    orders.  The duration sources already dropped them, but the rate and
+    volume sources kept them, so rates disagreed with durations and MIMIC-III
+    total intake was 38% too high.
+    """
+
+    params = getattr(source, "params", None) or {}
+    excluded = params.get("excluded_statuses")
+    status_var = str(params.get("status_var", "statusdescription"))
+    if not excluded or frame is None or status_var not in frame.columns:
+        return frame
+    excluded_lower = {str(value).strip().lower() for value in excluded}
+    status = frame[status_var].astype("string").str.strip().str.lower()
+    return frame.loc[~status.isin(excluded_lower).fillna(False)]
+
 def _apply_callback(
     frame: pd.DataFrame,
     source: ConceptSource,
@@ -2437,6 +2456,7 @@ def _apply_callback(
     # Handle mimic_rate_mv callback (for infusion rates)
     if expr.strip() == "mimic_rate_mv":
         from ..utils.callback_utils import mimic_rate_mv
+        frame = _drop_excluded_statuses(frame, source)
         # Only the PRIMARY ICU-stay identifier aligns an infusion with its
         # admission clock.  MIMIC-III inputevents_mv also carries row_id,
         # subject_id, hadm_id, itemid, cgid, orderid and linkorderid; icustays
@@ -3694,6 +3714,7 @@ def _apply_callback(
         )
 
         params = source.params or {}
+        frame = _drop_excluded_statuses(frame, source)
         end_col = params.get("end_var")
         if not end_col:
             end_col = "endtime" if "endtime" in frame.columns else "stop"
