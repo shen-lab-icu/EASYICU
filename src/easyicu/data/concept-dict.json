@@ -3205,11 +3205,19 @@
    "aumc": [
     {
      "ids": [
-      6655,
-      20926
+      6655
      ],
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      20926
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "_comment": "2026-11-03 audit round 2 (H3): 20926 is the high-frequency transducer channel; its values <= 0 (5.6%) are artefacts and are dropped. 6655 (manual) is unchanged."
     }
    ],
    "eicu": [
@@ -3292,7 +3300,9 @@
     {
      "ids": 2018,
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "callback": "transform_fun(na_above(30))",
+     "_comment": "2026-11-03 audit round 2 (H1): 2018 is already an hourly value, so a median cannot smooth arterial or flush-pressure contamination; hours above 30 mmHg (15,663 hours, 3,924 cases at 30-50) are dropped."
     }
    ]
   }
@@ -3316,7 +3326,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel."
+     "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
+     "callback": "transform_fun(na_below(1))"
     }
    ],
    "eicu": [
@@ -8912,7 +8923,8 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "source_channel": "invasive",
-     "_comment": "2026-11-03 extraction audit 2: invasive channel: 6642 'ABP gemiddeld', 8843 'ABP gemiddeld II' (aumc_item_dict, mmHg). 2026-07-02 source-dictionary audit: added non-invasive mean blood pressure channel. | 2026-07-17 official-code audit (amsterdamumcdb/sql/common/legacy/mean_abp.sql uses 6642/6679/8843): ADDED 8843 'ABP gemiddeld II' (second arterial line). MAP feeds SOFA-cardio and the M4 state; omitting it dropped MAP for patients with a 2nd/femoral art line."
+     "_comment": "2026-11-03 extraction audit 2: invasive channel: 6642 'ABP gemiddeld', 8843 'ABP gemiddeld II' (aumc_item_dict, mmHg). 2026-07-02 source-dictionary audit: added non-invasive mean blood pressure channel. | 2026-07-17 official-code audit (amsterdamumcdb/sql/common/legacy/mean_abp.sql uses 6642/6679/8843): ADDED 8843 'ABP gemiddeld II' (second arterial line). MAP feeds SOFA-cardio and the M4 state; omitting it dropped MAP for patients with a 2nd/femoral art line. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
+     "callback": "transform_fun(na_below(1))"
     },
     {
      "ids": [
@@ -8921,7 +8933,8 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "source_channel": "nibp",
-     "_comment": "2026-11-03 extraction audit 2: cuff channel: 6679 'Niet invasieve bloeddruk gemiddeld' (aumc_item_dict, mmHg)."
+     "_comment": "2026-11-03 extraction audit 2: cuff channel: 6679 'Niet invasieve bloeddruk gemiddeld' (aumc_item_dict, mmHg). 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
+     "callback": "transform_fun(na_below(1))"
     }
    ],
    "eicu": [
@@ -14982,7 +14995,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel."
+     "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
+     "callback": "transform_fun(na_below(1))"
     }
    ],
    "eicu": [
@@ -25959,7 +25973,9 @@
       8843
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "_comment": "2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped."
     }
    ],
    "eicu": [
@@ -26088,7 +26104,9 @@
       6679
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "_comment": "2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped."
     }
    ],
    "eicu": [
