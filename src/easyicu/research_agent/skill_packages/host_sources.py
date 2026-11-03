@@ -9,6 +9,7 @@ Excerpts are source evidence, not standalone executable skill scripts.
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 from pathlib import Path
 import textwrap
@@ -163,6 +164,25 @@ _ESTIMATOR_ROOTS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+# Parsed trees by the exact bytes they parse.  A projection still reads its
+# own byte snapshot; equal bytes give an equal tree, which no reader mutates.
+# The research-workflow catalog projects eleven packages per request and
+# parsed the same modules for each (2.5 s per Skills page load, 11-03).
+_PARSED: dict[tuple[str, str], ast.Module] = {}
+_PARSED_LIMIT = 1024
+
+
+def _parsed(path: Path, content: bytes) -> ast.Module:
+    key = (str(path), hashlib.sha256(content).hexdigest())
+    tree = _PARSED.get(key)
+    if tree is None:
+        tree = ast.parse(content.decode("utf-8"), filename=str(path))
+        if len(_PARSED) >= _PARSED_LIMIT:
+            _PARSED.clear()
+        _PARSED[key] = tree
+    return tree
+
+
 class _Sources:
     """One projection's consistent byte snapshots, discarded after the read."""
 
@@ -180,7 +200,7 @@ class _Sources:
                 path = self.root.joinpath(*parts[1:], "__init__.py")
             try:
                 content = path.read_bytes()
-                tree = ast.parse(content.decode("utf-8"), filename=str(path))
+                tree = _parsed(path, content)
             except (OSError, UnicodeError, SyntaxError) as exc:
                 raise MethodSkillSourceError(f"unreadable source module: {module}") from exc
             self.modules[module] = (path, content, tree)
@@ -199,7 +219,12 @@ class _Sources:
 
 def _registered_render_sources(sources: _Sources) -> tuple[SourceDefinition, ...]:
     """Resolve the actual StepExecutor render lambdas using only their syntax."""
-    tree = sources.read(_SELECTION)[2]
+    return _render_sources_in(sources.read(_SELECTION)[2])
+
+
+@functools.lru_cache(maxsize=8)
+def _render_sources_in(tree: ast.Module) -> tuple[SourceDefinition, ...]:
+    # Keyed by the shared parsed tree (``_parsed``), which no reader mutates.
     imports: dict[str, SourceDefinition] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -263,6 +288,12 @@ def _source_roots(specs: Sequence[SkillSourceSpec], sources: _Sources) -> dict[s
     return result
 
 
+@functools.lru_cache(maxsize=8192)
+def _names_in(node: ast.AST) -> frozenset[str]:
+    """The names a definition reads, by the shared parsed node."""
+    return frozenset(child.id for child in ast.walk(node) if isinstance(child, ast.Name))
+
+
 def method_skill_source_map(
     specs: Sequence[SkillSourceSpec], *, skill_ids: Sequence[str] | None = None,
     package_root: Path = _PACKAGE_ROOT,
@@ -286,7 +317,7 @@ def method_skill_source_map(
             node = sources.definition(source)
             selected[source] = None
             local = {child.name for child in sources.read(source.module)[2].body if isinstance(child, _DEFINITIONS)}
-            names = {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
+            names = _names_in(node)
             pending.extend(SourceDefinition(source.module, name) for name in sorted(names & local))
         module_order = {module: index for index, module in enumerate(dict.fromkeys(source.module for source in selected))}
         result[skill_id] = tuple(sorted(selected, key=lambda source: (
