@@ -388,7 +388,7 @@ def save_association_coverage_audit(
                 assessment = assess_robustness_effect_comparability(frame)
                 metadata["comparability_message"] = assessment.message
                 metadata["missing_identity_columns"] = list(assessment.missing_columns)
-            add_panel_label(ax, letter, x=-0.12, y=1.04, fontsize=8.0)
+            add_panel_label(ax, letter, x=-0.12, y=1.04)
             contracts.append({
                 "panel_id": panel_id, "title": title, "role": role, "article_role": role,
                 "chart_type": chart, "claim": "Registered sensitivity specification status.",

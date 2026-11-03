@@ -14,8 +14,13 @@ from sklearn.metrics import precision_recall_curve, roc_curve
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    curve_kwargs,
+    draw_interval_rows,
+    label_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
+    style_value_axis,
 )
 from ...contracts.figure_plan import STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX
 from ...schema import AnalysisStep
@@ -275,33 +280,24 @@ def _draw_repeated_split_variability(
     """Mean and SD of each metric over the repeated patient-level splits."""
 
     positions = np.arange(len(labels))
-    ax.errorbar(
-        means,
-        positions,
-        xerr=sds,
-        fmt="o",
-        color=palette["blue"],
-        capsize=2.5,
+    draw_interval_rows(
+        ax, means, means - sds, means + sds, positions, palette=palette, color="blue",
     )
     ax.set_yticks(positions, labels)
     ax.invert_yaxis()
     ax.set_xlim(0.0, 1.0)
+    style_category_axis(ax)
+    style_value_axis(ax, grid=True, palette=palette)
     ax.set_xlabel("Mean performance (error bars: SD)")
     ax.set_title(
         f"Repeated patient-level split variability (n={repeated_split_n})",
         loc="left",
         pad=12,
     )
-    for position, mean, sd in zip(positions, means, sds, strict=True):
-        ax.text(
-            min(0.96, mean + sd + 0.035),
-            position,
-            f"{mean:.3f} ± {sd:.3f}",
-            va="center",
-            fontsize=6.2,
-            color=palette["neutral"],
-        )
-    add_panel_label(ax, panel_label, x=label_x, y=1.04, fontsize=8.0)
+    label_rows(ax, [
+        f"{mean:.3f} ± {sd:.3f}" for mean, sd in zip(means, sds, strict=True)
+    ], positions, palette=palette)
+    add_panel_label(ax, panel_label, x=label_x, y=1.04)
 
 
 def run_prediction_figure(
@@ -434,29 +430,35 @@ def run_prediction_figure(
 
     fpr, tpr, _ = roc_curve(outcomes.to_numpy(dtype=int), probabilities.to_numpy())
     ax = ax_roc
-    ax.plot(fpr, tpr, color=palette["blue"], linewidth=1.6)
-    ax.plot([0, 1], [0, 1], "--", color="#777777", linewidth=0.8)
+    ax.plot(fpr, tpr, **curve_kwargs(palette, "blue"))
+    ax.plot([0, 1], [0, 1], color=palette["ink_3"], linestyle=(0, (3, 2)), linewidth=0.6)
     ax.set(xlabel="False-positive rate", ylabel="True-positive rate")
-    ax.set_title(
-        f"Discrimination (AUROC {float(performance.iloc[0]['auroc']):.3f})",
-        loc="left",
-        pad=12,
+    ax.set_box_aspect(1.0)
+    ax.set_title("Discrimination", loc="left", pad=12)
+    ax.text(
+        0.97, 0.03, f"AUROC {float(performance.iloc[0]['auroc']):.3f}",
+        transform=ax.transAxes, ha="right", va="bottom", fontsize=6.2,
+        color=palette["ink_2"],
     )
-    add_panel_label(ax, "b", x=-0.18, y=1.04, fontsize=8.0)
+    add_panel_label(ax, "b", x=-0.18, y=1.04)
 
     precision, recall, _ = precision_recall_curve(
         outcomes.to_numpy(dtype=int), probabilities.to_numpy()
     )
     ax = ax_pr
-    ax.plot(recall, precision, color=palette["orange"], linewidth=1.6)
-    ax.axhline(float(outcomes.mean()), linestyle="--", color="#777777", linewidth=0.8)
-    ax.set(xlabel="Recall", ylabel="Precision")
-    ax.set_title(
-        f"Precision-recall (AP {float(performance.iloc[0]['average_precision']):.3f})",
-        loc="left",
-        pad=12,
+    ax.plot(recall, precision, **curve_kwargs(palette, "orange"))
+    ax.axhline(
+        float(outcomes.mean()), linestyle=(0, (3, 2)), color=palette["ink_3"], linewidth=0.6,
     )
-    add_panel_label(ax, "c", x=-0.18, y=1.04, fontsize=8.0)
+    ax.set(xlabel="Recall", ylabel="Precision")
+    ax.set_box_aspect(1.0)
+    ax.set_title("Precision-recall", loc="left", pad=12)
+    ax.text(
+        0.97, 0.97, f"AP {float(performance.iloc[0]['average_precision']):.3f}",
+        transform=ax.transAxes, ha="right", va="top", fontsize=6.2,
+        color=palette["ink_2"],
+    )
+    add_panel_label(ax, "c", x=-0.18, y=1.04)
 
     bins = calibration.loc[calibration["row_role"].astype(str).eq("calibration_bin")]
     if bins.empty:
@@ -474,11 +476,18 @@ def run_prediction_figure(
     ax.plot(
         [0, calibration_limit],
         [0, calibration_limit],
-        "--",
-        color="#777777",
-        linewidth=0.8,
+        color=palette["ink_3"],
+        linestyle=(0, (3, 2)),
+        linewidth=0.6,
     )
-    ax.plot(predicted, observed, "o-", color=palette["blue"], linewidth=1.3)
+    # Each bin is a point at its mean prediction and observed rate; bins are
+    # not joined, because no rate exists between two bins. The source carries
+    # no interval for an observed rate, so none is drawn.
+    ax.plot(
+        predicted, observed, linestyle="none", marker="s", markersize=4.0,
+        markeredgewidth=0.0, color=palette["blue"], clip_on=False, zorder=3,
+    )
+    ax.set_aspect("equal", adjustable="box")
     ax.set(
         xlim=(0, calibration_limit),
         ylim=(0, calibration_limit),
@@ -495,12 +504,17 @@ def run_prediction_figure(
     brier_score = float(calibration_summary.iloc[0]["brier_score"])
     if not np.isfinite((calibration_intercept, calibration_slope, brier_score)).all():
         raise RuntimeError("calibration summary metrics are not finite")
-    ax.set_title(
-        "Calibration in validation data\n"
-        f"Intercept {calibration_intercept:.2f}; slope {calibration_slope:.2f}; "
+    ax.set_title("Calibration in validation data", loc="left", pad=12)
+    ax.text(
+        0.97,
+        0.03,
+        f"Intercept {calibration_intercept:.2f}; slope {calibration_slope:.2f}\n"
         f"Brier {brier_score:.3f}",
-        loc="left",
-        pad=12,
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=6.2,
+        color=palette["ink_2"],
     )
     validation_n = int(performance.iloc[0]["validation_n"])
     development_n = int(performance.iloc[0]["development_n"])
@@ -515,7 +529,7 @@ def run_prediction_figure(
         fontsize=6.2,
         color=palette["neutral"],
     )
-    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
+    add_panel_label(ax, "a", x=-0.08, y=1.04)
     if ax_variability is not None:
         _draw_repeated_split_variability(
             ax_variability,
@@ -610,7 +624,7 @@ def run_prediction_figure(
             color=palette["neutral"],
         )
         ax_design.set_title("Evaluation design", loc="left", pad=12)
-        add_panel_label(ax_design, "a", x=-0.06, y=1.04, fontsize=8.0)
+        add_panel_label(ax_design, "a", x=-0.06, y=1.04)
         _draw_repeated_split_variability(
             ax,
             labels=metric_labels,
@@ -628,23 +642,21 @@ def run_prediction_figure(
     ax.plot(
         decision_curve["threshold"],
         decision_curve["net_benefit_model"],
-        color=palette["blue"],
-        linewidth=1.5,
+        **curve_kwargs(palette, "blue"),
         label="Model",
     )
     ax.plot(
         decision_curve["threshold"],
         decision_curve["net_benefit_all"],
-        color=palette["orange"],
-        linewidth=1.0,
+        **curve_kwargs(palette, "orange"),
         label="Treat all",
     )
     ax.plot(
         decision_curve["threshold"],
         decision_curve["net_benefit_none"],
-        color="#777777",
-        linestyle="--",
-        linewidth=0.9,
+        color=palette["ink_3"],
+        linestyle=(0, (3, 2)),
+        linewidth=0.6,
         label="Treat none",
     )
     ax.set_xlim(0.01, 0.50)
@@ -652,7 +664,7 @@ def run_prediction_figure(
     ax.set_ylabel("Net benefit")
     ax.set_title("Decision-curve analysis", loc="left", pad=12)
     ax.legend(fontsize=6.0, frameon=False)
-    add_panel_label(ax, "a", x=-0.055, y=1.04, fontsize=8.0)
+    add_panel_label(ax, "a", x=-0.055, y=1.04)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
     panel_specs = (

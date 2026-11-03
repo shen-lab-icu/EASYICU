@@ -24,6 +24,7 @@ from ..planning.method_vocabulary import MISSINGNESS_SOURCE_AVAILABILITY_AUDIT
 from .publication import (
     add_panel_label,
     apply_publication_style,
+    legend_below,
     make_figure_contract,
     save_publication_figure,
 )
@@ -390,7 +391,8 @@ def render_missingness_source_bundle(
         left=plotted_available,
         color=palette["red_soft"],
         edgecolor=palette["red"],
-        linewidth=0.5,
+        # A zero-width segment draws nothing: no edge sliver for 0 rows.
+        linewidth=[0.5 if width > 0 else 0.0 for width in invalid_before_origin],
         height=0.62,
         label="Invalid before time origin",
     )
@@ -417,7 +419,7 @@ def render_missingness_source_bundle(
         color=palette["band"],
         edgecolor=palette["neutral"],
         hatch="////",
-        linewidth=0.6,
+        linewidth=[0.6 if width > 0 else 0.0 for width in plotted_no_source],
         height=0.62,
         label="No source",
     )
@@ -428,7 +430,8 @@ def render_missingness_source_bundle(
     ax.set_xlabel("Analysis cohort (%)")
     ax.set_title("Availability of declared audit inputs", loc="left")
     ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.5)
-    ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=2)
+    # The key sits under the axis label, never on the panel title.
+    legend_below(ax, ncol=3)
     for y, (
         missing_pct,
         missing_n,

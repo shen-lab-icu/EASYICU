@@ -27,8 +27,10 @@ from ...figures.display_labels import figure_language_labels, scoped_label_looku
 from ...figures.publication import (
     PALETTE_CLINICAL,
     apply_publication_style,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
 )
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
@@ -583,16 +585,10 @@ def run_descriptive_result_figure(
         source.to_csv(source_path, index=False)
 
         positions = list(range(len(frame)))
-        ax.errorbar(
-            median,
-            positions,
-            xerr=[median - q25, q75 - median],
-            fmt="o",
-            color=PALETTE_CLINICAL["blue"],
-            ecolor=PALETTE_CLINICAL["neutral"],
-            capsize=3,
-            markersize=5,
+        draw_interval_rows(
+            ax, median, q25, q75, positions, palette=PALETTE_CLINICAL, color="blue",
         )
+        style_category_axis(ax)
         ax.set_yticks(positions)
         ax.set_yticklabels(
             [

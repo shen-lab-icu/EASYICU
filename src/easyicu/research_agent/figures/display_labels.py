@@ -409,11 +409,50 @@ def display_label(
     return _figure_text(" ".join(rendered)) or "Value"
 
 
+#: Reader names for the effect-scale tokens producers write, abbreviations
+#: included, so an axis never reads "Heart rate" for a hazard ratio ``hr``.
+_EFFECT_MEASURE_NAMES = {
+    "or": "Odds ratio",
+    "odds_ratio": "Odds ratio",
+    "common_odds_ratio": "Common odds ratio",
+    "hr": "Hazard ratio",
+    "hazard_ratio": "Hazard ratio",
+    "rr": "Risk ratio",
+    "risk_ratio": "Risk ratio",
+    "irr": "Incidence rate ratio",
+    "incidence_rate_ratio": "Incidence rate ratio",
+    "rate_ratio": "Rate ratio",
+    "rd": "Risk difference",
+    "risk_difference": "Risk difference",
+    "md": "Mean difference",
+    "mean_difference": "Mean difference",
+    "log_odds": "Log odds",
+    "coefficient": "Coefficient",
+}
+
+
+def effect_measure_label(scale: Any, display_labels: Optional[Mapping[str, str]] = None) -> str:
+    """Name an effect scale for an axis: ``odds_ratio_per_1_sd`` -> ``Odds ratio per 1 SD``."""
+
+    declared = label_lookup(scale, display_labels)
+    if declared is not None:
+        return declared
+    token = str(scale or "").strip()
+    head, separator, unit = token.lower().partition("_per_")
+    name = _EFFECT_MEASURE_NAMES.get(token.lower()) or _EFFECT_MEASURE_NAMES.get(head)
+    if name is None:
+        return display_label(token)
+    if separator and token.lower() not in _EFFECT_MEASURE_NAMES:
+        return f"{name} per {unit.replace('_', ' ')}"
+    return name
+
+
 __all__ = [
     "binary_contrast_label",
     "binary_level",
     "binary_scope_label",
     "display_label",
+    "effect_measure_label",
     "figure_language_labels",
     "grouped_axis_labels",
     "label_lookup",

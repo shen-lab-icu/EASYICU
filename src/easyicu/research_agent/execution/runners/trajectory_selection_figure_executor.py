@@ -18,6 +18,7 @@ import pandas as pd
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    curve_kwargs,
     make_figure_contract,
     save_publication_figure,
 )
@@ -402,7 +403,7 @@ def _render_characterization_figure(
     # Letters sit left of the left-aligned titles, as in the selection figure;
     # at the title's own position they overlapped it.
     for index, axis in enumerate((ax_profile, ax_structure, ax_stability)):
-        add_panel_label(axis, "abc"[index], x=-0.16, y=1.05, fontsize=8.0)
+        add_panel_label(axis, "abc"[index], x=-0.16, y=1.05)
     fig.tight_layout()
 
     solution_claim = (
@@ -618,9 +619,8 @@ def run_trajectory_selection_figure(
     ax_bic.plot(
         selection["n_clusters"],
         selection["bic"],
-        color=palette["blue"],
+        **curve_kwargs(palette, "blue"),
         marker="o",
-        linewidth=1.4,
         markersize=4.0,
         label="BIC (selection)",
     )
@@ -628,9 +628,8 @@ def run_trajectory_selection_figure(
         ax_bic.plot(
             selection["n_clusters"],
             selection["aic"],
-            color=palette["orange"],
+            **{**curve_kwargs(palette, "orange"), "linewidth": 0.9},
             marker="s",
-            linewidth=1.1,
             markersize=3.2,
             label="AIC (diagnostic)",
         )
@@ -698,8 +697,8 @@ def run_trajectory_selection_figure(
             )
     colourbar = fig.colorbar(heatmap, ax=ax_availability, fraction=0.045, pad=0.04)
     colourbar.set_label("Available (%)")
-    add_panel_label(ax_bic, "a", x=-0.16, y=1.05, fontsize=8.0)
-    add_panel_label(ax_availability, "b", x=-0.15, y=1.05, fontsize=8.0)
+    add_panel_label(ax_bic, "a", x=-0.16, y=1.05)
+    add_panel_label(ax_availability, "b", x=-0.15, y=1.05)
     status_text = (
         "Fail closed: the minimum occurred at the upper candidate boundary; no trajectory-class solution is authorised."
         if failed_closed

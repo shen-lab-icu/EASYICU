@@ -74,10 +74,14 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from ...figures.display_labels import effect_measure_label
 from ...figures.publication import (
     apply_publication_style,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
+    style_value_axis,
 )
 from ...contracts.figure_plan import (
     ROBUSTNESS_COMPLETE_CASE_INPUT,
@@ -1124,7 +1128,12 @@ def run_robustness_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    height_mm = max(40.0, 16.0 + 7.4 * len(rows))
+    # A forest gets a fixed gutter plus a compact pitch per row; the table
+    # variant sizes itself from its wrapped text.
+    height_mm = (
+        max(40.0, 16.0 + 7.4 * len(rows)) if chart_type == "specification_grid"
+        else max(30.0, 24.0 + 6.0 * len(rows))
+    )
     fig, ax = plt.subplots(figsize=((180 if chart_type == "specification_grid" else 120) / 25.4, height_mm / 25.4))
 
     drawn = [index for index, ok in enumerate(rows["__drawable"]) if ok]
@@ -1138,35 +1147,16 @@ def run_robustness_figure(
         estimates = [rows["__estimate"].iloc[i] for i in drawn]
         lows = [rows["__low"].iloc[i] for i in drawn]
         highs = [rows["__high"].iloc[i] for i in drawn]
-        ax.errorbar(
-            estimates,
-            drawn,
-            xerr=[
-                [estimate - low for estimate, low in zip(estimates, lows)],
-                [high - estimate for estimate, high in zip(estimates, highs)],
-            ],
-            fmt="o",
-            color=palette["blue"],
-            ecolor=palette["neutral"],
-            elinewidth=1.0,
-            capsize=2.0,
-            markersize=4.2,
-        )
         null_value = scale_contract.null_value
+        draw_interval_rows(
+            ax, estimates, lows, highs, drawn, palette=palette, color="blue", null=null_value,
+        )
         if scale_contract.multiplicative:
             ax.set_xscale("log")
             from matplotlib.ticker import FuncFormatter, MaxNLocator, NullLocator
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, min_n_ticks=3))
             ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _pos: f"{value:g}"))
             ax.xaxis.set_minor_locator(NullLocator())
-        if null_value is not None:
-            ax.axvline(
-                null_value,
-                color=palette["neutral"],
-                linewidth=0.8,
-                linestyle="--",
-                zorder=0,
-            )
         # The anchor the specifications are compared against. Drawn whenever the
         # plan bound it, because binding it is what asks for it to be shown.
         if anchor_value is not None:
@@ -1183,9 +1173,10 @@ def run_robustness_figure(
             fig.legend(loc="upper left", bbox_to_anchor=(0.42, 1), frameon=False, fontsize=6.1)
         ax.set_yticks(positions)
         ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
-        ax.invert_yaxis()
-        ax.set_xlabel(_reader_label(effect_scale))
-        ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
+        ax.set_ylim(len(positions) - 0.5, -0.5)
+        ax.set_xlabel(f"{effect_measure_label(effect_scale)} (95% CI)")
+        style_category_axis(ax)
+        style_value_axis(ax, grid=True, palette=palette)
         for index, ok in enumerate(rows["__drawable"]):
             if ok:
                 continue
@@ -1246,9 +1237,13 @@ def run_robustness_figure(
             pad=4,
             fontsize=6.4,
         )
-    fig.subplots_adjust(left=0.02 if chart_type == "specification_grid" else 0.42, right=0.98,
-                        bottom=0.08 if chart_type == "specification_grid" else 0.22,
-                        top=0.82 if chart_type == "sensitivity_forest" and anchor_bound else 0.9)
+    if chart_type == "specification_grid":
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.08, top=0.9)
+    else:
+        figure_mm = fig.get_figheight() * 25.4
+        top_mm = 10.0 if chart_type == "sensitivity_forest" and anchor_bound else 6.0
+        fig.subplots_adjust(left=0.42, right=0.98, bottom=12.0 / figure_mm,
+                            top=1.0 - top_mm / figure_mm)
 
     contract = make_figure_contract(
         figure_id=figure_product,

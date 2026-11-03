@@ -133,8 +133,11 @@ def _render(
     from ...figures.publication import (
         add_panel_label,
         apply_publication_style,
+        curve_kwargs,
+        draw_interval_rows,
         make_figure_contract,
         save_publication_figure,
+        style_category_axis,
     )
 
     palette = apply_publication_style()
@@ -158,35 +161,55 @@ def _render(
         raise ValueError("target trial protocol table does not lead with eligibility")
     end = t0 + grace
     ax_clock.set_xlim(-0.5, end + max(2.0, 0.35 * end))
-    ax_clock.set_ylim(-0.6, 2.6)
-    ax_clock.axvspan(t0, end, color=palette["orange_soft"], zorder=0)
+    bottom, top = -1.1, 3.1
+    ax_clock.set_ylim(bottom, top)
+    # The grace band and the time markers stop above the footer strip, so the
+    # counts sentence never crosses them.
+    strip = (-0.2 - bottom) / (top - bottom)
+    ax_clock.axvspan(
+        t0, end, ymin=strip, ymax=(2.4 - bottom) / (top - bottom),
+        color=palette["orange_soft"], zorder=0,
+    )
+    markers: dict[float, list[str]] = {}
     for x, text in ((0.0, "ICU admission"), (t0, "Time zero"), (end, "End of grace")):
-        ax_clock.axvline(x, color=palette["baseline"], linewidth=0.8)
-        ax_clock.text(x, 2.45, text, ha="center", va="bottom", fontsize=5.8)
+        markers.setdefault(float(x), []).append(text)
+    for index, (x, texts) in enumerate(markers.items()):
+        # Names alternate between two rows and start just right of their own
+        # line, which stops at its name: no name sits on a marker.
+        level = 2.75 if index % 2 == 0 else 2.4
+        ax_clock.axvline(
+            x, ymin=strip, ymax=(level - bottom) / (top - bottom),
+            color=palette["baseline"], linewidth=0.8,
+        )
+        ax_clock.annotate(
+            " = ".join(texts), xy=(x, level), xytext=(2.0, 0.0),
+            textcoords="offset points", ha="left", va="bottom", fontsize=5.8,
+        )
     for row, arm in ((1.6, "initiate"), (0.6, "defer")):
         ax_clock.plot(
             [t0, end + 0.3 * end], [row, row], color=colors[arm], linewidth=2.0
         )
-        ax_clock.text(
-            t0,
-            row + 0.18,
+        ax_clock.annotate(
             textwrap.shorten(labels[arm], width=34, placeholder="..."),
-            fontsize=5.8,
-            color=colors[arm],
+            xy=(t0, row + 0.18), xytext=(3.0, 0.0), textcoords="offset points",
+            fontsize=5.8, color=colors[arm],
         )
     first, last = int(stages["count"].iloc[0]), int(stages["count"].iloc[-1])
     ax_clock.text(
         0.0,
-        -0.45,
-        f"{first:,} stays in the source; {last:,} eligible at time zero; "
-        f"follow-up to day {sealed.endpoint_horizon_days}",
+        -1.0,
+        textwrap.fill(
+            f"{first:,} stays in the source; {last:,} eligible at time zero; "
+            f"follow-up to day {sealed.endpoint_horizon_days}",
+            width=96,
+        ),
         fontsize=5.6,
         va="bottom",
     )
     ax_clock.set_yticks([])
     ax_clock.set_xlabel("Hours after ICU admission")
     ax_clock.set_title("Target trial protocol", loc="left")
-    add_panel_label(ax_clock, "a", x=-0.08, fontsize=8.0)
+    add_panel_label(ax_clock, "a", x=-0.08)
 
     # (b) Weighted cumulative risk under each strategy.
     if set(risk_curves["arm"]) != {"initiate", "defer"}:
@@ -199,8 +222,7 @@ def _render(
             rows["hours_from_time_zero"] / 24.0,
             100.0 * rows["cumulative_risk"],
             where="post",
-            color=colors[arm],
-            linewidth=1.4,
+            **curve_kwargs(palette, colors[arm]),
             label=textwrap.fill(labels[arm], width=30),
         )
     difference = _effect_row(effects, "risk_difference", "stabilized")
@@ -221,7 +243,7 @@ def _render(
     ax_risk.set_ylabel("Cumulative risk (%)")
     ax_risk.set_title("Weighted risk by strategy", loc="left")
     ax_risk.legend(loc="lower right", fontsize=5.6)
-    add_panel_label(ax_risk, "b", x=-0.12, fontsize=8.0)
+    add_panel_label(ax_risk, "b", x=-0.12)
 
     # (c) Balance of each confounder: |SMD| without and with the weights.
     flag = float(TARGET_TRIAL_STOP_THRESHOLDS["balance_smd_flag"])
@@ -242,17 +264,17 @@ def _render(
         ax_love.scatter(rows["smd_weighted"].abs(), y, color=colors[arm], s=12)
     ax_love.axvline(flag, color=palette["neutral"], linestyle="--", linewidth=0.8)
     ax_love.set_yticks(range(len(terms)))
+    # Long confounder names wrap; they are never cut short.
     ax_love.set_yticklabels(
-        [
-            textwrap.shorten(term, width=28, placeholder="...")
-            for term in reversed(terms)
-        ],
+        [textwrap.fill(term, width=30) for term in reversed(terms)],
         fontsize=5.4,
+        linespacing=1.0,
     )
+    style_category_axis(ax_love)
     ax_love.set_xlim(left=0.0)
     ax_love.set_xlabel("Absolute standardized mean difference")
     ax_love.set_title("Balance of confounders", loc="left")
-    add_panel_label(ax_love, "c", x=-0.42, fontsize=8.0)
+    add_panel_label(ax_love, "c", x=-0.42)
 
     # (d) The contrast under each prespecified weighting.
     for row, (weighting, name) in enumerate(reversed(_WEIGHTINGS)):
@@ -260,21 +282,24 @@ def _render(
         point = 100.0 * float(values["estimate"])
         ci_low = coerce_optional_finite_float(values.get("ci_low"))
         ci_high = coerce_optional_finite_float(values.get("ci_high"))
+        color = "red" if weighting == "stabilized" else "baseline"
         if ci_low is not None and ci_high is not None:
-            ax_robust.plot(
-                [100.0 * ci_low, 100.0 * ci_high],
-                [row, row],
-                color=palette["baseline"],
-                linewidth=1.0,
+            draw_interval_rows(
+                ax_robust, [point], [100.0 * ci_low], [100.0 * ci_high], [row],
+                palette=palette, color=color, null=0.0 if row == 0 else None,
             )
-        ax_robust.scatter(
-            [point],
-            [row],
-            color=palette["red"] if weighting == "stabilized" else palette["baseline"],
-            s=16,
-            zorder=3,
-        )
-    ax_robust.axvline(0.0, color=palette["neutral"], linewidth=0.8)
+        else:
+            # No interval: the point alone, as the legend states.
+            ax_robust.plot(
+                [point], [row], linestyle="none", marker="s", markersize=4.0,
+                markeredgewidth=0.0, color=palette[color], zorder=3,
+            )
+            if row == 0:
+                ax_robust.axvline(
+                    0.0, color=palette["ink_3"], linewidth=0.6, linestyle=(0, (3, 2)),
+                    zorder=1.5,
+                )
+    style_category_axis(ax_robust)
     ax_robust.set_yticks(range(len(_WEIGHTINGS)))
     ax_robust.set_yticklabels([name for _, name in reversed(_WEIGHTINGS)], fontsize=5.8)
     untruncated = weights.loc[~weights["truncated"].astype(str).str.lower().eq("true")]
@@ -293,7 +318,7 @@ def _render(
     )
     ax_robust.set_xlabel("Risk difference (percentage points)")
     ax_robust.set_title("Weighting sensitivity", loc="left")
-    add_panel_label(ax_robust, "d", x=-0.3, fontsize=8.0)
+    add_panel_label(ax_robust, "d", x=-0.3)
 
     panel_sources = {
         panel.panel_id: list(panel.source_products)

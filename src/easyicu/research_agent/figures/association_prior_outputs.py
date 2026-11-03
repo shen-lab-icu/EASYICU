@@ -363,8 +363,11 @@ def _render_association_publication_bundle_from_prior_outputs(
     from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
+        draw_interval_rows,
         make_figure_contract,
         save_publication_figure,
+        style_category_axis,
+        style_value_axis,
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -438,7 +441,9 @@ def _render_association_publication_bundle_from_prior_outputs(
 
     palette = apply_publication_style()
     if descriptive_rows:
-        fig_height_mm = max(82, 18 * len(labels) + 22, 16 * len(descriptive_rows) + 28)
+        # A fixed gutter plus a compact pitch per row: two rows never float in
+        # a frame sized for six.
+        fig_height_mm = max(46, 8 * max(len(labels), len(descriptive_rows)) + 32)
         fig = plt.figure(
             figsize=(183 / 25.4, fig_height_mm / 25.4),
             constrained_layout=False,
@@ -449,8 +454,8 @@ def _render_association_publication_bundle_from_prior_outputs(
             width_ratios=[1.02, 1.28],
             left=0.18,
             right=0.98,
-            top=0.90,
-            bottom=0.18,
+            top=1.0 - 9.0 / fig_height_mm,
+            bottom=13.0 / fig_height_mm,
             wspace=0.82,
         )
         ax_context = fig.add_subplot(grid[0, 0])
@@ -482,25 +487,9 @@ def _render_association_publication_bundle_from_prior_outputs(
             .to_numpy()
         )
         y_context = list(range(len(context_labels)))
-        ax_context.errorbar(
-            context_x,
-            y_context,
-            xerr=[
-                [
-                    max(0.0, center - lower)
-                    for center, lower in zip(context_x, context_lo)
-                ],
-                [
-                    max(0.0, upper - center)
-                    for center, upper in zip(context_x, context_hi)
-                ],
-            ],
-            fmt="o",
-            color=palette.get("teal", "#42949E"),
-            ecolor=palette.get("teal", "#42949E"),
-            elinewidth=1.0,
-            capsize=2.3,
-            markersize=4.0,
+        draw_interval_rows(
+            ax_context, context_x, context_lo, context_hi, y_context, palette=palette,
+            color="teal", clip_rounding=True,
         )
         max_context = max(
             [float(x) for x in context_hi if math.isfinite(float(x))] or [1.0]
@@ -510,13 +499,9 @@ def _render_association_publication_bundle_from_prior_outputs(
         ax_context.set_yticklabels(context_labels, fontsize=6.8)
         ax_context.set_xlabel("Percent (95% CI)")
         ax_context.set_title(str(descriptive_context["title"]), loc="left", pad=4)
-        ax_context.set_ylim(max(len(context_labels) + 1.8, 4.2), -0.5)
-        ax_context.grid(
-            axis="x",
-            color=palette.get("neutral_light", "#D8D8D8"),
-            linewidth=0.55,
-            alpha=0.8,
-        )
+        ax_context.set_ylim(max(len(context_labels), len(labels)) - 0.5, -0.5)
+        style_category_axis(ax_context)
+        style_value_axis(ax_context, grid=True, palette=palette)
         for row_idx, row in context_df.iterrows():
             event_n = pd.to_numeric(
                 pd.Series([row.get("plot_event_n")]), errors="coerce"
@@ -538,8 +523,9 @@ def _render_association_publication_bundle_from_prior_outputs(
             )
         add_panel_label(ax_context, "A", x=0.0, y=1.08)
     else:
+        fig_height_mm = max(42, 8 * len(labels) + 30)
         fig = plt.figure(
-            figsize=(183 / 25.4, max(72, 18 * len(labels) + 18) / 25.4),
+            figsize=(183 / 25.4, fig_height_mm / 25.4),
             constrained_layout=False,
         )
         grid = fig.add_gridspec(
@@ -548,31 +534,14 @@ def _render_association_publication_bundle_from_prior_outputs(
             width_ratios=[1.45, 0.85],
             left=0.22,
             right=0.98,
-            top=0.90,
-            bottom=0.18,
+            top=1.0 - 9.0 / fig_height_mm,
+            bottom=13.0 / fig_height_mm,
             wspace=0.42,
         )
         ax = fig.add_subplot(grid[0, 0])
         ax_width = fig.add_subplot(grid[0, 1], sharey=ax)
-    ax.errorbar(
-        or_vals,
-        y,
-        xerr=[
-            [max(0.0, center - lower) for center, lower in zip(or_vals, lo)],
-            [max(0.0, upper - center) for center, upper in zip(or_vals, hi)],
-        ],
-        fmt="o",
-        color=palette.get("blue", "#0F4D92"),
-        ecolor=palette.get("blue", "#0F4D92"),
-        elinewidth=1.0,
-        capsize=2.3,
-        markersize=4.0,
-    )
-    ax.axvline(
-        1.0,
-        color=palette.get("neutral", "#8F8F8F"),
-        linewidth=0.9,
-        linestyle="--",
+    draw_interval_rows(
+        ax, or_vals, lo, hi, y, palette=palette, color="blue", null=1.0, clip_rounding=True,
     )
     ax.set_yticks(y)
     ax.set_yticklabels(display_labels, fontsize=6.6)
@@ -593,13 +562,9 @@ def _render_association_publication_bundle_from_prior_outputs(
                 fontsize=6.2,
                 color=palette.get("baseline", "#272727"),
             )
-    ax.invert_yaxis()
-    ax.grid(
-        axis="x",
-        color=palette.get("neutral_light", "#D8D8D8"),
-        linewidth=0.55,
-        alpha=0.8,
-    )
+    ax.set_ylim(len(labels) - 0.5, -0.5)
+    style_category_axis(ax)
+    style_value_axis(ax, grid=True, palette=palette)
     add_panel_label(ax, "B" if descriptive_rows else "A", x=0.0, y=1.08)
 
     if not descriptive_rows:

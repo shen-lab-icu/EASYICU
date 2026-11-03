@@ -21,7 +21,7 @@ import math
 import re
 from pathlib import Path
 import zipfile
-from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Literal, Mapping, NamedTuple, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -888,6 +888,319 @@ def add_panel_label(
     )
 
 
+#: Shared mark geometry for intervals and curves, in points.
+INTERVAL_MARKER_SIZE = 4.0
+INTERVAL_WHISKER_WIDTH = 0.9
+REFERENCE_LINE_WIDTH = 0.6
+CURVE_LINE_WIDTH = 1.2
+VALUE_COLUMN_FONT_SIZE = 6.5
+
+
+class IntervalRows(NamedTuple):
+    """The artists :func:`draw_interval_rows` drew, for tests and legends."""
+
+    container: Any
+    null_line: Any
+
+
+def _palette_colour(palette: Mapping[str, str], key: str | None, default: str) -> str:
+    """A palette key's colour, or ``key`` itself when it is already a colour."""
+
+    if key is None:
+        key = default
+    if key in palette:
+        return palette[key]
+    if key in PALETTE_CLINICAL:
+        return PALETTE_CLINICAL[key]
+    return key
+
+
+def draw_interval_rows(
+    ax: Any,
+    estimates: Sequence[float],
+    lows: Sequence[float],
+    highs: Sequence[float],
+    positions: Sequence[float],
+    *,
+    palette: Mapping[str, str],
+    color: str | None = None,
+    null: float | None = None,
+    log: bool = False,
+    marker: str = "s",
+    orientation: Literal["horizontal", "vertical"] = "horizontal",
+    label: str | None = None,
+    zorder: float = 3.0,
+    clip_rounding: bool = False,
+) -> IntervalRows:
+    """Draw point estimates with their intervals in the house interval style.
+
+    ``horizontal`` rows put the estimate on x at each y ``position`` (a forest
+    plot); ``vertical`` rows put it on y at each x ``position``. The interval
+    always runs from ``lows`` to ``highs``: a square marker in the series
+    colour over an ``ink_2`` whisker without caps. ``null`` adds one dashed
+    ``ink_3`` reference line beneath the marks. The values are drawn exactly as
+    given; this function owns only how they look. ``clip_rounding`` keeps a
+    caller's existing rule that a bound a few ulps inside its estimate draws
+    as a zero-length whisker.
+    """
+
+    import numpy as np
+
+    estimate_values = np.asarray(estimates, dtype=float)
+    low_values = np.asarray(lows, dtype=float)
+    high_values = np.asarray(highs, dtype=float)
+    position_values = np.asarray(positions, dtype=float)
+    shapes = {
+        estimate_values.shape, low_values.shape, high_values.shape, position_values.shape,
+    }
+    if len(shapes) != 1:
+        raise ValueError("interval rows need one estimate, bound pair and position per row")
+    if orientation not in {"horizontal", "vertical"}:
+        raise ValueError(f"unknown interval orientation {orientation!r}")
+    horizontal = orientation == "horizontal"
+    series = _palette_colour(palette, color, "blue")
+    if log:
+        (ax.set_xscale if horizontal else ax.set_yscale)("log")
+    null_line = None
+    if null is not None:
+        null_line = (ax.axvline if horizontal else ax.axhline)(
+            float(null),
+            color=_palette_colour(palette, "ink_3", "ink_3"),
+            linewidth=REFERENCE_LINE_WIDTH,
+            linestyle=(0, (3.0, 2.0)),
+            zorder=zorder - 1.5,
+        )
+    errors = np.vstack([estimate_values - low_values, high_values - estimate_values])
+    if clip_rounding:
+        errors = np.maximum(errors, 0.0)
+    coordinates = (
+        (estimate_values, position_values) if horizontal
+        else (position_values, estimate_values)
+    )
+    container = ax.errorbar(
+        *coordinates,
+        **{"xerr" if horizontal else "yerr": errors},
+        fmt=marker,
+        color=series,
+        markerfacecolor=series,
+        markeredgewidth=0.0,
+        markersize=INTERVAL_MARKER_SIZE,
+        ecolor=_palette_colour(palette, "ink_2", "ink_2"),
+        elinewidth=INTERVAL_WHISKER_WIDTH,
+        capsize=0.0,
+        zorder=zorder,
+        label=label,
+    )
+    return IntervalRows(container=container, null_line=null_line)
+
+
+def style_category_axis(ax: Any, *, axis: Literal["x", "y"] = "y") -> None:
+    """A category axis keeps its labels but loses its spine, ticks and grid."""
+
+    ax.spines["left" if axis == "y" else "bottom"].set_visible(False)
+    ax.tick_params(axis=axis, length=0)
+    ax.grid(False, axis=axis)
+
+
+def style_value_axis(
+    ax: Any,
+    *,
+    axis: Literal["x", "y"] = "x",
+    grid: bool = False,
+    palette: Mapping[str, str] | None = None,
+) -> None:
+    """A value axis, optionally with a light grid behind the data on it alone."""
+
+    other = "y" if axis == "x" else "x"
+    ax.grid(False, axis=other)
+    if grid:
+        ax.set_axisbelow(True)
+        ax.grid(
+            True, axis=axis,
+            color=_palette_colour(palette or PALETTE_CLINICAL, "neutral_light", "neutral_light"),
+            linewidth=0.5,
+        )
+    else:
+        ax.grid(False, axis=axis)
+
+
+def style_count_axis(ax: Any, *, axis: Literal["x", "y"] = "x") -> None:
+    """Label a count axis in whole numbers with thousands separators."""
+
+    from matplotlib.ticker import FuncFormatter
+
+    target = ax.xaxis if axis == "x" else ax.yaxis
+    target.set_major_formatter(FuncFormatter(lambda value, _position: f"{value:,.0f}"))
+
+
+def legend_below(ax: Any, *, offset: float | None = None, **kwargs: Any) -> Any:
+    """Place ``ax``'s legend under its x-axis label, clear of the title and data.
+
+    Call it once the x label is final. ``offset`` is the drop below the axes'
+    bottom edge in points; by default it is measured from the drawn tick
+    labels and axis label, plus a 4 pt gap.
+    """
+
+    from matplotlib.transforms import ScaledTranslation
+
+    if offset is None:
+        figure = ax.figure
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        below = ax.xaxis.get_tightbbox(renderer)
+        drop = 0.0 if below is None else ax.get_window_extent(renderer).y0 - below.y0
+        offset = max(drop, 0.0) * 72.0 / figure.dpi + 4.0
+    kwargs.setdefault("loc", "upper left")
+    kwargs.setdefault("frameon", False)
+    return ax.legend(
+        bbox_to_anchor=(0.0, 0.0),
+        bbox_transform=ax.transAxes + ScaledTranslation(
+            0.0, -offset / 72.0, ax.figure.dpi_scale_trans
+        ),
+        **kwargs,
+    )
+
+def curve_kwargs(palette: Mapping[str, str], key: str) -> Dict[str, Any]:
+    """Line keywords for one series curve: 1.2 pt in its colour, butt caps."""
+
+    return {
+        "color": _palette_colour(palette, key, key),
+        "linewidth": CURVE_LINE_WIDTH,
+        "solid_capstyle": "butt",
+    }
+
+
+def interval_text(estimate: float, low: float, high: float, *, ratio: bool = True) -> str:
+    """The value-column text for one interval row, e.g. ``1.84 (1.61–2.10)``.
+
+    Ratios print two decimals with an en dash; other scales print three
+    significant digits with "to", since a negative bound beside a dash reads
+    as a range sign.
+    """
+
+    if ratio:
+        return f"{estimate:.2f} ({low:.2f}–{high:.2f})"
+    return f"{estimate:.3g} ({low:.3g} to {high:.3g})"
+
+
+def label_rows(
+    ax: Any,
+    texts: Sequence[str],
+    positions: Sequence[float],
+    *,
+    x: float = 1.0,
+    palette: Mapping[str, str] | None = None,
+    offset: float = 4.0,
+    axis: Literal["x", "y"] = "y",
+) -> list[Any]:
+    """Write a value column beside the axes, one text per row position.
+
+    The column starts ``offset`` points outside the axes edge at ``x`` (axes
+    fraction), so it never sits on the data. Row positions are data
+    coordinates on the category ``axis``.
+    """
+
+    texts = list(texts)
+    positions = list(positions)
+    if len(texts) != len(positions):
+        raise ValueError("label_rows needs one text per row position")
+    colour = _palette_colour(palette or PALETTE_CLINICAL, "ink_2", "ink_2")
+    drawn = []
+    for text, position in zip(texts, positions):
+        if axis == "y":
+            xy, coords = (x, position), ("axes fraction", "data")
+            xytext, ha, va = (offset, 0.0), "left", "center"
+        else:
+            xy, coords = (position, x), ("data", "axes fraction")
+            xytext, ha, va = (0.0, offset), "center", "bottom"
+        drawn.append(ax.annotate(
+            str(text), xy=xy, xycoords=coords, xytext=xytext,
+            textcoords="offset points", ha=ha, va=va,
+            fontsize=VALUE_COLUMN_FONT_SIZE, color=colour,
+            annotation_clip=False, gid="publication-value-column",
+        ))
+    return drawn
+
+
+def km_risk_times(ax: Any, horizon: float, *, start: float = 0.0) -> list[float]:
+    """Set round Kaplan-Meier time ticks on ``ax`` and return them.
+
+    The number-at-risk columns use exactly these times, so every count sits
+    under a labelled tick instead of at a quarter of the horizon.
+    """
+
+    from matplotlib.ticker import MaxNLocator
+
+    span = float(horizon) - float(start)
+    tolerance = 1e-9 * max(abs(span), 1.0)
+    ticks = [
+        float(value)
+        for value in MaxNLocator(nbins=6, steps=[1, 2, 2.5, 5, 10]).tick_values(start, horizon)
+        if float(start) - tolerance <= value <= float(horizon) + tolerance
+    ]
+    if not ticks:
+        ticks = [float(start), float(horizon)]
+    ax.set_xticks(ticks, [f"{value:g}" for value in ticks])
+    return ticks
+
+
+def draw_number_at_risk(
+    ax: Any,
+    times: Sequence[float],
+    rows: Sequence[Sequence[str]],
+    labels: Sequence[str],
+    *,
+    colors: Sequence[str] | None = None,
+    palette: Mapping[str, str] | None = None,
+    heading: str = "Number at risk",
+    fontsize: float = 6.0,
+) -> None:
+    """Write number-at-risk rows under a Kaplan-Meier axis that shares ``ax``'s x.
+
+    Each count sits at its time in data coordinates; group names and the
+    heading sit in a column left of the axes, so neither covers a count.
+    """
+
+    colours = palette or PALETTE_CLINICAL
+    ink_2 = _palette_colour(colours, "ink_2", "ink_2")
+    if len(rows) != len(labels):
+        raise ValueError("number-at-risk rows need one label each")
+    ax.axis("off")
+    ax.set_ylim(0.0, 1.0)
+    count = len(rows)
+    first_column = []
+    for index, row in enumerate(rows):
+        if len(row) != len(times):
+            raise ValueError("each number-at-risk row needs one count per time")
+        y = 0.72 * (count - index - 0.5) / count
+        for column, (time, value) in enumerate(zip(times, row)):
+            text = ax.text(
+                float(time), y, str(value), transform=ax.get_xaxis_transform(),
+                ha="center", va="center", fontsize=fontsize, color=ink_2,
+            )
+            if column == 0:
+                first_column.append(text)
+    # The label column clears half the widest first count, which is centred
+    # on the axis start and so reaches left of it.
+    renderer = ax.figure.canvas.get_renderer()
+    half_width = max(
+        (text.get_window_extent(renderer).width for text in first_column), default=0.0,
+    ) * 36.0 / ax.figure.dpi
+    offset = -(4.0 + half_width)
+    ax.annotate(
+        heading, xy=(0.0, 1.0), xycoords="axes fraction", xytext=(offset, 0.0),
+        textcoords="offset points", ha="right", va="top", fontsize=fontsize + 0.2,
+        fontweight="bold", color=_palette_colour(colours, "baseline", "baseline"),
+        annotation_clip=False,
+    )
+    for index, label in enumerate(labels):
+        ax.annotate(
+            str(label), xy=(0.0, 0.72 * (count - index - 0.5) / count),
+            xycoords="axes fraction", xytext=(offset, 0.0), textcoords="offset points",
+            ha="right", va="center", fontsize=fontsize,
+            color=colors[index] if colors else ink_2, annotation_clip=False,
+        )
+
 def finish_publication_layout(fig: Any) -> list[Any]:
     """Measure titles and reserve an external gutter for interval legends.
 
@@ -923,18 +1236,44 @@ def finish_publication_layout(fig: Any) -> list[Any]:
                         title.get_text(), renderer=renderer,
                         font=title.get_fontproperties(), width=max(width, gap),
                     ))
-            title_top = max(
-                (title.get_window_extent(renderer).y1 for title in titles if title.get_text()),
-                default=axis.get_window_extent(renderer).y1,
-            )
+            # One letter style: the panel letter shares the baseline of the
+            # title's first line, just outside the panel's left edge.
+            shown = [title for title in titles if title.get_visible() and title.get_text()]
+            top_title = max(shown, key=lambda title: title.get_window_extent(renderer).y1,
+                            default=None)
+            if top_title is None:
+                baseline, alignment = axis.get_window_extent(renderer).y1, "bottom"
+            else:
+                font = top_title.get_fontproperties()
+                first = top_title.get_text().split("\n")[0] or "lp"
+                _, line_h, line_d = renderer.get_text_width_height_descent(first, font, False)
+                _, lp_h, lp_d = renderer.get_text_width_height_descent("lp", font, False)
+                baseline = top_title.get_window_extent(renderer).y1 - (
+                    max(line_h, lp_h) - max(line_d, lp_d)
+                )
+                alignment = "baseline"
             for letter in axis.texts:
                 if letter.get_gid() == "publication-panel-label":
                     left = axis.get_window_extent(renderer).x0
+                    letter.set_verticalalignment(alignment)
                     letter_width = letter.get_window_extent(renderer).width
                     letter.set_position(axis.transAxes.inverted().transform(
-                        (left - letter_width - gap, title_top)
+                        (left - letter_width - gap, baseline)
                     ))
-                    letter.set_verticalalignment("top")
+                    # A top y tick label can reach up to the title line; the
+                    # letter then steps left of it rather than sit on it.
+                    box = letter.get_window_extent(renderer)
+                    blocking = [
+                        label.get_window_extent(renderer)
+                        for label in axis.get_yticklabels()
+                        if label.get_visible() and label.get_text()
+                    ]
+                    blocking = [other for other in blocking if box.overlaps(other)]
+                    if blocking:
+                        left = min(other.x0 for other in blocking)
+                        letter.set_position(axis.transAxes.inverted().transform(
+                            (left - letter_width - gap, baseline)
+                        ))
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     boxes = [axis.get_tightbbox(renderer) for axis in fig.axes if axis.get_visible()]

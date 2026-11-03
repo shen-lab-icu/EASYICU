@@ -261,7 +261,10 @@ def test_host_binary_estimators_keep_their_scale_in_the_overview(tmp_path, kind,
     pd.testing.assert_frame_equal(plotted, pd.read_csv(tmp_path / "adjusted_association_estimates.csv"))
     pd.testing.assert_frame_equal(pd.read_csv(tmp_path / "figure/overview_distribution_source_data.csv"),
                                   pd.read_csv(risk_path))
-    assert ("risk ratio" if kind == "glm_poisson" else "odds ratio") in (tmp_path / "figure/overview.svg").read_text()
+    # The axis names the measure in sentence case ("Odds ratio (95% CI)").
+    assert ("risk ratio" if kind == "glm_poisson" else "odds ratio") in (
+        tmp_path / "figure/overview.svg"
+    ).read_text().lower()
     # The integration must preserve the complete host schema check at both boundaries.
     bindings[EFFECT]["product_contract"]["columns"].remove("outcome_proportion")
     assert resolve_standard_executor(step, plan=None, resolved_bindings=bindings).claimed_by != "association_overview_figure"

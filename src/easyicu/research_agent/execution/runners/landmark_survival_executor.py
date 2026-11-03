@@ -766,8 +766,14 @@ def _render_figure(
     from ...figures.publication import (
         add_panel_label,
         apply_publication_style,
+        curve_kwargs,
+        draw_interval_rows,
+        draw_number_at_risk,
+        km_risk_times,
         make_figure_contract,
         save_publication_figure,
+        style_category_axis,
+        style_count_axis,
     )
     from ...figures.display_labels import display_label
 
@@ -785,8 +791,10 @@ def _render_figure(
         wspace=0.38,
         hspace=0.72,
     )
-    ax_km = fig.add_subplot(grid[:3, 0])
-    ax_risk = fig.add_subplot(grid[3, 0], sharex=ax_km)
+    # The number-at-risk rows sit directly under their Kaplan-Meier axis.
+    km_column = grid[:, 0].subgridspec(2, 1, height_ratios=(5.6, 1.0), hspace=0.16)
+    ax_km = fig.add_subplot(km_column[0])
+    ax_risk = fig.add_subplot(km_column[1], sharex=ax_km)
     ax_hr = fig.add_subplot(grid[0, 1])
     ax_flow = fig.add_subplot(grid[1:3, 1])
     ax_ph = fig.add_subplot(grid[3, 1])
@@ -802,8 +810,7 @@ def _render_figure(
             group["time_from_landmark_days"],
             group["survival_probability"],
             where="post",
-            color=colors[value],
-            linewidth=1.5,
+            **curve_kwargs(palette, colors[value]),
             label=labels[value],
         )
     ax_km.set_ylim(0.0, 1.02)
@@ -812,10 +819,11 @@ def _render_figure(
     ax_km.set_ylabel("Survival probability")
     ax_km.set_title("Unadjusted landmark Kaplan-Meier survival", loc="left")
     ax_km.legend(loc="lower left", fontsize=6.4)
-    add_panel_label(ax_km, "a", x=-0.09, fontsize=8.0)
+    add_panel_label(ax_km, "a", x=-0.09)
 
     horizon = sealed.endpoint_horizon_days - sealed.landmark_hours / 24.0
-    risk_times = np.linspace(0.0, horizon, 5)
+    # Number-at-risk columns stand at the Kaplan-Meier axis ticks.
+    risk_times = km_risk_times(ax_km, horizon)
     risk_rows: list[list[str]] = []
     for value in (0, 1):
         group = km_table.loc[km_table["exposure_group"].eq(value)].sort_values(
@@ -834,29 +842,9 @@ def _render_figure(
                 )
             )
         risk_rows.append(counts)
-    ax_risk.axis("off")
-    # The table stops below the "Number at risk" heading so the heading never
-    # sits on the first column's time label.
-    table = ax_risk.table(
-        cellText=risk_rows,
-        rowLabels=[labels[0], labels[1]],
-        colLabels=[f"{value:g}" for value in risk_times],
-        cellLoc="center",
-        rowLoc="right",
-        bbox=[0.0, 0.0, 1.0, 0.74],
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(5.7)
-    for cell in table.get_celld().values():
-        cell.set_linewidth(0.0)
-    ax_risk.text(
-        -0.02,
-        0.98,
-        "Number at risk",
-        transform=ax_risk.transAxes,
-        fontsize=6.2,
-        fontweight="bold",
-        va="top",
+    draw_number_at_risk(
+        ax_risk, risk_times, risk_rows, [labels[0], labels[1]],
+        colors=[colors[0], colors[1]], palette=palette,
     )
 
     ph_statuses = {
@@ -879,17 +867,11 @@ def _render_figure(
         and len(time_varying_table) > 0
     )
     if headline_hr_authorized:
-        ax_hr.errorbar(
-            hazard_ratio,
-            0,
-            xerr=np.array([[hazard_ratio - ci_low], [ci_high - hazard_ratio]]),
-            fmt="o",
-            color=palette["blue"],
-            capsize=3,
-            linewidth=1.2,
+        draw_interval_rows(
+            ax_hr, [hazard_ratio], [ci_low], [ci_high], [0], palette=palette,
+            color="blue", null=1.0, log=True,
         )
-        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-        ax_hr.set_xscale("log")
+        style_category_axis(ax_hr)
         lower_limit = min(ci_low * 0.9, 0.9)
         upper_limit = max(ci_high * 1.1, 1.1)
         ax_hr.set_xlim(lower_limit, upper_limit)
@@ -924,17 +906,11 @@ def _render_figure(
         lows = exposure_rows["ci_low"].to_numpy(dtype=float)
         highs = exposure_rows["ci_high"].to_numpy(dtype=float)
         positions = np.arange(len(exposure_rows))
-        ax_hr.errorbar(
-            estimates,
-            positions,
-            xerr=np.vstack((estimates - lows, highs - estimates)),
-            fmt="o",
-            color=palette["blue"],
-            capsize=3,
-            linewidth=1.2,
+        draw_interval_rows(
+            ax_hr, estimates, lows, highs, positions, palette=palette,
+            color="blue", null=1.0, log=True,
         )
-        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-        ax_hr.set_xscale("log")
+        style_category_axis(ax_hr)
         ax_hr.set_yticks(
             positions,
             [
@@ -954,18 +930,11 @@ def _render_figure(
         difference = float(rmst_row["rmst_difference_days"])
         difference_low = float(rmst_row["ci_low"])
         difference_high = float(rmst_row["ci_high"])
-        ax_hr.errorbar(
-            difference,
-            0,
-            xerr=np.array(
-                [[difference - difference_low], [difference_high - difference]]
-            ),
-            fmt="o",
-            color=palette["blue"],
-            capsize=3,
-            linewidth=1.2,
+        draw_interval_rows(
+            ax_hr, [difference], [difference_low], [difference_high], [0],
+            palette=palette, color="blue", null=0.0,
         )
-        ax_hr.axvline(0.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        style_category_axis(ax_hr)
         span = max(abs(difference_low), abs(difference_high), 0.25)
         ax_hr.set_xlim(-1.15 * span, 1.15 * span)
         _fit_row_label_to_gutter(
@@ -983,7 +952,7 @@ def _render_figure(
             ha="left",
             va="bottom",
         )
-    add_panel_label(ax_hr, "b", x=-0.16, y=1.05, fontsize=8.0)
+    add_panel_label(ax_hr, "b", x=-0.16, y=1.05)
 
     # Every stage, from the source records the legend starts at.
     display = risk_flow.copy()
@@ -999,7 +968,7 @@ def _render_figure(
         "landmark_analysis_population": "Landmark analysis population",
     }
     y = np.arange(len(display))
-    ax_flow.barh(y, display["count"], color=palette["teal"])
+    ax_flow.barh(y, display["count"], color=palette["neutral"])
     ax_flow.set_yticks(
         y,
         [
@@ -1018,11 +987,12 @@ def _render_figure(
             fontsize=5.8,
         )
     ax_flow.set_xlim(0, max(display["count"]) * 1.18)
+    style_count_axis(ax_flow)
     ax_flow.invert_yaxis()
     unit = sealed.analysis_unit_label
     ax_flow.set_xlabel(f"{unit[:1].upper()}{unit[1:]} (n)")
     ax_flow.set_title("Risk-set accounting", loc="left")
-    add_panel_label(ax_flow, "c", x=-0.16, y=1.05, fontsize=8.0)
+    add_panel_label(ax_flow, "c", x=-0.16, y=1.05)
 
     ph_display = ph_table.copy()
     required_ph_columns = {"covariate", "p_value", "declared_alpha"}
@@ -1080,7 +1050,7 @@ def _render_figure(
     ax_ph.set_yticks(y_ph, ph_labels, fontsize=5.3)
     ax_ph.set_xlabel(r"Schoenfeld test $-\log_{10}(p)$")
     ax_ph.set_title("Proportional-hazards diagnostics", loc="left")
-    add_panel_label(ax_ph, "d", x=-0.16, y=1.05, fontsize=8.0)
+    add_panel_label(ax_ph, "d", x=-0.16, y=1.05)
 
     # Plan-time panel promises live on the sealed authority; each rendered
     # panel repeats its role and exact digest-bound sources so the

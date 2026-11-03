@@ -23,6 +23,7 @@ import pandas as pd
 
 from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
+from .display_labels import display_label
 from .base import (
     RenderedFigure,
     km_estimate,
@@ -392,6 +393,57 @@ def _followup_from_cohort(run_dir: Path) -> List[float]:
     return []
 
 
+def _draw_cox_rows(ax: Any, cox_forest: pd.DataFrame, palette: Any) -> None:
+    """Cox hazard ratios as interval rows; a missing bound draws at its estimate."""
+
+    import numpy as np
+
+    from .publication import draw_interval_rows
+
+    centers, lows, highs = [], [], []
+    for _index, row in cox_forest.iterrows():
+        center = float(row["hr"])
+        centers.append(center)
+        lows.append(float(row["lower"]) if np.isfinite(row["lower"]) else center)
+        highs.append(float(row["upper"]) if np.isfinite(row["upper"]) else center)
+    draw_interval_rows(
+        ax, centers, lows, highs, list(cox_forest.index), palette=palette, color="blue",
+        null=1.0, clip_rounding=True,
+    )
+
+
+def _km_group_label(name: Any, exposure: Optional[str]) -> str:
+    """A KM group's reader name: a 0/1 code reads No/Yes, never a bare digit."""
+
+    from .display_labels import binary_level, display_label
+
+    level = binary_level(name)
+    if level is not None and str(name).strip() in {"0", "1", "0.0", "1.0", "True", "False"}:
+        return "Yes" if level else "No"
+    return display_label(name)
+
+
+def _km_legend(ax: Any, names: List[Any], exposure: Optional[str]) -> None:
+    """Legend titled by the exposure for a binary split, present level first."""
+
+    from .display_labels import binary_level, display_label
+
+    handles, labels = ax.get_legend_handles_labels()
+    binary = all(
+        binary_level(name) is not None and _km_group_label(name, exposure) in {"Yes", "No"}
+        for name in names
+    )
+    if binary:
+        order = sorted(range(len(handles)), key=lambda index: -int(binary_level(names[index]) or 0))
+        handles = [handles[index] for index in order]
+        labels = [labels[index] for index in order]
+    ax.legend(
+        handles, labels, loc="lower left", fontsize=6.2,
+        title=display_label(exposure) if binary and exposure else None,
+        title_fontsize=6.2,
+    )
+
+
 def _render_forest_followup_figure(
     *,
     context: ResearchContext,
@@ -412,7 +464,7 @@ def _render_forest_followup_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from .publication import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style, style_category_axis
 
     palette = apply_publication_style()
     fig = plt.figure(figsize=(183 / 25.4, 90 / 25.4), constrained_layout=False)
@@ -432,31 +484,13 @@ def _render_forest_followup_figure(
     cox_forest = _forest_display_rows(cox, context.primary_exposure, max_rows=8)
     y = np.arange(len(cox_forest))
     hr = cox_forest["hr"].astype(float).to_numpy()
-    for i, row in cox_forest.iterrows():
-        center = float(row["hr"])
-        low = float(row["lower"]) if np.isfinite(row["lower"]) else center
-        high = float(row["upper"]) if np.isfinite(row["upper"]) else center
-        ax_hr.errorbar(
-            center,
-            i,
-            xerr=np.array(
-                [[max(0.0, center - low)], [max(0.0, high - center)]], dtype=float
-            ),
-            fmt="o",
-            color=palette.get("blue", "#0F4D92"),
-            ecolor=palette.get("blue", "#0F4D92"),
-            elinewidth=1.0,
-            capsize=2.0,
-            markersize=4.0,
-        )
-    ax_hr.axvline(
-        1.0, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.8
-    )
-    ax_hr.set_yticks(y, cox_forest["label"].astype(str).tolist(), fontsize=6.0)
+    _draw_cox_rows(ax_hr, cox_forest, palette)
+    ax_hr.set_yticks(y, [display_label(label) for label in cox_forest["label"].astype(str)], fontsize=6.0)
     ax_hr.invert_yaxis()
+    style_category_axis(ax_hr)
     ax_hr.set_xlabel("Hazard ratio (95% CI)")
     ax_hr.set_title("Adjusted hazard ratios", loc="left", pad=4)
-    add_panel_label(ax_hr, "A", x=-0.2, y=1.05, fontsize=10.0)
+    add_panel_label(ax_hr, "A", x=-0.2, y=1.05)
 
     finite_fu = [float(d) for d in (followup or []) if np.isfinite(d)]
     if finite_fu:
@@ -476,12 +510,12 @@ def _render_forest_followup_figure(
         ax_diag.axvline(
             1.0, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.8
         )
-        ax_diag.set_yticks(y, cox_forest["label"].astype(str).tolist(), fontsize=6.0)
+        ax_diag.set_yticks(y, [display_label(label) for label in cox_forest["label"].astype(str)], fontsize=6.0)
         ax_diag.invert_yaxis()
         ax_diag.set_xlabel("Hazard ratio")
         diag_chart_type = "diagnostic_panel"
     ax_diag.set_title("Follow-up diagnostics", loc="left", pad=4)
-    add_panel_label(ax_diag, "B", x=-0.2, y=1.05, fontsize=10.0)
+    add_panel_label(ax_diag, "B", x=-0.2, y=1.05)
 
     outcome = context.target_outcome or "the time-to-event outcome"
     exposure = context.primary_exposure or "the primary stratum"
@@ -599,7 +633,12 @@ def render_survival_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from .publication import add_panel_label, apply_publication_style
+    from .publication import (
+        add_panel_label,
+        apply_publication_style,
+        curve_kwargs,
+        style_category_axis,
+    )
 
     palette = apply_publication_style()
     fig = plt.figure(figsize=(183 / 25.4, 118 / 25.4), constrained_layout=False)
@@ -631,16 +670,15 @@ def render_survival_figure(
             est["time"],
             est["survival"],
             where="post",
-            color=color,
-            linewidth=1.4,
-            label=str(name),
+            **curve_kwargs(palette, color),
+            label=_km_group_label(name, context.primary_exposure),
         )
     ax_km.set_ylim(0.0, 1.02)
     ax_km.set_xlabel("Follow-up time")
     ax_km.set_ylabel("Survival probability")
     ax_km.set_title("Kaplan-Meier survival", loc="left", pad=4)
     if len(curves) > 1:
-        ax_km.legend(loc="lower left", fontsize=6.2, title=None)
+        _km_legend(ax_km, [name for name, _est in curves], context.primary_exposure)
     ax_km.grid(
         axis="y",
         color=palette.get("neutral_light", "#D8D8D8"),
@@ -656,28 +694,10 @@ def render_survival_figure(
     hr = cox_forest["hr"].astype(float).to_numpy()
     lo = cox_forest["lower"].astype(float).to_numpy()
     hi = cox_forest["upper"].astype(float).to_numpy()
-    for i, row in cox_forest.iterrows():
-        center = float(row["hr"])
-        low = float(row["lower"]) if np.isfinite(row["lower"]) else center
-        high = float(row["upper"]) if np.isfinite(row["upper"]) else center
-        ax_hr.errorbar(
-            center,
-            i,
-            xerr=np.array(
-                [[max(0.0, center - low)], [max(0.0, high - center)]], dtype=float
-            ),
-            fmt="o",
-            color=palette.get("blue", "#0F4D92"),
-            ecolor=palette.get("blue", "#0F4D92"),
-            elinewidth=1.0,
-            capsize=2.0,
-            markersize=4.0,
-        )
-    ax_hr.axvline(
-        1.0, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.8
-    )
-    ax_hr.set_yticks(y, cox_forest["label"].astype(str).tolist(), fontsize=6.0)
+    _draw_cox_rows(ax_hr, cox_forest, palette)
+    ax_hr.set_yticks(y, [display_label(label) for label in cox_forest["label"].astype(str)], fontsize=6.0)
     ax_hr.invert_yaxis()
+    style_category_axis(ax_hr)
     finite_lo = lo[np.isfinite(lo)]
     if (
         finite_lo.size
@@ -689,7 +709,7 @@ def render_survival_figure(
         ax_hr.set_xscale("log")
     ax_hr.set_xlabel("Hazard ratio (95% CI)")
     ax_hr.set_title("Adjusted hazard ratios", loc="left", pad=4)
-    add_panel_label(ax_hr, "B", x=-0.16, y=1.05, fontsize=10.0)
+    add_panel_label(ax_hr, "B", x=-0.16, y=1.05)
 
     # Diagnostics: number-at-risk step, or follow-up histogram when we have the
     # raw durations from a per-stay dataset. The chart_type must stay within
@@ -707,8 +727,7 @@ def render_survival_figure(
                 est["time"],
                 est["at_risk"],
                 where="post",
-                color=curve_colors[idx % len(curve_colors)],
-                linewidth=1.1,
+                **curve_kwargs(palette, curve_colors[idx % len(curve_colors)]),
             )
         ax_diag.set_ylabel("At risk (n)")
         ax_diag.set_xlabel("Follow-up time")
@@ -730,13 +749,12 @@ def render_survival_figure(
                 est["time"],
                 [1.0 - s for s in est["survival"]],
                 where="post",
-                color=curve_colors[idx % len(curve_colors)],
-                linewidth=1.1,
+                **curve_kwargs(palette, curve_colors[idx % len(curve_colors)]),
             )
         ax_diag.set_ylabel("Cumulative incidence")
         ax_diag.set_xlabel("Follow-up time")
     ax_diag.set_title("Follow-up diagnostics", loc="left", pad=4)
-    add_panel_label(ax_diag, "C", x=-0.16, y=1.06, fontsize=10.0)
+    add_panel_label(ax_diag, "C", x=-0.16, y=1.06)
 
     outcome = context.target_outcome or "the time-to-event outcome"
     exposure = context.primary_exposure or "the primary stratum"

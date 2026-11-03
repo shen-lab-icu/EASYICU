@@ -26,8 +26,10 @@ from ...contracts.figure_plan import (
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
 )
 from ...schema import AnalysisStep
 from ...figures.display_labels import figure_language_labels
@@ -664,17 +666,11 @@ def run_composite_descriptive_figure(
     elif robustness is not None:
         positions = np.arange(len(robustness))
         centres = (robustness["range_low"] + robustness["range_high"]) / 2.0
-        errors = np.vstack(
-            [centres - robustness["range_low"], robustness["range_high"] - centres]
+        draw_interval_rows(
+            ax, centres, robustness["range_low"], robustness["range_high"], positions,
+            palette=palette, color="blue",
         )
-        ax.errorbar(
-            centres,
-            positions,
-            xerr=errors,
-            fmt="o",
-            color=palette["blue"],
-            capsize=2.5,
-        )
+        style_category_axis(ax)
         ax.set_yticks(
             positions,
             [

@@ -23,8 +23,10 @@ import pandas as pd
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    draw_interval_rows,
     make_figure_contract,
     save_publication_figure,
+    style_category_axis,
 )
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
@@ -482,17 +484,10 @@ def run_prevalence_mortality_figure(
     mortality_high = pd.to_numeric(grouped["ci_high_pct"]).to_numpy(dtype=float)
     deaths = pd.to_numeric(grouped["deaths"]).astype(int).to_numpy()
     observed = pd.to_numeric(grouped["outcome_observed_n"]).astype(int).to_numpy()
-    ax_b.errorbar(
-        mortality,
-        positions,
-        xerr=[mortality - mortality_low, mortality_high - mortality],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        elinewidth=1.0,
-        capsize=2.0,
-        markersize=4.2,
+    draw_interval_rows(
+        ax_b, mortality, mortality_low, mortality_high, positions, palette=palette, color="blue",
     )
+    style_category_axis(ax_b)
     ax_b.set_yticks(positions)
     ax_b.set_yticklabels(category_labels)
     ax_b.invert_yaxis()
