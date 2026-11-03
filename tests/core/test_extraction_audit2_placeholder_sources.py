@@ -98,4 +98,5 @@ def test_eicu_cort_reads_hicl_only_rows():
     sources = _dictionary()["cort"]["sources"]["eicu"]
     hicl = sources[1]
     assert hicl["sub_var"] == "drughiclseqno"
-    assert set(hicl["ids"]) == {2876, 36808, 2866, 36875, 2879, 2888, 2889}
+    # S6 (audit round 2) adds 2875 methylprednisolone and 34381/38176 dexamethasone.
+    assert set(hicl["ids"]) == {2876, 36808, 2866, 36875, 2879, 2888, 2889, 2875, 34381, 38176}
