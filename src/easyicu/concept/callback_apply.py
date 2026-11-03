@@ -2791,6 +2791,26 @@ def _apply_callback(
             expand_to_hourly=False,  # Return win_tbl format, not expanded ts_tbl
         )
 
+    # HiRID 30005010/30005110 are daily (12:00) input/output counters; the
+    # owner module derives hourly volumes from their increments.
+    if expr in ("hirid_fluid_counter_hourly", "hirid_fluid_balance_counters"):
+        from .hirid_fluid_counters import (
+            hirid_counter_frame,
+            load_hirid_admission_origins,
+        )
+
+        if data_source is None:
+            raise ValueError("HiRID fluid counters require general.admissiontime")
+        return hirid_counter_frame(
+            frame,
+            concept_name=concept_name,
+            origins=load_hirid_admission_origins(data_source),
+            value_col=source.value_var or "value",
+            time_col=source.index_var or "datetime",
+            item_col=source.sub_var or "variableid",
+            net_balance=expr == "hirid_fluid_balance_counters",
+        )
+
     # Handle HiRID's directly recorded hourly urine-rate source.
     if expr == "hirid_urine":
         from ..utils.callback_utils import hirid_urine

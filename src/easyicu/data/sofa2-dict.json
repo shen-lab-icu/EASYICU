@@ -1161,6 +1161,19 @@
         "dur_var": "stop",
         "callback": "transform_fun(set_val(TRUE))",
         "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
+      },
+      {
+       "table": "numericitems",
+       "sub_var": "itemid",
+       "ids": [
+        8805,
+        8806,
+        8808,
+        12091,
+        14838
+       ],
+       "callback": "transform_fun(set_val(TRUE))",
+       "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment."
       }
    ],
    "mimic": [
@@ -1205,9 +1218,23 @@
      "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
     },
     {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      146,
+      150,
+      152,
+      173,
+      192
+     ],
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 coverage fix (MIMIC-III CareVue): 146 Dialysate Flow ml/hr, 150 Dialysis Machine, 152 Dialysis Type (CVVHD/CVVH/Peritoneal, the CareVue analogue of MetaVision 227290 CRRT mode), 173 Effluent Press mmHg and 192 Filter Pressure mmHg are charted on the running-circuit flowsheet (>=99.8% of their charted hours lie within 2 h of a dialysate-flow/effluent/filter-pressure reading). Excluded: 148 Dialysis Access Site, 149 Dialysis Access Type and 151 Dialysis Site Appear describe the catheter (71-88 stays chart them with no running circuit); 147 Dialysate Infusing can be 'No'; 225126 Dialysis patient is history, not current RRT."
+    },
+    {
      "table": "outputevents",
      "sub_var": "itemid",
      "ids": [
+      40286,
       40386,
       40425,
       40426,
@@ -1248,7 +1275,7 @@
       46741
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded."
+     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays)."
     }
    ],
    "sic": [
@@ -1319,9 +1346,23 @@
      "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
     },
     {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      146,
+      150,
+      152,
+      173,
+      192
+     ],
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 coverage fix (MIMIC-III CareVue): 146 Dialysate Flow ml/hr, 150 Dialysis Machine, 152 Dialysis Type (CVVHD/CVVH/Peritoneal, the CareVue analogue of MetaVision 227290 CRRT mode), 173 Effluent Press mmHg and 192 Filter Pressure mmHg are charted on the running-circuit flowsheet (>=99.8% of their charted hours lie within 2 h of a dialysate-flow/effluent/filter-pressure reading). Excluded: 148 Dialysis Access Site, 149 Dialysis Access Type and 151 Dialysis Site Appear describe the catheter (71-88 stays chart them with no running circuit); 147 Dialysate Infusing can be 'No'; 225126 Dialysis patient is history, not current RRT."
+    },
+    {
      "table": "outputevents",
      "sub_var": "itemid",
      "ids": [
+      40286,
       40386,
       40425,
       40426,
@@ -1362,7 +1403,7 @@
       46741
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded."
+     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays)."
     }
    ]
   }

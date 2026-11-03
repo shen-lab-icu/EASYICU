@@ -881,12 +881,22 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
         assert {224135, 225126, 225128, 225954}.isdisjoint(chartevent_ids)
 
         # AmsterdamUMCdb's official treatment episode source is processitems.
-        # Device pressure/flow measurements and start/stop orders are not the
-        # treatment interval, and mapping a stop order to TRUE reverses its
-        # meaning.  Access-line process items are also not active dialysis.
+        # Start/stop orders and machine settings are not treatment evidence,
+        # and mapping a stop order to TRUE reverses its meaning.  Access-line
+        # process items are also not active dialysis.  Hourly readings that
+        # only exist while fluid is removed through a running circuit
+        # (2026-11-03) are point evidence beside the episodes.
         aumc_sources = dictionary["rrt"]["sources"]["aumc"]
-        assert len(aumc_sources) == 1
+        assert [source["table"] for source in aumc_sources] == [
+            "processitems",
+            "numericitems",
+        ]
         aumc_process = aumc_sources[0]
+        aumc_readings = set(aumc_sources[1]["ids"])
+        assert aumc_readings == {8805, 8806, 8808, 12091, 14838}
+        # Settings (ingesteld), alarm limits and treatment-order items can
+        # outlast the treatment.
+        assert not aumc_readings & {12451, 12452, 12454, 14840, 14848, 14849, 14850, 14851, 20538, 20543}
         assert aumc_process["table"] == "processitems"
         assert set(aumc_process["ids"]) == {12465, 16363}
         assert aumc_process["index_var"] == "start"
@@ -919,7 +929,11 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
             if source.get("table") == "outputevents"
             for source_id in source["ids"]
         )
-        assert {40613, 42388, 43052, 41527, 40910, 43115}.issubset(mimic_output_ids)
+        assert {40286, 40613, 42388, 43052, 41527, 40910, 43115}.issubset(mimic_output_ids)
+        # CareVue running-circuit charting (2026-11-03); catheter descriptors,
+        # "Dialysate Infusing" (can be "No") and dialysis history are not RRT.
+        assert {146, 150, 152, 173, 192}.issubset(mimic_chartevent_ids)
+        assert {147, 148, 149, 151, 225126}.isdisjoint(mimic_chartevent_ids)
         assert {44085, 42972, 41034, 46232, 46713}.isdisjoint(mimic_output_ids)
 
         eicu_intakeoutput_sources = [

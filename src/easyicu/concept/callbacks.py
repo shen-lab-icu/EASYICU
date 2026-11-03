@@ -8463,8 +8463,17 @@ def _callback_fluid_balance_hourly(
     time_col = "charttime"  # canonical post-rename
 
     # Ensure numeric
-    input_df["input_ml"] = pd.to_numeric(input_df["input_ml"], errors="coerce").fillna(0)
+    input_df["input_ml"] = pd.to_numeric(input_df["input_ml"], errors="coerce")
     urine_df["urine_ml"] = pd.to_numeric(urine_df["urine_ml"], errors="coerce").fillna(0)
+
+    # The table-level guard above is not enough when one database mixes
+    # charting systems (MIMIC-III CareVue + MetaVision): a stay whose intake
+    # was never captured would still get 0 − urine. Missing intake hours are
+    # zero only inside a stay that has intake evidence; a stay without any
+    # recorded input gets no balance at all.
+    input_df = input_df.loc[input_df["input_ml"].notna()]
+    stays_with_input = pd.Index(input_df[id_col].unique())
+    urine_df = urine_df.loc[urine_df[id_col].isin(stays_with_input)]
 
     # Merge on (id, time) — outer join
     merged = pd.merge(input_df, urine_df, on=[id_col, time_col], how="outer")
