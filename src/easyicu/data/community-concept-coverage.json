@@ -1909,11 +1909,13 @@
         "jinhua": {
           "dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -1921,10 +1923,12 @@
         "nwicu": {
           "dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "missing_dependencies": [
-            "plateau_pres"
+            "plateau_pres",
+            "pip"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -1932,7 +1936,8 @@
         "zhejiang_eicu": {
           "dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres"
@@ -1943,11 +1948,13 @@
         "zigong": {
           "dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -1962,12 +1969,14 @@
           "dependencies": [
             "plateau_pres",
             "peep",
-            "vent_breath_seq"
+            "vent_breath_seq",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres",
             "peep",
-            "vent_breath_seq"
+            "vent_breath_seq",
+            "pip"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -1976,11 +1985,13 @@
           "dependencies": [
             "plateau_pres",
             "peep",
-            "vent_breath_seq"
+            "vent_breath_seq",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres",
-            "vent_breath_seq"
+            "vent_breath_seq",
+            "pip"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -1989,7 +2000,8 @@
           "dependencies": [
             "plateau_pres",
             "peep",
-            "vent_breath_seq"
+            "vent_breath_seq",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres"
@@ -2001,11 +2013,13 @@
           "dependencies": [
             "plateau_pres",
             "peep",
-            "vent_breath_seq"
+            "vent_breath_seq",
+            "pip"
           ],
           "missing_dependencies": [
             "plateau_pres",
-            "peep"
+            "peep",
+            "pip"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -2366,7 +2380,7 @@
           "status": "unavailable"
         }
       },
-      "description": "tracheostomy"
+      "description": "invasive airway (endotracheal tube or tracheostomy), so the GCS verbal score is not assessable"
     },
     "fentanyl": {
       "category": "medications",
@@ -4595,6 +4609,9 @@
           "missing_dependencies": [
             "avpu"
           ],
+          "partial_dependencies": [
+            "supp_o2"
+          ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
         },
@@ -6275,7 +6292,7 @@
       "databases": {
         "jinhua": {
           "dependencies": [
-            "o2sat",
+            "spo2",
             "fio2"
           ],
           "reason": "all declared dependencies are available",
@@ -6283,7 +6300,7 @@
         },
         "nwicu": {
           "dependencies": [
-            "o2sat",
+            "spo2",
             "fio2"
           ],
           "reason": "all declared dependencies are available",
@@ -6291,7 +6308,7 @@
         },
         "zhejiang_eicu": {
           "dependencies": [
-            "o2sat",
+            "spo2",
             "fio2"
           ],
           "reason": "all declared dependencies are available",
@@ -6299,7 +6316,7 @@
         },
         "zigong": {
           "dependencies": [
-            "o2sat",
+            "spo2",
             "fio2"
           ],
           "missing_dependencies": [
@@ -6309,7 +6326,7 @@
           "status": "partial"
         }
       },
-      "description": "SaO2/FiO2"
+      "description": "SpO2/FiO2 (pulse oximetry; 2026-11-03 audit round 2, G8)"
     },
     "samp": {
       "category": "microbiology",
@@ -7865,7 +7882,11 @@
         "jinhua": {
           "dependencies": [
             "vent_ind",
-            "fio2"
+            "fio2",
+            "o2_flow"
+          ],
+          "missing_dependencies": [
+            "o2_flow"
           ],
           "partial_dependencies": [
             "vent_ind"
@@ -7876,18 +7897,24 @@
         "nwicu": {
           "dependencies": [
             "vent_ind",
-            "fio2"
+            "fio2",
+            "o2_flow"
           ],
-          "reason": "all declared dependencies are available",
-          "status": "derived"
+          "missing_dependencies": [
+            "o2_flow"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
         },
         "zhejiang_eicu": {
           "dependencies": [
             "vent_ind",
-            "fio2"
+            "fio2",
+            "o2_flow"
           ],
           "missing_dependencies": [
-            "vent_ind"
+            "vent_ind",
+            "o2_flow"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -7895,11 +7922,13 @@
         "zigong": {
           "dependencies": [
             "vent_ind",
-            "fio2"
+            "fio2",
+            "o2_flow"
           ],
           "missing_dependencies": [
             "vent_ind",
-            "fio2"
+            "fio2",
+            "o2_flow"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -8986,9 +9015,9 @@
       "unavailable": 109
     },
     "nwicu": {
-      "derived": 20,
+      "derived": 19,
       "direct": 137,
-      "partial": 25,
+      "partial": 26,
       "unavailable": 105
     },
     "zhejiang_eicu": {

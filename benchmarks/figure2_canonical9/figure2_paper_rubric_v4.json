@@ -104,11 +104,14 @@
     "src/easyicu/concept/definition_identity.py",
     "src/easyicu/concept/diuretics.py",
     "src/easyicu/concept/eicu_sedation_scale.py",
+    "src/easyicu/concept/eicu_vasopressor_orders.py",
     "src/easyicu/concept/emar_administration.py",
+    "src/easyicu/concept/emar_diuretics.py",
     "src/easyicu/concept/errors.py",
     "src/easyicu/concept/export_metadata.py",
     "src/easyicu/concept/expr_parser.py",
     "src/easyicu/concept/free_days.py",
+    "src/easyicu/concept/hirid_admission.py",
     "src/easyicu/concept/hirid_fluid_counters.py",
     "src/easyicu/concept/hospital_mortality.py",
     "src/easyicu/concept/loader.py",
@@ -1522,7 +1525,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "48671f68ca2e0161660edb4072b0f2a4abac295c8eeb44cc131eee83ad9f5d10",
+  "scorer_tree_sha256": "00dc22e36ce1f37079bc2001a0732e806421a0345e282ade27ad77032efc6d07",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
