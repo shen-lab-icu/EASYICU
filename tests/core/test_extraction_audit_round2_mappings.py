@@ -362,3 +362,12 @@ def test_s8_hirid_admission_type_prefers_apache_ii_within_the_first_day():
                                 item_col="variableid", value_col="value")
     # 1: the 30 h correction is outside the day; 2: APACHE II wins; 5: unlisted code.
     assert out.to_dict() == {1: "surg", 2: "surg", 3: "med", 4: "surg"}
+
+
+def test_s1_sic_advanced_support_reuses_the_invasive_ventilation_windows():
+    sofa2 = json.loads((Path(__file__).parents[2] / "src/easyicu/data/sofa2-dict.json").read_text())
+    tube, settings = sofa2["adv_resp"]["sources"]["sic"]
+    [_, vent_settings] = _sources("mech_vent", "sic")
+    assert tube["ids"] == [720] and tube["dur_var"] == "OffsetEnd"
+    assert settings["ids"] == vent_settings["ids"]
+    assert settings["callback"].startswith("combine_callbacks(sicdb_airway_attributed_ventilation")

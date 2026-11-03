@@ -397,6 +397,33 @@
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "CV: 505=PEEP, 506=PEEP Set, 686=Total PEEP Level"
     }
+   ],
+   "sic": [
+    {
+     "ids": [
+      720
+     ],
+     "table": "data_range",
+     "sub_var": "DataID",
+     "value_var": "DataID",
+     "dur_var": "OffsetEnd",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-03 extraction audit 2 (S1): the SICdb invasive-ventilation windows of mech_vent (endotracheal-tube interval 720)."
+    },
+    {
+     "ids": [
+      2278,
+      2282,
+      2284,
+      3040,
+      2285,
+      3121
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "combine_callbacks(sicdb_airway_attributed_ventilation, transform_fun(set_val(TRUE)))",
+     "_comment": "2026-11-03 extraction audit 2 (S1): ventilator-setting hours attributed to invasive ventilation by the mech_vent rule (concept/sicdb_ventilation.py). SICdb has no NIV or HFNC item, so NIV/HFNC support is not seen."
+    }
    ]
   }
  },
