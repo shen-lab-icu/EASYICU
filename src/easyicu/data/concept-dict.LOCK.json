@@ -2,8 +2,8 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "40945cb67e00c09ed5e4aed0fae71360b2bb45d7557fe8cacc2ba527ff2e0c5c",
-  "sofa2_dict_sha256": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
+  "concept_dict_sha256": "1a845edd899619181055925db9ae938380f7bc1bdfe91c6d8420c591ee3a5b04",
+  "sofa2_dict_sha256": "4beb1d80d83a1f3818858d6b5df9339b6a8ee4e9d15e190705b45b74fc3f30cb",
   "total_concepts": 260,
   "new_this_round": [],
   "pending_foundation_changes": [],
@@ -124,6 +124,10 @@
     {
       "git_commit": "60dd11dd081059b166ffeee98e8769170693211e",
       "change": "User-approved 2026-11-02 reseal: merge main's community profiles, four MIIV/MIMIC respiratory source channels and the corrected dex/o2sat/po2/spo2/urine/total_input_ml source mappings into dev9."
+    },
+    {
+      "git_commit": "621fe0619c1e67bcd7ba6a87dbaff8725a3331f9",
+      "change": "User-approved 2026-11-03 reseal of concept-dict.json and sofa2-dict.json after the six-database extraction audit: arterial-only blood gases, total-only resp/tidal_vol/peep_total, MIMIC-III MetaVision ventilator mode and oxygen-device vent_end, corrected vasopressor/urine/SICdb/AUMC item mappings, SICdb continuous infusions only, HiRID fluid counters, MIMIC-III CareVue intake and MIMIC-III/AUMC RRT evidence."
     }
   ]
 }

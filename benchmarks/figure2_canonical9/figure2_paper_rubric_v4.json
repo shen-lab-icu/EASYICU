@@ -95,6 +95,7 @@
     "src/easyicu/cohort_visualization.py",
     "src/easyicu/concept/__init__.py",
     "src/easyicu/concept/availability_signal.py",
+    "src/easyicu/concept/blood_gas_specimen.py",
     "src/easyicu/concept/builder.py",
     "src/easyicu/concept/callback_apply.py",
     "src/easyicu/concept/callbacks.py",
@@ -105,6 +106,7 @@
     "src/easyicu/concept/export_metadata.py",
     "src/easyicu/concept/expr_parser.py",
     "src/easyicu/concept/free_days.py",
+    "src/easyicu/concept/hirid_fluid_counters.py",
     "src/easyicu/concept/hospital_mortality.py",
     "src/easyicu/concept/loader.py",
     "src/easyicu/concept/merge_time_index.py",
@@ -1513,7 +1515,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "53a77eae9c94f6f5dacbd612ef17cbb6fb46348e0b63a6817d2261f6a3502589",
+  "scorer_tree_sha256": "815116a2748343767537386acdbae801c881864bcd64a51ee042d9950f586057",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
