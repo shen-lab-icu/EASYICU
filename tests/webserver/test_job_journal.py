@@ -382,3 +382,47 @@ def test_startup_loads_journal_after_lease_and_releases_lease_on_failure(monkeyp
     with pytest.raises(JobJournalError):
         app._acquire_web_deployment_lease()
     assert calls == ["lease", "journal", "release"]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_startup_relaunches_durable_research_off_the_event_loop(monkeypatch, fails):
+    """Preview 11-03: a restart during a run re-dispatched the active job and
+    asked DBOS its status on the event loop's thread, which DBOS refuses, and
+    the server did not start."""
+
+    import asyncio
+
+    app = importlib.import_module("easyicu.webserver.app")
+    jobs = importlib.import_module("easyicu.webserver.jobs")
+    durable_research = importlib.import_module("easyicu.webserver.durable_research")
+    calls = []
+
+    def start_service(_root):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            calls.append("started")
+            if fails:
+                raise RuntimeError("durable_executor_unavailable")
+            return
+        raise RuntimeError("get_workflow_status() was called while an event loop is running.")
+
+    monkeypatch.setattr(app, "acquire_single_process_lease", lambda: calls.append("lease"))
+    monkeypatch.setattr(app, "release_single_process_lease", lambda: calls.append("release"))
+    monkeypatch.setattr(app, "reconcile_review_recovery_records", lambda: None)
+    monkeypatch.setattr(jobs.MANAGER, "enable_persistence", lambda _path: None)
+    monkeypatch.setattr(durable_research, "start_service", start_service)
+    monkeypatch.setattr(durable_research, "stop_service", lambda: True)
+    monkeypatch.setattr(app.hosted_warmup, "start", lambda: calls.append("warm"))
+
+    async def startup():
+        # Starlette calls a synchronous startup handler on the loop's thread.
+        app._acquire_web_deployment_lease()
+
+    if fails:
+        with pytest.raises(RuntimeError, match="durable_executor_unavailable"):
+            asyncio.run(startup())
+        assert calls == ["lease", "started", "release"]
+    else:
+        asyncio.run(startup())
+        assert calls == ["lease", "started", "warm"]
