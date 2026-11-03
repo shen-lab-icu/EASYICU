@@ -850,6 +850,9 @@
         progressive_exposure_group_contrast_mismatch: tr('The proposed plan changed the reference or comparison group the study stated, or used conflicting contrasts across its steps. Planning stopped and no analysis was run. Generate the plan again.', '拟定的计划改动了研究声明的参照组或比较组，或在不同步骤用了不一致的比较方向。规划已停止，没有运行分析。请重新生成计划。'),
         // A substance the question names as given or as measured, read by the
         // plan's primary exposure in the other form (planning/question_substance_forms.py).
+        // Raised by the progressive planner itself (agents/progressive_planner.py).
+        progressive_article_required_roles_missing: tr('The candidate plan lacks a result this kind of study must report, such as the main table of a descriptive study, so planning stopped and no analysis was run. Generate the plan again.', '候选计划缺少这类研究必须报告的结果（例如描述性研究的主要结果表），规划已停止，没有运行分析。请重新生成计划。'),
+        progressive_outline_scientific_citation_missing: tr('A main analysis step of the candidate plan has no method source behind it, so planning stopped and no analysis was run. Generate the plan again.', '候选计划的主要分析步骤没有对应的方法学文献依据，规划已停止，没有运行分析。请重新生成计划。'),
         progressive_question_substance_form_substituted: tr('The question names a substance in one form (given, or measured as a level), and the plan\'s primary exposure reads it in the other, so the plan would answer another question. Planning stopped and no analysis was run. Generate the plan again; to study the other form, say so in the question.', '题面指的是这种物质的一种形式（作为给药，或作为测得的水平），而计划的主要暴露读成了另一种形式，回答的就成了另一个问题。规划已停止，没有运行分析。请重新生成计划；如果要研究另一种形式，请在问题里写明。'),
       };
       if (detailCopy[code]) return detailCopy[code];
@@ -857,7 +860,7 @@
       // the generic compile sentence would name a candidate plan step that a
       // refused request never drafted.
       if (code.startsWith('progressive_family_spec_')) {
-        return tr(`Planning stopped at an EasyICU check of the study's template plan (code: ${code}); no analysis was run.`, `模板规划没有通过 EasyICU 的检查（代码：${code}），没有运行分析。`);
+        return tr('Planning stopped at an EasyICU check of the study\'s template plan; no analysis was run. The failure receipt names the check.', '模板规划没有通过 EasyICU 的一项检查，没有运行分析。失败回执里写明了是哪一项检查。');
       }
       // The compile sentence names a variable or level the data cannot
       // resolve, which is true of these stops only.  Any other candidate-plan
@@ -872,7 +875,7 @@
         'progressive_table_one_group_levels_unavailable',
       ]);
       if (code.startsWith('progressive_') && !unresolvedDataStops.has(code)) {
-        return tr(`Planning stopped at an EasyICU check of the candidate plan (code: ${code}); no analysis was run.`, `候选计划没有通过 EasyICU 的检查（代码：${code}），规划停止，没有运行分析。`);
+        return tr('Planning stopped at an EasyICU check of the candidate plan; no analysis was run. The failure receipt names the check.', '候选计划没有通过 EasyICU 的一项检查，规划停止，没有运行分析。失败回执里写明了是哪一项检查。');
       }
       return '';
     }
@@ -1234,8 +1237,8 @@
       // A typed reason already explains these stops and supplies recovery copy.
       if (['research_pipeline_progressive_compile_failed', 'research_pipeline_scientific_authority_refused', 'research_pipeline_execution_failed', 'research_pipeline_approved_run_failed'].includes(value) && suffix) return suffix;
       if (known[value]) return withDetail(known[value]);
-      // An unlisted code stays visible for diagnosis, after a plain sentence.
-      return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));
+      // An unlisted code stays in the failure receipt for diagnosis, not in the sentence.
+      return withDetail(tr('The run stopped before finishing. The failure receipt names the reason.', '运行在完成前停止。失败回执里写明了原因。'));
     }
 
     function manuscriptNotPassedText(reasonCode) {

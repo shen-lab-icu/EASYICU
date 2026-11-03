@@ -47,12 +47,13 @@ for (const lang of ['en', 'zh']) {
   const owner = api.create({ tr: (en, zh) => lang === 'zh' ? zh : en, staticPreview: () => false });
   for (const code of codes) {
     const sentence = owner.runFailureText('research_pipeline_progressive_compile_failed', { code });
-    // Unmapped checks deliberately retain their diagnostic code; they do not
-    // assume that regenerating a plan will resolve the underlying stop.
+    // Unmapped checks point to the failure receipt, which keeps the code;
+    // they do not assume that regenerating a plan resolves the stop.  A raw
+    // code in the sentence read as a malfunction to the researcher (11-03).
     if (knownUnmapped.has(code)) {
       assert.equal(sentence, lang === 'zh'
-        ? `候选计划没有通过 EasyICU 的检查（代码：${code}），规划停止，没有运行分析。`
-        : `Planning stopped at an EasyICU check of the candidate plan (code: ${code}); no analysis was run.`);
+        ? '候选计划没有通过 EasyICU 的一项检查，规划停止，没有运行分析。失败回执里写明了是哪一项检查。'
+        : 'Planning stopped at an EasyICU check of the candidate plan; no analysis was run. The failure receipt names the check.');
       continue;
     }
     assert.ok(!sentence.includes('progressive_'), `${lang}: ${code}: ${sentence}`);
@@ -61,9 +62,15 @@ for (const lang of ['en', 'zh']) {
   }
   for (const code of ['progressive_unmapped_test_stop', 'progressive_family_spec_unmapped_test_stop']) {
     const sentence = owner.runFailureText('research_pipeline_progressive_compile_failed', { code });
-    assert.ok(sentence.includes(code), `diagnostic code is retained: ${sentence}`);
+    assert.ok(!sentence.includes(code), `no raw code in the sentence: ${sentence}`);
+    assert.ok(sentence.includes(lang === 'zh' ? '失败回执' : 'failure receipt'), sentence);
     assert.ok(sentence.includes(lang === 'zh' ? '没有运行分析' : 'no analysis was run'));
     assert.doesNotMatch(sentence, /重新生成|[Gg]enerate the plan again/);
+  }
+  for (const code of ['progressive_article_required_roles_missing', 'progressive_outline_scientific_citation_missing']) {
+    const sentence = owner.runFailureText('research_pipeline_progressive_compile_failed', { code });
+    assert.ok(!sentence.includes('progressive_') && !sentence.includes('失败回执') && !sentence.includes('failure receipt'), sentence);
+    assert.ok(sentence.includes(lang === 'zh' ? '请重新生成计划' : 'Generate the plan again'), sentence);
   }
   assert.equal(owner.runFailureText('research_pipeline_progressive_compile_failed', { code: 'progressive_analysis_module_unavailable' }),
     lang === 'zh' ? '候选计划中有一个分析步骤不适用于这类研究，因此规划已停止，没有运行分析。请重新生成计划。'
