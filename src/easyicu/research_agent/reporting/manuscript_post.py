@@ -36,6 +36,11 @@ from ..authority.evidence_store import (
     NumericClaim,
     _NUMERIC_IN_PROSE_RE,
 )
+from ..authority.numeric_claim_identity import (
+    NumericQuantityKind,
+    prose_quantity_kind,
+    quantity_kind_refuses_claim,
+)
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
@@ -1561,6 +1566,28 @@ def _restrict_to_cited_evidence(
     ]
 
 
+def _quantity_compatible_candidates(
+    candidates: Sequence[tuple[NumericClaim, float]],
+    *,
+    prose_kind: Optional[NumericQuantityKind],
+) -> List[tuple[NumericClaim, float]]:
+    """Keep only equal-valued claims whose field reports what the prose names.
+
+    Equal value is not identity. With ``median_age=60`` and ``n_deaths=12``
+    registered, "the cohort included 60 patients" bound to the median age and
+    "the median age was 12.0 years" bound to the death count: the cited
+    evidence left one equal-valued candidate and a single candidate was
+    accepted outright, footnote and all. Applied before selection, so a lone
+    candidate of the wrong kind is untraced exactly like a missing one.
+    """
+
+    return [
+        (claim, distance)
+        for claim, distance in candidates
+        if not quantity_kind_refuses_claim(prose_kind, claim)
+    ]
+
+
 def _select_numeric_claim(
     *,
     candidates: Sequence[tuple[NumericClaim, float]],
@@ -2025,8 +2052,11 @@ def repair_miscited_numeric_citations(
         if _is_bibliographic_year_context(scaffold, start=start, end=end, value=value):
             continue
         context = _numeric_sentence_context(scaffold, start=start, end=end)
-        candidates = _candidate_claims_for_value(
-            evidence, lookup_value, authoritative_claims=None
+        candidates = _quantity_compatible_candidates(
+            _candidate_claims_for_value(
+                evidence, lookup_value, authoritative_claims=None
+            ),
+            prose_kind=prose_quantity_kind(scaffold, start=start, end=end),
         )
         claim, _ambiguous = _select_numeric_claim(
             candidates=candidates,
@@ -2246,10 +2276,13 @@ def bind_numeric_values(
             cursor = end
             continue
         context = _numeric_sentence_context(manuscript, start=start, end=end)
-        candidates = _candidate_claims_for_value(
-            evidence,
-            lookup_value,
-            authoritative_claims=authoritative_claims,
+        candidates = _quantity_compatible_candidates(
+            _candidate_claims_for_value(
+                evidence,
+                lookup_value,
+                authoritative_claims=authoritative_claims,
+            ),
+            prose_kind=prose_quantity_kind(manuscript, start=start, end=end),
         )
         claim, ambiguous = _select_numeric_claim(
             candidates=candidates,
