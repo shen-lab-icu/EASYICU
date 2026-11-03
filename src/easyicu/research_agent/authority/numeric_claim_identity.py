@@ -6,7 +6,7 @@ import enum
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 
 class NumericEffectScale(str, enum.Enum):
@@ -588,7 +588,38 @@ def quantity_kind_refuses_claim(
     return field_kind is not None and field_kind is not prose_kind
 
 
+class ProseNumberMatcher:
+    """The prose number recogniser: one regex plus a phrase check.
+
+    A short integer's role is decided by the words around it, which a
+    fixed-width lookbehind cannot express ("the median length of stay was 7").
+    The regex proposes every short-integer candidate; this keeps the ones whose
+    phrase reports a quantity. Every other branch is returned unchanged.
+
+    MEASURED (external review): "The median age was 42 years
+    {evidence:cohort_stats}." and "N=42 {evidence:cohort_stats}." passed the
+    STRICT chain with zero bindings and no finding, while "n=42" and
+    "42 patients" were refused -- the gate keyed on lowercase ``n=`` and count
+    nouns only.
+    """
+
+    def __init__(self, pattern: "re.Pattern[str]") -> None:
+        self._pattern = pattern
+        self.pattern = pattern.pattern
+
+    def finditer(self, text: str) -> Iterator["re.Match[str]"]:
+        for match in self._pattern.finditer(text):
+            if match.group("short_quantity") is None or short_integer_reports_quantity(
+                text, match.start("value"), match.end("value")
+            ):
+                yield match
+
+    def search(self, text: str) -> Optional["re.Match[str]"]:
+        return next(self.finditer(text), None)
+
+
 __all__ = [
+    "ProseNumberMatcher",
     "contrast_exposure_coordinate",
     "NumericClaim",
     "NumericEffectScale",

@@ -143,7 +143,7 @@ def test_resume_tool_keeps_plan_decision_host_owned() -> None:
         / "src" / "easyicu" / "webserver" / "pi_copilot" / "tools.py"
     ).read_text(encoding="utf-8")
     resume_source = tools_source.split("def _resume(", 1)[1].split("\ndef ", 1)[0]
-    assert "decision" not in resume_source.split("\n    job_id = str(", 1)[1]
+    assert "decision" not in resume_source.split("\n    job_id, job, foreign = _session_job(", 1)[1]
     assert "submit_agent_run_review" not in resume_source
 
 
