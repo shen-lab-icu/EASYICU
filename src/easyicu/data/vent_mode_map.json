@@ -70,6 +70,7 @@
       "CPAP": {"control": "pressure", "seq": "spontaneous", "interface": "invasive"},
       "CMV": {"control": "unspecified", "seq": "controlled", "interface": "invasive"},
       "Pressure Control": {"control": "pressure", "seq": "controlled", "interface": "invasive"},
+      "TCPCV": {"control": "pressure", "seq": "controlled", "interface": "invasive"},
       "SIMV": {"control": "unspecified", "seq": "simv", "interface": "invasive"},
       "MMV": {"control": "unspecified", "seq": "simv", "interface": "invasive"},
       "APRV": {"control": "pressure", "seq": "simv", "interface": "invasive", "ambiguous_seq": true},
