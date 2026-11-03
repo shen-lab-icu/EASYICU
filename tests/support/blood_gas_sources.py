@@ -91,7 +91,7 @@ def mimic_source(tmp_path: Path, database: str = "mimic"):
 
 
 def aumc_source(tmp_path: Path):
-    """Specimen type is freetext 11646 at the same admission and measuredat."""
+    """Specimen type is freetext 11646 (or, 2003-2008, list item 7432) at the same admission and measuredat."""
 
     minute = 60_000
     numeric = pd.DataFrame(
@@ -99,6 +99,8 @@ def aumc_source(tmp_path: Path):
             (5, 7433, 90., "mmHg"), (65, 7433, 35., "mmHg"),
             (125, 21214, 12., "kPa"), (185, 7433, 80., "mmHg"),
             (245, 9996, 95., "mmHg"),
+            # 2003-2008 era: the site is list item 7432 "Afnameplaats".
+            (305, 7433, 40., "mmHg"), (365, 7433, 85., "mmHg"),
         ],
         columns=["minute", "itemid", "value", "unit"],
     )
@@ -116,6 +118,13 @@ def aumc_source(tmp_path: Path):
     freetext["itemid"] = 11646
     freetext["item"] = "Afname (bloed)"
     _write(freetext, tmp_path / "freetextitems.parquet")
+    listitems = pd.DataFrame([(305, "PAP"), (365, "Arterieel")], columns=["minute", "value"])
+    listitems["measuredat"] = listitems.pop("minute") * minute
+    listitems["admissionid"] = 1
+    listitems["itemid"] = 7432
+    listitems["item"] = "Afnameplaats"
+    listitems["valueid"] = [2, 1]
+    _write(listitems, tmp_path / "listitems.parquet")
     _write(
         pd.DataFrame({
             "admissionid": [1], "patientid": [11], "admittedat": [0],
