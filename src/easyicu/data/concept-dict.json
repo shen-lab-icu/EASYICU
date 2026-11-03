@@ -11727,6 +11727,45 @@
      "sub_var": "drugname",
      "callback": "eicu_duration(gap_length = hours(5L))",
      "class_name": "rgx_itm"
+    },
+    {
+     "regex": "(?i)norepi|levophed",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "class_name": "rgx_itm",
+     "table": "medication",
+     "callback": "eicu_order_exposure_duration",
+     "infused_regex": "(?i)^(?:norepi|levophed)",
+     "index_var": "drugstartoffset",
+     "extra_vars": [
+      "drugstopoffset",
+      "drugordercancelled"
+     ],
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped."
+    },
+    {
+     "ids": [
+      2051,
+      36346
+     ],
+     "sub_var": "drughiclseqno",
+     "table": "medication",
+     "callback": "eicu_order_exposure_duration",
+     "infused_regex": "(?i)^(?:norepi|levophed)",
+     "index_var": "drugstartoffset",
+     "extra_vars": [
+      "drugstopoffset",
+      "drugordercancelled"
+     ],
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped. HICL 2051/36346 (norepinephrine) orders without a drugname."
     }
    ],
    "eicu_demo": [
@@ -11736,6 +11775,45 @@
      "sub_var": "drugname",
      "callback": "eicu_duration(gap_length = hours(5L))",
      "class_name": "rgx_itm"
+    },
+    {
+     "regex": "(?i)norepi|levophed",
+     "sub_var": "drugname",
+     "val_var": "drugname",
+     "class_name": "rgx_itm",
+     "table": "medication",
+     "callback": "eicu_order_exposure_duration",
+     "infused_regex": "(?i)^(?:norepi|levophed)",
+     "index_var": "drugstartoffset",
+     "extra_vars": [
+      "drugstopoffset",
+      "drugordercancelled"
+     ],
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped."
+    },
+    {
+     "ids": [
+      2051,
+      36346
+     ],
+     "sub_var": "drughiclseqno",
+     "table": "medication",
+     "callback": "eicu_order_exposure_duration",
+     "infused_regex": "(?i)^(?:norepi|levophed)",
+     "index_var": "drugstartoffset",
+     "extra_vars": [
+      "drugstopoffset",
+      "drugordercancelled"
+     ],
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped. HICL 2051/36346 (norepinephrine) orders without a drugname."
     }
    ],
    "hirid": [
