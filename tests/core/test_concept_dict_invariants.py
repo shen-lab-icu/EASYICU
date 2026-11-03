@@ -126,7 +126,8 @@ def test_ambiguous_cross_database_mappings_are_not_exported(concept_dict):
 
     for dataset in ("miiv", "mimic", "mimic_demo"):
         source = concept_dict["d_dimer"]["sources"][dataset][0]
-        assert source["callback"] == "convert_unit(set_val(NA), 'ng/mL', 'FEU')"
+        # 2026-11-03 audit 3: FEU rows are converted to DDU (FEU / 2).
+        assert source["callback"] == "convert_unit(binary_op(`/`, 2), 'ng/mL', 'FEU')"
 
 
 def test_aumc_hba1c_scales_are_harmonised_before_pooling(concept_dict):

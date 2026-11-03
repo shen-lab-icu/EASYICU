@@ -30,7 +30,9 @@ def synthetic_source(tmp_path, database):
                    (2, 65, 223835, .21), (2, 125, 223835, 1.),
                    (2, 185, 223835, 10.), (2, 245, 223835, 101.),
                    (3, 5, 506, 12.), (3, 25, 506, 14.),
-                   (3, 15, 505, 35.),
+                   # CareVue 505 is the NICU ventilator PEEP, never
+                   # co-charted with 506 (2026-11-03 audit 3).
+                   (4, 15, 505, 7.),
                    (6, 5, 220277, 60.), (6, 5, 220339, 35.)]
     lab_rows = [(2, 5, 50816, .8), (2, 25, 50816, 80.),
                 (4, 5, 50816, .9), (2, 65, 50816, .3),
@@ -101,7 +103,7 @@ def test_actual_loader_keeps_alarms_and_respiratory_channels_separate(
         assert values(saturation, 2) == values(saturation, 3) == {0.: 97.}
     assert values("peep_set", 2) == {0.: 9.}
     assert values("peep_total", 2) == {0.: 16.}
-    assert values("peep_set", 4) == {}
+    assert values("peep_set", 4) == ({} if database == "miiv" else {0.: 7.})
     assert values("peep_total", 4) == {0.: 20.}
     assert values("peep_set", 5) == {0.: 6.}
     assert values("peep_total", 5) == {}
@@ -133,7 +135,8 @@ def test_source_contracts_do_not_invent_cross_database_support():
 
 def test_generic_peep_and_fio2_keep_their_mixed_source_contracts():
     dictionary = load_dictionary()
-    assert set(dictionary.get("peep").sources["miiv"][0].ids) == {220339, 224700}
+    # 2026-11-03 audit 3: generic peep is the ventilator setting only.
+    assert set(dictionary.get("peep").sources["miiv"][0].ids) == {220339}
     assert {source.table for source in dictionary.get("fio2").sources["miiv"]} == {"chartevents", "labevents"}
 
 

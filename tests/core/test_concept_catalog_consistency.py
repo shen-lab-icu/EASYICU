@@ -377,7 +377,8 @@ def test_aumc_ventilator_dictionary_items_are_prefiltered() -> None:
     peep_ids = set(dictionary["peep"]["sources"]["aumc"][0]["ids"])
 
     assert {6699, 12279, 12282} <= fio2_ids
-    assert {6694, 8862, 8879, 12284} <= peep_ids
+    assert {8862, 12284} <= peep_ids
+    assert not {6694, 8879} & peep_ids  # measured PEEP is not the setting
     assert fio2_ids <= prefilter_ids
     assert peep_ids <= prefilter_ids
 
