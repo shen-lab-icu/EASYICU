@@ -50,6 +50,11 @@ def _ids(concept: str, database: str, dictionary: dict = CONCEPTS) -> set[int]:
         ("vent_breath_seq", "mimic", set(), {720, 223849}),
         ("ckmb", "aumc", {6824}, {10413}),  # activity vs mass
         ("peep_total", "mimic", set(), {686, 224700}),
+        # 2026-11-03 audit 3: peep is the ventilator setting, as peep_set.
+        ("peep", "miiv", {224700}, {220339}),
+        ("peep", "mimic", {224700, 686}, {505, 506, 220339}),
+        ("peep", "aumc", {6694, 8879, 9666, 12354}, {12284, 12336, 8862}),
+        ("peep", "hirid", {2610}, {2600}),
         ("resp", "miiv", {224689}, {220210, 224690}),
         ("resp", "aumc", {7726, 9654, 12577}, {8874, 12266}),
         ("resp", "mimic", {614, 653, 1884, 224689}, {618, 615, 220210, 224690}),
@@ -124,3 +129,35 @@ def test_o2sat_lab_saturation_follows_the_arterial_specimen_rule_of_sao2(databas
         }
 
     assert lab("sao2") and lab("o2sat") == lab("sao2")
+
+
+@pytest.mark.parametrize(
+    "concept,database,callback",
+    [
+        ("be", "miiv", "arterial_specimen_only"),
+        ("be", "mimic", "arterial_specimen_only"),
+        ("be", "mimic_demo", "arterial_specimen_only"),
+        ("be", "aumc", "arterial_specimen_only(aumc_bxs)"),
+        ("bicar", "aumc", "arterial_specimen_only"),
+    ],
+)
+def test_blood_gas_base_excess_and_bicarbonate_are_arterial_only(concept, database, callback):
+    # 2026-11-03 audit 3: as po2/pco2/ph/sao2. MIMIC bicar is serum 50882.
+    assert [source["callback"] for source in CONCEPTS[concept]["sources"][database]] == [callback]
+    assert all("callback" not in source for source in CONCEPTS["bicar"]["sources"]["miiv"])
+
+
+def test_mimic_iv_d_dimer_feu_rows_are_converted_to_ddu():
+    source = ConceptSource.from_mapping(CONCEPTS["d_dimer"]["sources"]["miiv"][0])
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": pd.to_datetime(["2150-01-01 08:00"] * 3),
+            "d_dimer": [500.0, 1000.0, 800.0],
+            "valueuom": ["ng/mL", "ng/mL FEU", "ng/mL FEU"],
+        }
+    )
+
+    out = _apply_callback(frame, source, concept_name="d_dimer")
+
+    assert out["d_dimer"].tolist() == [500.0, 500.0, 400.0]

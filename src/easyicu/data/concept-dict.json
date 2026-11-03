@@ -1496,7 +1496,8 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "dir_var": "tag",
-     "callback": "aumc_bxs"
+     "callback": "arterial_specimen_only(aumc_bxs)",
+     "_comment": "2026-11-03 extraction audit 3: arterial samples only (freetext 11646 'Afname (bloed)' at the same measuredat; a gas without a specimen record is kept), as po2 (owner concept/blood_gas_specimen.py)."
     }
    ],
    "eicu": [
@@ -1525,21 +1526,31 @@
     {
      "ids": 50802,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (52033 'Specimen Type' = ART. on the same specimen_id), as po2/pco2/ph (owner concept/blood_gas_specimen.py)."
     }
    ],
    "mimic": [
     {
      "ids": 50802,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (50800 SPECIMEN TYPE = ART at the same charttime; a gas without a specimen record is kept), as po2 (owner concept/blood_gas_specimen.py)."
     }
    ],
    "mimic_demo": [
     {
      "ids": 50802,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (50800 SPECIMEN TYPE = ART at the same charttime; a gas without a specimen record is kept), as po2 (owner concept/blood_gas_specimen.py)."
     }
    ],
    "sic": [
@@ -1569,7 +1580,9 @@
       9992
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 extraction audit 3: AUMCdb 6810/9992 are blood-gas bicarbonate; arterial samples only (freetext 11646 at the same measuredat; a gas without a specimen record is kept). MIMIC-III/IV bicar stays the serum chemistry item 50882."
     }
    ],
    "eicu": [
@@ -12031,25 +12044,21 @@
   ],
   "min": 0,
   "max": 40,
-  "description": "Positive End Expiratory Pressure",
+  "description": "Positive end-expiratory pressure set on the ventilator (same sources as peep_set); total or measured PEEP is peep_total",
   "omopid": 4353936,
   "category": "ventilator",
   "sources": {
    "aumc": [
     {
      "ids": [
-      6694,
       12284,
-      8862,
-      8879,
-      9666,
       12336,
-      12354,
+      8862,
       16250
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 added low-volume secondary/device-specific applied PEEP channels; PEEP tot remains excluded pending semantic adjudication."
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; 12284/12336 'PEEP (Set)', 8862 'PEEP/CPAP' and 16250 'Zephyros PEEP' are settings; the measured 'Eind exp. druk' 6694/12354 and 'PEEP (gemeten)' 8879/9666 are not pooled."
     }
    ],
    "eicu": [
@@ -12071,23 +12080,23 @@
    "hirid": [
     {
      "ids": [
-      2600,
-      2610
+      2600
      ],
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; 2600 'Positive end expiratory pressure setting'; 2610 'Positive end expiratory pressure' is the measured value and is not pooled."
     }
    ],
    "miiv": [
     {
      "ids": [
-      220339,
-      224700
+      220339
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700 is peep_total."
     }
    ],
    "mimic": [
@@ -12095,12 +12104,11 @@
      "ids": [
       505,
       506,
-      220339,
-      224700
+      220339
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [535, 543] (wrong concept); added [505, 506]"
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700/686 are peep_total. CareVue 505 'PEEP' is charted only in the NICU (1,871 of 1,872 stays) and never at the same time as 506 'PEEP Set' or 686 'Total PEEP Level'; it is that unit's ventilator PEEP."
     }
    ],
    "sic": [
@@ -12116,12 +12124,11 @@
      "ids": [
       505,
       506,
-      220339,
-      224700
+      220339
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [535, 543] (wrong concept); added [505, 506]"
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700/686 are peep_total. CareVue 505 'PEEP' is charted only in the NICU (1,871 of 1,872 stays) and never at the same time as 506 'PEEP Set' or 686 'Total PEEP Level'; it is that unit's ventilator PEEP."
     }
    ]
   }
@@ -12146,23 +12153,27 @@
    "mimic": [
     {
      "ids": [
+      505,
       506,
       220339
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; CareVue 505 'PEEP' is the NICU ventilator PEEP (never co-charted with 506 or 686)."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
+      505,
       506,
       220339
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "index_var": "charttime"
+     "index_var": "charttime",
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; CareVue 505 'PEEP' is the NICU ventilator PEEP (never co-charted with 506 or 686)."
     }
    ]
   }
@@ -23196,7 +23207,7 @@
   "max": 50000,
   "description": "D-dimer (blood)",
   "category": "chemistry",
-  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. FEU-labelled rows are excluded rather than converted with an invalid universal factor; AUMC/SIC are unavailable until their FEU/DDU assay semantics can be represented explicitly.",
+  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. Output is ng/mL DDU; FEU-labelled rows are converted with the conventional factor FEU / 2 (2026-11-03 extraction audit 3). AUMC/SIC are unavailable until their FEU/DDU assay semantics can be represented explicitly.",
   "sources": {
    "miiv": [
     {
@@ -23206,8 +23217,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
-     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
+     "callback": "convert_unit(binary_op(`/`, 2), 'ng/mL', 'FEU')",
+     "_comment": "2026-11-03 extraction audit 3: rows whose valueuom contains FEU (fibrinogen-equivalent units) are divided by 2 and reported as ng/mL DDU (D-dimer units). One D-dimer unit corresponds to about two fibrinogen-equivalent units because the FEU calibrator is expressed as the mass of the fibrinogen molecule (~340 kDa) and DDU as the D-dimer fragment (~195 kDa); the factor 2 is the conventional assay-independent approximation of that ratio, not an assay-specific calibration, so converted values carry that approximation. MIMIC-IV charts both units under both itemids; MIMIC-III records no FEU rows."
     }
    ],
    "mimic": [
@@ -23218,8 +23229,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
-     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
+     "callback": "convert_unit(binary_op(`/`, 2), 'ng/mL', 'FEU')",
+     "_comment": "2026-11-03 extraction audit 3: rows whose valueuom contains FEU (fibrinogen-equivalent units) are divided by 2 and reported as ng/mL DDU (D-dimer units). One D-dimer unit corresponds to about two fibrinogen-equivalent units because the FEU calibrator is expressed as the mass of the fibrinogen molecule (~340 kDa) and DDU as the D-dimer fragment (~195 kDa); the factor 2 is the conventional assay-independent approximation of that ratio, not an assay-specific calibration, so converted values carry that approximation. MIMIC-IV charts both units under both itemids; MIMIC-III records no FEU rows."
     }
    ],
    "mimic_demo": [
@@ -23230,8 +23241,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "callback": "convert_unit(set_val(NA), 'ng/mL', 'FEU')",
-     "_comment": "Both itemids are retained, but valueuom rows containing FEU are set to NA before aggregation. Canonical output is ng/mL DDU only."
+     "callback": "convert_unit(binary_op(`/`, 2), 'ng/mL', 'FEU')",
+     "_comment": "2026-11-03 extraction audit 3: rows whose valueuom contains FEU (fibrinogen-equivalent units) are divided by 2 and reported as ng/mL DDU (D-dimer units). One D-dimer unit corresponds to about two fibrinogen-equivalent units because the FEU calibrator is expressed as the mass of the fibrinogen molecule (~340 kDa) and DDU as the D-dimer fragment (~195 kDa); the factor 2 is the conventional assay-independent approximation of that ratio, not an assay-specific calibration, so converted values carry that approximation. MIMIC-IV charts both units under both itemids; MIMIC-III records no FEU rows."
     }
    ]
   }
