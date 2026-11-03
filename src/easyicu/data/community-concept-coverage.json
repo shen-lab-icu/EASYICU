@@ -2380,7 +2380,7 @@
           "status": "unavailable"
         }
       },
-      "description": "invasive airway (endotracheal tube or tracheostomy), so the GCS verbal score is not assessable"
+      "description": "invasive airway (endotracheal tube or tracheostomy)"
     },
     "fentanyl": {
       "category": "medications",
@@ -6326,7 +6326,7 @@
           "status": "partial"
         }
       },
-      "description": "SpO2/FiO2 (pulse oximetry; 2026-11-03 audit round 2, G8)"
+      "description": "SpO2/FiO2"
     },
     "samp": {
       "category": "microbiology",
