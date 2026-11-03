@@ -81,7 +81,7 @@ from easyicu.webserver.research_launch_scientific import (
     _validate_trajectory_design,
     study_design_family,
     target_trial_launch_inputs,
-    without_exposure_subgroups,
+    record_without_exposure_subgroups,
 )
 from easyicu.webserver.scientific_runtime_projection import (
     WebScientificRuntimeProjectionError,
@@ -316,8 +316,9 @@ def _prepare_scientific_launch(
         else:
             stop_family_out_of_scope(study, question=question, database=database)
         # A study saved before its exposure's own levels were kept out of its
-        # subgroups is planned without them (``exposure_subgroup_variables``).
-        study = without_exposure_subgroups(study)
+        # subgroups is saved and planned without them
+        # (``exposure_subgroup_variables``).
+        study = dict(record_without_exposure_subgroups(study))
         # A variable the question states that the conversation has not
         # recorded stops a new plan instead of leaving it out silently
         # (``unread_stated_variables``).
