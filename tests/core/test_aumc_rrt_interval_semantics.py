@@ -27,18 +27,22 @@ def test_aumc_rrt_uses_treatment_process_intervals_only(
     dictionary = json.loads(dictionary_path.read_text(encoding="utf-8"))
     sources = dictionary["rrt"]["sources"]["aumc"]
 
-    assert sources == [
-        {
-            "table": "processitems",
-            "sub_var": "itemid",
-            "ids": [12465, 16363],
-            "index_var": "start",
-            "dur_var": "stop",
-            "callback": "transform_fun(set_val(TRUE))",
-            "_comment": sources[0]["_comment"],
-        }
-    ]
+    assert sources[0] == {
+        "table": "processitems",
+        "sub_var": "itemid",
+        "ids": [12465, 16363],
+        "index_var": "start",
+        "dur_var": "stop",
+        "callback": "transform_fun(set_val(TRUE))",
+        "_comment": sources[0]["_comment"],
+    }
     assert not ({9161, 9162, 9163, 16352} & set(sources[0]["ids"]))
+    # Hourly removal/pressure readings are point evidence, never an interval.
+    readings = sources[1]
+    assert readings["table"] == "numericitems"
+    assert "dur_var" not in readings
+    assert readings["callback"] == "transform_fun(set_val(TRUE))"
+    assert len(sources) == 2
 
 
 def test_compatibility_loader_projects_explicit_duration_end_column() -> None:
