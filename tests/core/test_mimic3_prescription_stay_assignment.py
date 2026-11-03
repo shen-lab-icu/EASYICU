@@ -113,3 +113,34 @@ def test_relative_hour_index_moves_twelve_hours_and_garbage_is_not_reinterpreted
     assert shift_index_minutes(pd.Series([-3.0, 10.5])).tolist() == [9.0, 22.5]
     with pytest.raises(ValueError, match="neither datetimes nor"):
         shift_index_minutes(pd.Series(["not a time"], dtype=object))
+
+
+def test_every_mimic_iii_prescription_source_is_placed_at_noon():
+    # 2026-11-03 extraction audit round 2 (D5): a midnight order on the day of
+    # ICU admission read as pre-ICU exposure.
+    import json
+    from importlib import resources
+
+    dictionary = json.loads(
+        resources.files("easyicu.data").joinpath("concept-dict.json").read_text(encoding="utf-8")
+    )
+    callbacks = {
+        (name, source.get("callback"))
+        for name, concept in dictionary.items()
+        for database in ("mimic", "mimic_demo")
+        for source in concept.get("sources", {}).get(database, [])
+        if source.get("table") == "prescriptions"
+    }
+    assert callbacks
+    assert {cb for _, cb in callbacks} <= {"mimic_abx_presc", "mimic_prescription_noon"}
+
+    source = ConceptSource.from_mapping(
+        {"regex": "furosem", "table": "prescriptions", "sub_var": "drug",
+         "index_var": "startdate", "callback": "mimic_prescription_noon",
+         "class_name": "rgx_itm"}
+    )
+    frame = pd.DataFrame({"icustay_id": [1], "drug": ["Furosemide"],
+                          "startdate": pd.to_datetime(["2101-01-01"]).astype("datetime64[us]")})
+    result = _apply_callback(frame, source, concept_name="loop_diuretic")
+    assert result["startdate"].tolist() == [pd.Timestamp("2101-01-01 12:00")]
+    assert result["loop_diuretic"].tolist() == [True]

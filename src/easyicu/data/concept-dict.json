@@ -1328,8 +1328,8 @@
      "sub_var": "drug",
      "regex": "(?i)aspirin|acetylsalicyl",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-05-27 Round 3. MIIV/MIIIv aspirin via prescriptions table (not in inputevents)."
+     "callback": "mimic_prescription_noon",
+     "_comment": "2026-05-27 Round 3. MIIV/MIIIv aspirin via prescriptions table (not in inputevents). 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "mimic_demo": [
@@ -1338,8 +1338,8 @@
      "sub_var": "drug",
      "regex": "(?i)aspirin|acetylsalicyl",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-05-27 Round 3. MIIV/MIIIv aspirin via prescriptions table (not in inputevents)."
+     "callback": "mimic_prescription_noon",
+     "_comment": "2026-05-27 Round 3. MIIV/MIIIv aspirin via prescriptions table (not in inputevents). 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ]
   }
@@ -2947,8 +2947,8 @@
      "sub_var": "drug",
      "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate))\\s*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-III has no eMAR: prescriptions (order start date) as the MIMIC dexamethasone concept reads them."
+     "callback": "mimic_prescription_noon",
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-III has no eMAR: prescriptions (order start date) as the MIMIC dexamethasone concept reads them. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     },
     {
      "ids": [
@@ -2966,8 +2966,8 @@
      "sub_var": "drug",
      "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate))\\s*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-III has no eMAR: prescriptions (order start date) as the MIMIC dexamethasone concept reads them."
+     "callback": "mimic_prescription_noon",
+     "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids (prednisone, prednisolone, methylprednisolone, hydrocortisone, dexamethasone, fludrocortisone) by name; topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and blinded study drugs are excluded. MIMIC-III has no eMAR: prescriptions (order start date) as the MIMIC dexamethasone concept reads them. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     },
     {
      "ids": [
@@ -3735,8 +3735,8 @@
      "sub_var": "drug",
      "regex": "[Dd]examethasone(?!.*[Oo]phth)(?!.*[Tt]opic)(?!.*[Cc]ream)(?!.*[Oo]int)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-05-27. MIIV/MIIIv have no IV dexamethasone in inputevents; use prescriptions and exclude ophthalmic/topical preparations."
+     "callback": "mimic_prescription_noon",
+     "_comment": "2026-05-27. MIIV/MIIIv have no IV dexamethasone in inputevents; use prescriptions and exclude ophthalmic/topical preparations. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "mimic_demo": [
@@ -3745,8 +3745,8 @@
      "sub_var": "drug",
      "regex": "[Dd]examethasone(?!.*[Oo]phth)(?!.*[Tt]opic)(?!.*[Cc]ream)(?!.*[Oo]int)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-05-27. MIIV/MIIIv have no IV dexamethasone in inputevents; use prescriptions and exclude ophthalmic/topical preparations."
+     "callback": "mimic_prescription_noon",
+     "_comment": "2026-05-27. MIIV/MIIIv have no IV dexamethasone in inputevents; use prescriptions and exclude ophthalmic/topical preparations. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "aumc": [
@@ -26417,9 +26417,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. CareVue furosemide boluses appear only here."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. CareVue furosemide boluses appear only here. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "mimic_demo": [
@@ -26454,9 +26454,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. CareVue furosemide boluses appear only here."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. CareVue furosemide boluses appear only here. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "sic": [
@@ -26570,9 +26570,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "mimic_demo": [
@@ -26581,9 +26581,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "sic": [
@@ -26712,9 +26712,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "mimic_demo": [
@@ -26723,9 +26723,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "sic": [
@@ -26843,9 +26843,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "mimic_demo": [
@@ -26854,9 +26854,9 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_noon",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III has no ICU administration record for this class; prescriptions are orders with date resolution (startdate at midnight), as for aspirin. 2026-11-03 audit round 2 (D5): date-only order placed at noon of its date (as abx), day-level exposure."
     }
    ],
    "sic": [

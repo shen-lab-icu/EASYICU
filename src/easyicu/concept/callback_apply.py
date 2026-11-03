@@ -3371,7 +3371,11 @@ def _apply_callback(
 
     # Handle MIMIC-III mimic_abx_presc callback
     # R ricu logic: x[, c(idx, val_var) := list(get(idx) + mins(720L), TRUE)]
-    if expr == "mimic_abx_presc":
+    from .mimic_prescription_time import PRESCRIPTION_NOON_CALLBACK
+
+    # mimic_prescription_noon is the same placement for non-antibiotic orders
+    # (2026-11-03 audit round 2, D5).
+    if expr in ("mimic_abx_presc", PRESCRIPTION_NOON_CALLBACK):
         frame = frame.copy()
         index_col = source.index_var
         if not index_col:
