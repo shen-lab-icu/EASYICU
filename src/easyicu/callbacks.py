@@ -3361,8 +3361,9 @@ def driving_pressure(
                 direction='nearest'
             )
         else:
-            # Numeric time (minutes or seconds)
-            max_diff = match_win.total_seconds() / 60  # assume minutes
+            # Numeric concept time is relative hours; a 60-minute window read
+            # as 60 matched PEEP up to 60 h away (2026-11-04 audit round 3, R3-17).
+            max_diff = match_win.total_seconds() / 3600.0
             merged = pd.merge_asof(
                 plat_pt, peep_pt[id_cols + [time_col, 'peep']],
                 on=time_col, by=id_cols,
@@ -3420,7 +3421,7 @@ def _drop_plateau_above_pip(
     if pd.api.types.is_datetime64_any_dtype(left[time_col]):
         tolerance = match_win
     else:
-        tolerance = match_win.total_seconds() / 60
+        tolerance = match_win.total_seconds() / 3600.0  # relative hours (R3-17)
         for col in id_cols + [time_col]:
             left[col] = pd.to_numeric(left[col], errors='coerce').astype('float64')
             right[col] = pd.to_numeric(right[col], errors='coerce').astype('float64')

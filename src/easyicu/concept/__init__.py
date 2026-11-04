@@ -8744,6 +8744,11 @@ class ConceptResolver:
             base_id_cols = list(base_table.id_vars) if isinstance(base_table, WinTbl) else list(base_table.id_columns)
             base_idx_col = base_table.index_var if isinstance(base_table, WinTbl) else base_table.index_column
             win_df = data[base_id_cols + [base_idx_col]].copy()
+            # A window opens on the hour of its observation, as every hourly
+            # concept does (2026-11-04 audit round 3, R3-05: 88.5% of eICU
+            # ett_gcs rows were off the hour).
+            if pd.api.types.is_numeric_dtype(win_df[base_idx_col]):
+                win_df[base_idx_col] = np.floor(win_df[base_idx_col])
             # True 行使用完整窗口持续时间（分钟），False 行使用 0（只表示该时间点存在）
             # 🔧 FIX 2025-02-13: Use 'dur_var' as column name to match R ricu output format
             win_df["dur_var"] = np.where(mask.values, duration_mins, 0.0)
@@ -10014,9 +10019,10 @@ class ConceptResolver:
                 if declared_index and declared_index in df.columns:
                     declared_time_columns[name] = declared_index
                 # The MIMIC-III IMV repair needs its reconstructed duration to
-                # survive the public multi-concept merge. Keep this scoped to
-                # that newly bound source: changing all mech_vent WinTbls would
-                # alter the already-sealed MIIV/AUMC/SIC extraction contract.
+                # survive the public multi-concept merge. A window concept with
+                # an hours dur_var and no end column (SICdb/HiRID mech_vent and
+                # ett_gcs) is expanded over it too (audit round 3, F-31); one
+                # with an end column (MIIV endtime, AUMC stop) keeps that end.
                 declared_duration = getattr(table, 'dur_var', None)
                 if (
                     name == "mech_vent"
@@ -10024,6 +10030,8 @@ class ConceptResolver:
                     and declared_duration
                     and declared_duration in df.columns
                 ):
+                    declared_duration_columns[name] = declared_duration
+                elif compat.merged_window_duration_column(name, df, declared_duration):
                     declared_duration_columns[name] = declared_duration
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
@@ -10109,9 +10117,9 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
-            # Only the newly bound MIMIC-III mech_vent source opts into interval
-            # preservation here. Its dur_var is an elapsed duration, while the
-            # source frame can retain an auxiliary absolute end timestamp.
+            # A declared duration (MIMIC-III mech_vent; window concepts without
+            # an end column) is an elapsed time in hours, while the source frame
+            # can retain an auxiliary absolute end timestamp.
             declared_duration = declared_duration_columns.get(name)
             if declared_duration and declared_duration in df.columns:
                 if declared_duration != "duration":

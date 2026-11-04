@@ -2470,6 +2470,38 @@ def _callback_anion_gap(
     )
 
 
+def _callback_plateau_pressure(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Plateau pressure consistent with the same hour's PIP and PEEP.
+
+    An end-inspiratory plateau lies between PEEP and the peak inspiratory
+    pressure.  A charted plateau above PIP + 1 cmH2O or below PEEP is a
+    mislabelled or mis-entered value and is dropped; one without a PIP or PEEP
+    in that hour cannot be checked and is kept (2026-11-04 audit round 3, R3-18).
+    """
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    keep = id_columns + ([index_column] if index_column else [])
+    if merged.empty or "plateau_pres_raw" not in merged.columns:
+        empty = merged[keep].copy() if all(c in merged.columns for c in keep) else pd.DataFrame(columns=keep)
+        empty["plateau_pres"] = pd.Series(dtype="float64")
+        return _as_icutbl(empty, id_columns=id_columns, index_column=index_column, value_column="plateau_pres")
+
+    plateau = pd.to_numeric(merged["plateau_pres_raw"], errors="coerce")
+    pip = pd.to_numeric(merged.get("pip", pd.Series(np.nan, index=merged.index)), errors="coerce")
+    peep = pd.to_numeric(merged.get("peep", pd.Series(np.nan, index=merged.index)), errors="coerce")
+    implausible = plateau.gt(pip + 1).fillna(False) | plateau.lt(peep).fillna(False)
+    out = merged.loc[plateau.notna() & ~implausible, keep].copy()
+    out["plateau_pres"] = plateau[out.index]
+    return _as_icutbl(
+        out.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="plateau_pres",
+    )
+
+
 def _callback_pulse_pressure(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3069,18 +3101,25 @@ def _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, time_col
     """Vectorized expansion of WinTbl vent_ind data to hourly time points.
     
     Replaces iterrows() loop with numpy vectorized operations.
-    Each window (start, dur) is expanded to cover all integer hours in [floor(start), floor(start+dur/60)].
+    Each window (start, dur) is expanded to cover all integer hours in
+    [floor(start), floor(start + dur)], with dur in hours.  vent_ind writes its
+    window durations in hours; dividing them by 60 again shrank every window
+    to its first hour (2026-11-04 audit round 3, section 4).
     """
+    from ..table.duration import get_dur_var_unit, resolve_dur_var_hours
+
     if vent_df.empty:
         return pd.DataFrame(columns=list(vent_id_cols) + [time_col_name, 'vent_ind'])
     
     starts = pd.to_numeric(vent_df[start_col], errors='coerce').values
-    if dur_col in vent_df.columns:
+    if dur_col not in vent_df.columns:
+        durs = np.zeros(len(vent_df))
+    elif get_dur_var_unit(vent_df) is None and not pd.api.types.is_timedelta64_dtype(vent_df[dur_col]):
         durs = pd.to_numeric(vent_df[dur_col], errors='coerce').fillna(0).values
     else:
-        durs = np.zeros(len(vent_df))
+        durs = resolve_dur_var_hours(vent_df, column=dur_col, concept="vent_ind").fillna(0).values
     
-    ends = np.where(durs > 0, starts + durs / 60.0, starts)
+    ends = np.where(durs > 0, starts + durs, starts)
     start_hours = np.floor(starts).astype(int)
     end_hours = np.floor(ends).astype(int)
     counts = np.maximum(end_hours - start_hours + 1, 1)
@@ -4942,6 +4981,9 @@ def _callback_vent_ind(
             "vent_ind": "any"
         }).reset_index(drop=True)
 
+        from ..table.duration import UNIT_HOURS, set_dur_var_unit
+
+        set_dur_var_unit(result_df, UNIT_HOURS)
         return WinTbl(
             data=result_df,
             id_vars=list(id_columns),
@@ -5130,44 +5172,18 @@ def _callback_vent_ind(
                             start_sorted[kc] = start_sorted[kc].astype('float64')
                             end_sorted = end_sorted.assign(**{kc: end_sorted[kc].astype('float64')})
             merged = pd.merge_asof(start_sorted, end_sorted[id_columns + ["_end_dt"]], **merge_kwargs)
-            # 🔥 R ricu 的 calc_dur 逻辑:
-            # calc_dur <- function(x, y) fifelse(is.na(y), x + match_win, y - x)
-            # 其中 x = vent_start.time (ICU 入院后的小时数), y = vent_end.time (如果没匹配到是 NA)
-            # 如果没匹配到 vent_end: dur = start_hours + match_win（不是 match_win！）
-            # 如果匹配到 vent_end: dur = end - start
-            # 这样窗口结束时间 = start + dur = 2*start + match_win（如果没匹配）
-            # 这导致"连锁"效应：密集的 vent_start 事件会产生相互重叠的大窗口
-            
-            # 获取 start 时间相对于 epoch 的小时数（这就是 R ricu 的 ICU 入院后时间）
-            # 因为 _coerce_time 将数值型时间转换为 epoch + timedelta(hours=value)
-            epoch = pd.Timestamp("1970-01-01")
-            start_hours = (merged["_start_dt"] - epoch).dt.total_seconds() / 3600.0
-            
-            # 如果匹配到 vent_end: dur = end - start
-            # 如果没匹配到: dur = start_hours + match_win_hours（R ricu 的行为）
+            # ricu's calc_dur returned start + match_win for a start with no
+            # matching end, i.e. an end time used as a duration, so a start at
+            # hour 40 ran to hour 86.  An unmatched start lasts match_win
+            # (2026-11-04 audit round 3, ricu-bug sweep).
             matched_mask = merged["_end_dt"].notna()
-            match_win_hours = match_win.total_seconds() / 3600.0
-            
-            # 初始化持续时间列为 timedelta 类型（避免 FutureWarning）
-            merged["vent_dur_td"] = pd.to_timedelta(pd.Series(dtype=float), unit="h")
-            
-            # 匹配到的情况: dur = end - start
+            merged["vent_dur_td"] = pd.Series(match_win, index=merged.index)
             if matched_mask.any():
                 matched_dur = merged.loc[matched_mask, "_end_dt"] - merged.loc[matched_mask, "_start_dt"]
                 merged.loc[matched_mask, "vent_dur_td"] = matched_dur.values
-            
-            # 没匹配到的情况: dur = start_hours + match_win (R ricu 的 calc_dur 行为)
-            # 使用 start_hours（相对于 epoch），这等于 ICU 入院后的小时数
-            if (~matched_mask).any():
-                unmatched_dur = pd.to_timedelta(start_hours.loc[~matched_mask] + match_win_hours, unit="h")
-                merged.loc[~matched_mask, "vent_dur_td"] = unmatched_dur.values
         else:
             merged = start_sorted.copy()
-            # 当没有任何 vent_end 数据时，也使用 R ricu 的 calc_dur 逻辑
-            epoch = pd.Timestamp("1970-01-01")
-            start_hours = (merged["_start_dt"] - epoch).dt.total_seconds() / 3600.0
-            match_win_hours = match_win.total_seconds() / 3600.0
-            merged["vent_dur_td"] = pd.to_timedelta(start_hours + match_win_hours, unit="h")
+            merged["vent_dur_td"] = pd.Series(match_win, index=merged.index)
 
         # 🔧 FIX 2024-11-30: Match R ricu's min_length filter
         # R ricu code: res <- res[get(var) >= min_length, ]
@@ -5209,8 +5225,6 @@ def _callback_vent_ind(
             raise ValueError(
                 "eICU vent_ind requires the point-evidence mech_vent dependency"
             )
-        if mech_tbl.data.empty:
-            return _empty_result()
         eicu_duration_columns = {
             "dur_var",
             "mech_vent_dur",
@@ -5226,8 +5240,38 @@ def _callback_vent_ind(
                 "eICU mech_vent point-evidence contract received an interval; "
                 "review the source semantics before deriving vent_ind"
             )
-        eicu_point_result = _normalize_result(_windows_from_mech(mech_tbl))
-        return eicu_point_result if eicu_point_result is not None else _empty_result()
+        # Point evidence and respiratoryCare intervals become windows, bridging
+        # gaps of at most eight hours (2026-11-04 audit round 3, R3-05).
+        from .eicu_ventilation_windows import bridge_hours, load_care_intervals
+
+        id_column = id_columns[0] if id_columns else "patientunitstayid"
+        points = (
+            None if mech_tbl.data.empty else _normalize_result(_windows_from_mech(mech_tbl))
+        )
+        point_frame = points.data if points is not None else pd.DataFrame()
+        point_hours = pd.DataFrame(
+            {
+                id_column: point_frame.get(id_column, pd.Series(dtype="int64")),
+                "hour": np.floor(
+                    pd.to_numeric(point_frame.get(time_column, pd.Series(dtype="float64")), errors="coerce")
+                ),
+            }
+        )
+        stays = (
+            list(ctx.patient_ids)
+            if ctx.patient_ids is not None
+            else pd.unique(mech_tbl.data[id_column].dropna()).tolist()
+            if id_column in mech_tbl.data.columns
+            else []
+        )
+        intervals = load_care_intervals(ctx.data_source, stays)
+        hours = bridge_hours(point_hours, intervals, id_column=id_column)
+        if hours.empty:
+            return _empty_result()
+        hours = hours.rename(columns={"hour": time_column})
+        hours[time_column] = hours[time_column].astype("float64")
+        hours["vent_ind"] = True
+        return _as_icutbl(hours, id_columns=[id_column], index_column=time_column, value_column="vent_ind")
 
     # 🔥 R ricu vent_ind 逻辑:
     # 如果 mech_vent 有数据 → 只使用 mech_vent，返回 win_tbl 格式
@@ -5301,16 +5345,20 @@ def _urine24_batch(
     """
     # Step 1: Compute per-patient stats
     stats = df.groupby(id_col)[time_col].agg(['min', 'max']).reset_index()
-    stats['ricu_end'] = stats['max'] - stats['min']  # ricu buggy behavior: duration as end
+    # The grid runs from the first to the last urine time.  ricu used the
+    # duration (max - min) as the end time, which cut the tail of a stay
+    # starting after admission and padded zero urine past the last record of
+    # a stay with pre-ICU urine (2026-11-04 audit round 3, R3-09).
+    stats['grid_end'] = stats['max']
     
     # Step 2: Generate time grids for all patients (vectorized with numpy)
-    # Each patient needs: arange(start, ricu_end + step, step)
+    # Each patient needs: arange(start, end + step, step)
     grid_sizes = np.maximum(1, np.floor(
-        (stats['ricu_end'].values - stats['min'].values) / time_step + 1
+        (stats['grid_end'].values - stats['min'].values) / time_step + 1
     ).astype(int))
     
-    # Handle edge case: ricu_end < start (duration = 0)
-    grid_sizes = np.where(stats['ricu_end'].values >= stats['min'].values, grid_sizes, 1)
+    # Handle edge case: a single record (end == start)
+    grid_sizes = np.where(stats['grid_end'].values >= stats['min'].values, grid_sizes, 1)
     
     total_points = grid_sizes.sum()
 
@@ -5324,7 +5372,7 @@ def _urine24_batch(
     # 60k-patient MIMIC-III run that was the dominant cost in urine24.
     # Pull the arrays out of pandas once and index with plain numpy.
     starts_arr = stats['min'].to_numpy()
-    ends_arr = stats['ricu_end'].to_numpy()
+    ends_arr = stats['grid_end'].to_numpy()
     id_arr = stats[id_col].to_numpy()
 
     offset = 0
@@ -5562,10 +5610,11 @@ def _callback_urine24(
         actual_end_time = original_times[-1]
         duration = actual_end_time - start_time
         
-        # CRITICAL: Match ricu's buggy behavior
+        # The grid ends at the last urine time, not at the duration
+        # (ricu's seq(start, duration); 2026-11-04 audit round 3, R3-09).
         if is_numeric_time:
-            ricu_end_time = duration
-            time_grid = np.arange(start_time, ricu_end_time + numeric_time_step, numeric_time_step)
+            ricu_end_time = actual_end_time
+            time_grid = np.arange(start_time, ricu_end_time + numeric_time_step * 0.5, numeric_time_step)
         else:
             ricu_end_time = pd.Timedelta(hours=duration) if isinstance(duration, (int, float)) else duration
             time_grid = pd.date_range(start=start_time, end=start_time + ricu_end_time, freq=interval)
@@ -6382,28 +6431,10 @@ def _callback_vaso60(
         # IMPORTANT: pd.to_timedelta() without unit treats numbers as NANOSECONDS, not hours!
         # We need to explicitly specify the unit based on the database
         numeric_durations = pd.to_numeric(durations, errors="coerce")
-        
-        is_aumc = isinstance(ds_name, str) and ds_name.lower() == 'aumc'
-        is_miiv = isinstance(ds_name, str) and ds_name.lower() in ('miiv', 'mimic', 'mimic_demo')
-        
-        if is_aumc or is_miiv:
-            # AUMC and MIMIC: duration is in hours
-            durations = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
-        else:
-            # Other databases: try hours first (most common for ICU data),
-            # then fall back to minutes if hours gives unreasonably large values
-            hours_based = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
-            # Check if values are reasonable (< 1000 hours = ~41 days max stay)
-            if hours_based.notna().any() and (hours_based.max() < pd.Timedelta(hours=1000) if hours_based.notna().any() else True):
-                durations = hours_based
-            else:
-                # Try minutes
-                minutes_based = pd.to_timedelta(numeric_durations, unit="m", errors="coerce")
-                if minutes_based.notna().any():
-                    durations = minutes_based
-                else:
-                    # Fall back to seconds
-                    durations = pd.to_timedelta(numeric_durations, unit="s", errors="coerce")
+        # Every *_dur callback returns hours. The unit is never inferred from
+        # the magnitude: one 8,784 h eICU order span used to switch a whole
+        # cohort's durations to minutes (2026-11-04 audit round 3, R3-04).
+        durations = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
 
     dur_df["__duration"] = durations
     dur_df = dur_df.dropna(subset=["__duration", dur_index_col])
@@ -6605,7 +6636,11 @@ def _callback_vaso60(
         rate_df = pd.concat([rate_df, rate_shifted], ignore_index=True)
 
     merged = rate_df.merge(intervals.drop(columns=["__length"]), on=id_columns, how="inner")
-    mask = (merged[rate_index_col] >= merged["__start"]) & (merged[rate_index_col] <= merged["__end"])
+    # Hourly rate grids (HiRID, AUMC) sit on the floored hour while a duration
+    # starts at its exact minute; compare on the same basis so the hour that
+    # contains the start keeps its rate (2026-11-04 audit round 3, R3-02).
+    window_start = merged["__start"].dt.floor(final_interval or pd.Timedelta(hours=1))
+    mask = (merged[rate_index_col] >= window_start) & (merged[rate_index_col] <= merged["__end"])
     filtered = merged[mask]
 
     if filtered.empty:
@@ -8889,6 +8924,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "free_days": free_days_callback,
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
+    "plateau_pressure": _callback_plateau_pressure,
     "persistent_critical_illness": _callback_persistent_critical_illness,
     "shock_index": _callback_shock_index,
     "modified_shock_index": _callback_modified_shock_index,

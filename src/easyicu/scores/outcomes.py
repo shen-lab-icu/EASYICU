@@ -66,6 +66,7 @@ from easyicu.outcome_availability import (
 from .comorbidity import lower_cols
 from ..databases.profiles import get_database_profile, normalize_database_key
 from ..io.identity import require_unique_keys
+from ..source_death_times import aumc_registry_death_after_discharge, sic_recorded_death
 
 LOGGER = logging.getLogger(__name__)
 
@@ -247,6 +248,15 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
             & (discharge_days >= 0)
         ).astype(bool)
         df["followup_days"] = (discharge_days + bound_days).where(documented)
+        # The bound applies to every stay of the group, dead or alive
+        # (2026-11-04 audit round 3, R3-08).
+        # Without a usable discharge time the bound is at least the source's
+        # linkage window from ICU admission.
+        df["source_bound_days"] = (
+            discharge_days.where(discharge_days >= 0, 0.0).fillna(0.0) + bound_days
+        ).where(dbsource.isin(["carevue", "metavision", "both"]).fillna(False))
+    else:
+        df["source_bound_days"] = np.nan
     return df.rename(columns={stay_col: "_stay", "intime": "_intime", "outtime": "_outtime"})[
         [
             "_stay",
@@ -257,6 +267,7 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
             "days_to_death",
             "los_days",
             "followup_days",
+            "source_bound_days",
         ]
     ]
 
@@ -276,8 +287,18 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     unusable_death = raw_death.notna() & ~valid_death
     icu_off = icu_off.where(valid_origin)
     off_death = off_death.where(valid_death)
-    df["days_to_death"] = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
     time_of_stay = pd.to_numeric(cases[cmap["timeofstay"]], errors="coerce")
+    # A recorded death in hospital or at ICU discharge without OffsetOfDeath is
+    # timed at ICU discharge; one recorded a little before the ICU transfer
+    # dies at its start (2026-11-04 audit round 3, R3-15).
+    recorded = sic_recorded_death(
+        cases[cmap["hospitaldischargetype"]] if "hospitaldischargetype" in cmap else pd.Series(np.nan, index=cases.index),
+        cases[cmap["dischargestate"]] if "dischargestate" in cmap else pd.Series(np.nan, index=cases.index),
+    )
+    untimed = recorded & off_death.isna() & ~unusable_death & np.isfinite(time_of_stay)
+    off_death = off_death.where(~untimed, time_of_stay)
+    days_to_death = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
+    df["days_to_death"] = days_to_death.where(~(recorded & days_to_death.lt(0)), 0.0)
     los_seconds = time_of_stay.where(np.isfinite(time_of_stay)) - icu_off
     df["los_days"] = los_seconds.where(los_seconds >= 0) / 86400.0
     df["followup_days"] = np.nan
@@ -301,6 +322,7 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
         df["followup_days"] = source_bound.where(
             valid_origin & ~unusable_death & (source_bound >= 0)
         ).to_numpy()
+        df["source_bound_days"] = source_bound.where(valid_origin & (source_bound >= 0)).to_numpy()
     # Moving the bound to the ICU transfer leaves it a few hours short of a
     # horizon equal to the category (median transfer 2 h after admission).
     # Accept a shortfall under one day: censoring every such survivor would
@@ -323,6 +345,7 @@ def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
     # some such deaths carry none.  This is the ``death`` concept's rule.
     destination = adm.get("destination", pd.Series(pd.NA, index=adm.index))
     in_icu = destination.astype("string").str.strip().str.lower().eq("overleden").fillna(False)
+    dod = aumc_registry_death_after_discharge(dod, discharge, day=86400000.0)
     dod = dod.where(~(in_icu & discharge.notna()), discharge)
     df["days_to_death"] = (dod - admit) / 86400000.0  # ms -> days
     df["los_days"] = (discharge - admit) / 86400000.0
@@ -401,11 +424,21 @@ def _load_followup_outcomes(
             f"{database}: fixed-horizon mortality has no follow-up for any "
             "stay without a recorded death"
         )
+    # A source whose follow-up of a stay ends before a horizon records deaths
+    # up to that bound only.  The horizon is then missing for the stay whether
+    # it died or not: keeping its deaths while its survivors are missing
+    # defined MIMIC-III MetaVision one-year mortality for the dead (84.5%;
+    # 2026-11-04 audit round 3, R3-08).
+    source_bound = pd.to_numeric(
+        base.get("source_bound_days", pd.Series(np.nan, index=base.index)),
+        errors="coerce",
+    ).to_numpy()
     for name, horizon in _HORIZONS.items():
-        died_by = has_death & (dtd <= horizon) & (dtd >= 0)
-        known_alive = (has_death & (dtd > horizon)) | (
+        unreachable = np.isfinite(source_bound) & (source_bound + grace_days < horizon)
+        died_by = has_death & (dtd <= horizon) & (dtd >= 0) & ~unreachable
+        known_alive = ((has_death & (dtd > horizon)) | (
             ~has_death & (followup_days + grace_days >= horizon)
-        )
+        )) & ~unreachable
         endpoint = pd.array([pd.NA] * len(base), dtype="boolean")
         endpoint[died_by] = True
         endpoint[known_alive] = False

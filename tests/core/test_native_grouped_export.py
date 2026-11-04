@@ -782,7 +782,9 @@ def test_eicu_native_publication_quarantines_adult_and_unknown_small_tidal_volum
     assert exported.loc[3, "tidal_vol"] == 8.0
     assert pd.isna(exported.loc[4, "tidal_vol"])
     assert exported.loc[5, "tidal_vol"] == 500.0
-    assert exported.loc[6, "tidal_vol"] == 0.0
+    # A measured tidal volume of 0 (ventilator standby) is below the concept
+    # minimum of 1 mL (2026-11-04 audit round 3, M NEW-5).
+    assert pd.isna(exported.loc[6, "tidal_vol"])
     assert exported.loc[1, "tidal_vol_set"] == 500.0
     assert pd.isna(exported.loc[3, "tidal_vol_set"])
     assert pd.isna(exported.loc[4, "tidal_vol_set"])

@@ -17,6 +17,16 @@ import pathlib
 import pytest
 
 DICT = pathlib.Path(__file__).resolve().parents[2] / "src" / "easyicu" / "data" / "concept-dict.json"
+
+# Boolean medication sources mark an administration TRUE; MIMIC-III
+# prescriptions are placed at noon of their start day, and a HiRID zero
+# givendose (pump start/stop marker) is not an administration (2026-11-04
+# audit round 3, F-17/F-23).
+BOOLEAN_DRUG_CALLBACKS = {
+    "transform_fun(set_val(TRUE))",
+    "mimic_prescription_noon",
+    "transform_fun(comp_na(`>`, 0))",
+}
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
@@ -65,7 +75,7 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
-            assert src.get("callback") == "transform_fun(set_val(TRUE))"
+            assert src.get("callback") in BOOLEAN_DRUG_CALLBACKS
 
 
 @pytest.mark.parametrize("name,_dbs,_cov", BATCH7, ids=[m[0] for m in BATCH7])

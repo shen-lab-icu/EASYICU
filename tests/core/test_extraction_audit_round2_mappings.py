@@ -71,7 +71,10 @@ def test_g4_aumc_paco2_converts_labelled_kpa():
 
 @pytest.mark.parametrize("concept", ["spo2", "o2sat"])
 def test_g3_aumc_blood_gas_saturation_is_not_pulse_oximetry(concept):
-    assert 8903 not in _ids(concept, "aumc")
+    # o2sat may carry the gas 8903 only as an arterial-specimen source (audit
+    # round 3, R3-10); pulse oximetry 6709 stays.
+    plain = [s for s in _sources(concept, "aumc") if "specimen_only" not in str(s.get("callback"))]
+    assert all(8903 not in (s["ids"] if isinstance(s["ids"], list) else [s["ids"]]) for s in plain)
     assert 6709 in _ids(concept, "aumc")
 
 
@@ -341,7 +344,9 @@ def test_p6_sic_tidal_volume_below_100_ml_is_missing():
 
 def test_s8_hirid_items_reach_their_concepts():
     sofa2 = json.loads((Path(__file__).parents[2] / "src/easyicu/data/sofa2-dict.json").read_text())
-    assert _ids("neut", "hirid") == {24000556}  # 24000550 behaves as an absolute count
+    # Segmented + band forms of one differential (summed), and 24000550, an
+    # absolute count read against WBC (2026-11-04 audit round 3, F-18/S8).
+    assert _ids("neut", "hirid") == {24000550, 24000556, 24000557}
     # HiRID has only oral diltiazem; the concept is IV elsewhere (2026-07-17 decision).
     assert "hirid" not in DICTIONARY["diltiazem"]["sources"]
     assert {1000793} <= set(sofa2["other_vaso"]["sources"]["hirid"][0]["ids"])

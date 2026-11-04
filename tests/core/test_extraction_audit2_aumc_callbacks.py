@@ -39,9 +39,11 @@ def test_aumc_death_marks_survivors_false_and_unknown_discharge_na():
     assert out.loc[3] is False  # died long after ICU discharge: not this endpoint
     assert out.loc[4] is False  # no recorded death
     assert pd.isna(out.loc[5])  # no discharge time: unknown
-    # Deaths keep their date of death; survivors are timed at ICU discharge so
-    # the hourly grid does not drop them as untimed rows.
-    assert result.loc[[1, 2], "dateofdeath"].tolist() == [900, 1000 + 71 * 60]
+    # Deaths keep their date of death, but no earlier than ICU discharge: a
+    # registry date (midnight) on the day of discharge is the discharge (audit
+    # round 3, R3-13).  Survivors are timed at ICU discharge so the hourly grid
+    # does not drop them as untimed rows.
+    assert result.loc[[1, 2], "dateofdeath"].tolist() == [1000, 1000 + 71 * 60]
     assert result.loc[[3, 4], "dateofdeath"].tolist() == [1000, 1000]
 
 

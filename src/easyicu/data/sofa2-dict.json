@@ -297,10 +297,39 @@
    ],
    "eicu": [
     {
+     "ids": [
+      "Oral ETT",
+      "Nasal ETT",
+      "Double-Lumen Tube",
+      "Cricothyrotomy"
+     ],
      "table": "respiratorycare",
-     "sub_var": "ventstartoffset",
-     "val_var": "ventstartoffset",
-     "callback": "transform_fun(set_val(TRUE))"
+     "sub_var": "airwaytype",
+     "value_var": "airwaytype",
+     "index_var": "ventstartoffset",
+     "callback": "combine_callbacks(eicu_invasive_airway_evidence, transform_fun(set_val(TRUE)))",
+     "_comment": "2026-11-04 audit round 3 (R3-06): the mech_vent ventilation evidence. The former respiratorycare ventstartoffset source read 685,205 placeholder rows (start = end = 0) as support."
+    },
+    {
+     "ids": [
+      "O2 Device",
+      "Oxygen Delivery Method"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "value_var": "respchartvalue",
+     "index_var": "respchartoffset",
+     "callback": "combine_callbacks(eicu_respiratory_device_ventilation_evidence, transform_fun(set_val(TRUE)))",
+     "_comment": "2026-11-04 audit round 3 (R3-06): the mech_vent ventilation evidence. The former respiratorycare ventstartoffset source read 685,205 placeholder rows (start = end = 0) as support."
+    },
+    {
+     "regex": "(?i)(mechanical ventilation|non[- ]?invasive ventilation)",
+     "table": "treatment",
+     "sub_var": "treatmentstring",
+     "value_var": "treatmentstring",
+     "index_var": "treatmentoffset",
+     "callback": "combine_callbacks(eicu_treatment_ventilation_evidence, transform_fun(set_val(TRUE)))",
+     "_comment": "2026-11-04 audit round 3 (R3-06): the mech_vent ventilation evidence. The former respiratorycare ventstartoffset source read 685,205 placeholder rows (start = end = 0) as support."
     },
     {
      "table": "respiratorycharting",
@@ -339,11 +368,19 @@
      "table": "observations",
      "sub_var": "variableid",
      "ids": [
-      3845,
+      3845
+     ],
+     "callback": "apply_map(c(`1` = NA, `2` = TRUE, `3` = TRUE, `4` = TRUE, `5` = TRUE, `6` = TRUE, `7` = TRUE, `8` = TRUE, `9` = NA, `10` = TRUE, `11` = TRUE, `12` = TRUE, `13` = TRUE, `14` = TRUE, `15` = TRUE, `16` = NA, `17` = TRUE))",
+     "_comment": "2026-11-04 audit round 3 (R3-07): 3845 Respiratory mode; code 1 'Stand By' and 9 'Optional' are not support (8,382 standby hours were TRUE). Every other mode, including NIV and nasal CPAP, is advanced respiratory support."
+    },
+    {
+     "table": "observations",
+     "sub_var": "variableid",
+     "ids": [
       15001552
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "3845=Respiratory mode, 15001552=Mechanical ventilation indicator"
+     "callback": "apply_map(c(`1` = TRUE, `2` = TRUE, `3` = TRUE, `4` = TRUE, `5` = TRUE, `6` = NA))",
+     "_comment": "2026-11-04 audit round 3 (R3-07): 15001552 airway 1-5 (tube, tracheostomy, mask, helmet, mouthpiece) is support; 6 '-' is not."
     }
    ],
    "mimic": [
@@ -481,19 +518,12 @@
    ],
    "eicu": [
     {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "ECMO|extracorporeal membrane",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
-    },
-    {
      "table": "nursecharting",
      "sub_var": "nursingchartvalue",
      "regex": "ECMO",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "O2 Admin Device = ventilator/ECMO: 46 records, 1 patient - rare but exists in nursecharting"
+     "_comment": "O2 Admin Device = ventilator/ECMO: 46 records, 1 patient - rare but exists in nursecharting | 2026-11-04 audit round 3 (F-11): the treatment ECMO pattern matches 0 rows in eICU (treatmentstring, diagnosis and admissionDx carry no ECMO entry in v2.0); only the nursecharting device value (46 rows) remains."
     }
    ],
    "aumc": [
@@ -542,22 +572,6 @@
      "val_var": "value",
      "callback": "apply_map(c(`VV` = 'respiratory', `VA` = 'cardiovascular', `VAV` = 'cardiovascular'), var = 'value')",
      "_comment": "229268=Circuit Configuration: VV=17950 (respiratory), VA=9926 (cardiovascular), VAV=41"
-    }
-   ],
-   "eicu": [
-    {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "VV.*ECMO|ECMO.*respiratory",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val('respiratory'))"
-    },
-    {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "VA.*ECMO|ECMO.*cardio",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val('cardiovascular'))"
     }
    ],
    "aumc": [
@@ -1182,7 +1196,23 @@
       221824
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "221824=Haloperidol (Haldol) (MetaVision)"
+     "_comment": "221824=Haloperidol (Haldol) (MetaVision)",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)haloperidol|haldol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -1204,7 +1234,23 @@
       221824
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "221824=Haloperidol (Haldol) (MetaVision)"
+     "_comment": "221824=Haloperidol (Haldol) (MetaVision)",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)haloperidol|haldol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ]
   }
@@ -1302,19 +1348,23 @@
         "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
       },
       {
-       "table": "numericitems",
-       "sub_var": "itemid",
-       "ids": [
-        8805,
-        8806,
-        8808,
-        12091,
-        14838
-       ],
-       "callback": "transform_fun(set_val(TRUE))",
-       "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment."
+        "table": "numericitems",
+        "sub_var": "itemid",
+        "ids": [
+          7666,
+          7667,
+          7668,
+          7671,
+          8805,
+          8806,
+          8808,
+          12091,
+          14838
+        ],
+        "callback": "transform_fun(set_val(TRUE))",
+        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record)."
       }
-   ],
+    ],
    "mimic": [
     {
      "table": "procedureevents_mv",

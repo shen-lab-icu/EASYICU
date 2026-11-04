@@ -2297,15 +2297,14 @@ def create_intervals(
             overhang_val = overhang.total_seconds() / 3600.0
             interval_val = interval.total_seconds() / 3600.0
         
-        # R ricu logic (matching ricu 0.6.3 behavior):
-        # NOTE: R ricu 0.6.3's trunc_time has a bug - it doesn't assign the result!
-        # So max_len truncation is NOT applied in practice.
-        # We match this behavior to produce identical results to gold standard.
-        # 
         # 1. diff = next_time - start (or overhang for last record)
-        # 2. diff = trunc(diff, 0, max_len)  # In ricu 0.6.3: max_len NOT applied due to bug
+        # 2. diff = trunc(diff, 0, max_len)
         # 3. diff = diff - interval
         # 4. endtime = start + diff
+        # ricu 0.6.3 drops the result of trunc_time, so a charted rate ran on
+        # to the next chart however late it came.  max_len is applied here
+        # (2026-11-04 audit round 3, ricu-bug sweep).
+        max_len_val = max_len.total_seconds() / (60.0 if is_minute_based else 3600.0)
         
         if by_cols:
             # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
@@ -2313,7 +2312,7 @@ def create_intervals(
             next_times = data.groupby(by_cols)[index_var].shift(-1)
             diff = next_times - data[index_var]
             diff = diff.fillna(overhang_val)
-            diff = diff.clip(lower=0)  # Only apply lower bound (ricu 0.6.3 bug)
+            diff = diff.clip(lower=0, upper=max_len_val)
             diff = diff - interval_val
             diff = diff.clip(lower=0)
             data[end_var] = data[index_var] + diff
@@ -2321,8 +2320,7 @@ def create_intervals(
             next_times = data[index_var].shift(-1)
             diff = next_times - data[index_var]
             diff = diff.fillna(overhang_val)
-            # NOTE: max_len NOT applied - matching ricu 0.6.3 bug
-            diff = diff.clip(lower=0)
+            diff = diff.clip(lower=0, upper=max_len_val)
             diff = diff - interval_val
             diff = diff.clip(lower=0)
             data[end_var] = data[index_var] + diff
@@ -2337,7 +2335,7 @@ def create_intervals(
             next_times = data.groupby(by_cols)[index_var].shift(-1)
             diff = next_times - data[index_var]
             diff = diff.fillna(overhang)
-            diff = diff.clip(lower=pd.Timedelta(0))
+            diff = diff.clip(lower=pd.Timedelta(0), upper=max_len)
             diff = diff - interval
             diff = diff.clip(lower=pd.Timedelta(0))
             data[end_var] = data[index_var] + diff
@@ -2345,8 +2343,7 @@ def create_intervals(
             next_times = data[index_var].shift(-1)
             diff = next_times - data[index_var]
             diff = diff.fillna(overhang)
-            # NOTE: max_len NOT applied - matching ricu 0.6.3 bug
-            diff = diff.clip(lower=pd.Timedelta(0))
+            diff = diff.clip(lower=pd.Timedelta(0), upper=max_len)
             diff = diff - interval
             diff = diff.clip(lower=pd.Timedelta(0))
             data[end_var] = data[index_var] + diff
@@ -2882,6 +2879,7 @@ def mimv_rate(
     amount_var: str = 'amount',
     auom_var: str = 'amountuom',
     status_var: str = 'statusdescription',
+    bolus_min_hours: Optional[float] = None,
     **kwargs
 ) -> pd.DataFrame:
     """MIMIC MetaVision rate calculation callback (R ricu mimv_rate).
@@ -2901,6 +2899,7 @@ def mimv_rate(
         amount_var: Amount column (fallback when rate is 0/NA)
         auom_var: Amount unit of measure column
         status_var: Recorded delivery status; Rewritten is excluded
+        bolus_min_hours: Optional shortest time an amount is spread over
         **kwargs: Additional arguments
         
     Returns:
@@ -2954,6 +2953,11 @@ def mimv_rate(
 
         dur_hours = dur_hours.replace(0, np.nan)
         dur_hours = dur_hours.where(dur_hours > 0, np.nan)
+        if bolus_min_hours is not None:
+            # A source may declare that an amount given faster than this is a
+            # bolus spread over that time: a one-minute 50 ml D50 push is not a
+            # 3,000 ml/hr infusion (2026-11-04 audit round 3, F-22).
+            dur_hours = dur_hours.clip(lower=bolus_min_hours)
 
         if amount_var in data.columns:
             data.loc[mask, val_col] = (
@@ -3754,6 +3758,11 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # 🚀 Vectorized unit conversion (replaces per-row apply, ~50x faster)
         _val = pd.to_numeric(frame[val_var], errors='coerce').values.astype(np.float64).copy()
         _unit = frame['unit_var'].astype(str).str.strip().str.lower()
+        # eICU's '(mg/kg/min)' vasopressor label carries mcg/kg/min values: its
+        # distribution is that of '(mcg/kg/min)' (epinephrine p50 0.04 against
+        # 0.06; norepinephrine 0.14 against 0.07), so x1000 made 40-140
+        # mcg/kg/min doses (2026-11-04 audit round 3, F-08).
+        _unit = _unit.mask(_unit.eq('mg/kg/min'), 'mcg/kg/min')
         _wt = frame['_weight'].values.astype(np.float64).copy()
         _wt_bad = np.isnan(_wt) | (_wt <= 0)
 
@@ -4439,7 +4448,10 @@ def eicu_dex_med(
     # rate = value / duration_minutes * 5 (ml/min)
     # 🔧 FIX 2025-02-03: 转换为 ml/hr 以匹配概念定义 (unit: "ml/hr")
     # R ricu 输出的是 ml/min，但概念定义是 ml/hr
-    duration_minutes = duration_minutes.where(duration_minutes > 0, 1.0)
+    # A D50 syringe given within the hour is a bolus spread over that hour,
+    # as for MIMIC 220952 and AUMC glucose bags; one minute made 50 ml a
+    # 15,000 ml/hr D10-equivalent infusion (2026-11-04 audit round 3, F-10).
+    duration_minutes = duration_minutes.where(duration_minutes > 0, 1.0).clip(lower=60.0)
     rate_ml_min = work[val_var] / duration_minutes * 5.0
     work[val_var] = rate_ml_min * 60.0  # 转换为 ml/hr
     work["unit_var"] = "ml/hr"
@@ -4652,6 +4664,12 @@ def aumc_rate_kg(
     if valid_weight.any():
         df.loc[valid_weight, val_col] = df.loc[valid_weight, val_col] / df.loc[valid_weight, 'weight']
     if missing_weight.any():
+        # No weightgroup, no per-kg rate; the exposure stays in *_dur.  Say
+        # so instead of dropping the rows unseen (2026-11-04 audit round 3, R3-14).
+        logger.warning(
+            "aumc_rate_kg %s: %d absolute-dose row(s) have no admission weight; "
+            "their per-kg rate is NA", concept_name, int(missing_weight.sum()),
+        )
         df.loc[missing_weight, val_col] = np.nan
 
     if unit_col and unit_col in df.columns:
@@ -5529,6 +5547,9 @@ def hirid_rate_kg(
     
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
     df = df.dropna(subset=[actual_val_col])
+    # A givendose of 0 is a stopped-pump record: nothing was given since the
+    # previous record (2026-11-04 audit round 3, R3-19).
+    df = df[df[actual_val_col] != 0]
     if df.empty:
         return empty_result
     
@@ -6355,6 +6376,12 @@ def hirid_duration(
         return pd.DataFrame(columns=empty_cols)
     
     df = frame.copy()
+    dose_col = next((c for c in (val_col, concept_name, 'givendose') if c and c in df.columns), None)
+    if df.empty:
+        empty_cols = ['patientid', 'givenat', concept_name]
+        if grp_var:
+            empty_cols.append(grp_var)
+        return pd.DataFrame(columns=empty_cols)
     
     # Identify patient ID column
     id_col = None
@@ -6400,6 +6427,22 @@ def hirid_duration(
     group_cols = [id_col]
     if grp_var and grp_var in df.columns:
         group_cols.append(grp_var)
+
+    # A givendose is the amount given since the infusion's previous record.
+    # The first record is a zero-dose start marker (49,021 of 49,050
+    # noradrenaline infusions) and bounds the infusion; zero records after the
+    # last positive dose gave nothing, and an infusion that never gives a
+    # positive dose is not exposure (2026-11-04 audit round 3, R3-19).
+    if dose_col is not None:
+        dose = pd.to_numeric(df[dose_col], errors='coerce')
+        positive_time = df['_time_numeric'].where(dose > 0)
+        last_positive = positive_time.groupby([df[c] for c in group_cols], dropna=False).transform('max')
+        df = df[last_positive.notna() & (df['_time_numeric'] <= last_positive)]
+        if df.empty:
+            empty_cols = [id_col, actual_index_col, concept_name]
+            if grp_var:
+                empty_cols.append(grp_var)
+            return pd.DataFrame(columns=empty_cols)
     
     # Calculate duration: floor(max(time)) - floor(min(time))
     # 🔧 FIX: R ricu's calc_dur operates on times that have already been floored
@@ -6424,8 +6467,9 @@ def hirid_duration(
 
     result[concept_name] = np.floor(result['_max_time']) - np.floor(result['_min_time'])
     
-    # Add index_col as the start time (min_time)
-    result[actual_index_col] = result['_min_time']
+    # The start is the floored hour the duration is counted from, so start +
+    # duration is the last infusion hour (2026-11-04 audit round 3, F-20).
+    result[actual_index_col] = np.floor(result['_min_time'])
     
     # Drop temp columns
     result = result.drop(columns=['_min_time', '_max_time'])

@@ -270,9 +270,12 @@ class TestEicuDexMed:
 
         result = eicu_dex_med(df, "dosage", "drugstopoffset", "d50")
 
+        # A D50 push given within the hour is spread over that hour, not over
+        # its 5 charted minutes (2026-11-04 audit round 3, F-10): 25 ml D50 is
+        # 125 ml D10 in one hour.
         assert len(result) == 1
-        assert result["drugstopoffset"].iloc[0] == pytest.approx(5.0 / 60.0)
-        assert result["dosage"].iloc[0] == pytest.approx(1500.0)
+        assert result["drugstopoffset"].iloc[0] == pytest.approx(1.0)
+        assert result["dosage"].iloc[0] == pytest.approx(125.0)
 
 
 # ---------------------------------------------------------------------------
