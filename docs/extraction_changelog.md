@@ -4,6 +4,80 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — extraction audit round 5 residue batch and round 6 (ninth dictionary reseal)
+
+Commits `1823ea413` through the ninth reseal commit on dev9.
+
+- **[RB-01..RB-07, R6-F009]** Row existence no longer makes a value TRUE.
+  MIIV auxiliary vasopressors, respiratory flow/volume/pressure settings,
+  circulatory-support numeric channels, 168 remaining medication and blood
+  product sources, eICU infusion drug names and eICU blood product/dialysis
+  intake-output rows all require a positive (pressures: finite non-zero) value.
+  MIIV/MetaVision `Rewritten` rows are excluded throughout.
+- **[RB-08]** AUMC 6658/20662 treat `Uit` (off) as negative.
+- **[RV-01..RV-05]** MIIV `Rewritten`, MIMIC-III `ISERROR=1`, and cancelled
+  procedure rows are excluded on every path (projection, CSV, Arrow, bucketed
+  and batch SQL); NULL status rows are kept. Static weight applies its chart
+  quality condition before the median. A HiRID medication table without
+  `recordstatus` raises a typed unavailability error.
+- **[RI-01..RI-07, R6-F011..F015]** Interval expansion publishes only hours
+  with positive half-open overlap (no zero-length or whole-hour-endpoint
+  hours) on per-concept, batch and native paths. 228340/7244 doses are split by
+  ICU-hour overlap; SOFA-2 scores the t-23..t window without unbounded fill;
+  LOCF/LOCB `max_gap` is measured from the last valid observation. eICU
+  infusion durations check for a positive rate before segmentation.
+- **[RR-01..RR-03, R6-F016; R6 refined by the auditor]** Arterial gas
+  concepts (`po2`, `pco2`, `ph`, `sao2`, `be`, `tco2`) admit a row in this
+  order. (1) A recorded specimen decides first: venous, capillary, mixed or
+  central samples are excluded, arterial ones admitted. (2) Without a
+  per-sample specimen field, an item or analyte that is arterial by name is
+  admitted (eICU paO2/paCO2; MIMIC/MIIV "Arterial ..." chart items; HiRID
+  arterial variables). (3) pH, base excess/deficit and O2 saturation, which do
+  not name a specimen, enter only beside an admitted paO2/paCO2 at the same
+  stay and time; otherwise they are unknown and excluded. (4) eICU `Total CO2`
+  is the chemistry panel and no longer feeds `tco2`. AUMC gases without a
+  specimen record and SICdb rows without a laboratory type stay excluded
+  (their items are not arterial by name). Each published hour carries
+  `<concept>_specimen_status` with its weakest admitted evidence:
+  `explicit_arterial`, `label_defined_arterial` or `co_measured_arterial`.
+  Excluded rows (`excluded_venous`, `excluded_unknown`) are counted in the
+  source audit, not published. Filtering runs before base-deficit negation
+  and unit conversion.
+- **[RR-04..RR-06]** eICU medication sources need route and positive dose
+  evidence. Dose text is read with numeric unit codes (`81 3`), thousands
+  separators (`1,000 mg`) and ranges (`2-4 mg`); a range from zero (`0-2 mg`)
+  is unknown. AUMC IV drugs exclude `Niet iv`; HiRID IV drugs use an IV
+  whitelist.
+- **[RR-07]** MIIV eMAR doses duplicated in inputevents are removed only when
+  admission, drug and positive mass dose match within 60 minutes and the
+  input is explicitly IV; each input removes at most one eMAR dose.
+- **[RR-08]** AUMC 8843 is a second arterial-line channel behind the main line
+  for `map`/`map_invasive`; zeros no longer mask fallback channels.
+- **[R6-F001, F020]** AUMC airway pressures convert mbar to cmH2O
+  (×100/98.0665) before bounds, source priority and hourly aggregation; 6694
+  is a measured PEEP fallback below the set source.
+- **[R6-F003]** HiRID infusion rates find a strictly earlier predecessor for
+  all same-time records, so row order no longer changes midazolam rates.
+- **[R6-F017]** eICU `Mechanical Ventilator Mode` and `Ventilator Support Mode`
+  feed `vent_mode`/`vent_breath_seq`; AC/CMV stay unknown.
+- **[R6-F006]** eICU wide-table vitals pool raw values and apply bounds before
+  aggregation, matching the ordinary path.
+- **[R6-F008]** CVP 30–50 is kept with high/arterial-contamination/isolated-
+  peak flags in all six databases; above 50 is excluded.
+- **[R6-F018..F023, F035, F046, F047]** HiRID bedside FiO2 2010, eICU measured
+  peak pressure and nursing invasive SBP/DBP, MIMIC-III nephrostomy volume
+  41184 and SICdb enzymatic creatinine 368 are added. AUMC FiO2 source items
+  are published as companion columns. Legacy GCS components expire 6 h after
+  their own observation. HiRID insulin is described as total U per hour bin.
+- **[R6-F040, F041]** An empty SICdb setting source no longer discards airway
+  points. AKI display smoothing is sustained only by surviving measurements or
+  active RRT, and empty creatinine/urine components no longer fail.
+- **pandas 3:** eICU infusion durations no longer split at every row
+  (boolean shift turned object-typed), and GCS components recorded at
+  different time resolutions merge again.
+- **Retrospective availability (all six databases):** values stay
+  retrospective; real-time use must filter `available_at <= t`.
+
 ## 2026-11-04 — RU5 review, urine availability and assessment residues
 
 - **[RU-01, RU-02, RU-09]** All six databases use the shared R1 collection

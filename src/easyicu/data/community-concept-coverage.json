@@ -612,7 +612,7 @@
           "status": "direct"
         }
       },
-      "description": "base excess"
+      "description": "arterial base excess"
     },
     "bicar": {
       "category": "chemistry",
@@ -1530,23 +1530,45 @@
       "category": "vitals",
       "databases": {
         "jinhua": {
-          "reason": "no validated native field/event in this release",
-          "status": "unavailable"
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "missing_dependencies": [
+            "cvp_raw"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
         },
         "nwicu": {
-          "reason": "no validated native field/event in this release",
-          "status": "unavailable"
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "missing_dependencies": [
+            "cvp_raw"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
         },
         "zhejiang_eicu": {
-          "reason": "no validated native field/event in this release",
-          "status": "unavailable"
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
         },
         "zigong": {
-          "reason": "no validated native field/event in this release",
-          "status": "unavailable"
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
         }
       },
-      "description": "SICdb central venous pressure exclusion reason"
+      "description": "Central venous pressure quality flags"
     },
     "cvp_raw": {
       "category": "vitals",
@@ -1570,7 +1592,7 @@
           "status": "direct"
         }
       },
-      "description": "Central venous pressure as charted (before the arterial-diastolic and spike check)"
+      "description": "Central venous pressure as charted before quality assessment"
     },
     "d_dimer": {
       "category": "chemistry",
@@ -3392,7 +3414,7 @@
           "status": "direct"
         }
       },
-      "description": "heparin administration — IV anticoagulation (therapeutic + prophylaxis)"
+      "description": "heparin intravenous anticoagulation"
     },
     "hgb": {
       "category": "hematology",
@@ -3649,7 +3671,7 @@
           "status": "unavailable"
         }
       },
-      "description": "insulin"
+      "description": "Insulin administered per hour bin; for HiRID, units/hr is the total U in a one hour bin, not an instantaneous continuous IV infusion rate"
     },
     "insulin": {
       "category": "medications",
@@ -3790,7 +3812,7 @@
           "status": "partial"
         }
       },
-      "description": "Public-reference KDIGO staging plus a source-native comparison or explicit unavailability receipt"
+      "description": "Public-reference KDIGO staging plus a source-native comparison or explicit unavailability receipt; retrospective value; real-time use must filter availability time to no later than evaluation time"
     },
     "kdigo_creat": {
       "category": "renal",
@@ -3905,7 +3927,7 @@
           "status": "partial"
         }
       },
-      "description": "KDIGO AKI urine output-based staging (mL/kg/h rates)"
+      "description": "KDIGO AKI urine output-based staging from rates in mL/kg/h; retrospective value; real-time use must filter availability time to no later than evaluation time"
     },
     "kdigo_urine_input": {
       "category": "renal",
@@ -4164,7 +4186,7 @@
           "status": "unavailable"
         }
       },
-      "description": "loop diuretic dose in mg intravenous furosemide equivalent, summed per hour at administration start (IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395)"
+      "description": "loop diuretic dose in mg intravenous furosemide equivalent, with continuous amounts apportioned by ICU-hour overlap and boluses summed at administration"
     },
     "lorazepam": {
       "category": "medications",
@@ -8630,7 +8652,7 @@
           "status": "derived"
         }
       },
-      "description": "SOFA renal: complete daily urine, else estimate with at least 18 covered hours"
+      "description": "SOFA renal: complete daily urine when present, otherwise a daily estimate extrapolated from 18 to less than 24 covered hours"
     },
     "sofa_resp": {
       "category": "outcome",
@@ -8898,7 +8920,7 @@
           "status": "direct"
         }
       },
-      "description": "totcal CO2"
+      "description": "arterial total CO2"
     },
     "temp": {
       "category": "vitals",
@@ -9769,7 +9791,7 @@
           "status": "derived"
         }
       },
-      "description": "Measured urine output with complete 24-hour coverage"
+      "description": "Measured urine output with complete 24-hour coverage; retrospective value; real-time use must filter availability time to no later than evaluation time"
     },
     "urine24_available_at": {
       "category": "output",
@@ -9809,7 +9831,7 @@
           "status": "derived"
         }
       },
-      "description": "ICU-relative hour of the latest record used by measured daily urine volume"
+      "description": "Latest source availability for retrospective measured daily urine; includes entry or store time when present, otherwise chart time"
     },
     "urine24_covered_h": {
       "category": "output",
@@ -9889,7 +9911,7 @@
           "status": "derived"
         }
       },
-      "description": "Estimated daily urine volume scaled from 18 to less than 24 covered hours"
+      "description": "Estimated daily urine volume scaled from 18 to less than 24 covered hours; retrospective value; real-time use must filter availability time to no later than evaluation time"
     },
     "urine24_est_available_at": {
       "category": "output",
@@ -9929,7 +9951,7 @@
           "status": "derived"
         }
       },
-      "description": "ICU-relative hour of the latest record used by estimated daily urine volume"
+      "description": "Latest source availability for retrospective estimated daily urine; includes entry or store time when present, otherwise chart time"
     },
     "urine24_observed_ml": {
       "category": "output",
@@ -10046,14 +10068,26 @@
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10064,14 +10098,26 @@
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10082,14 +10128,26 @@
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10100,14 +10158,26 @@
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
             "epi_dur",
-            "other_vaso"
+            "other_vaso",
+            "dopa_rate",
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate",
+            "adh_rate",
+            "phn_rate"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10420,26 +10490,26 @@
     "jinhua": {
       "derived": 19,
       "direct": 135,
-      "partial": 31,
-      "unavailable": 142
+      "partial": 32,
+      "unavailable": 141
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
-      "partial": 34,
-      "unavailable": 137
+      "partial": 35,
+      "unavailable": 136
     },
     "zhejiang_eicu": {
-      "derived": 38,
+      "derived": 39,
       "direct": 128,
       "partial": 23,
-      "unavailable": 138
+      "unavailable": 137
     },
     "zigong": {
-      "derived": 26,
+      "derived": 27,
       "direct": 125,
       "partial": 39,
-      "unavailable": 137
+      "unavailable": 136
     }
   },
   "databases": [

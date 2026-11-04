@@ -2,22 +2,9 @@
   "baseline_change_summary": {
     "source_digest_changes": [
       "src/easyicu/data/concept-dict.json",
-      "src/easyicu/data/sofa2-dict.json",
-      "src/easyicu/research_agent/agents/planner.py",
-      "src/easyicu/research_agent/concept_catalog.py",
-      "src/easyicu/research_agent/planning/cohort_contract.py",
-      "src/easyicu/resources.py"
+      "src/easyicu/data/sofa2-dict.json"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 63601,
-        "was": 63581
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 59193,
-        "was": 59173
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -272,9 +259,17 @@
           "was": 59173
         }
       }
+    },
+    {
+      "reason": "Ninth dictionary reseal (extraction audit round 5 residue and round 6): dictionary identity changed",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json",
+        "src/easyicu/data/sofa2-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Round-5 extraction audit: urine chain, companion concepts hidden from the Planner, opt-in bounds audit and the eighth dictionary reseal",
+  "baseline_reason": "Ninth dictionary reseal (extraction audit round 5 residue and round 6): dictionary identity changed",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -285,9 +280,9 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "80313dd8ab776e10f69f061192c0d22f161b9c8c55c9de1b846b5406ab8e3efb",
+    "src/easyicu/data/concept-dict.json": "bc8af88cf574415c208707d10f0d1aec85b6ef6cff3cd668a74c8c80bbb79c4b",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
-    "src/easyicu/data/sofa2-dict.json": "d6f00cc7e1a4d31f85ee0078d636273788a6f3810e7303533251189508b167b8",
+    "src/easyicu/data/sofa2-dict.json": "c8e6d329482f09fee0142a63bb2036e9b19c3012b4b8f3a3465674be43eb77c9",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
     "src/easyicu/research_agent/agents/plan_payload.py": "aad4b7206bbe99dd170e2663c1d4d3054e2843cad0e7e384348ae9f2fcb0308e",
     "src/easyicu/research_agent/agents/planner.py": "afbc95210e02dd859d9e901233ce1a5adfc1aab6e358616d5f5c732f67543873",
