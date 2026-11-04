@@ -2890,6 +2890,7 @@ class ConceptResolver:
                         # 🔧 eICU nursecharting 暂不启用 DuckDB（string itemid）
                         _skip_db_duckdb = (
                             (db_name in ('eicu', 'eicu_demo') and source.table == 'nursecharting')
+                            or (db_name == 'hirid' and source.table == 'pharma')
                         )
                         # 🚀 使用 regex 预匹配的 IDs 作为 source.ids 的补充
                         _effective_ids = source.ids
@@ -4910,7 +4911,8 @@ class ConceptResolver:
             # 删除无效的NaN
             if concept_name in frame.columns:
                 # 检查是否在merge模式（通过kwargs传递）
-                keep_na_rows = kwargs.get('_keep_na_rows', False) or _is_nullable_status_source(concept_name, source)
+                keep_na_rows = (kwargs.get('_keep_na_rows', False) or _is_nullable_status_source(concept_name, source)
+                                or (data_source.config.name == 'hirid' and concept_name == 'mech_vent'))
                 if not keep_na_rows:
                     _before_dropna = len(frame)
                     # 只在非merge模式下删除NaN（单独加载概念时）
@@ -5695,6 +5697,10 @@ class ConceptResolver:
             )
             is_point_event = concept_name in POINT_EVENT_CONCEPTS
             is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
+            if data_source.config.name == 'hirid' and any(src.callback == 'hirid_duration' for src in sources):
+                # R5C-HIRID-003: consumers need the true episode start to
+                # reconstruct its end; hourly flooring shifts the whole span.
+                agg_method = '__skip_change_interval__'
             
             # 🔧 FIX 2026-02-07: Skip expand for callbacks that already call expand internally
             # mimic_rate_cv/mimic_rate_mv, expand_intervals, etc. already handle time expansion
@@ -6117,7 +6123,10 @@ class ConceptResolver:
             # For lgl/fct win_tbl (mech_vent): floor + dedup as before
             # For num_cncpt win_tbl (dex): skip floor+dedup — expansion needs raw start times
             # R ricu's expand.win_tbl uses raw start: end = floor(raw_start + dur)
-            if not _is_num_win_tbl and interval is not None and index_column in combined.columns:
+            # R5C-HIRID-004: same-hour transitions must retain both exact
+            # intervals, including no-airway counterevidence for bridges.
+            preserve_airway_clock = data_source.config.name == "hirid" and concept_name == "mech_vent"
+            if not _is_num_win_tbl and not preserve_airway_clock and interval is not None and index_column in combined.columns:
                 if pd.api.types.is_numeric_dtype(combined[index_column]):
                     interval_hours = interval.total_seconds() / 3600.0
                     combined = combined.copy()

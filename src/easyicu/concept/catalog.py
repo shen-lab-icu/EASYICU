@@ -640,6 +640,9 @@ BOUNDS_AUDIT_CONCEPTS = tuple(
 )
 
 HIDDEN_DICTIONARY_CONCEPTS = {
+    # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
+    # unresolved assay identity cannot enter the cross-source mass catalog.
+    'ckmb_hirid_raw',
     'acute_rrt_input',
     'bicarb',
     'kdigo_aki',
@@ -847,7 +850,7 @@ CONCEPT_DB_COVERAGE = {
     'phenytoin': 6,  # + AUMC 7222 (2026-11-03 audit 2)
     'labetalol': 6,
     'esmolol': 6,
-    'diltiazem': 5,
+    'diltiazem': 6,  # R5C-HIRID-012: includes enteral HiRID administrations.
     'nicardipine': 4,
     # Batch 8 (2026-05-14; prescriptions/HiRID additions audited 2026-05-27)
     'warfarin': 6,

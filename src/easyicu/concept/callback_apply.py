@@ -986,6 +986,10 @@ def _apply_callback(
     data_source: Optional['ICUDataSource'] = None,
     interval: Optional[Union[str, pd.Timedelta]] = None,
 ) -> pd.DataFrame:
+    if getattr(source, "table", None) == "pharma" and getattr(getattr(data_source, "config", None), "name", "") == "hirid":
+        from ..utils.callback_utils import _hirid_valid_pharma_rows
+
+        frame = _hirid_valid_pharma_rows(frame)
     # A source's excluded statuses (MIMIC Rewritten orders, eICU cancelled
     # medication orders) are never data, whatever the value callback.
     frame = _drop_excluded_statuses(frame, source)
@@ -2545,7 +2549,12 @@ def _apply_callback(
             nested = arg.strip()
             if not nested:
                 continue
-            nested_source = replace(source, callback=nested)
+            # Eligibility was decided on raw rows above. Grouped callbacks
+            # can consume route/status columns (HiRID dex, R5C-HIRID-023).
+            nested_source = replace(source, callback=nested, params={
+                key: value for key, value in source.params.items()
+                if key not in {"excluded_statuses", "exclude_regex", "require_regex", "require_empty_var"}
+            })
             previous_frame = frame_result
             frame_result = _apply_callback(
                 frame_result, nested_source, concept_name, unit_column,
@@ -3264,6 +3273,14 @@ def _apply_callback(
             padding_hours=4.0,
             max_gap_hours=12.0,
             expand_to_hourly=False,  # Return win_tbl format, not expanded ts_tbl
+        )
+
+    if expr == "hirid_advanced_airway":
+        from .hirid_ventilation import advanced_airway_hours
+
+        return advanced_airway_hours(
+            frame, concept_name=concept_name, value_col=source.value_var or concept_name,
+            time_col=source.index_var or "datetime",
         )
 
     # HiRID 30005010/30005110 are daily (12:00) input/output counters; the

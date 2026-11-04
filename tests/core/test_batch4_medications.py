@@ -194,7 +194,8 @@ def test_batch4_hirid_scope_matches_audit(cdict):
         assert "hirid" not in cdict[c]["sources"], (
             f"{c}: HiRID source added without callback validation"
         )
-    assert cdict["magnesium_iv"]["sources"]["hirid"][0]["ids"] == [1000421]
+    # R5C-HIRID-010: the second IV magnesium preparation is also eligible.
+    assert cdict["magnesium_iv"]["sources"]["hirid"][0]["ids"] == [1000421, 1000070]
     assert cdict["packed_rbc"]["sources"]["hirid"][0]["ids"] == [1000100, 1000743]
     for c in ["magnesium_iv", "packed_rbc"]:
         assert cdict[c]["sources"]["hirid"][0]["callback"] in BOOLEAN_DRUG_CALLBACKS

@@ -242,10 +242,9 @@ def test_r4_029_hirid_short_episode_across_an_hour_is_not_one_hour():
     })
     out = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                          index_col="givenat", grp_var="infusionid").set_index("patientid")
-    # 02:40-03:30 is 50 minutes, not a qualifying hour; a long episode keeps
-    # its hour placement (floor 2 -> floor 17).
+    # R5C-HIRID-003: all episode lengths use the exact clock, including long episodes.
     assert out.loc[1, "norepi_dur"] == pytest.approx(50 / 60)
-    assert out.loc[2, "norepi_dur"] == 15
+    assert out.loc[2, "norepi_dur"] == pytest.approx(14.25)
 
 
 def test_r4_030_hirid_floating_point_residue_is_not_a_dose():
@@ -360,7 +359,8 @@ def test_r4_028_hirid_dose_is_split_over_the_hours_it_was_given_in():
     assert sum(mass.values()) == pytest.approx(85.0)  # the dose is conserved
     dur = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                          index_col="givenat", grp_var="infusionid")
-    assert dur["givenat"].tolist() == [10.0]  # the first duration hour has a rate
+    # R5C-HIRID-003: preserve the true start separately from its occupied hour.
+    assert dur["givenat"].tolist() == pytest.approx([10 + 50 / 60])
 
 
 def test_r4_016_chart_transcription_within_6h_of_a_lab_result_is_dropped():
@@ -404,6 +404,7 @@ def test_r4_031_hirid_vent_ind_bridges_ventilator_evidence_from_an_airway():
         "peep": table([(1, 5.0, 8.0), (1, 30.0, 8.0), (2, 3.0, 8.0)], "peep"),
         "etco2": table([(1, 5.0, 35.0), (1, 30.0, 35.0), (2, 3.0, 35.0)], "etco2"),
         "tidal_vol": table([], "tidal_vol"),
+        "vent_mode": table([], "vent_mode"),  # R5C-HIRID-004: explicit stop evidence
     }
     resolver = SimpleNamespace(load_concepts=lambda names, ds, **kw: {n: evidence[n] for n in names})
     ctx = SimpleNamespace(resolver=resolver, data_source=None, patient_ids=None)

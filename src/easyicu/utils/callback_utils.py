@@ -5210,6 +5210,18 @@ def sic_dur(
 HIRID_APPORTION_MAX_HOURS = 6.0
 
 
+def _hirid_valid_pharma_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Exclude pharma bit 2 (invalidated) and bit 32 (not administered).
+
+    These are independent recordstatus bits, not observations.status codes.
+    Filter before finding previous valid records or episode boundaries.
+    """
+    if 'recordstatus' not in frame.columns:
+        return frame
+    status = pd.to_numeric(frame['recordstatus'], errors='coerce').fillna(0).astype('int64')
+    return frame.loc[(status & (2 | 32)).eq(0)]
+
+
 def _hirid_previous_record_time(df: pd.DataFrame, index_col: Optional[str], grp_var: Optional[str]) -> pd.DataFrame:
     """Add ``_prev_t``: the time of the same infusion's previous record."""
     time_col = index_col if index_col in df.columns else next(
@@ -5308,7 +5320,7 @@ def hirid_rate_kg(
     if frame.empty:
         return empty_result
     
-    df = frame.copy()
+    df = _hirid_valid_pharma_rows(frame).copy()
     
     # Handle case where val_col was renamed to concept_name before callback
     # This happens when the frame is renamed (givendose -> norepi_rate) before callback
@@ -5475,7 +5487,8 @@ def hirid_rate(
     Implements R ricu's hirid_rate:
     1. Get the most frequent unit in the data
     2. Filter to only records with that unit
-    3. Group by (patientid, hour) and sum doses across infusions
+    3. Apportion doses over previous valid same-infusion intervals up to 6h,
+       then sum by (patientid, hour) across infusions
     4. Calculate rate = dose_per_interval / interval_minutes
     5. Append /min to the unit
     
@@ -5494,7 +5507,7 @@ def hirid_rate(
     if frame.empty:
         return empty_result
     
-    df = frame.copy()
+    df = _hirid_valid_pharma_rows(frame).copy()
     
     # Handle case where val_col was renamed to concept_name before callback
     actual_val_col = val_col
@@ -5506,6 +5519,7 @@ def hirid_rate(
     
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
     df = df.dropna(subset=[actual_val_col])
+    df = _hirid_previous_record_time(df, index_col, grp_var)
     # A givendose of 0 is a stopped-pump record, as in hirid_rate_kg
     # (2026-11-04 audit round 3, M NEW-1).
     # Floating-point residue (0 < dose < 1e-6) is not a dose either
@@ -5552,7 +5566,8 @@ def hirid_rate(
         # Floor time to hours
         time_series = df[index_col]
         if pd.api.types.is_numeric_dtype(time_series):
-            df['_hour'] = np.floor(time_series).astype(int)
+            df = _hirid_apportion_hourly(df, index_col, actual_val_col)
+            df = df.rename(columns={'_time_bin': '_hour'})
         else:
             df['_hour'] = time_series
     else:
@@ -5616,8 +5631,8 @@ def hirid_rate_mass(
     1. Filter to rows whose ``doseunit`` is compatible with ``target_unit`` —
        i.e. can be converted to the target mass via a unit factor. Rows with
        other or missing units are dropped.
-    2. Group by (patientid, hour-floor) and SUM the doses given within each
-       hour across infusions.
+    2. Apportion converted doses over their preceding valid same-infusion
+       intervals up to 6h, then SUM each hour across infusions.
     3. Divide by 60 (HiRID pharma events accumulate within an hourly grid;
        the summed dose across 1 hour becomes the per-minute rate).
     4. Convert to ``target_unit`` via mass + time scaling.
@@ -5644,7 +5659,7 @@ def hirid_rate_mass(
     if frame.empty:
         return empty
 
-    df = frame.copy()
+    df = _hirid_valid_pharma_rows(frame).copy()
 
     # Handle val_col rename collision (same pattern as hirid_rate)
     actual_val_col = val_col
@@ -5656,6 +5671,7 @@ def hirid_rate_mass(
 
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors="coerce")
     df = df.dropna(subset=[actual_val_col])
+    df = _hirid_previous_record_time(df, index_col, grp_var)
     # A givendose of 0 is a stopped-pump record (2026-11-04 audit round 3, M NEW-1).
     # Floating-point residue (0 < dose < 1e-6) is not a dose either
     # (2026-11-04 audit round 4, R4-030).
@@ -5710,7 +5726,8 @@ def hirid_rate_mass(
     if index_col and index_col in df.columns:
         time_series = df[index_col]
         if pd.api.types.is_numeric_dtype(time_series):
-            df["_hour"] = np.floor(time_series).astype(int)
+            df = _hirid_apportion_hourly(df, index_col, actual_val_col)
+            df = df.rename(columns={"_time_bin": "_hour"})
         else:
             df["_hour"] = time_series
     else:
@@ -5888,7 +5905,7 @@ def hirid_vent(
     2. Pad the last difference with padding (in data's time unit)
     3. Cap differences > max_gap to padding
     4. Store as dur_var for window table processing (in MINUTES per R ricu)
-    5. Round datetime to integer hours (per R ricu)
+    5. Keep exact window starts; floor only for hourly expansion
     
     Args:
         frame: DataFrame with ventilation records
@@ -5995,7 +6012,7 @@ def hirid_vent(
     set_dur_var_unit(df, UNIT_HOURS)
     
     # Round datetime to integer hours (R ricu behavior)
-    if actual_index_col in df.columns and not np.issubdtype(df[actual_index_col].dtype, np.datetime64):
+    if expand_to_hourly and actual_index_col in df.columns and not np.issubdtype(df[actual_index_col].dtype, np.datetime64):
         # If float hours, floor to integer
         df[actual_index_col] = np.floor(df[actual_index_col]).astype(int)
     
@@ -6147,7 +6164,7 @@ def hirid_duration(
     Args:
         frame: DataFrame with infusion records
         concept_name: Name of the output column (duration)
-        val_col: Name of the value column (not used, for compatibility)
+        val_col: Dose column used to exclude episodes without positive exposure
         index_col: Name of the time/index column
         grp_var: Grouping variable (e.g., infusionid)
         
@@ -6163,7 +6180,7 @@ def hirid_duration(
             empty_cols.append(grp_var)
         return pd.DataFrame(columns=empty_cols)
     
-    df = frame.copy()
+    df = _hirid_valid_pharma_rows(frame).copy()
     dose_col = next((c for c in (val_col, concept_name, 'givendose') if c and c in df.columns), None)
     if df.empty:
         empty_cols = ['patientid', 'givenat', concept_name]
@@ -6232,17 +6249,7 @@ def hirid_duration(
                 empty_cols.append(grp_var)
             return pd.DataFrame(columns=empty_cols)
     
-    # Calculate duration: floor(max(time)) - floor(min(time))
-    # 🔧 FIX: R ricu's calc_dur operates on times that have already been floored
-    # by dt_round_min in load_mihi. So the effective calculation is:
-    # duration = floor(max_hours) - floor(min_hours)
-    # NOT: duration = max_hours - min_hours
-    # 
-    # Example: Patient 2, infusion 289451
-    #   min_time = 2.8333 (01:25 - 22:35 = 2:50 = 2.833h)
-    #   max_time = 17.0833 (15:40 - 22:35 = 17:05 = 17.083h)
-    #   Wrong: 17.0833 - 2.8333 = 14.25 → floor = 14
-    #   Correct: floor(17.0833) - floor(2.8333) = 17 - 2 = 15
+    # Keep true boundaries; qualification and hourly occupancy use them independently.
     result = df.groupby(group_cols, as_index=False).agg(
         _min_time=('_time_numeric', 'min'),
         _max_time=('_time_numeric', 'max'),
@@ -6253,19 +6260,11 @@ def hirid_duration(
     # against 7.8 h per SICdb episode).
     result = _merge_infusion_episodes(result, id_col, HIRID_EPISODE_GAP_HOURS)
 
-    result[concept_name] = np.floor(result['_max_time']) - np.floor(result['_min_time'])
-    # The hour difference places the hourly rows; it is not the infusion
-    # length.  An episode shorter than one hour that crosses an hour boundary
-    # counted as one hour and passed the 60-minute qualification of the *60
-    # concepts; it keeps its exact length (2026-11-04 audit round 4, R4-029).
-    exact = result['_max_time'] - result['_min_time']
-    short = (exact < 1.0) & (result[concept_name] >= 1.0)
-    result.loc[short, concept_name] = exact[short]
-    
-    # The start is the floored hour the duration is counted from, so start +
-    # duration is the last infusion hour (2026-11-04 audit round 3, F-20).
-    result[actual_index_col] = np.floor(result['_min_time'])
-    
+    # R5C-HIRID-003: an hour grid is never an episode clock. Every length
+    # stays exact, and consumers expand the original [start, end) interval.
+    result[concept_name] = result['_max_time'] - result['_min_time']
+    result[actual_index_col] = result['_min_time']
+
     # Drop temp columns
     result = result.drop(columns=['_min_time', '_max_time'])
     

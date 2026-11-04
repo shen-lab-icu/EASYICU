@@ -286,12 +286,19 @@
       1001171,
       1001173,
       1001193,
-      1001198
+      1001198,
+      1000233
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (F-16): removed 1000760 Topamax (topiramate) and 1000426 Salofalk (mesalazine); a zero givendose (pump start/stop marker) is not an administration (comp_na > 0 instead of set_val TRUE). | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (F-16): removed 1000760 Topamax (topiramate) and 1000426 Salofalk (mesalazine); a zero givendose (pump start/stop marker) is not an administration (comp_na > 0 instead of set_val TRUE). | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | R5C-HIRID-007: include the audited additional preparations; retain positive-dose and route eligibility.",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -3502,15 +3509,6 @@
      "sub_var": "labname"
     }
    ],
-   "hirid": [
-    {
-     "ids": 24000220,
-     "table": "observations",
-     "sub_var": "variableid",
-     "class_name": "hrd_itm",
-     "_comment": "2026-11-04 audit round 4 (R4-163): the HiRID reference names 24000220 'Creatine kinase.MB [Mass/volume]' but gives the unit U/l; values (p50 10.8) are passed unconverted, so pooling HiRID CK-MB with ng/mL databases is unverified."
-    }
-   ],
    "miiv": [
     {
      "ids": 50911,
@@ -3537,6 +3535,23 @@
      "ids": 253,
      "table": "laboratory",
      "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "ckmb_hirid_raw": {
+  "unit": "U/L",
+  "min": 0,
+  "description": "HiRID CK-MB raw measurement",
+  "category": "chemistry",
+  "_comment": "R5C-HIRID-013: native reference unit U/l; assay identity conflicts with its mass-labelled name. Keep separate from the ng/mL ckmb pool until official method or erratum resolves the construct; no fixed conversion factor.",
+  "sources": {
+   "hirid": [
+    {
+     "ids": 24000220,
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
     }
    ]
   }
@@ -4612,7 +4627,15 @@
      "grp_var": "infusionid",
      "target": "ts_tbl",
      "interval": "00:01:00",
-     "callback": "combine_callbacks(\n               grp_mount_to_rate(mins(1L), hours(1L)),\n               dex_to_10(list(c(1000689L, 1000544L, 1000746L, 1000835L),\n                                1000060L, 1000545L, 1000567L), c(2, 3, 4, 5))\n             )"
+     "callback": "combine_callbacks(\n               grp_mount_to_rate(mins(1L), hours(1L)),\n               dex_to_10(list(c(1000689L, 1000544L, 1000746L, 1000835L),\n                                1000060L, 1000545L, 1000567L), c(2, 3, 4, 5))\n             )",
+     "extra_vars": [
+      "route",
+      "infusionid"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     },
+     "_comment": "R5C-HIRID-023: exclude non-IV glucose before grouped amount-to-rate conversion; explicitly retain infusionid alongside route."
     }
    ],
    "miiv": [
@@ -5264,6 +5287,21 @@
   "aggregate": "max",
   "category": "medications",
   "sources": {
+   "hirid": [
+    {
+     "ids": [
+      1001071,
+      1000331
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "_comment": "R5C-HIRID-012: enteral diltiazem administrations under the existing any-route definition; these rows are not IV exposure. Native route is retained during source interpretation."
+    }
+   ],
    "aumc": [
     {
      "ids": 7174,
@@ -6505,13 +6543,24 @@
       1000864,
       1000865,
       1000895,
-      1001016
+      1001016,
+      1000451,
+      1000831,
+      1000832,
+      1000833,
+      1000834
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
-     "_comment": "2026-07-03 full dictionary audit: HiRID reference has Clexane 0.2/0.4/0.8/0.6/1.0 ml as 1000863/1000864/1000865/1000895/1001016; removed absent 1000866 and Nitriate 1000867. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "_comment": "2026-07-03 full dictionary audit: HiRID reference has Clexane 0.2/0.4/0.8/0.6/1.0 ml as 1000863/1000864/1000865/1000895/1001016; removed absent 1000866 and Nitriate 1000867. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | R5C-HIRID-008: include the audited additional preparations; retain positive-dose and route eligibility.",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:sc(?:-inj)?|s\\.?c\\.?|subcutaneous)\\s*$"
+     }
     }
    ],
    "aumc": [
@@ -9686,12 +9735,15 @@
     {
      "ids": [
       15,
-      1000724
+      1000724,
+      1000379,
+      1000381,
+      1000963
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | R5C-HIRID-009: include the audited additional preparations; retain positive-dose and route eligibility."
     }
    ],
    "miiv": [
@@ -11160,13 +11212,20 @@
    "hirid": [
     {
      "ids": [
-      1000421
+      1000421,
+      1000070
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
-     "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | R5C-HIRID-010: include the audited additional preparations; retain positive-dose and route eligibility.",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ]
   }

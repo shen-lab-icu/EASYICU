@@ -4883,63 +4883,19 @@ _HIRID_VENT_EVIDENCE = ("peep", ("etco2", "tidal_vol"))
 _HIRID_VENT_BRIDGE_HOURS = 8
 
 
-def _hirid_ventilator_evidence_hours(ctx, id_col: str) -> pd.DataFrame:
-    peep_name, companions = _HIRID_VENT_EVIDENCE
-    loaded = ctx.resolver.load_concepts(
-        [peep_name, *companions],
-        ctx.data_source,
-        merge=False,
-        patient_ids=ctx.patient_ids,
-        verbose=False,
-        interval=pd.Timedelta(hours=1),
-    )
-
-    def hours(name, positive=False):
-        table = loaded.get(name) if isinstance(loaded, dict) else None
-        if table is None or table.data.empty or id_col not in table.data.columns:
-            return pd.DataFrame(columns=[id_col, "hour"])
-        data = table.data
-        values = pd.to_numeric(data[table.value_column or name], errors="coerce")
-        keep = values.gt(0) if positive else values.notna()
-        time = pd.to_numeric(data[table.index_column], errors="coerce")
-        return pd.DataFrame({id_col: data[id_col], "hour": np.floor(time)}).loc[keep.to_numpy()].dropna()
-
-    measured = pd.concat([hours(name) for name in companions], ignore_index=True).drop_duplicates()
-    return hours(peep_name, positive=True).merge(measured, on=[id_col, "hour"]).drop_duplicates()
-
-
 def _hirid_bridge_ventilator_evidence(airway: ICUTable, ctx, id_col: str, time_column: str) -> ICUTable:
-    """Extend HiRID invasive airway hours across ventilator-evidence hours.
+    """R5C-HIRID-004: exact airway windows seed bridges; explicit states stop them."""
+    from .hirid_ventilation import airway_hours, ventilator_evidence
 
-    HiRID vent_ind came from airway records (15001552) alone: 10.9% of the
-    hours with PEEP > 0 had no vent_ind, most of them 2-6 h from a vent_ind
-    hour, with etCO2 and a tidal volume charted.  As for eICU (R3-05) and
-    SICdb (P1), evidence hours and airway hours join across gaps of at most
-    8 h, and only runs that contain an invasive airway hour are kept: the
-    evidence never starts ventilation on its own (2026-11-04 audit round 4,
-    R4-031).
-    """
-    from .eicu_ventilation_windows import bridge_hours
-
-    data = airway.data
-    invasive = pd.DataFrame({
-        id_col: data[id_col],
-        "hour": np.floor(pd.to_numeric(data[airway.index_column or time_column], errors="coerce")),
-    }).dropna().drop_duplicates()
-    evidence = _hirid_ventilator_evidence_hours(ctx, id_col)
-    evidence = evidence[evidence[id_col].isin(invasive[id_col])]
-    points = pd.concat([invasive, evidence], ignore_index=True).drop_duplicates()
-    hours = bridge_hours(
-        points, pd.DataFrame(columns=[id_col, "start_h", "end_h"]),
-        id_column=id_col, max_gap_hours=_HIRID_VENT_BRIDGE_HOURS,
-    ).drop_duplicates().sort_values([id_col, "hour"]).reset_index(drop=True)
-    run = (hours.groupby(id_col)["hour"].diff().ne(1)).cumsum()
-    seed = hours.merge(invasive.assign(_seed=True), on=[id_col, "hour"], how="left")["_seed"].eq(True)
-    hours = hours.loc[seed.groupby(run.to_numpy()).transform("any").to_numpy()]
-    out = hours.rename(columns={"hour": time_column})
-    out[time_column] = out[time_column].astype("float64")
+    if ctx.resolver is None:
+        evidence = pd.DataFrame(columns=[id_col, "hour"])
+        barriers = pd.DataFrame(columns=[id_col, "start", "end"])
+    else:
+        evidence, barriers = ventilator_evidence(ctx, id_col)
+    out = airway_hours(airway, evidence, barriers, id_col=id_col, time_col=time_column,
+                       max_gap_hours=_HIRID_VENT_BRIDGE_HOURS)
     out["vent_ind"] = True
-    return _as_icutbl(out.reset_index(drop=True), id_columns=[id_col], index_column=time_column, value_column="vent_ind")
+    return _as_icutbl(out, id_columns=[id_col], index_column=time_column, value_column="vent_ind")
 
 
 def _callback_vent_ind(
@@ -5518,13 +5474,9 @@ def _callback_vent_ind(
         database_name == "hirid"
         and mech_tbl is not None
         and not mech_tbl.data.empty
-        and ctx.resolver is not None
         and id_columns
     ):
-        airway = _normalize_result(_windows_from_mech(mech_tbl))
-        if airway is None:
-            return _empty_result()
-        return _hirid_bridge_ventilator_evidence(airway, ctx, id_columns[0], time_column)
+        return _hirid_bridge_ventilator_evidence(mech_tbl, ctx, id_columns[0], time_column)
 
     # 🔧 PRIORITY: Try win_tbl format first (matches R ricu behavior)
     if mech_tbl is not None and not mech_tbl.data.empty:
@@ -5916,7 +5868,12 @@ def _callback_vaso_ind(
     durations = valid_rows["__duration_hours"].to_numpy(dtype="float64")
     keep = np.isfinite(starts) & np.isfinite(durations) & (durations >= 0)
     starts, durations = starts[keep], durations[keep]
-    counts = (np.floor(starts + durations + 1e-9) - np.floor(starts)).astype("int64") + 1
+    if getattr(getattr(ctx.data_source, "config", None), "name", "") == "hirid":
+        # R5C-HIRID-003: occupancy is [true start, true end), so an exact
+        # hour endpoint contributes no additional hour.
+        counts = np.maximum(1, np.ceil(starts + durations - 1e-9) - np.floor(starts)).astype("int64")
+    else:
+        counts = (np.floor(starts + durations + 1e-9) - np.floor(starts)).astype("int64") + 1
     hours = np.repeat(np.floor(starts), counts) + (
         np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
     )
@@ -6762,6 +6719,8 @@ def _callback_vaso60(
     # contains the start keeps its rate (2026-11-04 audit round 3, R3-02).
     window_start = merged["__start"].dt.floor(final_interval or pd.Timedelta(hours=1))
     mask = (merged[rate_index_col] >= window_start) & (merged[rate_index_col] <= merged["__end"])
+    if ds_name.lower() == "hirid":
+        mask &= merged[rate_index_col] < merged["__end"]
     filtered = merged[mask]
 
     if filtered.empty:
