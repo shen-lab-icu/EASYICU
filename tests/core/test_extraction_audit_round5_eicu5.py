@@ -82,9 +82,13 @@ def test_r5_eicu_009_same_offset_specimen_rejects_venous_and_conflicts(name):
     f = pd.DataFrame({"patientunitstayid": [1] * 5, "labresultoffset": [0, 60, 120, 180, 240], "labresult": [7.4] * 5})
     samples = pd.DataFrame({"patientunitstayid": [1] * 5, "labotheroffset": [0, 60, 120, 120, 240], "labothername": ["Sample Type"] * 5, "labothervaluetext": ["Venous", "Arterial", "Arterial", "Venous", "Capillary"], "labotherresult": [""] * 5})
     out = _apply(name, _sources(name, "lab")[0], f, _fake(customlab=samples))
-    assert out.labresultoffset.tolist() == [60]
-    assert out.attrs["eicu_specimen_audit"]["unknown_kept"] == 0
-    assert out.attrs["eicu_specimen_audit"]["unknown_dropped"] == 1
+    # Venous, capillary and conflicting samples drop; offset 180 has no sample:
+    # paO2/paCO2 are arterial by name, the others lack a same-offset paO2/paCO2.
+    label_defined = name in {"po2", "pco2"}
+    assert out.labresultoffset.tolist() == ([60, 180] if label_defined else [60])
+    assert out.specimen_status.tolist() == (["explicit_arterial", "label_defined_arterial"] if label_defined else ["explicit_arterial"])
+    assert out.attrs["eicu_specimen_audit"]["excluded_venous"] == 3
+    assert out.attrs["eicu_specimen_audit"]["excluded_unknown"] == (0 if label_defined else 1)
 
 
 def test_r5_eicu_011_adult_height_keeps_raw_value_and_qc_reason():
@@ -270,11 +274,13 @@ def test_r5_eicu_021_loop_rejects_volume_rate_and_cancelled_route_evidence():
 
 
 @pytest.mark.parametrize("offset", [1.0, pd.Timedelta(hours=1), pd.Timestamp("2020-01-01")])
-def test_r5_eicu_009_missing_specimens_are_excluded_for_each_clock(offset):
+def test_r5_eicu_009_missing_specimens_follow_the_r6_order_for_each_clock(offset):
     f = pd.DataFrame({"patientunitstayid": [1], "labresultoffset": [offset], "labresult": [80.0]})
-    out = _apply("po2", _sources("po2")[0], f, _fake())
-    assert out.empty
-    assert out.attrs["eicu_specimen_audit"]["unknown_dropped"] == 1
+    po2 = _apply("po2", _sources("po2")[0], f, _fake())
+    assert po2.specimen_status.tolist() == ["label_defined_arterial"]
+    ph = _apply("ph", _sources("ph")[0], f.assign(labresult=7.4), _fake())
+    assert ph.empty
+    assert ph.attrs["eicu_specimen_audit"]["excluded_unknown"] == 1
 
 
 def test_r5_eicu_020_explicit_chart_flow_label_is_not_a_percentage():
