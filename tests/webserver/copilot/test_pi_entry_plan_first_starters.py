@@ -147,7 +147,30 @@ def test_every_example_asks_only_what_its_database_records():
             assert decision.status == "exact", (example, decision.substitutions, decision.missing)
         for concept in (*fields.get("concepts", ()), *fields.get("treatment_concepts", ())):
             availability = profile.concept(concept)
+            if (database, concept) in _REVIEWED_PARTIAL_CONCEPTS:
+                # A disclosed composition gap, never a wider one.
+                assert availability.derivation_status == "degraded", (example, concept)
+                assert availability.missing_dependencies == _REVIEWED_PARTIAL_CONCEPTS[database, concept]
+                continue
             assert availability.mapped and availability.derivation_status in (None, "full"), (example, concept)
+
+
+# Auditor ruling 2026-11-04 (round 7): the vasopressor union differs by database.
+# AmsterdamUMCdb records no vasopressin, HiRID no dopamine or phenylephrine;
+# terlipressin is not a vasopressin substitute.
+_REVIEWED_PARTIAL_CONCEPTS = {
+    ("aumc", "vaso_ind"): ("adh_rate",),
+    ("hirid", "vaso_ind"): ("dopa_dur", "dopa_rate", "phn_rate"),
+}
+
+
+@pytest.mark.parametrize("database,concept", sorted(_REVIEWED_PARTIAL_CONCEPTS))
+def test_reviewed_vasopressor_gaps_stay_exactly_disclosed(database, concept):
+    from easyicu.databases.research_capabilities import research_capability_profile
+
+    availability = research_capability_profile(database).concept(concept)
+    assert availability.derivation_status == "degraded"
+    assert availability.missing_dependencies == _REVIEWED_PARTIAL_CONCEPTS[database, concept]
 
 
 @pytest.mark.parametrize("lang", ["zh", "en"])
