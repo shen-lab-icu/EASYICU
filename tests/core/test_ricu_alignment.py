@@ -301,8 +301,9 @@ class TestVentIndDtypeAlignment:
         out = _callback_vent_ind({"vent_start": start, "vent_end": end}, ctx)
 
         assert str(out.data["icustay_id"].dtype) == "Int64"
-        assert out.data["charttime"].tolist() == [1.0, 2.0, 3.0]
-        assert out.data["vent_ind"].tolist() == [True, True, True]
+        # Native ventilation occupies [1, 3); the stop hour has no overlap.
+        assert out.data["charttime"].tolist() == [1.0, 2.0]
+        assert out.data["vent_ind"].tolist() == [True, True]
 
     @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
     def test_eicu_mech_vent_points_are_not_expanded_into_six_hour_windows(

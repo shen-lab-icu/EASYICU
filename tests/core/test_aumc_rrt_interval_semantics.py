@@ -96,6 +96,7 @@ def test_rrt_episode_expands_to_active_hourly_status() -> None:
         9.0,
         10.0,
         11.0,
+        12.0,  # [4.17, 12.07) has positive overlap with its final cell.
         14.0,
         15.0,
         16.0,

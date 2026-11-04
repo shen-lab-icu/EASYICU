@@ -13337,7 +13337,8 @@
   "target": "win_tbl",
   "levels": [
    "invasive",
-   "noninvasive"
+   "noninvasive",
+   "invasive|noninvasive"
   ],
   "description": "mechanical ventilation windows",
   "omopid": 4230167,
@@ -28053,11 +28054,18 @@
   }
  },
  "vaso_ind": {
+  "aggregate": "max",
   "concepts": [
    "dopa_dur",
    "norepi_dur",
    "dobu_dur",
-   "epi_dur"
+   "epi_dur",
+   "dopa_rate",
+   "norepi_rate",
+   "dobu_rate",
+   "epi_rate",
+   "adh_rate",
+   "phn_rate"
   ],
   "description": "vasopressor indicator",
   "omopid": 3655896,
@@ -28065,7 +28073,7 @@
   "callback": "vaso_ind",
   "class_name": "rec_cncpt",
   "interval": "00:01:00",
-  "_comment": "2026-11-04 audit round 3 (M R2-02): the durations are loaded on a 1-minute grid so an episode keeps its start minute; on the hourly grid its start was floored while its duration was not, and the hour in which it ended was dropped (SICdb 35.7% of episodes)."
+  "_comment": "2026-11-04 R5/R6: exact duration intervals and positive main/adjunct rate hours are unioned across databases. The minute dependency grid retains partial support; max aggregation preserves positive evidence among zero-rate rows. Boolean adjuncts are points, never durations."
  },
  "vecuronium": {
   "class_name": "lgl_cncpt",
@@ -35452,10 +35460,10 @@
   "unit": "mg",
   "min": 0,
   "max": 2000,
-  "description": "loop diuretic dose in mg intravenous furosemide equivalent, summed per hour at administration start (IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395)",
+  "description": "loop diuretic dose in mg intravenous furosemide equivalent, with continuous amounts apportioned by ICU-hour overlap and boluses summed at administration",
   "category": "medications",
   "aggregate": "sum",
-  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) has none; MIMIC-III CareVue counts furosemide doses charted with an amount (2026-11-04 round 3 F-23; infusion rows charted as a rate only and bumetanide charted in ml are not counted); MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg. | R5-EICU-021: eICU now uses charted mass-rate infusions with IV route evidence; orders without charting still contribute no dose.",
+  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) has none; MIMIC-III CareVue counts furosemide doses charted with an amount (2026-11-04 round 3 F-23; infusion rows charted as a rate only and bumetanide charted in ml are not counted); MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg. | RI-04: MetaVision 228340 and AUMC 7244 interval amounts use positive half-open ICU-hour overlap; boluses remain point events. Equivalence factors: IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395. | R5-EICU-021: eICU now uses charted mass-rate infusions with IV route evidence; orders without charting still contribute no dose.",
   "sources": {
    "aumc": [
     {
@@ -35466,10 +35474,13 @@
      "sub_var": "itemid",
      "callback": "furosemide_equivalent",
      "fe_drug": "furosemide",
+     "fe_spread_index_var": "start",
+     "fe_spread_end_var": "stop",
      "val_var": "administered",
      "unit_var": "administeredunit",
      "extra_vars": [
-      "ordercategory"
+      "ordercategory",
+      "stop"
      ],
      "fe_route_var": "ordercategory",
      "fe_oral_values": [
@@ -35544,13 +35555,15 @@
      "sub_var": "itemid",
      "callback": "furosemide_equivalent",
      "fe_drug": "furosemide",
+     "fe_spread_index_var": "starttime",
+     "fe_spread_end_var": "endtime",
+     "fe_spread_item_var": "itemid",
+     "fe_spread_item_ids": [228340],
+     "extra_vars": ["statusdescription", "endtime", "itemid"],
      "val_var": "amount",
      "unit_var": "amountuom",
      "fe_route": "iv",
      "_comment": "2026-11-03 extraction audit 2: IV amount (amountuom mg); 'dose'-unit rows (<10) are dropped. Round 2 (D1): eMAR doses are added by the emar sources below, which drop an eMAR dose that this inputevents source already records within 60 min.",
-     "extra_vars": [
-      "statusdescription"
-     ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
@@ -35632,11 +35645,17 @@
      "sub_var": "itemid",
      "callback": "furosemide_equivalent",
      "fe_drug": "furosemide",
+     "fe_spread_index_var": "starttime",
+     "fe_spread_end_var": "endtime",
+     "fe_spread_item_var": "itemid",
+     "fe_spread_item_ids": [228340],
      "val_var": "amount",
      "unit_var": "amountuom",
      "fe_route": "iv",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "endtime",
+      "itemid"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
@@ -35668,11 +35687,17 @@
      "sub_var": "itemid",
      "callback": "furosemide_equivalent",
      "fe_drug": "furosemide",
+     "fe_spread_index_var": "starttime",
+     "fe_spread_end_var": "endtime",
+     "fe_spread_item_var": "itemid",
+     "fe_spread_item_ids": [228340],
      "val_var": "amount",
      "unit_var": "amountuom",
      "fe_route": "iv",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "endtime",
+      "itemid"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [

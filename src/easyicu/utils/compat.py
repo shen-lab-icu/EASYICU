@@ -22,7 +22,6 @@ ricu兼容层 - 实现与R ricu一致的数据提取行为
 
 from __future__ import annotations
 
-import math
 import logging
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, MutableMapping, Optional
@@ -158,16 +157,13 @@ INTERVAL_END_COLUMNS = ("endtime", "stop", "end_time", "end")
 def merged_window_duration_column(name: str, frame: pd.DataFrame, dur_var: Optional[str]) -> Optional[str]:
     """Return the duration column a merged export expands ``name`` over, if any.
 
-    A window concept whose frame carries no recognised end column (SICdb and
-    HiRID mech_vent and ett_gcs) used to keep only its start hour in the
-    merged export (2026-11-04 audit round 3, F-31).  Its ``dur_var`` is used
-    only when its unit is declared as hours.
+    A declared hours duration is authoritative, including when the frame
+    retains an auxiliary absolute source end timestamp. Both endpoints must
+    use the same clock before overlap is computed.
     """
     from ..table.duration import UNIT_HOURS, get_dur_var_unit
 
     if name not in WINDOW_CONCEPTS or not dur_var or dur_var not in frame.columns:
-        return None
-    if any(column in frame.columns for column in INTERVAL_END_COLUMNS):
         return None
     if get_dur_var_unit(frame) != UNIT_HOURS:
         return None
@@ -348,7 +344,7 @@ def expand_interval_rows(
 ) -> pd.DataFrame:
     """展开时间窗口为逐小时记录
     
-    将有start/end时间的记录展开为每小时一条记录，与ricu的expand()行为一致。
+    将有start/end时间的记录按半开区间的正重叠展开为逐小时记录。
     
     Args:
         df: 输入DataFrame
@@ -417,57 +413,23 @@ def expand_interval_rows(
     else:
         ends = starts
     
-    # 🔧 注意：R ricu 不对原始 endtime 做 floor
-    # 只有在 endtime 不在列中时，R ricu 才会用 re_time(start + dur, interval) 计算
-    # 对于 MIIV inputevents，endtime 已经在列中，所以直接使用原始值
-    # seq(start, end, step) 会产生所有 <= end 的时间点
-    
-    # 展开
-    records = []
-    for idx, (start, end, value, stay_id) in enumerate(
-        zip(starts, ends, working.get(value_col), working.get(id_col))
-    ):
-        if pd.isna(start) or pd.isna(stay_id):
-            continue
-        if pd.isna(end):
-            end = start
-        if end < start:
-            end = start
-        
-        span = min(end - start, max_span_hours)
-        if span <= 0:
-            records.append({id_col: stay_id, time_col: float(math.floor(start)), value_col: value})
-            continue
+    # The native merged path shares the same positive-overlap owner as the
+    # resolver. Only rows without an interval are point observations.
+    from ..concept.window_expansion import expand_wintbl_vectorized
 
-        # ``span`` is the validated expansion bound.  The old loop still used
-        # the uncapped source ``end`` below, so an absolute timestamp that
-        # accidentally reached this compatibility layer could allocate years
-        # of hourly rows despite ``max_span_hours``.  Iterate only to the
-        # effective end represented by the bound.
-        effective_end = start + span
-        
-        # 🔧 FIX: 使用 R seq(start, end, step) 的行为
-        # R 的 seq(17.84, 20, 1) 产生 [17.84, 18.84, 19.84]
-        # 然后取 floor 得到 [17, 18, 19]
-        # 
-        # 实现：从 start 开始，每次加 1，直到超过 end
-        time_points = []
-        current = start
-        while current <= effective_end + 1e-9:  # 加小量避免浮点误差
-            time_points.append(math.floor(current))
-            current += interval_hours
-        
-        # 去重（因为 floor 可能产生重复）
-        time_points = sorted(set(time_points))
-        
-        for hour in time_points:
-            records.append({id_col: stay_id, time_col: float(hour), value_col: value})
-    
-    if not records:
-        return df.drop(columns=[endtime_col, duration_col], errors="ignore")
-    
-    expanded = pd.DataFrame.from_records(records)
-    
+    working["__span"] = (ends - starts).clip(upper=max_span_hours)
+    expanded = expand_wintbl_vectorized(
+        working, idx_col=time_col, dur_col="__span", id_cols=[id_col],
+        value_columns=[value_col], interval_hours=interval_hours,
+    )
+    missing_end = ends.isna()
+    if missing_end.any():
+        points = working.loc[missing_end, [id_col, time_col, value_col]].copy()
+        points[time_col] = np.floor(points[time_col] / interval_hours) * interval_hours
+        expanded = pd.concat([expanded, points], ignore_index=True)
+    if expanded.empty:
+        return pd.DataFrame(columns=[id_col, time_col, value_col])
+
     # 🔧 FIX: 按(id, time)聚合，根据数据类型选择聚合函数
     # 参考: ricu/R/tbl-utils.R 第 741-751 行:
     #   - numeric → median
@@ -481,7 +443,18 @@ def expand_interval_rows(
     elif pd.api.types.is_numeric_dtype(value_dtype):
         agg_func = 'median'
     else:
-        # object/string/category → first
+        if concept_lower == 'mech_vent':
+            # Pool category membership with vectorized reductions: a Python
+            # callback for every patient-hour is costly on full source tables.
+            expanded['__imv'] = expanded[value_col].isin(['invasive', 'invasive|noninvasive'])
+            expanded['__niv'] = expanded[value_col].isin(['noninvasive', 'invasive|noninvasive'])
+            pooled = expanded.groupby([id_col, time_col], as_index=False).agg(
+                {value_col: 'first', '__imv': 'max', '__niv': 'max'}
+            )
+            labels = pooled[value_col].astype('object')
+            labels = labels.mask(pooled.__imv, 'invasive').mask(pooled.__niv, 'noninvasive')
+            pooled[value_col] = labels.mask(pooled.__imv & pooled.__niv, 'invasive|noninvasive')
+            return pooled[[id_col, time_col, value_col]]
         agg_func = 'first'
     
     expanded = expanded.groupby([id_col, time_col], as_index=False).agg({value_col: agg_func})

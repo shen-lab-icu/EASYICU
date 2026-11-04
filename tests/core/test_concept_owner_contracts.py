@@ -23,7 +23,7 @@ def test_wintbl_expansion_is_independently_owned_and_preserves_row_shape() -> No
         {
             "stay_id": [7, 8],
             "time": [0.5, 2.0],
-            "duration": [2.0, 0.0],
+            "duration": [2.0, 0.5],
             "dose": [1.5, 2.5],
         }
     )

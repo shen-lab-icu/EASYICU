@@ -23,7 +23,11 @@ def expand_wintbl_vectorized(
     end_mode: WinTblEndMode = "raw",
     duration_zero_single: bool = False,
 ) -> pd.DataFrame:
-    """Expand WinTbl rows with the resolver's two historical end semantics."""
+    """Publish grid cells with positive overlap with ``[start, start + dur)``.
+
+    The legacy mode/zero-duration arguments remain accepted for callers, but
+    neither may extend a window or turn an empty interval into point evidence.
+    """
 
     if interval_hours <= 0:
         raise ValueError("interval_hours must be positive")
@@ -42,31 +46,17 @@ def expand_wintbl_vectorized(
 
     start = pd.to_numeric(data[idx_col], errors="coerce").to_numpy(dtype=np.float64)
     duration = pd.to_numeric(data[dur_col], errors="coerce").to_numpy(dtype=np.float64)
-    start = np.where(np.isnan(start), 0.0, start)
-    duration = np.where(np.isnan(duration), 0.0, duration)
-    start_aligned = np.floor(start / interval_hours) * interval_hours
-
-    if end_mode == "raw":
-        end_effective = start + duration
-        point_counts = (
-            np.floor((end_effective - start_aligned) / interval_hours).astype(np.int64)
-            + 1
-        )
-        if duration_zero_single:
-            point_counts = np.where(duration <= 0.0, 1, point_counts)
-    elif end_mode == "floored_clamped":
-        end_effective = (
-            np.floor((start_aligned + duration) / interval_hours) * interval_hours
-        )
-        end_effective = np.maximum(end_effective, 0.0)
-        point_counts = (
-            np.floor((end_effective - start_aligned) / interval_hours).astype(np.int64)
-            + 1
-        )
-    else:
+    if end_mode not in ("raw", "floored_clamped"):
         raise ValueError(f"Unknown end_mode: {end_mode!r}")
-
-    point_counts = np.maximum(point_counts, 1)
+    end = start + duration
+    valid = np.isfinite(start) & np.isfinite(end) & (duration > 0) & (end > start)
+    start_aligned = np.floor(np.where(valid, start, 0) / interval_hours) * interval_hours
+    point_counts = np.where(
+        valid,
+        np.ceil(np.where(valid, end, 0) / interval_hours)
+        - np.floor(np.where(valid, start, 0) / interval_hours),
+        0,
+    ).astype(np.int64)
     total = int(point_counts.sum())
     if total == 0:
         return pd.DataFrame(columns=base_cols)

@@ -4224,14 +4224,8 @@ class ConceptResolver:
                         # CRITICAL FIX: 无论tmp是否为空，都要更新frame
                         # 如果tmp为空（没有匹配的数据或被时间过滤），frame也应该为空
                         if not tmp.empty:
-                            # 🔧 FIX: Convert datetime columns to relative hours BEFORE removing intime
-                            # This matches R ricu's load_mihi which converts times relative to origin
-                            # before any callbacks (like calc_dur) are called.
-                            # 
-                            # R ricu flow: dt_round_min <- function(x, y) round_to(difftime(x, y, units = "mins"))
-                            # This floors all time columns to integer minutes, then later to hours.
-                            # 
-                            # For duration calculation, we need: floor(end_h) - floor(start_h)
+                            # Preserve exact source endpoints on the ICU clock before
+                            # callbacks; only hourly materialization may round them.
                             if 'intime' in tmp.columns and tmp['intime'].notna().any():
                                 # Convert all datetime time columns to relative hours
                                 datetime_cols = []
@@ -4242,18 +4236,11 @@ class ConceptResolver:
                                 
                                 if datetime_cols:
                                     for col in datetime_cols:
-                                        # Convert to relative hours (from intime)
-                                        # 🔧 FIX: Match R ricu's round_to(difftime(x, y, units = "mins")) logic:
-                                        # 1. First floor to integer minutes (dt_round_min)
-                                        # 2. Then floor to integer hours when aggregating
-                                        # This ensures times slightly before intime go to hour -1, not 0
                                         relative_td = tmp[col] - tmp['intime']
-                                        # Step 1: floor to integer minutes (matching R's floor(difftime(..., units="mins")))
-                                        relative_mins = np.floor(relative_td.dt.total_seconds() / 60.0)
-                                        # Step 2: convert to hours (will be floored during aggregation)
+                                        relative_mins = relative_td.dt.total_seconds() / 60.0
                                         tmp[col] = relative_mins / 60.0
                                     if DEBUG_MODE:
-                                        print(f"      🕐 [时间转换] {datetime_cols} 从 datetime → 相对小时数 (floor to mins first)")
+                                        print(f"      🕐 [时间转换] {datetime_cols} 从 datetime → 精确相对小时数")
                             
                             # 将过滤后的数据作为新frame，仅保留必要列
                             drop_cols = [c for c in ['intime', 'outtime'] if c in tmp.columns]
@@ -5943,6 +5930,8 @@ class ConceptResolver:
                         step_size=interval,
                         id_cols=id_columns,
                         keep_vars=keep_vars,
+                        end_inclusive=False,
+                        numeric_time_unit="h" if align_to_admission else None,
                     )
                     if not point_rows.empty and not expanded.empty:
                         combined = pd.concat(
@@ -6043,7 +6032,7 @@ class ConceptResolver:
             # change_interval floors start first, causing precision loss:
             # floor(2.9 + 0.2)=3 vs floor(floor(2.9) + 0.2)=floor(2.2)=2
             if agg_method != '__skip_change_interval__' and not (
-                db_name == 'aumc' and any(src.callback == 'aumc_dur' for src in sources)
+                is_duration_concept
             ):
                 urine_receipts = None
                 if concept_name == 'urine':
@@ -6198,25 +6187,9 @@ class ConceptResolver:
             ts_source_rows = combined[combined['dur_var'].isna()].copy()
             combined = combined.dropna(subset=['dur_var'])
             
-            # 🔧 FIX 2026-02-15: Apply R ricu's change_interval behavior for win_tbl
-            # For lgl/fct win_tbl (mech_vent): floor + dedup as before
-            # For num_cncpt win_tbl (dex): skip floor+dedup — expansion needs raw start times
-            # R ricu's expand.win_tbl uses raw start: end = floor(raw_start + dur)
-            # R5C-HIRID-004: same-hour transitions must retain both exact
-            # intervals, including no-airway counterevidence for bridges.
-            preserve_airway_clock = data_source.config.name == "hirid" and concept_name == "mech_vent"
-            if not _is_num_win_tbl and not preserve_airway_clock and interval is not None and index_column in combined.columns:
-                if pd.api.types.is_numeric_dtype(combined[index_column]):
-                    interval_hours = interval.total_seconds() / 3600.0
-                    combined = combined.copy()
-                    combined[index_column] = (combined[index_column] // interval_hours) * interval_hours
-                elif pd.api.types.is_datetime64_any_dtype(combined[index_column]):
-                    combined = combined.copy()
-                    combined[index_column] = combined[index_column].dt.floor(interval)
-                # unique by (id_cols + index_col), keep first
-                dedup_cols = [c for c in id_columns if c in combined.columns] + [index_column]
-                combined = combined.drop_duplicates(subset=dedup_cols, keep='first')
-            
+            # R5: keep both endpoints and all same-hour categories intact.
+            # Only the interval materializer may quantize a window's start.
+
             win_tbl = WinTbl(
                 data=combined,
                 id_vars=id_columns,
@@ -7339,17 +7312,10 @@ class ConceptResolver:
             # 这是因为临床数据可能在 ICU 入住前后测量，但仍然与 ICU 住院相关
             # 例如：实验室检验、生命体征等可能在入ICU前或转出后记录
             
-            # Calculate hours since admission (不进行任何时间窗口过滤)
-            # 🔧 CRITICAL FIX: 使用 R ricu 的时间转换逻辑：
-            # R ricu 使用 round_to(difftime(x, y, units = "mins"))
-            # round_to() 对于 to=1 使用 floor()
-            # 即: floor((charttime - intime).total_seconds() / 60) / 60
-            # 这与直接 total_seconds() / 3600 的结果不同，特别是对于负时间
-            # 例如: -12秒 → floor(-12/60)/60 = floor(-0.2)/60 = -1/60 = -0.0167 小时
-            #       -12秒 → -12/3600 = -0.003 小时 (WRONG)
+            # Exact ICU-relative hours, including negative pre-admission time.
             time_diff = data[index_column] - data['intime']
-            # 🔧 R ricu compatible: floor to minutes first, then convert to hours
-            minutes = np.floor(time_diff.dt.total_seconds() / 60.0)
+            # Exact relative time; rounding before interval arithmetic loses overlap.
+            minutes = time_diff.dt.total_seconds() / 60.0
             hours = minutes / 60.0
             
             data[index_column] = hours
@@ -7366,9 +7332,9 @@ class ConceptResolver:
                 # Remove timezone if present
                 if hasattr(data[time_col].dt, 'tz') and data[time_col].dt.tz is not None:
                     data[time_col] = data[time_col].dt.tz_localize(None)
-                # Convert to hours since admission (R ricu compatible: floor to minutes first)
+                # Convert the other endpoint against the same exact origin.
                 time_diff_col = data[time_col] - data['intime']
-                minutes_col = np.floor(time_diff_col.dt.total_seconds() / 60.0)
+                minutes_col = time_diff_col.dt.total_seconds() / 60.0
                 data[time_col] = minutes_col / 60.0
             
             # 2026-09-18 v6: the absolute-timestamp path gets the same
@@ -7940,7 +7906,6 @@ class ConceptResolver:
                         value_columns=extra_value_cols,
                         interval_hours=interval_hours,
                         end_mode="raw",
-                        duration_zero_single=True,
                     )
 
                     if not expanded_df.empty:
@@ -9574,7 +9539,6 @@ class ConceptResolver:
                             value_columns=[concept_name] if concept_name in result.data.columns else [],
                             interval_hours=interval_hours,
                             end_mode="raw",
-                            duration_zero_single=True,
                         )
                     
 
@@ -10223,11 +10187,8 @@ class ConceptResolver:
                 declared_index = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
                 if declared_index and declared_index in df.columns:
                     declared_time_columns[name] = declared_index
-                # The MIMIC-III IMV repair needs its reconstructed duration to
-                # survive the public multi-concept merge. A window concept with
-                # an hours dur_var and no end column (SICdb/HiRID mech_vent and
-                # ett_gcs) is expanded over it too (audit round 3, F-31); one
-                # with an end column (MIIV endtime, AUMC stop) keeps that end.
+                # A declared elapsed duration shares the aligned index clock;
+                # redundant source endpoints may still be absolute timestamps.
                 declared_duration = getattr(table, 'dur_var', None)
                 if (
                     name == "mech_vent"
@@ -10322,9 +10283,7 @@ class ConceptResolver:
             df = concept_data[name]
             if df is None or df.empty:
                 continue
-            # A declared duration (MIMIC-III mech_vent; window concepts without
-            # an end column) is an elapsed time in hours, while the source frame
-            # can retain an auxiliary absolute end timestamp.
+            # Declared elapsed hours take precedence over auxiliary source ends.
             declared_duration = declared_duration_columns.get(name)
             if declared_duration and declared_duration in df.columns:
                 if declared_duration != "duration":
@@ -10333,7 +10292,7 @@ class ConceptResolver:
                     )
                 redundant_end_columns = [
                     column
-                    for column in ("endtime", "stop")
+                    for column in compat.INTERVAL_END_COLUMNS
                     if column in df.columns
                     and column != declared_time_columns.get(name)
                 ]

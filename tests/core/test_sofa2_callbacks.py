@@ -520,7 +520,7 @@ def test_sofa2_aggregate_counts_component_receipts_not_score_non_nullness():
 
 
 @pytest.mark.clinical_conformance
-def test_sofa2_owner_receipt_prevents_synthetic_zero_from_truncating_locf():
+def test_sofa2_owner_receipt_keeps_real_scores_only_within_the_window():
     timeline = list(range(31))
     cns = _callback_sofa_component(standalone_sofa2_cns)(
         {
@@ -550,17 +550,19 @@ def test_sofa2_owner_receipt_prevents_synthetic_zero_from_truncating_locf():
     }
     components["sofa2_cns"] = cns
 
-    at_30h = _callback_sofa2_score(
+    result = _callback_sofa2_score(
         components,
         _component_context("sofa2", keep_components=True),
-    ).data.set_index("charttime").loc[30]
+    ).data.set_index("charttime")
+    assert result.loc[12, "sofa2_cns"] == 2
+    at_30h = result.loc[30]
 
-    assert at_30h["sofa2_cns"] == 2
-    assert at_30h["sofa2"] == 2
+    assert pd.isna(at_30h["sofa2_cns"])
+    assert at_30h["sofa2"] == 0
     assert at_30h["sofa2_cns_observed"] == 0
-    assert at_30h["sofa2_cns_available"] == 1
+    assert pd.isna(at_30h["sofa2_cns_available"])
     assert at_30h["sofa2_n_observed_components"] == 5
-    assert at_30h["sofa2_n_available_components"] == 6
+    assert at_30h["sofa2_n_available_components"] == 5
 
 
 def test_sofa2_aggregate_treats_legacy_score_only_inputs_as_asserted():
@@ -729,7 +731,7 @@ def test_sofa2_gap_domain_is_invariant_to_stay_partitioning():
 
 
 @pytest.mark.clinical_conformance
-def test_sofa2_production_aggregate_carries_last_component_beyond_24_hours():
+def test_sofa2_production_aggregate_expires_a_component_outside_24_hours():
     components = {
         "sofa2_liver": ICUTable(
             pd.DataFrame(
@@ -773,11 +775,11 @@ def test_sofa2_production_aggregate_carries_last_component_beyond_24_hours():
         _component_context("sofa2", keep_components=True),
     ).data.set_index("charttime")
 
-    assert result.loc[25.0, "sofa2_liver"] == 3
-    assert result.loc[25.0, "sofa2"] == 3
+    assert pd.isna(result.loc[25.0, "sofa2_liver"])
+    assert result.loc[25.0, "sofa2"] == 0
     assert result.loc[25.0, "sofa2_n_observed_components"] == 5
-    assert result.loc[25.0, "sofa2_n_available_components"] == 6
-    assert result.loc[25.0, "sofa2_n_components"] == 6
+    assert result.loc[25.0, "sofa2_n_available_components"] == 5
+    assert result.loc[25.0, "sofa2_n_components"] == 5
 
 
 def test_sofa2_empty_aggregate_keeps_a_stable_schema():

@@ -1095,6 +1095,7 @@ def _apply_callback(
         # (2026-11-03 extraction audit #19).
         from .diuretics import furosemide_equivalent
 
+        definition = getattr(resolver, "dictionary", {}).get(concept_name)
         return furosemide_equivalent(
             frame,
             concept_name=concept_name,
@@ -1102,6 +1103,7 @@ def _apply_callback(
             unit_var=source.unit_var,
             params=source.params,
             data_source=data_source,
+            maximum=definition.maximum if definition is not None else _get_concept_bounds(concept_name, 'max'),
         )
 
     if expr == "transform_fun(miiv_age)":

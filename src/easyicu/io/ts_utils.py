@@ -494,6 +494,9 @@ def expand(
     id_cols: Optional[list] = None,
     keep_vars: Optional[list] = None,
     admission_times: Optional[pd.DataFrame] = None,
+    *,
+    end_inclusive: bool = True,
+    numeric_time_unit: Optional[str] = None,
 ) -> pd.DataFrame:
     """Expand intervals into individual time points (R ricu expand).
     
@@ -510,6 +513,11 @@ def expand(
         admission_times: DataFrame with id and intime columns for R ricu-compatible
                         floor behavior. When provided, floor is applied to
                         relative time (time - intime), not absolute datetime.
+        end_inclusive: Preserve the historical ricu point sequence by default.
+            False publishes only positive-overlap cells of [start, end),
+            aligning the start down and the end up to the requested grid.
+        numeric_time_unit: Explicit h/min/s clock for already-normalized axes.
+            Omit to retain the source-column inference used by raw callers.
         
     Returns:
         Expanded DataFrame with one row per time step
@@ -546,7 +554,9 @@ def expand(
         # the semantic unit inference over a single hardcoded column name;
         # minute-valued columns such as measuredat_minutes or *offset must
         # not be expanded on an hour grid.
-        numeric_unit = _infer_numeric_time_unit(data[start_var], start_var)
+        numeric_unit = numeric_time_unit or _infer_numeric_time_unit(data[start_var], start_var)
+        if numeric_unit not in {"h", "min", "s"}:
+            raise ValueError("numeric_time_unit must be h, min or s")
         if numeric_unit == 's':
             step_val = float(step_size.total_seconds())
         elif numeric_unit == 'min':
@@ -560,13 +570,33 @@ def expand(
         
         end_col = end_var
 
+        if not end_inclusive:
+            if pd.api.types.is_timedelta64_dtype(data[end_col]):
+                data = data.copy()
+                data[end_col] = data[start_var] + data[end_col].dt.total_seconds() / (step_size.total_seconds() / step_val)
+            elif pd.api.types.is_datetime64_any_dtype(data[end_col]):
+                # A mixed-source resolver can align starttime before its raw
+                # endtime. Normalize both sides against the same ICU origin.
+                origin = data.get('intime')
+                if origin is None and admission_times is not None:
+                    identifier = next((c for c in id_cols if c in admission_times), None)
+                    if identifier and 'intime' in admission_times:
+                        lookup = admission_times.drop_duplicates(identifier).set_index(identifier).intime
+                        origin = data[identifier].map(lookup)
+                if origin is None:
+                    raise ValueError("Mixed interval clocks require ICU admission origins")
+                data = data.copy()
+                delta = pd.to_datetime(data[end_col], utc=True) - pd.to_datetime(origin, utc=True)
+                data[end_col] = delta.dt.total_seconds() / (step_size.total_seconds() / step_val)
+
         # 🔧 FIX 2026-05-16: when start is numeric (hours/minutes since admission)
         # but end happens to be datetime (e.g. mimic delirium_tx endtime keeps the
         # raw datetime from inputevents while charttime got time-aligned), drop to
         # an NA-only filter to avoid a numeric-vs-datetime TypeError. The expand
         # below still bounds-checks per-row.
         try:
-            valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+            ordered = data[start_var] <= data[end_col] if end_inclusive else data[start_var] < data[end_col]
+            valid_mask = data[start_var].notna() & data[end_col].notna() & ordered
         except (TypeError, ValueError) as _cmp_err:
             import logging as _ts_log
             _ts_log.getLogger(__name__).debug(
@@ -627,10 +657,16 @@ def expand(
         # endtime kept the raw datetime). The numeric path can't span both — fall
         # back to count=1 (single-point expansion) so we still produce a result.
         try:
-            diff = end_values - start_values
-            counts = np.floor(diff / step_val).astype(int) + 1
-            counts = np.maximum(counts, 1)
+            if end_inclusive:
+                diff = end_values - start_values
+                counts = np.floor(diff / step_val).astype(int) + 1
+                counts = np.maximum(counts, 1)
+            else:
+                start_values = np.floor(start_values / step_val) * step_val
+                counts = (np.ceil(end_values / step_val) - start_values / step_val).astype(int)
         except Exception:
+            if not end_inclusive:
+                raise ValueError("Half-open expansion requires matching start/end clocks")
             counts = np.ones(len(start_values), dtype=int)
         
         # Filter out rows with 0 counts
@@ -644,15 +680,15 @@ def expand(
         start_values = start_values[row_mask]
         
         # Repeat rows
-        # valid_data.index.repeat(counts) repeats the index, then loc selects rows
-        expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+        # Select by position so reused source labels cannot multiply rows.
+        expanded_df = valid_data.iloc[np.repeat(np.arange(len(valid_data)), counts)].reset_index(drop=True)
         
         # Repeat original start times for offset calculation
         start_expanded = np.repeat(start_values, counts)
         
         # Generate time offsets: 0, 1, 2... for each group
-        # Using list comprehension with numpy is much faster than pandas iterrows
-        offsets = np.concatenate([np.arange(c) for c in counts])
+        # Use array offsets without a Python loop over source rows
+        offsets = np.arange(int(counts.sum())) - np.repeat(np.cumsum(np.asarray(counts)) - np.asarray(counts), counts)
         
         # Calculate new times: start + offset * step (using original start, not floored)
         # The values will be floored later by change_interval
@@ -736,7 +772,8 @@ def expand(
     # comparison still fails (e.g. mixed object dtypes), fall back to a NA-only
     # mask so the caller can still produce a result rather than skipping expansion.
     try:
-        valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+        ordered = data[start_var] <= data[end_col] if end_inclusive else data[start_var] < data[end_col]
+        valid_mask = data[start_var].notna() & data[end_col].notna() & ordered
     except (TypeError, ValueError) as _cmp_err:
         import logging as _ts_log
         _ts_log.getLogger(__name__).debug(
@@ -786,7 +823,7 @@ def expand(
                 
                 # Floor relative hours (R ricu behavior)
                 start_floored_rel = np.floor(start_rel / step_hours) * step_hours
-                end_floored_rel = np.floor(end_rel / step_hours) * step_hours
+                end_floored_rel = (np.floor(end_rel / step_hours) if end_inclusive else np.ceil(end_rel / step_hours)) * step_hours
                 
                 # Calculate counts based on floored relative hours
                 diff_hours = end_floored_rel - start_floored_rel
@@ -803,7 +840,7 @@ def expand(
                         result_cols = [start_var] + id_cols + keep_vars
                         return pd.DataFrame(columns=result_cols)
                 
-                counts = (diff_hours / step_hours).astype(int) + 1
+                counts = np.rint(diff_hours / step_hours).astype(int) + int(end_inclusive)
                 counts = np.maximum(counts, 0)
                 
                 # Filter out rows with 0 counts
@@ -818,14 +855,14 @@ def expand(
                 intime_values = valid_data[intime_col].values
                 
                 # Repeat rows
-                expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+                expanded_df = valid_data.iloc[np.repeat(np.arange(len(valid_data)), counts)].reset_index(drop=True)
                 
                 # Repeat start floored relative hours and intime for offset calculation
                 start_floored_rel_expanded = np.repeat(start_floored_rel.values, counts)
                 intime_expanded = np.repeat(intime_values, counts)
                 
                 # Generate time offsets: 0, 1, 2, ... for each row
-                offsets = np.concatenate([np.arange(c) for c in counts])
+                offsets = np.arange(int(counts.sum())) - np.repeat(np.cumsum(np.asarray(counts)) - np.asarray(counts), counts)
                 
                 # Calculate new absolute times from floored relative time + intime
                 # 🔧 PERFORMANCE FIX: Use numpy timedelta64 instead of pd.to_timedelta
@@ -864,11 +901,11 @@ def expand(
     # This matches R ricu's seq(floor(start), floor(end), by)
     # For hourly steps, floor to the hour (remove minutes/seconds)
     start_floored = valid_data[start_var].dt.floor(step_size)
-    end_floored = valid_data[end_col].dt.floor(step_size)
+    end_floored = valid_data[end_col].dt.floor(step_size) if end_inclusive else valid_data[end_col].dt.ceil(step_size)
     
     # Calculate number of points: (floor_end - floor_start) / step + 1
     diff = end_floored - start_floored
-    counts = (diff / step_size).astype(int) + 1
+    counts = (diff / step_size).astype(int) + int(end_inclusive)
     counts = np.maximum(counts, 0)
     
     # Filter out rows with 0 counts
@@ -882,13 +919,13 @@ def expand(
     start_floored = start_floored[row_mask]
     
     # Repeat rows
-    expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+    expanded_df = valid_data.iloc[np.repeat(np.arange(len(valid_data)), counts)].reset_index(drop=True)
     
     # Repeat floored start times for offset calculation
-    start_floored_expanded = start_floored.repeat(counts).values
+    start_floored_expanded = start_floored.repeat(counts).array
     
     # Generate time offsets: 0, 1, 2, ... for each row
-    offsets = np.concatenate([np.arange(c) for c in counts])
+    offsets = np.arange(int(counts.sum())) - np.repeat(np.cumsum(np.asarray(counts)) - np.asarray(counts), counts)
     
     # Calculate new times: floored_start + offset * step_size
     # Use floored start time to generate aligned hour boundaries

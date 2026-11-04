@@ -212,34 +212,37 @@ def fentanyl_cv_mass_rate(
 
 
 def union_vaso_indicator(tables: dict, ctx: Any, duration_callback: Any) -> Any:
-    """Union MIMIC-III adjunct evidence with four-drug duration support.
+    """Union adjunct evidence with duration support in every source database.
 
-    Other databases retain their existing indicator contract. Boolean support
-    is a point on its published grid, never a numeric one-hour duration.
+    Boolean support is a point on its published grid, never a numeric duration.
     """
     from ..table import ICUTable
 
-    duration_tables = {k: v for k, v in tables.items() if k != "other_vaso"}
-    database = getattr(getattr(ctx.data_source, "config", None), "name", "")
-    if database not in {"mimic", "mimic_demo"}:
-        # Decide before reading the adjunct table: outside MIMIC-III it may be an
-        # unindexed empty frame, and it never changes the indicator there.
-        return duration_callback(duration_tables, ctx)
-    other = tables["other_vaso"]
-    id_cols = list(other.id_columns)
-    time_col = other.index_column
-    empty = other.data.iloc[:0][[*id_cols, time_col]].assign(vaso_ind=pd.Series(dtype=bool))
-    base = duration_callback(duration_tables, ctx) if duration_tables else ICUTable(
-        empty, id_columns=id_cols, index_column=time_col, value_column="vaso_ind",
-    )
-    active = other.data.loc[other.data["other_vaso"].eq(True), [*id_cols, time_col]].copy()
-    if pd.api.types.is_numeric_dtype(active[time_col]):
-        active[time_col] = np.floor(_numeric(active[time_col]).to_numpy("float64", na_value=np.nan))
-    elif pd.api.types.is_datetime64_any_dtype(active[time_col]):
-        active[time_col] = active[time_col].dt.floor("h")
-    active["vaso_ind"] = True
-    if not base.data.empty:
-        frame = base.data.rename(columns={base.index_column: time_col})
-        active = pd.concat([frame, active], ignore_index=True)
-    active = active.drop_duplicates([*id_cols, time_col]).sort_values([*id_cols, time_col]).reset_index(drop=True)
+    duration_tables = {k: v for k, v in tables.items() if k.endswith("_dur")}
+    base = duration_callback(duration_tables, ctx) if duration_tables else None
+    pieces = []
+    if base is not None and not base.data.empty:
+        pieces.append(base.data.rename(columns={base.index_column: "__hour"}))
+    id_cols = list(base.id_columns) if base is not None else []
+    time_col = base.index_column if base is not None else None
+    for name, other in tables.items():
+        if name.endswith("_dur") or other.data.empty or not other.index_column:
+            continue
+        id_cols = list(other.id_columns)
+        time_col = time_col or other.index_column
+        values = other.data[name]
+        positive = values.eq(True) if name == "other_vaso" else _numeric(values).gt(0)
+        active = other.data.loc[positive, [*id_cols, other.index_column]].copy()
+        clock = active.pop(other.index_column)
+        active["__hour"] = (np.floor(_numeric(clock).to_numpy("float64", na_value=np.nan))
+                            if pd.api.types.is_numeric_dtype(clock) else clock.dt.floor("h"))
+        active["vaso_ind"] = True
+        pieces.append(active)
+    if not pieces:
+        return base if base is not None else ICUTable(
+            pd.DataFrame(columns=[*id_cols, time_col or "charttime", "vaso_ind"]),
+            id_columns=id_cols, index_column=time_col or "charttime", value_column="vaso_ind",
+        )
+    active = pd.concat(pieces, ignore_index=True).drop_duplicates([*id_cols, "__hour"])
+    active = active.sort_values([*id_cols, "__hour"]).rename(columns={"__hour": time_col}).reset_index(drop=True)
     return ICUTable(active, id_columns=id_cols, index_column=time_col, value_column="vaso_ind")

@@ -35,22 +35,28 @@
     {
       "database": "miiv",
       "concept": "vaso_ind",
-      "agents": ["dobutamine", "dopamine", "epinephrine", "norepinephrine"],
+      "agents": ["dobutamine", "dopamine", "epinephrine", "norepinephrine", "phenylephrine", "vasopressin"],
       "definition": {
         "dictionary": "concept-dict.json",
         "components": [
           {"component": "dobu_dur", "agent": "dobutamine"},
           {"component": "dopa_dur", "agent": "dopamine"},
           {"component": "epi_dur", "agent": "epinephrine"},
-          {"component": "norepi_dur", "agent": "norepinephrine"}
+          {"component": "norepi_dur", "agent": "norepinephrine"},
+          {"component": "dobu_rate", "agent": "dobutamine"},
+          {"component": "dopa_rate", "agent": "dopamine"},
+          {"component": "epi_rate", "agent": "epinephrine"},
+          {"component": "norepi_rate", "agent": "norepinephrine"},
+          {"component": "phn_rate", "agent": "phenylephrine"},
+          {"component": "adh_rate", "agent": "vasopressin"}
         ]
       },
       "capture_setting": "icu",
       "absent_in_capture": "absent_row_is_no_event",
       "pre_admission_visible": false,
       "basis": "development_assumption",
-      "declared_by": "EasyICU development, causal owner design 2026-10-09 (section 10.2)",
-      "declared_at": "2026-10-09",
+      "declared_by": "EasyICU development, extraction audit R6-F012",
+      "declared_at": "2026-11-04",
       "note": "MIMIC-IV charts these continuous infusions in the ICU's input events, clipped to ICU discharge; an infusion started before ICU admission is seen only from ICU arrival."
     },
     {

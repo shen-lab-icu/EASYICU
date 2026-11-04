@@ -534,7 +534,9 @@ def test_r5c_iii_009_all_ventilation_paths_keep_only_active_evidence(tmp_path, b
         frame = result[name].data
         clock = result[name].index_column
         assert set(frame.icustay_id) == {1, 3}
-        assert frame.loc[frame.icustay_id.eq(1), clock].tolist() == ([0., 24.] if name == "mech_vent" else [0., 1., 24., 25.])
+        # Each explicit procedure is [0, 1) or [24, 25): the stop hour
+        # carries no ventilation evidence in either projection (RI-03).
+        assert frame.loc[frame.icustay_id.eq(1), clock].tolist() == [0., 24.]
         # Explicit invasive procedure evidence survives a concurrent Off mode.
         explicit = frame.loc[frame.icustay_id.eq(3), clock].tolist()
         assert explicit == [6.] if name == "mech_vent" else 12. in explicit

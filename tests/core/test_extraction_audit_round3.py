@@ -277,7 +277,9 @@ def test_r3_05_eicu_ventilation_evidence_becomes_windows_across_gaps_of_up_to_8h
     points = pd.DataFrame({"patientunitstayid": [1, 1, 1, 2], "hour": [10.0, 18.0, 30.0, 5.0]})
     hours = bridge_hours(points, intervals)
     by_stay = hours.groupby("patientunitstayid")["hour"].apply(list).to_dict()
-    # [0,2) has no overlap with hour 2; only 10 -> 18 bridges an 8 h gap.
+    # [0, 2) ends with evidence hour 1. The excluded stop hour 2 must not
+    # act as an extra anchor bridging the nine-hour 1 -> 10 gap (RI-07).
+    # Point evidence 10 -> 18 still bridges its eight-hour gap.
     assert by_stay[1] == [0, 1] + list(range(10, 19)) + [30]
     assert by_stay[2] == [5]
 
@@ -296,7 +298,7 @@ def test_ricu_sweep_unmatched_vent_start_lasts_match_win_not_start_plus_match_wi
         patient_ids=None,
     )
     out = _callback_vent_ind({"vent_start": start}, ctx).data
-    assert sorted(out["charttime"].tolist()) == [40.0 + h for h in range(7)]
+    assert sorted(out["charttime"].tolist()) == [40.0 + h for h in range(6)]
 
 
 def test_ricu_sweep_a_charted_rate_runs_at_most_max_len() -> None:
@@ -313,4 +315,4 @@ def test_section4_wintbl_expansion_reads_vent_ind_durations_in_hours() -> None:
 
     windows = pd.DataFrame({"CaseID": [1], "starttime": [2.0], "dur_var": [3.0]})
     out = _expand_wintbl_to_hourly(windows, ["CaseID"], "starttime", "dur_var", "charttime")
-    assert out["charttime"].tolist() == [2.0, 3.0, 4.0, 5.0]
+    assert out["charttime"].tolist() == [2.0, 3.0, 4.0]
