@@ -131,6 +131,7 @@ def test_hirid_mass_rate_sums_concurrent_syringes_and_drops_zero_doses():
         "infusionid": [10, 11, 11, 11],
         "givendose": [60.0, 30.0, 0.0, 0.0],
         "doseunit": ["µg"] * 4,
+        "recordstatus": 0,
     })
     out = hirid_rate_mass(
         frame, concept_name="fentanyl_rate", val_col="givendose", unit_col="doseunit",

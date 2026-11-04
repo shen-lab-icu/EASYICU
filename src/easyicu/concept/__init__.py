@@ -2961,7 +2961,7 @@ class ConceptResolver:
                             _idtbl_ids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
                             if _idtbl_ids:
                                 try:
-                                    from ..datasource import _get_duckdb_connection
+                                    from ..datasource import _get_duckdb_connection, mimic_chart_quality_sql
                                     _idtbl_conn = _get_duckdb_connection()
                                     _idtbl_sub_var = source.sub_var
                                     _idtbl_val_var = getattr(source, 'value_var', None) or 'value'
@@ -3053,6 +3053,11 @@ class ConceptResolver:
                                         # Query: GROUP BY patient, MEDIAN(value). The alias keeps
                                         # the configured id spelling: DuckDB returns a column as
                                         # the file spells it (MIMIC-III exports ICUSTAY_ID).
+                                        if db_name in {"mimic", "mimic_demo"}:
+                                            _idtbl_where += mimic_chart_quality_sql(
+                                                db_name, source.table,
+                                                data_source._get_parquet_columns_for_files(_idtbl_files), alias="",
+                                            )
                                         _idtbl_sql = f"""
                                             SELECT {_idtbl_id_col} AS "{_idtbl_id_col}",
                                                    MEDIAN({_idtbl_val_expr}) AS {concept_name}

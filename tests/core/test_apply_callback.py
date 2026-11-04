@@ -148,13 +148,15 @@ def test_mimiciii_chart_ventilation_includes_procedure_extubation_markers():
 
         def load_table(self, table_name, columns=None, filters=None, verbose=False):
             assert table_name == "procedureevents_mv"
-            assert columns == ["icustay_id", "starttime", "itemid"]
+            assert columns == ["icustay_id", "starttime", "itemid", "statusdescription", "cancelreason"]
             del filters, verbose
             return pd.DataFrame(
                 {
                     "icustay_id": [1],
                     "starttime": [pd.Timestamp("2180-01-01 05:00")],
                     "itemid": [227194],
+                    "statusdescription": ["FinishedRunning"],
+                    "cancelreason": [0],
                 }
             )
 

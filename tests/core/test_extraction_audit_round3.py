@@ -69,6 +69,7 @@ def test_r3_19_hirid_zero_doses_neither_rate_nor_extend_exposure():
         "givendose": [0.0, 30.0, 30.0, 0.0, 0.0, 0.0],
         "doseunit": ["µg"] * 6,
         "weight": [70.0] * 6,
+        "recordstatus": 0,
     })
     duration = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                               index_col="givenat", grp_var="infusionid")

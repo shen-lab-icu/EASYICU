@@ -667,7 +667,14 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )"
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -5040,7 +5047,10 @@
      ],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )",
      "bolus_min_hours": 1,
-     "_comment": "2026-11-04 audit round 3 (F-22): an amount without a rate (220952 Dextrose 50%, a one-minute push) is spread over at least one hour; a 50 ml push was a 3,000 ml/hr infusion (15,000 ml/hr D10-equivalent)."
+     "_comment": "2026-11-04 audit round 3 (F-22): an amount without a rate (220952 Dextrose 50%, a one-minute push) is spread over at least one hour; a 50 ml push was a 3,000 ml/hr infusion (15,000 ml/hr D10-equivalent).",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -6233,7 +6243,14 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -6538,7 +6555,14 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -7424,7 +7448,14 @@
      "stop_var": "endtime",
      "rate_uom": "rateuom",
      "callback": "mimic_rate_mv",
-     "_comment": "2026-11-04 audit round 4 (R4-109): 229617 'Epinephrine.' is a bolus push with no rate in any row."
+     "_comment": "2026-11-04 audit round 4 (R4-109): 229617 'Epinephrine.' is a bolus push with no rate in any row.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "eicu": [
@@ -8288,7 +8319,14 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "callback": "mimic_rate_mv",
-     "_comment": "2026-07-17: added 225942 'Fentanyl (Concentrate)' (138,860 rate rows / 13,907 stays, rateuom mcg/hour). 221744 alone captured 1,175 of 14,921 infusion stays = 92.1% loss, and contradicted the lgl `fentanyl` concept which already lists 225942. 225972 'Fentanyl (Push)' stays excluded (bolus, no rate)."
+     "_comment": "2026-07-17: added 225942 'Fentanyl (Concentrate)' (138,860 rate rows / 13,907 stays, rateuom mcg/hour). 221744 alone captured 1,175 of 14,921 infusion stays = 92.1% loss, and contradicted the lgl `fentanyl` concept which already lists 225942. 225972 'Fentanyl (Push)' stays excluded (bolus, no rate).",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -10457,7 +10495,14 @@
      "sub_var": "itemid",
      "val_var": "amount",
      "end_var": "endtime",
-     "callback": "distribute_amount"
+     "callback": "distribute_amount",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -13126,7 +13171,17 @@
       224272
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "224272 IABP line is a MIMIC-IV procedureevents item, not chartevents."
+     "_comment": "224272 IABP line is a MIMIC-IV procedureevents item, not chartevents.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "eicu": [
@@ -13390,7 +13445,17 @@
      "table": "procedureevents",
      "sub_var": "itemid",
      "dur_var": "endtime",
-     "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
+     "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "mimic": [
@@ -13493,7 +13558,12 @@
      "cancel_var": "cancelreason",
      "status_var": "statusdescription",
      "callback": "mimiciii_explicit_ventilation_interval",
-     "_comment": "Supplementary exact MetaVision procedure intervals; 225792=invasive and 225794=non-invasive. Cancelled, rewritten and zero-length procedures are excluded."
+     "_comment": "Supplementary exact MetaVision procedure intervals; 225792=invasive and 225794=non-invasive. Cancelled, rewritten and zero-length procedures are excluded.",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ]
     }
    ],
    "mimic_demo": [
@@ -13596,7 +13666,12 @@
      "cancel_var": "cancelreason",
      "status_var": "statusdescription",
      "callback": "mimiciii_explicit_ventilation_interval",
-     "_comment": "Supplementary exact MetaVision procedure intervals; 225792=invasive and 225794=non-invasive. Cancelled, rewritten and zero-length procedures are excluded."
+     "_comment": "Supplementary exact MetaVision procedure intervals; 225792=invasive and 225794=non-invasive. Cancelled, rewritten and zero-length procedures are excluded.",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ]
     }
    ],
    "sic": [
@@ -14347,7 +14422,14 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -16107,7 +16189,14 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "rate_uom": "rateuom",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "eicu": [
@@ -17842,7 +17931,14 @@
      "sub_var": "itemid",
      "stop_var": "endtime",
      "callback": "mimic_rate_mv",
-     "_comment": "2026-11-03 extraction audit: added 229630/229632 'Phenylephrine (50/250)', '(200/250)' (rate in mcg/kg/min like 221749)."
+     "_comment": "2026-11-03 extraction audit: added 229630/229632 'Phenylephrine (50/250)', '(200/250)' (rate in mcg/kg/min like 221749).",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -19254,7 +19350,14 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "mimic_rate_mv"
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -20188,7 +20291,17 @@
       225955
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: active RRT procedures only; dialysis-catheter placement is excluded because it is access, not treatment. | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/treatment/rrt.sql: `WHEN itemid NOT IN (224270, 225436) THEN 1 ELSE 0` — 225436 = CRRT Filter Change): REMOVED 225436; a filter change is maintenance, not active dialysis."
+     "_comment": "2026-07-03 audit: active RRT procedures only; dialysis-catheter placement is excluded because it is access, not treatment. | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/treatment/rrt.sql: `WHEN itemid NOT IN (224270, 225436) THEN 1 ELSE 0` — 225436 = CRRT Filter Change): REMOVED 225436; a filter change is maintenance, not active dialysis.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "eicu": [
@@ -20284,7 +20397,18 @@
       225955
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/treatment/rrt.sql: `WHEN itemid NOT IN (224270, 225436) THEN 1 ELSE 0` — 225436 = CRRT Filter Change): REMOVED 225436; a filter change is maintenance, not active dialysis."
+     "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/treatment/rrt.sql: `WHEN itemid NOT IN (224270, 225436) THEN 1 ELSE 0` — 225436 = CRRT Filter Change): REMOVED 225436; a filter change is maintenance, not active dialysis.",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     },
     {
      "table": "chartevents",
@@ -20434,7 +20558,18 @@
       225955
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/treatment/rrt.sql: `WHEN itemid NOT IN (224270, 225436) THEN 1 ELSE 0` — 225436 = CRRT Filter Change): REMOVED 225436; a filter change is maintenance, not active dialysis."
+     "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/treatment/rrt.sql: `WHEN itemid NOT IN (224270, 225436) THEN 1 ELSE 0` — 225436 = CRRT Filter Change): REMOVED 225436; a filter change is maintenance, not active dialysis.",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     },
     {
      "table": "chartevents",
@@ -22241,9 +22376,14 @@
      "callback": "distribute_volume_hourly",
      "end_var": "endtime",
      "extra_vars": [
-      "endtime"
+      "endtime",
+      "statusdescription"
      ],
-     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission/Non-ICU Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake."
+     "_comment": "2026-11-03 extraction audit 2: pre-ICU and procedure-location intake removed, the same ICU-intake rule as the CareVue source (d_items labels: 226361 Pre-Admission/Non-ICU Intake, 226363 Cath Lab Intake, 226364/226365 OR Crystalloid/Colloid Intake, 226367-226372 OR FFP/Packed RBC/Platelet/Autologous Blood/Cryoprecipitate/Cell Saver Intake, 226375-226377 PACU Crystalloid/Colloid/PO Intake, 227070-227072 PACU Packed RBC/Platelet/FFP Intake). They are one-minute entries documenting volume given outside the ICU (MIMIC-III: median 0.8-5.7 h after intime by item; 14% charted >24 h after intime, i.e. after a procedure trip), so they are not ICU-hour intake.",
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -28057,6 +28197,7 @@
  },
  "vent_end": {
   "class_name": "lgl_cncpt",
+  "aggregate": "max",
   "description": "ventilation end",
   "category": "respiratory",
   "sources": {
@@ -28119,7 +28260,17 @@
      ],
      "table": "procedureevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "mimic": [
@@ -28131,7 +28282,18 @@
      ],
      "table": "procedureevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     },
     {
      "ids": [
@@ -28169,7 +28331,18 @@
      ],
      "table": "procedureevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     },
     {
      "ids": [
@@ -28327,6 +28500,7 @@
  "vent_start": {
   "aggregate": "max",
   "class_name": "lgl_cncpt",
+  "aggregate": "max",
   "description": "ventilation start",
   "category": "respiratory",
   "sources": {
@@ -28385,7 +28559,17 @@
      "table": "procedureevents",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: the start of invasive ventilation, as the MIMIC-IV vent_end extubation items (225468/225477/227194) end it. MIMIC-IV d_items procedureevents 225792 'Invasive Ventilation' (2-Ventilation; starttime) and 224385 'Intubation' (1-Intubation/Extubation). Non-invasive ventilation 225794 is not a start of this concept. vent_ind keeps reading the mech_vent windows."
+     "_comment": "2026-11-03 extraction audit 2: the start of invasive ventilation, as the MIMIC-IV vent_end extubation items (225468/225477/227194) end it. MIMIC-IV d_items procedureevents 225792 'Invasive Ventilation' (2-Ventilation; starttime) and 224385 'Intubation' (1-Intubation/Extubation). Non-invasive ventilation 225794 is not a start of this concept. vent_ind keeps reading the mech_vent windows.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "mimic": [
@@ -35363,7 +35547,14 @@
      "val_var": "amount",
      "unit_var": "amountuom",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: IV amount (amountuom mg); 'dose'-unit rows (<10) are dropped. Round 2 (D1): eMAR doses are added by the emar sources below, which drop an eMAR dose that this inputevents source already records within 60 min."
+     "_comment": "2026-11-03 extraction audit 2: IV amount (amountuom mg); 'dose'-unit rows (<10) are dropped. Round 2 (D1): eMAR doses are added by the emar sources below, which drop an eMAR dose that this inputevents source already records within 60 min.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "ids": [
@@ -35376,7 +35567,14 @@
      "val_var": "amount",
      "unit_var": "amountuom",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: IV amount mg x 40."
+     "_comment": "2026-11-03 extraction audit 2: IV amount mg x 40.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "table": "emar",

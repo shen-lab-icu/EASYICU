@@ -2445,7 +2445,7 @@ class ICUDataSource:
         
         # Build WHERE conditions
         where_conditions = []
-        quality_sql = mimic_chart_quality_sql(self.config.name, 'chartevents', pd.read_csv(csv_path, nrows=0).columns, alias='') if csv_path.name.upper().startswith('CHARTEVENTS') else ''
+        quality_sql = mimic_chart_quality_sql(self.config.name, csv_path.name.split('.')[0].lower(), pd.read_csv(csv_path, nrows=0).columns, alias='')
         if quality_sql:
             where_conditions.append(quality_sql.removeprefix(' AND '))
         
@@ -4974,19 +4974,21 @@ def mimic_source_columns(database: str, table: str, columns, available):
     if columns is None:
         return None
     optional = []
-    if database in {"mimic", "mimic_demo"} and table == "chartevents":
-        optional = ["error"]
+    if database in {"mimic", "mimic_demo"} and table in {"chartevents", "outputevents"}:
+        optional = ["error" if table == "chartevents" else "iserror"]
     elif database == "miiv" and table == "labevents":
         optional = list(LAB_OPTIONAL_COLUMNS)
     elif database in {"miiv", "mimic", "mimic_demo"} and table in {"inputevents", "inputevents_mv"}:
         optional = ["rateuom", "patientweight", "statusdescription"]
+    elif database in {"miiv", "mimic", "mimic_demo"} and table in {"procedureevents", "procedureevents_mv"}:
+        optional = ["cancelreason"]
     by_lower = {str(c).lower(): c for c in available}
     return list(dict.fromkeys([*columns, *(by_lower[c] for c in optional if c in by_lower)]))
 
 
 def mimic_disk_columns(source, path: Path, table: str, columns):
     """Inspect only schemas/CSV headers to retain optional MIMIC fields."""
-    requested = mimic_source_columns(source.config.name, table, columns, ["error", "rateuom", "patientweight", "statusdescription", *LAB_OPTIONAL_COLUMNS])
+    requested = mimic_source_columns(source.config.name, table, columns, ["error", "iserror", "rateuom", "patientweight", "statusdescription", "cancelreason", *LAB_OPTIONAL_COLUMNS])
     if requested == columns:
         return columns
     if path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}:
@@ -5000,10 +5002,11 @@ def mimic_disk_columns(source, path: Path, table: str, columns):
 
 
 def drop_mimic_chart_errors(frame: pd.DataFrame, database: str, table: str) -> pd.DataFrame:
-    """ERROR=1 is a rejected observation; NULL and zero remain usable."""
-    if database not in {"mimic", "mimic_demo"} or table != "chartevents":
+    """Chart ERROR=1 and output ISERROR=1 are void; NULL and zero stay usable."""
+    if database not in {"mimic", "mimic_demo"} or table not in {"chartevents", "outputevents"}:
         return frame
-    error = next((c for c in frame if str(c).lower() == "error"), None)
+    flag = "error" if table == "chartevents" else "iserror"
+    error = next((c for c in frame if str(c).lower() == flag), None)
     if error is None:
         return frame
     rejected = pd.to_numeric(frame[error], errors="coerce").eq(1).fillna(False)
@@ -5011,10 +5014,11 @@ def drop_mimic_chart_errors(frame: pd.DataFrame, database: str, table: str) -> p
 
 
 def mimic_chart_quality_sql(database: str, table: str, columns, alias="o") -> str:
-    """SQL equivalent of the raw-source ERROR rule, before aggregation."""
-    if database not in {"mimic", "mimic_demo"} or table != "chartevents":
+    """SQL equivalent of the chart/output void rule, before aggregation."""
+    if database not in {"mimic", "mimic_demo"} or table not in {"chartevents", "outputevents"}:
         return ""
-    error = next((c for c in columns if str(c).lower() == "error"), None)
+    flag = "error" if table == "chartevents" else "iserror"
+    error = next((c for c in columns if str(c).lower() == flag), None)
     if error is None:
         return ""
     prefix = f"{alias}." if alias else ""

@@ -4914,9 +4914,15 @@ def _hirid_valid_pharma_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
     These are independent recordstatus bits, not observations.status codes.
     Filter before finding previous valid records or episode boundaries.
+    A source without the status column cannot establish valid administrations.
     """
     if 'recordstatus' not in frame.columns:
-        return frame
+        from ..concept.errors import ConceptExtractionUnavailable
+
+        raise ConceptExtractionUnavailable(
+            concept_id="pharma", database="hirid", stage="pharma_recordstatus",
+            detail="pharma recordstatus is required to exclude invalidated and not administered records",
+        )
     status = pd.to_numeric(frame['recordstatus'], errors='coerce').fillna(0).astype('int64')
     return frame.loc[(status & (2 | 32)).eq(0)]
 

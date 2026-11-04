@@ -957,7 +957,17 @@
       224272
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): procedureevents 224272 'IABP line' (669 rows, 605 stays), as in concept-dict."
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): procedureevents 224272 'IABP line' (669 rows, 605 stays), as in concept-dict.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "eicu": [
@@ -1641,7 +1651,17 @@
       225955
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17: removed 225436 'CRRT Filter Change', syncing with concept-dict.json. Official mimic-code treatment/rrt.sql lists 225436 but marks it dialysis_active = 0 (same as 224270 Dialysis Catheter) - it is a procedural event, not an active treatment session. `rrt` is a boolean with no active/inactive axis, so excluding the id is the faithful mapping. Measured cost: of 240 MIMIC-IV stays with a filter change, 239 already carry a core dialysis id, so exactly 1 stay is affected."
+     "_comment": "2026-07-17: removed 225436 'CRRT Filter Change', syncing with concept-dict.json. Official mimic-code treatment/rrt.sql lists 225436 but marks it dialysis_active = 0 (same as 224270 Dialysis Catheter) - it is a procedural event, not an active treatment session. `rrt` is a boolean with no active/inactive axis, so excluding the id is the faithful mapping. Measured cost: of 240 MIMIC-IV stays with a filter change, 239 already carry a core dialysis id, so exactly 1 stay is affected.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     }
    ],
    "eicu": [
@@ -1726,7 +1746,18 @@
       225955
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17: removed 225436 'CRRT Filter Change', syncing with concept-dict.json. Official mimic-code treatment/rrt.sql lists 225436 but marks it dialysis_active = 0 (same as 224270 Dialysis Catheter) - it is a procedural event, not an active treatment session. `rrt` is a boolean with no active/inactive axis, so excluding the id is the faithful mapping. Measured cost: of 240 MIMIC-IV stays with a filter change, 239 already carry a core dialysis id, so exactly 1 stay is affected."
+     "_comment": "2026-07-17: removed 225436 'CRRT Filter Change', syncing with concept-dict.json. Official mimic-code treatment/rrt.sql lists 225436 but marks it dialysis_active = 0 (same as 224270 Dialysis Catheter) - it is a procedural event, not an active treatment session. `rrt` is a boolean with no active/inactive axis, so excluding the id is the faithful mapping. Measured cost: of 240 MIMIC-IV stays with a filter change, 239 already carry a core dialysis id, so exactly 1 stay is affected.",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     },
     {
      "table": "chartevents",
@@ -1887,7 +1918,18 @@
       225955
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17: removed 225436 'CRRT Filter Change', syncing with concept-dict.json. Official mimic-code treatment/rrt.sql lists 225436 but marks it dialysis_active = 0 (same as 224270 Dialysis Catheter) - it is a procedural event, not an active treatment session. `rrt` is a boolean with no active/inactive axis, so excluding the id is the faithful mapping. Measured cost: of 240 MIMIC-IV stays with a filter change, 239 already carry a core dialysis id, so exactly 1 stay is affected."
+     "_comment": "2026-07-17: removed 225436 'CRRT Filter Change', syncing with concept-dict.json. Official mimic-code treatment/rrt.sql lists 225436 but marks it dialysis_active = 0 (same as 224270 Dialysis Catheter) - it is a procedural event, not an active treatment session. `rrt` is a boolean with no active/inactive axis, so excluding the id is the faithful mapping. Measured cost: of 240 MIMIC-IV stays with a filter change, 239 already carry a core dialysis id, so exactly 1 stay is affected.",
+     "extra_vars": [
+      "statusdescription",
+      "cancelreason"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "cancel_var": "cancelreason"
     },
     {
      "table": "chartevents",
