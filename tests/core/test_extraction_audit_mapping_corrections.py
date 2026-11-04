@@ -55,8 +55,8 @@ def _ids(concept: str, database: str, dictionary: dict = CONCEPTS) -> set[int]:
         ("peep", "miiv", {224700}, {220339}),
         ("peep", "mimic", {224700, 686}, {505, 506, 220339}),
         # 2026-11-04 audit round 3: measured PEEP (AUMC 8879, HiRID 2610) is a
-        # lower-priority channel below the setting.
-        ("peep", "aumc", {6694, 9666, 12354}, {12284, 12336, 8862, 8879}),
+        # lower-priority channel below the setting; R6-F020 also confirms 6694.
+        ("peep", "aumc", {9666, 12354}, {12284, 12336, 8862, 8879, 6694}),
         ("peep", "hirid", set(), {2600, 2610}),
         ("resp", "miiv", {224689}, {220210, 224690}),
         ("resp", "aumc", {7726, 9654, 12577}, {8874, 12266}),

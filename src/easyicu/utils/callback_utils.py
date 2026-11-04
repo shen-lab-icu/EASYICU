@@ -4922,7 +4922,7 @@ def _hirid_valid_pharma_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _hirid_previous_record_time(df: pd.DataFrame, index_col: Optional[str], grp_var: Optional[str]) -> pd.DataFrame:
-    """Add ``_prev_t``: the time of the same infusion's previous record."""
+    """Add ``_prev_t``: the same infusion's previous strictly earlier time."""
     time_col = index_col if index_col in df.columns else next(
         (c for c in ('datetime', 'givenat', 'charttime', 'time') if c in df.columns), None
     )
@@ -4931,7 +4931,12 @@ def _hirid_previous_record_time(df: pd.DataFrame, index_col: Optional[str], grp_
         return df
     keys = [id_col] + ([grp_var] if grp_var and grp_var in df.columns else [])
     df = df.sort_values(keys + [time_col], kind='mergesort')
-    df['_prev_t'] = df.groupby(keys, dropna=False)[time_col].shift(1)
+    previous = df.groupby(keys, dropna=False)[time_col].shift(1)
+    # Same-time doses share the preceding interval, regardless of row order.
+    # Keep every dose (and its native unit); only propagate interval boundaries
+    # within the same stay/infusion, including zero-dose start markers.
+    df['_prev_t'] = previous.where(previous < df[time_col])
+    df['_prev_t'] = df.groupby(keys, dropna=False)['_prev_t'].ffill()
     return df
 
 

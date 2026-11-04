@@ -3939,6 +3939,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 0.980665), 'mL/cmH2O', '^ml/mbar$')",
      "_comment": "added 12561 Cdyn (dynamic compliance, ml/cmH2O) per audit 2026-05-27"
     }
    ],
@@ -13002,6 +13004,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "_comment": "2026-07-02 added secondary mean airway pressure channel."
     }
    ],
@@ -17188,17 +17192,22 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; 12284/12336 'PEEP (Set)', 8862 'PEEP/CPAP' and 16250 'Zephyros PEEP' are settings; the measured 'Eind exp. druk' 6694/12354 and 'PEEP (gemeten)' 8879/9666 are not pooled.",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; 12284/12336 'PEEP (Set)', 8862 'PEEP/CPAP' and 16250 'Zephyros PEEP' are settings. R6-F020: measured PEEP is a separate lower-priority fallback after unit conversion.",
      "source_channel": "set"
     },
     {
      "ids": [
-      8879
+      8879,
+      6694
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "source_channel": "measured",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): Evita 8879 'PEEP (gemeten)' (83,693 rows, 935 stays) is measured PEEP; set PEEP is preferred in the same hour."
+     "_comment": "R6-F020: 8879 'PEEP (gemeten)' and auditor-confirmed 6694 'Eind exp. druk' are measured PEEP; a valid setting wins in the same hour. Neither is total PEEP. 12354/9666 remain excluded pending verification of their device definitions."
     }
    ],
    "eicu": [
@@ -17357,6 +17366,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "_comment": "2026-11-03 audit round 2 (P4): ventilator-set PEEP, the same items as peep."
     }
    ],
@@ -17452,6 +17463,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "_comment": "2026-11-03 audit round 2 (P4): 12301 'PEEP tot' (Servo total PEEP after an expiratory hold); 6694/8879 measured end-expiratory pressure equals the set PEEP and is not total PEEP.",
      "source_channel": "primary"
     },
@@ -17461,6 +17474,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "source_channel": "secondary",
      "_comment": "R5C-AUMC-019: alternate total-PEEP channel as a fallback for 12301; do not add set PEEP or the routine measured end-expiratory pressure 8879."
     }
@@ -18023,6 +18038,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; 2026-07-02 added secondary Piek druk and Zephyros Ppeak channels. | 2026-11-04 audit round 3 (F-07): removed 8852 'P max', the Evita pressure alarm limit (p50 39 mbar against 23 for the measured 8877 'Peak druk')."
     }
    ],
@@ -18141,7 +18158,9 @@
       8878
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')"
     }
    ],
    "eicu": [
@@ -19329,6 +19348,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
+     "unit_var": "unit",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
      "_comment": "2026-07-02 added secondary/device-specific PS above PEEP channels; pressure-control above PEEP remains excluded. | 2026-07-17 official-code audit (AmsterdamUMCdb get_respiration_flowsheet_itemids.sql): REMOVED 12285 = 'PC boven PEEP (Set)' = pressure CONTROL above PEEP, not pressure support — it contradicted this entry's own stated exclusion. 12286/12338 = 'PS boven PEEP (Set)' are the correct PS channels. | 2026-11-04 audit round 3 (full-dictionary M): added Evita 8865 'ASB' (pressure support above PEEP, mbar; 74,582 rows/917 admissions, median 18)."
     }
    ],
@@ -33881,7 +33902,7 @@
   ],
   "description": "Ventilator breath-control target (volume/pressure/dual_adaptive/proportional/unspecified/standby). Harmonised across MIMIC-IV/MIMIC-III/AUMC/HiRID. Governs the validity of driving_pres & plateau_pres.",
   "category": "ventilator",
-  "_comment": "2026-07-17 new. Harmonised from native modes via vent_mode_map.json (callback vent_mode_control). Time-varying 1h covariate, NOT a baseline label -- HiRID cycles every patient through standby/controlled/spontaneous. eICU (332 stays) and SIC (no mode item) carry no source. AUMC reads listitems_bucket (canonical listitems parquet are corrupt). standby is a level, not missingness.",
+  "_comment": "2026-07-17 new. Harmonised from native modes via vent_mode_map.json (callback vent_mode_control). Time-varying 1h covariate, NOT a baseline label -- HiRID cycles every patient through standby/controlled/spontaneous. eICU uses respiratorycharting mode labels; SIC has no mode item. AUMC reads listitems_bucket (canonical listitems parquet are corrupt). standby is a level, not missingness.",
   "sources": {
    "miiv": [
     {
@@ -33992,12 +34013,14 @@
      "ids": [
       "Ventilator Mode",
       "Vent Mode",
-      "Mode"
+      "Mode",
+      "Mechanical Ventilator Mode",
+      "Ventilator Support Mode"
      ],
      "val_var": "respchartvalue",
      "index_var": "respchartoffset",
      "callback": "eicu_mode_target",
-     "_comment": "R5-EICU-022: APV target and explicit SIMV/spontaneous sequence only. AC/CMV initiation remains unknown."
+     "_comment": "R5-EICU-022: APV target and explicit SIMV/spontaneous sequence only. AC/CMV initiation remains unknown. R6A-03: include Mechanical Ventilator Mode and Ventilator Support Mode in the source selector."
     }
    ]
   }
@@ -34014,7 +34037,7 @@
   ],
   "description": "Ventilator breath sequencing (controlled/assisted/simv/spontaneous/standby) -- who initiates breaths. Orthogonal to vent_mode. driving_pres/plateau_pres are physiologically valid only under 'controlled'.",
   "category": "ventilator",
-  "_comment": "2026-07-17 new. Harmonised from native modes via vent_mode_map.json (callback vent_mode_seq). Time-varying 1h covariate, NOT a baseline label -- HiRID cycles every patient through standby/controlled/spontaneous. eICU (332 stays) and SIC (no mode item) carry no source. AUMC reads listitems_bucket (canonical listitems parquet are corrupt). standby is a level, not missingness.",
+  "_comment": "2026-07-17 new. Harmonised from native modes via vent_mode_map.json (callback vent_mode_seq). Time-varying 1h covariate, NOT a baseline label -- HiRID cycles every patient through standby/controlled/spontaneous. eICU uses respiratorycharting mode labels; SIC has no mode item. AUMC reads listitems_bucket (canonical listitems parquet are corrupt). standby is a level, not missingness.",
   "sources": {
    "miiv": [
     {
@@ -34125,12 +34148,14 @@
      "ids": [
       "Ventilator Mode",
       "Vent Mode",
-      "Mode"
+      "Mode",
+      "Mechanical Ventilator Mode",
+      "Ventilator Support Mode"
      ],
      "val_var": "respchartvalue",
      "index_var": "respchartoffset",
      "callback": "eicu_breath_sequence",
-     "_comment": "R5-EICU-022: APV target and explicit SIMV/spontaneous sequence only. AC/CMV initiation remains unknown."
+     "_comment": "R5-EICU-022: APV target and explicit SIMV/spontaneous sequence only. AC/CMV initiation remains unknown. R6A-03: include Mechanical Ventilator Mode and Ventilator Support Mode in the source selector."
     }
    ]
   }
