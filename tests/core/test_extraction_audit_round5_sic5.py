@@ -111,7 +111,8 @@ def test_r5_sic_012_only_verified_continuous_doses_become_rates(name, item, amou
     source = _source(name, item=item)
     frame = pd.DataFrame({"CaseID": 1, "DrugID": item, "Offset": [1800+H-60]*3, "OffsetDrugEnd": [1800+2*H-60]*3, "Amount": [amount, amount, 0.], "AmountPerMinute": 999., "IsSingleDose": [0, 1, 0]})
     ds = _clock()
-    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [item], "ReferenceUnit": ["ml" if item in {2043, 2044} else "g"], "ReferenceName": [{2043: "Glukose 5%", 2044: "Glukose 20%"}.get(item, "synthetic")]})
+    # Real SICdb shape: the preparation is in ReferenceValue, ReferenceName is "Fluid".
+    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [item], "ReferenceUnit": ["ml" if item in {2043, 2044} else "g"], "ReferenceName": ["Fluid"], "ReferenceValue": [{2043: "Glukose 5%", 2044: "Glukose 20%"}.get(item, "synthetic")]})
     out = _run(name, frame, source=source, data_source=ds)
     assert out.Offset.tolist() == [0., 1.]
     assert out[name].tolist() == pytest.approx([want, want])
@@ -283,7 +284,7 @@ def test_r5_sic_012_unknown_glucose_unit_is_explicitly_unavailable():
     from easyicu.concept.errors import ConceptExtractionUnavailable
 
     ds = _clock()
-    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [2045], "ReferenceUnit": ["unknown"], "ReferenceName": ["Glukose 33%"]})
+    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [2045], "ReferenceUnit": ["unknown"], "ReferenceName": ["Fluid"], "ReferenceValue": ["Glukose 33%"]})
     frame = pd.DataFrame({"CaseID": [1], "DrugID": [2045], "Offset": [1800], "OffsetDrugEnd": [5400], "IsSingleDose": [0], "Amount": [1.]})
     with pytest.raises(ConceptExtractionUnavailable, match="reference amount unit"):
         _run("dex", frame, data_source=ds)
@@ -293,7 +294,7 @@ def test_r5_sic_012_unknown_glucose_concentration_is_never_guessed_from_amount()
     from easyicu.concept.errors import ConceptExtractionUnavailable
 
     ds = _clock()
-    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [2043], "ReferenceUnit": ["g"], "ReferenceName": ["Glukose solution"]})
+    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [2043], "ReferenceUnit": ["g"], "ReferenceName": ["Fluid"], "ReferenceValue": ["Glukose solution"]})
     frame = pd.DataFrame({"CaseID": [1], "DrugID": [2043], "Offset": [1800], "OffsetDrugEnd": [5400], "IsSingleDose": [0], "Amount": [10.]})
     with pytest.raises(ConceptExtractionUnavailable, match="known concentration"):
         _run("dex", frame, data_source=ds)
@@ -562,3 +563,13 @@ def test_r5_sic_011_hourly_qc_retains_flags_from_both_minute_volume_sources(tmp_
     assert out["minute_vol"].data.minute_vol.tolist() == [7., 11.]
     assert out["minute_vol_raw"].data.minute_vol_raw.tolist() == [3.505, 11.]
     assert out["minute_vol_qc"].data.minute_vol_qc.tolist() == ["below_analysis_min_1|kept", "kept"]
+
+
+def test_r5_sic_012_glucose_concentration_reads_the_reference_value_column():
+    # As in SICdb 1.0.x: 2.5 % and 10 % glucose are named only in ReferenceValue.
+    ds = _clock()
+    ds.tables["d_references"] = pd.DataFrame({"ReferenceGlobalID": [2043, 2044], "ReferenceUnit": ["ml", "ml"], "ReferenceName": ["Fluid", "Fluid"], "ReferenceValue": ["Glukose 2,5%", "Glukose 10%"]})
+    frame = pd.DataFrame({"CaseID": 1, "DrugID": [2043, 2044], "Offset": [1800+H-60]*2, "OffsetDrugEnd": [1800+2*H-60]*2, "Amount": [40., 20.], "IsSingleDose": [0, 0]})
+    out = _run("dex", frame, source=_source("dex", item=2043), data_source=ds)
+    # 40 ml of 2.5 % = 10 ml of 10 %; 20 ml of 10 % = 20 ml of 10 %.
+    assert out.groupby("Offset")["dex"].sum().tolist() == pytest.approx([30., 30.])

@@ -163,7 +163,9 @@ def _events(database, config, concepts, p):
         rows["d_references"].append(pd.DataFrame({
             "ReferenceGlobalID": [2043, 2044, 2045, 2148],
             "ReferenceUnit": ["g", "ml", "g", "g"],
-            "ReferenceName": ["Glukose 5%", "Glukose 10%", "Glukose 33%", "Glukose 50%"],
+            # As in SICdb: the preparation is in ReferenceValue, the class in ReferenceName.
+            "ReferenceName": ["Fluid"] * 4,
+            "ReferenceValue": ["Glukose 5%", "Glukose 10%", "Glukose 33%", "Glukose 50%"],
         }))
         # R5-SIC-015: a controlled hour with opioid alone, outside the airway
         # tolerance, exercises the separately exported sensitivity channel.
