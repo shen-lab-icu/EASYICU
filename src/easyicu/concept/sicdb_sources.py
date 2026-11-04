@@ -276,23 +276,13 @@ def _minute_volume_reasons(raw):
 
 
 def filter_cvp(tables, ctx):
-    """Apply the common CVP evidence rule using SICdb's arterial item only.
-
-    An hour without same-hour arterial evidence retains the conservative 30
-    cap. The raw concept and QC receipt retain original values above that cap.
-    """
+    """Supply SICdb's invasive arterial item to the shared CVP/QC rule."""
     from ..datasource import FilterOp, FilterSpec
-    from .callbacks import _as_icutbl, _merge_tables
+    from .callbacks import _cvp_quality_result, _merge_tables
 
     data, ids, time = _merge_tables(tables, ctx=ctx, how="outer")
-    keep = ids + ([time] if time else [])
     if data.empty or "cvp_raw" not in data:
-        out = data.reindex(columns=keep).iloc[:0].copy()
-        out["cvp"] = pd.Series(dtype=float)
-        out.attrs["sicdb_cvp_qc"] = {**dict.fromkeys(keep, []), "cvp_raw": [], "reason": []}
-        return _as_icutbl(out, id_columns=ids, index_column=time, value_column="cvp")
-    data = data.loc[pd.to_numeric(data.get("cvp_raw", pd.Series(dtype=float)), errors="coerce").notna()].sort_values(keep).copy()
-    cvp = pd.to_numeric(data.cvp_raw, errors="coerce")
+        return _cvp_quality_result(data, ids, time, ctx, pd.Series(dtype=float))
     arterial = pd.Series(np.nan, index=data.index, dtype=float)
     try:
         refs = _table(ctx.data_source, "data_float_h", ["CaseID", "DataID", "Offset", "Val"], [FilterSpec("DataID", FilterOp.IN, [702]), FilterSpec("CaseID", FilterOp.IN, pd.unique(data.CaseID).tolist())])
@@ -303,19 +293,5 @@ def filter_cvp(tables, ctx):
         lookup = refs.groupby(["CaseID", "_hour"]).Val.median()
         arterial = pd.Series(pd.MultiIndex.from_arrays([data.CaseID, np.floor(pd.to_numeric(data[time], errors="coerce"))]).map(lookup).to_numpy(), index=data.index, dtype=float)
     except (KeyError, ValueError, TypeError, AttributeError, OSError):
-        pass  # Evidence unavailability keeps the source cap, never restores highs.
-    high = cvp.gt(30)
-    groups = data.groupby(ids, sort=False)
-    previous, following = groups.cvp_raw.shift(1), groups.cvp_raw.shift(-1)
-    before, after = groups[time].shift(1), groups[time].shift(-1)
-    spike = high & (data[time]-before).le(6) & (after-data[time]).le(6) & previous.le(30) & following.le(30) & (cvp-np.maximum(previous, following)).ge(10)
-    reason = pd.Series("kept", index=data.index)
-    reason.loc[spike.fillna(False)] = "isolated_spike"
-    reason.loc[high & (cvp-arterial).abs().lt(10)] = "arterial_diastolic_match"
-    reason.loc[high & arterial.isna()] = "arterial_evidence_unavailable_cap_30"
-    reason.loc[cvp.gt(50)] = "above_50"
-    reason.loc[cvp.lt(-5)] = "below_minus_5"
-    out = data.loc[reason.eq("kept"), keep].copy()
-    out["cvp"] = cvp.loc[out.index]
-    out.attrs["sicdb_cvp_qc"] = {**{c: data[c].tolist() for c in keep}, "cvp_raw": cvp.tolist(), "reason": reason.tolist()}
-    return _as_icutbl(out.reset_index(drop=True), id_columns=ids, index_column=time, value_column="cvp")
+        pass  # Missing evidence is reported as QC; R2 still retains 30--50.
+    return _cvp_quality_result(data, ids, time, ctx, arterial)

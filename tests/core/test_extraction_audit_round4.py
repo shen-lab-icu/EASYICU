@@ -225,18 +225,19 @@ def test_r4_013_cvp_keeps_real_30_to_50_values():
     assert out == {0: 20, 1: 35, 2: 36, 3: 38, 4: 37}
 
 
-def test_r4_013_cvp_drops_arterial_waveform_and_isolated_spikes():
+def test_r4_013_cvp_artefact_candidates_are_retained_under_r6_r2():
     rows = [(1, 0, 12), (1, 1, 45), (1, 2, 12), (1, 3, 40), (1, 4, 14), (1, 5, 13)]
     dbp = [(1, 3, 44.0)]
     out = _cvp(rows, dbp)
     # Hour 1: 45 between 12 and 12 is an isolated spike. Hour 3: 40 is within
     # 10 mmHg of the 44 mmHg diastolic arterial pressure.
-    assert out == {0: 12, 2: 12, 4: 14, 5: 13}
+    # R6-F008: these candidates are flagged, never hard-deleted within R2.
+    assert out == {0: 12, 1: 45, 2: 12, 3: 40, 4: 14, 5: 13}
 
 
-def test_r4_013_hirid_keeps_its_30_mmhg_cap():
+def test_r4_013_hirid_uses_the_shared_r6_r2_bounds():
     out = _cvp([(1, 0, 20), (1, 1, 35), (1, 2, 36)], [], database="hirid")
-    assert out == {0: 20}
+    assert out == {0: 20, 1: 35, 2: 36}
 
 
 def test_r4_013_cvp_bounds_and_sicdb_source_cap():

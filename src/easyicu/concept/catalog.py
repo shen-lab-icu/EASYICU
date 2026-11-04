@@ -18,7 +18,7 @@ CONCEPT_DICTIONARY = {
     'pulse_pressure': ('Pulse Pressure (SBP - DBP)', '脉压差 (收缩压 - 舒张压)', 'mmHg'),
     'cvp': ('Central Venous Pressure', '中心静脉压', 'mmHg'),
     'cvp_raw': ('Charted Central Venous Pressure', '原始中心静脉压', 'mmHg'),
-    'cvp_qc': ('SICdb CVP Exclusion Reason', 'SICdb中心静脉压质控原因', 'category'),
+    'cvp_qc': ('Central Venous Pressure Quality Flags', '中心静脉压质控标记', 'category'),
     'shock_index': ('Shock Index', '休克指数', 'ratio'),
     'modified_shock_index': ('Modified Shock Index', '改良休克指数', 'ratio'),
     'diastolic_shock_index': ('Diastolic Shock Index', '舒张压休克指数', 'ratio'),
@@ -838,7 +838,7 @@ CONCEPT_DB_COVERAGE = {
     'pafi': 5, 'safi': 5, 'urine': 5,
     'peep': 4, 'tidal_vol': 4, 'ins': 6,  # R5-SIC-012: positive continuous SIC insulin.
     'peep_set': 2, 'peep_total': 2, 'fio2_chart': 3, 'fio2_lab': 3,  # R5-SIC-013.
-    'cvp_raw': 6, 'cvp_qc': 1, 'minute_vol_raw': 1, 'minute_vol_qc': 1,
+    'cvp_raw': 6, 'cvp_qc': 6, 'minute_vol_raw': 1, 'minute_vol_qc': 1,
     'mech_vent_rule': 1, 'mech_vent_opioid_sensitivity': 1,  # SIC audit companions.
     'dex': 6,
     'o2_flow': 5,  # supp_o2 input: miiv/mimic/eicu/aumc/hirid (2026-11-03 audit round 2, G6/G7)

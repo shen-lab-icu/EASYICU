@@ -183,7 +183,7 @@ def test_r5_sic_026_zero_is_false_missing_is_unknown_positive_wins(name):
         assert _dictionary()[name].get("aggregate") == "max"
 
 
-def test_r5_sic_001_raw_cvp_and_reasons_survive_the_conservative_evidence_filter():
+def test_r5_sic_001_raw_cvp_and_reasons_follow_r6_r2_without_evidence_deletion():
     from easyicu.concept.callbacks import ConceptCallbackContext, _callback_cvp_artefact_filter
     from easyicu.table import ICUTable
 
@@ -193,10 +193,10 @@ def test_r5_sic_001_raw_cvp_and_reasons_survive_the_conservative_evidence_filter
     ctx = ConceptCallbackContext(concept_name="cvp", target=None, interval=pd.Timedelta(hours=1), resolver=None, data_source=ds, patient_ids=None)
     table = ICUTable(cvp, id_columns=["CaseID"], index_column="Offset", value_column="cvp_raw")
     out = _callback_cvp_artefact_filter({"cvp_raw": table}, ctx).data
-    assert out.Offset.tolist() == [0., 2., 4.]
+    assert out.Offset.tolist() == [0., 1., 2., 3., 4., 6.]
     qc = out.attrs["sicdb_cvp_qc"]
     assert qc["cvp_raw"] == cvp.cvp_raw.tolist()
-    assert qc["reason"] == ["kept", "isolated_spike", "kept", "arterial_diastolic_match", "kept", "above_50", "arterial_evidence_unavailable_cap_30"]
+    assert qc["reason"] == ["kept", "high_30_to_50|isolated_spike", "kept", "high_30_to_50|arterial_diastolic_match", "high_30_to_50", "above_50", "high_30_to_50|arterial_evidence_unavailable"]
     from easyicu.resources import load_dictionary
 
     assert load_dictionary(source_name="sic")["cvp_raw"].maximum is None
@@ -335,12 +335,13 @@ def test_r5_sic_015_unavailable_text_receipts_keep_nullable_string_dtype(tmp_pat
     from easyicu.resources import load_dictionary
 
     ds = SimpleNamespace(config=load_src_cfg("eicu"))
-    frame = ConceptResolver(load_dictionary())._load_single_concept("cvp_qc", ds, aggregator=False, patient_ids=None).data
-    assert isinstance(frame.cvp_qc.dtype, pd.StringDtype)
+    # CVP QC is now available everywhere; minute-volume QC remains SIC-only.
+    frame = ConceptResolver(load_dictionary())._load_single_concept("minute_vol_qc", ds, aggregator=False, patient_ids=None).data
+    assert isinstance(frame.minute_vol_qc.dtype, pd.StringDtype)
     frame = frame.reindex([0])
     path = tmp_path / "synthetic-qc.parquet"
     frame.to_parquet(path)
-    pd.testing.assert_series_equal(frame.cvp_qc, pd.read_parquet(path).cvp_qc)
+    pd.testing.assert_series_equal(frame.minute_vol_qc, pd.read_parquet(path).minute_vol_qc)
 
 
 def test_r5_sic_018_corrected_rates_feed_equivalents_sixty_minute_rates_and_scores(tmp_path):
@@ -422,7 +423,7 @@ def test_r5_sic_001_qc_uses_the_same_hourly_values_as_cvp(tmp_path):
         interval=pd.Timedelta(hours=1), concept_workers=1, verbose=False,
     )
     assert out["cvp"].data.cvp.tolist() == [30.]
-    assert out["cvp_qc"].data.cvp_qc.tolist() == ["kept", "above_50", "below_minus_5"]
+    assert out["cvp_qc"].data.cvp_qc.tolist() == ["high_30_to_50", "above_50", "below_minus_5"]
 
 
 def test_r5_sic_007_legacy_dispatch_keeps_continuous_filter_evidence():

@@ -2496,11 +2496,6 @@ def _callback_anion_gap(
     )
 
 
-# HiRID retains its unconditional hourly cap. SICdb's owner requires invasive
-# arterial evidence before lifting the cap and preserves charted CVP for QC.
-_CVP_CAPPED_AT_30 = frozenset({"hirid"})
-
-
 def _callback_bounds_qc(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -2540,72 +2535,91 @@ def _callback_cvp_artefact_filter(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Central venous pressure without arterial-waveform and spike artefacts.
-
-    An hourly CVP above 30 mmHg (up to the 50 mmHg bound) is kept unless it
-    lies within 10 mmHg of the same hour's diastolic arterial pressure (an
-    arterial waveform on the venous transducer) or is an isolated spike: both
-    neighbouring hourly CVP values of the stay, each within 6 hours, are at
-    most 30 mmHg and at least 10 mmHg lower.  Rounds 2-3 deleted every value
-    above 30 mmHg, including real severe congestion (2026-11-04 extraction
-    audit round 4, R4-013/017/023/025).
-    """
+    """Keep R2-bounded CVP; expose high values and suspected artefacts as QC."""
     if str(getattr(getattr(ctx.data_source, "config", None), "name", "")) in {"sic", "sic_demo"}:
         from .sicdb_sources import filter_cvp
 
         return filter_cvp(tables, ctx)
     merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
-    keep = id_columns + ([index_column] if index_column else [])
-    if merged.empty or "cvp_raw" not in merged.columns:
-        empty = merged[keep].copy() if all(c in merged.columns for c in keep) else pd.DataFrame(columns=keep)
-        empty["cvp"] = pd.Series(dtype="float64")
-        return _as_icutbl(empty, id_columns=id_columns, index_column=index_column, value_column="cvp")
+    arterial = pd.to_numeric(merged.get("dbp", pd.Series(np.nan, index=merged.index)), errors="coerce")
+    return _cvp_quality_result(merged, id_columns, index_column, ctx, arterial)
 
-    data = merged.loc[pd.to_numeric(merged["cvp_raw"], errors="coerce").notna()].copy()
+
+def _cvp_quality_result(
+    data: pd.DataFrame,
+    id_columns: list[str],
+    index_column: Optional[str],
+    ctx: ConceptCallbackContext,
+    arterial: pd.Series,
+) -> ICUTable:
+    """One hourly R2 rule for CVP and its QC companion across all databases.
+
+    The 30--50 range, arterial proximity and isolated peaks are flags. Only
+    values outside [-5, 50] are removed from the main value. SIC supplies its
+    invasive diastolic item explicitly; a missing arterial value is a flag.
+    """
+    keep = id_columns + ([index_column] if index_column else [])
+    if "cvp_raw" not in data:
+        data = data.reindex(columns=keep + ["cvp_raw"]).iloc[:0]
+    data = data.loc[pd.to_numeric(data["cvp_raw"], errors="coerce").notna()].copy()
+    if keep:
+        data = data.sort_values(keep)
     cvp = pd.to_numeric(data["cvp_raw"], errors="coerce")
-    database = str(getattr(getattr(ctx.data_source, "config", None), "name", "") or "")
-    if database in _CVP_CAPPED_AT_30:
-        drop = cvp.gt(30)
+    arterial = arterial.reindex(data.index)
+    high = cvp.between(30, 50)
+    if index_column and not data.empty:
+        time = data[index_column]
+        hours = (
+            (time - time.min()) / pd.Timedelta(hours=1)
+            if pd.api.types.is_datetime64_any_dtype(time) or pd.api.types.is_timedelta64_dtype(time)
+            else pd.to_numeric(time, errors="coerce")
+        )
+        group = data.groupby(id_columns, sort=False) if id_columns else None
+        prev_v = group["cvp_raw"].shift(1) if group is not None else cvp.shift(1)
+        next_v = group["cvp_raw"].shift(-1) if group is not None else cvp.shift(-1)
+        hours_s = pd.Series(hours.to_numpy(dtype=float), index=data.index)
+        hgroup = hours_s.groupby([data[c] for c in id_columns], sort=False) if id_columns else None
+        prev_t = hgroup.shift(1) if hgroup is not None else hours_s.shift(1)
+        next_t = hgroup.shift(-1) if hgroup is not None else hours_s.shift(-1)
+        prev_v = pd.to_numeric(prev_v, errors="coerce")
+        next_v = pd.to_numeric(next_v, errors="coerce")
+        near = (hours_s - prev_t).between(0, 6) & (next_t - hours_s).between(0, 6)
+        spike = (
+            high & near
+            & prev_v.le(30) & next_v.le(30)
+            & (cvp - np.maximum(prev_v, next_v)).ge(10)
+        ).fillna(False)
     else:
-        dbp = pd.to_numeric(data.get("dbp", pd.Series(np.nan, index=data.index)), errors="coerce")
-        high = cvp.gt(30)
-        arterial = high & (cvp - dbp).abs().lt(10).fillna(False)
-        if index_column:
-            data = data.sort_values(keep)
-            cvp = cvp.loc[data.index]
-            high = high.loc[data.index]
-            arterial = arterial.loc[data.index]
-            time = data[index_column]
-            hours = (
-                (time - time.min()) / pd.Timedelta(hours=1)
-                if pd.api.types.is_datetime64_any_dtype(time) or pd.api.types.is_timedelta64_dtype(time)
-                else pd.to_numeric(time, errors="coerce")
-            )
-            group = data.groupby(id_columns, sort=False) if id_columns else None
-            prev_v = group["cvp_raw"].shift(1) if group is not None else cvp.shift(1)
-            next_v = group["cvp_raw"].shift(-1) if group is not None else cvp.shift(-1)
-            hours_s = pd.Series(hours.to_numpy(dtype=float), index=data.index)
-            hgroup = hours_s.groupby([data[c] for c in id_columns], sort=False) if id_columns else None
-            prev_t = hgroup.shift(1) if hgroup is not None else hours_s.shift(1)
-            next_t = hgroup.shift(-1) if hgroup is not None else hours_s.shift(-1)
-            prev_v = pd.to_numeric(prev_v, errors="coerce")
-            next_v = pd.to_numeric(next_v, errors="coerce")
-            near = (hours_s - prev_t).le(6) & (next_t - hours_s).le(6)
-            spike = (
-                high & near
-                & prev_v.le(30) & next_v.le(30)
-                & (cvp - np.maximum(prev_v, next_v)).ge(10)
-            ).fillna(False)
-        else:
-            spike = pd.Series(False, index=data.index)
-        drop = arterial | spike
-    out = data.loc[~drop.reindex(data.index).fillna(False).astype(bool), keep].copy()
-    out["cvp"] = pd.to_numeric(data.loc[out.index, "cvp_raw"], errors="coerce")
+        spike = pd.Series(False, index=data.index)
+    reason = pd.Series("", index=data.index, dtype="string")
+    # Fixed flag vocabulary, never a Python callback per observation. Preserve
+    # simultaneous reasons instead of hiding one artefact behind another.
+    for mask, label in [
+        (high, "high_30_to_50"),
+        (high & arterial.isna(), "arterial_evidence_unavailable"),
+        (high & (cvp - arterial).abs().lt(10), "arterial_diastolic_match"),
+        (spike, "isolated_spike"),
+    ]:
+        reason = reason.mask(mask, reason + "|" + label)
+    reason = reason.str.lstrip("|").replace("", "kept")
+    reason.loc[cvp.gt(50)] = "above_50"
+    reason.loc[cvp.lt(-5)] = "below_minus_5"
+    output = "cvp_qc" if ctx.concept_name == "cvp_qc" else "cvp"
+    selected = pd.Series(True, index=data.index) if output == "cvp_qc" else cvp.between(-5, 50)
+    out = data.loc[selected, keep].copy()
+    out[output] = (reason if output == "cvp_qc" else cvp).loc[out.index]
+    if str(getattr(getattr(ctx.data_source, "config", None), "name", "")) in {"sic", "sic_demo"}:
+        # Preserve the existing SIC receipt. Other databases publish QC in its
+        # companion table, avoiding redundant Python lists on large exports.
+        out.attrs["sicdb_cvp_qc"] = {
+            **{c: data[c].tolist() for c in keep},
+            "cvp_raw": cvp.tolist(), "reason": reason.tolist(),
+        }
     return _as_icutbl(
         out.reset_index(drop=True),
         id_columns=id_columns,
         index_column=index_column,
-        value_column="cvp",
+        value_column=output,
     )
 
 
