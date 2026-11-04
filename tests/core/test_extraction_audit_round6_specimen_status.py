@@ -158,3 +158,21 @@ def test_published_blood_gas_module_carries_the_status(tmp_path, monkeypatch):
     assert rows.po2_specimen_status.tolist() == ["label_defined_arterial"] * 2
     assert published.loc[published.ph.notna(), "ph_specimen_status"].tolist() == ["co_measured_arterial"] * 2
     assert pd.api.types.is_string_dtype(published.po2_specimen_status) or published.po2_specimen_status.dtype == object
+
+
+def test_shared_long_table_merge_keeps_the_status_beside_the_value():
+    """Four or more concepts on one long table merge through a partial wide path."""
+    from easyicu.table import ICUTable
+
+    wide = pd.DataFrame({"patientunitstayid": [1, 1], "charttime": [0., 1.], "lact": [1.1, 1.3]})
+
+    def table(frame):
+        return ICUTable(data=frame, id_columns=["patientunitstayid"], index_column="charttime", value_column="po2")
+
+    plain = pd.DataFrame({"patientunitstayid": [1, 1], "charttime": [0., 1.], "po2": [80., 90.]})
+    stamped = plain.assign(po2_specimen_status=["label_defined_arterial", "explicit_arterial"])
+    merge = ConceptResolver(load_dictionary())._merge_partial_wide_result
+    fast = merge(wide, {"po2": table(plain)}, ["lact", "po2"], {"lact"})
+    assert fast.po2.tolist() == [80., 90.]
+    # The value-only alignment would drop the companion; the full merge keeps it.
+    assert merge(wide, {"po2": table(stamped)}, ["lact", "po2"], {"lact"}) is None

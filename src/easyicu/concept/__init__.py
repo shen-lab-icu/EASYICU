@@ -8086,6 +8086,22 @@ class ConceptResolver:
                 return None
             if name not in frame.columns:
                 return None
+            # This path aligns one value column.  A concept that carries
+            # published companions (source item, specimen status, evidence
+            # receipts) takes the full merge, which keeps them beside the
+            # value; projecting here dropped them whenever four or more
+            # concepts shared a long table (2026-11-04 audit round 6).
+            from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS, SPECIMEN_STATUS_OUTPUT_COLUMNS
+
+            companions = (
+                *SOURCE_ITEM_OUTPUT_COLUMNS.get(name, ()),
+                *SPECIMEN_STATUS_OUTPUT_COLUMNS.get(name, ()),
+                f"{name}_observed",
+                f"{name}_available",
+                f"{name}_time",
+            )
+            if any(column in frame.columns for column in companions):
+                return None
             frame = frame[merge_keys + [name]]
             remaining_frames.append(frame)
 

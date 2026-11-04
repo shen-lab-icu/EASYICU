@@ -75,6 +75,10 @@ Commits `1823ea413` through the ninth reseal commit on dev9.
 - **pandas 3:** eICU infusion durations no longer split at every row
   (boolean shift turned object-typed), and GCS components recorded at
   different time resolutions merge again.
+- **Module export of companions:** when four or more concepts share a long
+  table, the partial wide merge aligned only the value column and dropped
+  `<concept>_specimen_status` (eICU, MIMIC-III, MIMIC-IV blood_gas) and other
+  published companions. Such concepts now take the full merge.
 - **Retrospective availability (all six databases):** values stay
   retrospective; real-time use must filter `available_at <= t`.
 
