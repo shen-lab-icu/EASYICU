@@ -855,11 +855,12 @@ def _normalize_legacy_export_categorical(
     physical column then contains raw source levels even though the dictionary
     declares a closed output domain.  Re-materializing that raw column would
     silently bless an undeclared level, so the export is normalized through
-    the same ``apply_map`` callback used by source extraction.
+    the same declared map used by source extraction: an ``apply_map``
+    callback, or the ``service_map`` of the ``service_at_admission`` callback.
 
-    This is deliberately limited to untyped exports and simple ``apply_map``
-    callbacks.  Typed exports carry their own owner-authorized bindings and are
-    never rewritten here.
+    This is deliberately limited to untyped exports and these declared maps.
+    Typed exports carry their own owner-authorized bindings and are never
+    rewritten here.
     """
 
     if (
@@ -873,6 +874,10 @@ def _normalize_legacy_export_categorical(
     from ...config import load_src_cfg
     from ...resources import load_dictionary
     from ...concept.callback_apply import apply_callback
+    from ...concept.service_at_admission import (
+        SERVICE_AT_ADMISSION_CALLBACK,
+        map_service_codes,
+    )
 
     definition = load_dictionary(source_name=database).get(concept)
     levels = getattr(definition, "levels", None)
@@ -896,17 +901,25 @@ def _normalize_legacy_export_categorical(
             "does not have one unambiguous source callback"
         )
     callback = str(sources[0].callback).strip()
-    if not callback.startswith("apply_map("):
+    service_map = (getattr(sources[0], "params", None) or {}).get("service_map")
+    if callback.startswith("apply_map("):
+        normalized = apply_callback(
+            frame.copy(),
+            sources[0],
+            concept,
+        )
+    elif callback == SERVICE_AT_ADMISSION_CALLBACK and service_map:
+        # A legacy export holds the raw service code; a value without a
+        # declared code stays as it is and is refused below.
+        normalized = frame.copy()
+        mapped = map_service_codes(values, service_map)
+        normalized[concept] = mapped.where(mapped.notna(), values)
+        callback = f"{callback}:{json.dumps(service_map, sort_keys=True)}"
+    else:
         raise MaterializedMetadataError(
             f"legacy export concept {concept!r} has undeclared values and "
             "requires a declared apply_map callback"
         )
-
-    normalized = apply_callback(
-        frame.copy(),
-        sources[0],
-        concept,
-    )
     if len(normalized) != len(frame):
         raise MaterializedMetadataError(
             f"legacy export normalization changed row count for {concept!r}"
@@ -920,7 +933,7 @@ def _normalize_legacy_export_categorical(
         }
         raise MaterializedMetadataError(
             f"legacy export concept {concept!r} still contains undeclared "
-            f"levels after apply_map: {counts}"
+            f"levels after the declared map: {counts}"
         )
 
     raw_counts = {

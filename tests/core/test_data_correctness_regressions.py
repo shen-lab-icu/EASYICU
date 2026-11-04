@@ -1342,7 +1342,11 @@ def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
     assert bool(result.loc[1, "mort_365d"]) is False
     assert pd.isna(result.loc[2, "mort_365d"])
     assert bool(result.loc[2, "mort_90d"]) is False
-    assert bool(result.loc[3, "mort_365d"]) is True
+    # The same six-month category leaves the dead as missing at 365 days too:
+    # defining the horizon for its deaths only is the selection bias of
+    # R3-08 (2026-11-04 audit round 3).  The 90-day horizon is reached.
+    assert pd.isna(result.loc[3, "mort_365d"])
+    assert bool(result.loc[3, "mort_90d"]) is False
 
 
 def test_sic_outcomes_accept_the_public_sicdb_alias(monkeypatch):

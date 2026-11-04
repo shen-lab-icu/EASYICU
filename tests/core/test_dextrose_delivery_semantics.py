@@ -48,7 +48,9 @@ def test_dictionary_declares_status_projection_and_full_chain_applies_concentrat
     source = ConceptSource.from_mapping({**mapping, "val_var": "rate", "unit_var": "rateuom"})
     result = _apply_callback(mv_frame(), source, concept_name="dex", unit_column="rateuom")
     assert result.stay_id.tolist() == [3, 4, 5, 6]
-    assert result.rate.tolist() == [7500., 20., 20., 10.]
+    # 25 ml of D50 pushed in one minute is spread over one hour (125 ml/hr
+    # D10-equivalent), not a 1,500 ml/hr infusion (2026-11-04 audit round 3, F-22).
+    assert result.rate.tolist() == [125., 20., 20., 10.]
 
 
 @pytest.mark.parametrize("missing", ["dur_var", "amount", "statusdescription"])
@@ -63,7 +65,9 @@ def test_aumc_drop_units_do_not_become_ml_and_minute_conversion_remains():
     assert source.params["required_volume_unit"] == "ml"
     assert {"doseunit", "doserateunit"}.issubset(source.params["extra_vars"])
     frame = pd.DataFrame({"admissionid": [1, 2, 3, 4], "itemid": [8940]*4, "dose": [10.]*4,
-                          "doseunit": ["druppel", " ML ", "ml", None], "doserateunit": ["uur", "uur", "min", "uur"]})
+                          "doseunit": ["druppel", " ML ", "ml", None], "doserateunit": ["uur", "uur", "min", "uur"],
+                          # Continuous rows; intermittent bags are spread (F-03).
+                          "iscontinuous": [1]*4, "start": [0.]*4, "stop": [1.]*4})
     result = _apply_callback(frame, source, concept_name="dex", unit_column="doseunit")
     assert result.admissionid.tolist() == [2, 3]
     assert result.dose.tolist() == [40., 2400.]
@@ -71,7 +75,8 @@ def test_aumc_drop_units_do_not_become_ml_and_minute_conversion_remains():
 
 def test_aumc_missing_declared_volume_unit_is_an_error():
     source = ConceptSource.from_mapping({**dictionary_sources()["aumc"][0], "val_var": "dose", "unit_var": "doseunit"})
-    frame = pd.DataFrame({"itemid": [8940], "dose": [30.], "doserateunit": ["uur"]})
+    frame = pd.DataFrame({"itemid": [8940], "dose": [30.], "doserateunit": ["uur"],
+                          "iscontinuous": [1], "start": [0.], "stop": [1.]})
     with pytest.raises(ValueError, match="volume-unit column"):
         _apply_callback(frame, source, concept_name="dex", unit_column="doseunit")
 

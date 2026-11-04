@@ -21,6 +21,13 @@ import pandas as pd
 SERVICE_AT_ADMISSION_CALLBACK = "service_at_admission"
 
 
+def map_service_codes(values: pd.Series, service_map: Mapping[str, str]) -> pd.Series:
+    """Map hospital service codes to admission types; an unmapped code is missing."""
+    mapping = {str(k).upper(): v for k, v in service_map.items()}
+    code = values.astype("string").str.strip().str.upper()
+    return code.map(mapping).astype("object").where(lambda v: v.notna(), None)
+
+
 def service_at_admission(
     stays: pd.DataFrame,
     services: pd.DataFrame,
@@ -49,11 +56,10 @@ def service_at_admission(
     )
     first = changes.sort_values("transfertime").drop_duplicates("hadm_id")[["hadm_id", "curr_service"]]
     active = active.merge(first.rename(columns={"curr_service": "_first_service"}), on="hadm_id", how="left")
-    service = active["curr_service"].fillna(active["_first_service"]).astype("string").str.strip().str.upper()
-    mapping = {str(k).upper(): v for k, v in service_map.items()}
-    active[value_column] = service.map(mapping).astype("object").where(lambda v: v.notna(), None)
+    service = active["curr_service"].fillna(active["_first_service"])
+    active[value_column] = map_service_codes(service, service_map)
     result = active.loc[active[value_column].notna(), [stay_column, value_column]]
     return result.sort_values(stay_column).reset_index(drop=True)
 
 
-__all__ = ["SERVICE_AT_ADMISSION_CALLBACK", "service_at_admission"]
+__all__ = ["SERVICE_AT_ADMISSION_CALLBACK", "map_service_codes", "service_at_admission"]

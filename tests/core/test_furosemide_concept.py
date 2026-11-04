@@ -116,10 +116,19 @@ def test_sic_source_uses_medication_drugid(furosemide_entry):
 
 
 def test_all_sources_use_set_val_true_callback(furosemide_entry):
-    """Logical concept: every source emits TRUE."""
+    """Logical concept: every source emits TRUE.
+
+    HiRID pharma rows emit TRUE for a positive dose only: a zero dose is a
+    pump marker (2026-11-04 audit round 3, R3-19).
+    """
     for db, sources in furosemide_entry["sources"].items():
         for src in sources:
-            assert src["callback"] == "transform_fun(set_val(TRUE))", (
+            expected = "transform_fun(comp_na(`>`, 0))" if db == "hirid" else "transform_fun(set_val(TRUE))"
+            if src["table"] == "prescriptions":
+                # MIMIC-III prescriptions are day-resolution orders anchored at
+                # noon (2026-11-04 audit round 3, M D5).
+                expected = "mimic_prescription_noon"
+            assert src["callback"] == expected, (
                 f"{db}: unexpected callback {src.get('callback')!r}"
             )
 

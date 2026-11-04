@@ -45,7 +45,8 @@ def _ids(concept: str, database: str, dictionary: dict = CONCEPTS) -> set[int]:
         ("na", "sic", {686}, {469}),  # BGA sodium with a validity note
         ("bicar", "sic", {667}, {451, 456, 666}),  # standard bicarbonate
         ("hr", "sic", set(), {707, 708}),
-        ("resp", "sic", set(), {719, 2282, 2274}),
+        # 2026-11-04 audit round 3: 2282 is the set ventilator rate.
+        ("resp", "sic", {2282}, {719, 2274}),
         ("vent_mode", "mimic", set(), {720, 223849}),
         ("vent_breath_seq", "mimic", set(), {720, 223849}),
         ("ckmb", "aumc", {6824}, {10413}),  # activity vs mass
@@ -53,8 +54,10 @@ def _ids(concept: str, database: str, dictionary: dict = CONCEPTS) -> set[int]:
         # 2026-11-03 audit 3: peep is the ventilator setting, as peep_set.
         ("peep", "miiv", {224700}, {220339}),
         ("peep", "mimic", {224700, 686}, {505, 506, 220339}),
-        ("peep", "aumc", {6694, 8879, 9666, 12354}, {12284, 12336, 8862}),
-        ("peep", "hirid", {2610}, {2600}),
+        # 2026-11-04 audit round 3: measured PEEP (AUMC 8879, HiRID 2610) is a
+        # lower-priority channel below the setting.
+        ("peep", "aumc", {6694, 9666, 12354}, {12284, 12336, 8862, 8879}),
+        ("peep", "hirid", set(), {2600, 2610}),
         ("resp", "miiv", {224689}, {220210, 224690}),
         ("resp", "aumc", {7726, 9654, 12577}, {8874, 12266}),
         ("resp", "mimic", {614, 653, 1884, 224689}, {618, 615, 220210, 224690}),
@@ -81,7 +84,8 @@ def test_sicdb_has_no_prothrombin_time_in_seconds():
 
 
 def test_vent_end_keeps_only_oxygen_therapy_devices():
-    (chart,) = [s for s in CONCEPTS["vent_end"]["sources"]["mimic"] if s["table"] == "chartevents"]
+    # 640 'extubated' is a second chartevents source (2026-11-04 audit round 3).
+    (chart,) = [s for s in CONCEPTS["vent_end"]["sources"]["mimic"] if s["table"] == "chartevents" and s["ids"] != [640]]
     assert chart["ids"] == [467]
     assert chart["callback"] == "mimiciii_oxygen_device_event"
 
@@ -144,10 +148,13 @@ def test_o2sat_lab_saturation_follows_the_arterial_specimen_rule_of_sao2(databas
 def test_blood_gas_base_excess_and_bicarbonate_are_arterial_only(concept, database, callback):
     # 2026-11-03 audit 3: as po2/pco2/ph/sao2. MIMIC bicar is serum 50882.
     assert [source["callback"] for source in CONCEPTS[concept]["sources"][database]] == [callback]
-    assert all("callback" not in source for source in CONCEPTS["bicar"]["sources"]["miiv"])
+    # Serum 50882 has no specimen rule; blood-gas 50803 (2026-11-04 audit
+    # round 3) is arterial only.
+    for source in CONCEPTS["bicar"]["sources"]["miiv"]:
+        assert source.get("callback") == ("arterial_specimen_only" if source["ids"] == [50803] else None)
 
 
-def test_mimic_iv_d_dimer_feu_rows_are_converted_to_ddu():
+def test_mimic_iv_d_dimer_feu_rows_are_not_halved():
     source = ConceptSource.from_mapping(CONCEPTS["d_dimer"]["sources"]["miiv"][0])
     frame = pd.DataFrame(
         {
@@ -160,4 +167,6 @@ def test_mimic_iv_d_dimer_feu_rows_are_converted_to_ddu():
 
     out = _apply_callback(frame, source, concept_name="d_dimer")
 
-    assert out["d_dimer"].tolist() == [500.0, 500.0, 400.0]
+    # Both labels share the 0-500 reference range: FEU rows are not halved
+    # (2026-11-04 audit round 3, F-21).
+    assert out["d_dimer"].tolist() == [500.0, 1000.0, 800.0]
