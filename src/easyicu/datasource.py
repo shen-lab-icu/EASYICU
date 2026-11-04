@@ -5013,10 +5013,12 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
     )"""
 
 
-def _lab_query(events_sql: str, stays_sql: str, result_sql: str, time_col="charttime", value_col="valuenum") -> str:
+def _lab_query(events_sql: str, stays_sql: str, result_sql: str, time_col="charttime", value_col="valuenum",
+               order_sql: str = "") -> str:
+    # The audit join does not keep row order; callers name the order the other loaders return.
     return f"""WITH {_lab_ctes(events_sql, stays_sql, time_col, value_col)},
         lab_result AS ({result_sql})
-        SELECT r.*, a.* FROM lab_audit a LEFT JOIN lab_result r ON TRUE"""
+        SELECT r.*, a.* FROM lab_audit a LEFT JOIN lab_result r ON TRUE {order_sql}"""
 
 
 def finish_miiv_lab_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -5047,7 +5049,8 @@ def miiv_lab_aggregation_sql(parquet_sql, stays_sql, itemids_sql, patient_ids, i
     result = f"""SELECT o.stay_id, {hour} AS charttime, {aggregate_sql},
         STRING_AGG(DISTINCT o.lab_attribution_basis, ',') AS lab_attribution_basis
         FROM assigned o {targets} GROUP BY o.stay_id, {hour}"""
-    return _lab_query(events, stays_sql, result, time_col, value_col)
+    return _lab_query(events, stays_sql, result, time_col, value_col,
+                      "ORDER BY r.stay_id NULLS LAST, r.charttime")
 
 
 def attribute_miiv_labs(frame: pd.DataFrame, source, patient_ids=None) -> pd.DataFrame:
@@ -5066,7 +5069,8 @@ def attribute_miiv_labs(frame: pd.DataFrame, source, patient_ids=None) -> pd.Dat
     conn.register("__miiv_stays", stays)
     try:
         query = _lab_query("SELECT * FROM __miiv_labs", "SELECT * FROM __miiv_stays",
-                           "SELECT * EXCLUDE (__lab_row) FROM assigned")
+                           "SELECT * EXCLUDE (__lab_row) FROM assigned ORDER BY __lab_row",
+                           order_sql="ORDER BY r.stay_id NULLS LAST, r.charttime")
         result = finish_miiv_lab_frame(conn.execute(query).fetchdf())
     finally:
         conn.unregister("__miiv_labs")
