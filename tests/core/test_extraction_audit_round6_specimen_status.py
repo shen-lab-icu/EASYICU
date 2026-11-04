@@ -94,7 +94,7 @@ def test_explicit_specimen_records_in_mimic(tmp_path):
 
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
 def test_hirid_arterial_variables_are_label_defined(tmp_path, layout):
-    from tests.core.test_extraction_audit_round5_hirid5 import _source_root
+    from tests.support.hirid_source import hirid_source_root as _source_root
     from tests.support.blood_gas_sources import _source
 
     root = _source_root(tmp_path, "observations", [

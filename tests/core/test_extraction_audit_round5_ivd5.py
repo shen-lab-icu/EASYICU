@@ -14,6 +14,7 @@ from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu import resources
 from easyicu.resources import load_dictionary
+from tests.support.mimic_synthetic_source import mimic_synthetic_source as _synthetic_source, mimic_synthetic_load as _load
 
 # Resolve fixtures beside the imported package, so copying this test for a
 # read-only base run exercises that base's dictionary as well as its callbacks.
@@ -406,33 +407,6 @@ def test_r5c_iv_022_hbco_declares_percent_unit():
 def test_r5c_iii_035_gas_documentation_matches_strict_specimen_rule():
     from easyicu.concept import blood_gas_specimen
     assert "record is kept, as in AUMCdb" not in blood_gas_specimen.__doc__
-
-
-def _synthetic_source(root, database, *, bucketed=False, **tables):
-    """Tiny parquet fixture exercising real source column renaming and ICU clocks."""
-    id_col = "stay_id" if database == "miiv" else "icustay_id"
-    start = pd.Timestamp("2150-01-01")
-    pd.DataFrame({id_col: [1, 2, 3], "subject_id": [11, 12, 13], "hadm_id": [21, 22, 23],
-                  "intime": start, "outtime": start + pd.Timedelta(days=3), "los": 3.}).to_parquet(root / "icustays.parquet", index=False)
-    for table, frame in tables.items():
-        path = root / f"{table}.parquet"
-        if bucketed and table != "d_items":
-            path = root / f"{table}_bucket" / "bucket_id=0" / "part.parquet"
-            path.parent.mkdir(parents=True, exist_ok=True)
-        frame.to_parquet(path, index=False)
-    return ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False)
-
-
-def _load(source, names, *, batch=True):
-    resolver = ConceptResolver(load_dictionary(include_sofa2=True))
-    id_col = "stay_id" if source.config.name == "miiv" else "icustay_id"
-    result = {}
-    for group in ([names] if batch else [[name] for name in names]):
-        result.update(resolver.load_concepts(
-            group, source, merge=False, r_compatible=False, interval=pd.Timedelta(hours=1),
-            patient_ids={id_col: [1, 2, 3]}, concept_workers=1, verbose=False,
-        ))
-    return result
 
 
 def _native_metadata(table, name, database):

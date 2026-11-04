@@ -78,7 +78,7 @@ def test_ru_02_descriptive_and_assessment_export_source_availability(database, t
         if window == 6:
             assert out.iloc[-1].uo_6h_oliguria_available_at == 24.75
     from easyicu.api import concepts as api
-    from tests.core.test_extraction_audit_round5_u5 import _clock_source
+    from tests.support.urine_clock_source import urine_clock_source as _clock_source
 
     root = tmp_path / database
     _clock_source(root, database)
@@ -244,7 +244,7 @@ SOURCE_CLOCKS = {
 
 
 def _availability_source(root, database, layout, *, gaps=False):
-    from tests.core.test_extraction_audit_round5_u5 import _clock_source
+    from tests.support.urine_clock_source import urine_clock_source as _clock_source
 
     schema = json.loads((Path(callbacks.__file__).parents[1] / "data/data-sources.json").read_text())
     table, selector, code, clock, factor, availability = SOURCE_CLOCKS[database]
@@ -534,7 +534,7 @@ def test_ru_08_unbinned_load_retains_entry_clock(database, tmp_path):
 @pytest.mark.parametrize("missing", [True, False])
 def test_ru_08_optional_partition_clock_never_forces_unfiltered_fallback(database, missing, tmp_path, monkeypatch):
     from easyicu.concept import ConceptDictionary, ConceptResolver
-    from tests.core.test_signed_urine_loading import fixture_source
+    from tests.support.signed_urine_source import signed_urine_fixture_source as fixture_source
 
     source, _, _, id_col = fixture_source(tmp_path, database)
     path = tmp_path / "outputevents/part-0.parquet"
