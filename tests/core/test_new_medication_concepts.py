@@ -67,6 +67,10 @@ def test_all_sources_use_set_val_true(name, _n, _dbs):
                 # A zero HiRID dose is a pump marker (2026-11-04 audit round 3, R3-19).
                 assert "comp_na(`>`, 0.000001)" in cb, f"{name}/{db}: callback '{cb}' keeps zero doses"
                 continue
+            # R5C-AUMC-006/027: require a positive IV dose before marking exposure.
+            if name in {"midazolam", "rocuronium"} and db == "aumc":
+                assert cb == "aumc_positive_dose"
+                continue
             assert "set_val(TRUE)" in cb, (
                 f"{name}/{db}: callback '{cb}' missing set_val(TRUE)"
             )

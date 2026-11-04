@@ -71,6 +71,9 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
             elif db == "hirid":
                 # A zero givendose is a pump marker (audit round 3).
                 expected = "transform_fun(comp_na(`>`, 0.000001))"
+            elif db == "aumc" and name == "warfarin":
+                # R5C-AUMC-027: a zero-dose order is not VKA administration.
+                expected = "aumc_positive_dose"
             else:
                 expected = "transform_fun(set_val(TRUE))"
             assert src.get("callback") == expected

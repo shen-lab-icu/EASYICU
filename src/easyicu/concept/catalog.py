@@ -643,6 +643,7 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.
     'ckmb_hirid_raw',
+    'cai_ph74',  # R5C-AUMC-009: explicit corrected assay, never an implicit cai fallback.
     'acute_rrt_input',
     'bicarb',
     'kdigo_aki',

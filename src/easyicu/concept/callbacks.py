@@ -5389,6 +5389,11 @@ def _callback_vent_ind(
         getattr(getattr(ctx.data_source, "config", None), "name", "") or ""
     ).lower()
 
+    if database_name == "aumc" and mech_tbl is not None:
+        from .aumc_intervals import ventilation_indicator
+
+        return ventilation_indicator(mech_tbl, interval) if not mech_tbl.data.empty else _empty_result()
+
     # eICU's three mech_vent sources are deliberately point evidence only:
     # an invasive-airway start, a device charting row, or a treatment row.  None
     # has an auditable stop time.  The generic R-compatible WinTbl path below
@@ -5748,6 +5753,11 @@ def _callback_vaso_ind(
     expands seq(start, start + duration, 1). ricu's own callback used the
     duration as the end time (seq(start, duration)); that is not reproduced.
     """
+    if getattr(getattr(ctx.data_source, "config", None), "name", "") == "aumc":
+        from .aumc_intervals import vaso_indicator
+
+        return vaso_indicator(tables, ctx)
+
     # When upstream concepts request hourly alignment (ctx.interval != None),
     # the duration tables may already have their start times floored to the hour.
     # 🚀 优化：使用 get_raw_concept 缓存原始数据，避免重复加载
@@ -6473,7 +6483,8 @@ def _callback_vaso60(
             .reset_index()
         )
     # R ricu's vaso60 uses minute-precision start: end = start + duration
-    dur_df[dur_index_col] = dur_df[dur_index_col].dt.floor('min')
+    if ds_name != 'aumc':
+        dur_df[dur_index_col] = dur_df[dur_index_col].dt.floor('min')
     dur_df['__dur_time_min'] = dur_df[dur_index_col]
 
     durations = dur_df[dur_col]
@@ -6718,9 +6729,11 @@ def _callback_vaso60(
     # starts at its exact minute; compare on the same basis so the hour that
     # contains the start keeps its rate (2026-11-04 audit round 3, R3-02).
     window_start = merged["__start"].dt.floor(final_interval or pd.Timedelta(hours=1))
-    mask = (merged[rate_index_col] >= window_start) & (merged[rate_index_col] <= merged["__end"])
-    if ds_name.lower() == "hirid":
-        mask &= merged[rate_index_col] < merged["__end"]
+    before_end = (
+        merged[rate_index_col] < merged["__end"] if ds_name.lower() in {"aumc", "hirid"}
+        else merged[rate_index_col] <= merged["__end"]
+    )
+    mask = (merged[rate_index_col] >= window_start) & before_end
     filtered = merged[mask]
 
     if filtered.empty:

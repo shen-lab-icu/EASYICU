@@ -4332,6 +4332,7 @@ def aumc_rate_kg(
     rate_unit_col: Optional[str],
     index_col: Optional[str],
     stop_col: Optional[str],
+    data_source=None,
 ) -> pd.DataFrame:
     if frame.empty:
         return frame
@@ -4427,69 +4428,17 @@ def aumc_rate_kg(
 
     result = df[result_cols].dropna(subset=[concept_name])
     
-    # 🔧 CRITICAL: Call expand() like R ricu does
-    # R ricu: expand(res, index_var(x), stop_var, keep_vars = c(id_vars(x), val_var, unit_var))
-    # This expands interval data (start/stop) into hourly time points
-    # Without this, we get only ~40 rows instead of ~1000 rows
     if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
-        # Add stop_col to result for expand
+        from ..concept.aumc_intervals import expand_intervals
+
+        result = result.copy()
         result[stop_col] = df.loc[result.index, stop_col]
-        
-        # Time is in minutes (from datasource), expand at 60-minute intervals
-        # This matches R ricu's 1-hour interval
-        step_minutes = 60.0  # 1 hour = 60 minutes
-        
-        # Vectorized expand: floor start/stop to hour boundaries, compute repeat counts
-        starts = pd.to_numeric(result[index_col], errors='coerce')
-        stops = pd.to_numeric(result[stop_col], errors='coerce')
-        valid = starts.notna() & stops.notna() & (stops > starts)
-        result_valid = result.loc[valid].copy()
-        starts_v = starts.loc[valid].values
-        stops_v = stops.loc[valid].values
-        
-        start_hours = np.floor(starts_v / step_minutes) * step_minutes
-        stop_hours = np.floor(stops_v / step_minutes) * step_minutes
-        # Number of hourly time points per row (inclusive)
-        n_points = ((stop_hours - start_hours) / step_minutes).astype(int) + 1
-        n_points = np.maximum(n_points, 1)
-        
-        if n_points.sum() > 0:
-            # Repeat each row n_points times
-            row_indices = np.repeat(np.arange(len(result_valid)), n_points)
-            expanded = result_valid.iloc[row_indices].reset_index(drop=True)
-            
-            # Generate time points for each expanded row
-            time_values = np.concatenate([
-                np.arange(sh, sh + n * step_minutes, step_minutes)
-                for sh, n in zip(start_hours, n_points)
-            ])
-            expanded[index_col] = time_values
-            
-            # Drop stop_col from result (not needed after expand)
-            if stop_col in expanded.columns:
-                expanded = expanded.drop(columns=[stop_col])
-            result = expanded
-            
-            # 🔧 FIX 2024-12-01: Do NOT aggregate in expand()
-            # R ricu's expand() does NOT aggregate by default (aggregate=FALSE)
-            # Aggregation should be done at a higher level based on the concept's
-            # aggregate parameter (e.g., 'max' for dopa60 in sofa_cardio)
-            # 
-            # Previous code used mean aggregation here, which caused:
-            # - dopa60 at time=1 = mean(5.33, 4.44, 3.56) = 4.44 (incorrect)
-            # - sofa_cardio score = 2 (because 4.44 <= 5)
-            #
-            # Correct behavior:
-            # - dopa60 at time=1 should keep all values (5.33, 4.44, 3.56)
-            # - External aggregation with max gives 5.33
-            # - sofa_cardio score = 3 (because 5.33 > 5)
-            #
-            # Note: This may result in duplicate rows at the same time point,
-            # which is expected and will be handled by external aggregation.
-        else:
-            result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
-    
+        result = expand_intervals(
+            result, start_col=index_col, stop_col=stop_col,
+            value_col=concept_name, data_source=data_source,
+        )
     return result
+
 
 def aumc_rate_mass(
     frame: pd.DataFrame,
@@ -4501,6 +4450,7 @@ def aumc_rate_mass(
     index_col: Optional[str],
     stop_col: Optional[str],
     target_unit: str,
+    data_source=None,
 ) -> pd.DataFrame:
     """AUMC non-kg mass-rate callback (analogue of aumc_rate_kg without ÷weight).
 
@@ -4601,37 +4551,15 @@ def aumc_rate_mass(
 
     result = df[result_cols].dropna(subset=[concept_name])
 
-    # Interval expand (identical to aumc_rate_kg)
     if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
+        from ..concept.aumc_intervals import expand_intervals
+
+        result = result.copy()
         result[stop_col] = df.loc[result.index, stop_col]
-
-        step_minutes = 60.0
-        starts = pd.to_numeric(result[index_col], errors="coerce")
-        stops = pd.to_numeric(result[stop_col], errors="coerce")
-        valid = starts.notna() & stops.notna() & (stops > starts)
-        result_valid = result.loc[valid].copy()
-        starts_v = starts.loc[valid].values
-        stops_v = stops.loc[valid].values
-
-        start_hours = np.floor(starts_v / step_minutes) * step_minutes
-        stop_hours = np.floor(stops_v / step_minutes) * step_minutes
-        n_points = ((stop_hours - start_hours) / step_minutes).astype(int) + 1
-        n_points = np.maximum(n_points, 1)
-
-        if n_points.sum() > 0:
-            row_indices = np.repeat(np.arange(len(result_valid)), n_points)
-            expanded = result_valid.iloc[row_indices].reset_index(drop=True)
-            time_values = np.concatenate([
-                np.arange(sh, sh + n * step_minutes, step_minutes)
-                for sh, n in zip(start_hours, n_points)
-            ])
-            expanded[index_col] = time_values
-            if stop_col in expanded.columns:
-                expanded = expanded.drop(columns=[stop_col])
-            result = expanded
-        else:
-            result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
-
+        result = expand_intervals(
+            result, start_col=index_col, stop_col=stop_col,
+            value_col=concept_name, data_source=data_source,
+        )
     return result
 
 
@@ -4975,13 +4903,13 @@ def aumc_dur(
     drug component of the stay-plus-drug grouping.  ``grp_var`` is accepted for
     compatibility with older dictionaries but deliberately ignored.
 
-    AUMC start/stop values reach this layer as absolute integer minutes.  The
+    AUMC start/stop values reach this layer as exact absolute minutes. The
     returned start stays in source minutes so the central admission-alignment
     layer can subtract ``admittedat`` exactly once; only the duration is already
     expressed in hours.
     
     Args:
-        frame: Input dataframe with AUMC data (times in INTEGER MINUTES)
+        frame: Input dataframe with AUMC data (times in minutes, including fractions)
         val_col: Name of the value column (will be replaced with duration)
         stop_var: Column name containing stop timestamps in MINUTES
         grp_var: Deprecated row/order grouping variable; deliberately ignored
