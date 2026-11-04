@@ -1288,6 +1288,8 @@ def _mimic_iv_profile(
     )
     spine = _native_spine((crea_df, urine_df, rrt_df), resolved_id, resolved_time)
     result = spine.copy()
+    surviving_components = []
+    creat = pd.DataFrame()
     if crea_df is not None and not crea_df.empty:
         creat = kdigo_creatinine(
             crea_df,
@@ -1296,6 +1298,8 @@ def _mimic_iv_profile(
             value_col=crea_col,
             time_unit=time_unit,
         )
+    if not creat.empty:
+        surviving_components.append(creat)
         result = result.merge(
             creat[[resolved_id, resolved_time, "aki_stage_creat"]],
             on=[resolved_id, resolved_time],
@@ -1303,6 +1307,7 @@ def _mimic_iv_profile(
         )
     else:
         result["aki_stage_creat"] = pd.NA
+    uo = pd.DataFrame()
     if (
         urine_df is not None
         and not urine_df.empty
@@ -1320,6 +1325,10 @@ def _mimic_iv_profile(
             source_is_rate=urine_source_is_rate,
             interval=interval,
         )
+    if not uo.empty:
+        # A calculation row can survive with no eligible window or weight.
+        # Such a row must not renew a normal display after a rejected gap.
+        surviving_components.append(uo.loc[uo["aki_stage_uo"].notna()])
         result = result.merge(
             uo[[resolved_id, resolved_time, "aki_stage_uo"]],
             on=[resolved_id, resolved_time],
@@ -1337,14 +1346,31 @@ def _mimic_iv_profile(
         .astype("Int64")
     )
     result["aki_source_native"] = result["aki_stage_source_native"].gt(0)
-    result["aki_stage_source_native_smoothed"] = _rolling_stage_max(
-        result,
+    # Keep the pinned point-stage coalescing, but a derived display cannot
+    # manufacture a normal observation from an all-missing component row.
+    # Valid first measurements still support a zero even without a baseline.
+    evidence_spine = _native_spine(
+        (*surviving_components, result.loc[
+            result["aki_stage_crrt"].notna(), [resolved_id, resolved_time]
+        ]),
+        resolved_id, resolved_time,
+    )
+    observed = pd.MultiIndex.from_frame(result[[resolved_id, resolved_time]]).isin(
+        pd.MultiIndex.from_frame(evidence_spine)
+    )
+    display = result[[resolved_id, resolved_time]].copy()
+    # Reserve zero for absent support. Shifting supported stages by one lets
+    # the existing maximum kernel retain both normal zero and unavailable.
+    display["stage"] = (result["aki_stage_source_native"] + 1)
+    smoothed = _rolling_stage_max(
+        display,
         resolved_id,
         resolved_time,
-        stage_col="aki_stage_source_native",
+        stage_col="stage",
         hours=6.0,
         time_unit=time_unit,
     )
+    result["aki_stage_source_native_smoothed"] = (smoothed - 1).where(smoothed.gt(0))
     result[f"{_PROFILE_PREFIX}_ascertainment"] = np.where(
         result["aki_stage_source_native"].gt(0),
         "positive",
@@ -1376,6 +1402,7 @@ def _mimic_iii_profile(
             filtered_crea = filtered_crea.loc[hours.between(-6.0, 162.0)].copy()
     spine = _native_spine((filtered_crea, urine_df), resolved_id, resolved_time)
     result = spine.copy()
+    creat = pd.DataFrame()
     if filtered_crea is not None and not filtered_crea.empty:
         creat = kdigo_creatinine(
             filtered_crea,
@@ -1384,6 +1411,7 @@ def _mimic_iii_profile(
             value_col=crea_col,
             time_unit=time_unit,
         )
+    if not creat.empty:
         result = result.merge(
             creat[[resolved_id, resolved_time, "aki_stage_creat"]],
             on=[resolved_id, resolved_time],
@@ -1391,6 +1419,7 @@ def _mimic_iii_profile(
         )
     else:
         result["aki_stage_creat"] = pd.NA
+    uo = pd.DataFrame()
     if (
         urine_df is not None
         and not urine_df.empty
@@ -1406,6 +1435,7 @@ def _mimic_iii_profile(
             weight_col=weight_col,
             time_unit=time_unit,
         )
+    if not uo.empty:
         result = result.merge(uo, on=[resolved_id, resolved_time], how="left")
     else:
         result["aki_stage_uo"] = pd.NA
@@ -1475,7 +1505,8 @@ def _mimic_iii_uo(
             stages[row_index] = stage
         group["aki_stage_uo"] = pd.Series(stages, index=group.index, dtype="Int64")
         output.append(group[[id_col, time_col, "aki_stage_uo"]])
-    return pd.concat(output, ignore_index=True)
+    return (pd.concat(output, ignore_index=True) if output
+            else pd.DataFrame(columns=[id_col, time_col, "aki_stage_uo"]))
 
 
 def _event_stage_at_exact_rows(

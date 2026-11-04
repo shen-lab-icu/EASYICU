@@ -154,12 +154,17 @@ def apply_sicdb_attributed_ventilation(
 ) -> pd.DataFrame:
     """Source callback: load the cases' airway intervals and attribute."""
     from ..datasource import FilterOp, FilterSpec
+    from .sicdb_sources import icu_seconds, materialize_intervals
 
     if frame.empty:
-        return attributed_ventilation_windows(
+        windows = attributed_ventilation_windows(
             frame, pd.DataFrame(columns=[id_col, "Offset", "OffsetEnd"]),
             concept_name=concept_name, id_col=id_col, time_col=time_col,
         )
+        # Match the nonempty hourly schema. A phantom dur_var from this
+        # empty source makes the resolver discard the other source's points.
+        windows["OffsetEnd"] = windows[time_col]
+        return materialize_intervals(windows, start=time_col, stop="OffsetEnd", relative=True)
     if data_source is None:
         raise ValueError("sicdb_airway_attribution_requires_data_source")
     cases = pd.unique(frame[id_col].dropna()).tolist()
@@ -177,8 +182,6 @@ def apply_sicdb_attributed_ventilation(
     if missing:
         raise ValueError(f"sicdb_airway_columns_missing:{sorted(missing)}")
     airway = airway.loc[airway["DataID"].isin(AIRWAY_ITEMS)]
-    from .sicdb_sources import icu_seconds, materialize_intervals
-
     sedated = _sedated_controlled_hours(frame, data_source, cases, id_col, time_col)
     windows = attributed_ventilation_windows(
         icu_seconds(frame, data_source, [time_col]),
