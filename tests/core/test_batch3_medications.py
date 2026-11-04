@@ -35,6 +35,8 @@ DICT = pathlib.Path(__file__).resolve().parents[2] / "src" / "easyicu" / "data" 
 # givendose (pump start/stop marker) is not an administration (2026-11-04
 # audit round 3, F-17/F-23).
 BOOLEAN_DRUG_CALLBACKS = {
+    # R5C-III-015/017: positive administered amounts/rates beside IV order proxies.
+    "mimic_positive_dose",
     "transform_fun(set_val(TRUE))",
     "mimic_prescription_noon",
     "transform_fun(comp_na(`>`, 0))",

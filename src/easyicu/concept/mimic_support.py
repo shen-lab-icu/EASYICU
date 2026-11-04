@@ -1,0 +1,223 @@
+"""MIMIC chart support and medication evidence with explicit positive semantics.
+
+These source callbacks do not infer exposure from the existence of a row.
+CareVue vasoactive intervals reuse the observed-span contract of mimic_dur_incv;
+amount-only administrations remain points. Zero ECMO flow is unknown support,
+not a decannulation event.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from .schema import ConceptSource
+
+logger = logging.getLogger(__name__)
+
+
+def _numeric(values: pd.Series) -> pd.Series:
+    """Use ordinary float/NaN semantics for nullable pandas source columns."""
+    return pd.Series(pd.to_numeric(values, errors="coerce").to_numpy("float64", na_value=np.nan),
+                     index=values.index)
+
+
+def source_values(frame: pd.DataFrame, source: ConceptSource, column: str, concept: str) -> pd.Series:
+    """Read a raw column even when the source loader renamed it to the concept."""
+    if column in frame:
+        return frame[column]
+    if source.value_var == column and concept in frame:
+        return frame[concept]
+    return pd.Series(np.nan, index=frame.index)
+
+
+def ecmo_evidence(frame: pd.DataFrame, source: ConceptSource, concept: str) -> pd.DataFrame:
+    """Parse flow, checkboxes and explicit state; ancillary site text is not on/off."""
+    values = source_values(frame, source, "value", concept).astype("string").str.strip().str.casefold()
+    item = _numeric(frame[source.sub_var or "itemid"])
+    numeric = _numeric(values)
+    checkbox = item.isin([228193, 229274])
+    flow = item.isin([224660, 2957, 3265, 229270, 229277, 229278])
+    config = item.eq(229268)
+    positive = (flow & numeric.gt(0)) | (
+        checkbox & (numeric.gt(0) | values.isin(["yes", "true", "on", "checked"]))
+    ) | (config & values.isin(["vv", "va", "vav", "veno-venous", "veno-arterial"]))
+    # Explicit off is a state; numeric zero flow can be a transient pump pause.
+    negative = values.isin(["off", "no", "false", "unchecked", "discontinued"]) | (checkbox & numeric.eq(0))
+    known = (positive | negative).fillna(False)
+    out = frame.loc[known].copy()
+    out[concept] = positive.loc[known].fillna(False).astype(bool)
+    return out
+
+
+def antibacterial_inputs(
+    frame: pd.DataFrame, source: ConceptSource, concept: str, data_source: Any,
+) -> pd.DataFrame:
+    """Apply the prescription antibacterial whitelist to d_items labels as well."""
+    from ..datasource import FilterOp, FilterSpec
+
+    if frame.empty:
+        return frame.assign(**{concept: pd.Series(dtype=bool)})
+    if data_source is None:
+        raise ValueError("mimic_antibacterial_inputs requires d_items labels")
+    item_col = source.sub_var or "itemid"
+    items = data_source.load_table(
+        "d_items", columns=["itemid", "label"],
+        filters=[FilterSpec("itemid", FilterOp.IN, frame[item_col].dropna().unique().tolist())],
+        verbose=False,
+    )
+    items = items.data if hasattr(items, "data") else items
+    labels = items.drop_duplicates("itemid").set_index("itemid")["label"]
+    selected = frame[item_col].map(labels).astype("string").str.contains(
+        str(source.params["antibacterial_regex"]), case=False, regex=True, na=False,
+    )
+    amount = _numeric(source_values(frame, source, "amount", concept))
+    rate = _numeric(source_values(frame, source, "rate", concept))
+    return frame.loc[selected & (amount.gt(0) | rate.gt(0))].assign(**{concept: True})
+
+
+def other_vaso_points(
+    frame: pd.DataFrame, source: ConceptSource, concept: str, *, icu_stays: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Return active observed spans on the ICU hour grid, plus amount-only points.
+
+    Stopped/zero rates terminate a CV span. Missing evidence produces no row;
+    explicit no-treatment rows may produce False. No singleton is extrapolated.
+    """
+    from ..io.ts_utils import expand
+    from ..utils.callback_utils import mimic_dur_incv
+
+    id_col = next(c for c in ["icustay_id", "stay_id"] if c in frame)
+    time_col = source.index_var or ("charttime" if "charttime" in frame else "starttime")
+    rate = _numeric(source_values(frame, source, "rate", concept))
+    amount = _numeric(source_values(frame, source, "amount", concept))
+    frame = frame.copy()
+    frame["rate"] = rate
+    parts = []
+    if source.table == "inputevents_cv":
+        stopped = frame["stopped"].astype("string").str.strip().str.casefold()
+        terminal = stopped.isin(["stopped", "discontinued", "discontinue"]) | stopped.str.startswith("d/c", na=False)
+        # Stop rows can retain the old positive pump setting. They close the
+        # observed span but cannot start a course or count as a new bolus.
+        frame.loc[terminal, "rate"] = 0.
+        rate = rate.mask(terminal, 0.)
+        # The duration helper groups by stay and drug, so keep drugs separate.
+        for _, drug in frame.groupby(source.sub_var or "itemid", sort=False):
+            durations = mimic_dur_incv(drug, val_col=concept, id_cols=[id_col], icu_stays=icu_stays)
+            durations["__end"] = durations[time_col] + (
+                durations[concept] if pd.api.types.is_numeric_dtype(durations[time_col])
+                else pd.to_timedelta(durations[concept], unit="h")
+            )
+            durations[concept] = True
+            known = durations["__end"].gt(durations[time_col])
+            if known.any():
+                # A terminal stop is exclusive. The last positive observation
+                # of an open episode still supports its own hour.
+                epsilon = 1e-9 if pd.api.types.is_numeric_dtype(durations[time_col]) else pd.Timedelta(nanoseconds=1)
+                spans = durations.loc[known].copy()
+                ends = pd.MultiIndex.from_arrays([spans[id_col], spans["__end"]])
+                active = pd.MultiIndex.from_frame(drug.loc[drug["rate"].gt(0), [id_col, time_col]])
+                stopped = pd.MultiIndex.from_frame(drug.loc[drug["rate"].eq(0), [id_col, time_col]])
+                exclusive = ~ends.isin(active) | ends.isin(stopped)
+                spans.loc[exclusive, "__end"] -= epsilon
+                parts.append(expand(spans, start_var=time_col, end_var="__end", id_cols=[id_col],
+                                    step_size=pd.Timedelta(hours=1), keep_vars=[concept],
+                                    admission_times=icu_stays))
+            if (~known).any():
+                parts.append(durations.loc[~known, [id_col, time_col, concept]])
+    else:
+        end_col = source.params.get("stop_var", "endtime")
+        valid = rate.gt(0) & frame[end_col].gt(frame[time_col])
+        spans = frame.loc[valid, [id_col, time_col, end_col]].assign(**{concept: True})
+        epsilon = 1e-9 if pd.api.types.is_numeric_dtype(frame[time_col]) else pd.Timedelta(nanoseconds=1)
+        spans[end_col] -= epsilon
+        if not spans.empty:
+            parts.append(expand(spans, start_var=time_col, end_var=end_col, id_cols=[id_col],
+                                step_size=pd.Timedelta(hours=1), keep_vars=[concept],
+                                admission_times=icu_stays))
+    # A zero rate never becomes a bolus merely because a bag amount is recorded.
+    bolus = rate.isna() & amount.gt(0)
+    if bolus.any():
+        parts.append(frame.loc[bolus, [id_col, time_col]].assign(**{concept: True}))
+    negative = rate.eq(0) & ~amount.gt(0)
+    if negative.any():
+        parts.append(frame.loc[negative, [id_col, time_col]].assign(**{concept: False}))
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=[id_col, time_col, concept])
+
+
+def fentanyl_cv_mass_rate(
+    frame: pd.DataFrame, source: ConceptSource, concept: str, *, resolver: Any = None, data_source: Any = None,
+) -> pd.DataFrame:
+    """30308 mcg/kg/hour -> mcg/hour using measured stay weight, never a default."""
+    id_col = next(c for c in ["icustay_id", "stay_id"] if c in frame)
+    out = frame.copy()
+    if "weight" not in out and resolver is not None and data_source is not None:
+        try:
+            weights = resolver._load_single_concept(
+                "weight", data_source, aggregator=False,
+                patient_ids={id_col: out[id_col].dropna().unique().tolist()}, verbose=False,
+            )
+        except KeyError as exc:
+            # A source without weight rows cannot convert per-kg rates; those rows
+            # are then dropped and counted as missing_weight_rows below.
+            logger.warning("fentanyl 30308: weight unavailable (%s); per-kg rows dropped", exc)
+            weights = None
+        weights = weights.data if hasattr(weights, "data") else weights
+        if weights is not None and "weight" in weights and id_col in weights:
+            valid = _numeric(weights["weight"]).where(lambda x: x.between(1, 500))
+            out["weight"] = out[id_col].map(valid.groupby(weights[id_col]).median())
+    weight = _numeric(out.get("weight", pd.Series(np.nan, index=out.index)))
+    valid_weight = weight.between(1, 500)
+    units = out[source.unit_var or "rateuom"].astype("string").str.strip().str.casefold()
+    valid_unit = units.isin(["mcgkghr", "mcg/kg/hour", "mcg/kg/hr", "ug/kg/hr"])
+    rate = _numeric(out[concept])
+    stopped = source_values(out, source, "stopped", concept).astype("string").str.strip().str.casefold()
+    terminal = stopped.isin(["stopped", "discontinued", "discontinue"]) | stopped.str.startswith("d/c", na=False)
+    rate = rate.mask(terminal, 0.)
+    # Keep explicit zero rates to terminate the CV expansion, even without weight.
+    keep = (valid_weight & valid_unit) | rate.eq(0)
+    audit = {"missing_weight_rows": int((rate.gt(0) & ~valid_weight).sum()),
+             "unknown_unit_rows": int((rate.gt(0) & ~valid_unit).sum())}
+    if any(audit.values()):
+        logger.info("MIMIC CareVue mass-rate rejection concept=%s audit=%s", concept, audit)
+    out[concept] = (rate * weight).where(rate.ne(0), 0.)
+    out = out.loc[keep].copy()
+    out[source.unit_var or "rateuom"] = "mcg/hour"
+    out.attrs["mimic_mass_rate_audit"] = audit
+    return out
+
+
+def union_vaso_indicator(tables: dict, ctx: Any, duration_callback: Any) -> Any:
+    """Union MIMIC-III adjunct evidence with four-drug duration support.
+
+    Other databases retain their existing indicator contract. Boolean support
+    is a point on its published grid, never a numeric one-hour duration.
+    """
+    from ..table import ICUTable
+
+    duration_tables = {k: v for k, v in tables.items() if k != "other_vaso"}
+    database = getattr(getattr(ctx.data_source, "config", None), "name", "")
+    if database not in {"mimic", "mimic_demo"}:
+        # Decide before reading the adjunct table: outside MIMIC-III it may be an
+        # unindexed empty frame, and it never changes the indicator there.
+        return duration_callback(duration_tables, ctx)
+    other = tables["other_vaso"]
+    id_cols = list(other.id_columns)
+    time_col = other.index_column
+    empty = other.data.iloc[:0][[*id_cols, time_col]].assign(vaso_ind=pd.Series(dtype=bool))
+    base = duration_callback(duration_tables, ctx) if duration_tables else ICUTable(
+        empty, id_columns=id_cols, index_column=time_col, value_column="vaso_ind",
+    )
+    active = other.data.loc[other.data["other_vaso"].eq(True), [*id_cols, time_col]].copy()
+    if pd.api.types.is_numeric_dtype(active[time_col]):
+        active[time_col] = np.floor(_numeric(active[time_col]).to_numpy("float64", na_value=np.nan))
+    elif pd.api.types.is_datetime64_any_dtype(active[time_col]):
+        active[time_col] = active[time_col].dt.floor("h")
+    active["vaso_ind"] = True
+    if not base.data.empty:
+        frame = base.data.rename(columns={base.index_column: time_col})
+        active = pd.concat([frame, active], ignore_index=True)
+    active = active.drop_duplicates([*id_cols, time_col]).sort_values([*id_cols, time_col]).reset_index(drop=True)
+    return ICUTable(active, id_columns=id_cols, index_column=time_col, value_column="vaso_ind")

@@ -851,7 +851,7 @@ CONCEPT_DB_COVERAGE = {
     'thiazide_diuretic': 6, 'potassium_sparing_diuretic': 6, 'acetazolamide': 6,
     'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 5,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
-    'mannitol': 5, 'amiodarone': 6, 'milrinone': 6, 'rocuronium': 5,
+    'mannitol': 5, 'amiodarone': 6, 'milrinone': 6, 'rocuronium': 6,  # R5C-III-019: IV order proxy
     # Rate concepts (2026-05-13). 2026-11-03 audit 2: HiRID Disoprivan
     # infusions and SICdb's native hourly dose 3057 (not AmountPerMinute, see
     # audit_reports/sic_amount_per_minute_unit_audit_20260513.md) added.
@@ -884,7 +884,7 @@ CONCEPT_DB_COVERAGE = {
     'levetiracetam': 6,
     'dexamethasone': 6,
     'octreotide': 5,
-    'neostigmine': 4,
+    'neostigmine': 5,  # R5C-III-018: MIMIC-III IV order proxy
     # Batch 7 (2026-05-14; HiRID/eICU additions audited 2026-05-27)
     'phenytoin': 6,  # + AUMC 7222 (2026-11-03 audit 2)
     'labetalol': 6,

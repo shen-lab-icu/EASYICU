@@ -101,7 +101,8 @@ def test_mimic_source_covers_cv_and_mv(cdict, name, itemid, _u1, _u2, _max):
     assert itemid in declared
     assert mv["callback"] == "mimic_rate_mv"
 
-    cv = tables["inputevents_cv"]
+    # R5C-III-021 adds a separate kg-to-mass CareVue source for 30308.
+    cv = next(s for s in mimic if s["table"] == "inputevents_cv" and s["callback"] == "mimic_rate_cv")
     assert cv["callback"] == "mimic_rate_cv"
     assert cv["grp_var"] == "linkorderid"
 

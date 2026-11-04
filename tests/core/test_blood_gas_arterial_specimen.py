@@ -41,7 +41,8 @@ def test_miiv_uses_the_specimen_type_of_the_same_specimen_id(tmp_path, scan):
 def test_miiv_ph_drops_venous_lab_and_venous_chart_channels(tmp_path, scan):
     source, id_column = miiv_source(tmp_path)
     # Lab 7.30 (VEN.) and chart 220274 "PH (Venous)" 7.31 must not appear.
-    assert hourly(source, id_column, "ph", parquet_scan=scan) == {0.0: 7.45, 2.0: 7.40}
+    # R5C-IV-009: the arterial lab has priority over chart values within 6h.
+    assert hourly(source, id_column, "ph", parquet_scan=scan) == {0.0: 7.45}
 
 
 @READERS

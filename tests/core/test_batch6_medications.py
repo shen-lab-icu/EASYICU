@@ -23,7 +23,8 @@ BATCH6 = [
     ("levetiracetam", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("dexamethasone", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("octreotide",    {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
-    ("neostigmine",   {"miiv", "eicu", "aumc", "sic"},          4),
+    # R5C-III-018: MIMIC-III adds an explicitly ordered, day-level IV proxy.
+    ("neostigmine",   {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
 ]
 
 
@@ -111,7 +112,8 @@ def test_neostigmine_no_mimic_iii_mv(cdict):
     """MIMIC-III MetaVision inputevents has no neostigmine itemid (only
     MIMIC-IV adds 229071). Guard rail."""
     mimic_sources = cdict["neostigmine"]["sources"].get("mimic", [])
-    assert mimic_sources == [], "MIMIC-III neostigmine source must remain empty"
+    # R5C-III-018 adds a date-only IV order proxy, not a MetaVision dose item.
+    assert all(s["table"] == "prescriptions" and s["exposure_kind"] == "ordered" for s in mimic_sources)
 
 
 def test_levetiracetam_includes_miiv_and_mimic_mv(cdict):

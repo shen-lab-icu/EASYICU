@@ -412,3 +412,19 @@ def test_r5c_aumc_009_013_dense_points_keep_the_relative_hour(tmp_path, name, it
 def test_r5c_aumc_007_008_014_016_logical_pools_declare_positive_evidence_aggregation(sofa, names):
     dictionary = _dictionary(sofa)
     assert all(dictionary[name]["aggregate"] == "max" for name in names)
+
+
+def test_subconcept_cached_on_parent_grid_does_not_answer_a_coarser_request(tmp_path):
+    # SOFA-2 vaso_ind loads other_vaso on its one-minute grid; the requested
+    # other_vaso must still come back on the requested hourly grid.
+    db = _review_sources(tmp_path, "file")
+    dictionary = ConceptDictionary.from_json(DATA / "concept-dict.json")
+    dictionary.update(ConceptDictionary.from_json(DATA / "sofa2-dict.json"))
+    for order in (["vaso_ind", "other_vaso"], ["other_vaso", "vaso_ind"]):
+        result = ConceptResolver(dictionary).load_concepts(
+            order, db, merge=False, r_compatible=False, interval=pd.Timedelta(hours=1),
+            patient_ids={"admissionid": [1]}, concept_workers=1, verbose=False,
+        )
+        assert {name: table.interval for name, table in result.items()} == {
+            "vaso_ind": pd.Timedelta(hours=1), "other_vaso": pd.Timedelta(hours=1),
+        }, order

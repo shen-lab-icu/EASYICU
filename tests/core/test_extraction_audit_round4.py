@@ -107,7 +107,8 @@ def test_r4_002_carevue_phenylephrine_is_another_vasopressor():
         ids = {i for s in cv for i in s["ids"]}
         assert {30051, 30125, 30127, 30128} <= ids
         phn = [s for s in cv if 30127 in s["ids"]]
-        assert phn[0]["callback"] == "transform_fun(comp_na(`>`, 0))"
+        # R5C-III-012: positive rates now support observed infusion intervals.
+        assert phn[0]["callback"] == "mimic_other_vaso"
 
 
 @pytest.mark.parametrize("db", ["eicu", "eicu_demo"])
