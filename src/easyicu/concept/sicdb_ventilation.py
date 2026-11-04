@@ -24,6 +24,12 @@ the intensive care units 2-4 (``cases.HospitalUnit``; unit 5 is the mixed ward
 that also runs NIV), a setting hour with a set rate (2282) or a
 PressureOverPeep (3040) while propofol is running (3057 > 0) is therefore
 invasive ventilation too: a sedated patient on a set rate is not on NIV.
+Remifentanil (3059) and sufentanil (3063) infusions are the analgosedation of
+the same patients, and a measured end-tidal CO2 (716 > 10 mmHg) beside a set
+rate is mainstream capnography on an airway; both count like propofol
+(2026-11-04 audit round 3, M P1: 72,870 setting hours in units 2-4 had
+neither an airway interval nor propofol).  Dexmedetomidine and clonidine are
+also given for NIV tolerance and weaning and do not count.
 ``attributed_ventilation_windows`` without ``sedated_hours`` is the strict
 airway-only rule, kept for sensitivity analyses.  Setting hours attributed by
 neither rule are counted on the frame's ``attrs`` so the extraction can report
@@ -42,6 +48,11 @@ SETTING_ITEMS = (2278, 2282, 2284, 3040, 2285, 3121)
 #: Settings that, under propofol in an ICU unit, mean controlled ventilation.
 CONTROLLED_SETTING_ITEMS = (2282, 3040)
 PROPOFOL_ITEM = 3057
+#: Continuous hypnotic/opioid infusions of controlled ventilation (per hour per kg).
+SEDATION_ITEMS = (PROPOFOL_ITEM, 3059, 3063)
+#: End-tidal CO2 (mmHg); above ``ETCO2_MIN_MMHG`` it is measured on an airway.
+ETCO2_ITEM = 716
+ETCO2_MIN_MMHG = 10.0
 #: cases.HospitalUnit codes of the intensive care units (5 is the NIV ward).
 ICU_UNITS = (2, 3, 4)
 #: Charting tolerance around an airway interval, in seconds.
@@ -153,7 +164,8 @@ def apply_sicdb_attributed_ventilation(
 def _sedated_controlled_hours(
     frame: pd.DataFrame, data_source: Any, cases: list, id_col: str, time_col: str
 ) -> pd.DataFrame:
-    """Hours of ICU-unit cases with a set rate or PressureOverPeep under propofol."""
+    """Hours of ICU-unit cases with a set rate or PressureOverPeep under
+    propofol, remifentanil or sufentanil, or with a measured end-tidal CO2."""
     from ..datasource import FilterOp, FilterSpec
 
     empty = pd.DataFrame(columns=[id_col, "_h"])
@@ -173,21 +185,23 @@ def _sedated_controlled_hours(
     controlled = controlled.loc[controlled[id_col].isin(icu_cases)]
     if controlled.empty:
         return empty
-    propofol = data_source.load_table(
+    evidence = data_source.load_table(
         "data_float_h",
         columns=[id_col, "DataID", "Offset", "Val"],
         filters=[
-            FilterSpec("DataID", FilterOp.IN, [PROPOFOL_ITEM]),
+            FilterSpec("DataID", FilterOp.IN, [*SEDATION_ITEMS, ETCO2_ITEM]),
             FilterSpec(id_col, FilterOp.IN, pd.unique(controlled[id_col]).tolist()),
         ],
         verbose=False,
     )
-    propofol = propofol.data if hasattr(propofol, "data") else propofol
-    propofol = propofol.loc[
-        propofol["DataID"].eq(PROPOFOL_ITEM) & (pd.to_numeric(propofol["Val"], errors="coerce") > 0)
+    evidence = evidence.data if hasattr(evidence, "data") else evidence
+    value = pd.to_numeric(evidence["Val"], errors="coerce")
+    evidence = evidence.loc[
+        (evidence["DataID"].isin(SEDATION_ITEMS) & (value > 0))
+        | (evidence["DataID"].eq(ETCO2_ITEM) & (value > ETCO2_MIN_MMHG))
     ]
     return _hour_index(controlled, id_col, time_col).merge(
-        _hour_index(propofol, id_col, "Offset"), on=[id_col, "_h"]
+        _hour_index(evidence, id_col, "Offset").drop_duplicates(), on=[id_col, "_h"]
     )
 
 

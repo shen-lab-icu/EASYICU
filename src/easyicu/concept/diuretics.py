@@ -142,7 +142,9 @@ def furosemide_equivalent(
     routes = _route_series(frame, params)
     factor = routes.map(lambda r: FUROSEMIDE_EQUIVALENT_FACTORS[(drug, r)]).astype("float64")
     mg_eq = amount * to_mg * factor
-    keep = mg_eq.notna() & (mg_eq >= 0)
+    # A zero amount (HiRID pump start/stop marker) is no dose (2026-11-04
+    # audit round 3, M R2-HIRID-42).
+    keep = mg_eq.notna() & (mg_eq > 0)
     audit = {
         "drug": drug,
         "rows_in": int(len(frame)),

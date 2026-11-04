@@ -653,7 +653,9 @@ def test_miiv_bilirubin_keeps_blood_total_not_body_fluid_variants() -> None:
         for source_id in _source_ids(source)
     }
 
-    assert {50885, 53089}.issubset(labevent_ids)
+    assert 50885 in labevent_ids
+    # 53089 has <10 rows in an ICU window (2026-11-04 audit round 3).
+    assert 53089 not in labevent_ids
     assert 225690 in chartevent_ids
     assert {50838, 51028, 51049, 51568, 51783, 51812, 51932}.isdisjoint(labevent_ids)
 

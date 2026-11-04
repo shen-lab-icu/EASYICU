@@ -46,20 +46,35 @@ COUNTER_RESET_HOUR = 12
 MAX_DAILY_COUNTER_ML = 100_000.0
 #: A reading below this share of the running maximum restarts the counter.
 RESTART_FRACTION = 0.5
+#: ...unless the next reading of the same day returns to this share of it.
+REBOUND_FRACTION = 0.8
 
 
 def _restart_aware_increments(ids: np.ndarray, days: np.ndarray, values: np.ndarray) -> np.ndarray:
     """Increment of each reading over its block's running maximum.
 
     Rows are sorted by stay and time.  A new stay or 12:00 day starts a block;
-    so does a reading below ``RESTART_FRACTION`` of the running maximum.
+    so does a reading below ``RESTART_FRACTION`` of the running maximum, unless
+    the next reading of the same day rebounds to ``REBOUND_FRACTION`` of it: a
+    single low reading between two on-trajectory ones is a charting dip, and
+    restarting at it counted the day's total twice (2026-11-04 audit round 3,
+    M F1: 109 of 470 drops, 163,744 mL of output).
     """
     out = np.zeros(len(values), dtype=float)
     peak = 0.0
-    for i in range(len(values)):
+    n = len(values)
+    for i in range(n):
         if i == 0 or ids[i] != ids[i - 1] or days[i] != days[i - 1]:
             peak = 0.0
         elif values[i] < RESTART_FRACTION * peak:
+            rebounds = (
+                i + 1 < n
+                and ids[i + 1] == ids[i]
+                and days[i + 1] == days[i]
+                and values[i + 1] >= REBOUND_FRACTION * peak
+            )
+            if rebounds:
+                continue
             peak = 0.0
         if values[i] > peak:
             out[i] = values[i] - peak

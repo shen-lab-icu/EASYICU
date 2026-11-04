@@ -4723,6 +4723,24 @@ def _callback_supp_o2_aumc(
         value_column="supp_o2"
     )
 
+def _leveled_window_mask(df: pd.DataFrame, value_col: Optional[str]) -> pd.Series:
+    """Keep the ventilation windows of a mech_vent WinTbl that carry a level.
+
+    Every window row is ventilation, except a window whose level a source
+    mapped to NA where the other windows have a level: HiRID airway code 6
+    ('-', no airway) ends an episode and was padded into four ventilated
+    hours (2026-11-04 audit round 3, M R2-HIRID-28).  A table whose windows
+    carry no level at all is kept whole.
+    """
+    value_col = value_col or "mech_vent"
+    if value_col not in df.columns:
+        return pd.Series(True, index=df.index)
+    has_level = df[value_col].notna()
+    if not has_level.any():
+        return pd.Series(True, index=df.index)
+    return has_level
+
+
 def _callback_vent_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4892,7 +4910,7 @@ def _callback_vent_ind(
         # The mech_vent value may be NaN (e.g., MIIV procedureevents), but the row's
         # existence means mechanical ventilation is happening.
         if isinstance(mech, WinTbl):
-            vent_mask = pd.Series(True, index=df.index)
+            vent_mask = _leveled_window_mask(df, getattr(mech, 'value_column', None))
         else:
             value_col = "mech_vent"
             if hasattr(mech, 'value_column') and mech.value_column:
@@ -4998,7 +5016,7 @@ def _callback_vent_ind(
 
         # 🔧 FIX 2026-03-10: For WinTbl, every row IS a ventilation window by definition.
         if isinstance(mech, WinTbl):
-            vent_mask = pd.Series(True, index=df.index)
+            vent_mask = _leveled_window_mask(df, getattr(mech, 'value_column', None))
         else:
             value_col = getattr(mech, 'value_column', None) or "mech_vent"
             if value_col in df.columns:
@@ -5807,12 +5825,15 @@ def _callback_vaso_ind(
     # i.e. seq(start, duration), which drops every episode that starts later
     # than it lasts (2026-11-03 extraction audit round 2, R2-02: SICdb
     # vaso_ind covered 44% of norepinephrine-rate hours, MIIV/HiRID/MIMIC-III
-    # 11-21%). The start keeps its hour; k = 0..floor(duration).
+    # 11-21%). Every hour from the start's to the end's is covered: counting
+    # floor(duration) + 1 hours from the start hour dropped the last hour of
+    # 35.7% of SICdb episodes, whose fractional start and duration add past
+    # an hour boundary (2026-11-04 audit round 3, M R2-02).
     starts = valid_rows["__start_hours"].to_numpy(dtype="float64")
     durations = valid_rows["__duration_hours"].to_numpy(dtype="float64")
     keep = np.isfinite(starts) & np.isfinite(durations) & (durations >= 0)
     starts, durations = starts[keep], durations[keep]
-    counts = np.floor(durations + 1e-9).astype("int64") + 1
+    counts = (np.floor(starts + durations + 1e-9) - np.floor(starts)).astype("int64") + 1
     hours = np.repeat(np.floor(starts), counts) + (
         np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
     )
@@ -8402,14 +8423,17 @@ def _callback_fluid_balance_hourly(
     tables: Dict[str, "ICUTable"],
     ctx: "ConceptCallbackContext",
 ) -> "ICUTable":
-    """Compute hourly fluid balance = total_input_ml - urine.
+    """Compute hourly fluid balance = total_input_ml - urine - other_output_ml.
 
-    Both dependencies go through the standard loading pipeline, so their time
-    columns are already aligned to relative hours. This callback simply merges
-    them on (id, time) and subtracts.
+    All dependencies go through the standard loading pipeline, so their time
+    columns are already aligned to relative hours. This callback merges them on
+    (id, time) and subtracts. Non-urine output (drains, gastric, stool) is zero
+    in an hour without a charted entry; a database without non-urine output
+    sources subtracts urine only (2026-11-04 audit round 3).
     """
     input_tbl = tables.get("total_input_ml")
     urine_tbl = tables.get("urine")
+    other_tbl = tables.get("other_output_ml")
 
     # Determine schema from whichever table is available
     ref_tbl = input_tbl or urine_tbl
@@ -8503,11 +8527,13 @@ def _callback_fluid_balance_hourly(
 
     input_df = to_df(input_tbl, "input_ml")
     urine_df = to_df(urine_tbl, "urine_ml")
+    other_df = to_df(other_tbl, "other_ml")
     time_col = "charttime"  # canonical post-rename
 
     # Ensure numeric
     input_df["input_ml"] = pd.to_numeric(input_df["input_ml"], errors="coerce")
     urine_df["urine_ml"] = pd.to_numeric(urine_df["urine_ml"], errors="coerce").fillna(0)
+    other_df["other_ml"] = pd.to_numeric(other_df["other_ml"], errors="coerce").fillna(0)
 
     # The table-level guard above is not enough when one database mixes
     # charting systems (MIMIC-III CareVue + MetaVision): a stay whose intake
@@ -8517,14 +8543,17 @@ def _callback_fluid_balance_hourly(
     input_df = input_df.loc[input_df["input_ml"].notna()]
     stays_with_input = pd.Index(input_df[id_col].unique())
     urine_df = urine_df.loc[urine_df[id_col].isin(stays_with_input)]
+    other_df = other_df.loc[other_df[id_col].isin(stays_with_input)]
 
     # Merge on (id, time) — outer join
     merged = pd.merge(input_df, urine_df, on=[id_col, time_col], how="outer")
+    merged = pd.merge(merged, other_df, on=[id_col, time_col], how="outer")
     merged["input_ml"] = merged["input_ml"].fillna(0)
     merged["urine_ml"] = merged["urine_ml"].fillna(0)
+    merged["other_ml"] = merged["other_ml"].fillna(0)
 
     # Hourly balance = input - output
-    merged["fluid_balance"] = merged["input_ml"] - merged["urine_ml"]
+    merged["fluid_balance"] = merged["input_ml"] - merged["urine_ml"] - merged["other_ml"]
     merged = merged.sort_values([id_col, time_col])
 
     result = merged[[id_col, time_col, "fluid_balance"]].copy()
@@ -8687,8 +8716,9 @@ def _callback_nlr(tables, ctx):
 def _callback_plr(tables, ctx):
     """Platelet-to-lymphocyte ratio = platelets / ABSOLUTE lymphocyte count.
 
-    `lymph` is a percentage in all six databases (the absolute sources AUMC 14258 and
-    HiRID 24000480 are converted to % by the blood_cell_ratio callback), so the absolute
+    `lymph` is a percentage wherever it is mapped (the absolute AUMC 14258 is converted
+    to % by the blood_cell_ratio callback; HiRID 24000480 is 62% zeros with a 0.2 G/l
+    p99 and is not a lymphocyte count, so HiRID has no lymph), so the absolute
     count has to be reconstructed as lymph% * wbc / 100. plt and wbc share the same unit
     (K/uL == 10^9/L), so the ratio is dimensionless.
     """

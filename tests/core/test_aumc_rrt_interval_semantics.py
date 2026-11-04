@@ -41,7 +41,8 @@ def test_aumc_rrt_uses_treatment_process_intervals_only(
     readings = sources[1]
     assert readings["table"] == "numericitems"
     assert "dur_var" not in readings
-    assert readings["callback"] == "transform_fun(set_val(TRUE))"
+    # A zero blood flow or removal reading is not treatment (audit round 3).
+    assert readings["callback"] == "transform_fun(comp_na(`>`, 0))"
     assert len(sources) == 2
 
 

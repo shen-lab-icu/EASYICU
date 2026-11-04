@@ -5696,7 +5696,7 @@ def hirid_rate(
     Implements R ricu's hirid_rate:
     1. Get the most frequent unit in the data
     2. Filter to only records with that unit
-    3. Group by (patientid, time, infusionid) and sum doses
+    3. Group by (patientid, hour) and sum doses across infusions
     4. Calculate rate = dose_per_interval / interval_minutes
     5. Append /min to the unit
     
@@ -5727,6 +5727,9 @@ def hirid_rate(
     
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
     df = df.dropna(subset=[actual_val_col])
+    # A givendose of 0 is a stopped-pump record, as in hirid_rate_kg
+    # (2026-11-04 audit round 3, M NEW-1).
+    df = df[df[actual_val_col] != 0]
     if df.empty:
         return empty_result
     
@@ -5774,10 +5777,10 @@ def hirid_rate(
     else:
         df['_hour'] = 0
     
-    # Step 3: Group by (patientid, hour, infusionid) and sum doses
+    # Step 3: Group by (patientid, hour) and sum doses.  Concurrent syringes
+    # add up, as in hirid_rate_kg; a per-infusion median halved the rate in
+    # syringe-change hours (2026-11-04 audit round 3, M V5).
     group_cols = [id_col, '_hour']
-    if grp_var and grp_var in df.columns:
-        group_cols.append(grp_var)
     
     grouped = df.groupby(group_cols, as_index=False).agg({
         actual_val_col: 'sum',  # Sum doses within each hour
@@ -5832,8 +5835,8 @@ def hirid_rate_mass(
     1. Filter to rows whose ``doseunit`` is compatible with ``target_unit`` —
        i.e. can be converted to the target mass via a unit factor. Rows with
        other or missing units are dropped.
-    2. Group by (patientid, hour-floor, infusionid) and SUM the doses given
-       within each hour.
+    2. Group by (patientid, hour-floor) and SUM the doses given within each
+       hour across infusions.
     3. Divide by 60 (HiRID pharma events accumulate within an hourly grid;
        the summed dose across 1 hour becomes the per-minute rate).
     4. Convert to ``target_unit`` via mass + time scaling.
@@ -5872,6 +5875,8 @@ def hirid_rate_mass(
 
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors="coerce")
     df = df.dropna(subset=[actual_val_col])
+    # A givendose of 0 is a stopped-pump record (2026-11-04 audit round 3, M NEW-1).
+    df = df[df[actual_val_col] != 0]
     if df.empty:
         return empty
 
@@ -5928,10 +5933,10 @@ def hirid_rate_mass(
     else:
         df["_hour"] = 0
 
-    # ── Step 3: group-sum per (patient, hour, infusion) ──
+    # ── Step 3: group-sum per (patient, hour) ──
+    # Concurrent syringes add up, as in hirid_rate_kg (2026-11-04 audit round
+    # 3, M V5: a per-infusion median halved 630 fentanyl and 543 midazolam hours).
     group_cols = [id_col, "_hour"]
-    if grp_var and grp_var in df.columns:
-        group_cols.append(grp_var)
     grouped = df.groupby(group_cols, as_index=False).agg({actual_val_col: "sum"})
 
     # ── Step 4: sum over hour → rate per target_time ──

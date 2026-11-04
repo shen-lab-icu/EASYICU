@@ -77,7 +77,8 @@ def test_monocyte_absolute_count_is_converted_to_percent():
 
 
 def test_device_oxygen_flow_feeds_supplemental_oxygen_on_aumc_and_hirid():
-    assert _ids("o2_flow") == {8845}
+    # 10387 is the oxygen flow charted with a blood gas (audit round 3).
+    assert _ids("o2_flow") == {8845, 10387}
     assert _ids("o2_flow", "hirid") == {15001525, 15001555}
     for database in ("aumc", "hirid"):
         (source,) = CONCEPTS["supp_o2"]["sources"][database]

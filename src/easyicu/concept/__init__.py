@@ -2884,6 +2884,14 @@ class ConceptResolver:
                         # 让 change_interval 做一次性跨源 MEDIAN（匹配 R ricu 的 pooled 行为）
                         if _block_duckdb_same_table or _block_duckdb_multi_numeric:
                             _can_inline_callback = False
+                        # Declared row filters (excluded statuses, exclude_regex,
+                        # require_empty_var) act on raw rows; a pre-aggregated
+                        # frame no longer has them (2026-11-04 audit round 3).
+                        if any(
+                            source.params.get(_key)
+                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var")
+                        ):
+                            _can_inline_callback = False
                         if signed_sum_bounds and interval is None:
                             # Preserve native timestamps when no grid is requested.
                             _can_inline_callback = False
@@ -5837,12 +5845,18 @@ class ConceptResolver:
                         id_cols=id_columns,
                         keep_vars=keep_vars,
                     )
-                    if not point_rows.empty:
+                    if not point_rows.empty and not expanded.empty:
                         combined = pd.concat(
                             [expanded, point_rows],
                             ignore_index=True,
                             sort=False,
                         )
+                    elif not point_rows.empty:
+                        # An empty expansion carries object columns; concatenating
+                        # it turned the point rows' hour column into objects that
+                        # later parsed as 1970-01-01 (2026-11-04 audit round 3,
+                        # M NEW-2: MIMIC-III CareVue-only other_vaso).
+                        combined = point_rows.reset_index(drop=True)
                     else:
                         combined = expanded
                     if DEBUG_MODE:
@@ -9343,7 +9357,13 @@ class ConceptResolver:
                 and _is_true_win_tbl_class
             )
             
-            if isinstance(result, WinTbl) and interval is not None and not result.data.empty and not is_win_tbl_target:
+            # Point rows of a concept whose other sources are windows (MIMIC-III
+            # CareVue beside MetaVision) travel as ``_ts_source_rows``; they
+            # must survive when no window row exists (2026-11-04 audit round 3,
+            # M NEW-2: CareVue-only stays had no other_vaso at all).
+            _pending_ts_rows = getattr(result, '_ts_source_rows', None) if isinstance(result, WinTbl) else None
+            _has_ts_rows = _pending_ts_rows is not None and not _pending_ts_rows.empty
+            if isinstance(result, WinTbl) and interval is not None and (not result.data.empty or _has_ts_rows) and not is_win_tbl_target:
                 idx_col = result.index_var
                 dur_col = result.dur_var
                 id_cols = result.id_vars
@@ -9361,16 +9381,19 @@ class ConceptResolver:
                     # the value column; extra WinTbl columns (stop, doseunit, …) are
                     # dropped here so value_column detection downstream is unambiguous.
                     interval_hours = interval.total_seconds() / 3600.0
-                    expanded_df = _expand_wintbl_vectorized(
-                        result.data,
-                        idx_col=idx_col,
-                        dur_col=dur_col,
-                        id_cols=list(id_cols),
-                        value_columns=[concept_name] if concept_name in result.data.columns else [],
-                        interval_hours=interval_hours,
-                        end_mode="raw",
-                        duration_zero_single=True,
-                    )
+                    if result.data.empty:
+                        expanded_df = pd.DataFrame(columns=[*id_cols, idx_col, concept_name])
+                    else:
+                        expanded_df = _expand_wintbl_vectorized(
+                            result.data,
+                            idx_col=idx_col,
+                            dur_col=dur_col,
+                            id_cols=list(id_cols),
+                            value_columns=[concept_name] if concept_name in result.data.columns else [],
+                            interval_hours=interval_hours,
+                            end_mode="raw",
+                            duration_zero_single=True,
+                        )
                     
 
                     
