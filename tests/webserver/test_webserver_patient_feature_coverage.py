@@ -260,7 +260,7 @@ def test_drilldown_summary_uses_export_wide_catalog_coverage(
     assert loaded["module_count"] == 19
     assert loaded["observed_features"] == 5
     modules = {row["module"]: row for row in payload["data_tables"]["modules"]}
-    assert modules["vitals"]["review_features"] == 14  # + map_invasive, map_nibp (2026-11-03 audit)
+    assert modules["vitals"]["review_features"] == 16  # + map_invasive, map_nibp (2026-11-03 audit); cvp_raw, cvp_qc (round 5)
     assert modules["vitals"]["observed_features"] == 2
     assert modules["vitals"]["dynamic_features"] == 2
     assert modules["ventilator"]["observed_features"] == 1

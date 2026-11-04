@@ -59,7 +59,10 @@ def test_community_coverage_audits_every_standard_concept() -> None:
     # concepts (unavailable in community sources until validated there), and
     # the AUMC/HiRID batch added o2_flow.
     # R5C-HIRID-013: the isolated native-unit CK-MB entry adds one concept.
-    assert coverage["concept_count"] == 291 == len(list(dictionary.keys()))
+    # Round 5 then adds cai_ph74, 18 bounds-audit raw/QC channels, 12 urine
+    # coverage companions and the SICdb cvp_qc, minute-volume and ventilation
+    # rule/sensitivity columns.
+    assert coverage["concept_count"] == 327 == len(list(dictionary.keys()))
     assert set(coverage["concepts"]) == set(dictionary.keys())
     assert set(coverage["databases"]) == COMMUNITY_DATABASES
     valid = {"direct", "derived", "partial", "unavailable"}
