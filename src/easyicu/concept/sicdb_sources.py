@@ -162,12 +162,15 @@ def _glucose_factors(frame, data_source):
 
     ids = pd.unique(frame.DrugID).tolist()
     try:
-        refs = _table(data_source, "d_references", ["ReferenceGlobalID", "ReferenceUnit", "ReferenceName"], [FilterSpec("ReferenceGlobalID", FilterOp.IN, ids)])
+        refs = _table(data_source, "d_references", ["ReferenceGlobalID", "ReferenceUnit", "ReferenceName", "ReferenceValue"], [FilterSpec("ReferenceGlobalID", FilterOp.IN, ids)])
         refs = refs.drop_duplicates().set_index("ReferenceGlobalID")
         if not refs.index.is_unique:
             raise ValueError("ambiguous reference units")
         unit = frame.DrugID.map(refs.ReferenceUnit).astype("string").str.strip().str.lower()
-        percentage = refs.ReferenceName.astype("string").str.extract(r"(?i)^\s*(?:glukose|glucose|dextrose)\s*(\d+(?:[.,]\d+)?)\s*%", expand=False)
+        # SICdb names the preparation in ReferenceValue ("Glukose 10%"); ReferenceName is its class ("Fluid").
+        pattern = r"(?i)^\s*(?:glukose|glucose|dextrose)\s*(\d+(?:[.,]\d+)?)\s*%"
+        percentage = refs.ReferenceValue.astype("string").str.extract(pattern, expand=False)
+        percentage = percentage.fillna(refs.ReferenceName.astype("string").str.extract(pattern, expand=False))
         parsed = pd.to_numeric(percentage.str.replace(",", ".", regex=False), errors="coerce") / 100.
         concentration = frame.DrugID.map({2045: .33, 2148: .50})
         concentration = concentration.fillna(frame.DrugID.map(parsed))

@@ -91,8 +91,11 @@ def test_all_nineteen_modules_publish_from_synthetic_aumc(aumc_source, tmp_path)
     assert contract["time_origin"] == "icu_admission"
     assert contract["time_unit"] == "h"
     published_modules = {entry["module"] for entry in manifest["files"]}
-    assert published_modules == set(api.EXTRACT_MODULES) - {"sic_case_landmark"}
+    # The SICdb landmark and the round-5 bounds audit are opt-in modules.
+    assert published_modules == set(api.EXTRACT_MODULES) - {"sic_case_landmark", "bounds_audit"}
+    assert published_modules == set(api.EXTRACT_MODULE_ORDER)
     assert "sic_case_landmark" not in result["modules"]
+    assert "bounds_audit" not in result["modules"]
     for entry in manifest["files"]:
         frame = pd.read_parquet(output / entry["file"])
         assert frame.columns[0] == "stay_id"
