@@ -76,9 +76,11 @@ def test_admission_type_maps_mimic_ophthalmology_service_to_surgery() -> None:
     """EYE is a real MIMIC-IV services.curr_service code, not a free level."""
 
     concept = _load_json("concept-dict.json")
-    for database in ("miiv", "mimic", "mimic_demo"):
+    for database in ("mimic", "mimic_demo"):
         callback = concept["adm"]["sources"][database][0]["callback"]
         assert re.search(r"\bEYE\s*=\s*'surg'", callback)
+    # MIIV reads the service active at ICU intime (audit round 3); its map is data.
+    assert concept["adm"]["sources"]["miiv"][0]["service_map"]["EYE"] == "surg"
 
 
 def _data_source_tables() -> dict[str, dict]:

@@ -647,7 +647,8 @@ _DICT_CALLBACKS = sorted(_enumerate_dict_callbacks())
 # The tripwire must exclude callbacks dispatched elsewhere; otherwise
 # it would incorrectly flag them as missing from ``_apply_callback``.
 _REGISTRY_HANDLED = set(CALLBACK_REGISTRY.keys())
-_LOAD_SINGLE_CONCEPT_HANDLED = {"los_callback"}  # plus any fwd_concept(*)
+# service_at_admission (MIIV adm) is a fun_itm loaded by _load_fun_item.
+_LOAD_SINGLE_CONCEPT_HANDLED = {"los_callback", "service_at_admission"}  # plus any fwd_concept(*)
 
 
 def _dispatched_elsewhere(cb: str) -> bool:
