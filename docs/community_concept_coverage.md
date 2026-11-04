@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **289 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 26 | 105 |
-| zhejiang_eicu | 128 | 25 | 22 | 112 |
-| jinhua | 135 | 19 | 24 | 109 |
-| zigong | 125 | 19 | 33 | 110 |
+| nwicu | 137 | 19 | 27 | 106 |
+| zhejiang_eicu | 128 | 25 | 23 | 113 |
+| jinhua | 135 | 19 | 24 | 111 |
+| zigong | 125 | 19 | 33 | 112 |
 
 ## Complete matrix
 
@@ -194,6 +194,7 @@ concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
 | `o2sat` | respiratory | direct | direct | direct | direct |
 | `octreotide` | medications | direct | direct | direct | direct |
 | `osmolality` | chemistry | direct | unavailable | unavailable | unavailable |
+| `other_output_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `other_vaso` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `oxygenation_index` | respiratory | partial | partial | partial | partial |
 | `packed_rbc` | medications | unavailable | unavailable | direct | unavailable |
@@ -214,7 +215,8 @@ concept (base dictionary plus SOFA-2 overlay): **287 concepts × 4 databases**.
 | `phn_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `phos` | chemistry | direct | direct | direct | direct |
 | `pip` | ventilator | unavailable | direct | unavailable | unavailable |
-| `plateau_pres` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `plateau_pres` | ventilator | partial | partial | unavailable | unavailable |
+| `plateau_pres_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `platelets` | medications | direct | unavailable | direct | unavailable |
 | `plr` | hematology | derived | derived | derived | derived |
 | `plt` | hematology | direct | direct | direct | direct |

@@ -4,6 +4,118 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — extraction audit round 3
+
+Numbers are 3,000-stay samples, before (`014aac14f`) → after. Commits:
+`edb7da2aa` (R3-01), `5a5eac84b` (R3-02..R3-20, F items, first M items),
+`3a296c1f9`, `8c8605337` and `4b2664127` (full-dictionary M items).
+
+### Trunk fixes (R3)
+
+- **[R3-01]** The id-table DuckDB path converts every row for a
+  two-argument `convert_unit`: 226531 'Admission Weight (lbs.)' is now kg.
+  MIIV weight p95 149.6 → 121.0 kg; MIMIC-III MetaVision 131.9 → 120.2.
+- **[R3-02]** HiRID and AUMC vasopressor durations start on the hour as the
+  rates do, so `*60` finds its rates. HiRID norepi60 rows 15,873 → 16,644,
+  AUMC 78,265 → 79,977.
+- **[R3-03]** eICU cancelled orders are dropped: `drugordercancelled` holds
+  'Yes'/'No', which now normalise to the declared `true`.
+- **[R3-04]** eICU noradrenaline order spans end at unit discharge. norepi_dur
+  p95 117.7 → 109.8 h; norepi60 rows 3,889 → 4,113.
+- **[R3-05]** eICU ventilation windows come from charted ventilator settings
+  and care intervals. vent_ind hours 3,754 → 50,061 (stays 824 → 985); PEEP > 0
+  hours without vent_ind 17,796 → 535.
+- **[R3-06/R3-07]** `adv_resp` is limited to ventilation windows (eICU hours
+  outside vent_ind 19,279 → 171) and HiRID 'Stand By' is not ventilation
+  (11,667 → 7,187).
+- **[R3-08]** MIMIC-III MetaVision `mort_365d` is NA: follow-up ends at 90 days
+  (non-null 8,131 → 0).
+- **[R3-09]** `urine24` windows end at the last hour, not at a duration used
+  as an end. MIIV urine24 stays 1,655 → 1,718; AUMC 1,751 → 1,806.
+- **[R3-10..R3-12]** AUMC 8903 arterial SO2 feeds `sao2` (rows 74,123 →
+  76,478); `minute_vol` excludes spontaneous 12578 (zero rows 268 → 195);
+  `ett_gcs` reads the tube and tracheostomy intervals (0 → 2,207 windows).
+- **[R3-13/R3-15]** AUMC death after discharge and SICdb deaths without an
+  offset are timed at discharge (SICdb death TRUE 2,095 → 2,154 in the full
+  database).
+- **[R3-14]** AUMC vasopressor bounds allow high doses (norepi > 3: 0 → 19
+  rows).
+- **[R3-16]** eICU and SICdb `sbp`/`dbp` carry source channels.
+- **[R3-17]** Driving pressure matches PEEP within ±1 h. MIIV rows 9,129 →
+  9,034; eICU 5,291 → 5,044.
+- **[R3-18]** `plateau_pres` drops plateaus above PIP + 1 or below PEEP
+  (HiRID 30,517 → 28,176 rows); `plateau_pres_raw` keeps the charted values.
+- **[R3-19]** A HiRID zero dose is a pump marker, not a rate: norepi_rate rows
+  17,352 → 16,799, vaso_ind 29,552 → 29,477; 37 boolean HiRID drug sources need
+  a positive dose.
+- **[R3-20]** MIMIC-III CareVue mcg/min vasopressor rows without a weight are
+  NA, not mcg/kg/min.
+
+### F items
+
+F-01..F-31 are listed with their numbers in
+`outputs/extraction_audit_r3_receipt_20261104.md`. Examples: AUMC antibiotics
+rows 27,568 → 30,200; eICU ammonia no longer divided (median 22.6 → 37.0
+µmol/L); MIIV D-dimer FEU not halved (median 1,618 → 2,576); MIMIC-III CareVue
+vancomycin < 10 → 1,708 rows; SICdb albumin 171 added; the merged export
+expands windows that carry an hours duration (SICdb mech_vent 338 → 6,459).
+
+### Full-dictionary M items
+
+- **Fluid balance.** `fluid_balance` is input minus urine minus non-urine
+  output (`other_output_ml`: drains, gastric, stool, blood loss; RRT removal and
+  urine excluded) for MIIV, MIMIC-III, eICU, AUMC and SICdb. This replaces the
+  round-2 [F1] note. Median hourly balance MIIV 36.0 → 30.1 mL, AUMC 11 → 6,
+  SICdb 30 → 25.
+- **Rates.** HiRID mass rates sum concurrent syringes per hour; zero doses are
+  dropped (fentanyl median 50.6 → 51.8 µg/h); diuretic zero amounts are not
+  doses; AUMC continuous rates read running infusions only (flushes and single
+  doses out).
+- **Ventilation.** `vaso_ind` loads on a minute grid and covers the hour an
+  episode ends (SICdb 55,580 → 56,953 hours). A HiRID mech_vent window without
+  a level ('-') is not ventilation. MIMIC-III 640 'extubated' rows end
+  ventilation; MIMIC/MIIV 'Standby' is not a mode.
+- **Mappings.** eICU GCS labels (gcs stays 2,123 → 2,248), base deficit (be
+  stays 970 → 1,116), differential percentages only, oxygen flow (rows 9,683 →
+  23,379), charted NIBP, HICL dedupe, IV-only route filters for IV-defined
+  drugs; MIMIC-III blood-gas items, sao2 without pulse-oximetry 834;
+  MIIV 'High flow neb' out of adv_resp, bicarbonate 50803, delirium from the
+  overall CAM-ICU result (stays 1,057 → 698); AUMC IABP intervals (rows 2,118
+  → 2,886), ASB pressure support (stays 1,899 → 2,020), measured PEEP 8879,
+  cardiac output 20955; SICdb inspiratory tidal volume for 2013, manual
+  differentials (stays 214 → 370), heart-rate channels; eICU SOFA-2 motor
+  response labels (stays 1,816 → 2,030).
+- **SICdb perfusor furosemide.** A continuous row's syringe amount is shared
+  over its running hours (furosemide-equivalent rows 3,927 → 8,709; hours above
+  40 mg 205 → 27).
+- **eICU monitor etCO2.** `etco2` reads `vitalperiodic.etco2`; the per-table
+  offset merge no longer loses a source beside an empty one (rows 149 → 3,878,
+  stays < 10 → 116).
+- **MIIV admission type.** `adm` takes the hospital service active at ICU
+  intime (the first service when the stay starts earlier); a service chosen more
+  than a day before the stay or a second ICU stay no longer loses its type
+  (stays 2,440 → 2,999 of 3,000).
+- **Bounds.** Arterial pressures and plateau below 1 mmHg are not measurements.
+
+### Documented, not changed (round 3)
+
+- **MIIV ED labs.** Labs with `hadm_id` NULL drawn in the ED before admission
+  are not attributed to the ICU stay (ricu convention; 10-30% of stays for ~30
+  lab concepts per the audit). Attribution by subject and time needs a loader
+  change on three query paths and is tracked separately.
+- **MIMIC-III prescriptions** are day-resolution (noon); eMAR does not exist.
+- **Lab specimens.** `lact`, `be`, `tco2`, `hbco`, `methb`, `cai` and `o2sat`
+  are not arterial-only concepts; arterial-only variables carry
+  `arterial_specimen_only`.
+- **Charted lab transcriptions** (MIMIC-III crea/hgb/plt/wbc chartevents) stay
+  as a second source; hourly aggregation merges same-hour copies.
+- **SICdb boolean drug infusions** mark the start hour, as boolean drug
+  concepts do in every database.
+- **SICdb pulmonary-artery and temperature artefacts** cannot be separated from
+  physiology by bounds.
+- **eICU dopamine/dobutamine '()' rows** carry no unit and stay unconverted;
+  'mg/kg/min' rows outside bounds are dropped, not relabelled.
+
 ## 2026-11-03 — extraction audit round 2
 
 ### Deliberate changes since v6 (`97f508c6`), confirmed

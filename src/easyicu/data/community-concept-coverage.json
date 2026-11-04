@@ -1,5 +1,5 @@
 {
-  "concept_count": 287,
+  "concept_count": 289,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -1927,8 +1927,10 @@
             "pip"
           ],
           "missing_dependencies": [
-            "plateau_pres",
             "pip"
+          ],
+          "partial_dependencies": [
+            "plateau_pres"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -1939,7 +1941,7 @@
             "peep",
             "pip"
           ],
-          "missing_dependencies": [
+          "partial_dependencies": [
             "plateau_pres"
           ],
           "reason": "some declared dependencies are available; full definition is not",
@@ -1989,9 +1991,11 @@
             "pip"
           ],
           "missing_dependencies": [
-            "plateau_pres",
             "vent_breath_seq",
             "pip"
+          ],
+          "partial_dependencies": [
+            "plateau_pres"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -2003,7 +2007,7 @@
             "vent_breath_seq",
             "pip"
           ],
-          "missing_dependencies": [
+          "partial_dependencies": [
             "plateau_pres"
           ],
           "reason": "some declared dependencies are available; full definition is not",
@@ -2577,11 +2581,13 @@
         "jinhua": {
           "dependencies": [
             "total_input_ml",
-            "urine"
+            "urine",
+            "other_output_ml"
           ],
           "missing_dependencies": [
             "total_input_ml",
-            "urine"
+            "urine",
+            "other_output_ml"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -2589,11 +2595,13 @@
         "nwicu": {
           "dependencies": [
             "total_input_ml",
-            "urine"
+            "urine",
+            "other_output_ml"
           ],
           "missing_dependencies": [
             "total_input_ml",
-            "urine"
+            "urine",
+            "other_output_ml"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -2601,10 +2609,12 @@
         "zhejiang_eicu": {
           "dependencies": [
             "total_input_ml",
-            "urine"
+            "urine",
+            "other_output_ml"
           ],
           "missing_dependencies": [
-            "total_input_ml"
+            "total_input_ml",
+            "other_output_ml"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -2612,16 +2622,18 @@
         "zigong": {
           "dependencies": [
             "total_input_ml",
-            "urine"
+            "urine",
+            "other_output_ml"
           ],
           "missing_dependencies": [
-            "total_input_ml"
+            "total_input_ml",
+            "other_output_ml"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
         }
       },
-      "description": "hourly fluid balance (total_input_ml - urine); emitted only for stays with recorded intake, so a stay without intake capture never becomes -urine. HiRID: hourly input minus total output from its daily counters."
+      "description": "hourly fluid balance (total_input_ml - urine - other_output_ml); emitted only for stays with recorded intake, so a stay without intake capture never becomes -urine. Non-urine output covers drains, gastric/enteral tube output, stool, ostomy, emesis, wound drainage and taps; RRT fluid removal is not subtracted (stratify or adjust for RRT). HiRID: hourly input minus total output from its daily counters."
     },
     "fluid_balance_cumulative": {
       "category": "output",
@@ -5042,6 +5054,28 @@
       },
       "description": "serum osmolality, measured"
     },
+    "other_output_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "hourly non-urine fluid output (mL): surgical/chest/CSF drains, gastric and enteral tube output, stool, ostomy, emesis, wound drainage, paracentesis/thoracentesis and charted ICU blood loss. Not included: urine (its own concept), RRT/ultrafiltrate removal (gross ultrafiltrate and net removal are charted differently and replacement fluid is not in total_input_ml), tube-feed residual, and OR/PACU/pre-admission/cath-lab output (excluded from total_input_ml as well). Input for fluid_balance."
+    },
     "other_vaso": {
       "category": "cardiovascular",
       "databases": {
@@ -5581,6 +5615,65 @@
       "category": "ventilator",
       "databases": {
         "jinhua": {
+          "dependencies": [
+            "plateau_pres_raw",
+            "pip",
+            "peep"
+          ],
+          "missing_dependencies": [
+            "plateau_pres_raw",
+            "pip",
+            "peep"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "plateau_pres_raw",
+            "pip",
+            "peep"
+          ],
+          "missing_dependencies": [
+            "plateau_pres_raw",
+            "pip"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "plateau_pres_raw",
+            "pip",
+            "peep"
+          ],
+          "missing_dependencies": [
+            "plateau_pres_raw"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zigong": {
+          "dependencies": [
+            "plateau_pres_raw",
+            "pip",
+            "peep"
+          ],
+          "missing_dependencies": [
+            "plateau_pres_raw",
+            "pip",
+            "peep"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Plateau Pressure"
+    },
+    "plateau_pres_raw": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
           "reason": "no validated native field/event in this release",
           "status": "unavailable"
         },
@@ -5597,7 +5690,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Plateau Pressure"
+      "description": "Plateau Pressure as charted (before the PIP/PEEP consistency check)"
     },
     "platelets": {
       "category": "medications",
@@ -8251,7 +8344,7 @@
           "status": "unavailable"
         }
       },
-      "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses intakeoutput IV-fluid events and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III include enteral/PO feeds; AUMC is IV only; pre-admission, cath-lab, OR, PACU and ED intake is excluded for MIIV, MIMIC-III MetaVision and CareVue), so per-database intake capture requires stratified sensitivity analysis."
+      "description": "total fluid input volume in each ICU-anchored hour (mL) — MIIV/MIMIC-III MetaVision interval amounts and AUMC IV drugitems fluid totals are overlap-allocated with exact volume conservation; MIMIC-III CareVue amounts are booked at charttime; HiRID uses increments of the daily input counter 30005010; eICU uses every intakeoutput Intake (ml) entry and SIC uses native DataID 2200 FluidPerHour. Scope differs by database (MIIV/MIMIC-III/eICU include enteral/PO feeds; AUMC is IV only; pre-admission, cath-lab, OR, PACU and ED intake is excluded for MIIV, MIMIC-III MetaVision and CareVue), so per-database intake capture requires stratified sensitivity analysis."
     },
     "total_protein": {
       "category": "chemistry",
@@ -9012,25 +9105,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 24,
-      "unavailable": 109
+      "unavailable": 111
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
-      "partial": 26,
-      "unavailable": 105
+      "partial": 27,
+      "unavailable": 106
     },
     "zhejiang_eicu": {
       "derived": 25,
       "direct": 128,
-      "partial": 22,
-      "unavailable": 112
+      "partial": 23,
+      "unavailable": 113
     },
     "zigong": {
       "derived": 19,
       "direct": 125,
       "partial": 33,
-      "unavailable": 110
+      "unavailable": 112
     }
   },
   "databases": [
