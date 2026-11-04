@@ -4,6 +4,47 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — extraction audit round 5 (eighth dictionary reseal)
+
+The round-5 audit of cd2bae05d is fixed in eight lanes; the per-cluster
+receipt is `outputs/extraction_audit_r5_receipt_20261104.md`. The loader and
+HiRID lanes keep their detailed sections below. The other lanes:
+
+- **Urine chain.** KDIGO collection intervals are clipped to the exact
+  evaluation window. `uo_6h/12h/24h` divide by the hours actually covered
+  and publish `*_covered_h` and `*_partial_window`. `urine24` is the full
+  daily volume; an 18 to under 24 h estimate goes to the separate, flagged
+  `urine24_est` (SOFA-1 keeps its fallback). `urine24_covered_h`,
+  `urine24_observed_ml` and `*_available_at` report coverage and when the
+  source records became available. HiRID urine follows its rate branch with
+  gap segmentation. These companions are hidden from Planner menus.
+- **eICU.** I/O rows are deduplicated before projection and hourly
+  aggregation on every path. Systemic volumes are kept apart from
+  cumulative and irrigation channels. Specimen, height, infection, device,
+  route, concentration and NIV handling are corrected, and FiO2 channels
+  stay independent.
+- **AUMC.** Source timestamps are kept until half-open hourly expansion,
+  and bag amounts are conserved. Actual-pH calcium is separate from
+  `cai_ph74`. Tidal-volume units, ScvO2, FiO2, ECMO, PEEP and RRT evidence
+  are corrected. D-dimer stays unmapped because no FEU/DDU basis is
+  documented.
+- **SICdb.** Intervals, rates and diuretic amounts are aligned to
+  right-open hours. Pressure units are corrected before bounds.
+  `cvp_raw`/`cvp_qc` and `minute_vol_raw`/`minute_vol_qc` are published,
+  and an opioid-only ventilation sensitivity column is kept apart. The
+  legacy mass-rate and `sofa_score` APIs delegate to the current owners.
+- **MIMIC dictionary.** ECMO requires positive evidence, and antibacterial
+  exposure must be systemic. MIIV laboratory priority applies. CareVue
+  vasoactive support is expanded and BiPAP/CPAP devices are added. SOFA-2
+  `vaso_ind` takes `other_vaso` as boolean support, for MIMIC-III only.
+  Fentanyl weight indexing fails closed. HbCO units are corrected.
+- **Bounds.** Nine concepts publish `*_raw`/`*_qc` siblings through the
+  opt-in `bounds_audit` module. Public bounds, units, specimens and source
+  priorities are unchanged.
+- **Resolver.** A sub-concept cached on its parent's grid no longer answers
+  a request on another grid. Before this fix the result depended on request
+  order.
+
 ## 2026-11-04 — extraction audit round 5, MIMIC loader lane
 
 Synthetic regressions only; real-data coverage and export deltas have not
@@ -100,11 +141,10 @@ Round-5 secondary registrations do not establish clinical validity:
   active effort require special caution; controlled passive measurements
   still need an adequate inspiratory hold. No clinical revalidation was run.
 - **[026]** Descriptive urine half-window coverage is distinct from a fully
-  assessable SOFA-2 evaluation window. Coverage-column publication and the
-  HiRID urine strategy belong to lane u5; this lane changes neither.
-- **[029]** The legacy `easyicu.callbacks.sofa_score` forward-fill contract
-  needs a separate cross-database API migration. This lane uses the current
-  resolver and does not claim the legacy path is repaired.
+  assessable SOFA-2 evaluation window. Coverage columns and the HiRID urine
+  strategy are described under the urine chain above.
+- **[029]** The legacy `easyicu.callbacks.sofa_score` now delegates to the
+  current SOFA owner (SICdb lane, above).
 - **[022/024/027/028/030/031/032]** Reference-only zero-event IDs, P/F
   metadata, platelet/ICP/respiratory/neutrophil candidates and insulin timing
   notes are registered without remapping or a scientific-status change.
