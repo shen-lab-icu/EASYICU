@@ -325,8 +325,8 @@ def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
     )
     result = loaded["rrt"].data.sort_values("charttime").reset_index(drop=True)
 
-    assert result["charttime"].tolist() == [2.0, 4.0, 5.0, 6.0]
-    assert result["rrt"].tolist() == [True, True, True, True]
+    assert result["charttime"].tolist() == [2.0, 4.0, 5.0]
+    assert result["rrt"].tolist() == [True, True, True]
 
 
 def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
@@ -369,7 +369,7 @@ def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
     )
 
     observed = result.loc[result["mech_vent"].notna(), "charttime"].tolist()
-    assert observed == [2.0, 3.0, 4.0, 5.0, 6.0]
+    assert observed == [2.0, 3.0, 5.0]
 
 
 def _merge_mech_vent(frame: pd.DataFrame, database: str, dur_unit: str = "hours"):
@@ -411,7 +411,7 @@ def test_window_without_end_column_expands_over_its_hours_duration() -> None:
             "mech_vent": ["invasive", "noninvasive"],
         }
     )
-    assert _merge_mech_vent(frame, "sic") == [2.0, 3.0, 4.0, 5.0, 6.0]
+    assert _merge_mech_vent(frame, "sic") == [2.0, 3.0, 5.0]
 
 
 def test_miiv_mech_vent_window_end_keeps_its_merge_contract() -> None:
@@ -426,11 +426,11 @@ def test_miiv_mech_vent_window_end_keeps_its_merge_contract() -> None:
             "mech_vent": ["invasive"],
         }
     )
-    assert _merge_mech_vent(frame, "miiv") == [2.0, 3.0, 4.0]
+    assert _merge_mech_vent(frame, "miiv") == [2.0, 3.0]
 
 
-def test_unrelated_wintbl_keeps_historical_sparse_merge_contract() -> None:
-    """An IMV repair must not expand unrelated window concepts."""
+def test_rrt_wintbl_merge_uses_declared_hours_duration() -> None:
+    """Declared elapsed hours win over a redundant absolute source endpoint."""
 
     treatment = WinTbl(
         data=pd.DataFrame(
@@ -462,7 +462,7 @@ def test_unrelated_wintbl_keeps_historical_sparse_merge_contract() -> None:
     )
 
     observed = result.loc[result["rrt"].notna(), "charttime"].tolist()
-    assert observed == [2.0]
+    assert observed == [2.0, 3.0]
 
 
 def test_true_window_concept_preserves_duration_unit_during_alignment() -> None:
@@ -579,7 +579,7 @@ def test_interval_expansion_enforces_its_declared_span_cap() -> None:
         max_span_hours=2,
     )
 
-    assert result["time"].tolist() == [0.0, 1.0, 2.0]
+    assert result["time"].tolist() == [0.0, 1.0]
 
 
 def test_eicu_rrt_coalesces_treatment_and_intake_output_offsets() -> None:

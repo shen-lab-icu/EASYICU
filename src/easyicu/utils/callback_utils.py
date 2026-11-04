@@ -476,6 +476,7 @@ def distribute_volume_hourly(
     numeric_time_unit: str = "hours",
     output_time_unit: str = "relative_hours",
     row_chunk_size: int = 100_000,
+    aggregate: bool = True,
 ) -> pd.DataFrame:
     """Allocate an interval's total volume exactly across ICU-hour bins.
 
@@ -492,6 +493,9 @@ def distribute_volume_hourly(
     ``absolute_minutes`` output exists for AUMC: the generic alignment layer
     still needs the source's absolute-minute clock in order to subtract
     ``admittedat`` exactly once.
+
+    ``aggregate=False`` preserves separate dose records through allocation so
+    source-level plausibility bounds can precede the final hourly dose sum.
     """
 
     if val_col not in data.columns or index_col not in data.columns:
@@ -593,6 +597,8 @@ def distribute_volume_hourly(
     def _reduce_pieces(pieces: List[pd.DataFrame]) -> pd.DataFrame:
         if len(pieces) == 1:
             return pieces[0]
+        if not aggregate:
+            return pd.concat(pieces, ignore_index=True)
         return (
             pd.concat(pieces, ignore_index=True)
             .groupby([id_col, index_col], as_index=False, sort=False)[val_col]
@@ -651,6 +657,8 @@ def distribute_volume_hourly(
             }
         )
         piece = piece[np.isfinite(piece[val_col])]
+        if not aggregate:
+            return piece.reset_index(drop=True)
         return (
             piece.groupby([id_col, index_col], as_index=False, sort=False)[val_col]
             .sum(min_count=1)
@@ -758,145 +766,48 @@ def fwd_concept(concept_name: str) -> Callable:
     
     return _fwd_callback
 
-def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
-    """Last observation carried forward (R ricu locf).
-    
-    Creates a callback that performs forward filling of missing values,
-    optionally limiting the maximum gap to fill.
-    
-    Args:
-        max_gap: Maximum time gap to fill (None = unlimited)
-        
-    Returns:
-        Callback function
-        
-    Examples:
-        >>> # Fill gaps up to 4 hours
-        >>> cb = locf(max_gap=pd.Timedelta(hours=4))
-        >>> result = cb(data, index_col='time', val_col='hr')
-    """
-    def _locf_callback(
-        data: pd.DataFrame,
-        val_col: str = 'value',
-        index_col: Optional[str] = None,
-        id_cols: Optional[list] = None,
-        **kwargs
-    ) -> pd.DataFrame:
-        """Apply last observation carried forward.
-        
-        Args:
-            data: Input DataFrame
-            val_col: Value column to fill
-            index_col: Time index column (for gap checking)
-            id_cols: ID columns for grouping
-            **kwargs: Additional arguments
-            
-        Returns:
-            DataFrame with forward filled values
-        """
-        data = data.copy()
-        
+def _carry_callback_values(data, val_col, index_col, id_cols, max_gap, direction):
+    """Fill within a stay, measuring age from an original observed value."""
+    data = data.copy()
+    if max_gap is not None and index_col is not None:
+        data = data.sort_values(list(id_cols or []) + [index_col], kind="stable").reset_index(drop=True)
+    grouped = data.groupby(id_cols, sort=False, dropna=False) if id_cols else data
+    filled = getattr(grouped[val_col], direction)()
+    if max_gap is not None and index_col is not None:
+        observed_time = data[index_col].where(data[val_col].notna())
         if id_cols:
-            # Group by IDs and fill within each group
-            def fill_group(group):
-                if max_gap is not None and index_col is not None:
-                    # Fill only within max_gap
-                    group = group.sort_values(index_col)
-                    time_diff = group[index_col].diff()
-                    
-                    # Create mask for fillable positions
-                    can_fill = time_diff <= max_gap
-                    
-                    # Forward fill with limit
-                    filled = group[val_col].ffill()
-                    group[val_col] = group[val_col].where(can_fill, filled)
-                else:
-                    # Simple forward fill
-                    group[val_col] = group[val_col].ffill()
-                
-                return group
-            
-            # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
-            # Re-add group columns after apply.
-            _grp_backup = data[id_cols].copy()
-            data = data.groupby(id_cols).apply(fill_group).reset_index(drop=True)
-            for _gc in id_cols:
-                if _gc not in data.columns:
-                    data[_gc] = _grp_backup[_gc].values
-        else:
-            # Simple forward fill
-            data[val_col] = data[val_col].ffill()
-        
-        return data
-    
+            observed_time = observed_time.groupby(
+                [data[c] for c in id_cols], sort=False, dropna=False,
+            )
+        nearest_time = getattr(observed_time, direction)()
+        can_fill = (data[index_col] - nearest_time).abs() <= max_gap
+        filled = filled.where(can_fill)
+    data[val_col] = data[val_col].where(data[val_col].notna(), filled)
+    return data
+
+
+def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
+    """Carry the last observation forward, at most max_gap from its source.
+
+    Supply index_col to enforce the optional elapsed-time bound. The endpoint
+    is inclusive; missing intermediate rows never refresh the observation age.
+    None retains the historical unlimited callback behavior.
+    """
+    def _locf_callback(data, val_col='value', index_col=None, id_cols=None, **kwargs):
+        return _carry_callback_values(data, val_col, index_col, id_cols, max_gap, "ffill")
+
     return _locf_callback
 
+
 def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
-    """Last observation carried backward (R ricu locb).
-    
-    Creates a callback that performs backward filling of missing values,
-    optionally limiting the maximum gap to fill.
-    
-    Args:
-        max_gap: Maximum time gap to fill (None = unlimited)
-        
-    Returns:
-        Callback function
+    """Carry the next observation backward within max_gap of its source.
+
+    Supply index_col for an elapsed-time bound, inclusive at max_gap. Missing
+    intermediate rows never refresh the observation age. None is unlimited.
     """
-    def _locb_callback(
-        data: pd.DataFrame,
-        val_col: str = 'value',
-        index_col: Optional[str] = None,
-        id_cols: Optional[list] = None,
-        **kwargs
-    ) -> pd.DataFrame:
-        """Apply last observation carried backward.
-        
-        Args:
-            data: Input DataFrame
-            val_col: Value column to fill
-            index_col: Time index column (for gap checking)
-            id_cols: ID columns for grouping
-            **kwargs: Additional arguments
-            
-        Returns:
-            DataFrame with backward filled values
-        """
-        data = data.copy()
-        
-        if id_cols:
-            # Group by IDs and fill within each group
-            def fill_group(group):
-                if max_gap is not None and index_col is not None:
-                    # Fill only within max_gap
-                    group = group.sort_values(index_col)
-                    time_diff = group[index_col].diff(-1).abs()
-                    
-                    # Create mask for fillable positions
-                    can_fill = time_diff <= max_gap
-                    
-                    # Backward fill with limit
-                    filled = group[val_col].bfill()
-                    group[val_col] = group[val_col].where(can_fill, filled)
-                else:
-                    # Simple backward fill
-                    group[val_col] = group[val_col].bfill()
-                
-                return group
-            
-            # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
-            # Re-add group columns after apply.
-            _grp_backup = data[id_cols].copy()
-            data = data.groupby(id_cols).apply(fill_group).reset_index(drop=True)
-            for _gc in id_cols:
-                if _gc not in data.columns:
-                    data[_gc] = _grp_backup[_gc].values
-        else:
-            # Simple backward fill
-            data[val_col] = data[val_col].bfill()
-        
-        return data
-    
+    def _locb_callback(data, val_col='value', index_col=None, id_cols=None, **kwargs):
+        return _carry_callback_values(data, val_col, index_col, id_cols, max_gap, "bfill")
+
     return _locb_callback
 
 def vent_flag(
@@ -961,156 +872,42 @@ def vent_flag(
     return frame
 
 def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
-    """Infer eICU infusion episodes from charted point sequences.
+    """Infer positive observed spans on the exact source clock.
 
-    Consecutive points no more than ``gap_length`` apart belong to the same
-    episode.  A single point establishes that an infusion was charted, but it
-    does *not* establish how long the infusion ran; singleton durations are
-    therefore returned as missing rather than as a false zero-hour exposure.
+    A zero or missing rate closes a preceding positive span, never starts one.
+    Gaps over the explicit limit break episodes; a final positive singleton
+    remains unknown duration. Offsets are source minutes, durations are hours.
     """
-    from ..io.ts_utils import group_measurements
+    gap_hours = pd.Timedelta(gap_length).total_seconds() / 3600.
 
-    if not isinstance(gap_length, pd.Timedelta):
-        gap_length = pd.to_timedelta(gap_length)
-
-    def _callback(
-        data: pd.DataFrame,
-        val_col: str = "value",
-        index_var: Optional[str] = None,
-        id_cols: Optional[list] = None,
-        group_col: str = "__grp",
-        **kwargs,
-    ) -> pd.DataFrame:
+    def _callback(data, val_col="value", index_var=None, id_cols=None,
+                  group_col="__grp", **kwargs):
+        ids = list(id_cols or [c for c in ("patientunitstayid", "stay_id", "icustay_id") if c in data])
+        index = index_var or next(c for c in data if "offset" in c or "time" in c)
+        columns = [*ids, index, val_col]
         if data.empty:
-            return data.copy()
-
-        frame = data.copy()
-
-        if id_cols is None or not id_cols:
-            # Find ID columns, but for eICU, prioritize patient-level IDs
-            # Check for patientunitstayid first (eICU specific)
-            if "patientunitstayid" in frame.columns:
-                id_cols = ["patientunitstayid"]
-            else:
-                # Fall back to general ID column search
-                id_cols = [col for col in frame.columns if "id" in col.lower()]
-
-        # For eICU infusion data, if no ID columns exist, create a dummy one
-        # This allows the callback to work even when ID columns were filtered out
-        if not any(col in frame.columns for col in id_cols) and not frame.empty:
-            import logging
-            logging.debug(f"No ID columns found in eICU duration callback. Available columns: {list(frame.columns)}. Creating dummy grouping for duration calculation.")
-            # Use a constant group ID for all rows (treat as single patient/time series)
-            frame["__dummy_patient_id"] = 1
-            id_cols = ["__dummy_patient_id"]
-
-        if index_var is None or index_var not in frame.columns:
-            # eICU uses 'offset' columns, other databases use 'time' columns
-            time_cols = [col for col in frame.columns if "time" in col.lower() or "offset" in col.lower()]
-            if not time_cols:
-                raise ValueError("Cannot determine time column for eICU duration callback")
-            index_var = time_cols[0]
-
-        # Handle numeric offset vs datetime properly
-        is_offset = 'offset' in index_var.lower()
-        if is_offset:
-            # eICU offset is numeric (minutes from ICU admission)
-            frame[index_var] = pd.to_numeric(frame[index_var], errors="coerce")
-            frame = frame.dropna(subset=[index_var])
-            
-            if frame.empty:
-                return frame
-            
-            # CRITICAL: R ricu converts minutes to hours BEFORE grouping.
-            # floor(offset/60) → hour-level, then groups on unique hours.
-            # This affects gap detection: e.g., 310min gap < 5h (strict >) stays together,
-            # but at minute-level 310 > 300 would split incorrectly.
-            frame['_hour'] = (frame[index_var] // 60).astype(int)
-            # Keep original offset for min tracking
-            frame['_orig_offset'] = frame[index_var]
-            # Deduplicate per (patient, hour) — keep first occurrence per hour
-            dedup_cols = [c for c in id_cols if c in frame.columns] + ['_hour']
-            frame = frame.drop_duplicates(subset=dedup_cols, keep='first')
-            
-            # For group_measurements, convert HOURS to datetime (so gap unit matches hours)
-            base_time = pd.Timestamp('2000-01-01')
-            frame['__temp_time'] = base_time + pd.to_timedelta(frame['_hour'], unit='h')
-            temp_index_var = '__temp_time'
-        else:
-            # Other databases use datetime
-            frame[index_var] = pd.to_datetime(frame[index_var], errors="coerce")
-            frame = frame.dropna(subset=[index_var])
-            
-            if frame.empty:
-                return frame
-            
-            temp_index_var = index_var
-
-        # Add group column using group_measurements
-        grouped = group_measurements(
-            frame,
-            id_cols=id_cols,
-            index_col=temp_index_var,
-            max_gap=gap_length,
-            group_col=group_col,
+            return pd.DataFrame(columns=columns)
+        work = data.copy()
+        numeric = pd.api.types.is_numeric_dtype(work[index])
+        work["__time"] = (pd.to_numeric(work[index], errors="coerce") / 60. if numeric
+                          else pd.to_datetime(work[index]).astype("int64") / 3.6e12)
+        work["__positive"] = pd.to_numeric(work[val_col], errors="coerce").gt(0)
+        keys = ids + (["drugname"] if "drugname" in work else [])
+        work = work.dropna(subset=["__time"]).sort_values(keys + ["__time"], kind="stable")
+        group = work.groupby(keys, dropna=False, sort=False)
+        nxt = group["__time"].shift(-1)
+        gap = nxt - work.__time
+        previous_positive = group["__positive"].shift().fillna(False)
+        previous_time = group["__time"].shift()
+        new = ~previous_positive | work.__time.sub(previous_time).gt(gap_hours)
+        work[group_col] = new.groupby([work[c] for c in keys], dropna=False).cumsum()
+        work["__end"] = nxt.where(gap.gt(0) & gap.le(gap_hours))
+        positive = work.loc[work.__positive]
+        out = positive.groupby(keys + [group_col], as_index=False, dropna=False).agg(
+            **{index: (index, "min"), "__start": ("__time", "min"), "__stop": ("__end", "max")},
         )
-        
-        # If we used temporary time column, drop it now but keep original index_var
-        if is_offset:
-            grouped = grouped.drop(columns=['__temp_time'], errors='ignore')
-
-        # Calculate duration per group (R calc_dur logic)
-        # Following R ricu's calc_dur implementation
-        # Simplify to match R ricu exactly
-        
-        # Make sure all ID columns actually exist in grouped dataframe
-        valid_id_cols = [col for col in id_cols if col in grouped.columns]
-        
-        if not valid_id_cols:
-            import logging
-            logging.warning(f"No valid ID columns found in grouped data. Available columns: {list(grouped.columns)}")
-            # Return empty with correct structure
-            return pd.DataFrame(columns=list(id_cols) + [index_var, val_col])
-
-        groupby_cols = valid_id_cols + [group_col]
-        
-        # R ricu: res <- x[, list(min(min_var), max(max_var)), by = c(id_vars, grp_var)]
-        result = grouped.groupby(groupby_cols, dropna=False).agg(
-            min_time=(index_var, 'min'),
-            max_time=(index_var, 'max'),
-            observation_count=(index_var, 'size'),
-        ).reset_index()
-        
-        # R ricu: res <- res[, c(val_var) := get(val_var) - get(index_var)]
-        # Calculate duration: max - min
-        if is_offset:
-            # eICU: use _hour for duration (integer hour difference, matching R ricu)
-            # R does: floor(max_offset/60) - floor(min_offset/60)
-            result_hr = grouped.groupby(groupby_cols, dropna=False).agg(
-                min_hour=('_hour', 'min'),
-                max_hour=('_hour', 'max'),
-            ).reset_index()
-            result[val_col] = result_hr['max_hour'] - result_hr['min_hour']
-            result[val_col] = result[val_col].astype(float)
-        else:
-            # Other databases: datetime difference gives timedelta, convert to hours
-            result[val_col] = (result['max_time'] - result['min_time']).dt.total_seconds() / 3600.0
-
-        # A singleton has no observed end boundary.  Encoding it as 0 h makes
-        # unknown duration indistinguishable from a known zero-length exposure
-        # and can make the point qualify downstream as real vasopressor time.
-        result.loc[result['observation_count'] < 2, val_col] = np.nan
-        
-        # Use min_time as the index_var value for this duration
-        result[index_var] = result['min_time']
-        
-        # Return columns: id_vars + index_var + val_var (drop group_col)
-        # R ricu returns: id_vars, grp_var, index_var, val_var
-        # But for duration concepts, we typically don't need grp_var in final output
-        final_cols = valid_id_cols + [index_var, val_col]
-        result = result[final_cols]
-        
-        return result
+        out[val_col] = out.__stop - out.__start
+        return out[columns]
 
     return _callback
 
@@ -3302,6 +3099,30 @@ def units_to_unit(x: pd.Timedelta) -> str:
 
     return unit_map.get(resolution, 'hour')
 
+def _eicu_expand_rate_hours(frame, id_col, time_col, concept_name):
+    """Quantize after building exact step intervals, capped at six hours.
+
+    The final observation retains the established one-hour overhang. Explicit
+    zero or missing rates terminate earlier settings before hourly pooling,
+    so a stop halfway through an hour cannot erase its positive first half.
+    """
+    from ..concept.window_expansion import expand_wintbl_vectorized
+
+    work = frame[[id_col, time_col, concept_name]].copy()
+    work[time_col] = pd.to_numeric(work[time_col], errors="coerce") / 60.
+    work = work.dropna(subset=[time_col]).sort_values([id_col, time_col], kind="stable")
+    work = work.drop_duplicates([id_col, time_col], keep="last")
+    nxt = work.groupby(id_col)[time_col].shift(-1)
+    work["__duration"] = (nxt - work[time_col]).fillna(1.).clip(upper=6.)
+    work = work.dropna(subset=[concept_name])
+    out = expand_wintbl_vectorized(
+        work, idx_col=time_col, dur_col="__duration", id_cols=[id_col],
+        value_columns=[concept_name], interval_hours=1.,
+    )
+    out[time_col] *= 60.
+    return out.groupby([id_col, time_col], as_index=False)[concept_name].max()
+
+
 def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
     """eICU dose rate conversion with weight normalization (R ricu eicu_rate_kg).
     
@@ -3472,97 +3293,13 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         if id_col is None:
             return frame
         
-        # Remove rows with NaN concept values (already converted)
-        frame = frame[frame[concept_name].notna()].copy()
+        # Missing settings remain boundaries until exact spans are built.
         
         if len(frame) == 0:
             result_cols = [id_col, time_col, concept_name]
             return pd.DataFrame(columns=result_cols)
         
-        # R ricu expand_intervals logic for eICU:
-        # 1. Convert minutes to hours (floor division)
-        # 2. Aggregate by hour (take max if multiple values)
-        # 3. Create intervals: diff = min(next_hour - current_hour, max_len) - interval
-        # 4. Expand each record to [current_hour, current_hour + diff]
-        
-        # Step 0: Sort by time so groupby.agg('last') picks the chronologically last record
-        frame = frame.sort_values([id_col, time_col]).reset_index(drop=True)
-        
-        # Step 1: Convert to hours
-        frame['_hour'] = (frame[time_col] // 60).astype(int)
-        
-        # Step 2: Aggregate by patient and hour
-        # CRITICAL: R ricu uses 'last' (chronological order), not 'max'.
-        # When infusion stops, a rate=0 record is written. Using 'max' would
-        # incorrectly keep the pre-stop rate, while 'last' correctly picks up 0.
-        hourly = frame.groupby([id_col, '_hour'], as_index=False).agg({
-            concept_name: 'last'
-        })
-        hourly = hourly.sort_values([id_col, '_hour'])
-        
-        # Step 3: Create intervals using R ricu's create_intervals logic
-        # R: endtime = padded_diff(hour, overhang=1)  # diff to next, or 1 for last
-        # R: endtime = trunc(endtime, 0, max_len=6) - interval=1
-        # R: endtime = hour + endtime
-        overhang = 1  # hours
-        max_len = 6   # hours  
-        interval = 1  # hours (time step)
-        
-        def create_intervals_r(group):
-            group = group.copy()
-            # padded_diff: next - current, or overhang for last
-            group['_diff'] = group['_hour'].shift(-1) - group['_hour']
-            group.loc[group['_diff'].isna(), '_diff'] = overhang
-            # trunc to max_len
-            group['_diff'] = group['_diff'].clip(upper=max_len)
-            # subtract interval (key step to avoid overlap!)
-            group['_diff'] = group['_diff'] - interval
-            # Calculate end hour
-            group['_end_hour'] = group['_hour'] + group['_diff']
-            return group
-        
-        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
-        # Use vectorized groupby().shift() instead.
-        hourly = hourly.copy()
-        hourly['_diff'] = hourly.groupby(id_col)['_hour'].shift(-1) - hourly['_hour']
-        hourly.loc[hourly['_diff'].isna(), '_diff'] = overhang
-        hourly['_diff'] = hourly['_diff'].clip(upper=max_len)
-        hourly['_diff'] = hourly['_diff'] - interval
-        hourly['_end_hour'] = hourly['_hour'] + hourly['_diff']
-        
-        # Step 4: Vectorized expand using numpy repeat + arange
-        start_hours = hourly['_hour'].values.astype(int)
-        end_hours = hourly['_end_hour'].values.astype(int)
-        n_points = np.maximum(end_hours - start_hours + 1, 1)
-        total_points = n_points.sum()
-        
-        if total_points > 0:
-            # Repeat each row's patient_id and value n_points times
-            patient_ids_exp = np.repeat(hourly[id_col].values, n_points)
-            values_exp = np.repeat(hourly[concept_name].values, n_points)
-            # Generate time points (in minutes for eICU _align_time_to_admission)
-            time_points = np.concatenate([
-                np.arange(s, s + n) * 60
-                for s, n in zip(start_hours, n_points)
-            ])
-            expanded = pd.DataFrame({
-                id_col: patient_ids_exp,
-                time_col: time_points,
-                concept_name: values_exp,
-            })
-        
-        # If multiple values at same hour (from overlapping intervals), take max
-        # R ricu default aggregation for rate concepts is 'max'
-        expanded = expanded.groupby([id_col, time_col], as_index=False).agg({
-            concept_name: 'max'
-        })
-        
-        # Sort final result
-        expanded = expanded.sort_values([id_col, time_col]).reset_index(drop=True)
-        
-        # R5-EICU-026: interval expansion already caps support at six hours.
-        # An extra grid-wide LOCF would revive rates after that limit.
-        return expanded
+        return _eicu_expand_rate_hours(frame, id_col, time_col, concept_name)
     
     return callback
 
@@ -3862,56 +3599,11 @@ def eicu_rate_mass_callback(target_unit: str, mg_label_mcg_above: Optional[float
         if id_col is None:
             return frame
 
-        # Drop rows with NaN concept value (incompatible units filtered out)
-        frame = frame[frame[concept_name].notna()].copy()
+        # Missing settings remain boundaries until exact spans are built.
         if len(frame) == 0:
             return pd.DataFrame(columns=[id_col, time_col, concept_name])
 
-        # R ricu-compatible interval expansion — identical to eicu_rate_kg
-        frame = frame.sort_values([id_col, time_col]).reset_index(drop=True)
-        frame["_hour"] = (frame[time_col] // 60).astype(int)
-        hourly = frame.groupby([id_col, "_hour"], as_index=False).agg(
-            {concept_name: "last"}
-        )
-        hourly = hourly.sort_values([id_col, "_hour"])
-
-        overhang = 1
-        max_len = 6
-        interval = 1
-
-        hourly = hourly.copy()
-        hourly["_diff"] = hourly.groupby(id_col)["_hour"].shift(-1) - hourly["_hour"]
-        hourly.loc[hourly["_diff"].isna(), "_diff"] = overhang
-        hourly["_diff"] = hourly["_diff"].clip(upper=max_len)
-        hourly["_diff"] = hourly["_diff"] - interval
-        hourly["_end_hour"] = hourly["_hour"] + hourly["_diff"]
-
-        start_hours = hourly["_hour"].values.astype(int)
-        end_hours = hourly["_end_hour"].values.astype(int)
-        n_points = np.maximum(end_hours - start_hours + 1, 1)
-        total_points = n_points.sum()
-
-        if total_points == 0:
-            return pd.DataFrame(columns=[id_col, time_col, concept_name])
-
-        patient_ids_exp = np.repeat(hourly[id_col].values, n_points)
-        values_exp = np.repeat(hourly[concept_name].values, n_points)
-        time_points = np.concatenate([
-            np.arange(s, s + n) * 60
-            for s, n in zip(start_hours, n_points)
-        ])
-        expanded = pd.DataFrame({
-            id_col: patient_ids_exp,
-            time_col: time_points,
-            concept_name: values_exp,
-        })
-        expanded = expanded.groupby([id_col, time_col], as_index=False).agg(
-            {concept_name: "max"}
-        )
-        expanded = expanded.sort_values([id_col, time_col]).reset_index(drop=True)
-
-        # R5-EICU-026: retain gaps outside the bounded raw-rate intervals.
-        return expanded
+        return _eicu_expand_rate_hours(frame, id_col, time_col, concept_name)
 
     return callback
 

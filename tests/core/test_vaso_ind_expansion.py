@@ -1,4 +1,4 @@
-"""vaso_ind covers seq(start, start + duration) for every episode.
+"""vaso_ind covers positive overlaps with [start, start + duration).
 
 2026-11-03 extraction audit round 2 (R2-02): the ricu-style expansion used
 the duration as the end time, so an episode starting at hour 10 that lasted
@@ -30,5 +30,5 @@ def test_late_short_episodes_cover_their_own_hours():
     out = _callback_vaso_ind(tables, ctx).data
 
     hours = {k: sorted(g["charttime"].tolist()) for k, g in out.groupby("stay_id")}
-    assert hours == {1: [10.0, 11.0, 12.0, 13.0], 2: [0.0], 3: [5.0, 6.0, 7.0]}
+    assert hours == {1: [10.0, 11.0, 12.0], 3: [5.0, 6.0]}
     assert out["vaso_ind"].all()

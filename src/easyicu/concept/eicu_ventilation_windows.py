@@ -193,11 +193,22 @@ def cut_hours_at_barriers(hours, point_hours, intervals, data_source, stays, id_
     anchors["_active"] = anchors._level.eq("invasive")
     events = pd.concat([starts, anchors[["_id", "_t", "_active"]]], ignore_index=True)
     events = events.sort_values(["_t", "_active"], ascending=[True, False]).drop_duplicates(["_id", "_t"], keep="last")
-    target = hours.rename(columns={id_column: "_id", "hour": "_h"}).sort_values("_h")
-    target["_t"] = (target._h.astype(float) + 1) * 60
-    events["_t"] = events._t.astype(float)
-    joined = pd.merge_asof(target, events, by="_id", on="_t", direction="backward", allow_exact_matches=False)
-    return joined.loc[joined._active.eq(True), ["_id", "_h"]].rename(columns={"_id": id_column, "_h": "hour"})  # noqa: E712
+    # Keep an hour if ANY active segment intersects it. The state just before
+    # the hour's end loses legitimate support before a within-hour stop.
+    from .window_expansion import expand_wintbl_vectorized
+
+    events = events.sort_values(["_id", "_t"], kind="stable")
+    end = events.groupby("_id")._t.shift(-1)
+    last = (hours.groupby(id_column).hour.max() + 1) * 60
+    end = end.fillna(events._id.map(last))
+    active = events.loc[events._active].copy()
+    active["_duration"] = (end.loc[active.index] - active._t) / 60
+    active["_t"] /= 60
+    permitted = expand_wintbl_vectorized(
+        active, idx_col="_t", dur_col="_duration", id_cols=["_id"],
+        value_columns=[], interval_hours=1.,
+    ).rename(columns={"_id": id_column, "_t": "hour"}).drop_duplicates()
+    return hours.merge(permitted, on=[id_column, "hour"], how="inner")
 
 
 def care_intervals(
@@ -248,15 +259,16 @@ def bridge_hours(
     id_column: str = ID_COLUMN,
     max_gap_hours: int = MAX_GAP_HOURS,
 ) -> pd.DataFrame:
-    """Return ``[id, hour]`` covering every evidence hour and the gaps of at most ``max_gap_hours``."""
+    """Bridge evidence within the gap limit; care intervals are half-open."""
     hours = [point_hours[[id_column, "hour"]]]
     if not intervals.empty:
-        start = np.floor(intervals["start_h"].to_numpy()).astype(np.int64)
-        end = np.ceil(intervals["end_h"].to_numpy()).astype(np.int64)
-        lengths = end - start
-        ids = np.repeat(intervals[id_column].to_numpy(), lengths)
-        offsets = np.arange(lengths.sum()) - np.repeat(np.cumsum(lengths) - lengths, lengths)
-        hours.append(pd.DataFrame({id_column: ids, "hour": np.repeat(start, lengths) + offsets}))
+        from .window_expansion import expand_wintbl_vectorized
+
+        work = intervals.assign(_duration=intervals.end_h - intervals.start_h)
+        hours.append(expand_wintbl_vectorized(
+            work, idx_col="start_h", dur_col="_duration", id_cols=[id_column],
+            value_columns=[], interval_hours=1.,
+        ).rename(columns={"start_h": "hour"}))
     work = pd.concat(hours, ignore_index=True).dropna()
     if work.empty:
         return pd.DataFrame(columns=[id_column, "hour"])

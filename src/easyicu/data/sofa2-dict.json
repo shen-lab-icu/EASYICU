@@ -2075,13 +2075,20 @@
   "callback": "rrt_criteria"
  },
  "vaso_ind": {
+  "aggregate": "max",
   "concepts": [
    "dopa_dur",
    "norepi_dur",
    "dobu_dur",
    "epi_dur",
-   "other_vaso"
+   "other_vaso",
+   "dopa_rate",
+   "norepi_rate",
+   "dobu_rate",
+   "epi_rate",
+   "adh_rate",
+   "phn_rate"
   ],
-  "_comment": "2026-11-04 round 5 R5C-III-012: the SOFA-2 dictionary supplies explicit adjunct support to vaso_ind. The callback unions these boolean grid points for MIMIC-III only; it never interprets TRUE as a duration. Other databases retain their existing indicator contract."
+  "_comment": "2026-11-04 R5/R6: exact duration intervals and positive main/adjunct rate hours are unioned across databases. The minute dependency grid retains partial support; max aggregation preserves positive evidence among zero-rate rows. Boolean adjuncts are points, never durations."
  }
 }

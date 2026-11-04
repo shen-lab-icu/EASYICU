@@ -450,7 +450,7 @@ def test_p0_2_declared_minutes_are_not_read_as_hours():
     hours = _expand_public_numeric_win_tbl_output(hours_frame, "norepi_rate", "1h")
 
     assert len(minutes) == 1, "10 minutes at a 1h interval is a single point"
-    assert len(hours) == 11, "10 hours at a 1h interval is 11 points"
+    assert len(hours) == 10, "[0, 10) overlaps exactly 10 hour cells"
     assert len(hours) > len(minutes)
 
 
@@ -502,7 +502,7 @@ def test_p0_2_guess_requires_explicit_opt_out(monkeypatch, caplog):
 
 @pytest.mark.parametrize(
     ("unit", "expected_rows"),
-    [(UNIT_MINUTES, 1), (UNIT_HOURS, 11)],
+    [(UNIT_MINUTES, 1), (UNIT_HOURS, 10)],
 )
 def test_p0_2_datetime_index_honours_declared_unit(unit, expected_rows):
     """A datetime index with a numeric dur_var used to be forced to minutes.

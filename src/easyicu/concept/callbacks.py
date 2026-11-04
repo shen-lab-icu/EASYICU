@@ -3263,8 +3263,8 @@ def _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, time_col
     """Vectorized expansion of WinTbl vent_ind data to hourly time points.
     
     Replaces iterrows() loop with numpy vectorized operations.
-    Each window (start, dur) is expanded to cover all integer hours in
-    [floor(start), floor(start + dur)], with dur in hours.  vent_ind writes its
+    Each window covers cells overlapping [start, start + dur), with dur in
+    hours. An exact stop never adds a cell. vent_ind writes its
     window durations in hours; dividing them by 60 again shrank every window
     to its first hour (2026-11-04 audit round 3, section 4).
     """
@@ -3281,31 +3281,15 @@ def _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, time_col
     else:
         durs = resolve_dur_var_hours(vent_df, column=dur_col, concept="vent_ind").fillna(0).values
     
-    ends = np.where(durs > 0, starts + durs, starts)
-    start_hours = np.floor(starts).astype(int)
-    end_hours = np.floor(ends).astype(int)
-    counts = np.maximum(end_hours - start_hours + 1, 1)
-    
-    # Build expanded arrays
-    total = counts.sum()
-    hours_arr = np.empty(total, dtype=np.float64)
-    row_indices = np.empty(total, dtype=np.intp)
-    pos = 0
-    for i in range(len(counts)):
-        c = counts[i]
-        hours_arr[pos:pos+c] = np.arange(start_hours[i], start_hours[i] + c)
-        row_indices[pos:pos+c] = i
-        pos += c
-    
-    # Build result DataFrame
-    id_data = {}
-    for col in vent_id_cols:
-        if col in vent_df.columns:
-            id_data[col] = vent_df[col].values[row_indices]
-    id_data[time_col_name] = hours_arr
-    id_data['vent_ind'] = True
-    
-    result = pd.DataFrame(id_data)
+    from .window_expansion import expand_wintbl_vectorized
+
+    work = vent_df[list(vent_id_cols)].copy()
+    work[time_col_name], work["_duration_hours"] = starts, durs
+    result = expand_wintbl_vectorized(
+        work, idx_col=time_col_name, dur_col="_duration_hours",
+        id_cols=list(vent_id_cols), value_columns=[], interval_hours=1.,
+    )
+    result['vent_ind'] = True
     # Aggregate by id + time (any=True for overlapping windows)
     group_cols = [c for c in list(vent_id_cols) + [time_col_name] if c in result.columns]
     result = result.groupby(group_cols, as_index=False).agg({'vent_ind': 'any'})
@@ -3562,7 +3546,13 @@ def _callback_sofa2_score(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Calculate SOFA-2 and aggregate component-owned evidence receipts."""
+    """Aggregate SOFA-2 evidence within the SOFA-1 window policy.
+
+    Default carry is the last 24 hourly cells, t-23..t, through ``slide``.
+    Do not pre-fill components: even bounded LOCF before the rolling maximum
+    would extend the original evidence by another window. Owner availability
+    expires with its original score; observation receipts remain window events.
+    """
     from ..io.ts_utils import fill_gaps, hours, slide
 
     required = list(SOFA2_COMPONENT_NAMES)
@@ -3726,18 +3716,9 @@ def _callback_sofa2_score(
                     value_dtype="float32",
                 )
 
-        # Observation is a per-window event. Availability follows the score's
-        # legal LOCF lifecycle but can only start from an owner-issued receipt.
+        # The rolling window alone bounds score and availability carry, as in
+        # SOFA-1. Filling first would keep stale evidence past win_length.
         data[observed_columns] = data[observed_columns].fillna(0)
-        locf_columns = required + available_columns
-        if id_cols_to_group:
-            data[locf_columns] = data.groupby(
-                id_cols_to_group,
-                sort=False,
-                dropna=False,
-            )[locf_columns].ffill()
-        else:
-            data[locf_columns] = data[locf_columns].ffill()
 
         agg_dict = {name: worst_val_fun for name in required}
         agg_dict.update(
@@ -5037,25 +5018,9 @@ def _callback_vent_ind(
         if work.empty:
             return _empty_result()
 
-        # 🔧 FIX 2024-11-29: Match R ricu expand() behavior
-        # R ricu: end = re_time(start + dur, interval) -- NO subtraction!
-        # R seq(start, end, step) is INCLUSIVE on both ends
-        # easyicu expand() also uses inclusive end (after ts_utils fix)
-        # So end = start + dur is correct
+        # R5 occupancy uses the true half-open interval, including negative
+        # windows. A pre-admission stop must never be stretched to admission.
         work["_end_dt"] = work["_start_dt"] + work["vent_dur_td"]
-        
-        # 🔧 FIX 2024-11-30: Match R ricu's end < 0 correction
-        # R ricu code: x <- x[get(end_var) < 0, c(end_var) := as.difftime(0, units = time_unit)]
-        # This ensures windows with negative end times extend to time 0
-        # Example: start=-5h, dur=1h → original_end=-4h → corrected_end=0h → covers -5,-4,-3,-2,-1,0
-        #
-        # The base timestamp represents time 0 (ICU admission)
-        # _coerce_time converts numeric hours to datetime as: base + timedelta(hours=value)
-        # So time 0 = base, negative times < base
-        base = pd.Timestamp("1970-01-01")
-        negative_end_mask = work["_end_dt"] < base
-        if negative_end_mask.any():
-            work.loc[negative_end_mask, "_end_dt"] = base
         
         expanded = expand(
             work,
@@ -5064,6 +5029,7 @@ def _callback_vent_ind(
             step_size=interval,
             id_cols=id_columns,
             keep_vars=None,
+            end_inclusive=False,
         )
         if expanded.empty:
             return _empty_result()
@@ -5173,11 +5139,8 @@ def _callback_vent_ind(
         result_df["dur_var"] = dur_hours if isinstance(dur_hours, (int, float)) else dur_hours.values
         result_df["vent_ind"] = True
         
-        # 按时间聚合 (change_interval 行为)
-        # 取整到小时
-        result_df["starttime"] = (result_df["starttime"] // 1).astype(int)
-        
-        # 按 ID 和 starttime 分组，取 max dur_var
+        # Keep the exact start until expansion; flooring it while preserving
+        # duration loses the last partial hour of a window such as [.8, 3.2).
         group_cols = list(id_columns) + ["starttime"]
         result_df = result_df.groupby(group_cols, as_index=False).agg({
             "dur_var": "max",
@@ -5683,12 +5646,12 @@ def _callback_vaso_ind(
     """Vasopressor indicator: every hour an administration episode covers.
 
     Takes pmax(dopa_dur, norepi_dur, dobu_dur, epi_dur) per episode start and
-    expands seq(start, start + duration, 1). ricu's own callback used the
+    expands cells overlapping [start, start + duration). ricu's own callback used the
     duration as the end time (seq(start, duration)); that is not reproduced.
     """
     # Split boolean adjunct support (SOFA-2 vaso_ind) off first: it recurses with
     # the four duration tables only, so no database reads TRUE as a duration.
-    if "other_vaso" in tables:
+    if any(name == "other_vaso" or name.endswith("_rate") for name in tables):
         from .mimic_support import union_vaso_indicator
 
         return union_vaso_indicator(tables, ctx, _callback_vaso_ind)
@@ -5787,10 +5750,7 @@ def _callback_vaso_ind(
     # 获取 start 的小时数（相对于 base_time）
     merged["__start_hours"] = (merged["__start_dt"] - base_time).dt.total_seconds() / 3600
     
-    # R ricu 的 expand 函数只保留 start <= end 的行
-    # 对于 vaso_ind，end_var = vaso_ind = duration（pmax 结果）
-    # 所以当 start=0, duration=0 时，0 <= 0 为 TRUE，会保留这一行
-    # 修复：允许 duration >= 0（而不是 duration > 0）
+    # The shared overlap owner below discards zero-length intervals.
     valid_mask = (
         merged["__max_duration"].notna() & 
         (merged["__max_duration"] >= pd.Timedelta(0))
@@ -5805,38 +5765,13 @@ def _callback_vaso_ind(
             value_column="vaso_ind",
         )
 
-    # Each administration covers the hours seq(start, start + duration, 1).
-    # ricu's vaso_ind passed pmax(duration) to expand() as the *end* time,
-    # i.e. seq(start, duration), which drops every episode that starts later
-    # than it lasts (2026-11-03 extraction audit round 2, R2-02: SICdb
-    # vaso_ind covered 44% of norepinephrine-rate hours, MIIV/HiRID/MIMIC-III
-    # 11-21%). Every hour from the start's to the end's is covered: counting
-    # floor(duration) + 1 hours from the start hour dropped the last hour of
-    # 35.7% of SICdb episodes, whose fractional start and duration add past
-    # an hour boundary (2026-11-04 audit round 3, M R2-02).
-    starts = valid_rows["__start_hours"].to_numpy(dtype="float64")
-    durations = valid_rows["__duration_hours"].to_numpy(dtype="float64")
-    keep = np.isfinite(starts) & np.isfinite(durations) & (durations >= 0)
-    starts, durations = starts[keep], durations[keep]
-    if getattr(getattr(ctx.data_source, "config", None), "name", "") == "hirid":
-        # R5C-HIRID-003: occupancy is [true start, true end), so an exact
-        # hour endpoint contributes no additional hour.
-        counts = np.maximum(1, np.ceil(starts + durations - 1e-9) - np.floor(starts)).astype("int64")
-    else:
-        counts = (np.floor(starts + durations + 1e-9) - np.floor(starts)).astype("int64") + 1
-    hours = np.repeat(np.floor(starts), counts) + (
-        np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
-    )
-    expanded_records: list[tuple] = []
-    if len(hours):
-        id_frame = valid_rows.loc[keep, list(id_columns)] if id_columns else None
-        if id_frame is not None:
-            repeated_ids = id_frame.loc[id_frame.index.repeat(counts)].reset_index(drop=True)
-            expanded_records = list(zip(*[repeated_ids[c] for c in id_columns], hours.astype(float)))
-        else:
-            expanded_records = [(float(h),) for h in hours]
+    from .window_expansion import expand_wintbl_vectorized
 
-    if not expanded_records:
+    expanded = expand_wintbl_vectorized(
+        valid_rows, idx_col="__start_hours", dur_col="__duration_hours",
+        id_cols=list(id_columns), value_columns=[], interval_hours=1.,
+    ).rename(columns={"__start_hours": time_col})
+    if expanded.empty:
         return _as_icutbl(
             pd.DataFrame(columns=empty_cols),
             id_columns=id_columns,
@@ -5845,7 +5780,6 @@ def _callback_vaso_ind(
         )
 
     result_cols = list(id_columns) + [time_col]
-    expanded = pd.DataFrame(expanded_records, columns=result_cols)
     expanded["vaso_ind"] = True
     
     # 去重（同一患者同一小时只保留一条记录）
@@ -6422,9 +6356,8 @@ def _callback_vaso60(
             .median()
             .reset_index()
         )
-    # R ricu's vaso60 uses minute-precision start: end = start + duration
-    if ds_name != 'aumc':
-        dur_df[dur_index_col] = dur_df[dur_index_col].dt.floor('min')
+    # Duration starts are exact episode boundaries; minute flooring would
+    # shift the end backwards and lose a final partial hour (R6-F015).
     dur_df['__dur_time_min'] = dur_df[dur_index_col]
 
     durations = dur_df[dur_col]
@@ -6669,10 +6602,7 @@ def _callback_vaso60(
     # starts at its exact minute; compare on the same basis so the hour that
     # contains the start keeps its rate (2026-11-04 audit round 3, R3-02).
     window_start = merged["__start"].dt.floor(final_interval or pd.Timedelta(hours=1))
-    before_end = (
-        merged[rate_index_col] < merged["__end"] if ds_name.lower() in {"aumc", "hirid"}
-        else merged[rate_index_col] <= merged["__end"]
-    )
+    before_end = merged[rate_index_col] < merged["__end"]
     mask = (merged[rate_index_col] >= window_start) & before_end
     filtered = merged[mask]
 

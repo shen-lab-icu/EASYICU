@@ -267,88 +267,33 @@ def _expand_public_numeric_win_tbl_output(
     if work.empty:
         return result
 
-    expanded_rows = []
-    is_datetime_index = pd.api.types.is_datetime64_any_dtype(work[index_column])
+    from ..io.ts_utils import expand
 
-    if is_datetime_index:
-        work[index_column] = pd.to_datetime(work[index_column], errors="coerce")
-        # Both branches read the SAME declared unit. This one used to hardcode
-        # unit="m" for every numeric dur_var, so a frame that declared hours was
-        # read as minutes — the same 60x error as the old distribution guess,
-        # just on the datetime path.
-        duration_values = pd.to_timedelta(
-            _resolve_duration_hours(work, result, concept_name), unit="h"
-        )
-        epsilon = pd.Timedelta(microseconds=1)
-
-        for row, duration in zip(work.itertuples(index=False), duration_values):
-            row_dict = row._asdict()
-            start = row_dict[index_column]
-            if pd.isna(start):
-                continue
-            end = start + duration
-            current = start
-            emitted = 0
-            while current <= end + epsilon:
-                emitted += 1
-                _guard_window_expansion(
-                    emitted,
-                    concept_name=concept_name,
-                    duration=duration.total_seconds() / 3600.0,
-                    unit="hours",
-                    row=row_dict,
-                )
-                expanded_rows.append(
-                    {
-                        **{col: row_dict[col] for col in id_columns},
-                        index_column: current,
-                        concept_name: row_dict[concept_name],
-                    }
-                )
-                current = current + interval_td
+    duration_hours = _resolve_duration_hours(work, result, concept_name)
+    step_hours = interval_td.total_seconds() / 3600.
+    # Bound expansion before allocation. An interval may touch one extra cell
+    # when its start is off-grid; evaluate the exact count rather than span.
+    if pd.api.types.is_datetime64_any_dtype(work[index_column]):
+        origin = pd.Timestamp("1970-01-01", tz=work[index_column].dt.tz)
+        start_hours = (work[index_column] - origin) / pd.Timedelta(hours=1)
+        work["__end"] = work[index_column] + pd.to_timedelta(duration_hours, unit="h")
     else:
-        work[index_column] = pd.to_numeric(work[index_column], errors="coerce")
-        work = work.dropna(subset=[index_column])
-        if work.empty:
-            return result
+        start_hours = pd.to_numeric(work[index_column], errors="coerce")
+        work["__end"] = start_hours + duration_hours
+    counts = np.ceil((start_hours + duration_hours) / step_hours) - np.floor(start_hours / step_hours)
+    excessive = counts.gt(MAX_WINDOW_EXPANSION_POINTS)
+    if excessive.any():
+        position = np.flatnonzero(excessive.to_numpy())[0]
+        _guard_window_expansion(
+            int(counts.iloc[position]), concept_name=concept_name,
+            duration=float(duration_hours.iloc[position]), unit="hours",
+            row=work.iloc[position].to_dict(),
+        )
+    expanded = expand(
+        work, start_var=index_column, end_var="__end", step_size=interval_td,
+        id_cols=id_columns, keep_vars=[concept_name], end_inclusive=False, numeric_time_unit="h",
+    )
 
-        interval_hours = interval_td.total_seconds() / 3600.0
-        if interval_hours <= 0:
-            interval_hours = 1.0
-
-        duration_hours = _resolve_duration_hours(work, result, concept_name)
-        epsilon = 1e-9
-
-        for row, duration_hour in zip(work.itertuples(index=False), duration_hours):
-            row_dict = row._asdict()
-            start = row_dict[index_column]
-            if pd.isna(start):
-                continue
-            end = start + max(float(duration_hour), 0.0)
-            current = float(start)
-            emitted = 0
-            while current <= end + epsilon:
-                emitted += 1
-                _guard_window_expansion(
-                    emitted,
-                    concept_name=concept_name,
-                    duration=float(duration_hour),
-                    unit="hours",
-                    row=row_dict,
-                )
-                expanded_rows.append(
-                    {
-                        **{col: row_dict[col] for col in id_columns},
-                        index_column: current,
-                        concept_name: row_dict[concept_name],
-                    }
-                )
-                current += interval_hours
-
-    if not expanded_rows:
-        return result
-
-    expanded = pd.DataFrame(expanded_rows)
     expanded = (
         expanded.groupby(id_columns + [index_column], as_index=False)[concept_name]
         .median()

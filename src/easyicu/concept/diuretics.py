@@ -30,17 +30,17 @@ to mg (a table without a unit column declares ``fe_amount_unit`` from its
 reference dictionary); a row whose unit is not a mass unit is dropped and counted in the
 frame's ``attrs['furosemide_equivalent_audit']``, never guessed.  A source may
 declare ``status_var`` and ``excluded_statuses`` (MIMIC ``Rewritten``
-records are superseded entries, not doses).  Each dose is attributed to its
-administration start time unless the source explicitly declares interval
-allocation. SICdb continuous amounts use ICU-hour overlap; boluses remain
-point events. SICdb's unknown route retains the documented IV upper bound.
+records are superseded entries, not doses). Declared continuous amounts use
+half-open ICU-hour overlap, conserving the administered mg equivalent.
+MetaVision item 228340 and AUMC item 7244 join SICdb interval allocation;
+boluses remain point events. SICdb's unknown route retains the documented IV
+upper bound.
 """
 
 from __future__ import annotations
 
 from typing import Iterable, Mapping, Optional
 
-import numpy as np
 import pandas as pd
 
 FUROSEMIDE_EQUIVALENT_CALLBACK = "furosemide_equivalent"
@@ -114,14 +114,12 @@ def _route_series(frame: pd.DataFrame, params: Mapping[str, object]) -> pd.Serie
 
 
 def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: Mapping[str, object], data_source=None) -> pd.DataFrame:
-    """Share a continuous infusion's amount over its running time.
+    """Allocate declared interval totals on the admission-anchored hour grid.
 
-    A SICdb perfusor row records the whole syringe amount at its start
-    ``Offset``; ``OffsetDrugEnd`` is its end, both in source seconds.  The
-    SICdb's ``fe_icu_clock`` delegates to positive ICU-hour overlaps rather
-    than chunks beginning at the raw start (R5-SIC-009). Other explicitly
-    declared spreading sources retain their fixed-step convention. Single
-    doses stay point events on the source's declared clock.
+    SICdb keeps its source-specific single-dose flag and ICUOffset adapter.
+    Other sources use the existing bounded-memory overlap allocator. Optional
+    item selection keeps MetaVision bolus item 221794 at its administration
+    hour, even when its order carries a nominal end time.
     """
     end_var = params.get("fe_spread_end_var")
     if not end_var or frame.empty:
@@ -138,24 +136,43 @@ def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: M
             frame, concept_name=concept_name, start=index_var, stop=str(end_var),
             single=str(single_var), data_source=data_source,
         )
-    step = float(params.get("fe_spread_step") or 3600)
-    start = pd.to_numeric(frame[index_var], errors="coerce")
-    end = pd.to_numeric(frame[str(end_var)], errors="coerce")
-    spread = (end > start).fillna(False)
-    if single_var:
-        spread &= pd.to_numeric(frame[str(single_var)], errors="coerce").eq(0).fillna(False)
-    if not spread.any():
-        return frame
-    rows = frame.loc[spread.to_numpy()]
-    first, last = start[spread].to_numpy(dtype="float64"), end[spread].to_numpy(dtype="float64")
-    pieces = np.ceil((last - first) / step).astype("int64")
-    expanded = rows.loc[rows.index.repeat(pieces)].copy()
-    k = np.concatenate([np.arange(n) for n in pieces])
-    piece_start = np.repeat(first, pieces) + k * step
-    piece_len = np.minimum(step, np.repeat(last, pieces) - piece_start)
-    expanded[concept_name] = expanded[concept_name].to_numpy() * piece_len / np.repeat(last - first, pieces)
-    expanded[index_var] = piece_start.astype(frame[index_var].dtype) if pd.api.types.is_integer_dtype(frame[index_var]) else piece_start
-    return pd.concat([frame.loc[(~spread).to_numpy()], expanded], ignore_index=True)
+    from ..utils.callback_utils import distribute_volume_hourly
+
+    work = frame.copy()
+    item_ids = params.get("fe_spread_item_ids")
+    if item_ids:
+        item_var = str(params.get("fe_spread_item_var") or "itemid")
+        if item_var not in work:
+            raise DiureticSourceContractError("diuretic_spread_column_missing", item_var)
+        work[str(end_var)] = work[str(end_var)].where(work[item_var].isin(item_ids))
+    id_col = next((c for c in ("stay_id", "icustay_id", "admissionid") if c in work), None)
+    if id_col is None:
+        raise DiureticSourceContractError("diuretic_spread_identifier_missing")
+    aumc = id_col == "admissionid"
+    datetime_clock = pd.api.types.is_datetime64_any_dtype(work[index_var])
+    origins, origin_col = None, None
+    if aumc:
+        from .aumc_intervals import admission_origins
+
+        origins, origin_col = admission_origins(work, data_source), "admittedat"
+    elif datetime_clock:
+        if data_source is None:
+            raise DiureticSourceContractError("diuretic_spread_admission_missing")
+        table = data_source.load_table("icustays", columns=[id_col, "intime"], verbose=False)
+        origins = table.data if hasattr(table, "data") else table
+        origin_col = "intime"
+    result = distribute_volume_hourly(
+        work, val_col=concept_name, index_col=index_var, end_col=str(end_var),
+        id_col=id_col, origin_times=origins, origin_col=origin_col,
+        numeric_time_unit="minutes" if aumc else "hours",
+        output_time_unit="absolute_minutes" if aumc else "relative_hours",
+        aggregate=False,
+    )
+    if datetime_clock:
+        lookup = origins.drop_duplicates(id_col).set_index(id_col)[origin_col]
+        origin = pd.to_datetime(result[id_col].map(lookup), utc=True)
+        result[index_var] = (origin + pd.to_timedelta(result[index_var], unit="h")).dt.tz_localize(None)
+    return result
 
 
 def furosemide_equivalent(
@@ -166,6 +183,7 @@ def furosemide_equivalent(
     unit_var: Optional[str],
     params: Mapping[str, object],
     data_source=None,
+    maximum: Optional[float] = None,
 ) -> pd.DataFrame:
     """Convert one source's administered amounts to mg IV furosemide."""
 
@@ -193,6 +211,10 @@ def furosemide_equivalent(
     # A zero amount (HiRID pump start/stop marker) is no dose (2026-11-04
     # audit round 3, M R2-HIRID-42).
     keep = mg_eq.notna() & (mg_eq > 0)
+    if maximum is not None and params.get("fe_spread_end_var") and not params.get("fe_icu_clock"):
+        # Preserve the existing original-dose bound before the new adapters
+        # split an interval into smaller amounts. Hourly sums have no such cap.
+        keep &= mg_eq.le(maximum)
     audit = {
         "drug": drug,
         "rows_in": int(len(frame)),

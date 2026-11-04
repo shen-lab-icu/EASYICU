@@ -48,8 +48,8 @@ def score_loader():
             frame.loc[0, "gcs"] = 6.0
             frame.loc[1, "pafi"] = 200.0
         else:
-            # Missing renal evidence contributes zero. Liver state remains
-            # available by SOFA-2 LOCF when respiratory failure starts on day 2.
+            # Missing renal evidence contributes zero. The liver assessment
+            # expires before respiratory failure starts on day 2 (RI-05).
             frame["crea"] = float("nan")
             frame["bili"] = float("nan")
             frame.loc[0, "bili"] = 8.0
@@ -131,7 +131,7 @@ def score_loader():
 
 @pytest.mark.parametrize("streamed", [False, True])
 @pytest.mark.parametrize("force_duckdb", [False, True])
-def test_sofa2_module_preserves_rolling_and_locf_states(
+def test_sofa2_module_preserves_bounded_rolling_states(
     score_loader,
     monkeypatch,
     tmp_path,
@@ -160,8 +160,8 @@ def test_sofa2_module_preserves_rolling_and_locf_states(
     ]
     expected[receipts] = expected[receipts].astype("boolean")
     assert expected.loc[(11, 1), "sofa2"] == 5
-    assert expected.loc[(12, 25), "sofa2"] == 5
-    assert expected.loc[(12, 25), "sofa2_n_available_components"] == 5
+    assert expected.loc[(12, 25), "sofa2"] == 2
+    assert expected.loc[(12, 25), "sofa2_n_available_components"] == 4
 
     api._run_module_extraction(
         module_name="sofa2_score",
@@ -178,7 +178,7 @@ def test_sofa2_module_preserves_rolling_and_locf_states(
     staging = pd.read_parquet(tmp_path / "sofa2_score.parquet")
     assert staging.groupby("patientunitstayid").sofa2.max().to_dict() == {
         11: 5.0,
-        12: 5.0,
+        12: 3.0,
     }
 
     api._publish_native_export_v2(
@@ -190,19 +190,18 @@ def test_sofa2_module_preserves_rolling_and_locf_states(
         result={"modules": {"sofa2_score": {"errors": []}}},
     )
     actual = pd.read_parquet(tmp_path / "sofa2_score.parquet")
-    assert actual.groupby("stay_id").sofa2.max().to_dict() == {11: 5.0, 12: 5.0}
+    assert actual.groupby("stay_id").sofa2.max().to_dict() == {11: 5.0, 12: 3.0}
     assert (
         staging.loc[
             (staging.patientunitstayid == 11) & (staging.charttime == 1), "sofa2_cns"
         ].item()
         == 3
     )
-    assert (
+    assert pd.isna(
         staging.loc[
             (staging.patientunitstayid == 12) & (staging.charttime == 25),
             "sofa2_liver_available",
         ].item()
-        == 1
     )
     columns = [
         *REQUESTED,

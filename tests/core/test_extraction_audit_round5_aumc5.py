@@ -322,7 +322,8 @@ def _review_sources(tmp_path, layout):
 
 
 REVIEW_EXPECTED = {
-    "norepi_rate": {0: 1., 1: 1.}, "norepi60": {0: 1., 1: 1.}, "vaso_ind": {0: True, 1: True},
+    # R6-F012: adjunct support at hour 2 belongs in the union as well.
+    "norepi_rate": {0: 1., 1: 1.}, "norepi60": {0: 1., 1: 1.}, "vaso_ind": {0: True, 1: True, 2: True},
     "dex": {0: 80., 1: 160.}, "tidal_vol_set": {0: 500.}, "midazolam": {0: True},
     "rrt": {0: True}, "mech_vent": {0: "invasive", 1: "invasive", 2: "invasive"},
     "vent_ind": {0: True, 1: True, 2: True},
