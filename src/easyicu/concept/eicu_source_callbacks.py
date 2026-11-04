@@ -65,7 +65,7 @@ def apply(frame, source, concept_name, data_source=None):
     if not column or column not in frame:
         raise KeyError(f"{expr}: value column missing for {concept_name}")
     if expr == "eicu_arterial_gas":
-        return qc.arterial_gases(frame, data_source)
+        return qc.arterial_gases(frame, data_source, analytes=list(source.ids or ()))
     if expr == "eicu_height_qc":
         return qc.height_qc(frame, column)
     if expr == "eicu_infection_evidence":

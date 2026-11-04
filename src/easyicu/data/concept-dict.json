@@ -22205,30 +22205,6 @@
   "omopid": 4193415,
   "category": "blood gas",
   "sources": {
-   "eicu": [
-    {
-     "ids": "Total CO2",
-     "table": "lab",
-     "sub_var": "labname",
-     "callback": "combine_callbacks(eicu_arterial_gas, combine_callbacks(convert_unit(set_val(NA), 'mEq/L', '(lpm|mm\\\\(hg\\\\))'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol')))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): rows in mm(hg) (3,806 rows, p50 40) are a pCO2 under the Total CO2 label and are dropped.",
-     "extra_vars": [
-      "labresultoffset"
-     ]
-    }
-   ],
-   "eicu_demo": [
-    {
-     "ids": "Total CO2",
-     "table": "lab",
-     "sub_var": "labname",
-     "callback": "combine_callbacks(eicu_arterial_gas, combine_callbacks(convert_unit(set_val(NA), 'mEq/L', '(lpm|mm\\\\(hg\\\\))'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol')))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): rows in mm(hg) (3,806 rows, p50 40) are a pCO2 under the Total CO2 label and are dropped.",
-     "extra_vars": [
-      "labresultoffset"
-     ]
-    }
-   ],
    "miiv": [
     {
      "ids": 50804,

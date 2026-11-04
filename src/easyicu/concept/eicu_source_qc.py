@@ -28,50 +28,111 @@ def load_optional(data_source, table, stays, columns=None):
     return result.data if hasattr(result, "data") else result
 
 
-def arterial_gases(frame, data_source):
-    """Keep only confirmed arterial specimens at the exact stay/offset key.
+#: eICU lab names whose analyte is itself arterial (R6 rule 2).
+LABEL_DEFINED_ARTERIAL = frozenset({"pao2", "paco2"})
+_NONARTERIAL_SAMPLE = r"\b(?:ven\w*|cap\w*|mixed|pa|pap|pulmonary\s+artery|central(?:\s+line)?)\b"
+_ARTERIAL_SAMPLE = r"\s*(?:art(?:erial)?\.?|aterial|[lr]\.?\s*radial|radial(?:,?\s*(?:left|right))?)\s*"
 
-    Unknown, unpaired and conflicting samples are excluded and counted. No
-    forward/nearest-time specimen join or inference from the analyte name.
-    """
-    samples = load_optional(data_source, "customlab", frame[STAY].dropna().unique())
+
+def _offset_like(values, like):
+    """Read a source offset on the clock of the gas frame's ``labresultoffset``."""
+    if pd.api.types.is_timedelta64_dtype(like):
+        return values if pd.api.types.is_timedelta64_dtype(values) else pd.to_timedelta(pd.to_numeric(values, errors="coerce"), unit="m")
+    if pd.api.types.is_datetime64_any_dtype(like):
+        # An absolute clock cannot be paired to numeric admission offsets
+        # without an admission-time anchor; such evidence stays unpaired.
+        return pd.to_datetime(values) if pd.api.types.is_datetime64_any_dtype(values) else pd.Series(pd.NaT, index=values.index)
+    return pd.to_numeric(values, errors="coerce")
+
+
+def _sample_types(data_source, stays, like):
+    """Per stay/offset: recorded non-arterial and arterial Sample Type flags."""
     keys = [STAY, "labresultoffset"]
-    status = pd.DataFrame(columns=[*keys, "_nonarterial", "_arterial", "_unknown"])
-    if not samples.empty:
-        samples = samples.loc[samples.labothername.astype("string").str.strip().str.casefold().eq("sample type")].copy()
-        text = samples.labothervaluetext.astype("string").fillna("").str.strip()
-        numeric_text = samples.labotherresult.astype("string").fillna("").str.strip()
-        text = text.where(text.ne(""), numeric_text)
-        samples["_nonarterial"] = text.str.contains(r"\b(?:ven\w*|cap\w*|mixed|pa|pap|pulmonary\s+artery)\b", case=False, na=False)
-        samples["_arterial"] = text.str.fullmatch(r"\s*(?:art(?:erial)?\.?)\s*", case=False, na=False)
-        samples["_unknown"] = text.ne("") & ~samples["_arterial"] & ~samples["_nonarterial"]
-        offset = samples.labotheroffset
-        if pd.api.types.is_timedelta64_dtype(frame.labresultoffset):
-            offset = offset if pd.api.types.is_timedelta64_dtype(offset) else pd.to_timedelta(pd.to_numeric(offset, errors="coerce"), unit="m")
-        elif pd.api.types.is_datetime64_any_dtype(frame.labresultoffset):
-            # An absolute clock cannot be paired to numeric admission offsets
-            # without an admission-time anchor. Such specimens remain unknown.
-            offset = pd.to_datetime(offset) if pd.api.types.is_datetime64_any_dtype(offset) else pd.Series(pd.NaT, index=samples.index)
-        else:
-            offset = pd.to_numeric(offset, errors="coerce")
-        samples["labresultoffset"] = offset
-        status = samples.groupby(keys, as_index=False)[["_nonarterial", "_arterial", "_unknown"]].any()
-    if status.empty:
-        out = frame.iloc[:0].copy()
-        out["eicu_specimen_status"] = pd.Series(dtype="object")
-        out.attrs["eicu_specimen_audit"] = {"nonarterial_dropped": 0, "unknown_kept": 0, "unknown_dropped": len(frame)}
-        logger.info("eICU arterial specimen restriction audit=%s", out.attrs["eicu_specimen_audit"])
-        return out
-    keyed = frame[keys].reset_index(drop=True)
-    joined = keyed.merge(status, on=keys, how="left", validate="many_to_one", sort=False)
-    bad = joined["_nonarterial"].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
-    known = joined["_arterial"].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
-    unknown = joined["_unknown"].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
-    keep = known & ~bad & ~unknown
+    samples = load_optional(data_source, "customlab", stays)
+    if samples.empty:
+        return pd.DataFrame(columns=[*keys, "_nonarterial", "_arterial"])
+    samples = samples.loc[samples.labothername.astype("string").str.strip().str.casefold().eq("sample type")].copy()
+    text = samples.labothervaluetext.astype("string").fillna("").str.strip()
+    text = text.where(text.ne(""), samples.labotherresult.astype("string").fillna("").str.strip())
+    samples["_nonarterial"] = text.str.contains(_NONARTERIAL_SAMPLE, case=False, na=False)
+    samples["_arterial"] = text.str.fullmatch(_ARTERIAL_SAMPLE, case=False, na=False) & ~samples["_nonarterial"]
+    samples["labresultoffset"] = _offset_like(samples.labotheroffset, like)
+    return samples.groupby(keys, as_index=False)[["_nonarterial", "_arterial"]].any()
+
+
+def _arterial_anchor_keys(data_source, stays, like):
+    """Stay/offset keys holding a non-missing paO2 or paCO2 result."""
+    from ..datasource import FilterOp, FilterSpec
+
+    keys = [STAY, "labresultoffset"]
+    if data_source is None or not len(stays):
+        return pd.DataFrame(columns=keys)
+    try:
+        result = data_source.load_table(
+            "lab", columns=[*keys, "labname", "labresult"],
+            filters=[FilterSpec(STAY, FilterOp.IN, list(stays)),
+                     FilterSpec("labname", FilterOp.IN, ["paO2", "paCO2"])],
+            verbose=False,
+        )
+    except (FileNotFoundError, KeyError):
+        return pd.DataFrame(columns=keys)
+    lab = result.data if hasattr(result, "data") else result
+    lab = lab.loc[lab.labname.astype("string").str.strip().str.casefold().isin(LABEL_DEFINED_ARTERIAL)
+                  & pd.to_numeric(lab.labresult, errors="coerce").notna(), keys].copy()
+    lab["labresultoffset"] = _offset_like(lab.labresultoffset, like)
+    return lab.dropna().drop_duplicates()
+
+
+def arterial_gases(frame, data_source, analytes=()):
+    """Admit eICU gases to arterial concepts by the R6 specimen order.
+
+    1. A recorded Sample Type decides first: venous, capillary, mixed or
+       central samples drop every gas at that stay/offset; an arterial sample
+       admits them (``explicit_arterial``).
+    2. eICU has no per-sample specimen field otherwise. paO2 and paCO2 are
+       arterial by definition (``label_defined_arterial``).
+    3. pH, base excess/deficit and O2 Sat (%) do not name a specimen; they enter
+       only beside a paO2/paCO2 result at the same stay and offset
+       (``co_measured_arterial``) and are otherwise ``excluded_unknown``.
+    No forward/nearest-time pairing is used.
+    """
+    keys = [STAY, "labresultoffset"]
+    label_defined = bool(analytes) and all(
+        str(a).strip().casefold() in LABEL_DEFINED_ARTERIAL for a in analytes
+    )
+    stays = frame[STAY].dropna().unique()
+    work = frame[keys].reset_index(drop=True)
+    def flag(evidence, column):
+        if evidence.empty:
+            return np.zeros(len(work), dtype=bool)
+        evidence = evidence.astype({key: work[key].dtype for key in keys})
+        joined = work.merge(evidence[[*keys, column]], on=keys, how="left", validate="many_to_one", sort=False)
+        return joined[column].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
+
+    samples = _sample_types(data_source, stays, frame.labresultoffset)
+    venous = flag(samples, "_nonarterial")
+    explicit = flag(samples, "_arterial") & ~venous
+    if label_defined:
+        anchored = np.ones(len(work), dtype=bool)
+    else:
+        anchors = _arterial_anchor_keys(data_source, stays, frame.labresultoffset)
+        anchored = flag(anchors.assign(_anchor=True), "_anchor")
+    status = np.select(
+        [venous, explicit, anchored],
+        ["excluded_venous", "explicit_arterial",
+         "label_defined_arterial" if label_defined else "co_measured_arterial"],
+        default="excluded_unknown",
+    )
+    keep = ~pd.Series(status).str.startswith("excluded").to_numpy()
     out = frame.loc[keep].copy()
-    out.attrs["eicu_specimen_audit"] = {"nonarterial_dropped": int(bad.sum()), "unknown_kept": 0, "unknown_dropped": int((~bad & ~keep).sum())}
+    out["specimen_status"] = status[keep]
+    counts = pd.Series(status).value_counts()
+    out.attrs["eicu_specimen_audit"] = {
+        name: int(counts.get(name, 0))
+        for name in ("explicit_arterial", "label_defined_arterial", "co_measured_arterial",
+                     "excluded_venous", "excluded_unknown")
+    }
     logger.info("eICU arterial specimen restriction audit=%s", out.attrs["eicu_specimen_audit"])
-    out["eicu_specimen_status"] = "arterial"
     return out
 
 

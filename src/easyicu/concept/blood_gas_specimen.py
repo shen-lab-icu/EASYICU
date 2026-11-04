@@ -60,6 +60,8 @@ logger = logging.getLogger(__name__)
 ARTERIAL_SPECIMEN_CALLBACK = "arterial_specimen_only"
 MIXED_VENOUS_SPECIMEN_CALLBACK = "mixed_venous_specimen_only"
 AUDIT_ATTR = "arterial_specimen_audit"
+#: Per-row R6 specimen evidence of an admitted arterial gas.
+SPECIMEN_STATUS_COLUMN = "specimen_status"
 MIXED_VENOUS_AUDIT_ATTR = "mixed_venous_specimen_audit"
 
 
@@ -328,6 +330,9 @@ def restrict_to_arterial_specimens(
     else:
         kept, audit = _restrict_by_column(frame, rule, data_source)
     kept = kept.copy()
+    # R6 rule 1: every kept row has its own arterial specimen record. These
+    # analytes are not arterial by name, so unrecorded rows are not admitted.
+    kept[SPECIMEN_STATUS_COLUMN] = "explicit_arterial"
     kept.attrs.update(attrs)
     kept.attrs[AUDIT_ATTR] = audit
     logger.info(

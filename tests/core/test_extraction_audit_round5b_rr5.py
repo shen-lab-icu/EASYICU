@@ -179,17 +179,29 @@ def test_rr_01_unknown_specimens_never_enter_arterial_sources(database, name, ca
             continue
         source = ConceptSource.from_mapping(mapping)
         out = _apply_callback(frame, source, name, unit_column="unit", data_source=ds)
-        assert out.index.tolist() == [0]
-        audit = out.attrs["eicu_specimen_audit" if database.startswith("eicu") else AUDIT_ATTR]
-        assert audit["unknown_dropped" if database.startswith("eicu") else "unrecorded_rows_dropped"] > 0
-        assert audit["unknown_kept" if database.startswith("eicu") else "unrecorded_rows_kept"] == 0
         if database.startswith("eicu"):
-            assert audit == {"nonarterial_dropped": 3, "unknown_kept": 0, "unknown_dropped": 4}
+            # R6 refined: eICU has no per-sample specimen field beyond these
+            # few Sample Type rows. paO2/paCO2 are arterial by name; pH and
+            # SaO2 need a same-offset paO2/paCO2, absent from this source.
+            audit = out.attrs["eicu_specimen_audit"]
+            if name in {"po2", "pco2"}:
+                assert out.index.tolist() == [0, 2, 3, 5, 7]
+                assert audit == {"explicit_arterial": 2, "label_defined_arterial": 3,
+                                 "co_measured_arterial": 0, "excluded_venous": 3, "excluded_unknown": 0}
+            else:
+                assert out.index.tolist() == [0, 5]
+                assert audit == {"explicit_arterial": 2, "label_defined_arterial": 0,
+                                 "co_measured_arterial": 0, "excluded_venous": 3, "excluded_unknown": 3}
             assert any(record.args == audit for record in caplog.records)
+            continue
+        assert out.index.tolist() == [0]
+        audit = out.attrs[AUDIT_ATTR]
+        assert audit["unrecorded_rows_dropped"] > 0
+        assert audit["unrecorded_rows_kept"] == 0
     if database.startswith("eicu"):
         # A missing optional specimen table supplies no arterial evidence.
         missing = _apply_callback(frame, source, name, data_source=_fake_source(database))
-        assert missing.empty
+        assert len(missing) == (n if name in {"po2", "pco2"} else 0)
         assert any(record.args == missing.attrs["eicu_specimen_audit"] for record in caplog.records)
 
 
@@ -231,7 +243,8 @@ def test_rr_03_base_excess_and_total_co2_require_arterial_specimen(tmp_path, dat
         sample = pd.DataFrame({"labothername": "Sample Type", "labotheroffset": [0, 60, 180, 240],
                                "labothervaluetext": ["Arterial", "Venous"] * 2, "labotherresult": ""})
         ds = _eicu_source(tmp_path, database, lab=lab, customlab=sample)
-        assert _hourly(ds, name) == ({0.: 2., 3.: -2.} if name == "be" else {0.: 22.})
+        # R6 rule 4: eICU Total CO2 is the chemistry panel, not an arterial tco2.
+        assert _hourly(ds, name) == ({0.: 2., 3.: -2.} if name == "be" else {})
 
 
 AUMC_IV_RESIDUES = "albumin_iv bicarbonate fentanyl heparin magnesium_iv mannitol milrinone nicardipine nitroglycerin potassium_iv propofol rocuronium".split()
@@ -379,3 +392,30 @@ def test_rr_04_dose_text_reads_unit_codes_separators_and_ranges(text, expected):
 
     got = _positive_dose(pd.Series([text], dtype=object)).iloc[0]
     assert (None if pd.isna(got) else bool(got)) is expected
+
+
+@pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+@pytest.mark.parametrize("name", ["ph", "sao2", "be"])
+def test_r6_eicu_ambiguous_gases_need_a_same_offset_arterial_anchor(database, name):
+    """pH, SaO2 and BE enter beside a paO2/paCO2 at the same stay and offset."""
+    frame = pd.DataFrame({"patientunitstayid": [1, 1, 1, 1, 2], "labresultoffset": [0, 60, 120, 180, 0],
+                          name: [7.4] * 5, "unit": ""})
+    lab = pd.DataFrame({  # anchors: 0 paO2, 60 paCO2, 120 a blank paO2, 180 venous, stay 2 none
+        "patientunitstayid": [1, 1, 1, 1, 1], "labresultoffset": [0, 60, 120, 180, 181],
+        "labname": ["paO2", "paCO2", "paO2", "paO2", "paO2"], "labresult": [80., 40., None, 40., 80.],
+    })
+    samples = pd.DataFrame({"patientunitstayid": [1], "labotheroffset": [180], "labothername": "Sample Type",
+                            "labothervaluetext": ["Venous"], "labotherresult": ""})
+    mapping = next(m for m in _definition(name)["sources"][database] if m["table"] == "lab")
+    out = _apply_callback(frame, ConceptSource.from_mapping(mapping), name,
+                          data_source=_fake_source(database, lab=lab, customlab=samples))
+    assert out.labresultoffset.tolist() == [0, 60]
+    assert set(out.specimen_status) == {"co_measured_arterial"}
+    assert out.attrs["eicu_specimen_audit"] == {
+        "explicit_arterial": 0, "label_defined_arterial": 0, "co_measured_arterial": 2,
+        "excluded_venous": 1, "excluded_unknown": 2}
+
+
+def test_r6_eicu_total_co2_is_not_an_arterial_tco2_source():
+    for database in ("eicu", "eicu_demo"):
+        assert database not in _definition("tco2")["sources"]
