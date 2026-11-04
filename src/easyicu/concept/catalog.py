@@ -159,6 +159,22 @@ CONCEPT_DICTIONARY = {
     # 尿量
     'urine': ('Urine Output', '尿量', 'mL'),
     'urine24': ('24h Urine Output', '24小时尿量', 'mL/24h'),
+    'urine24_est': ('Estimated Daily Urine Output', '估计24小时尿量', 'mL/24h'),
+    'urine24_observed_ml': ('Observed Urine Volume in Daily Window', '24小时窗内观测尿量', 'mL'),
+    'urine24_covered_h': ('Urine Daily Window Coverage', '24小时尿量覆盖时长', 'h'),
+    'urine24_available_at': ('Measured Daily Urine Availability', '实测24小时尿量可得时间', 'h'),
+    'urine24_est_available_at': ('Estimated Daily Urine Availability', '估计24小时尿量可得时间', 'h'),
+    'urine24_uses_future': ('Daily Urine Uses Later Records', '24小时尿量使用后续记录', 'boolean'),
+    'aki_stage_uo_reference_available_at': ('KDIGO Urine Stage Availability', 'KDIGO尿量分期可得时间', 'h'),
+    'uo_rt_6hr_covered_h': ('KDIGO Urine 6h Window Coverage', 'KDIGO尿量6小时窗覆盖时长', 'h'),
+    'uo_6h_partial_window': ('Urine 6h Partial Window', '尿量6小时窗覆盖不足', 'boolean'),
+    'uo_6h_covered_h': ('Urine 6h Window Coverage', '尿量6小时窗覆盖时长', 'h'),
+    'uo_rt_12hr_covered_h': ('KDIGO Urine 12h Window Coverage', 'KDIGO尿量12小时窗覆盖时长', 'h'),
+    'uo_12h_partial_window': ('Urine 12h Partial Window', '尿量12小时窗覆盖不足', 'boolean'),
+    'uo_12h_covered_h': ('Urine 12h Window Coverage', '尿量12小时窗覆盖时长', 'h'),
+    'uo_rt_24hr_covered_h': ('KDIGO Urine 24h Window Coverage', 'KDIGO尿量24小时窗覆盖时长', 'h'),
+    'uo_24h_partial_window': ('Urine 24h Partial Window', '尿量24小时窗覆盖不足', 'boolean'),
+    'uo_24h_covered_h': ('Urine 24h Window Coverage', '尿量24小时窗覆盖时长', 'h'),
     'total_input_ml': ('Total IV Fluid Input', '总输液量', 'mL/hr'),
     'fluid_balance': ('Hourly Fluid Balance', '每小时液体平衡', 'mL/hr'),
     'fluid_balance_cumulative': ('Cumulative Fluid Balance', '累计液体平衡', 'mL'),
@@ -587,7 +603,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'loop_diuretic', 'loop_diuretic_furosemide_eq', 'thiazide_diuretic', 'potassium_sparing_diuretic', 'acetazolamide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
-    'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria',
+    'renal': ['urine', 'urine24', 'urine24_est', 'urine24_observed_ml', 'urine24_covered_h', 'urine24_available_at', 'urine24_est_available_at', 'urine24_uses_future', 'aki_stage_uo_reference_available_at', 'uo_rt_6hr_covered_h', 'uo_6h_partial_window', 'uo_6h_covered_h', 'uo_rt_12hr_covered_h', 'uo_12h_partial_window', 'uo_12h_covered_h', 'uo_rt_24hr_covered_h', 'uo_24h_partial_window', 'uo_24h_covered_h', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria',
               # Current AKI contract: one public-reference phenotype plus a
               # parallel source-native comparison or explicit unavailable
               # receipt.  Historical strict/harmonized disease labels are not
@@ -666,6 +682,18 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # Non-urine output; surfaced through fluid_balance (2026-11-04 audit round 3).
     'other_output_ml',
 }
+
+# R5 urine receipts remain in extraction modules and the data catalog, but are
+# not independent clinical variables for Planner selection. Unlike the hidden
+# loader aliases above, these columns must remain visible beside their values.
+PLANNER_HIDDEN_CONCEPTS = frozenset({
+    'urine24_est', 'urine24_observed_ml', 'urine24_covered_h',
+    'urine24_available_at', 'urine24_est_available_at', 'urine24_uses_future',
+    'aki_stage_uo_reference_available_at',
+    'uo_rt_6hr_covered_h', 'uo_rt_12hr_covered_h', 'uo_rt_24hr_covered_h',
+    'uo_6h_covered_h', 'uo_12h_covered_h', 'uo_24h_covered_h',
+    'uo_6h_partial_window', 'uo_12h_partial_window', 'uo_24h_partial_window',
+})
 
 # 双语显示名称映射（优化：更清晰的命名区分评分vs诊断，包含准确特征数量）
 CONCEPT_GROUP_NAMES = {

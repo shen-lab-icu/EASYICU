@@ -83,6 +83,10 @@ RENAL_AKI_BUNDLE_OUTPUTS = (
     "uo_rt_6hr",
     "uo_rt_12hr",
     "uo_rt_24hr",
+    "uo_rt_6hr_covered_h",
+    "uo_rt_12hr_covered_h",
+    "uo_rt_24hr_covered_h",
+    "aki_stage_uo_reference_available_at",
 )
 
 #: Bundle outputs whose presence depends on the database's registered
@@ -521,6 +525,10 @@ def build_renal_aki_bundle(
         "uo_rt_6hr": "uo_rt_6hr",
         "uo_rt_12hr": "uo_rt_12hr",
         "uo_rt_24hr": "uo_rt_24hr",
+        "uo_rt_6hr_covered_h": "uo_rt_6hr_covered_h",
+        "uo_rt_12hr_covered_h": "uo_rt_12hr_covered_h",
+        "uo_rt_24hr_covered_h": "uo_rt_24hr_covered_h",
+        "aki_stage_uo_available_at": "aki_stage_uo_reference_available_at",
     }
     available_quality = [
         column for column in quality_columns if column in quality.columns
@@ -882,7 +890,14 @@ def load_renal_aki_bundle(
                 patient_ids=patient_ids,
                 max_patients=max_patients,
                 verbose=verbose,
+                r_compatible=name != "kdigo_urine_input",
             )
+            if name == "kdigo_urine_input" and isinstance(frame, pd.DataFrame):
+                # Keep the raw-record receipt while matching the other inputs'
+                # public hourly clock. R-compatible projection drops sidecars.
+                clock = detect_time_col(frame)
+                if clock is not None:
+                    frame = frame.rename(columns={clock: "charttime"})
         except (KeyError, FileNotFoundError, ValueError):
             if name == "crrt_mode_input":
                 return None

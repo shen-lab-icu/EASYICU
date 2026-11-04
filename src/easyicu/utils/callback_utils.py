@@ -5660,12 +5660,19 @@ def hirid_urine(
             interval_seconds = max(1, int(round(interval_hours * 3600.0)))
             df[time_col] = datetime_t.dt.floor(f"{interval_seconds}s")
 
+        # R5C-HIRID-001: preserve the record clock before pooling rates by bin.
+        lag = raw_t - df[time_col]
+        if pd.api.types.is_timedelta64_dtype(lag):
+            lag = lag / pd.Timedelta(hours=1)
+        df['_urine_source_lag_h'] = lag + df.get('_urine_source_lag_h', 0.)
+        df['_urine_first_lag_h'] = lag + df.get('_urine_first_lag_h', 0.)
+
         # A rate may be recorded more than once in a target bin.  Average the
         # readings; summing rates creates chart-frequency-dependent urine output.
         df = df.dropna(subset=[time_col, actual_val_col])
         df = (
-            df.groupby([id_col, time_col], as_index=False, sort=False)[actual_val_col]
-            .mean()
+            df.groupby([id_col, time_col], as_index=False, sort=False)
+            .agg({actual_val_col: 'mean', '_urine_source_lag_h': 'max', '_urine_first_lag_h': 'min'})
             .sort_values([id_col, time_col], kind="mergesort")
             .reset_index(drop=True)
         )

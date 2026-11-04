@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 from ..scores.urine_windows import assess_urine_windows, urine_evidence_columns
+from ..scores.urine_output import DAILY_COLUMNS, daily_volume_batch as _urine24_batch, rate_daily
 from .free_days import free_days_callback
 
 import logging
@@ -2888,12 +2889,18 @@ def _callback_sofa_component(
             if value_col != sub_name and value_col in data.columns:
                 data = data.rename(columns={value_col: sub_name})
         else:
-            # Multiple concepts: merge with outer join
+            # Multiple concepts: merge with outer join. Urine receipts remain
+            # attached to the parent value rather than independent loads.
+            sidecars = None
+            if ctx.concept_name == "sofa2_renal":
+                sidecars = {
+                    name: [col for col in [*urine_evidence_columns(name), f"{name}_assessment_covered_h"] if col in table.data]
+                    for name, table in tables.items() if name in {"uo_6h", "uo_12h", "uo_24h"}
+                }
+            elif ctx.concept_name == "sofa_renal" and "urine24" in tables:
+                sidecars = {"urine24": [col for col in ("urine24_est",) if col in tables["urine24"].data]}
             data, id_columns, index_column = _merge_tables(
-                tables, ctx=ctx, how="outer",
-                sidecar_columns={name: [col for col in urine_evidence_columns(name) if col in table.data]
-                                 for name, table in tables.items() if name in {"uo_6h", "uo_12h", "uo_24h"}}
-                if ctx.concept_name == "sofa2_renal" else None,
+                tables, ctx=ctx, how="outer", sidecar_columns=sidecars,
             )
         
         if data.empty:
@@ -3036,13 +3043,16 @@ def _callback_sofa_component(
                     # Required parameters - create Series with NaN to preserve time points
                     kwargs[name] = pd.Series(np.nan, index=data.index, dtype=float)
         
+        if ctx.concept_name == "sofa_renal":
+            kwargs["urine24_est"] = data.get("urine24_est")
+
         if ctx.concept_name == "sofa2_renal":
             # Assessment values and their complete-window evidence travel together.
             # Legacy descriptive rolling averages are never sufficient evidence.
             for name in ("uo_6h", "uo_12h", "uo_24h"):
                 if name in kwargs:
                     kwargs[name] = data.get(f"{name}_assessment_rate", pd.Series(np.nan, index=data.index))
-                kwargs[f"{name}_covered_h"] = data.get(f"{name}_covered_h")
+                kwargs[f"{name}_covered_h"] = data.get(f"{name}_assessment_covered_h", data.get(f"{name}_covered_h"))
             kwargs["oliguria_gt6h"] = data.get("uo_6h_oliguria_gt6h")
 
         # Call function with kwargs - add special handling for functions that require positional args
@@ -5511,93 +5521,32 @@ def _callback_vent_ind(
 
     return event_result
 
-def _urine24_batch(
-    df: pd.DataFrame,
-    id_col: str,
-    time_col: str,
-    urine_col: str,
-    time_step: float,
-    window_steps: int,
-    min_steps: int,
-    cap_steps: int,
-) -> pd.DataFrame:
-    """24-hour urine output from charted volumes with explicit coverage.
+def _callback_urine_output_evidence(tables, ctx):
+    """Select a urine sidecar as a separately requestable output column."""
+    table = next(iter(tables.values()))
+    keys = list(table.id_columns) + ([table.index_column] if table.index_column else [])
+    frame = table.data.reindex(columns=keys + [ctx.concept_name]).copy()
+    return _as_icutbl(frame, id_columns=table.id_columns, index_column=table.index_column,
+                      value_column=ctx.concept_name)
 
-    A charted volume is the urine collected since the previous record of the
-    stay; it is spread evenly over those grid cells (backward apportioning).
-    The first record of a stay covers its own cell.  A record more than
-    ``cap_steps`` cells after the previous one cannot be placed: its interval
-    is not assessable and covers no cell.  Cells covered by no record are
-    missing, not zero urine.
 
-    ``urine24`` at a cell sums the last ``window_steps`` cells (24 hours) and
-    is emitted only when at least ``min_steps`` of them are covered; with
-    fewer than all cells covered it is the covered volume scaled to 24 hours.
-    ricu filled every uncharted hour with zero and summed a closed 25-cell
-    window, so charting gaps read as oliguria (2026-11-04 extraction audit
-    round 4, R4-001/R4-010/R4-104).
-    """
-    out_cols = [id_col, time_col, "urine24"]
-    rec = df[[id_col, time_col, urine_col]].copy()
-    rec[urine_col] = pd.to_numeric(rec[urine_col], errors="coerce")
-    rec = rec.dropna(subset=[time_col, urine_col])
-    if rec.empty:
-        return pd.DataFrame(columns=out_cols)
-    rec["_k"] = np.floor(rec[time_col].to_numpy(dtype=np.float64) / time_step + 1e-9).astype(np.int64)
-    rec = rec.groupby([id_col, "_k"], sort=True, as_index=False)[urine_col].sum()
-
-    gap = rec.groupby(id_col, sort=False)["_k"].diff().fillna(1).astype(np.int64).to_numpy()
-    placed = gap <= cap_steps
-    reps = gap[placed]
-    within = np.arange(int(reps.sum())) - np.repeat(np.cumsum(reps) - reps, reps)
-    cells = pd.DataFrame({
-        id_col: np.repeat(rec[id_col].to_numpy()[placed], reps),
-        "_k": np.repeat(rec["_k"].to_numpy()[placed] - reps + 1, reps) + within,
-        "_vol": np.repeat(rec[urine_col].to_numpy(dtype=np.float64)[placed] / reps, reps),
-    })
-    cells["_cov"] = 1.0
-
-    bounds = rec.groupby(id_col, sort=True)["_k"].agg(["min", "max"])
-    sizes = (bounds["max"] - bounds["min"] + 1).to_numpy()
-    grid = pd.DataFrame({
-        id_col: np.repeat(bounds.index.to_numpy(), sizes),
-        "_k": np.repeat(bounds["min"].to_numpy(), sizes)
-        + (np.arange(int(sizes.sum())) - np.repeat(np.cumsum(sizes) - sizes, sizes)),
-    })
-    grid = grid.merge(cells, on=[id_col, "_k"], how="left")
-    grid[["_vol", "_cov"]] = grid[["_vol", "_cov"]].fillna(0.0)
-    grid = grid.sort_values([id_col, "_k"]).reset_index(drop=True)
-
-    rolled = (
-        grid.groupby(id_col, sort=True)[["_vol", "_cov"]]
-        .rolling(window=window_steps, min_periods=1)
-        .sum()
-        .reset_index(level=0, drop=True)
-        .sort_index()
-    )
-    covered = rolled["_cov"].to_numpy()
-    grid["urine24"] = np.where(
-        covered >= min_steps,
-        rolled["_vol"].to_numpy() * window_steps / np.where(covered > 0, covered, 1.0),
-        np.nan,
-    )
-    grid[time_col] = grid["_k"].to_numpy(dtype=np.float64) * time_step
-    return grid[out_cols]
+def _callback_urine24_est(tables, ctx):
+    """Select the explicit partial-coverage estimate produced with urine24."""
+    table = tables["urine24"]
+    keys = list(table.id_columns) + ([table.index_column] if table.index_column else [])
+    return _as_icutbl(table.data[keys + ["urine24_est"]].copy(), id_columns=table.id_columns,
+                      index_column=table.index_column, value_column="urine24_est")
 
 
 def _callback_urine24(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """24-hour urine output over the last 24 grid hours.
+    """Measured daily volume, explicit partial estimate, coverage and availability.
 
-    Event volumes are spread back over the interval each record covers
-    (``max_gap``, default 12 h, beyond which an interval is not assessable);
-    uncharted hours are missing, and a value needs ``min_win`` (default 18 h)
-    of the 24 hours covered.  See ``_urine24_batch``.  ricu's urine24 filled
-    uncharted hours with zero over a closed 25-cell window (audit round 4,
-    R4-001/R4-010/R4-103/R4-104).  HiRID records an hourly rate and integrates
-    it over observed clock time.
+    Preserve retrospective event-grid apportioning. Only complete 24-hour
+    coverage publishes urine24; min_win gates the separate daily estimate.
+    HiRID rates use exact collection intervals with the same >12 h rejection.
     """
     # Load urine if not in tables - 🚀 优化：使用 get_raw_concept 缓存
     if "urine" not in tables:
@@ -5623,7 +5572,7 @@ def _callback_urine24(
                     tables["urine"] = loaded
         except (KeyError, ValueError):
             # Return empty table if urine cannot be loaded
-            cols = ["urine24"]
+            cols = DAILY_COLUMNS
             return _as_icutbl(pd.DataFrame(columns=cols), id_columns=[], index_column=None, value_column="urine24")
     
     urine_tbl = _ensure_time_index(tables["urine"])
@@ -5632,7 +5581,7 @@ def _callback_urine24(
     df = urine_tbl.data.copy()
     key_cols = list(urine_tbl.id_columns) + [urine_tbl.index_column]
     if df.empty:
-        cols = key_cols + ["urine24"]
+        cols = key_cols + DAILY_COLUMNS
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
 
     # Prepare columns
@@ -5644,53 +5593,7 @@ def _callback_urine24(
         df[urine_col] = np.nan
     df[urine_col] = pd.to_numeric(df[urine_col], errors="coerce")
 
-    # HiRID variable 10020000 is a directly recorded mL/h rate, not a voided
-    # volume event.  The generic ricu-compatible path below expands sparse
-    # timestamps to an hourly grid and fills the gaps with zero.  Applying that
-    # path to a rate source turns ordinary charting gaps into anuria and can
-    # spuriously assign renal-SOFA 3/4.  Use the same observed-clock-time
-    # integration already used by HiRID's uo_6h/12h/24h and KDIGO callbacks,
-    # then convert the mean mL/h rate to its 24-hour-equivalent volume.
-    source_name = getattr(
-        getattr(ctx.data_source, "config", None),
-        "name",
-        "",
-    )
-    if source_name == "hirid":
-        from ..callbacks import urine_rate_window_avg_multi
-
-        if not id_cols or not time_col:
-            cols = id_cols + ([time_col] if time_col else []) + ["urine24"]
-            return _as_icutbl(
-                pd.DataFrame(columns=cols),
-                id_columns=id_cols,
-                index_column=time_col,
-                value_column="urine24",
-            )
-
-        rate = df[id_cols + [time_col, urine_col]].rename(
-            columns={urine_col: "urine"}
-        )
-        unit_weight = rate[id_cols].drop_duplicates().assign(weight=1.0)
-        result_df = urine_rate_window_avg_multi(
-            rate,
-            unit_weight,
-            windows=[(24, 12)],
-            interval=interval,
-        )["uo_24h"].rename(columns={"uo_24h": "urine24"})
-        result_df["urine24"] = (
-            pd.to_numeric(result_df["urine24"], errors="coerce") * 24.0
-        )
-        return _as_icutbl(
-            result_df[id_cols + [time_col, "urine24"]],
-            id_columns=id_cols,
-            index_column=time_col,
-            value_column="urine24",
-        )
-
-    # Event-volume sources: charted volumes spread back over the interval
-    # they cover, uncharted hours missing, a 24-cell window with a coverage
-    # requirement (2026-11-04 audit round 4, R4-001/R4-010).
+    source_name = getattr(getattr(ctx.data_source, "config", None), "name", "")
     df = df.dropna(subset=[urine_col])
     interval_hours = interval.total_seconds() / 3600.0
     min_cov_hours = pd.Timedelta(ctx.kwargs.get("min_win", pd.Timedelta(hours=18))).total_seconds() / 3600.0
@@ -5698,21 +5601,20 @@ def _callback_urine24(
 
     is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
     work = df[id_cols + [time_col, urine_col]].copy()
+    for receipt in ('_urine_available_at', '_urine_gap_h'):
+        if receipt in df:
+            work[receipt] = df[receipt]
     origin = None
     if is_numeric_time:
-        # SIC charts in seconds (median per-stay spacing >= 60), others in hours.
+        # Concept-layer numeric axes are relative hours in every database.
         time_unit_hours = 1.0
-        if len(work) > 1 and id_cols:
-            per_stay = work.sort_values(id_cols + [time_col]).groupby(id_cols)[time_col].diff()
-            positive = per_stay[per_stay > 0]
-            if len(positive) > 0 and positive.median() >= 60:
-                time_unit_hours = 1.0 / 3600.0
-        work["_t"] = pd.to_numeric(work[time_col], errors="coerce").astype(np.float64) * time_unit_hours
+        work["_t"] = pd.to_numeric(work[time_col], errors="coerce").astype(np.float64)
+    elif pd.api.types.is_timedelta64_dtype(work[time_col]):
+        work["_t"] = work[time_col] / pd.Timedelta(hours=1)
     else:
         stamps = pd.to_datetime(work[time_col], errors="coerce")
         origin = stamps.min()
         work["_t"] = (stamps - origin) / pd.Timedelta(hours=1)
-        time_unit_hours = None
     key_cols = id_cols or ["_stay"]
     if not id_cols:
         work["_stay"] = 0
@@ -5721,20 +5623,26 @@ def _callback_urine24(
     window_steps = max(1, int(round(24.0 / interval_hours)))
     min_steps = min(window_steps, max(1, int(np.ceil(min_cov_hours / interval_hours - 1e-9))))
     cap_steps = max(1, int(np.floor(max_gap_hours / interval_hours + 1e-9)))
-    batch = _urine24_batch(
-        work, "_key", "_t", urine_col, interval_hours, window_steps, min_steps, cap_steps
-    )
+    if source_name == "hirid":
+        batch = rate_daily(work, "_key", "_t", urine_col, minimum=min_cov_hours,
+                           max_gap=max_gap_hours, rate_width=interval_hours)
+    else:
+        batch = _urine24_batch(
+            work, "_key", "_t", urine_col, interval_hours, window_steps, min_steps, cap_steps
+        )
     keys = work.drop_duplicates("_key").set_index("_key")[key_cols]
     result_df = batch.join(keys, on="_key")
     if is_numeric_time:
         result_df[time_col] = result_df["_t"] / time_unit_hours
+    elif origin is None:
+        result_df[time_col] = pd.to_timedelta(result_df["_t"], unit="h")
     else:
         result_df[time_col] = origin + pd.to_timedelta(result_df["_t"], unit="h")
-    result_df = result_df[key_cols + [time_col, "urine24"]]
+    result_df = result_df[key_cols + [time_col, *DAILY_COLUMNS]]
     if not id_cols:
         result_df = result_df.drop(columns=["_stay"])
     
-    output_cols = id_cols + [time_col, 'urine24']
+    output_cols = id_cols + [time_col, *DAILY_COLUMNS]
     available_cols = [c for c in output_cols if c in result_df.columns]
     
     return _as_icutbl(
@@ -7399,7 +7307,9 @@ def _callback_rrt_criteria(
             for uo_name in missing_uo:
                 if uo_name in uo_results:
                     enriched = uo_results[uo_name].merge(
-                        assessment[keys + urine_evidence_columns(uo_name)],
+                        assessment[keys + urine_evidence_columns(uo_name)].rename(
+                            columns={f"{uo_name}_covered_h": f"{uo_name}_assessment_covered_h"}
+                        ),
                         on=keys, how="left", validate="many_to_one",
                     )
                     tables[uo_name] = _as_icutbl(enriched, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column=uo_name)
@@ -7673,7 +7583,9 @@ def _callback_uo_window(
         assessment = _shared_urine_assessment(urine_tbl, weight_tbl, ctx, source_is_rate)
         keys = list(urine_tbl.id_columns) + [urine_tbl.index_column]
         result_df = result_df.merge(
-            assessment[keys + urine_evidence_columns(output_col)],
+            assessment[keys + urine_evidence_columns(output_col)].rename(
+                columns={f"{output_col}_covered_h": f"{output_col}_assessment_covered_h"}
+            ),
             on=keys, how="left", validate="many_to_one",
         )
 
@@ -8059,6 +7971,12 @@ def _callback_kdigo_aki(
     )
     id_col = detect_id_col(anchor) or 'stay_id'
     time_col = detect_time_col(anchor) or 'charttime'
+    if urine_df is not None and time_col not in urine_df:
+        # HiRID pooled labs and urine can carry different clock column names;
+        # both are already ICU-relative hours at the concept boundary.
+        urine_time = detect_time_col(urine_df)
+        if urine_time is not None:
+            urine_df = urine_df.rename(columns={urine_time: time_col})
     database = getattr(
         getattr(ctx.data_source, "config", None), "name", ""
     )
@@ -9073,6 +8991,8 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "supp_o2_aumc": _callback_supp_o2_aumc,
     "vent_ind": _callback_vent_ind,
     "urine24": _callback_urine24,
+    "urine24_est": _callback_urine24_est,
+    "urine_output_evidence": _callback_urine_output_evidence,
     "fluid_balance_admitted": _callback_fluid_balance_admitted,
     "fluid_balance_hourly": _callback_fluid_balance_hourly,
     "fluid_balance_cumulative": _callback_fluid_balance_cumulative,

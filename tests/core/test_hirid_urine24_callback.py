@@ -42,15 +42,13 @@ def test_hirid_urine24_integrates_sparse_rate_over_observed_clock_time():
 
     result = _callback_urine24({"urine": urine}, _context("hirid")).data
 
-    # A constant 50 mL/h rate is 1,200 mL per 24 hours even when it is charted
-    # sparsely.  The first evaluable point is 12h because urine24 requires at
-    # least half-window coverage, and the callback does not invent rows after
-    # the last observation.
+    # R5C-HIRID-001: a daily estimate requires 18 covered hours; only
+    # complete 24-hour coverage keeps the urine24 name.
     assert result["datetime"].tolist() == [0.0, 2.0, 6.0, 12.0, 24.0]
-    assert result.loc[result["datetime"] < 12, "urine24"].isna().all()
-    assert result.loc[result["datetime"] == 12, "urine24"].item() == pytest.approx(
-        1200.0
-    )
+    assert result.loc[result["datetime"] < 24, "urine24"].isna().all()
+    # R5C-HIRID-001: twelve hours cannot publish either daily value.
+    assert result.loc[result["datetime"] == 12, ["urine24", "urine24_est"]].isna().all(axis=None)
+    assert result.loc[result["datetime"] == 12, "urine24_covered_h"].item() == 12
     assert result.loc[result["datetime"] == 24, "urine24"].item() == pytest.approx(
         1200.0
     )
@@ -75,9 +73,8 @@ def test_hirid_urine24_preserves_true_oliguria():
 
     result = _callback_urine24({"urine": urine}, _context("hirid")).data
 
-    assert result.loc[result["datetime"] == 12, "urine24"].item() == pytest.approx(
-        240.0
-    )
+    # R5C-HIRID-001: preserve oliguria at 24 h, require 18 h for estimates.
+    assert result.loc[result["datetime"] == 12, ["urine24", "urine24_est"]].isna().all(axis=None)
     assert result.loc[result["datetime"] == 24, "urine24"].item() == pytest.approx(
         240.0
     )
@@ -103,6 +100,6 @@ def test_hirid_urine24_does_not_turn_missing_rate_into_zero():
     result = _callback_urine24({"urine": urine}, _context("hirid")).data
 
     assert result["datetime"].tolist() == [0.0, 12.0]
-    assert result.loc[result["datetime"] == 12, "urine24"].item() == pytest.approx(
-        1200.0
-    )
+    # R5C-HIRID-001: twelve hours cannot publish either daily value.
+    assert result.loc[result["datetime"] == 12, ["urine24", "urine24_est"]].isna().all(axis=None)
+    assert result.loc[result["datetime"] == 12, "urine24_covered_h"].item() == 12

@@ -19,6 +19,8 @@ _HELPER_NAMES = re.compile(
     r"|^aki_reference_.+|^creat_(?:baseline_|low_past_).+"
     r"|^aki_source_native_(?:profile|status|authority|reliability_grade|fidelity|reason|time_scale|uses_future)$"
     r"|^kidney_observation_window_coverage$"
+    r"|^(?:urine24|uo_(?:6h|12h|24h)|uo_rt_(?:6hr|12hr|24hr)|aki_stage_uo_reference)"
+    r"_(?:covered_h|partial_window|available_at|est_available_at|uses_future)$"
     r"|_offset$|^raw_.+_(?:time|timestamp)$)"
 )
 _HELPER_ROLES = frozenset(

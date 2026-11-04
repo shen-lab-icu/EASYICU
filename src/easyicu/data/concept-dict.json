@@ -19839,7 +19839,7 @@
    "crea",
    "urine24"
   ],
-  "description": "SOFA renal component",
+  "description": "SOFA renal: complete daily urine, else estimate with at least 18 covered hours",
   "omopid": 1616355,
   "category": "outcome",
   "aggregate": [
@@ -26024,7 +26024,7 @@
   "unit": "mL/kg/h",
   "min": 0,
   "max": 20,
-  "description": "12-hour rolling average urine output (requires >= 6h of data)",
+  "description": "12-hour urine rate per covered hour, at least 6 hours; partial window flagged",
   "concepts": [
    "urine",
    "weight"
@@ -26041,7 +26041,7 @@
   "unit": "mL/kg/h",
   "min": 0,
   "max": 20,
-  "description": "24-hour rolling average urine output (requires >= 12h of data)",
+  "description": "24-hour urine rate per covered hour, at least 12 hours; partial window flagged",
   "concepts": [
    "urine",
    "weight"
@@ -26058,7 +26058,7 @@
   "unit": "mL/kg/h",
   "min": 0,
   "max": 20,
-  "description": "6-hour rolling average urine output (requires >= 3h of data)",
+  "description": "6-hour urine rate per covered hour, at least 3 hours; partial window flagged",
   "concepts": [
    "urine",
    "weight"
@@ -26270,7 +26270,7 @@
   "depends_on": [
    "urine"
   ],
-  "description": "urine output per 24h",
+  "description": "Measured urine output with complete 24-hour coverage",
   "omopid": 4191836,
   "category": "output",
   "callback": "urine24",
@@ -35094,5 +35094,139 @@
     }
    ]
   }
+ },
+ "urine24_est": {
+  "min": 0,
+  "max": 15000,
+  "unit": "mL/24h",
+  "concepts": "urine24",
+  "depends_on": [
+   "urine24"
+  ],
+  "description": "Estimated daily urine volume scaled from 18 to less than 24 covered hours",
+  "category": "output",
+  "callback": "urine24_est",
+  "class_name": "rec_cncpt"
+ },
+ "urine24_observed_ml": {
+  "concepts": "urine24",
+  "depends_on": [
+   "urine24"
+  ],
+  "description": "Observed urine volume within the daily evaluation window",
+  "unit": "mL",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "urine24_covered_h": {
+  "concepts": "urine24",
+  "depends_on": [
+   "urine24"
+  ],
+  "description": "Covered hours in the daily urine evaluation window",
+  "unit": "h",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "urine24_available_at": {
+  "concepts": "urine24",
+  "depends_on": [
+   "urine24"
+  ],
+  "description": "ICU-relative hour of the latest record used by measured daily urine volume",
+  "unit": "h",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "urine24_est_available_at": {
+  "concepts": "urine24",
+  "depends_on": [
+   "urine24"
+  ],
+  "description": "ICU-relative hour of the latest record used by estimated daily urine volume",
+  "unit": "h",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "urine24_uses_future": {
+  "concepts": "urine24",
+  "depends_on": [
+   "urine24"
+  ],
+  "description": "Daily urine value depends on a record charted after the evaluation hour",
+  "unit": "boolean",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "uo_6h_covered_h": {
+  "concepts": "uo_6h",
+  "depends_on": [
+   "uo_6h"
+  ],
+  "description": "Covered collection hours within the past 6 hours",
+  "unit": "h",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "uo_6h_partial_window": {
+  "concepts": "uo_6h",
+  "depends_on": [
+   "uo_6h"
+  ],
+  "description": "Collection coverage is shorter than the nominal 6-hour urine window",
+  "unit": "boolean",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "uo_12h_covered_h": {
+  "concepts": "uo_12h",
+  "depends_on": [
+   "uo_12h"
+  ],
+  "description": "Covered collection hours within the past 12 hours",
+  "unit": "h",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "uo_12h_partial_window": {
+  "concepts": "uo_12h",
+  "depends_on": [
+   "uo_12h"
+  ],
+  "description": "Collection coverage is shorter than the nominal 12-hour urine window",
+  "unit": "boolean",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "uo_24h_covered_h": {
+  "concepts": "uo_24h",
+  "depends_on": [
+   "uo_24h"
+  ],
+  "description": "Covered collection hours within the past 24 hours",
+  "unit": "h",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
+ },
+ "uo_24h_partial_window": {
+  "concepts": "uo_24h",
+  "depends_on": [
+   "uo_24h"
+  ],
+  "description": "Collection coverage is shorter than the nominal 24-hour urine window",
+  "unit": "boolean",
+  "category": "output",
+  "callback": "urine_output_evidence",
+  "class_name": "rec_cncpt"
  }
 }

@@ -3228,6 +3228,7 @@ def load_bucketed_table_aggregated(
     convert_unit_filter: Optional[str] = None,  # 🚀 DuckDB内联convert_unit单位过滤模式
     value_transform: Optional[str] = None,  # 🚀 通用SQL值转换表达式（如 percent_as_numeric, set_val_na）
     itemid_col: Optional[str] = None,
+    retain_source_time: bool = False,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -3587,6 +3588,19 @@ def load_bucketed_table_aggregated(
     _query_bounded_agg = _bounded_agg
     _query_unbounded_agg = _unbounded_agg
     unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
+
+    def source_time_select(raw_hours, bucket_hours):
+        if not retain_source_time:
+            return ""
+        value = value_transform or f'TRY_CAST("{value_column}" AS DOUBLE)'
+        valid = [f'({value}) IS NOT NULL']
+        if value_min is not None:
+            valid.append(f'({value}) >= {value_min}')
+        if value_max is not None:
+            valid.append(f'({value}) <= {value_max}')
+        offset = f"CASE WHEN {' AND '.join(valid)} THEN ({raw_hours}) - ({bucket_hours}) END"
+        return (f", MAX({offset}) AS _urine_source_lag_h"
+                f", MIN({offset}) AS _urine_first_lag_h")
     
     # R ricu 的 change_interval 聚合不按 itemid 分组:
     # 它将同一 (patient, hour) 的所有 itemid 数据池化后取 median/max 等。
@@ -3617,6 +3631,7 @@ def load_bucketed_table_aggregated(
             f"(a.admittedat / 60000.0 + {relative_bucket_minutes})"
         )
         output_time_expr = f"{time_round_expr} as measuredat_minutes"
+        receipt_select = source_time_select(f'o.{time_col} / 3600000.0', f'({time_round_expr}) / 60.0')
         aumc_where_conditions = [
             f"o.{itemid_col} IN ({ids_str})",
             f"o.{value_column} IS NOT NULL",
@@ -3632,7 +3647,7 @@ def load_bucketed_table_aggregated(
         SELECT 
             o.{id_col} AS {id_col},
             {output_time_expr}{_select_itemid},
-            {_agg_value_expr}{unit_select}
+            {_agg_value_expr}{unit_select}{receipt_select}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
         JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
         {aumc_where_clause}
@@ -3660,6 +3675,9 @@ def load_bucketed_table_aggregated(
         # HiRID: 使用 general 表的 admissiontime 计算相对小时数
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
         output_time_expr = f"{time_round_expr} as charttime"
+        receipt_select = source_time_select(
+            f'EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0', time_round_expr,
+        )
 
         # 🔧 修复: 为 HiRID 的 JOIN 查询添加表别名前缀
         # 因为使用了 JOIN，列名需要明确来自哪个表
@@ -3713,7 +3731,7 @@ def load_bucketed_table_aggregated(
         SELECT 
             o.{id_col},
             {output_time_expr}{_hirid_select_itemid},
-            {_hirid_agg_expr}{hirid_unit_select}
+            {_hirid_agg_expr}{hirid_unit_select}{receipt_select}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
         JOIN adm a ON o.{id_col} = a.patientid
         {hirid_where_clause}
@@ -3738,6 +3756,9 @@ def load_bucketed_table_aggregated(
         _interval_hours = interval_minutes / 60.0
         time_round_expr = f"FLOOR(EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
         output_time_expr = f"{time_round_expr} as charttime"
+        receipt_select = source_time_select(
+            f'EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 3600.0', time_round_expr,
+        )
 
         # Alias value references for JOIN query
         if _has_inline_convert:
@@ -3938,7 +3959,7 @@ def load_bucketed_table_aggregated(
             SELECT
                 a.{output_id_col} as {output_id_col},
                 {output_time_expr},
-                {_mimic_agg_expr}{_mimic_unit_select}
+                {_mimic_agg_expr}{_mimic_unit_select}{receipt_select}
             FROM read_parquet({glob_pattern}, union_by_name=true) o
             JOIN adm a ON {join_predicate}
             {_mimic_where}
@@ -4025,6 +4046,7 @@ def load_bucketed_table_aggregated(
             f'FLOOR((o."Offset" - c.ICUOffset) / {_interval_seconds})'
         )
         output_time_expr = f"{time_round_expr} as charttime"
+        receipt_select = source_time_select('(o."Offset" - c.ICUOffset) / 3600.0', time_round_expr)
 
         if _has_inline_convert:
             _op_sql = {"*": "*", "/": "/", "+": "+", "-": "-"}.get(convert_unit_op, "*")
@@ -4066,7 +4088,7 @@ def load_bucketed_table_aggregated(
         SELECT
             o.{id_col} AS {id_col},
             {output_time_expr},
-            {_sic_agg_expr}
+            {_sic_agg_expr}{receipt_select}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
         JOIN {cases_relation} c ON o.{id_col} = c.CaseID
         {sic_where_clause}
@@ -4080,6 +4102,7 @@ def load_bucketed_table_aggregated(
         # 之前输出小时导致 _align_time_to_admission 再除以60（双重转换）
         time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
         output_time_expr = f"{time_round_expr} as charttime"
+        receipt_select = source_time_select(f'{time_col} / 60.0', f'({time_round_expr}) / 60.0')
         default_unit_select = (
             ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
         )
@@ -4094,7 +4117,7 @@ def load_bucketed_table_aggregated(
         SELECT 
             {id_col},
             {output_time_expr}{_select_itemid},
-            {_agg_value_expr}{default_unit_select}{io_audit}
+            {_agg_value_expr}{default_unit_select}{io_audit}{receipt_select}
         FROM {eicu_read}
         {where_clause}
         GROUP BY {id_col}, {time_round_expr}{_group_itemid}

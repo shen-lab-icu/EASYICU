@@ -2011,9 +2011,12 @@ def _metadata_only_planning_catalog(
     # Keep unknown local concepts: absence from the canonical menu alone is not
     # evidence that a source-owned measurement is structurally unavailable.
     normalized_database = normalize_database_name(database)
+    from easyicu.concept.catalog import PLANNER_HIDDEN_CONCEPTS
+
     catalog.concepts = [
         item for item in catalog.concepts
-        if structural_outcome_unavailability(item.concept_id, normalized_database) is None
+        if item.concept_id not in PLANNER_HIDDEN_CONCEPTS
+        and structural_outcome_unavailability(item.concept_id, normalized_database) is None
     ]
     # A declared cross-concept reading is offered exactly when this source
     # carries every receipt it needs.  It is not a database capability -- no

@@ -1713,6 +1713,9 @@ class ConceptResolver:
                     batch_bounds = {}
                     batch_sub_var = None
                     for concept_name, _ in _concepts_for_batch:
+                        if concept_name == "urine":
+                            # The single-concept SQL owner also preserves source-clock receipts.
+                            continue
                         if concept_name in multi_source_concepts:
                             continue
                         concept = self.dictionary.get(concept_name)
@@ -3250,6 +3253,7 @@ class ConceptResolver:
                             # 🚀 通用值转换表达式（percent_as_numeric, set_val_na, fahr_to_cels）
                             value_transform=_duckdb_value_transform,
                             itemid_col=source.sub_var,
+                            retain_source_time=concept_name == "urine",
                         )
                         
                         if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:
@@ -5034,6 +5038,7 @@ class ConceptResolver:
             ]
             ordered_cols.extend(extra_time)
             ordered_cols.append(concept_name)
+            ordered_cols.extend(c for c in ('_urine_source_lag_h', '_urine_first_lag_h') if c in frame)
             if source_unit_column and source_unit_column not in ordered_cols:
                 ordered_cols.append(source_unit_column)
             
@@ -6000,6 +6005,11 @@ class ConceptResolver:
             if agg_method != '__skip_change_interval__' and not (
                 db_name == 'aumc' and any(src.callback == 'aumc_dur' for src in sources)
             ):
+                urine_receipts = None
+                if concept_name == 'urine':
+                    from ..scores.urine_output import source_availability
+
+                    urine_receipts = source_availability(combined, id_columns, index_column, interval)
                 # Apply interval change with aggregation (SINGLE aggregation on relative time)
                 combined_result = change_interval(
                     temp_table,
@@ -6023,6 +6033,10 @@ class ConceptResolver:
                     combined = combined_result
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
+                if urine_receipts is not None:
+                    combined = combined.drop(columns=['_urine_source_lag_h', '_urine_first_lag_h'], errors='ignore').merge(
+                        urine_receipts, on=[*id_columns, index_column], how='left', validate='many_to_one',
+                    )
         elif align_to_admission:
             # Just alignment, no interval/aggregation
             # True win_tbl concepts bypass the interval branch above, where
@@ -7961,7 +7975,7 @@ class ConceptResolver:
             if agg_method and has_time_column and has_time_column in result.data.columns and not result.data.empty and not isinstance(result, WinTbl) and not is_id_tbl_target:
                 evidence_columns = [col for col in result.data.columns
                                     if col.startswith(f"{concept_name}_")]
-                protect_urine = concept_name in {"uo_6h", "uo_12h", "uo_24h"} and bool(evidence_columns)
+                protect_urine = concept_name in {"uo_6h", "uo_12h", "uo_24h", "urine24", "urine24_est"} and bool(evidence_columns)
                 try:
                     fill_missing = self._should_fill_gaps(concept_name, definition)
                     fill_method = self._get_fill_method(concept_name, definition)
@@ -8977,6 +8991,10 @@ class ConceptResolver:
 
         for name, table in tables.items():
             frame = table.data.copy()
+            # R5 daily estimate is also a first-class requested concept.
+            # Its own table owns that value when both outputs are requested.
+            if name in {"urine24", "uo_6h", "uo_12h", "uo_24h"}:
+                frame = frame.drop(columns=[c for c in frame if c != name and c in tables])
             table_index = table.index_var if isinstance(table, WinTbl) else table.index_column
             if table_index and table_index != aligned_index:
                 frame = frame.rename(columns={table_index: aligned_index})

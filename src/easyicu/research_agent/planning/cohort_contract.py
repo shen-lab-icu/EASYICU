@@ -762,6 +762,10 @@ def concept_id_exists(concept_id: str) -> bool:
 
 @lru_cache(maxsize=2)
 def known_concept_ids(*, include_audit: bool = True) -> set[str]:
+    """Every dictionary concept; include_audit=False drops audit/provenance companions
+    (bounds audit raw/QC channels and urine coverage columns) from Planner menus."""
+    from easyicu.concept.catalog import PLANNER_HIDDEN_CONCEPTS
+
     concept_ids: set[str] = set()
     for path in _CONCEPT_DICT_PATHS:
         try:
@@ -771,7 +775,7 @@ def known_concept_ids(*, include_audit: bool = True) -> set[str]:
         if isinstance(payload, dict):
             concept_ids.update(
                 str(key) for key in payload
-                if include_audit or key not in BOUNDS_AUDIT_CONCEPTS
+                if include_audit or (key not in BOUNDS_AUDIT_CONCEPTS and key not in PLANNER_HIDDEN_CONCEPTS)
             )
     return concept_ids
 

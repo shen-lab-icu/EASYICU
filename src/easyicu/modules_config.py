@@ -134,7 +134,7 @@ MODULES: List[FeatureModule] = [
     FeatureModule(
         name="output",
         ricu_file="{db}_output.csv",
-        concepts=["urine", "urine24"],
+        concepts=["urine", "urine24", "urine24_est"],
         description="Urine output",
     ),
     FeatureModule(
@@ -169,7 +169,7 @@ SOFA_COMPONENT_DEPENDENCIES: Dict[str, List[str]] = {
     "sofa_liver": ["bili", "bili_dir", "alp", "ast", "alt"],
     "sofa_cardio": ["map", "vaso_ind", "norepi_rate", "dobu_rate", "epi_rate", "adh_rate"],
     "sofa_cns": ["gcs", "mgcs", "rass", "avpu"],
-    "sofa_renal": ["crea", "bun", "urine", "urine24"],
+    "sofa_renal": ["crea", "bun", "urine", "urine24", "urine24_est"],
 }
 
 # ============================================================================

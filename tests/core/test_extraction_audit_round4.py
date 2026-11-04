@@ -9,7 +9,9 @@ def _urine24(records, *, window=24, min_steps=18, cap=12):
     from easyicu.concept.callbacks import _urine24_batch
 
     df = pd.DataFrame(records, columns=["stay", "t", "urine"])
-    return _urine24_batch(df, "stay", "t", "urine", 1.0, window, min_steps, cap).set_index("t")["urine24"]
+    out = _urine24_batch(df, "stay", "t", "urine", 1.0, window, min_steps, cap).set_index("t")
+    # R5C-IV/III-003, R5-EICU-033, R5-SIC-024: estimates now have their own name.
+    return out.urine24.combine_first(out.urine24_est)
 
 
 def test_r4_001_uncharted_hours_are_missing_not_zero():
@@ -55,7 +57,16 @@ def test_r4_001_vectorized_kernel_matches_plain_reference(seed):
     df = pd.DataFrame(rows, columns=["stay", "t", "urine"])
     got = _urine24_batch(df, "stay", "t", "urine", 1.0, 24, 18, 12).reset_index(drop=True)
     want = reference(df, "stay", "t", "urine", 1.0, 24, 18, 12)
-    pd.testing.assert_frame_equal(got, want, check_dtype=False, atol=1e-9)
+    # R5C-IV/III-003: the retrospective numeric input is preserved where
+    # no rejected >12 h interval splits the evaluation window.
+    got["urine24"] = got.urine24.combine_first(got.urine24_est)
+    comparable = got.urine24.notna()
+    pd.testing.assert_frame_equal(got.loc[comparable, want.columns], want.loc[comparable],
+                                  check_dtype=False, atol=1e-9)
+    # The exact R4 coverage gate remains enforced, including windows dropped
+    # after a rejected interval starts a new segment (R5C-HIRID-001).
+    assert got.urine24_covered_h.between(0, 24).all()
+    assert got.loc[got.urine24_covered_h < 18, "urine24"].isna().all()
 
 
 def test_r4_001_kdigo_uo_does_not_spread_a_record_over_a_long_gap():
