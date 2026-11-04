@@ -674,6 +674,14 @@ def _calculate_uo_rates_simple(
     if urine.empty:
         return pd.DataFrame()
 
+    # Multiple channels at one collection end share one duration.
+    aggregation = {urine_col: "mean" if source_is_rate else "sum"}
+    if '_urine_available_at' in urine:
+        aggregation['_urine_available_at'] = 'max'
+    if '_urine_gap_h' in urine:
+        aggregation['_urine_gap_h'] = 'max'
+    urine = urine.groupby([id_col, time_col], as_index=False, sort=True).agg(aggregation)
+
     if weight_col not in weight.columns:
         weight_col = next(
             (column for column in ("weight", "value", "valuenum") if column in weight),
@@ -711,46 +719,6 @@ def _calculate_uo_rates_simple(
                 ),
             ) from exc
 
-    if source_is_rate:
-        # HiRID 10020000 is OUTurine/h (mL/h), whereas the other databases
-        # expose voided volume events. Reusing the event-volume denominator
-        # here would divide a rate by charting gaps and create false oliguria.
-        # KDIGO staging requires the complete 6/12/24-hour duration, so its
-        # thresholds are stricter than the descriptive UO concepts.
-        from easyicu.callbacks import urine_rate_window_avg_multi
-
-        rate_urine = urine.copy()
-        rate_weight = keyed_weight.copy() if keyed_weight is not None else weight.copy()
-        if urine_col != "urine" and urine_col in rate_urine.columns:
-            rate_urine = rate_urine.rename(columns={urine_col: "urine"})
-        if weight_col != "weight" and weight_col in rate_weight.columns:
-            rate_weight = rate_weight.rename(columns={weight_col: "weight"})
-
-        windowed = urine_rate_window_avg_multi(
-            rate_urine,
-            rate_weight,
-            windows=[(6, 6), (12, 12), (24, 24)],
-            interval=interval,
-        )
-        result = windowed["uo_6h"].merge(
-            windowed["uo_12h"],
-            on=[id_col, time_col],
-            how="outer",
-            sort=False,
-        ).merge(
-            windowed["uo_24h"],
-            on=[id_col, time_col],
-            how="outer",
-            sort=False,
-        )
-        return result.rename(
-            columns={
-                "uo_6h": "uo_rt_6hr",
-                "uo_12h": "uo_rt_12hr",
-                "uo_24h": "uo_rt_24hr",
-            }
-        )
-    
     # Resolve weight only through a patient key.  The exceptional unkeyed
     # one-entity path is explicitly proved below; selecting ``iloc[0]`` from a
     # multi-patient table would silently apply one patient's weight to another.
@@ -807,84 +775,38 @@ def _calculate_uo_rates_simple(
     urine[urine_col] = urine[urine_col].astype(np.float64)
     urine = urine.sort_values([id_col, '_min']).reset_index(drop=True)
     
-    # Initialize output columns
-    n_total = len(urine)
-    uo_6h = np.full(n_total, np.nan)
-    uo_12h = np.full(n_total, np.nan)
-    uo_24h = np.full(n_total, np.nan)
-    
-    windows_min = np.array([360.0, 720.0, 1440.0])  # 6h, 12h, 24h in minutes
-    
-    # Process each patient with vectorized searchsorted + cumsum
-    for _pid, _idx in urine.groupby(id_col, sort=False).indices.items():
-        _idx_sorted = _idx[np.argsort(urine['_min'].values[_idx])]
-        times_min = urine['_min'].values[_idx_sorted]
-        u_vals = urine[urine_col].values[_idx_sorted]
-        wt = urine['_wt'].values[_idx_sorted[0]]
-        n = len(times_min)
-        
-        # Replicate MIT-LCP's hours_since_previous_row logic:
-        # first row defaults to 1 hour, subsequent rows use the elapsed time
-        # from the previous urine charting row.
-        hours_prev = np.empty(n, dtype=np.float64)
-        hours_prev[0] = 1.0
-        if n > 1:
-            hours_prev[1:] = np.maximum(np.diff(times_min) / 60.0, 0.0)
+    from .urine_output import collection_windows, KDIGO_EVIDENCE_COLUMNS
 
-        # A record more than _UO_MAX_GAP_HOURS after the previous one cannot
-        # be spread over that interval: it is not assessable and starts a new
-        # segment, and no window crosses the gap.  MIT-LCP spread it over the
-        # whole gap, so charting gaps read as oliguria (2026-11-04 audit
-        # round 4, R4-001).
-        breaks = hours_prev > _UO_MAX_GAP_HOURS
-        breaks[0] = False
-        hours_prev[breaks] = 0.0
-        u_vals = np.where(breaks, 0.0, u_vals)
-        segment_start = np.maximum.accumulate(np.where(breaks, np.arange(n), 0))
-
-        # Missing urine values were removed before the timeline was built; no
-        # failed conversion or absent measurement can become zero output.
-        cum_u = np.concatenate([[0.0], np.cumsum(u_vals)])
-        cum_h = np.concatenate([[0.0], np.cumsum(hours_prev)])
-        idx_arr = np.arange(n)
-        
-        for w_idx in range(3):
-            window = windows_min[w_idx]
-            # For each i, find left boundary: first j where times_min[j] >= times_min[i] - window
-            lefts = np.searchsorted(times_min, times_min - window, side='left')
-            # Clip: only look at j <= i (backward looking), within the segment
-            lefts = np.maximum(np.minimum(lefts, idx_arr), segment_start)
-            # Windowed sums via prefix sums
-            total_u = cum_u[idx_arr + 1] - cum_u[lefts]
-            total_h = cum_h[idx_arr + 1] - cum_h[lefts]
-
-            if w_idx == 0:
-                valid = (total_h >= 6.0) & (total_h < 12.0)
-            elif w_idx == 1:
-                valid = total_h >= 12.0
-            else:
-                valid = total_h >= 24.0
-
-            rates = np.full(n, np.nan, dtype=np.float64)
-            np.divide(
-                total_u,
-                wt * total_h,
-                out=rates,
-                where=valid & (total_h > 0),
+    output = [f"uo_rt_{w}hr" for w in (6, 12, 24)]
+    for name in [*output, *KDIGO_EVIDENCE_COLUMNS]:
+        urine[name] = np.nan
+    width = pd.Timedelta(interval or pd.Timedelta(hours=1)).total_seconds() / 3600
+    for positions in urine.groupby(id_col, sort=False).indices.values():
+        ends = urine['_min'].to_numpy()[positions] / 60.0
+        amounts = urine[urine_col].to_numpy()[positions]
+        if source_is_rate:
+            amounts = amounts / width
+        integrated = collection_windows(
+            ends, amounts, (6, 12, 24), source_is_rate=source_is_rate,
+            max_gap=_UO_MAX_GAP_HOURS,
+            source_times=urine['_urine_available_at'].to_numpy()[positions]
+            if '_urine_available_at' in urine else None,
+            record_gaps=urine['_urine_gap_h'].to_numpy()[positions]
+            if '_urine_gap_h' in urine else None,
+        )
+        assessable = np.zeros(len(ends), dtype=bool)
+        for window in (6, 12, 24):
+            volume, covered, available = integrated[window]
+            wt = urine['_wt'].to_numpy()[positions]
+            valid = (covered >= window - 1e-9) & np.isfinite(wt) & (wt > 0)
+            name = f"uo_rt_{window}hr"
+            urine.loc[positions, name] = np.divide(
+                volume, wt * covered, out=np.full(len(ends), np.nan), where=valid,
             )
-            
-            if w_idx == 0:
-                uo_6h[_idx_sorted] = rates
-            elif w_idx == 1:
-                uo_12h[_idx_sorted] = rates
-            else:
-                uo_24h[_idx_sorted] = rates
-    
-    urine['uo_rt_6hr'] = uo_6h
-    urine['uo_rt_12hr'] = uo_12h
-    urine['uo_rt_24hr'] = uo_24h
-    
-    return urine[[id_col, time_col, 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr']]
+            urine.loc[positions, f"{name}_covered_h"] = covered
+            assessable |= valid
+        urine.loc[positions, "aki_stage_uo_available_at"] = np.where(assessable, available, np.nan)
+    return urine[[id_col, time_col, *output, *KDIGO_EVIDENCE_COLUMNS]]
 
 
 def _calc_aki_stage_uo(
@@ -1233,6 +1155,7 @@ def kdigo_stages(
                         'uo_assessable',
                         'uo_assessment_reason',
                         'weight_available',
+                        *[c for c in uo_staging if c.endswith('_covered_h') or c == 'aki_stage_uo_available_at'],
                     ]],
                     on=[id_col, time_col],
                     how='outer'
@@ -1682,10 +1605,16 @@ def load_kdigo_aki(
                 )
             return _pre[legacy_name]
         try:
-            return load_concepts(
+            frame = load_concepts(
                 concepts=[concept], database=database, data_path=data_path,
-                patient_ids=patient_ids, max_patients=max_patients, verbose=verbose
+                patient_ids=patient_ids, max_patients=max_patients, verbose=verbose,
+                r_compatible=concept != "kdigo_urine_input",
             )
+            if concept == "kdigo_urine_input" and isinstance(frame, pd.DataFrame):
+                clock = _detect_time_col(frame)
+                if clock is not None:
+                    frame = frame.rename(columns={clock: "charttime"})
+            return frame
         except Exception as exc:
             raise KDIGOComponentLoadError(
                 component=concept,

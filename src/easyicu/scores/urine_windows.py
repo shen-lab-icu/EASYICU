@@ -92,6 +92,10 @@ def assess_urine_windows(
         .sort_values(ids + [time_column])
         .reset_index(drop=True)
     )
+    if source_is_rate and '_urine_available_at' in urine:
+        receipt_cols = [c for c in ('_urine_available_at', '_urine_gap_h') if c in urine]
+        receipts = urine.groupby(ids + [time_column], as_index=False)[receipt_cols].max()
+        data = data.merge(receipts, on=ids + [time_column], how='left', validate='one_to_one')
     common_ids = [col for col in ids if col in weight.columns]
     if common_ids and "weight" in weight.columns:
         keyed = resolve_keyed_unique_weights(weight, id_columns=common_ids)
@@ -133,6 +137,20 @@ def assess_urine_windows(
         amounts = amounts_all[batch]
         weights = weights_all[batch]
         valid = np.isfinite(amounts) & np.isfinite(ends) & (lengths > 0)
+        # R5C-HIRID-001: reject a long interval in its entirety. Its record
+        # starts a new segment for both window coverage and duration evidence.
+        segment_start = np.zeros(len(ends), dtype=np.int64)
+        if source_is_rate:
+            source_times = data['_urine_available_at'].to_numpy()[batch] if '_urine_available_at' in data else ends
+            source_gaps = np.r_[0., np.diff(source_times)]
+            if '_urine_gap_h' in data:
+                source_gaps = data['_urine_gap_h'].fillna(0.).to_numpy(dtype=float, copy=True)[batch]
+            source_gaps[edges[:-1]] = 0.
+            long_gap = (lengths > 12.0) | (source_gaps > 12.0)
+            valid &= ~long_gap
+            segment_start = np.maximum.accumulate(
+                np.where(long_gap, np.arange(len(ends)), 0),
+            )
         if not source_is_rate and len(ends) > 1:
             # Overlapping nonidentical volume bins have no unambiguous volume
             # allocation. Do not round them into manufactured grid continuity.
@@ -170,7 +188,7 @@ def assess_urine_windows(
         for window, window_left in zip(WINDOWS, left_by_window):
             left_edges = ends - window
             left = window_left
-            left = np.minimum(left, offsets)
+            left = np.maximum(np.minimum(left, offsets), segment_start)
             partial = np.maximum(0.0, left_edges - starts[left])
             partial = np.minimum(partial, lengths[left])
             partial = np.where(valid[left], partial, 0.0)

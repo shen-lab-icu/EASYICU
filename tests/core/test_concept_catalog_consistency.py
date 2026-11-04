@@ -175,7 +175,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # channels. 327 -> 331.
     # 2026-11-03 audit round 2 (G6): o2_flow, the supp_o2 device-flow input,
     # is published in the respiratory module. 338 -> 339.
-    assert len(CONCEPT_DICTIONARY) == 339
+    # R5 urine-chain audit: daily estimate, coverage, availability and partial-window fields.
+    assert len(CONCEPT_DICTIONARY) == 355
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

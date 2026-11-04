@@ -1973,6 +1973,14 @@ def load_concepts(
                     if isinstance(legacy_aki, pd.DataFrame) and not legacy_aki.empty:
                         aki_frames.append((legacy_aki, legacy_requested))
                 for aki_df, requested_outputs in aki_frames:
+                    from ..scores.kdigo_aki import detect_time_col
+
+                    aki_clock = detect_time_col(aki_df)
+                    if merge and isinstance(result, pd.DataFrame):
+                        output_clock = detect_time_col(result)
+                        if aki_clock and output_clock and aki_clock != output_clock:
+                            aki_df = aki_df.rename(columns={aki_clock: output_clock})
+                            aki_clock = output_clock
                     id_time = [
                         c
                         for c in (
@@ -1982,9 +1990,7 @@ def load_concepts(
                             "admissionid",
                             "patientid",
                             "CaseID",
-                            "charttime",
-                            "datetime",
-                            "observationoffset",
+                            aki_clock,
                         )
                         if c in aki_df.columns
                     ]

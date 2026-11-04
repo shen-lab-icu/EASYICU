@@ -459,6 +459,7 @@ def build_database_capability_catalog(database: str) -> AvailableCatalog:
     """
 
     from easyicu.concept.selection_policy import concept_selection_policy
+    from easyicu.concept.catalog import PLANNER_HIDDEN_CONCEPTS
 
     from ..concept_availability import (
         explain_concept_availability,
@@ -472,6 +473,8 @@ def build_database_capability_catalog(database: str) -> AvailableCatalog:
     _, enrichment_degraded = _concept_dict_meta_with_status()
     concepts: List[CatalogConcept] = []
     for concept_id in dictionary_catalog.available_concepts:
+        if concept_id in PLANNER_HIDDEN_CONCEPTS:
+            continue
         availability = explain_concept_availability(
             concept=concept_id,
             database=normalized_database,

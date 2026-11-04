@@ -32,6 +32,9 @@ PROVENANCE_COLUMNS = frozenset({
     "creat_baseline_n_48h", "creat_baseline_n_7d", "creat_baseline_source",
     "creat_pre_icu_history_observed", "creatinine_evidence_reason", "creatinine_evidence_status",
     "kidney_observation_window_coverage",
+    # R5C-IV/III-001: coverage and availability are urine staging receipts.
+    "uo_rt_6hr_covered_h", "uo_rt_12hr_covered_h", "uo_rt_24hr_covered_h",
+    "aki_stage_uo_reference_available_at",
     "rrt_evidence_reason", "rrt_evidence_status", "urine_evidence_status",
 })
 

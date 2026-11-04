@@ -452,6 +452,7 @@ def sofa_cns(gcs: pd.Series) -> pd.Series:
 def sofa_renal(
     crea: pd.Series,
     urine24: Optional[pd.Series] = None,
+    urine24_est: Optional[pd.Series] = None,
 ) -> pd.Series:
     """Calculate renal SOFA component.
     
@@ -469,7 +470,8 @@ def sofa_renal(
 
     Args:
         crea: Creatinine values (mg/dL)
-        urine24: 24-hour urine output values (mL/day, optional)
+        urine24: Fully covered 24-hour urine volume (mL/day, optional)
+        urine24_est: Daily equivalent from at least 18 covered hours; fallback
 
     Returns:
         Series with renal SOFA scores (0-4, with 0 as baseline when data exists)
@@ -485,6 +487,11 @@ def sofa_renal(
         # If not provided, create Series of NaN (won't match any threshold)
         uri_num = pd.Series(np.nan, index=crea.index)
     
+    # R5C-IV/III-003, R5-EICU-033, R5-SIC-024: retain SOFA's numeric
+    # input while the full measurement and partial estimate have separate names.
+    if urine24_est is not None:
+        uri_num = uri_num.combine_first(pd.to_numeric(urine24_est, errors="coerce"))
+
     score = pd.Series(0, index=crea.index, dtype=int)
 
     # Score 1: crea >= 1.2 & crea < 2 (only based on crea)
@@ -2015,130 +2022,12 @@ def _urine_window_avg(
     Returns:
         DataFrame with averaged urine output (mL/kg/h)
     """
-    if source_is_rate:
-        return _urine_rate_window_avg_multi(
-            urine,
-            weight,
-            windows=[(window_hours, min_hours)],
-            interval=interval,
-        )[f"uo_{window_hours}h"]
+    from .scores.urine_output import descriptive_windows
 
-    # Determine ID and time columns
-    # 🔧 FIX 2025-01-31: Include CaseID (uppercase) for SICdb support
-    id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'patient_SN', 'INP_NO']]
-    
-    # 不同数据库使用不同的时间列名
-    if 'charttime' in urine.columns:
-        time_col = 'charttime'
-    elif 'measuredat' in urine.columns:
-        time_col = 'measuredat'
-    elif 'measuredat_minutes' in urine.columns:
-        time_col = 'measuredat_minutes'  # DuckDB aggregation output
-    elif 'nursingchartoffset' in urine.columns:
-        time_col = 'nursingchartoffset'
-    elif 'observationoffset' in urine.columns:
-        time_col = 'observationoffset'
-    elif 'intakeoutputoffset' in urine.columns:
-        time_col = 'intakeoutputoffset'  # eICU urine
-    elif 'registeredat' in urine.columns:
-        time_col = 'registeredat'  # AUMC
-    else:
-        # 尝试找到任何时间相关的列
-        time_like_cols = [col for col in urine.columns if 'time' in col.lower() or 'offset' in col.lower() or 'minute' in col.lower()]
-        if time_like_cols:
-            time_col = time_like_cols[0]
-        else:
-            raise ValueError(f"Cannot find time column in urine data. Available columns: {urine.columns.tolist()}")
-    
-    val_col = 'urine'
-    result_col = f'uo_{window_hours}h'
-    
-    # 如果没有找到ID列，尝试常见的ID列名
-    if not id_cols:
-        for potential_id in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID', 'patient_SN', 'INP_NO']:
-            if potential_id in urine.columns:
-                id_cols = [potential_id]
-                break
-    
-    # Merge urine and weight data
-    if id_cols:
-        # 检查weight表是否有相同的ID列
-        # 对于AUMC，urine有admissionid但weight只有patientid
-        # 需要先join admissions表获取admissionid->patientid映射
-        common_ids = [col for col in id_cols if col in weight.columns]
-        if common_ids:
-            merged = pd.merge(urine, weight, on=common_ids, how='left', suffixes=('', '_weight'))
-        else:
-            merged = urine.copy()
-            from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
+    return descriptive_windows(
+        urine, weight, [(window_hours, min_hours)], interval=interval, source_is_rate=source_is_rate,
+    )[f"uo_{window_hours}h"]
 
-            resolution = resolve_unkeyed_single_entity_weight(
-                urine,
-                weight,
-                urine_id_columns=id_cols,
-                weight_column="weight",
-            )
-            merged['weight'] = (
-                resolution.weight if resolution.weight is not None else np.nan
-            )
-    else:
-        merged = urine.copy()
-        merged['weight'] = np.nan
-    
-    # Handle weight time column
-    if 'charttime_weight' in merged.columns:
-        # Use forward fill to propagate weight values
-        merged = merged.sort_values(id_cols + [time_col])
-        for id_col in id_cols:
-            merged['weight'] = merged.groupby(id_col)['weight'].ffill()
-    
-    # Remove rows without weight
-    merged = merged[merged['weight'].notna() & (merged['weight'] > 0)]
-    
-    if len(merged) == 0:
-        # Return empty DataFrame with correct structure
-        result = urine[id_cols + [time_col]].copy()
-        result[result_col] = np.nan
-        return result
-    
-    # Sort by ID and time
-    merged = merged.sort_values(id_cols + [time_col])
-    
-    # Infer interval if not provided
-    if interval is None:
-        # Try to infer from data
-        if len(merged) > 1:
-            time_diffs = merged.groupby(id_cols)[time_col].diff()
-            valid_diffs = time_diffs[time_diffs.notna() & (time_diffs > pd.Timedelta(0))]
-            if len(valid_diffs) > 0:
-                interval = valid_diffs.median()
-            else:
-                interval = pd.Timedelta(hours=1)
-        else:
-            interval = pd.Timedelta(hours=1)
-    
-    # Calculate window parameters (use lowercase 'h' to avoid deprecation warning)
-    min_periods = max(1, int(min_hours / (interval.total_seconds() / 3600)))
-    
-    # Vectorized rolling — avoids per-group Python function call overhead
-    # Data is already sorted by id_cols + [time_col], so sort=False is safe
-    interval_hours = interval.total_seconds() / 3600
-    n_measurements = max(1, int(window_hours / interval_hours))
-
-    urine_sum = merged.groupby(id_cols, sort=False)[val_col].rolling(
-        window=n_measurements,
-        min_periods=max(1, min_periods),
-        closed='right'
-    ).sum()
-
-    # .values preserves row order (sort=False + pre-sorted data)
-    merged[result_col] = urine_sum.values / (merged['weight'].values * window_hours)
-
-    # Keep only relevant columns
-    keep_cols = id_cols + [time_col, result_col]
-    result = merged[[col for col in keep_cols if col in merged.columns]]
-
-    return result
 
 def _urine_window_avg_multi(
     urine,
@@ -2150,109 +2039,11 @@ def _urine_window_avg_multi(
     
     Returns dict: {'uo_6h': DataFrame, 'uo_12h': DataFrame, 'uo_24h': DataFrame}
     """
-    windows = [(6, 3), (12, 6), (24, 12)]  # (window_hours, min_hours)
+    from .scores.urine_output import descriptive_windows
 
-    if source_is_rate:
-        return _urine_rate_window_avg_multi(
-            urine,
-            weight,
-            windows=windows,
-            interval=interval,
-        )
-    
-    # Reuse _urine_window_avg's column detection logic for the first call
-    # Then share the merged+sorted data for subsequent windows
-    id_cols = [col for col in urine.columns if col.endswith('_id') or col in [
-        'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid',
-        'CaseID', 'patient_SN', 'INP_NO']]
-    
-    time_col = None
-    for candidate in ['charttime', 'measuredat', 'measuredat_minutes', 'nursingchartoffset',
-                       'observationoffset', 'intakeoutputoffset', 'registeredat']:
-        if candidate in urine.columns:
-            time_col = candidate
-            break
-    if time_col is None:
-        time_like = [c for c in urine.columns if 'time' in c.lower() or 'offset' in c.lower() or 'minute' in c.lower()]
-        if time_like:
-            time_col = time_like[0]
-        else:
-            # Fallback to individual calls
-            return {
-                'uo_6h': _urine_window_avg(urine, weight, 6, 3, interval),
-                'uo_12h': _urine_window_avg(urine, weight, 12, 6, interval),
-                'uo_24h': _urine_window_avg(urine, weight, 24, 12, interval),
-            }
-    
-    if not id_cols:
-        for pid in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID', 'patient_SN', 'INP_NO']:
-            if pid in urine.columns:
-                id_cols = [pid]
-                break
-    
-    # Single merge of urine + weight
-    common_ids = [c for c in id_cols if c in weight.columns]
-    if common_ids:
-        merged = pd.merge(urine, weight, on=common_ids, how='left', suffixes=('', '_weight'))
-    else:
-        merged = urine.copy()
-        from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
-
-        resolution = resolve_unkeyed_single_entity_weight(
-            urine,
-            weight,
-            urine_id_columns=id_cols,
-            weight_column="weight",
-        )
-        merged['weight'] = (
-            resolution.weight if resolution.weight is not None else np.nan
-        )
-    
-    if 'charttime_weight' in merged.columns:
-        merged = merged.sort_values(id_cols + [time_col])
-        for ic in id_cols:
-            merged['weight'] = merged.groupby(ic)['weight'].ffill()
-    
-    merged = merged[merged['weight'].notna() & (merged['weight'] > 0)]
-    
-    if len(merged) == 0:
-        empty = urine[id_cols + [time_col]].copy()
-        results = {}
-        for wh, _ in windows:
-            r = empty.copy()
-            r[f'uo_{wh}h'] = np.nan
-            results[f'uo_{wh}h'] = r
-        return results
-    
-    merged = merged.sort_values(id_cols + [time_col])
-    
-    if interval is None:
-        if len(merged) > 1:
-            td = merged.groupby(id_cols)[time_col].diff()
-            valid = td[td.notna() & (td > pd.Timedelta(0))]
-            interval = valid.median() if len(valid) > 0 else pd.Timedelta(hours=1)
-        else:
-            interval = pd.Timedelta(hours=1)
-    
-    val_col = 'urine'
-    interval_hours = interval.total_seconds() / 3600
-    
-    # Vectorized rolling for all 3 windows — no per-group function calls
-    for wh, mh in windows:
-        n_meas = max(1, int(wh / interval_hours))
-        min_p = max(1, int(mh / interval_hours))
-        urine_sum = merged.groupby(id_cols, sort=False)[val_col].rolling(
-            window=n_meas, min_periods=min_p, closed='right'
-        ).sum()
-        merged[f'uo_{wh}h'] = urine_sum.values / (merged['weight'].values * wh)
-    
-    results = {}
-    for wh, _ in windows:
-        col = f'uo_{wh}h'
-        keep = id_cols + [time_col, col]
-        results[col] = merged[[c for c in keep if c in merged.columns]].copy()
-    
-    return results
+    return descriptive_windows(
+        urine, weight, [(6, 3), (12, 6), (24, 12)], interval=interval, source_is_rate=source_is_rate,
+    )
 
 
 def miiv_icu_patients_filter(data: Union[IdTbl, pd.DataFrame], **kwargs) -> Union[IdTbl, pd.DataFrame]:

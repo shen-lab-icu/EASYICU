@@ -17,6 +17,21 @@ from tests.support import urine_window_reference as old
 from tests.support.renal_export import write_renal_source
 
 
+def _assessment_reference(urine, weight, **kwargs):
+    """R5C-HIRID-001: the old reference runs independently per accepted segment."""
+    if not kwargs.get("source_is_rate") or urine.empty:
+        return old.assess_urine_windows(urine, weight, **kwargs)
+    ids = list(kwargs["id_columns"])
+    time = kwargs["time_column"]
+    data = urine.sort_values(ids + [time]).copy()
+    gaps = data.groupby(ids)[time].diff()
+    if pd.api.types.is_timedelta64_dtype(gaps):
+        gaps = gaps / pd.Timedelta(hours=1)
+    data["_audit_segment"] = gaps.gt(12).groupby([data[c] for c in ids]).cumsum()
+    options = dict(kwargs, id_columns=[*ids, "_audit_segment"])
+    return old.assess_urine_windows(data, weight, **options).drop(columns="_audit_segment")
+
+
 def test_three_requested_windows_assess_the_shared_source_once(monkeypatch):
     urine = pd.DataFrame({
         "stay_id": np.repeat([11, 12], 30), "charttime": np.tile(np.arange(30.0), 2),
@@ -78,7 +93,7 @@ def test_shared_assessment_respects_scope_and_eviction(monkeypatch, change):
     elif change == "clear":
         resolver.clear()
     result = callbacks._shared_urine_assessment(urine, weight, ctx, source_is_rate)
-    expected = old.assess_urine_windows(urine.data, weight.data, id_columns=["stay_id"], time_column="charttime", interval=ctx.interval, source_is_rate=source_is_rate)
+    expected = _assessment_reference(urine.data, weight.data, id_columns=["stay_id"], time_column="charttime", interval=ctx.interval, source_is_rate=source_is_rate)
     pd.testing.assert_frame_equal(result, expected, check_exact=True)
     assert len(calls) == 2
 
@@ -107,9 +122,9 @@ def test_window_evidence_matches_original(source_is_rate, interval_hours, time_k
     urine = pd.concat(frames, ignore_index=True)
     weight = pd.DataFrame({"stay_id": [11, 12], "weight": [70.0, np.nan]})
     kwargs = dict(id_columns=["stay_id"], time_column="charttime", interval=pd.Timedelta(hours=interval_hours), source_is_rate=source_is_rate)
-    expected = old.assess_urine_windows(urine, weight, **kwargs)
+    expected = _assessment_reference(urine, weight, **kwargs)
     actual = assess_urine_windows(urine, weight, **kwargs)
-    pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+    pd.testing.assert_frame_equal(actual, expected, check_exact=not source_is_rate, atol=1e-9)
 
 
 @pytest.mark.parametrize("rate", [False, True])
@@ -127,7 +142,7 @@ def test_unequal_stay_lengths_cross_batch_boundaries(rate):
     kwargs = dict(id_columns=["stay_id"], time_column="charttime", interval=pd.Timedelta(hours=1), source_is_rate=rate)
     pd.testing.assert_frame_equal(
         assess_urine_windows(urine, weight, **kwargs),
-        old.assess_urine_windows(urine, weight, **kwargs), check_exact=True,
+        _assessment_reference(urine, weight, **kwargs), check_exact=not rate, atol=1e-9,
     )
 
 
@@ -139,7 +154,7 @@ def test_each_stays_prefix_starts_at_zero_with_valid_weights():
     weight = pd.DataFrame({"stay_id": [11, 12], "weight": [70.0, 80.0]})
     kwargs = dict(id_columns=["stay_id"], time_column="charttime", interval=pd.Timedelta(hours=1))
     actual = assess_urine_windows(urine, weight, **kwargs)
-    expected = old.assess_urine_windows(urine, weight, **kwargs)
+    expected = _assessment_reference(urine, weight, **kwargs)
     pd.testing.assert_frame_equal(actual, expected, check_exact=True)
     first_complete = actual.loc[(actual.stay_id == 12) & (actual.charttime == 5.0)]
     assert first_complete.uo_6h_assessment_rate.item() == 47.125 / 80.0
@@ -151,7 +166,6 @@ def test_each_stays_prefix_starts_at_zero_with_valid_weights():
 def test_raw_source_loader_frames_match_original(database, module, unit_variant, tmp_path, monkeypatch):
     from easyicu.api import concepts as api
     from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
-    import easyicu.callbacks as descriptive
     import easyicu.scores.aki_profiles as profiles
     import easyicu.io.ts_utils as ts
 
@@ -176,10 +190,9 @@ def test_raw_source_loader_frames_match_original(database, module, unit_variant,
     )
     with monkeypatch.context() as legacy:
         legacy.setattr(callbacks, "_concat_component_frames", old._concat_component_frames)
-        legacy.setattr(callbacks, "assess_urine_windows", old.assess_urine_windows)
-        legacy.setattr(descriptive, "_urine_window_avg", old._urine_window_avg)
-        legacy.setattr(descriptive, "_urine_window_avg_multi", old._urine_window_avg_multi)
-        legacy.setattr(callbacks, "_urine24_batch", old._urine24_batch)
+        # R5C-IV/III-002, R5-EICU-033: corrected descriptive/daily owners
+        # are shared on both sides; obsolete kernels are not parity oracles.
+        legacy.setattr(callbacks, "assess_urine_windows", _assessment_reference)
         legacy.setattr(profiles, "_event_stage_at_exact_rows", old._event_stage_at_exact_rows)
         legacy.setattr(profiles, "_rolling_stage_max", old._rolling_stage_max)
         legacy.setattr(ts, "_slide_vectorized_bulk", old._slide_vectorized_bulk)
@@ -209,16 +222,14 @@ def test_patient_batches_preserve_original_loader_frames(database, module, tmp_p
     api.clear_global_loader()
     batched = api.load_concepts(**kwargs, chunk_size=10)
     api.clear_global_loader()
-    import easyicu.callbacks as descriptive
     import easyicu.scores.aki_profiles as profiles
     import easyicu.io.ts_utils as ts
 
     with monkeypatch.context() as legacy:
         legacy.setattr(callbacks, "_concat_component_frames", old._concat_component_frames)
-        legacy.setattr(callbacks, "assess_urine_windows", old.assess_urine_windows)
-        legacy.setattr(descriptive, "_urine_window_avg", old._urine_window_avg)
-        legacy.setattr(descriptive, "_urine_window_avg_multi", old._urine_window_avg_multi)
-        legacy.setattr(callbacks, "_urine24_batch", old._urine24_batch)
+        # R5C-IV/III-002, R5-EICU-033: corrected descriptive/daily owners
+        # are shared on both sides; obsolete kernels are not parity oracles.
+        legacy.setattr(callbacks, "assess_urine_windows", _assessment_reference)
         legacy.setattr(profiles, "_event_stage_at_exact_rows", old._event_stage_at_exact_rows)
         legacy.setattr(profiles, "_rolling_stage_max", old._rolling_stage_max)
         legacy.setattr(ts, "_slide_vectorized_bulk", old._slide_vectorized_bulk)
@@ -420,7 +431,7 @@ def test_bulk_extrema_rejects_nonmonotonic_presorted_input():
 
 @pytest.mark.parametrize("window", [1, 6, 12, 24])
 @pytest.mark.parametrize("case", ["empty", "single", "gaps", "negative", "weight_times"])
-def test_descriptive_window_matches_original(window, case):
+def test_descriptive_window_matches_interval_reference(window, case):
     from easyicu.callbacks import _urine_window_avg
 
     times = [] if case == "empty" else ([1.0] if case == "single" else [0.0, 1.0, 2.0, 30.0, 31.0, 60.0])
@@ -431,9 +442,33 @@ def test_descriptive_window_matches_original(window, case):
     if case == "weight_times":
         weight = pd.concat([weight.assign(charttime=0.0), weight.assign(charttime=2.0)], ignore_index=True)
     kwargs = dict(window_hours=window, min_hours=max(1, window // 2), interval=pd.Timedelta(hours=1))
-    expected = old._urine_window_avg(urine, weight, **kwargs)
     actual = _urine_window_avg(urine, weight, **kwargs)
-    pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+    # R5C-IV/III-002: a small independent intersection oracle replaces the
+    # record-count rolling implementation, including invalid records and gaps.
+    name = f"uo_{window}h"
+    for _, row in actual.iterrows():
+        group = urine.loc[urine.stay_id == row.stay_id].sort_values("charttime")
+        records = list(group[["charttime", "urine"]].itertuples(index=False, name=None))
+        volume = covered = 0.
+        previous = None
+        for end, amount in records:
+            if end > row.charttime:
+                break
+            start = end - 1 if previous is None else previous
+            previous = end
+            if end - start > 12 or not np.isfinite(amount) or amount < 0:
+                volume = covered = 0.
+                continue
+            overlap = max(0., end - max(start, row.charttime - window))
+            covered += overlap
+            volume += amount * overlap / (end - start)
+        expected = volume / covered / weight.loc[weight.stay_id == row.stay_id, "weight"].iloc[0] if covered >= kwargs["min_hours"] else np.nan
+        assert row[f"{name}_covered_h"] == pytest.approx(covered)
+        assert row[f"{name}_partial_window"] == (covered < window)
+        if np.isfinite(expected):
+            assert row[name] == pytest.approx(expected)
+        else:
+            assert pd.isna(row[name])
 
 
 @pytest.mark.parametrize("database", ["eicu", "miiv"])
@@ -468,7 +503,7 @@ def _long_tailed_urine():
 def test_urine_long_tail_has_no_padded_searches_or_string_allocations(monkeypatch, source_is_rate):
     urine, weight = _long_tailed_urine()
     kwargs = dict(id_columns=["stay_id"], time_column="charttime", interval=pd.Timedelta(hours=1), source_is_rate=source_is_rate)
-    expected = old.assess_urine_windows(urine, weight, **kwargs)
+    expected = _assessment_reference(urine, weight, **kwargs)
     original_full = np.full
 
     def full(shape, value, *args, **kwargs):
@@ -480,7 +515,8 @@ def test_urine_long_tail_has_no_padded_searches_or_string_allocations(monkeypatc
 
     monkeypatch.setattr(np, "full", full)
     monkeypatch.setattr(np, "take_along_axis", take)
-    pd.testing.assert_frame_equal(assess_urine_windows(urine, weight, **kwargs), expected, check_exact=True)
+    pd.testing.assert_frame_equal(assess_urine_windows(urine, weight, **kwargs), expected,
+                                  check_exact=not source_is_rate, atol=1e-9)
 
 
 def test_rolling_long_tail_uses_shared_flat_bounds(monkeypatch):
@@ -532,7 +568,7 @@ def test_urine_evidence_crosses_actual_row_batch_boundaries(monkeypatch, rate):
     kwargs = dict(id_columns=["stay_id"], time_column="charttime", interval=pd.Timedelta(hours=0.7), source_is_rate=rate)
     pd.testing.assert_frame_equal(
         windows.assess_urine_windows(urine, weight, **kwargs),
-        old.assess_urine_windows(urine, weight, **kwargs), check_exact=True,
+        _assessment_reference(urine, weight, **kwargs), check_exact=not rate, atol=1e-9,
     )
 
 

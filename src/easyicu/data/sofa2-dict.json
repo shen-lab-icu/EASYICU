@@ -206,7 +206,8 @@
    "ph",
    "bicarb"
   ],
-  "description": "SOFA-2 renal component with duration-based UO. RRT event evidence scores the active treatment time; intermittent off-days/chronic state and non-renal-only exclusion require explicit episode/indication inputs and remain database ascertainment limitations.",
+  "description": "SOFA-2 renal component using weight-normalized urine rates with complete 6, 12 or 24-hour coverage. RRT event evidence scores active treatment; intermittent off-days, chronic state and non-renal-only exclusion require explicit episode and indication inputs.",
+  "_comment": "R5 urine review: SOFA-2 retains duration-based urine assessment, not the SOFA-1 daily-volume or partial-daily-estimate fallback. HiRID rate intervals longer than 12 hours contribute no coverage.",
   "clinical_status": "source_bound_golden",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,
@@ -232,7 +233,7 @@
    "urine",
    "weight"
   ],
-  "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
+  "description": "6-hour urine rate per covered hour; SOFA-2 uses complete-duration assessment",
   "category": "output",
   "callback": "uo_6h",
   "class_name": "rec_cncpt",
@@ -243,7 +244,7 @@
    "urine",
    "weight"
   ],
-  "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
+  "description": "12-hour urine rate per covered hour; SOFA-2 uses complete-duration assessment",
   "category": "output",
   "callback": "uo_12h",
   "class_name": "rec_cncpt",
@@ -254,7 +255,7 @@
    "urine",
    "weight"
   ],
-  "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
+  "description": "24-hour urine rate per covered hour; SOFA-2 uses complete-duration assessment",
   "category": "output",
   "callback": "uo_24h",
   "class_name": "rec_cncpt",
