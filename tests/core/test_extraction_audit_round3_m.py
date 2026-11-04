@@ -335,7 +335,7 @@ def test_full_dictionary_m_mappings():
     # eICU: per-item GCS forms, base deficit, oral formulations of IV drugs.
     assert "Eye Opening" in ids("egcs", "eicu") and "Score (Glasgow Coma Scale)" in ids("tgcs", "eicu")
     deficit = next(s for s in d["be"]["sources"]["eicu"] if _ids(s) == {"Base Deficit"})
-    assert deficit["callback"] == "transform_fun(binary_op(`*`, -1))"
+    assert deficit["callback"] == "combine_callbacks(eicu_arterial_gas, transform_fun(binary_op(`*`, -1)))"
     amio = next(s for s in d["amiodarone"]["sources"]["eicu"] if s.get("sub_var") == "drugname" and s["table"] == "medication")
     assert re.search(amio["exclude_regex"]["drugname"], "AMIODARONE HCL 200 MG PO TABS")
     assert re.search(amio["exclude_regex"]["routeadmin"], "PO")
@@ -363,6 +363,7 @@ def test_aumc_rates_come_from_running_infusions_only():
         "iscontinuous": [1, 1, 0, 1],
         "action": ["Nieuwe spuit", "Flush", "Nieuwe toediening", "Snelheid veranderd"],
         "rate": [2.0, 60.0, 0.0, 1.5],
+        "ordercategory": "IV",
     })
     assert _drop_declared_row_exclusions(frame, source)["rate"].tolist() == [2.0, 1.5]
 

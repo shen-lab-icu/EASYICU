@@ -87,6 +87,8 @@ def apply(frame, source, concept_name, data_source=None):
     if expr == "eicu_insulin_units":
         return medication.insulin_units(frame, column)
     if expr == "eicu_positive_value":
+        if source.table == "medication":
+            return medication.positive_value(frame, column)
         out = frame.copy()
         values = pd.to_numeric(frame[column], errors="coerce")
         out[column] = values.gt(0).astype("boolean").mask(~np.isfinite(values) | values.lt(0))

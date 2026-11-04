@@ -21,15 +21,18 @@ class RawSource:
         }}},
     )
 
-    def __init__(self, frame, admittedat=(0., 0.)):
+    def __init__(self, frame, admittedat=(0., 0.), specimens=None):
         self.frame = frame
         self.admittedat = admittedat
+        self.specimens = specimens
 
     def load_table(self, table_name, columns=None, filters=None, verbose=False):
         if table_name == "admissions":
             return ICUTable(pd.DataFrame({"admissionid": [1, 2], "admittedat": self.admittedat}),
                             id_columns=["admissionid"], index_column="admittedat")
         frame = self.frame.copy()
+        if self.specimens is not None and table_name in {"freetextitems", "listitems"}:
+            frame = self.specimens.copy() if table_name == "freetextitems" else self.specimens.iloc[:0].copy()
         for spec in filters or []:
             frame = spec.apply(frame)
         return ICUTable(frame, id_columns=["admissionid"],
@@ -153,7 +156,9 @@ def test_builtin_aumc_po2_converts_kpa_before_bounds_and_pooling():
     raw = pd.DataFrame({"admissionid": [1, 1], "measuredat": [1., 2.],
                         "itemid": [7433, 21214], "value": [100., 10.],
                         "unit": ["mmHg", "kPa"]})
-    source = RawSource(raw)
+    specimens = pd.DataFrame({"admissionid": [1, 1], "measuredat": [1., 2.],
+                              "itemid": 11646, "value": "ART."})
+    source = RawSource(raw, specimens=specimens)
     source.config = DataSourceConfig(
         name="aumc", tables={"numericitems": {"defaults": {
             "id_var": "admissionid", "index_var": "measuredat",

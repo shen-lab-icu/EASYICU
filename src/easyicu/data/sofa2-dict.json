@@ -1223,7 +1223,13 @@
      "callback": "aumc_positive_dose",
      "val_var": "dose",
      "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5) | 2026-11-03 extraction audit: removed 9126 (ordercategory 'Niet iv Zalven/Crèmes/Druppels', eye drops). | 2026-11-03 extraction audit: added 7135 Isoprenaline (Isuprel) syringe-pump infusion. | 2026-11-04 audit round 3 (M NEW-2): an infusion covers every hour from its start to its end; only the start hour was marked (SICdb lost 69% of active vasopressin/phenylephrine hours).",
-     "dur_var": "stop"
+     "dur_var": "stop",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "hirid": [
@@ -1238,7 +1244,13 @@
       1001061
      ],
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | R5C-HIRID-011: include milrinone and the additional terlipressin preparation; positive givendose remains required."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | R5C-HIRID-011: include milrinone and the additional terlipressin preparation; positive givendose remains required.",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "mimic": [
@@ -1438,16 +1450,17 @@
     {
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
+     "val_var": "dosage",
      "regex": "haloperidol|haldol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-042): HALDOL added (555 named rows were missed)."
     },
@@ -1461,14 +1474,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,300 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): HICL 1661 haloperidol lactate (23,092 rows, 12,617 stays) added. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-042): HICL 1662 (haloperidol; 2,647 rows/1,720 stays) and 11814 (olanzapine; 5,136 rows without a drugname, 2,759 stays) added.",
      "exclude_regex": {

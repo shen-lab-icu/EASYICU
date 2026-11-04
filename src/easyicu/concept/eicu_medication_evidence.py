@@ -35,14 +35,29 @@ def normalize_routes(values):
     return pd.Series(np.select([noniv, has_iv & rest.eq("")], ["noniv", "iv"], default="unknown"), index=values.index)
 
 
+def _positive_dose(values):
+    """Read a numeric dose prefix; zero is false and invalid doses are unknown."""
+    text = values.astype("string")
+    number = text.str.extract(
+        r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?=\s*(?:[a-zA-Zµμ%]|$))",
+        expand=False,
+    )
+    amount = pd.to_numeric(number, errors="coerce").astype("float64")
+    return amount.gt(0).astype("boolean").mask(~np.isfinite(amount) | amount.lt(0))
+
+
+def positive_value(frame, column):
+    """Positive numeric values or medication dose text establish exposure."""
+    out = frame.copy()
+    out[column] = _positive_dose(frame[column])
+    return out
+
+
 def iv_exposure(frame, column):
     route = normalize_routes(frame["routeadmin"])
     out = frame.loc[route.ne("noniv")].copy()
-    dose_text = frame.get("dosage", frame[column]).astype("string")
-    amount = pd.to_numeric(dose_text.str.extract(r"^\s*([+-]?\d+(?:\.\d+)?)(?=\s*(?:[a-zA-Zµμ%]|$))", expand=False), errors="coerce")
-    out[column] = amount.loc[out.index].gt(0).astype("boolean").mask(
-        route.loc[out.index].eq("unknown") | amount.loc[out.index].isna() | amount.loc[out.index].lt(0)
-    )
+    positive = _positive_dose(frame.get("dosage", frame[column]))
+    out[column] = positive.loc[out.index].mask(route.loc[out.index].eq("unknown"))
     out["eicu_route_status"] = route.loc[out.index]
     out["eicu_exposure_source"] = "order_exposure"
     out.attrs["eicu_medication_audit"] = {"source": "order_exposure", "route_unknown": int(route.eq("unknown").sum()), "noniv_dropped": int(route.eq("noniv").sum())}

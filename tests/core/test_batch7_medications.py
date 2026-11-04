@@ -83,9 +83,11 @@ def test_sources_use_explicit_boolean_evidence(cdict, name, _dbs, _cov):
                 assert src.get("callback") == evidence[table]
                 continue
             # R5-EICU-023/037: IV routes and positive infusion rates are explicit owners.
-            if db in {"eicu", "eicu_demo"} and src.get("callback") in {"eicu_iv_exposure", "eicu_positive_infusion"}:
-                expected_table = "medication" if src["callback"] == "eicu_iv_exposure" else "infusiondrug"
+            if db in {"eicu", "eicu_demo"} and src.get("callback") in {"eicu_iv_exposure", "eicu_positive_infusion", "eicu_positive_value"}:
+                expected_table = "infusiondrug" if src["callback"] == "eicu_positive_infusion" else "medication"
                 assert src["table"] == expected_table
+                if src["callback"] == "eicu_positive_value":
+                    assert src["val_var"] == "dosage"
                 continue
             if db == "sic" and name in ('esmolol', 'phenytoin'):
                 # R5-SIC-026: observed Amount, preserving zero and missing.

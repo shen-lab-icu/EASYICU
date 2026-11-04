@@ -67,13 +67,13 @@ def test_mimic_iii_ph_keeps_arterial_chart_channels_only(tmp_path, scan):
 
 
 @READERS
-def test_aumc_drops_recorded_non_arterial_specimens_and_keeps_unrecorded(tmp_path, scan):
+def test_aumc_drops_non_arterial_and_unrecorded_specimens(tmp_path, scan):
     source, id_column = aumc_source(tmp_path)
     # Ven. (35) and the "Vervalt" status code (80) are excluded; the kPa gas
-    # without a specimen record is kept and still converted (12 kPa).  The
+    # without a specimen record is excluded under R6. The
     # old-era list item 7432 drops the PAP gas (40) and keeps "Arterieel".
     assert hourly(source, id_column, "po2", parquet_scan=scan) == {
-        0.0: 90.0, 2.0: 90.007, 4.0: 95.0, 6.0: 85.0,
+        0.0: 90.0, 4.0: 95.0, 6.0: 85.0,
     }
 
 

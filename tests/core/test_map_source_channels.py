@@ -121,12 +121,13 @@ def test_partial_channel_declarations_are_refused():
 def test_map_channels_partition_the_map_sources_per_database():
     dictionary = load_dictionary()
     definition = dictionary.get("map")
-    assert definition.source_channel_priority == ["invasive", "nibp"]
+    assert definition.source_channel_priority == ["invasive", "invasive_secondary", "nibp"]
     for database in MAIN_DATABASES + ["eicu_demo", "mimic_demo"]:
         sources = definition.sources[database]
         assert validate_sources(definition, sources) is True
         for channel, concept in (("invasive", "map_invasive"), ("nibp", "map_nibp")):
-            mine = [s for s in sources if s.params.get("source_channel") == channel]
+            channels = {"invasive", "invasive_secondary"} if channel == "invasive" else {channel}
+            mine = [s for s in sources if s.params.get("source_channel") in channels]
             theirs = dictionary.get(concept).sources[database]
             key = lambda s: (s.table, s.value_var, tuple(sorted(s.ids or ())))  # noqa: E731
             assert sorted(map(key, mine)) == sorted(map(key, theirs)), (database, channel)

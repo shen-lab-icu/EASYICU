@@ -204,6 +204,10 @@ def _source_fixture(root, database, name, values, layout):
         rows = pd.DataFrame({"patientunitstayid": 1, "labid": range(4), "labname": item,
                              "labresultoffset": minutes, "labresultrevisedoffset": minutes,
                              "labresult": values, "labmeasurenameinterface": unit})
+        if name == "ph":
+            pd.DataFrame({"patientunitstayid": 1, "labotheroffset": minutes,
+                          "labothername": "Sample Type", "labothervaluetext": "Arterial",
+                          "labotherresult": ""}).to_parquet(root / "customlab.parquet", index=False)
     elif database in {"miiv", "mimic"}:
         stay = "stay_id" if database == "miiv" else "icustay_id"
         pd.DataFrame({stay: [1], "subject_id": [1], "hadm_id": [11], "intime": [start],

@@ -89,6 +89,10 @@ def test_sources_use_explicit_boolean_evidence(cdict, name, _dbs, _cov):
             elif db == "aumc" and name == "warfarin":
                 # R5C-AUMC-027: a zero-dose order is not VKA administration.
                 expected = "aumc_positive_dose"
+            elif db in {"eicu", "eicu_demo"}:
+                # RR-04: medication orders require positive dose text.
+                expected = "eicu_positive_value"
+                assert src["table"] == "medication" and src["val_var"] == "dosage"
             else:
                 expected = "transform_fun(set_val(TRUE))"
             assert src.get("callback") == expected

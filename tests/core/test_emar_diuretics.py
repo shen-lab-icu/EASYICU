@@ -33,20 +33,20 @@ def test_event_dose_sums_detail_rows_and_takes_the_parent_route():
 
 
 def test_route_classes():
-    routes = pd.Series(["PO/NG", "IV", "IV DRIP", "NG", None, "TP"])
-    assert classify_route(routes).tolist() == ["oral", "iv", "iv", "oral", pd.NA, pd.NA]
+    routes = pd.Series(["PO/NG", "IV", "IV DRIP", "NG", None, "TP", "IV/PO", "PO/IV", "IVPB"])
+    assert classify_route(routes).tolist() == ["oral", "iv", "iv", "oral", pd.NA, pd.NA, pd.NA, pd.NA, "iv"]
 
 
 def test_an_emar_dose_charted_in_inputevents_within_an_hour_is_dropped():
     t = pd.Timestamp("2150-01-01 10:00")
-    # R5C-IV-016: proximity needs a shared event id and matching IV mass dose.
+    # R6 RR-07: real inputevents has no eMAR ID; match drug, IV mass and time.
     doses = pd.DataFrame({"hadm_id": [1, 1, 2], "emar_id": ["a", "b", "c"],
                           "_route": "iv", "_dose": 40., "_unit": "mg",
                           "charttime": [t, t + pd.Timedelta(hours=3), t]})
-    inputs = pd.DataFrame({"hadm_id": [1, 2], "emar_id": ["a", "c"], "amount": 40., "amountuom": "mg",
+    inputs = pd.DataFrame({"hadm_id": [1, 2], "itemid": 221794, "amount": 40., "amountuom": "mg",
                           "starttime": [t + pd.Timedelta(minutes=45),
                                                            t + pd.Timedelta(minutes=61)]})
-    kept = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime")
+    kept = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime", drug="furosemide")
     assert kept.index.tolist() == [1, 2]
 
 
