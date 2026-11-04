@@ -4,6 +4,35 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — RU5 review, urine availability and assessment residues
+
+- **[RU-01, RU-02, RU-09]** All six databases use the shared R1 collection
+  kernel for descriptive urine output, KDIGO and SOFA-2/RRT urine assessment.
+  Collection intervals are clipped to the window, and chart gaps over 12 hours
+  break coverage. AUMC follows the same owner in per-concept, batch and native
+  export paths. Window and duration assessments publish availability companions.
+- **[RU-03, RU-08]** `urine24`, `urine24_est`, `uo_6h/12h/24h` and KDIGO urine
+  stages remain **retrospective values; real-time use must filter
+  `available_at <= t`**. Availability is the latest true availability of every
+  contributing interval's records, including the record defining its left
+  endpoint. A late entry can precede a later charted record in chart order; the
+  entire window's maximum is retained. Entry delays do not change chart-gap
+  segmentation or retrospective values. No real-time value column is added.
+  eICU uses max of `intakeoutputoffset` and `intakeoutputentryoffset`;
+  MIMIC-III/IV use chart/store time; HiRID uses `datetime`/`entertime`;
+  AUMC uses `measuredat`/`registeredat`/`updatedat`. SICdb `data_float_h` has
+  only `Offset`, so chart time is its available source clock. Missing per-row
+  entry/store times fall back to chart time. Times are exported in ICU-relative
+  hours through raw and unbinned, SQL, compatibility and native paths. Daily back-allocation
+  may publish a value before its availability; its companion exposes that delay.
+- **[RU-04]** The public legacy rate helper delegates to the shared kernel;
+  obsolete scalar/daily/RRT helpers raise explicit deprecation errors.
+- **[RU-05, RU-06]** eICU respiratory-care intervals require recognized invasive
+  airway evidence and cover only hours with positive half-open overlap. HiRID
+  NIV modes 12–14 keep their pressure control label but block invasive bridges.
+- **[RU-07]** SOFA-1's description discloses its fallback to daily volume
+  extrapolated from 18 to under 24 covered hours. Scores are unchanged.
+
 ## 2026-11-04 — extraction audit round 5 (eighth dictionary reseal)
 
 The round-5 audit of cd2bae05d is fixed in eight lanes; the per-cluster

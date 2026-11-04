@@ -5,7 +5,7 @@ each piece of evidence as an isolated hour, so 92.6% of the hours with charted
 ventilator parameters carried no vent_ind (2026-11-04 audit round 3, R3-05).
 Following the eICU-CRD ventilation logic, an episode is
 
-* a respiratoryCare row whose ventEndOffset follows its ventStartOffset (rows
+* a respiratoryCare row with invasive airway evidence whose ventEndOffset follows its ventStartOffset (rows
   with both offsets 0 are placeholders and carry no time), or
 * a run of ventilator evidence hours (charted ventilator settings or measured
   ventilator data, an invasive airway, a ventilation treatment) whose
@@ -26,6 +26,7 @@ ID_COLUMN = "patientunitstayid"
 CARE_TABLE = "respiratorycare"
 DISCHARGE_COLUMN = "unitdischargeoffset"
 MAX_GAP_HOURS = 8
+INVASIVE_AIRWAYS = frozenset({"Oral ETT", "Nasal ETT", "Double-Lumen Tube", "Cricothyrotomy"})
 
 # respiratoryCharting labels that only an invasive ventilator is set with.
 INVASIVE_SETTING_LABELS = frozenset(
@@ -139,7 +140,7 @@ def load_ventilation_anchors(data_source, stays) -> pd.DataFrame:
     pieces = []
     care = load_optional(data_source, CARE_TABLE, stays, [ID_COLUMN, "airwaytype", "ventstartoffset", "ventendoffset"])
     if not care.empty:
-        invasive = care.airwaytype.isin(["Oral ETT", "Nasal ETT", "Double-Lumen Tube", "Cricothyrotomy"])
+        invasive = care.airwaytype.isin(INVASIVE_AIRWAYS)
         start = pd.to_numeric(care.ventstartoffset, errors="coerce").clip(lower=0)
         for mask, time, level in [(invasive & start.notna(), start, "invasive")]:
             pieces.append(pd.DataFrame({"_id": care.loc[mask, ID_COLUMN], "_t": time.loc[mask], "_level": level}))
@@ -202,7 +203,15 @@ def cut_hours_at_barriers(hours, point_hours, intervals, data_source, stays, id_
 def care_intervals(
     care: pd.DataFrame, discharge_offsets: Optional[dict] = None
 ) -> pd.DataFrame:
-    """Return ``[id, start_h, end_h]`` from respiratoryCare current and prior vent offsets."""
+    """Current/prior vent offsets require the source's explicit invasive airway.
+
+    airwaytype is free text, not an invasive flag. Use the same recognized
+    airway labels as the point-evidence owner; NIV, blank, missing and unknown
+    labels cannot establish an invasive interval.
+    """
+    if "airwaytype" not in care:
+        return pd.DataFrame(columns=[ID_COLUMN, "start_h", "end_h"])
+    care = care.loc[care.airwaytype.isin(INVASIVE_AIRWAYS)]
     pieces = []
     for start_col, end_col in (
         ("ventstartoffset", "ventendoffset"),
@@ -243,8 +252,8 @@ def bridge_hours(
     hours = [point_hours[[id_column, "hour"]]]
     if not intervals.empty:
         start = np.floor(intervals["start_h"].to_numpy()).astype(np.int64)
-        end = np.floor(intervals["end_h"].to_numpy()).astype(np.int64)
-        lengths = end - start + 1
+        end = np.ceil(intervals["end_h"].to_numpy()).astype(np.int64)
+        lengths = end - start
         ids = np.repeat(intervals[id_column].to_numpy(), lengths)
         offsets = np.arange(lengths.sum()) - np.repeat(np.cumsum(lengths) - lengths, lengths)
         hours.append(pd.DataFrame({id_column: ids, "hour": np.repeat(start, lengths) + offsets}))
@@ -271,6 +280,7 @@ def load_care_intervals(data_source, stays: Iterable[object]) -> pd.DataFrame:
         return pd.DataFrame(columns=[ID_COLUMN, "start_h", "end_h"])
     columns = [
         ID_COLUMN,
+        "airwaytype",
         "ventstartoffset",
         "ventendoffset",
         "priorventstartoffset",

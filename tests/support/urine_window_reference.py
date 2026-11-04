@@ -1,4 +1,4 @@
-"""Frozen pre-optimization urine kernels, for synthetic parity checks only."""
+"""Pre-optimization synthetic oracles; assessment follows the RU-01 collection rule."""
 
 from collections.abc import Sequence
 
@@ -74,6 +74,10 @@ def assess_urine_windows(
         .sort_values(ids + [time_column])
         .reset_index(drop=True)
     )
+    if '_urine_available_at' in urine:
+        cols = [c for c in ('_urine_available_at', '_urine_gap_h') if c in urine]
+        receipts = urine.groupby(ids + [time_column], as_index=False)[cols].max()
+        data = data.merge(receipts, on=ids + [time_column], how='left', validate='one_to_one')
     common_ids = [col for col in ids if col in weight.columns]
     if common_ids and "weight" in weight.columns:
         keyed = resolve_keyed_unique_weights(weight, id_columns=common_ids)
@@ -95,6 +99,8 @@ def assess_urine_windows(
         reason_by_window[window] = np.full(
             row_count, "insufficient_window", dtype=object
         )
+    available_by_window = {w: np.full(row_count, np.nan) for w in WINDOWS}
+    oliguria_available = np.full(row_count, np.nan)
     oliguria_gt6h = np.zeros(row_count, dtype=bool)
     oliguria_duration_h = np.full(row_count, np.nan, dtype=float)
     oliguria_rate = np.full(row_count, np.nan, dtype=float)
@@ -102,16 +108,17 @@ def assess_urine_windows(
     for positions in data.groupby(ids, sort=False, observed=True).indices.values():
         pos = np.asarray(positions)
         ends = times[pos]
-        starts = np.r_[ends[0], ends[:-1]] if source_is_rate else ends - width
-        lengths = ends - starts
+        lengths = np.r_[0. if source_is_rate else width, np.diff(ends)]
+        starts = ends - lengths
         amounts = data.urine.to_numpy(dtype=float)[pos]
         weights = data.weight.to_numpy(dtype=float)[pos]
         valid = np.isfinite(amounts) & np.isfinite(ends) & (lengths > 0)
-        if not source_is_rate and len(ends) > 1:
-            # Overlapping nonidentical volume bins have no unambiguous volume
-            # allocation. Do not round them into manufactured grid continuity.
-            valid[1:] &= starts[1:] >= ends[:-1] - 1e-9
-        rates = amounts if source_is_rate else amounts / width
+        source_times = data['_urine_available_at'].to_numpy(dtype=float)[pos] if '_urine_available_at' in data else ends
+        gaps = data['_urine_gap_h'].fillna(0.).to_numpy(dtype=float)[pos] if '_urine_gap_h' in data else np.r_[0., np.diff(source_times)]
+        rejected = (lengths > 12.) | (gaps > 12.)
+        valid &= ~rejected
+        segment = np.maximum.accumulate(np.where(rejected | ~np.isfinite(amounts), np.arange(len(pos)), 0))
+        rates = amounts / width if source_is_rate else np.divide(amounts, lengths, out=np.zeros_like(amounts), where=lengths > 0)
         observed_lengths = np.where(valid, lengths, 0.0)
         volumes = np.where(valid, rates * lengths, 0.0)
         cumulative_h = np.r_[0.0, np.cumsum(observed_lengths)]
@@ -120,7 +127,7 @@ def assess_urine_windows(
         for window in WINDOWS:
             left_edges = ends - window
             left = np.searchsorted(ends, left_edges, side="right")
-            left = np.minimum(left, np.arange(len(ends)))
+            left = np.maximum(np.minimum(left, np.arange(len(ends))), segment)
             partial = np.maximum(0.0, left_edges - starts[left])
             partial = np.minimum(partial, lengths[left])
             partial = np.where(valid[left], partial, 0.0)
@@ -131,20 +138,19 @@ def assess_urine_windows(
                 - partial * np.where(valid[left], rates[left], 0.0)
             )
             full = covered >= window - 1e-9
-            whole_volume_bins = source_is_rate | (partial < 1e-9)
             weight_ok = np.isfinite(weights) & (weights > 0)
-            assessable = full & whole_volume_bins & weight_ok
+            assessable = full & weight_ok
             covered_by_window[window][pos] = np.maximum(0.0, covered)
             rate_by_window[window][pos[assessable]] = (
-                volume[assessable] / window / weights[assessable]
+                np.maximum(volume[assessable], 0.) / (window * weights[assessable])
             )
             reason = np.full(len(pos), "insufficient_window", dtype=object)
-            reason[full & ~whole_volume_bins] = "partial_volume_bin"
+            available_by_window[window][pos] = np.where(covered > 1e-9, source_times, np.nan)
             reason[~weight_ok] = "missing_weight"
             reason[assessable] = (
                 "complete_rate_intervals"
                 if source_is_rate
-                else "complete_estimated_bins"
+                else "complete_collection_intervals"
             )
             reason_by_window[window][pos] = reason
 
@@ -168,6 +174,7 @@ def assess_urine_windows(
         rate[assessable] = (
             volume[assessable] / duration[assessable] / weights[assessable]
         )
+        oliguria_available[pos] = np.where(assessable, source_times, np.nan)
         oliguria_duration_h[pos] = np.where(
             assessable, duration, np.nan
         )
@@ -183,9 +190,11 @@ def assess_urine_windows(
         out[f"{name}_covered_h"] = covered_by_window[window]
         out[f"{name}_assessment_rate"] = rate_by_window[window]
         out[f"{name}_assessment_reason"] = reason_by_window[window]
+        out[f"{name}_assessment_available_at"] = available_by_window[window]
     out["uo_6h_oliguria_gt6h"] = oliguria_gt6h
     out["uo_6h_oliguria_duration_h"] = oliguria_duration_h
     out["uo_6h_oliguria_rate"] = oliguria_rate
+    out["uo_6h_oliguria_available_at"] = oliguria_available
     return out
 
 

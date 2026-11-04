@@ -1636,6 +1636,9 @@ class ICUDataSource:
 
         frame = drop_mimic_chart_errors(frame, db_name, table_name)
         columns = mimic_source_columns(db_name, table_name, columns, frame.columns)
+        from .scores.urine_output import available_source_columns
+
+        columns = available_source_columns(columns, frame.columns, db_name, table_name)
         if columns is not None:
             if should_lowercase:
                 # MIMIC-III: 列名匹配时也转为小写
@@ -2024,6 +2027,9 @@ class ICUDataSource:
         
         suffix = path.suffix.lower()
         lower_name = path.name.lower()
+        from .scores.urine_output import optional_availability_projection
+
+        columns = optional_availability_projection(path, columns, db_name, table_name)
 
         if suffix == ".csv" or lower_name.endswith(".csv.gz"):
             read_columns = list(columns) if columns else None
@@ -2612,6 +2618,13 @@ class ICUDataSource:
             _flat = _enumerate_bucket_parquet_files(directory)
             glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _flat) + "]") if _flat else _duckdb_path(directory / "*.parquet")
         
+        # Entry clocks are optional in older converted partitions. Inspect the
+        # selected relation before SQL projection, so absence never forces a
+        # full-table Arrow fallback or fabricates a numeric timestamp column.
+        from .scores.urine_output import partitioned_source_columns
+
+        relation_path = glob_pattern if glob_pattern.startswith("[") else f"'{glob_pattern}'"
+        columns = partitioned_source_columns(_get_duckdb_connection(), f"read_parquet({relation_path}, union_by_name=true)", columns, self.config.name, table_name)
         # 列选择
         if columns:
             select_cols = ", ".join(list(columns))
@@ -3598,9 +3611,9 @@ def load_bucketed_table_aggregated(
             valid.append(f'({value}) >= {value_min}')
         if value_max is not None:
             valid.append(f'({value}) <= {value_max}')
-        offset = f"CASE WHEN {' AND '.join(valid)} THEN ({raw_hours}) - ({bucket_hours}) END"
-        return (f", MAX({offset}) AS _urine_source_lag_h"
-                f", MIN({offset}) AS _urine_first_lag_h")
+        from .scores.urine_output import source_time_select_sql
+
+        return source_time_select_sql(raw_hours, bucket_hours, ' AND '.join(valid), db_name, time_col, raw_columns_lower)
     
     # R ricu 的 change_interval 聚合不按 itemid 分组:
     # 它将同一 (patient, hour) 的所有 itemid 数据池化后取 median/max 等。

@@ -7,7 +7,7 @@ import pandas as pd
 
 
 def ventilator_evidence(ctx, id_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """PEEP plus a measured companion; standby modes are bridge barriers."""
+    """PEEP plus a measured companion; standby and NIV block invasive bridges."""
     names = ["peep", "etco2", "tidal_vol", "vent_mode"]
     loaded = ctx.resolver.load_concepts(
         names, ctx.data_source, merge=False, patient_ids=ctx.patient_ids,
@@ -36,6 +36,8 @@ def ventilator_evidence(ctx, id_col: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         off = data[mode.value_column or "vent_mode"].astype("string").str.fullmatch(
             r"(?i)\s*(?:stand\s*by|off|stopped|no support)\s*", na=False,
         )
+        if "vent_mode_interface" in data:
+            off |= data.vent_mode_interface.eq("niv").fillna(False)
         barriers = pd.DataFrame({id_col: data[id_col], "start": start, "end": end}).loc[off]
     return evidence, barriers
 
@@ -120,6 +122,7 @@ def airway_hours(
     offsets = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
     out = pd.DataFrame({id_col: np.repeat(runs[id_col].to_numpy(), counts),
                         time_col: np.repeat(starts, counts) + offsets})
+    out[id_col] = out[id_col].astype(data[id_col].dtype)
     return out.drop_duplicates().sort_values([id_col, time_col]).reset_index(drop=True)
 
 

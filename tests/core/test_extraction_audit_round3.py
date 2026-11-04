@@ -262,6 +262,7 @@ def test_r3_05_eicu_ventilation_evidence_becomes_windows_across_gaps_of_up_to_8h
 
     care = pd.DataFrame({
         "patientunitstayid": [1, 1, 2],
+        "airwaytype": ["Oral ETT"] * 3,
         "ventstartoffset": [0, -120, 600],
         "ventendoffset": [0, 150, 0],
         "priorventstartoffset": [0, 0, 0],
@@ -275,8 +276,8 @@ def test_r3_05_eicu_ventilation_evidence_becomes_windows_across_gaps_of_up_to_8h
     points = pd.DataFrame({"patientunitstayid": [1, 1, 1, 2], "hour": [10.0, 18.0, 30.0, 5.0]})
     hours = bridge_hours(points, intervals)
     by_stay = hours.groupby("patientunitstayid")["hour"].apply(list).to_dict()
-    # 2 -> 10 and 10 -> 18 are gaps of 8 h; 18 -> 30 is not.
-    assert by_stay[1] == list(range(0, 19)) + [30]
+    # [0,2) has no overlap with hour 2; only 10 -> 18 bridges an 8 h gap.
+    assert by_stay[1] == [0, 1] + list(range(10, 19)) + [30]
     assert by_stay[2] == [5]
 
 

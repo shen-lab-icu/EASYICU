@@ -1752,184 +1752,17 @@ def _urine_rate_window_avg_multi(
     max_gap_hours: Optional[float] = None,
     default_interval_hours: float = 0.0,
 ) -> dict[str, pd.DataFrame]:
-    """Time-weighted UO windows for a directly recorded mL/h source.
+    """Compatibility wrapper for the shared twelve-hour-gap collection owner."""
+    from .scores.urine_output import descriptive_windows
 
-    HiRID 10020000 is a rate rather than a voided-volume event.  A reading is
-    assigned to the interval immediately preceding its timestamp, matching the
-    source's "hourly urine volume" semantics and the official AKI-EWS HiRID
-    implementation, which backfills each rate to the preceding chart interval.
-    No rate is invented before the first reading or after the last reading.
-    Missing time is excluded from both numerator and denominator, and a result
-    is published only after the caller-specified coverage threshold is met.
-    Descriptive UO concepts request half-window coverage; KDIGO staging requests
-    full 6/12/24-hour coverage.
-
-    ``max_gap_hours`` remains available for sensitivity analyses, but the
-    production default is uncapped because the source rate already summarizes
-    the interval preceding its timestamp. An arbitrary four-hour cap caused
-    informative missingness and selected high-output stays in long windows.
-
-    The implementation integrates non-overlapping piecewise-constant segments
-    with cumulative sums.  It is O(N log N) per stay and does not create a dense
-    time grid, keeping full-cohort extraction suitable for 16-GB machines.
-    """
-
-    id_cols, time_col = _urine_id_and_time_columns(urine)
-    output_names = [f"uo_{window_hours}h" for window_hours, _ in windows]
-    empty_base = urine[id_cols + [time_col]].copy()
-
-    if urine.empty or weight.empty:
-        return {
-            name: empty_base.assign(**{name: np.nan})
-            for name in output_names
-        }
-
-    if "urine" not in urine.columns:
-        raise ValueError("Rate-based urine calculation requires a 'urine' column")
-    if "weight" not in weight.columns:
-        return {
-            name: empty_base.assign(**{name: np.nan})
-            for name in output_names
-        }
-
-    common_ids = [col for col in id_cols if col in weight.columns]
-    if common_ids:
-        weight_one = weight[common_ids + ["weight"]].copy()
-        weight_one["weight"] = pd.to_numeric(
-            weight_one["weight"], errors="coerce"
+    if max_gap_hours not in (None, 12.) or default_interval_hours != 0.:
+        raise NotImplementedError(
+            "urine_rate_window_avg_multi custom gap/first interval is deprecated; "
+            "use scores.urine_output.descriptive_windows with the shared collection rules"
         )
-        weight_one = (
-            weight_one.dropna(subset=["weight"])
-            .groupby(common_ids, as_index=False, sort=False)["weight"]
-            .median()
-        )
-        merged = urine[id_cols + [time_col, "urine"]].merge(
-            weight_one,
-            on=common_ids,
-            how="left",
-            sort=False,
-        )
-    else:
-        merged = urine[id_cols + [time_col, "urine"]].copy()
-        from easyicu.urine_weight_linkage import resolve_unkeyed_single_entity_weight
-
-        resolution = resolve_unkeyed_single_entity_weight(
-            urine,
-            weight,
-            urine_id_columns=id_cols,
-            weight_column="weight",
-        )
-        merged["weight"] = (
-            resolution.weight if resolution.weight is not None else np.nan
-        )
-
-    merged["urine"] = pd.to_numeric(merged["urine"], errors="coerce")
-    merged["weight"] = pd.to_numeric(merged["weight"], errors="coerce")
-    merged = merged.dropna(subset=[time_col, "urine", "weight"])
-    merged = merged[merged["weight"] > 0]
-    if merged.empty:
-        return {
-            name: empty_base.assign(**{name: np.nan})
-            for name in output_names
-        }
-
-    # At most one rate per stay/time.  The source callback already aggregates
-    # target bins, but this guard makes direct API use deterministic as well.
-    merged = (
-        merged.groupby(id_cols + [time_col], as_index=False, sort=False)
-        .agg(urine=("urine", "mean"), weight=("weight", "median"))
-        .sort_values(id_cols + [time_col], kind="mergesort")
-        .reset_index(drop=True)
+    return descriptive_windows(
+        urine, weight, windows, interval=interval, source_is_rate=True,
     )
-    time_hours = _time_as_hours(merged[time_col])
-    finite_time = np.isfinite(time_hours)
-    if not finite_time.all():
-        merged = merged.loc[finite_time].reset_index(drop=True)
-        time_hours = time_hours[finite_time]
-
-    result_values = {
-        name: np.full(len(merged), np.nan, dtype=np.float64)
-        for name in output_names
-    }
-    rate_bin_hours = _rate_interval_hours(interval)
-    rates = merged["urine"].to_numpy(dtype=np.float64) / rate_bin_hours
-    weights = merged["weight"].to_numpy(dtype=np.float64)
-
-    for positions in merged.groupby(
-        id_cols, sort=False, observed=True
-    ).indices.values():
-        pos = np.asarray(positions, dtype=np.int64)
-        ends = time_hours[pos]
-        patient_rates = rates[pos]
-
-        gaps = np.empty(len(pos), dtype=np.float64)
-        gaps[0] = default_interval_hours
-        if len(pos) > 1:
-            gaps[1:] = np.diff(ends)
-        gaps = np.where(
-            np.isfinite(gaps) & (gaps > 0),
-            gaps,
-            default_interval_hours,
-        )
-        if max_gap_hours is not None:
-            cap = float(max_gap_hours)
-            if np.isfinite(cap) and cap > 0:
-                gaps = np.minimum(gaps, cap)
-        starts = ends - gaps
-        cumulative_coverage = np.cumsum(gaps)
-        cumulative_volume = np.cumsum(patient_rates * gaps)
-
-        for window_hours, min_hours in windows:
-            window_starts = ends - float(window_hours)
-
-            # Integral at the left edge of every rolling window.  Segments are
-            # non-overlapping and sorted, so one search plus a possible partial
-            # next segment is sufficient.
-            full_idx = np.searchsorted(
-                ends, window_starts, side="right"
-            ) - 1
-            coverage_at_start = np.where(
-                full_idx >= 0,
-                cumulative_coverage[np.maximum(full_idx, 0)],
-                0.0,
-            )
-            volume_at_start = np.where(
-                full_idx >= 0,
-                cumulative_volume[np.maximum(full_idx, 0)],
-                0.0,
-            )
-
-            next_idx = full_idx + 1
-            safe_next = np.minimum(next_idx, len(pos) - 1)
-            partial = (
-                (next_idx >= 0)
-                & (next_idx < len(pos))
-                & (starts[safe_next] < window_starts)
-            )
-            partial_hours = np.where(
-                partial,
-                window_starts - starts[safe_next],
-                0.0,
-            )
-            coverage_at_start += partial_hours
-            volume_at_start += partial_hours * patient_rates[safe_next]
-
-            covered = cumulative_coverage - coverage_at_start
-            volume = cumulative_volume - volume_at_start
-            valid = covered + 1e-9 >= float(min_hours)
-            values = np.full(len(pos), np.nan, dtype=np.float64)
-            values[valid] = (
-                volume[valid]
-                / covered[valid]
-                / weights[pos][valid]
-            )
-            result_values[f"uo_{window_hours}h"][pos] = values
-
-    base = merged[id_cols + [time_col]]
-    return {
-        name: base.assign(**{name: result_values[name]})
-        for name in output_names
-    }
 
 def _urine_window_avg(
     urine: pd.DataFrame,
@@ -2385,94 +2218,11 @@ def urine24(
     limits: pd.DataFrame = None,
     interval: pd.Timedelta = None
 ) -> pd.DataFrame:
-    """Calculate 24-hour urine output.
-    
-    Replicates R ricu's urine24 callback:
-    - Sum urine output over 24-hour sliding window
-    - Require minimum min_win of data for valid calculation
-    
-    Args:
-        urine: DataFrame with 'urine' column (ml)
-        min_win: Minimum window for valid calculation
-        limits: Optional DataFrame with start/end limits for each patient
-        interval: Time series interval
-        
-    Returns:
-        DataFrame with 'urine24' column (ml/24h)
-    """
-    if urine.empty or 'urine' not in urine.columns:
-        result = urine.copy()
-        result['urine24'] = pd.Series(dtype='float64')
-        if 'urine' in result.columns:
-            result = result.drop(columns=['urine'])
-        return result
-    
-    result = urine.copy()
-    
-    # Detect ID and time columns
-    id_cols = [col for col in result.columns if col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
-    time_col = None
-    for tc in ['time', 'charttime', 'index_var']:
-        if tc in result.columns:
-            time_col = tc
-            break
-    
-    if not time_col:
-        # Cannot compute sliding window without time
-        result['urine24'] = result['urine']
-        result = result.drop(columns=['urine'])
-        return result
-    
-    # Sort by ID and time
-    sort_cols = id_cols + [time_col]
-    result = result.sort_values(sort_cols)
-    
-    # Infer interval from data if not provided
-    if interval is None:
-        if len(result) > 1:
-            diffs = result.groupby(id_cols)[time_col].diff().dropna()
-            if len(diffs) > 0:
-                interval = diffs.median()
-            else:
-                interval = pd.Timedelta(hours=1)
-        else:
-            interval = pd.Timedelta(hours=1)
-    
-    # Calculate window parameters
-    window_hours = 24
-    min_steps = int(np.ceil(min_win / interval))
-    
-    # Calculate sliding window sum
-    def calc_urine24(group):
-        if len(group) == 0:
-            return group
-        
-        group = group.copy()
-        window_size = int(window_hours / (interval.total_seconds() / 3600))
-        
-        # Use rolling window
-        group['urine24'] = group['urine'].rolling(
-            window=window_size, 
-            min_periods=min_steps
-        ).sum()
-        
-        # Scale to 24h equivalent if window is shorter
-        # R ricu: sum * 24 / actual_hours
-        return group
-    
-    if id_cols:
-        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
-        _id_backup = result[id_cols].copy()
-        result = result.groupby(id_cols, group_keys=False).apply(calc_urine24)
-        for _gc in id_cols:
-            if _gc not in result.columns:
-                result[_gc] = _id_backup[_gc].values
-    else:
-        result = calc_urine24(result)
-    
-    result = result.drop(columns=['urine'], errors='ignore')
-    
-    return result
+    """Deprecated: the old arguments cannot carry collection provenance."""
+    raise NotImplementedError(
+        "callbacks.urine24 is deprecated; use concept callbacks urine24 "
+        "or scores.urine_output for measured and flagged estimated daily volumes"
+    )
 
 
 def vaso60(

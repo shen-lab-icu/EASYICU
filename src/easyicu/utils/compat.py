@@ -927,6 +927,12 @@ def merge_concepts_r_style(
             )
             if column in df.columns
         )
+        if name in {"urine24", "urine24_est", "uo_6h", "uo_12h", "uo_24h", "kdigo_uo", "aki_stage_uo", "kdigo_aki", "aki_stage_uo_reference"}:
+            # RU-02: availability belongs to the window value, including its
+            # separate full-window and >6h assessments. Preserve it in exports.
+            from ..scores.urine_output import urine_availability_columns
+
+            keep_cols.extend(c for c in urine_availability_columns(name) if c not in normalized_names)
         keep_cols = [c for c in keep_cols if c in df.columns]
         if len(keep_cols) <= 2:
             continue

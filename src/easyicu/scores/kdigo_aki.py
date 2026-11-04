@@ -794,7 +794,7 @@ def _calculate_uo_rates_simple(
             record_gaps=urine['_urine_gap_h'].to_numpy()[positions]
             if '_urine_gap_h' in urine else None,
         )
-        assessable = np.zeros(len(ends), dtype=bool)
+        stage_available = np.full(len(ends), np.nan)
         for window in (6, 12, 24):
             volume, covered, available = integrated[window]
             wt = urine['_wt'].to_numpy()[positions]
@@ -804,8 +804,8 @@ def _calculate_uo_rates_simple(
                 volume, wt * covered, out=np.full(len(ends), np.nan), where=valid,
             )
             urine.loc[positions, f"{name}_covered_h"] = covered
-            assessable |= valid
-        urine.loc[positions, "aki_stage_uo_available_at"] = np.where(assessable, available, np.nan)
+            stage_available = np.fmax(stage_available, np.where(valid, available, np.nan))
+        urine.loc[positions, "aki_stage_uo_available_at"] = stage_available
     return urine[[id_col, time_col, *output, *KDIGO_EVIDENCE_COLUMNS]]
 
 

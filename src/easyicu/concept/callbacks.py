@@ -5542,7 +5542,7 @@ def _callback_urine24_est(tables, ctx):
     """Select the explicit partial-coverage estimate produced with urine24."""
     table = tables["urine24"]
     keys = list(table.id_columns) + ([table.index_column] if table.index_column else [])
-    return _as_icutbl(table.data[keys + ["urine24_est"]].copy(), id_columns=table.id_columns,
+    return _as_icutbl(table.data.reindex(columns=keys + ["urine24_est", "urine24_est_available_at"]).copy(), id_columns=table.id_columns,
                       index_column=table.index_column, value_column="urine24_est")
 
 
@@ -8915,6 +8915,9 @@ def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
 
     frame = frame.copy()
     frame[out_column] = mapped
+    if db_key == "hirid" and axis == "control":
+        # RU-06: the control target alone cannot identify a NIV interface.
+        frame["vent_mode_interface"] = keys.map({key: mode.get("interface") for key, mode in submap["map"].items()})
     frame = frame.dropna(subset=[out_column]).reset_index(drop=True)
     if frame.empty:
         return frame
