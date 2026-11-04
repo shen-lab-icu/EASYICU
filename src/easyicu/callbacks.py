@@ -2017,7 +2017,7 @@ def gcs(
         mgcs: Motor response (1-6)
         tgcs: Total GCS (optional, 3-15)
         ett_gcs: ETT/sedation indicator
-        valid_win: Window for LOCF imputation
+        valid_win: Maximum age of each original component observation, inclusive
         sed_impute: Sedation imputation mode ('max', 'prev', 'none', 'verb')
         set_na_max: Whether to impute missing values with max
         interval: Time series interval
@@ -2065,13 +2065,21 @@ def gcs(
     if sort_cols:
         result = result.sort_values(sort_cols)
     
-    # Apply LOCF within valid_win (simplified: just forward fill within groups)
+    # Age every component from its own original observation. Refreshing another
+    # component must not extend this one's lifetime (R6-F046).
     for col in ['egcs', 'vgcs', 'mgcs', 'tgcs']:
-        if col in result.columns:
+        if col in result.columns and time_col:
+            last_time = result[time_col].where(result[col].notna())
             if id_cols:
-                result[col] = result.groupby(id_cols)[col].ffill()
+                last_time = last_time.groupby([result[c] for c in id_cols], dropna=False).ffill()
+                result[col] = result.groupby(id_cols, dropna=False)[col].ffill()
             else:
+                last_time = last_time.ffill()
                 result[col] = result[col].ffill()
+            max_age = pd.Timedelta(valid_win)
+            if pd.api.types.is_numeric_dtype(result[time_col]):
+                max_age = max_age.total_seconds() / 3600.0
+            result[col] = result[col].mask((result[time_col] - last_time) > max_age)
     
     # Apply sedation imputation
     # (Simplified - would need ett_gcs merge for full implementation)

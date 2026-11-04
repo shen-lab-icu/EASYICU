@@ -890,12 +890,15 @@ def _drop_declared_row_exclusions(frame: pd.DataFrame, source, concept_name=None
     empty value does not match (MIMIC-III 640 'Significant Events' is an
     extubation only when it says so; an eICU differential is a percentage only
     in rows reported in %).
+    ``deduplicate_by`` supplies native observation keys; equal numeric values
+    on those keys count once before hourly pooling or signed volume netting.
     """
     params = getattr(source, "params", None) or {}
     empty_var = params.get("require_empty_var")
     patterns = params.get("exclude_regex") or {}
     required = params.get("require_regex") or {}
-    if frame is None or frame.empty or (not empty_var and not patterns and not required):
+    deduplicate_by = params.get("deduplicate_by") or []
+    if frame is None or frame.empty or (not empty_var and not patterns and not required and not deduplicate_by):
         return frame
     keep = pd.Series(True, index=frame.index)
     if empty_var:
@@ -915,7 +918,14 @@ def _drop_declared_row_exclusions(frame: pd.DataFrame, source, concept_name=None
             raise KeyError(f"require_regex column {column!r} needs that column in extra_vars")
         hit = values.astype("string").str.contains(str(pattern), regex=True, na=False)
         keep &= hit.fillna(False)
-    return frame.loc[keep.to_numpy()]
+    frame = frame.loc[keep.to_numpy()]
+    if deduplicate_by:
+        if not isinstance(deduplicate_by, list) or not all(isinstance(c, str) for c in deduplicate_by):
+            raise TypeError("deduplicate_by must be a list of column names")
+        frame = frame.copy()
+        frame[concept_name] = pd.to_numeric(frame[concept_name], errors="coerce")
+        frame = frame.drop_duplicates(subset=[*deduplicate_by, concept_name])
+    return frame
 
 
 _TRUE_STATUS = frozenset({"true", "yes", "y", "t", "1", "1.0"})

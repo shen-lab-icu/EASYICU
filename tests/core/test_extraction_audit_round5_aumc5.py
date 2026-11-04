@@ -165,7 +165,8 @@ def test_r5c_aumc_013_chart_fio2_has_only_bedside_channels(tmp_path):
                                (125, 20656, 100, "Geen"), (185, 8845, 5, "L/min")])
     assert _load(db, "fio2_chart") == {0: 40, 1: 35}
     for source in _dictionary()["fio2_chart"]["sources"]["aumc"]:
-        assert source["chart_channel"] == "set_or_analyzed"
+        assert source["chart_channel"] == "unknown"
+        assert source["chart_channel_reason"] == "device_channel_definition_not_verified"
 
 
 @pytest.mark.parametrize("sofa", [False, True])
@@ -372,7 +373,9 @@ def test_r5c_aumc_review_sources_match_in_batch_and_bucket_paths(tmp_path, monke
         if not merged:
             _assert_values(_load(db, name, sofa=True), expected, name)
     if layout == "bucket":
-        assert any({"cai", "cai_ph74", "fio2_chart"} <= names for names in calls)
+        assert any({"cai", "cai_ph74"} <= names for names in calls)
+        # R6-F019 needs original item identities for the FiO2 companions.
+        assert all("fio2_chart" not in names for names in calls)
 
 
 def test_r5c_aumc_review_native_publication_preserves_the_audited_values(tmp_path, monkeypatch):

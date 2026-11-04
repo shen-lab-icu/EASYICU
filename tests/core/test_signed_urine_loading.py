@@ -91,7 +91,9 @@ def test_signed_net_full_loader_matches_independent_total(
         expected[columns].sort_values(columns[:2]).reset_index(drop=True),
         check_dtype=False,
     )
-    assert len(calls) == int(use_duckdb and grid is not None)
+    # R6-F022: MIMIC-III deduplicates native same-item volumes before netting;
+    # an hourly SQL aggregate has already discarded those observation keys.
+    assert len(calls) == int(use_duckdb and grid is not None and database == "miiv")
     if calls:
         assert calls[0]["value_min"] is None and calls[0]["value_max"] is None
         assert calls[0]["interval_minutes"] == grid.total_seconds()/60

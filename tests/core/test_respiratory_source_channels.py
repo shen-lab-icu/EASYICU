@@ -131,7 +131,7 @@ def test_source_contracts_do_not_invent_cross_database_support():
     expected = {
         "peep_set": mimic | {"aumc", "eicu", "hirid", "sic"},
         "peep_total": mimic | {"aumc", "hirid"},
-        "fio2_chart": mimic | {"aumc", "eicu", "sic"},
+        "fio2_chart": mimic | {"aumc", "eicu", "hirid", "sic"},
         "fio2_lab": mimic | {"eicu", "sic"},
     }
     for name in CHANNELS[2:]:

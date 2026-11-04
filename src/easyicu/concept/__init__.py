@@ -1735,7 +1735,7 @@ class ConceptResolver:
                         _params = getattr(src, 'params', None) or {}
                         if any(
                             _params.get(_key)
-                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var")
+                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "deduplicate_by", "source_item_columns")
                         ):
                             continue
                         _sub_var = getattr(src, 'sub_var', None)
@@ -2953,7 +2953,7 @@ class ConceptResolver:
                         # frame no longer has them (2026-11-04 audit round 3).
                         if any(
                             source.params.get(_key)
-                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var")
+                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "deduplicate_by", "source_item_columns")
                         ):
                             _can_inline_callback = False
                         if signed_sum_bounds and interval is None:
@@ -5114,6 +5114,10 @@ class ConceptResolver:
                 concept_name=concept_name,
                 source_frame=frame,
             )
+            if source.params.get("source_item_columns"):
+                from .source_channel import stamp_source_item_columns
+
+                frame_subset = stamp_source_item_columns(frame_subset, frame, source, concept_name)
             
             if _select_channels:
                 from .source_channel import stamp_rank
@@ -9979,6 +9983,9 @@ class ConceptResolver:
                 result_cols.append(value_cols[0])
                 value_col_name = value_cols[0]
 
+            from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
+
+            result_cols.extend(SOURCE_ITEM_OUTPUT_COLUMNS.get(concept_name, ()))
             # 确保只返回需要的列
             available_cols = [col for col in result_cols if col in frame.columns]
             result = frame[available_cols].copy()

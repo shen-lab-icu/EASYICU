@@ -90,6 +90,13 @@ CONCEPT_OUTPUT_LOAD_SOURCES: Mapping[str, str] = MappingProxyType(
     {"sep3_sofa1": "sep3"}
 )
 
+# Physical provenance companions travel with their parent value. They are not
+# independently selectable concepts and do not expand the public catalogue.
+SOURCE_ITEM_OUTPUT_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "fio2_chart": tuple(f"fio2_chart_aumc_{item}" for item in
+                        (6699, 12279, 12282, 12329, 12369, 16246, 20134)),
+})
+
 
 @dataclass(frozen=True, slots=True)
 class CompositeLoaderSupport:
@@ -309,6 +316,7 @@ def compile_concept_load_plan(output_concepts: Sequence[str]) -> ConceptLoadPlan
 
 
 __all__ = [
+    "SOURCE_ITEM_OUTPUT_COLUMNS",
     "COMPOSITE_CONCEPT_OUTPUT_SOURCES",
     "COMPOSITE_LOADER_SUPPORT",
     "CONCEPT_OUTPUT_LOAD_SOURCES",
