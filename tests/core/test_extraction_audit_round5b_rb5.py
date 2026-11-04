@@ -240,13 +240,14 @@ def test_rb_07_intake_output_exposure_requires_positive_volume(filename, db, pro
 
 
 @pytest.mark.parametrize("filename", DICTIONARIES)
-@pytest.mark.parametrize("concept,item,positive", [("ecmo", 20662, "VA ECMO"), ("mech_circ_support", 6658, "Ja")])
+# Real AUMCdb categories: 6658 IABP Frequentie 1:1/1:2/1:3/Uit; 20662 ECMO - Type VA ECMO.
+@pytest.mark.parametrize("concept,item,positive", [("ecmo", 20662, "VA ECMO"), ("mech_circ_support", 6658, "1:2")])
 @pytest.mark.parametrize("projected", [False, True])
 def test_rb_08_categorical_support_excludes_explicit_negative_and_empty_values(filename, concept, item, positive, projected):
     spec = _sources(filename, concept, "aumc", {"listitems"})[0]
     assert spec["ids"] == [item]
-    values = [positive, "Nee", " no ", "FALSE", "0", None, "", "  "]
-    frame = pd.DataFrame({"row": range(8), "itemid": item, "value": values})
+    values = [positive, "Nee", " no ", "FALSE", "0", None, "", "  ", "Uit"]
+    frame = pd.DataFrame({"row": range(9), "itemid": item, "value": values})
     assert _true_rows(_apply(spec, concept, frame, projected), concept) == {0}
     assert spec["val_var"] == "value"
 
