@@ -42,6 +42,7 @@ from ..concept_availability import (
     normalize_concept_name,
     real_data_concept_feasibility,
 )
+from ..concept_catalog import load_concept_catalog, research_selectable_concepts
 from .hypothesis_generator import (
     HypothesisFeasibilitySignal,
     HypothesisGeneratorResult,
@@ -1678,8 +1679,6 @@ def _catalog_restrict_keys(
 def _default_concept_catalog_for_idea_run(
     available_concepts: Sequence[ConceptDescriptor | str],
 ):
-    from ..concept_catalog import load_concept_catalog
-
     return load_concept_catalog(restrict_to=_catalog_restrict_keys(available_concepts))
 
 
@@ -3178,7 +3177,7 @@ def _build_concept_lookup(
 ) -> Dict[str, str]:
     lookup: Dict[str, str] = {}
     canonicals: List[str] = []
-    for item in available_concepts:
+    for item in research_selectable_concepts(available_concepts):
         if isinstance(item, ConceptDescriptor):
             canonical = normalize_concept_name(item.source_concept or item.name)
             keys = [item.name, item.source_concept or "", item.description or ""]

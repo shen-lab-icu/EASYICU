@@ -125,7 +125,7 @@ def _bindable_concept_ids(columns: Sequence[str]) -> list[str]:
         return []
     return sorted(
         concept_id
-        for concept_id in known_concept_ids()
+        for concept_id in known_concept_ids(include_audit=False)
         if any(
             resolve(names, concept_id, aggregation, column_bindings={}) is not None
             for aggregation in _COHORT_PREDICATE_AGGREGATIONS
@@ -148,7 +148,7 @@ def _format_concept_id_allowlist(columns: Sequence[str] = ()) -> str:
         "available to narrow them)"
     )
     if not concept_ids:
-        concept_ids = sorted(known_concept_ids())
+        concept_ids = sorted(known_concept_ids(include_audit=False))
     if not concept_ids:
         return (
             "ALLOWED concept_ids — no concept dictionary entries were loaded. "

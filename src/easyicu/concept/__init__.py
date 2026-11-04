@@ -1692,7 +1692,7 @@ class ConceptResolver:
                     # 否则批量路径会强制使用 MEDIAN，导致 pafi/safi 与 ricu 不一致。
                     _concepts_for_batch = [
                         (name, val_var) for name, val_var in concepts_info
-                        if aggregators.get(name) in (None, False, 'auto', 'median')
+                        if aggregators.get(name) in (None, 'auto', 'median')
                         and name not in multi_source_concepts
                     ]
 
@@ -3061,7 +3061,8 @@ class ConceptResolver:
                                     _convert_unit_callback_for_duckdb = False
                                     if verbose:
                                         print(f"   ⚠️ id_tbl DuckDB失败({_idtbl_err}), 回退到原始路径")
-                        if has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
+                        # Raw audit observations must reach QC before SQL aggregation.
+                        if aggregator is not False and has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
                             itemids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
                             use_duckdb_aggregation = len(itemids) > 0
                             if is_convert_unit and use_duckdb_aggregation:
@@ -7477,7 +7478,9 @@ class ConceptResolver:
         # - Pyricu (old): sub-concept aggregated first → median(1.0, 2.0) = 1.5 → vaso60 → 1.5
         #
         # Solution: For vaso60 callback, set aggregate=False for all sub-concepts
-        if definition.callback == "vaso60":
+        # Range QC must also inspect each source value: an hourly median or
+        # maximum can conceal a low tail before its quality flag is computed.
+        if definition.callback in {"vaso60", "bounds_qc"}:
             aggregate_mapping = {name: False for name in sub_names}
 
         # Prepare kwargs for sub-concepts, allowing them to be optional
@@ -7510,7 +7513,9 @@ class ConceptResolver:
             align_to_admission=align_to_admission,  # Pass align flag
             r_compatible=False,  # 🔥 内部调用必须返回 Dict[str, ICUTable]
             concept_workers=1,  # 🔧 子概念顺序加载，避免过度并行导致线程竞争
-            _skip_concept_cache=False,  # 🚀 启用缓存以避免重复加载共享子概念
+            # QC needs source observations even if a requested raw sibling
+            # already cached its hourly median under the default cache key.
+            _skip_concept_cache=definition.callback == "bounds_qc",
             **sub_kwargs,  # Pass kwargs with allow_missing flag
         )
 
