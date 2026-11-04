@@ -619,9 +619,10 @@ def test_minute_volume_semantic_coverage_keeps_observed_values_not_alarms() -> N
     assert "Minute Ventilation Set(L/min)" not in eicu_ids
     assert "Minute Volume Leak" not in eicu_ids
 
-    measured_mimic_ids = {448, 450, 650, 1883, 3049, 3259, 6078, 6932}
-    # 6934 'inhaled ve' is inspiratory (extraction audit round 2, P5).
-    excluded_mimic_ids = {449, 2012, 6934}
+    measured_mimic_ids = {448, 450, 3259, 6078, 6932}
+    # 6934 'inhaled ve' is inspiratory (extraction audit round 2, P5);
+    # 650/1883/3049 are spontaneous-only (extraction audit round 4, R4-122).
+    excluded_mimic_ids = {449, 2012, 6934, 650, 1883, 3049}
     for dataset in ("mimic", "mimic_demo"):
         mimic_ids = set(concept["minute_vol"]["sources"][dataset][0]["ids"])
         assert measured_mimic_ids.issubset(mimic_ids)
