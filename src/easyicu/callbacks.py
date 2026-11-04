@@ -2041,6 +2041,18 @@ def gcs(
     if not merge_cols:
         return pd.DataFrame(columns=['gcs'])
     
+    if time_col:
+        # Components may arrive at different timedelta/datetime resolutions
+        # (pandas 3 infers seconds); merging those keys raises.
+        def _common_clock(df):
+            if df is None or df.empty or time_col not in df:
+                return df
+            col = df[time_col]
+            if (pd.api.types.is_timedelta64_dtype(col) or pd.api.types.is_datetime64_any_dtype(col)) and hasattr(col.dt, "as_unit"):
+                return df.assign(**{time_col: col.dt.as_unit("ns")})
+            return df
+        egcs, vgcs, mgcs, tgcs = (_common_clock(df) for df in (egcs, vgcs, mgcs, tgcs))
+
     # Merge all components
     result = egcs.copy() if not egcs.empty else pd.DataFrame()
     

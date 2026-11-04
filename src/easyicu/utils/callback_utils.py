@@ -897,7 +897,7 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         group = work.groupby(keys, dropna=False, sort=False)
         nxt = group["__time"].shift(-1)
         gap = nxt - work.__time
-        previous_positive = group["__positive"].shift().fillna(False)
+        previous_positive = group["__positive"].shift(fill_value=False)
         previous_time = group["__time"].shift()
         new = ~previous_positive | work.__time.sub(previous_time).gt(gap_hours)
         work[group_col] = new.groupby([work[c] for c in keys], dropna=False).cumsum()

@@ -379,13 +379,14 @@ def test_r6_f013_public_and_native_ventilation_keep_precise_mixed_windows(tmp_pa
 def test_r6_f014_care_to_bridge_retains_partial_hours_across_stop_barriers():
     from easyicu.concept.eicu_ventilation_windows import care_intervals, cut_hours_at_barriers
 
-    care = pd.DataFrame({"patientunitstayid": [1, 2, 3], "ventstartoffset": [0., 30., -30.], "ventendoffset": [60., 60., 30.]})
+    care = pd.DataFrame({"patientunitstayid": [1, 2, 3], "ventstartoffset": [0., 30., -30.], "ventendoffset": [60., 60., 30.],
+                         "airwaytype": "Oral ETT"})
     intervals = care_intervals(care)
     points = pd.DataFrame(columns=["patientunitstayid", "hour"])
     out = bridge_hours(points, intervals)
     assert out.groupby("patientunitstayid").hour.apply(list).to_dict() == {1: [0.], 2: [0.], 3: [0.]}
     # A stop halfway through the cell cannot erase its earlier IMV overlap.
-    tables = {"respiratorycare": care.assign(airwaytype="Oral ETT")}
+    tables = {"respiratorycare": care}
     class Source:
         def load_table(self, name, **kwargs):
             return tables.get(name, pd.DataFrame(columns=kwargs.get("columns", [])))
