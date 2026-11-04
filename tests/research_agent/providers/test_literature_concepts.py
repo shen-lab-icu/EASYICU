@@ -31,7 +31,14 @@ def dictionary_descriptions():
     )
     entries = json.loads(dictionary_path.read_text(encoding="utf-8"))
     assert entries
-    return {name: entry.get("description", "") for name, entry in entries.items()}
+    from easyicu.concept.catalog import BOUNDS_AUDIT_CONCEPTS
+
+    # Bounds-audit raw/QC channels are opt-in audit columns that no Planner
+    # menu or literature query offers; every other concept must stay searchable.
+    return {
+        name: entry.get("description", "") for name, entry in entries.items()
+        if name not in BOUNDS_AUDIT_CONCEPTS
+    }
 
 
 def _dictionary_context(concept, descriptions, *, database, role):
