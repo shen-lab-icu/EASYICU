@@ -113,94 +113,23 @@ def sofa_score(
     Returns:
         DataFrame with SOFA score and optionally components
     """
-    from .io.ts_utils import slide
-    
-    required = ['sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal']
-    
-    # Set default window length
-    if win_length is None:
-        win_length = pd.Timedelta(hours=24)
-    
-    # Step 1: Merge all component dataframes using outer joins.
-    result = None
-    for comp in required:
-        if comp in data_dict and not data_dict[comp].empty:
-            df = data_dict[comp]
-            if result is None:
-                result = df
-            else:
-                result = pd.merge(result, df, on=['stay_id', 'time'], how='outer')
+    from .concept.callbacks import ConceptCallbackContext, _callback_sofa_score
+    from .table import ICUTable
 
-    if result is None or result.empty:
-        return pd.DataFrame(columns=['stay_id', 'time', 'sofa'])
-
-    # Step 2: Use fill_gaps to create continuous time series
-    # CRITICAL: fill_gaps should only fill within the range where we have data,
-    # matching R ricu's behavior where time points are determined by component data.
-    # We DON'T create arbitrary time grids beyond data boundaries.
-    from .io.ts_utils import fill_gaps as ricu_fill_gaps
-    
-    # Apply fill_gaps which will create hourly grid within data range for each patient
-    # For miiv database, enforce ricu-style time filtering (time >= 0)
-    if 'time' in result.columns and len(result) > 0:
-        # Check if this is miiv data by examining data source patterns
-        # If we have very negative time values, assume miiv and apply ricu-style filtering
-        min_time = result['time'].min()
-        if min_time < -1000:  # Likely miiv data with pre-ICU records
-            # Filter to only include time >= 0 (ricu-style)
-            result = result[result['time'] >= 0].copy()
-
-    aligned_result = ricu_fill_gaps(result, limits=None)
-
-    # Step 3: Apply sliding window to get the "worst" value (max).
-    # CRITICAL: Slide on the gapped data, BEFORE forward-filling.
-    # This matches R ricu's logic where `slide` operates on the output of `fill_gaps`.
-    id_cols = ['stay_id']
-    sofa_components = [comp for comp in required if comp in aligned_result.columns]
-    
-    if win_length.total_seconds() > 0:
-        agg_dict = {comp: worst_val_fun for comp in sofa_components}
-        
-        slid_result = slide(
-            data=aligned_result,
-            id_cols=id_cols,
-            index_col='time',
-            before=win_length,
-            after=pd.Timedelta(0),
-            agg_func=agg_dict,
-            full_window=False
-        )
-    else:
-        slid_result = aligned_result.copy()
-
-    # Step 5: Forward-fill the results AFTER sliding.
-    # This fills in the hours where the entire 24h window had no data.
-    slid_components = [c for c in sofa_components if c in slid_result.columns]
-    if slid_components:
-        slid_result[slid_components] = slid_result.groupby(id_cols)[slid_components].ffill()
-
-    # CRITICAL: Filter out rows where ALL components are NaN
-    # This replicates ricu's behavior where time points only exist if at least one component has data
-    # Without this, fill_gaps creates rows beyond component data boundaries
-    if slid_components:
-        # Keep rows where at least one component is non-NaN
-        has_data_mask = slid_result[slid_components].notna().any(axis=1)
-        slid_result = slid_result[has_data_mask].copy()
-
-    # Step 6: Calculate the total SOFA score.
-    slid_result['sofa'] = slid_result[slid_components].fillna(0).sum(axis=1).astype(int)
-    
-    # Final column selection.
-    final_cols = ['stay_id', 'time', 'sofa']
-    if keep_components:
-        final_cols.extend(sofa_components)
-    
-    # Ensure all required columns exist before returning, adding NaN if they were dropped.
-    for col in final_cols:
-        if col not in slid_result.columns:
-            slid_result[col] = np.nan
-            
-    return slid_result[final_cols]
+    components = ["sofa_resp", "sofa_coag", "sofa_liver", "sofa_cardio", "sofa_cns", "sofa_renal"]
+    tables = {
+        name: ICUTable(frame.copy(), id_columns=["stay_id"], index_column="time", value_column=name)
+        for name, frame in data_dict.items() if name in components and not frame.empty
+    }
+    if not tables:
+        return pd.DataFrame(columns=["stay_id", "time", "sofa"])
+    ctx = ConceptCallbackContext(
+        concept_name="sofa", target=None, interval=pd.Timedelta(hours=1),
+        resolver=None, data_source=None, patient_ids=None,
+        kwargs={"keep_components": keep_components, "win_length": win_length,
+                "worst_val_fun": worst_val_fun},
+    )
+    return _callback_sofa_score(tables, ctx).data
 
 def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Series:
     """Calculate respiratory SOFA component.

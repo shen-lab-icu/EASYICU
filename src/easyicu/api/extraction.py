@@ -5787,6 +5787,7 @@ def _try_publish_native_export_arrow_fast_path(
                 frame,
                 requested_concepts=requested_concepts,
                 dictionary=dictionary,
+                database=database,
             )
             if time_axis_audit is None:
                 time_axis_audit = dict(batch_time_audit)
@@ -6096,6 +6097,7 @@ def _enforce_native_export_concept_bounds(
     *,
     requested_concepts: List[str],
     dictionary,
+    database: str | None = None,
 ) -> Dict[str, Dict[str, object]]:
     """Null values outside declared target-unit bounds in a canonical frame.
 
@@ -6116,6 +6118,11 @@ def _enforce_native_export_concept_bounds(
     bounds_map = _load_concept_bounds_map()
     for concept in requested_concepts:
         minimum, maximum = bounds_map.get(concept, (None, None))
+        from ..concept.sicdb_sources import preserves_raw_cvp
+
+        if preserves_raw_cvp(dictionary.get(concept), database):
+            # R5-SIC-001: only the declared SIC raw channel retains rejected values.
+            minimum, maximum = None, None
         bounded = _native_export_storage_kind(concept, dictionary) == "float64" and (
             minimum is not None or maximum is not None
         )
@@ -6530,6 +6537,7 @@ def _publish_native_export_v2(
                         frame,
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
+                        database=normalized_database,
                     )
                     frame, row_grain_audit = _consolidate_native_export_row_grain(
                         frame,
@@ -6543,6 +6551,7 @@ def _publish_native_export_v2(
                         frame,
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
+                        database=normalized_database,
                     )
                     for concept, post_audit in post_consolidation_bounds.items():
                         bounds_audit[concept]["excluded_out_of_bounds"] += int(
@@ -6556,6 +6565,7 @@ def _publish_native_export_v2(
                         frame,
                         requested_concepts=requested_concept_plan[module],
                         dictionary=dictionary,
+                        database=normalized_database,
                     )
                     frame, row_grain_audit = _consolidate_native_export_row_grain(
                         frame,

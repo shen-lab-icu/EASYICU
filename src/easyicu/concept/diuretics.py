@@ -31,8 +31,9 @@ reference dictionary); a row whose unit is not a mass unit is dropped and counte
 frame's ``attrs['furosemide_equivalent_audit']``, never guessed.  A source may
 declare ``status_var`` and ``excluded_statuses`` (MIMIC ``Rewritten``
 records are superseded entries, not doses).  Each dose is attributed to its
-administration start time; infusion amounts are not spread over their
-duration, so hourly values of a long infusion sit in its first hour.
+administration start time unless the source explicitly declares interval
+allocation. SICdb continuous amounts use ICU-hour overlap; boluses remain
+point events. SICdb's unknown route retains the documented IV upper bound.
 """
 
 from __future__ import annotations
@@ -112,15 +113,15 @@ def _route_series(frame: pd.DataFrame, params: Mapping[str, object]) -> pd.Serie
     return pd.Series(oral.fillna(False).map({True: "oral", False: "iv"}).to_numpy(), index=frame.index)
 
 
-def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: Mapping[str, object]) -> pd.DataFrame:
+def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: Mapping[str, object], data_source=None) -> pd.DataFrame:
     """Share a continuous infusion's amount over its running time.
 
     A SICdb perfusor row records the whole syringe amount at its start
     ``Offset``; ``OffsetDrugEnd`` is its end, both in source seconds.  The
-    amount is split into consecutive ``fe_spread_step`` pieces (one hour) in
-    proportion to their running time, each timed at its own start, so the
-    hourly sum follows the infusion instead of loading its first hour
-    (2026-11-04 audit round 3, M SIC NEW-3).  Single doses stay as recorded.
+    SICdb's ``fe_icu_clock`` delegates to positive ICU-hour overlaps rather
+    than chunks beginning at the raw start (R5-SIC-009). Other explicitly
+    declared spreading sources retain their fixed-step convention. Single
+    doses stay point events on the source's declared clock.
     """
     end_var = params.get("fe_spread_end_var")
     if not end_var or frame.empty:
@@ -130,6 +131,13 @@ def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: M
     for column in (index_var, str(end_var)) + ((str(single_var),) if single_var else ()):
         if column not in frame.columns:
             raise DiureticSourceContractError("diuretic_spread_column_missing", column)
+    if params.get("fe_icu_clock"):
+        from .sicdb_sources import allocate_amounts
+
+        return allocate_amounts(
+            frame, concept_name=concept_name, start=index_var, stop=str(end_var),
+            single=str(single_var), data_source=data_source,
+        )
     step = float(params.get("fe_spread_step") or 3600)
     start = pd.to_numeric(frame[index_var], errors="coerce")
     end = pd.to_numeric(frame[str(end_var)], errors="coerce")
@@ -157,6 +165,7 @@ def furosemide_equivalent(
     value_var: Optional[str],
     unit_var: Optional[str],
     params: Mapping[str, object],
+    data_source=None,
 ) -> pd.DataFrame:
     """Convert one source's administered amounts to mg IV furosemide."""
 
@@ -193,7 +202,7 @@ def furosemide_equivalent(
     }
     out = frame.loc[keep.to_numpy()].copy()
     out[concept_name] = mg_eq.loc[keep].to_numpy()
-    out = _spread_continuous_amounts(out, concept_name, params)
+    out = _spread_continuous_amounts(out, concept_name, params, data_source)
     out.attrs[AUDIT_ATTR] = audit
     return out
 

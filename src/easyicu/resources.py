@@ -183,5 +183,9 @@ def load_dictionary(
 
     if is_packaged_default and _is_sic_source(source_name):
         require_sic_case_overlay(dictionary)
+        from .concept.sicdb_sources import preserves_raw_cvp
+
+        if preserves_raw_cvp(dictionary.get("cvp_raw"), "sic"):
+            dictionary["cvp_raw"].minimum = dictionary["cvp_raw"].maximum = None
 
     return dictionary

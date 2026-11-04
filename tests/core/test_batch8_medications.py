@@ -62,6 +62,11 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
+            if db == "sic" and name in ('aspirin', 'enoxaparin', 'warfarin'):
+                # R5-SIC-026: observed Amount, preserving zero and missing.
+                assert src.get("callback") == "sicdb_exposure"
+                assert src.get("val_var") == "Amount"
+                continue
             # An eMAR source keeps given doses first, then marks them TRUE.
             # MIMIC-III prescriptions without a time sit at noon (audit round 2, D5).
             if src.get("table") == "emar":

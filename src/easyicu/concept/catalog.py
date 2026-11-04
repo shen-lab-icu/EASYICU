@@ -17,6 +17,8 @@ CONCEPT_DICTIONARY = {
     'dbp': ('Diastolic Blood Pressure', '舒张压', 'mmHg'),
     'pulse_pressure': ('Pulse Pressure (SBP - DBP)', '脉压差 (收缩压 - 舒张压)', 'mmHg'),
     'cvp': ('Central Venous Pressure', '中心静脉压', 'mmHg'),
+    'cvp_raw': ('Charted Central Venous Pressure', '原始中心静脉压', 'mmHg'),
+    'cvp_qc': ('SICdb CVP Exclusion Reason', 'SICdb中心静脉压质控原因', 'category'),
     'shock_index': ('Shock Index', '休克指数', 'ratio'),
     'modified_shock_index': ('Modified Shock Index', '改良休克指数', 'ratio'),
     'diastolic_shock_index': ('Diastolic Shock Index', '舒张压休克指数', 'ratio'),
@@ -32,6 +34,8 @@ CONCEPT_DICTIONARY = {
     'o2sat': ('Oxygen Saturation (SpO2)', '血氧饱和度', '%'),
     'sao2': ('Arterial Oxygen Saturation', '动脉血氧饱和度', '%'),
     'mech_vent': ('Mechanical Ventilation Mode', '机械通气模式', 'category'),
+    'mech_vent_rule': ('SICdb Ventilation Attribution', 'SICdb通气归因规则', 'category'),
+    'mech_vent_opioid_sensitivity': ('SICdb Opioid-only Ventilation Sensitivity', 'SICdb仅阿片通气敏感性候选', 'boolean'),
     'vent_mode': ('Ventilator Breath-Control Mode', '呼吸机控制类型', 'category'),
     'vent_breath_seq': ('Ventilator Breath Sequencing', '呼吸机呼吸序列', 'category'),
     'driving_pres_controlled': ('Driving Pressure (controlled vent)', '驱动压(控制通气)', 'cmH2O'),
@@ -249,6 +253,8 @@ CONCEPT_DICTIONARY = {
     'plateau_pres': ('Plateau Pressure', '平台压', 'cmH2O'),
     'mean_airway_pres': ('Mean Airway Pressure', '平均气道压', 'cmH2O'),
     'minute_vol': ('Minute Ventilation', '分钟通气量', 'L/min'),
+    'minute_vol_raw': ('SICdb Charted Minute Ventilation', 'SICdb原始分钟通气量', 'L/min'),
+    'minute_vol_qc': ('SICdb Minute Ventilation Exclusion Reason', 'SICdb分钟通气量质控原因', 'category'),
     'vent_rate': ('Ventilator Respiratory Rate', '呼吸机频率', '/min'),
     'compliance': ('Static Compliance', '静态肺顺应性', 'mL/cmH2O'),
     'driving_pres': ('Driving Pressure', '驱动压', 'cmH2O'),
@@ -595,9 +601,9 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
-    'vitals': ['hr', 'map', 'map_invasive', 'map_nibp', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
-    'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'o2_flow', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
-    'ventilator': ['peep', 'peep_set', 'peep_total', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
+    'vitals': ['hr', 'map', 'map_invasive', 'map_nibp', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'cvp_raw', 'cvp_qc', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
+    'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'o2_flow', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'mech_vent_rule', 'mech_vent_opioid_sensitivity', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
+    'ventilator': ['peep', 'peep_set', 'peep_total', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'minute_vol_raw', 'minute_vol_qc', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
@@ -673,9 +679,7 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # Charted plateau before the PIP/PEEP consistency check; plateau_pres is
     # the published concept (2026-11-04 audit round 3, R3-18).
     'plateau_pres_raw',
-    # Charted CVP before the arterial-diastolic and spike check; cvp is the
-    # published concept (2026-11-04 audit round 4, R4-013).
-    'cvp_raw',
+    # R5-SIC-001 publishes charted CVP beside the filtered value and QC reason.
     # Round-5 bounds audit: explicit raw/QC receipts retain candidate extremes
     # without replacing reviewed public ranges or claiming clinical validity.
     *BOUNDS_AUDIT_CONCEPTS,
@@ -693,6 +697,9 @@ PLANNER_HIDDEN_CONCEPTS = frozenset({
     'uo_rt_6hr_covered_h', 'uo_rt_12hr_covered_h', 'uo_rt_24hr_covered_h',
     'uo_6h_covered_h', 'uo_12h_covered_h', 'uo_24h_covered_h',
     'uo_6h_partial_window', 'uo_12h_partial_window', 'uo_24h_partial_window',
+    # SICdb audit companions (R5-SIC-001/011/015): exported beside their values.
+    'cvp_raw', 'cvp_qc', 'minute_vol_raw', 'minute_vol_qc',
+    'mech_vent_rule', 'mech_vent_opioid_sensitivity',
 })
 
 # 双语显示名称映射（优化：更清晰的命名区分评分vs诊断，包含准确特征数量）
@@ -829,8 +836,11 @@ CONCEPT_DB_COVERAGE = {
     'sofa': 6, 'sofa2': 6, 'gcs': 6,
     'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
     'pafi': 5, 'safi': 5, 'urine': 5,
-    'peep': 4, 'tidal_vol': 4, 'ins': 4,
-    'peep_set': 2, 'peep_total': 2, 'fio2_chart': 2, 'fio2_lab': 2,
+    'peep': 4, 'tidal_vol': 4, 'ins': 6,  # R5-SIC-012: positive continuous SIC insulin.
+    'peep_set': 2, 'peep_total': 2, 'fio2_chart': 3, 'fio2_lab': 3,  # R5-SIC-013.
+    'cvp_raw': 6, 'cvp_qc': 1, 'minute_vol_raw': 1, 'minute_vol_qc': 1,
+    'mech_vent_rule': 1, 'mech_vent_opioid_sensitivity': 1,  # SIC audit companions.
+    'dex': 6,
     'o2_flow': 5,  # supp_o2 input: miiv/mimic/eicu/aumc/hirid (2026-11-03 audit round 2, G6/G7)
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 5, 'rrt': 4,
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
@@ -848,7 +858,7 @@ CONCEPT_DB_COVERAGE = {
     'propofol_rate': 6,
     # MIIV+MIMIC only for now; other DBs need non-kg mass-rate callback (TODO)
     'fentanyl_rate': 5,
-    'midazolam_rate': 5,
+    'midazolam_rate': 6,  # R5-SIC-012: verified grams / elapsed time.
     # Batch 2 (2026-05-13; HiRID additions audited 2026-05-27)
     'lorazepam': 6,
     'ketamine': 6,

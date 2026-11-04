@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pandas as pd
 import pytest
 
 REAL_ROOT = os.environ.get("EASYICU_NATIVE_V2_REAL_ROOT")
@@ -64,6 +65,30 @@ def test_synthetic_source_publishes_all_modules(tmp_path, database):
         modules=list(EXTRACT_MODULE_ORDER), native_export_v2=True, verbose=False,
     )
     _assert_published(database, output, result)
+    if database == "sic":
+        # R5-SIC-001: raw CVP survives publication beside the exclusion reason.
+        vitals = pq.read_table(output / "vitals.parquet").to_pandas()
+        assert vitals.cvp_raw.max() == 60.
+        assert "above_50" in set(vitals.cvp_qc.dropna())
+        assert (vitals.cvp.dropna() <= 50).all()
+        # R5-SIC-016: publication keeps the converted physical values, not
+        # only a non-empty column or a relabelled unit. Pool the source rows
+        # independently on the official ICU clock to check all six channels.
+        source = tmp_path / "source"
+        events = pd.read_parquet(source / "data_float_h.parquet")
+        origins = pd.read_parquet(source / "cases.parquet").set_index("CaseID").ICUOffset
+        events["charttime"] = ((events.Offset - events.CaseID.map(origins)) // 3600).astype(float)
+        channels = {"peep": ([2278], 40), "peep_set": ([2278], 40),
+                    "pip": ([715], 100), "ps": ([2284], 40),
+                    "mean_airway_pres": ([2279, 712], 60), "compliance": ([3120], 200)}
+        published = pd.read_parquet(output / "ventilator.parquet").set_index(["stay_id", "charttime"])
+        for name, (items, upper) in channels.items():
+            rows = events.loc[events.DataID.isin(items)].copy()
+            rows["value"] = rows.Val * (98.0665/100 if name == "compliance" else 100/98.0665)
+            expected = rows.loc[rows.value.between(0, upper)].groupby(["CaseID", "charttime"]).value.median()
+            actual = published[name].dropna().sort_index()
+            expected.index.names = actual.index.names
+            pd.testing.assert_series_equal(actual, expected.sort_index(), check_names=False, check_dtype=False)
 
 
 @pytest.mark.skipif(not REAL_ROOT, reason="EASYICU_NATIVE_V2_REAL_ROOT is not set")

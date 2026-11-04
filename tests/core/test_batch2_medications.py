@@ -66,6 +66,11 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
                 expected_table = "medication" if src["callback"] == "eicu_iv_exposure" else "infusiondrug"
                 assert src["table"] == expected_table
                 continue
+            if db == "sic" and name in ('nitroglycerin',):
+                # R5-SIC-026: observed Amount, preserving zero and missing.
+                assert src.get("callback") == "sicdb_exposure"
+                assert src.get("val_var") == "Amount"
+                continue
             # A HiRID zero givendose is a pump marker, not an administration
             # (2026-11-04 audit round 3).
             expected = "transform_fun(comp_na(`>`, 0.000001))" if db == "hirid" else "transform_fun(set_val(TRUE))"

@@ -91,6 +91,11 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
                 expected_table = "medication" if src["callback"] == "eicu_iv_exposure" else "infusiondrug"
                 assert src["table"] == expected_table
                 continue
+            if db == "sic" and name in ('potassium_iv',):
+                # R5-SIC-026: observed Amount, preserving zero and missing.
+                assert src.get("callback") == "sicdb_exposure"
+                assert src.get("val_var") == "Amount"
+                continue
             assert src.get("callback") in BOOLEAN_DRUG_CALLBACKS
 
 

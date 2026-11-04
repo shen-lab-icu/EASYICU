@@ -37,14 +37,15 @@ def _dict_source(concept: str) -> ConceptSource:
 def test_sic_vasopressin_maps_continuous_units_per_minute_without_weight():
     frame = _sic_rows("adh_rate", [0.04, 20.0], [0, 1])
     result = _apply_callback(frame, _dict_source("adh_rate"), concept_name="adh_rate", data_source=_sic_source())
-    assert result["Offset"].tolist() == [1, 2]
-    assert result["adh_rate"].tolist() == pytest.approx([0.04, 0.04])
+    # R5-SIC-018: an exact stop has no overlap with the following hour.
+    assert result["Offset"].tolist() == [1]
+    assert result["adh_rate"].tolist() == pytest.approx([0.04])
 
 
 def test_sic_phenylephrine_keeps_infusions_and_drops_single_dose_pushes():
     frame = _sic_rows("phn_rate", [0.00004, 0.0001], [0, 1])
     result = _apply_callback(frame, _dict_source("phn_rate"), concept_name="phn_rate", data_source=_sic_source())
-    assert result["phn_rate"].tolist() == pytest.approx([0.5, 0.5])  # 40 mcg/min / 80 kg
+    assert result["phn_rate"].tolist() == pytest.approx([0.5])  # R5-SIC-018; 40 mcg/min / 80 kg
 
 
 def test_sic_kg_rate_without_weight_is_dropped_not_left_in_grams():
@@ -113,19 +114,19 @@ def test_sic_norepinephrine_rate_and_duration_ignore_single_dose_pushes(concept)
     frame = _sic_rows(concept, [0.000008, 0.0004], [0, 1])
     result = _apply_callback(frame, _dict_source(concept), concept_name=concept, data_source=_sic_source())
     if concept == "norepi_rate":
-        assert result["norepi_rate"].tolist() == pytest.approx([0.1, 0.1])  # 8 mcg/min / 80 kg
+        assert result["norepi_rate"].tolist() == pytest.approx([0.1])  # R5-SIC-018; 8 mcg/min / 80 kg
     else:
         assert result["norepi_dur"].tolist() == pytest.approx([1.0])
 
 
 def test_sofa2_other_vaso_counts_sic_infusions_of_vasopressin_and_phenylephrine_only():
     mapping = _sofa2_other_vaso("sic")
-    assert mapping["ids"] == [1550, 1593]
+    assert mapping["ids"] == [1550, 1593, 1560]  # R5-SIC-010: milrinone too.
     frame = pd.DataFrame({"CaseID": 17, "Offset": [7200, 10800], "IsSingleDose": [0, 1],
-                          "DrugID": [1593, 1593], "other_vaso": [0.0001, 0.0001]})
+                          "DrugID": [1593, 1593], "OffsetDrugEnd": [10800, 10860], "other_vaso": [0.0001, 0.0001]})
     result = _apply_callback(frame, ConceptSource.from_mapping(mapping), concept_name="other_vaso",
                              data_source=_sic_source())
-    assert result["Offset"].tolist() == [7200] and "IsSingleDose" not in result.columns
+    assert result["Offset"].tolist() == [1.] and "IsSingleDose" not in result.columns  # R5-SIC-003: ICU hours.
 
 
 def test_sofa2_other_vaso_matches_neo_synephrine_in_eicu():
