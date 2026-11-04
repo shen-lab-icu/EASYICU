@@ -382,293 +382,45 @@ def percent_as_numeric(x: Union[str, pd.Series]) -> Union[float, pd.Series]:
 
 def distribute_amount(
     data: pd.DataFrame,
-    val_col: str = 'value',
-    unit_col: str = 'unit',
-    end_col: str = 'endtime',
-    index_col: str = 'time',
-    interval_hours: float = 1.0,  # 默认 1 小时间隔
-    admission_times: pd.DataFrame = None,  # 🔧 For proper relative time floor behavior
-    **kwargs
+    val_col: str = "value",
+    unit_col: str = "unit",
+    end_col: str = "endtime",
+    index_col: str = "time",
+    interval_hours: float = 1.0,
+    admission_times: pd.DataFrame = None,
+    **kwargs,
 ) -> pd.DataFrame:
-    """Distribute total amount over duration to get rate, then expand.
-    
-    For drug administrations given as total amount over a duration,
-    converts to rate per hour AND expands to hourly time points.
-    
-    R ricu 逻辑 (distribute_amount):
-    1. 过滤掉 endtime - starttime < 0 的行
-    2. 对于 duration == 0 的行，设置 endtime = starttime + 1hr
-    3. 计算速率 = amount / duration * 1hr
-    4. 调用 expand() 展开时间窗口到每个小时
-    5. 设置单位为 units/hr
-    
-    Args:
-        admission_times: DataFrame with id_col and 'intime' columns for relative time calculation.
-                        Required for proper floor() behavior matching R ricu.
+    """Allocate total insulin units by true hourly overlap and sum components.
+
+    Each source administration contributes once. IV infusions are split by
+    their actual duration; IV pushes and SC doses with zero/missing duration
+    contribute their total units to the start hour. The result is hourly dose
+    (units per one-hour cell), already summed before the resolver's default
+    numeric aggregation. Other databases' insulin rate sources are unchanged.
     """
-    data = data.copy()
-    
-    # 检测 ID 列
-    id_cols = [c for c in data.columns if c.lower().endswith('id') or c.lower() == 'stay_id']
-    
-    # 确保时间列存在
-    if index_col not in data.columns or end_col not in data.columns:
+    if data.empty or index_col not in data or end_col not in data:
         return data
-    
-    # 将时间转换为小时（如果是数值）或 datetime
-    start_time = data[index_col].copy()
-    end_time = data[end_col].copy()
-    
-    # 判断时间是数值（小时）还是 datetime
-    is_numeric = pd.api.types.is_numeric_dtype(start_time)
-    
-    if is_numeric:
-        # 时间已经是小时数
-        pass
-    else:
-        # 转换为 datetime 然后计算小时差
-        start_time = pd.to_datetime(start_time, errors='coerce')
-        end_time = pd.to_datetime(end_time, errors='coerce')
-        
-        # 假设时间已经是相对于某个参考点的
-        # 转换为相对小时数（如果需要）
-        if start_time.notna().any():
-            # 保持原始逻辑
-            pass
-    
-    if is_numeric:
-        # 计算时间差（小时）
-        time_diff_hours = end_time - start_time
-        
-        # 过滤掉 endtime - starttime < 0 的行
-        valid_mask = time_diff_hours >= 0
-        data = data[valid_mask].copy()
-        start_time = start_time[valid_mask]
-        end_time = end_time[valid_mask]
-        time_diff_hours = time_diff_hours[valid_mask]
-        
-        if data.empty:
-            return data
-        
-        # 对于 duration == 0 的行，设置 endtime = starttime + 1
-        zero_duration_mask = time_diff_hours == 0
-        if zero_duration_mask.any():
-            end_time = end_time.copy()
-            end_time.loc[zero_duration_mask] = start_time.loc[zero_duration_mask] + 1.0
-            data.loc[zero_duration_mask, end_col] = end_time.loc[zero_duration_mask]
-            time_diff_hours = end_time - start_time
-        
-        # Half-open hourly cells [floor(start), floor(end)), at least one, and
-        # the amount divided by their number, so the hourly values sum to the
-        # amount.  The closed expansion gave n + 1 cells at amount / n: a
-        # bolus appeared in two hours (insulin pushes doubled; 2026-11-04
-        # audit round 4, R4-033/R4-036).
-        start_hrs = np.floor(start_time.values).astype(int)
-        end_hrs = np.floor(end_time.values).astype(int)
-        n_points = np.maximum(end_hrs - start_hrs, 1)
-        data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / n_points
-        
-        if n_points.sum() > 0:
-            # Find ID columns present in data
-            valid_id_cols = [c for c in id_cols if c in data.columns]
-            
-            # Build expanded arrays
-            time_vals = np.concatenate([np.arange(s, s + n) for s, n in zip(start_hrs, n_points)])
-            val_vals = np.repeat(data[val_col].values, n_points)
-            
-            result_dict = {index_col: time_vals, val_col: val_vals}
-            for c in valid_id_cols:
-                result_dict[c] = np.repeat(data[c].values, n_points)
-            
-            result = pd.DataFrame(result_dict)
-            if unit_col and unit_col in data.columns:
-                result[unit_col] = 'units/hr'
-            return result
-        else:
-            return data
-    else:
-        # datetime 逻辑 - 需要转换为相对时间然后展开
-        # 
-        # R ricu 的处理流程：
-        # 1. load_difftime() 将 datetime 转换为相对时间（分钟）
-        # 2. change_interval(floor) 将分钟转换为小时并 floor
-        # 3. distribute_amount 接收 floor 后的时间:
-        #    - 如果 end - start == 0，设置 end = start + 1
-        #    - 计算速率 = amount / (end - start) * 1hr
-        # 4. expand() 展开到每个小时
-        #
-        # 关键点：R ricu 计算速率时使用的是 floor 后的持续时间！
-        
-        start_time = pd.to_datetime(data[index_col], errors='coerce')
-        end_time = pd.to_datetime(data[end_col], errors='coerce')
-        
-        time_diff = end_time - start_time
-        valid_mask = time_diff >= pd.Timedelta(0)
-        data = data[valid_mask].copy()
-        start_time = start_time[valid_mask]
-        end_time = end_time[valid_mask]
-        
-        if data.empty:
-            return data
-        
-        expanded_rows = []
-        
-        # 检测 ID 列 - 优先使用标准的患者 ID 列
-        standard_id_cols = ['icustay_id', 'stay_id', 'admissionid', 'patientid', 'patientunitstayid', 'hadm_id', 'subject_id']
-        id_col = None
-        for col in standard_id_cols:
-            if col in data.columns:
-                id_col = col
-                break
-        if id_col is None:
-            for col in id_cols:
-                if col in data.columns:
-                    id_col = col
-                    break
-        
-        # 获取每个患者的 intime 用于计算相对时间
-        intime_map = {}
-        if admission_times is not None and id_col is not None:
-            for _, row in admission_times.iterrows():
-                if id_col in row.index and 'intime' in row.index:
-                    patient_id = row[id_col]
-                    intime = pd.to_datetime(row['intime'], errors='coerce')
-                    if pd.notna(intime):
-                        if intime.tzinfo is None:
-                            intime = intime.tz_localize('UTC')
-                        intime_map[patient_id] = intime
-        
-        # Vectorized path for rows with intime
-        if intime_map and id_col is not None:
-            # Ensure timezone consistency
-            starts_dt = start_time.copy()
-            ends_dt = end_time.copy()
-            if starts_dt.dt.tz is None:
-                starts_dt = starts_dt.dt.tz_localize('UTC')
-            if ends_dt.dt.tz is None:
-                ends_dt = ends_dt.dt.tz_localize('UTC')
-            
-            # Map intime to each row
-            intimes = data[id_col].map(intime_map)
-            has_intime = intimes.notna()
-            amounts = pd.to_numeric(data[val_col], errors='coerce')
-            has_amount = amounts.notna()
-            valid = has_intime & has_amount
-            
-            if valid.any():
-                d_valid = data.loc[valid].copy()
-                intimes_v = pd.to_datetime(intimes.loc[valid])
-                starts_v = starts_dt.loc[valid]
-                ends_v = ends_dt.loc[valid]
-                amounts_v = amounts.loc[valid].values
-                
-                # Compute relative hours and floor
-                start_rel = (starts_v.values - intimes_v.values).astype('timedelta64[s]').astype(float) / 3600
-                end_rel = (ends_v.values - intimes_v.values).astype('timedelta64[s]').astype(float) / 3600
-                start_floor = np.floor(start_rel).astype(int)
-                end_floor = np.floor(end_rel).astype(int)
-                
-                # Half-open cells [start_floor, end_floor), at least one; the
-                # hourly values sum to the amount (R4-033/R4-036).
-                n_points = np.maximum(end_floor - start_floor, 1)
-                rates = amounts_v / n_points
-                total = n_points.sum()
-                if total > 0:
-                    valid_ids = [c for c in id_cols if c in d_valid.columns]
-                    time_vals = np.concatenate([np.arange(s, s + n, dtype=float) for s, n in zip(start_floor, n_points)])
-                    rate_vals = np.repeat(rates, n_points)
-                    result_dict = {index_col: time_vals, val_col: rate_vals}
-                    for c in valid_ids:
-                        result_dict[c] = np.repeat(d_valid[c].values, n_points)
-                    expanded_rows = [pd.DataFrame(result_dict)]
-            
-            # Handle rows without intime (fallback)
-            no_intime = (~has_intime) & has_amount
-            if no_intime.any():
-                for idx in data.index[no_intime]:
-                    row = data.loc[idx]
-                    row_start = start_time.loc[idx]
-                    row_end = end_time.loc[idx]
-                    if pd.isna(row_start) or pd.isna(row_end):
-                        continue
-                    if row_start.tzinfo is None:
-                        row_start = row_start.tz_localize('UTC')
-                    if row_end.tzinfo is None:
-                        row_end = row_end.tz_localize('UTC')
-                    amount = amounts.loc[idx]
-                    start_fl = row_start.floor('h')
-                    end_fl = row_end.floor('h')
-                    if start_fl == end_fl:
-                        end_fl = start_fl + pd.Timedelta(hours=1)
-                    dur = (end_fl - start_fl).total_seconds() / 3600
-                    rate = amount / dur
-                    time_points = pd.date_range(start=start_fl, end=end_fl, freq='h')
-                    for t in time_points:
-                        new_row = {c: row[c] for c in id_cols if c in row.index}
-                        new_row[index_col] = t
-                        new_row[val_col] = rate
-                        expanded_rows.append(new_row)
-        else:
-            # No intime_map: fallback to per-row datetime processing
-            for idx, row in data.iterrows():
-                row_start = start_time.loc[idx]
-                row_end = end_time.loc[idx]
-                if pd.isna(row_start) or pd.isna(row_end):
-                    continue
-                if row_start.tzinfo is None:
-                    row_start = row_start.tz_localize('UTC')
-                if row_end.tzinfo is None:
-                    row_end = row_end.tz_localize('UTC')
-                amount = pd.to_numeric(row[val_col], errors='coerce')
-                if pd.isna(amount):
-                    continue
-                start_fl = row_start.floor('h')
-                end_fl = row_end.floor('h')
-                if start_fl == end_fl:
-                    end_fl = start_fl + pd.Timedelta(hours=1)
-                dur = (end_fl - start_fl).total_seconds() / 3600
-                rate = amount / dur
-                time_points = pd.date_range(start=start_fl, end=end_fl, freq='h')
-                for t in time_points:
-                    new_row = {c: row[c] for c in id_cols if c in row.index}
-                    new_row[index_col] = t
-                    new_row[val_col] = rate
-                    expanded_rows.append(new_row)
-        
-        if expanded_rows:
-            # 2026-05-20 fix: this list can mix DataFrame chunks (the
-            # vectorized fast path at line 556) with bare dict rows (the
-            # per-row fallback paths at 583 / 609). The previous code
-            # only inspected `expanded_rows[0]` and then pd.concat'd the
-            # whole list, which crashed with
-            #   "cannot concatenate object of type '<class 'dict'>'"
-            # on every full-cohort MIMIC-III medication-rate concept
-            # because the fast path runs first and the fallback rows
-            # come after. Normalise both branches into DataFrames before
-            # concat.
-            parts: list = []
-            bare: list = []
-            for r in expanded_rows:
-                if isinstance(r, pd.DataFrame):
-                    if bare:
-                        parts.append(pd.DataFrame(bare))
-                        bare = []
-                    parts.append(r)
-                else:
-                    bare.append(r)
-            if bare:
-                parts.append(pd.DataFrame(bare))
-            if len(parts) == 1:
-                result = parts[0]
-            elif parts:
-                result = pd.concat(parts, ignore_index=True)
-            else:
-                return data
-            if unit_col and unit_col in data.columns:
-                result[unit_col] = 'units/hr'
-            return result
-        else:
-            return data
+    # MetaVision retains superseded orders beside the actual administration.
+    # They are not extra dose components (including in MIIV sources without
+    # a dictionary-level excluded_statuses declaration).
+    if "statusdescription" in data:
+        rewritten = data.statusdescription.astype("string").str.strip().str.lower().eq("rewritten")
+        data = data.loc[~rewritten.fillna(False)]
+    origins = None if pd.api.types.is_numeric_dtype(data[index_col]) else admission_times
+    absolute_fallback = None
+    if not pd.api.types.is_numeric_dtype(data[index_col]) and origins is None:
+        identifier = _mimic_duration_id_cols(data, None)[0]
+        absolute_fallback = pd.Timestamp("1970-01-01")
+        origins = data[[identifier]].drop_duplicates().assign(intime=absolute_fallback)
+    result = distribute_volume_hourly(
+        data, val_col=val_col, end_col=end_col, index_col=index_col,
+        origin_times=origins, origin_col="intime" if origins is not None else None,
+    )
+    if absolute_fallback is not None:
+        result[index_col] = absolute_fallback + pd.to_timedelta(result[index_col], unit="h")
+    if unit_col and unit_col in data:
+        result[unit_col] = "units/hr"
+    return result
 
 
 def normalize_volume_to_ml(values: pd.Series, units: pd.Series) -> pd.Series:
@@ -852,7 +604,7 @@ def distribute_volume_hourly(
         piece_starts = starts.iloc[lo:hi].reset_index(drop=True)
         piece_ends = ends.iloc[lo:hi].reset_index(drop=True)
         piece_amounts = amounts.iloc[lo:hi].reset_index(drop=True)
-        bolus = piece_ends.isna() | np.isclose(piece_ends, piece_starts)
+        bolus = piece_ends.isna() | np.isclose(piece_ends - piece_starts, 0.0, rtol=0.0, atol=1e-12)
         duration = piece_ends - piece_starts
         start_bins = np.floor(piece_starts).astype(np.int64)
         interval_end_bins = (
@@ -1371,90 +1123,13 @@ def mimic_rate_mv(
     admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
-    """MIMIC MetaVision infusion rate callback (R ricu mimic_rate_mv).
-    
-    Expands inputevents_mv data with start/stop times into time series.
-    This is used for continuous infusion medications like vasopressors.
-    
-    Args:
-        data: Input DataFrame with infusion data
-        val_col: Value column (infusion rate)
-        unit_col: Unit column (rate units)
-        stop_var: End time variable for expansion
-        id_cols: ID columns for grouping
-        admission_times: DataFrame with id and intime columns for time alignment
-        **kwargs: Additional arguments
-        
-    Returns:
-        Expanded DataFrame with time series data
-        
-    Note:
-        This is a simplified version that expands intervals.
-        In ricu, it calls expand(x, index_var(x), stop_var, keep_vars = ...)
-        
-        🔧 CRITICAL FIX 2024-11-30: R ricu converts datetime to relative time 
-        BEFORE calling expand(). This affects the floor() behavior:
-        - R ricu: 06:39 -> relative 13.26h -> floor -> 13
-        - Old easyicu: 06:39 -> floor -> 06:00 -> relative 12.61h -> 12
-        
-        We now pass admission_times to expand() to fix this discrepancy.
-    """
-    # Handle empty data - preserve column structure
+    """Expand MetaVision rates over positive intersections with ICU-hour cells."""
     if data.empty:
         return data
-    
-    from ..io.ts_utils import expand
-    
-    # Infer the ICU-stay identifier if not provided.  Only the primary stay id
-    # may key the admission-time join in expand(): row/subject/order ids
-    # would attach another row's or another stay's intime.
     if id_cols is None:
         id_cols = _mimic_duration_id_cols(data, None)
-    
-    # Infer index variable (time column)
-    time_cols = [col for col in data.columns if 'time' in col.lower() and col != stop_var]
-    if not time_cols:
-        # Fallback to common names
-        time_cols = [col for col in ['charttime', 'starttime'] if col in data.columns]
-    
-    if not time_cols:
-        # No time column found, return as-is
-        return data
-    
-    index_var = time_cols[0]
-    
-    # Prepare keep_vars - IMPORTANT: do NOT include stop_var, matching R ricu behavior
-    # R ricu mimic_rate_mv: keep_vars = c(id_vars(x), val_var, unit_var) - no stop_var
-    # Keeping stop_var would cause double expand in _load_single_concept
-    keep_vars = list(id_cols) + [val_col]
-    if unit_col and unit_col in data.columns:
-        keep_vars.append(unit_col)
-    # NOTE: DO NOT add stop_var to keep_vars - it should be removed after expand
-    
-    # 确保 index_var (starttime) 被保留在 keep_vars 中，因为它是时间索引
-    if index_var not in keep_vars:
-        keep_vars.append(index_var)
-    
-    # Remove duplicates
-    keep_vars = [col for col in keep_vars if col in data.columns]
-    
-    # Expand intervals if stop_var exists
-    if stop_var and stop_var in data.columns:
-        # Expand with 1-hour steps (standard for ICU data)
-        step_size = pd.Timedelta(hours=1)
-        expanded = expand(
-            data,
-            start_var=index_var,
-            end_var=stop_var,
-            step_size=step_size,
-            id_cols=id_cols,
-            keep_vars=keep_vars,
-            admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
-        )
-        return expanded
-    else:
-        # No expansion needed
-        return data
+    return expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times)
+
 
 def calc_dur(
     data: pd.DataFrame,
@@ -6598,4 +6273,97 @@ def hirid_duration(
     # Keep all durations including 0 for consistency
     result = result[result[concept_name] >= 0]
     
+    return result
+
+
+def normalize_mv_rate(frame, concept_name, val_col, unit_col):
+    """Convert recognized source units before any concept bounds are applied.
+
+    Only charted dosing weights in the adult 20--300 kg range may change
+    weight dimension. A mg/kg/min label also requires a valid charted weight;
+    it is interpreted literally, never relabelled by magnitude.
+    """
+    from ..concept.loader import load_concept_dict_cached
+
+    units = load_concept_dict_cached().get(concept_name, {}).get("unit")
+    target = units[0] if isinstance(units, list) else units
+    if target not in {"mcg/kg/min", "mcg/hour", "mg/hour", "units/min"}:
+        return frame
+    out = frame.copy()
+    if not unit_col or unit_col not in out:
+        logger.warning("dropping %d %s rates without source units", len(out), concept_name)
+        return out.iloc[:0]
+    labels = (out[unit_col].astype("string").str.strip().str.lower()
+              .str.replace("µg", "mcg", regex=False).str.replace("μg", "mcg", regex=False)
+              .str.replace("hr", "hour", regex=False))
+    labels = labels.replace({"mcgkgmin": "mcg/kg/min", "mcghour": "mcg/hour", "mghour": "mg/hour",
+                             "u/min": "units/min", "u/hour": "units/hour"})
+    # (mass in mcg, per-kg exponent, duration in minutes).
+    dimensions = {"mcg/kg/min": (1., 1, 1.), "mcg/kg/hour": (1., 1, 60.),
+                  "mg/kg/min": (1000., 1, 1.), "mg/kg/hour": (1000., 1, 60.),
+                  "mcg/min": (1., 0, 1.), "mcg/hour": (1., 0, 60.),
+                  "mg/min": (1000., 0, 1.), "mg/hour": (1000., 0, 60.)}
+    weight = pd.to_numeric(out.get("patientweight", pd.Series(np.nan, index=out.index)), errors="coerce")
+    weight = weight.where(np.isfinite(weight) & weight.between(20., 300.))
+    rate = pd.to_numeric(out[val_col], errors="coerce")
+    converted = pd.Series(np.nan, index=out.index, dtype=float)
+    if target == "units/min":
+        converted = rate * labels.map({"units/min": 1., "units/hour": 1. / 60.})
+    else:
+        target_mass, target_kg, target_time = dimensions[target]
+        for label, (mass, per_kg, minutes) in dimensions.items():
+            mask = labels.eq(label).fillna(False)
+            factor = (mass / target_mass) * (target_time / minutes)
+            values = rate * factor
+            if per_kg != target_kg:
+                values = values * weight if per_kg else values / weight
+            if label == "mg/kg/min":
+                values = values.where(weight.notna())
+            converted.loc[mask] = values.loc[mask]
+    valid = np.isfinite(converted) & converted.ge(0)
+    if (~valid).any():
+        logger.warning("dropping %d %s rates with unsupported units, rates or dosing weights", int((~valid).sum()), concept_name)
+    out[val_col] = converted
+    out[unit_col] = target
+    return out.loc[valid].copy()
+
+
+def expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times):
+    """Repeat a rate only in ICU-hour cells with positive [start, end) overlap."""
+    time_col = next((c for c in ("starttime", "charttime", "time") if c in data), None)
+    if data.empty or time_col is None or not stop_var or stop_var not in data:
+        return data
+    keep = list(dict.fromkeys([*id_cols, time_col, val_col] + ([unit_col] if unit_col in data else [])))
+    numeric = pd.api.types.is_numeric_dtype(data[time_col])
+    if numeric:
+        start = pd.to_numeric(data[time_col], errors="coerce")
+        end = pd.to_numeric(data[stop_var], errors="coerce")
+        origins = None
+    else:
+        starts = pd.to_datetime(data[time_col], errors="coerce", utc=True)
+        ends = pd.to_datetime(data[stop_var], errors="coerce", utc=True)
+        if admission_times is None:
+            origins = pd.Series(pd.Timestamp("1970-01-01", tz="UTC"), index=data.index)
+        else:
+            identifier = id_cols[0]
+            lookup = admission_times.drop_duplicates(identifier).set_index(identifier).intime
+            origins = pd.to_datetime(data[identifier].map(lookup), errors="coerce", utc=True)
+        start = (starts - origins).dt.total_seconds() / 3600.
+        end = (ends - origins).dt.total_seconds() / 3600.
+    valid = start.notna() & end.notna() & np.isfinite(start) & np.isfinite(end) & end.gt(start)
+    rows = data.loc[valid, keep].reset_index(drop=True)
+    lo = np.floor(start.loc[valid]).to_numpy(dtype=np.int64)
+    hi = np.ceil(end.loc[valid]).to_numpy(dtype=np.int64)
+    counts = hi - lo
+    repeated = np.repeat(np.arange(len(rows)), counts)
+    if not len(repeated):
+        return rows.iloc[:0]
+    block = np.repeat(np.cumsum(counts) - counts, counts)
+    hours = np.repeat(lo, counts) + np.arange(len(repeated)) - block
+    result = rows.iloc[repeated].reset_index(drop=True)
+    if numeric:
+        result[time_col] = hours.astype(float)
+    else:
+        repeated_origins = origins.loc[valid].reset_index(drop=True).iloc[repeated].reset_index(drop=True)
+        result[time_col] = (repeated_origins + pd.to_timedelta(hours, unit="h")).dt.tz_localize(None)
     return result

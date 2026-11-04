@@ -4,6 +4,51 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — extraction audit round 5, MIMIC loader lane
+
+Synthetic regressions only; real-data coverage and export deltas have not
+been measured in this lane.
+
+- **[R5C-IV-008, formerly R4-012]** MIIV labs with NULL `hadm_id` use
+  `subject_id` and the bounded window from 24 h before ICU admission to 24 h
+  after ICU discharge. Attribution considers all stays of the subject before
+  selecting requested stays. Multiple candidate stays or admissions reject
+  the row. Requested-stay filters survive subject-level read pushdown.
+  Admission-linked duplicate events take precedence; available event and
+  specimen identifiers distinguish independent equal results, and text-only
+  specimen labels remain distinct when they disagree. Missing optional units
+  do not disable attribution. Raw and SQL
+  loaders retain `lab_attribution_basis` and attribution counters in the
+  `easyicu_miiv_lab_attribution` frame attribute and logs, including ambiguous,
+  unmatched and deduplicated NULL-admission rows. Candidate counts are not
+  estimates of net added stay coverage or of emergency-department activity.
+- **[R5C-III-008, formerly R4-073]** MIMIC-III `chartevents` rejects
+  `ERROR=1` before source projection or hourly aggregation; NULL and zero
+  remain usable. Per-concept, bucketed and multi-concept loads share the rule,
+  including lab/chart channel selection and CVP-derived values. Uppercase
+  native headers work in preloaded and PyArrow dataset projections too.
+- **[R5C-IV-010]** MetaVision medication rates use an explicit unit
+  whitelist and mass/time/weight conversion before bounds. Conversion that
+  changes the weight dimension requires a charted dosing weight of 20–300 kg.
+  `mg/kg/min` is interpreted literally only with a valid dosing weight;
+  unsupported labels and invalid required weights are rejected. Minimal
+  projection retains source rate units and dosing weights.
+- **[R5C-IV-011]** MetaVision rates occupy only hourly cells with positive
+  overlap with `[start, end)`. An exact stop boundary contributes no rate to
+  the next cell; multiple rate components within one hour retain the existing
+  hourly rate aggregation.
+- **[R5C-IV-012]** MIIV and MIMIC-III MetaVision insulin amounts represent total administered units.
+  Infusion components are apportioned by actual overlap with ICU-hour cells;
+  zero-duration pushes and subcutaneous doses contribute once to their start
+  cell. Rewritten orders are excluded before summing the dose components
+  inside the amount callback and before the generic numeric aggregation.
+  Other databases' rate-valued insulin sources retain
+  their aggregation semantics.
+- **[R5C-IV-014]** The interval allocator tests duration against an absolute
+  tolerance of `1e-12` hours with `rtol=0`. A long-stay clock therefore cannot
+  turn a short positive infusion into a bolus. The conserved hourly volumes
+  feed fluid balance and cumulative balance.
+
 ## 2026-11-04 — extraction audit round 4
 
 Numbers are 3,000-stay native-v2 samples, before (`5d0ed1256`) → after.
@@ -60,7 +105,7 @@ Commits: `ade4802d7` (fixes), `6d3d52e92` (seventh reseal), `b21030f26`
 ### Documented, not changed (round 4)
 
 - **MIIV ED labs** with `hadm_id` NULL (R4-012) and **chartevents ERROR rows**
-  (R4-073) need loader changes and are deferred.
+  (R4-073) were deferred in round 4; the round-5 loader fixes are recorded above.
 - **HiRID dex route** (R4-164): the route filter broke the grouped callback
   and was reverted.
 

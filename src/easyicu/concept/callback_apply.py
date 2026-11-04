@@ -2814,11 +2814,13 @@ def _apply_callback(
             raise ValueError("mimic_rate_mv requires an ICU stay identifier")
         # stop_var is stored in params dict
         stop_var = source.params.get('stop_var', None) if source.params else None
-        unit_col = source.unit_var if hasattr(source, 'unit_var') else None
+        unit_col = source.unit_var or ('rateuom' if 'rateuom' in frame else unit_column)
         # 🔧 FIX: mimic_rate_mv 应使用表的 'rate' 列，而不是 concept_name
         # R ricu 中 mimic_rate_mv 使用 inputevents 表的 'rate' 列作为输出值
         # 原始数据中 'rate' 是速率 (mcg/kg/min)，'amount' 是总量 (mg)
         val_col = 'rate' if 'rate' in frame.columns else concept_name
+        from ..utils.callback_utils import normalize_mv_rate
+        frame = normalize_mv_rate(frame, concept_name, val_col, unit_col)
         
         # 🔧 CRITICAL FIX 2024-11-30: Get admission times for R ricu-compatible floor behavior
         # R ricu converts datetime to relative time BEFORE callbacks (in load_mihi).
