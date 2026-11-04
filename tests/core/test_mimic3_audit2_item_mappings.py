@@ -33,9 +33,10 @@ def _ids(sources: list[dict]) -> set[int]:
 
 
 CAREVUE = {
-    "packed_rbc": ({30001, 30004, 30179, 30104}, set()),
-    "ffp": ({30005, 30180, 30103}, {40801, 44031}),  # plasmapheresis, Plasma-Lyte
-    "platelets": ({30006, 30105}, set()),
+    # OR transfusions (30103-30105) are pre-ICU intake (audit round 4, R4-035).
+    "packed_rbc": ({30001, 30004, 30179}, {30104}),
+    "ffp": ({30005, 30180}, {40801, 44031, 30103}),  # plasmapheresis, Plasma-Lyte
+    "platelets": ({30006}, {30105}),
     "albumin_iv": ({30008, 30009, 30181}, {44952}),  # OR Albumin (MV excludes OR colloid)
     # 30299 Potassium Acetate: MetaVision excludes 222139 Potassium ACEtate too.
     "potassium_iv": ({30026, 30297, 30029}, {30299}),
@@ -63,9 +64,13 @@ def test_carevue_holds_the_same_product_as_the_metavision_items(concept, databas
 
 
 @pytest.mark.parametrize("database", ["mimic", "mimic_demo", "miiv"])
-def test_platelets_include_or_and_pacu_platelets_like_rbc_and_ffp(database):
+def test_transfusions_exclude_pre_icu_or_and_pacu_intake(database):
+    # OR/PACU intake is charted at ICU admission for transfusions given before
+    # the stay, as total_input_ml treats it (2026-11-04 audit round 4, R4-035).
     table = "inputevents" if database == "miiv" else "inputevents_mv"
-    assert {225170, 226369, 227071} <= _ids(_sources("platelets", database, table))
+    for concept, icu in (("platelets", 225170), ("packed_rbc", 225168), ("ffp", 220970)):
+        ids = _ids(_sources(concept, database, table))
+        assert icu in ids and not ids & PRE_ICU_INTAKE
 
 
 @pytest.mark.parametrize("database", ["mimic", "mimic_demo"])

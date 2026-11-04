@@ -871,8 +871,8 @@ E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT7 = replace(
     version="20261104-audit7", locked_at="2026-11-04T11:00:00Z",
     # User-requested seventh reseal of the concept dictionary and the SOFA-2
     # overlay, extraction audit round 4 (2026-11-04).
-    expected_concept_dict_sha="a6c37e10f6b539e5f357337f746da3840880a934aaf7503a342fdbc404a54e1c",
-    expected_sofa2_dict_sha="efa28bb8af36e536d31068eacf0edd4a61466f9e89ed0794329f660affbca0bd",
+    expected_concept_dict_sha="f5ef513c980e0444e9a54bc77f944eb00bf0bcce3328b875afcbf686576e79eb",
+    expected_sofa2_dict_sha="08243b3b31f766f55d989aaa8ac4a9a7d37e620a080b0c926af822865c56754a",
 )
 
 E1_REVIEWED_DEMO_2026_11_04_AUDIT7 = replace(

@@ -216,7 +216,7 @@ def test_bound_runtime_table_defaults_supply_resolver_coordinates_only():
     source = actual.concepts[0].sources[0]
     assert source.table == "laboratory"
     assert source.selector_variable == "LaboratoryID"
-    assert set(source.item_ids) == {454, 465, 657}
+    assert set(source.item_ids) == {465, 657}  # 454 has no rows (audit round 4, R4-176)
     assert source.value_variable == "LaboratoryValue"
     assert source.time_variable == "Offset"
     assert source.unit_variable is None

@@ -38,6 +38,8 @@ BOOLEAN_DRUG_CALLBACKS = {
     "transform_fun(set_val(TRUE))",
     "mimic_prescription_noon",
     "transform_fun(comp_na(`>`, 0))",
+    # HiRID doses above numerical noise (2026-11-04 audit round 4, R4-088).
+    "transform_fun(comp_na(`>`, 0.000001))",
 }
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
@@ -176,4 +178,4 @@ def test_batch3_hirid_and_sic_sources_match_audited_scope(cdict):
     assert cdict["pantoprazole"]["sources"]["sic"][0]["callback"] == "transform_fun(set_val(TRUE))"
     for c in ["vancomycin", "meropenem", "calcium_iv"]:
         hirid = cdict[c]["sources"]["hirid"][0]
-        assert hirid["callback"] == "transform_fun(comp_na(`>`, 0))"
+        assert hirid["callback"] == "transform_fun(comp_na(`>`, 0.000001))"

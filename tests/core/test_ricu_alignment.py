@@ -310,13 +310,14 @@ class TestVentIndDtypeAlignment:
     ):
         # Evidence hours at most eight hours apart form one window; an isolated
         # point stays one hour and nothing extends past the last evidence
-        # (audit round 3, R3-05).
+        # (audit round 3, R3-05).  Noninvasive evidence is not vent_ind
+        # (audit round 4, R4-014/R4-022) and does not bridge invasive hours.
         mech = ICUTable(
             pd.DataFrame(
                 {
-                    "patientunitstayid": [10, 10, 10],
-                    "charttime": [1.25, 8.5, 20.0],
-                    "mech_vent": ["invasive", "noninvasive", "invasive"],
+                    "patientunitstayid": [10, 10, 10, 10],
+                    "charttime": [1.25, 8.5, 20.0, 30.0],
+                    "mech_vent": ["invasive", "invasive", "invasive", "noninvasive"],
                 }
             ),
             id_columns=["patientunitstayid"],

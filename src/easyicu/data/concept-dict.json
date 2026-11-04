@@ -4612,14 +4612,7 @@
      "grp_var": "infusionid",
      "target": "ts_tbl",
      "interval": "00:01:00",
-     "callback": "combine_callbacks(\n               grp_mount_to_rate(mins(1L), hours(1L)),\n               dex_to_10(list(c(1000689L, 1000544L, 1000746L, 1000835L),\n                                1000060L, 1000545L, 1000567L), c(2, 3, 4, 5))\n             )",
-     "extra_vars": [
-      "route"
-     ],
-     "exclude_regex": {
-      "route": "(?i)^\\s*(?:enteral|ms|p\\s*os|p\\.\\s*ms|ep-.*|sc.*|s\\.c\\..*|inh.*)\\s*$"
-     },
-     "_comment": "2026-11-04 audit round 4 (R4-164): enteral and gastric-tube glucose rows (route enteral/ms) are not IV dextrose."
+     "callback": "combine_callbacks(\n               grp_mount_to_rate(mins(1L), hours(1L)),\n               dex_to_10(list(c(1000689L, 1000544L, 1000746L, 1000835L),\n                                1000060L, 1000545L, 1000567L), c(2, 3, 4, 5))\n             )"
     }
    ],
    "miiv": [
@@ -8737,6 +8730,8 @@
  "hbco": {
   "description": "carboxyhemoglobin",
   "omopid": 4056787,
+  "min": 0,
+  "max": 100,
   "category": "blood gas",
   "sources": {
    "aumc": [
@@ -18293,6 +18288,8 @@
   }
  },
  "rrt": {
+  "aggregate": "max",
+  "_comment_aggregate": "2026-11-04 audit round 4: an hour is positive when any source row is (a median of pooled TRUE/FALSE rows gave 0.5 and stopped the eICU native-v2 publication).",
   "class_name": "lgl_cncpt",
   "description": "Renal replacement therapy in use",
   "category": "renal",
@@ -33327,7 +33324,7 @@
   "max": 80,
   "description": "oxygen flow delivered by a non-ventilator device (nasal cannula, mask), L/min",
   "category": "respiratory",
-  "_comment": "2026-11-03 extraction audit 2: input to supp_o2 for databases that chart device oxygen flow. AUMC 8845 'O2 l/min' [l/min] (aumc_item_dict); HiRID 15001525 'Oxygen administration by nasal cannula' and 15001555 'Oxygen administration by mask' [l/min] (hirid_variable_reference). Not an exported catalog concept yet: MIMIC/eICU flow items are unmapped.",
+  "_comment": "2026-11-03 extraction audit 2: input to supp_o2 for databases that chart device oxygen flow. AUMC 8845 'O2 l/min' [l/min] (aumc_item_dict); HiRID 15001525 'Oxygen administration by nasal cannula' and 15001555 'Oxygen administration by mask' [l/min] (hirid_variable_reference). MIMIC-IV, MIMIC-III, eICU and SICdb flow items were mapped in later rounds (see the per-database source comments; 2026-11-04 audit round 4, R4-146).",
   "sources": {
    "aumc": [
     {

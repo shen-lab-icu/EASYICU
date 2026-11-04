@@ -260,9 +260,9 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "a6c37e10f6b539e5f357337f746da3840880a934aaf7503a342fdbc404a54e1c",
+    "src/easyicu/data/concept-dict.json": "f5ef513c980e0444e9a54bc77f944eb00bf0bcce3328b875afcbf686576e79eb",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
-    "src/easyicu/data/sofa2-dict.json": "efa28bb8af36e536d31068eacf0edd4a61466f9e89ed0794329f660affbca0bd",
+    "src/easyicu/data/sofa2-dict.json": "08243b3b31f766f55d989aaa8ac4a9a7d37e620a080b0c926af822865c56754a",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
     "src/easyicu/research_agent/agents/plan_payload.py": "aad4b7206bbe99dd170e2663c1d4d3054e2843cad0e7e384348ae9f2fcb0308e",
     "src/easyicu/research_agent/agents/planner.py": "5d01bba07f26e0f2bee94cc0fd6df758c11212aec1b231a4dab28ec758fa66d2",

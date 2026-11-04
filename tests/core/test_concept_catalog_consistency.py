@@ -613,7 +613,9 @@ def test_minute_volume_semantic_coverage_keeps_observed_values_not_alarms() -> N
     assert {8875, 9663, 12578}.isdisjoint(aumc_ids)
 
     eicu_ids = set(concept["minute_vol"]["sources"]["eicu"][0]["ids"])
-    assert "Minute Volume, Spontaneous" in eicu_ids
+    # Spontaneous-only minute volume is not total exhaled ventilation
+    # (extraction audit round 4, R4-143).
+    assert "Minute Volume, Spontaneous" not in eicu_ids and "Exhaled MV" in eicu_ids
     assert "Minute Ventilation Set(L/min)" not in eicu_ids
     assert "Minute Volume Leak" not in eicu_ids
 
