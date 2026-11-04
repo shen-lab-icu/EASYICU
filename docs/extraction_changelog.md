@@ -4,7 +4,6 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
-<<<<<<< ours
 ## 2026-11-04 — extraction audit round 5, MIMIC loader lane
 
 Synthetic regressions only; real-data coverage and export deltas have not
@@ -49,7 +48,7 @@ been measured in this lane.
   tolerance of `1e-12` hours with `rtol=0`. A long-stay clock therefore cannot
   turn a short positive infusion into a bolus. The conserved hourly volumes
   feed fluid balance and cumulative balance.
-=======
+
 ## 2026-11-04 — extraction audit round 5, HiRID
 
 These changes are checked with synthetic sources. The audit's real-data
@@ -111,7 +110,6 @@ Round-5 secondary registrations do not establish clinical validity:
   notes are registered without remapping or a scientific-status change.
   HiRID `ins` is an hourly amount sum; it is not proof of continuous IV
   insulin delivery.
->>>>>>> theirs
 
 ## 2026-11-04 — extraction audit round 4
 
