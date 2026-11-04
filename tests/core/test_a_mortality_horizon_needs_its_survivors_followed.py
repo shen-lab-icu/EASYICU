@@ -174,9 +174,10 @@ def test_mimic3_survivors_are_followed_to_their_system_bound(monkeypatch) -> Non
 
     result = outcomes.load_outcomes("mimic").set_index("icustay_id")
 
-    # MetaVision: discharge day 10 + 90 days of Social Security linkage.
+    # MetaVision: the 4 x 365-day follow-up bound covers both systems
+    # (extraction audit round 4, R4-018, reversing R3-08).
     assert bool(result.loc[1, "mort_90d"]) is False
-    assert pd.isna(result.loc[1, "mort_365d"])
+    assert bool(result.loc[1, "mort_365d"]) is False
     # CareVue: four years after discharge.
     assert bool(result.loc[2, "mort_365d"]) is False
     # A death after discharge counts: day 40 is past 28 and within 90.
