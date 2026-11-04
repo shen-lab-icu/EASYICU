@@ -382,3 +382,45 @@ def test_device_and_score_channels_missing_from_the_winning_dictionary():
         windows = [s for s in d["mech_circ_support"]["sources"]["aumc"] if s.get("table") == "processitems"]
         assert [(_ids(s), s["dur_var"]) for s in windows] == [({10430, 9164}, "stop")]
     assert 8865 in {i for s in cd["ps"]["sources"]["aumc"] for i in _ids(s)}
+
+
+def test_sicdb_continuous_furosemide_amount_is_shared_over_its_running_hours():
+    from easyicu.concept.diuretics import furosemide_equivalent
+
+    spec = next(s for s in _dictionary()["loop_diuretic_furosemide_eq"]["sources"]["sic"] if s["fe_drug"] == "furosemide")
+    params = {k: v for k, v in spec.items() if k.startswith("fe_")}
+    frame = pd.DataFrame({
+        "CaseID": [1, 1],
+        "Offset": [0, 10_000],
+        "OffsetDrugEnd": [9_000, 10_060],
+        "IsSingleDose": [0, 1],
+        "loop_diuretic_furosemide_eq": [0.05, 0.02],  # g
+    })
+    out = furosemide_equivalent(frame, concept_name="loop_diuretic_furosemide_eq", value_var="Amount", unit_var=None, params=params)
+    pieces = out.sort_values("Offset")
+    # 50 mg over 2.5 h: 20, 20, 10 mg at 0, 3600 and 7200 s; the 20 mg single dose stays at its start.
+    assert pieces["Offset"].tolist() == [0, 3600, 7200, 10_000]
+    assert pieces["loop_diuretic_furosemide_eq"].tolist() == pytest.approx([20.0, 20.0, 10.0, 20.0])
+    assert out["loop_diuretic_furosemide_eq"].sum() == pytest.approx(70.0)
+
+
+def test_eicu_end_tidal_co2_reads_the_monitor_column():
+    sources = _dictionary()["etco2"]["sources"]["eicu"]
+    assert {"table": "vitalperiodic", "val_var": "etco2", "class_name": "col_itm"}.items() <= next(
+        s for s in sources if s.get("table") == "vitalperiodic"
+    ).items()
+
+
+def test_eicu_time_merge_keeps_offsets_beside_an_empty_source_charttime():
+    from easyicu.concept import _merge_eicu_time_columns
+
+    # The empty bucketed source arrived as 'charttime'; the monitor rows as observationoffset.
+    combined = pd.DataFrame({
+        "patientunitstayid": [1, 1],
+        "charttime": [np.nan, np.nan],
+        "observationoffset": [65.0, 130.0],
+        "etco2": [30.0, 34.0],
+    })
+    merged, changed = _merge_eicu_time_columns(combined, ["observationoffset", "respchartoffset"])
+    assert changed and list(merged.columns).count("charttime") == 1
+    assert merged["charttime"].tolist() == [65.0, 130.0]

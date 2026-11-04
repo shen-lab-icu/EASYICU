@@ -7032,6 +7032,12 @@
      "sub_var": "respchartvaluelabel",
      "val_var": "respchartvalue",
      "class_name": "rgx_itm"
+    },
+    {
+     "table": "vitalperiodic",
+     "val_var": "etco2",
+     "class_name": "col_itm",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): monitor end-tidal CO2 (4.4 million 5-minute values, 8,346 stays, median 32 mmHg); zeros fall below the 10 mmHg minimum."
     }
    ],
    "eicu_demo": [
@@ -7041,6 +7047,12 @@
      "sub_var": "respchartvaluelabel",
      "val_var": "respchartvalue",
      "class_name": "rgx_itm"
+    },
+    {
+     "table": "vitalperiodic",
+     "val_var": "etco2",
+     "class_name": "col_itm",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): monitor end-tidal CO2 (4.4 million 5-minute values, 8,346 stays, median 32 mmHg); zeros fall below the 10 mmHg minimum."
     }
    ],
    "mimic_demo": [
@@ -32825,7 +32837,10 @@
      "val_var": "Amount",
      "fe_amount_unit": "g",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: Amount in g (d_references unit 'g'); SICdb records no route, so furosemide is counted as IV (an upper bound for enteral doses)."
+     "_comment": "2026-11-03 extraction audit 2: Amount in g (d_references unit 'g'); SICdb records no route, so furosemide is counted as IV (an upper bound for enteral doses). | 2026-11-04 audit round 3 (full-dictionary M): a perfusor row (IsSingleDose 0) holds the syringe amount for Offset..OffsetDrugEnd; the amount is shared hourly over that time instead of loading the start hour (1417: 6,108 continuous rows in 1,044 cases, median 5.8 h).",
+     "fe_spread_end_var": "OffsetDrugEnd",
+     "fe_spread_index_var": "Offset",
+     "fe_spread_single_var": "IsSingleDose"
     },
     {
      "ids": [
@@ -32838,7 +32853,10 @@
      "val_var": "Amount",
      "fe_amount_unit": "g",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: Amount in g x 1000 x 2 (any route)."
+     "_comment": "2026-11-03 extraction audit 2: Amount in g x 1000 x 2 (any route). | 2026-11-04 audit round 3 (full-dictionary M): a perfusor row (IsSingleDose 0) holds the syringe amount for Offset..OffsetDrugEnd; the amount is shared hourly over that time instead of loading the start hour (1417: 6,108 continuous rows in 1,044 cases, median 5.8 h).",
+     "fe_spread_end_var": "OffsetDrugEnd",
+     "fe_spread_index_var": "Offset",
+     "fe_spread_single_var": "IsSingleDose"
     }
    ]
   }
