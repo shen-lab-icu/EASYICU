@@ -326,7 +326,7 @@ def test_r6_f012_adjunct_only_support_is_unioned_in_every_database(database):
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
 def test_r6_f013_public_and_native_ventilation_keep_precise_mixed_windows(tmp_path, monkeypatch, database, layout):
     from easyicu.api.extraction import _canonicalise_native_export_frame
-    from tests.core.test_extraction_audit_round5_hirid5 import _source_root
+    from tests.support.hirid_source import hirid_source_root as _source_root
 
     if database == "hirid":
         root = _source_root(tmp_path, "observations", [
@@ -405,7 +405,7 @@ def test_r6_f014_care_to_bridge_retains_partial_hours_across_stop_barriers():
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
 def test_r6_f015_duration_is_identical_in_single_batch_and_native_paths(tmp_path, monkeypatch, prefix, layout):
     from easyicu.api.extraction import _canonicalise_native_export_frame
-    from tests.core.test_extraction_audit_round5_hirid5 import _source_root
+    from tests.support.hirid_source import hirid_source_root as _source_root
 
     dictionary = load_dictionary()
     ids = dictionary[f"{prefix}_dur"].sources["hirid"][0].ids
@@ -498,7 +498,7 @@ def test_r6_f012_eicu_rate_quantizes_after_exact_stop_and_keeps_partial_cell(kin
 @pytest.mark.parametrize("database", ["miiv", "aumc", "sic"])
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
 def test_r6_f012_public_source_clocks_match_rate_duration_and_all_drug_support(tmp_path, database, layout):
-    from tests.core.test_extraction_audit_round5_aumc5 import _db, _drug
+    from tests.support.aumc_source import aumc_db as _db, aumc_drug as _drug
     from easyicu.synthetic_sources import generate_source
 
     tmp_path = tmp_path / "source"

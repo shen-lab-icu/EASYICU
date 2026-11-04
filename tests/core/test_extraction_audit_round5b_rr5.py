@@ -254,7 +254,7 @@ AUMC_INFUSIONS = "norepi_rate epi_rate dopa_rate dobu_rate phn_rate propofol_rat
 
 @pytest.mark.parametrize("name", AUMC_IV_RESIDUES + AUMC_IV_GUARDS + AUMC_INFUSIONS + ["dex", "other_vaso"])
 def test_rr_05_iv_drug_orders_exclude_niet_iv_categories_on_raw_loading(tmp_path, name):
-    from tests.core.test_extraction_audit_round5_aumc5 import _db, _drug, _load
+    from tests.support.aumc_source import aumc_db as _db, aumc_drug as _drug, aumc_load as _load
 
     for source in _definition(name)["sources"]["aumc"]:
         item = source["ids"] if isinstance(source["ids"], int) else source["ids"][0]
@@ -281,7 +281,7 @@ HIRID_INFUSIONS = "adh_rate dobu_dur dobu_rate epi_dur epi_rate fentanyl_rate mi
 
 @pytest.mark.parametrize("name", HIRID_IV + HIRID_INFUSIONS)
 def test_rr_06_iv_route_filter_preserves_separate_infusion_groups(tmp_path, name):
-    from tests.core.test_extraction_audit_round5_hirid5 import _load, _source_root
+    from tests.support.hirid_source import hirid_load as _load, hirid_source_root as _source_root
 
     source = _definition(name)["sources"]["hirid"][0]
     assert "route" in source.get("extra_vars", [])
@@ -311,7 +311,7 @@ def test_rr_06_iv_route_filter_preserves_separate_infusion_groups(tmp_path, name
 @pytest.mark.parametrize("layout", ["directory", "file"])  # full MIMIC-IV / public demo conversion
 @pytest.mark.parametrize("drug,item,dose", [("furosemide", 221794, 40.), ("bumetanide", 229639, 1.)])
 def test_rr_07_emar_dedup_matches_real_drug_dose_time_and_preserves_oral(tmp_path, drug, item, dose, layout):
-    from tests.core.test_extraction_audit_round5_ivd5 import _synthetic_source, _load
+    from tests.support.mimic_synthetic_source import mimic_synthetic_source as _synthetic_source, mimic_synthetic_load as _load
 
     t = pd.Timestamp("2150-01-01")
     hours = [0., 3., 6., 9., 12., 15., 18., 21., 24., 27., 30., 33.]
@@ -372,7 +372,7 @@ def test_rr_07_emar_dedup_matches_real_drug_dose_time_and_preserves_oral(tmp_pat
 
 @pytest.mark.parametrize("name", ["map", "map_invasive"])
 def test_rr_08_secondary_map_follows_primary_then_secondary_then_cuff(tmp_path, name):
-    from tests.core.test_extraction_audit_round5_aumc5 import _db, _load
+    from tests.support.aumc_source import aumc_db as _db, aumc_load as _load
 
     rows = [(5, 6642, 100., "mmHg"), (5, 8843, 80., "mmHg"), (5, 6679, 90., "mmHg"),
             (65, 8843, 80., "mmHg"), (65, 6679, 90., "mmHg"),

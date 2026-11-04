@@ -14,8 +14,8 @@ from easyicu.concept.metadata_projection import (
     ConceptColumnRole,
     project_concept_column_metadata,
 )
-from tests.core.test_extraction_audit_round5_aumc5 import _db
-from tests.core.test_extraction_audit_round5_hirid5 import _source_root
+from tests.support.aumc_source import aumc_db as _db
+from tests.support.hirid_source import hirid_source_root as _source_root
 from tests.support.blood_gas_sources import ADMISSION, _source, _write
 from tests.support.eicu_source import _eicu_source
 
