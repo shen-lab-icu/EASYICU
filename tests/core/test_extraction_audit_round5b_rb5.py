@@ -338,6 +338,7 @@ def _disk_source(root, database, concept, table, item, bucketed):
             expected = {4}
         elif table == "drugitems":
             rows["doseunit"] = "mg"
+            rows["ordercategory"] = "Infuus - Colloid"  # RR-05 reads the IV order category
         elif table in {"infusiondrug", "respiratorycharting"}:
             rows[value] = pd.Series(values).astype("string")
     for table_name, frame in ((stays_table, stays), (table, rows)):
