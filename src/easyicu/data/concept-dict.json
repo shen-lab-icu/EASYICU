@@ -12,23 +12,31 @@
       6834,
       6847,
       6871,
+      6917,
       6919,
       6948,
       6953,
       6958,
       7044,
       7064,
+      7123,
       7185,
       7187,
       7208,
       7227,
       7235,
+      8127,
+      8230,
+      8231,
       8394,
+      8546,
       8942,
       9029,
       9030,
+      9037,
+      9047,
       9052,
-      9070,
+      9075,
       9117,
       9128,
       9133,
@@ -36,17 +44,18 @@
       9151,
       9152,
       12398,
+      12953,
       12956,
-      12997,
       13057,
-      13094,
-      13102,
+      14236,
       19137,
-      19773
+      19764,
+      19773,
+      20175
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 full dictionary audit: removed legacy/non-current AUMC ids absent from drugitems.csv; 18860 was Hb pleural fluid in numericitems, not antibiotic.",
+     "_comment": "2026-07-03 full dictionary audit: removed legacy/non-current AUMC ids absent from drugitems.csv; 18860 was Hb pleural fluid in numericitems, not antibiotic. | 2026-11-04 audit round 3 (F-01): removed eye drops/ointments and burn cream (9070 Flammazine, 12997 ofloxacin eye drops, 13094 tobramycin and 13102 gentamicin eye ointment); added systemic antibacterials 7123 imipenem, 6917 ceftazidime, 8127 meropenem, 8546 clarithromycin, 9037 pheneticillin, 9047 chloramphenicol, 9075 fusidic acid, 19764 tigecycline, 20175 colistin, 14236 nitrofurantoin and the antituberculous 8230 isoniazid, 8231 pyrazinamide, 12953 ethambutol. Antivirals and antifungals (aciclovir, fluconazole) are not antibacterials and stay unmapped.",
      "callback": "transform_fun(set_val(TRUE))"
     }
    ],
@@ -212,7 +221,6 @@
       1000408,
       1000424,
       1000425,
-      1000426,
       1000437,
       1000483,
       1000507,
@@ -225,7 +233,6 @@
       1000666,
       1000670,
       1000671,
-      1000760,
       1000781,
       1000791,
       1000797,
@@ -259,7 +266,8 @@
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "2026-11-04 audit round 3 (F-16): removed 1000760 Topamax (topiramate) and 1000426 Salofalk (mesalazine); a zero givendose (pump start/stop marker) is not an administration (comp_na > 0 instead of set_val TRUE)."
     }
    ],
    "miiv": [
@@ -469,6 +477,7 @@
    "sic": [
     {
      "ids": [
+      1401,
       1406,
       1408,
       1410,
@@ -482,11 +491,13 @@
       1436,
       1449,
       1454,
+      1456,
       1457,
       1458,
       1459,
       1460,
       1461,
+      1577,
       1603,
       1795,
       1913,
@@ -494,7 +505,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 audit round 3 (M NEW-4): added 1577 Cefuroxim (7,853 cases), 1401 Metronidazol (2,718) and 1456 Ceftriaxon (705), the most used SICdb antibiotics, which were unmapped."
     }
    ]
   }
@@ -558,7 +570,8 @@
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               mimic_rate_cv\n             )"
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               transform_fun(divide_above(0.2, 60)),\n               mimic_rate_cv\n             )",
+     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60."
     },
     {
      "ids": 222315,
@@ -581,7 +594,8 @@
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               mimic_rate_cv\n             )"
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               transform_fun(divide_above(0.2, 60)),\n               mimic_rate_cv\n             )",
+     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60."
     },
     {
      "ids": 222315,
@@ -889,9 +903,14 @@
    ],
    "sic": [
     {
-     "ids": 287,
+     "ids": [
+      171,
+      287
+     ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "transform_fun(na_above(6))",
+     "_comment": "2026-11-04 audit round 3 (F-30): 287 'Serum-Albumin' has 3 rows; the serum albumin is 171 'Albumin (ZL)' (7,508 rows, 4,347 cases, median 3.3 g/dL) whose dictionary unit '%' belongs to the protein-electrophoresis fraction charted under the same ID: values split into 0-6 g/dL and 21-71 %, so values above 6 are not g/dL and are removed."
     }
    ]
   }
@@ -1923,7 +1942,9 @@
       9992
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-04 audit round 3 (F-02): blood-gas bicarbonate, arterial samples only, as bicar (10,806 venous and 8,850 mixed-venous rows were pooled)."
     }
    ],
    "eicu": [
@@ -1964,6 +1985,16 @@
      "table": "labevents",
      "sub_var": "itemid",
      "index_var": "charttime"
+    },
+    {
+     "ids": [
+      50803
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-04 audit round 3 (M NEW-1): blood-gas 50803 'Calculated Bicarbonate, Whole Blood' (11,315 ICU stays) was unmapped; arterial specimens only, as the other blood-gas items."
     }
    ],
    "mimic": [
@@ -2580,14 +2611,18 @@
     {
      "ids": "ionized calcium",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "transform_fun(divide_above(2.5, 4.008))",
+     "_comment": "2026-11-04 audit round 3 (F-09): eICU stores ionized calcium mostly in mg/dL (system unit; p50 4.4 even under an 'mmol/L' interface label), with some rows in mmol/L (about 1.1). Ionized calcium is 0.5-2 mmol/L and 2-8 mg/dL, so a value above 2.5 is mg/dL and is divided by 4.008 (40.08 g/mol, valence 2)."
     }
    ],
    "eicu_demo": [
     {
      "ids": "ionized calcium",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "transform_fun(divide_above(2.5, 4.008))",
+     "_comment": "2026-11-04 audit round 3 (F-09): eICU stores ionized calcium mostly in mg/dL (system unit; p50 4.4 even under an 'mmol/L' interface label), with some rows in mmol/L (about 1.1). Ionized calcium is 0.5-2 mmol/L and 2-8 mg/dL, so a value above 2.5 is mg/dL and is divided by 4.008 (40.08 g/mol, valence 2)."
     }
    ],
    "hirid": [
@@ -3603,10 +3638,11 @@
    "mm Hg"
   ],
   "min": -5,
-  "max": 50,
+  "max": 30,
   "description": "central venous pressure",
   "omopid": 21490852,
   "category": "vitals",
+  "source_channel_priority": ["manual", "transducer"],
   "sources": {
    "aumc": [
     {
@@ -3614,7 +3650,8 @@
       6655
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "manual"
     },
     {
      "ids": [
@@ -3623,7 +3660,8 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "transform_fun(na_below(1))",
-     "_comment": "2026-11-03 audit round 2 (H3): 20926 is the high-frequency transducer channel; its values <= 0 (5.6%) are artefacts and are dropped. 6655 (manual) is unchanged."
+     "_comment": "2026-11-03 audit round 2 (H3): 20926 is the high-frequency transducer channel; its values <= 0 (5.6%) are artefacts and are dropped. 6655 (manual) is unchanged. | 2026-11-04 audit round 3 (M H3): validated manual 6655 is preferred in each hour; 20926 (about 60 points per hour) fills the other hours.",
+     "source_channel": "transducer"
     }
    ],
    "eicu": [
@@ -3731,39 +3769,55 @@
    "aumc": [
     {
      "ids": [
-      6643,
+      6643
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped. | 2026-11-04 audit round 3 (R3-16): invasive channel (6643 'ABP diastolisch'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
       6680
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
-     "callback": "transform_fun(na_below(1))"
+     "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped. | 2026-11-04 audit round 3 (R3-16): nibp channel (6680 'Niet invasieve bloeddruk diastolisch'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "nibp"
     }
    ],
    "eicu": [
     {
      "table": "vitalperiodic",
      "val_var": "systemicdiastolic",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (vitalperiodic.systemicdiastolic)."
     },
     {
      "table": "vitalaperiodic",
      "val_var": "noninvasivediastolic",
      "class_name": "col_itm",
-     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: dbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays)."
+     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: dbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays). | 2026-11-04 audit round 3 (R3-16): nibp channel (vitalaperiodic.noninvasivediastolic).",
+     "source_channel": "nibp"
     }
    ],
    "eicu_demo": [
     {
      "table": "vitalperiodic",
      "val_var": "systemicdiastolic",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (vitalperiodic.systemicdiastolic)."
     },
     {
      "table": "vitalaperiodic",
      "val_var": "noninvasivediastolic",
      "class_name": "col_itm",
-     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: dbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays)."
+     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: dbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays). | 2026-11-04 audit round 3 (R3-16): nibp channel (vitalaperiodic.noninvasivediastolic).",
+     "source_channel": "nibp"
     }
    ],
    "hirid": [
@@ -3792,49 +3846,89 @@
     {
      "ids": [
       220051,
-      220180,
       225310
      ],
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added."
+     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added. | 2026-11-04 audit round 3 (R3-16): invasive channel (220051 'Arterial Blood Pressure diastolic', 225310 'ART BP Diastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      220180
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added. | 2026-11-04 audit round 3 (R3-16): nibp channel (220180 'Non Invasive Blood Pressure diastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "source_channel": "nibp"
     }
    ],
    "mimic": [
     {
      "ids": [
       8368,
-      8441,
       8555,
-      220051,
+      220051
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (8368 'Arterial BP [Diastolic]', 8555 'Arterial BP #2 [Diastolic]', 220051 'Arterial Blood Pressure diastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
+    },
+    {
+     "ids": [
+      8441,
       220180
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-04 audit round 3 (R3-16): nibp channel (8441 'NBP [Diastolic]', 220180 'Non Invasive Blood Pressure diastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
       8368,
-      8441,
       8555,
-      220051,
+      220051
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (8368 'Arterial BP [Diastolic]', 8555 'Arterial BP #2 [Diastolic]', 220051 'Arterial Blood Pressure diastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
+    },
+    {
+     "ids": [
+      8441,
       220180
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-04 audit round 3 (R3-16): nibp channel (8441 'NBP [Diastolic]', 220180 'Non Invasive Blood Pressure diastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
     }
    ],
    "sic": [
     {
      "ids": [
-      702,
+      702
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (702 'BloodPressureArterialDiastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
+    },
+    {
+     "ids": [
       705
      ],
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "source_channel": "nibp",
+     "_comment": "2026-11-04 audit round 3 (R3-16): nibp channel (705 'BloodPressureNIDiastolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
     }
    ]
   }
@@ -3921,7 +4015,8 @@
      "val_var": "OffsetOfDeath",
      "extra_vars": [
       "HospitalDischargeType",
-      "TimeOfStay"
+      "TimeOfStay",
+      "DischargeState"
      ],
      "callback": "sic_death",
      "class_name": "col_itm"
@@ -3951,8 +4046,13 @@
      "dur_var": "stop",
      "rate_var": "doserateunit",
      "required_volume_unit": "ml",
-     "extra_vars": ["doseunit", "doserateunit"],
-     "callback": "combine_callbacks(\n                           aumc_rate,\n                           dex_to_10(list(7255L, 7256L, c(8940L, 9571L)),\n                                     c(2, 3, 4))\n                         )"
+     "extra_vars": [
+      "doseunit",
+      "doserateunit"
+     ],
+     "callback": "combine_callbacks(\n                           aumc_rate,\n                           dex_to_10(list(7255L, 7256L, c(8940L, 9571L)),\n                                     c(2, 3, 4))\n                         )",
+     "intermittent": "spread",
+     "_comment": "2026-11-04 audit round 3 (F-03): Flush rows are not rates, and an intermittent bag (iscontinuous 0; 2,481 rows of 8940 glucose 40%, often 100 ml over 20-30 min) is spread over the whole hours it spans instead of counting as a continuous infusion at its pump speed."
     }
    ],
    "eicu": [
@@ -4041,8 +4141,12 @@
      "amount_var": "amount",
      "auom_var": "amountuom",
      "status_var": "statusdescription",
-     "extra_vars": ["statusdescription"],
-     "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )",
+     "bolus_min_hours": 1,
+     "_comment": "2026-11-04 audit round 3 (F-22): an amount without a rate (220952 Dextrose 50%, a one-minute push) is spread over at least one hour; a 50 ml push was a 3,000 ml/hr infusion (15,000 ml/hr D10-equivalent)."
     }
    ],
    "mimic": [
@@ -4058,8 +4162,12 @@
      "amount_var": "amount",
      "auom_var": "amountuom",
      "status_var": "statusdescription",
-     "extra_vars": ["statusdescription"],
-     "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )",
+     "bolus_min_hours": 1,
+     "_comment": "2026-11-04 audit round 3 (F-22): an amount without a rate (220952 Dextrose 50%, a one-minute push) is spread over at least one hour; a 50 ml push was a 3,000 ml/hr infusion (15,000 ml/hr D10-equivalent)."
     },
     {
      "ids": [
@@ -4089,8 +4197,12 @@
      "amount_var": "amount",
      "auom_var": "amountuom",
      "status_var": "statusdescription",
-     "extra_vars": ["statusdescription"],
-     "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )",
+     "bolus_min_hours": 1,
+     "_comment": "2026-11-04 audit round 3 (F-22): an amount without a rate (220952 Dextrose 50%, a one-minute push) is spread over at least one hour; a 50 ml push was a 3,000 ml/hr infusion (15,000 ml/hr D10-equivalent)."
     },
     {
      "ids": [
@@ -4509,7 +4621,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)dextrose 50|\\bd50",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -4519,7 +4647,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)dextrose 50|\\bd50",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -5378,36 +5522,22 @@
    ],
    "eicu": [
     {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "ECMO|extracorporeal membrane",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
-    },
-    {
      "table": "nursecharting",
      "sub_var": "nursingchartvalue",
      "regex": "ECMO",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: ECMO appears in the nursecharting value, not the label."
+     "_comment": "2026-07-03 audit: ECMO appears in the nursecharting value, not the label. | 2026-11-04 audit round 3 (F-11): the treatment ECMO pattern matches 0 rows in eICU (treatmentstring, diagnosis and admissionDx carry no ECMO entry in v2.0); only the nursecharting device value (46 rows) remains."
     }
    ],
    "eicu_demo": [
     {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "ECMO|extracorporeal membrane",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
-    },
-    {
      "table": "nursecharting",
      "sub_var": "nursingchartvalue",
      "regex": "ECMO",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: ECMO appears in the nursecharting value, not the label."
+     "_comment": "2026-07-03 audit: ECMO appears in the nursecharting value, not the label. | 2026-11-04 audit round 3 (F-11): the treatment ECMO pattern matches 0 rows in eICU (treatmentstring, diagnosis and admissionDx carry no ECMO entry in v2.0); only the nursecharting device value (46 rows) remains."
     }
    ],
    "aumc": [
@@ -5456,38 +5586,6 @@
      "val_var": "value",
      "callback": "apply_map(c(`VV` = 'respiratory', `VA` = 'cardiovascular', `VAV` = 'cardiovascular'), var = 'value')",
      "_comment": "2026-07-03 audit: 229268 Circuit Configuration carries VV/VA/VAV indication; flow/checkbox ECMO itemids cannot distinguish indication."
-    }
-   ],
-   "eicu": [
-    {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "VV.*ECMO|ECMO.*respiratory",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val('respiratory'))"
-    },
-    {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "VA.*ECMO|ECMO.*cardio",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val('cardiovascular'))"
-    }
-   ],
-   "eicu_demo": [
-    {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "VV.*ECMO|ECMO.*respiratory",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val('respiratory'))"
-    },
-    {
-     "table": "treatment",
-     "sub_var": "treatmentstring",
-     "regex": "VA.*ECMO|ECMO.*cardio",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val('cardiovascular'))"
     }
    ],
    "aumc": [
@@ -5672,7 +5770,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)enoxaparin|lovenox",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -5682,7 +5796,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)enoxaparin|lovenox",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -5995,7 +6125,7 @@
    "mcgkgmin"
   ],
   "min": 0,
-  "max": 1.5,
+  "max": 5,
   "description": "epinephrine rate",
   "omopid": 1343916,
   "category": "medications",
@@ -6439,6 +6569,17 @@
      "sub_var": "itemid",
      "target": "ts_tbl",
      "callback": "combine_callbacks(\n               transform_fun(comp_na(`==`, 'Geïntubeerd')),\n               ts_to_win_tbl(mins(1L))\n             )"
+    },
+    {
+     "ids": [
+      12634,
+      12635
+     ],
+     "table": "processitems",
+     "sub_var": "itemid",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 audit round 3 (R3-12): an endotracheal tube (12634 Tube) or tracheostomy (12635 Tracheostoma) in place from start to stop, the airway that makes the GCS verbal response unassessable; listitem 6735 alone marked one minute."
     }
    ],
    "eicu": [
@@ -6733,7 +6874,10 @@
      "callback": "mimic_rate_cv"
     },
     {
-     "ids": 221744,
+     "ids": [
+      221744,
+      225942
+     ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
@@ -6744,7 +6888,8 @@
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "_comment": "2026-11-04 audit round 3 (F-26): added MetaVision 225942 'Fentanyl (Concentrate)' (30,726 rate rows, mcg/hour, as MIMIC-IV). CareVue 30149 'Fentanyl (Conc)' is charted in mcghr with the same distribution as 30118 (median 100 vs 75 mcg/hr), so it needs no conversion."
     }
    ],
    "mimic_demo": [
@@ -6759,7 +6904,10 @@
      "callback": "mimic_rate_cv"
     },
     {
-     "ids": 221744,
+     "ids": [
+      221744,
+      225942
+     ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
      "stop_var": "endtime",
@@ -6770,7 +6918,8 @@
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "_comment": "2026-11-04 audit round 3 (F-26): added MetaVision 225942 'Fentanyl (Concentrate)' (30,726 rate rows, mcg/hour, as MIMIC-IV). CareVue 30149 'Fentanyl (Conc)' is charted in mcghr with the same distribution as 30118 (median 100 vs 75 mcg/hr), so it needs no conversion."
     }
    ],
    "eicu": [
@@ -6906,14 +7055,13 @@
    "hirid": [
     {
      "ids": [
-      1000050,
-      1000744
+      1000050
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
-     "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (F-17): about half the pharma rows are givendose 0 start/stop markers; only a positive volume is a transfusion; removed 1000744, which has no rows.",
+     "callback": "transform_fun(comp_na(`>`, 0))"
     }
    ],
    "aumc": [
@@ -7035,25 +7183,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "value_var": "value",
-     "_comment": "2026-07-02 AUMC raw dictionary audit: added primary/secondary FiO2 percent channels with numeric 21-100-compatible values."
-    },
-    {
-     "ids": [
-      13076
-     ],
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "value_var": "value",
-     "callback": "transform_fun(percent_as_numeric)"
-    },
-    {
-     "ids": [
-      20656
-     ],
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "value_var": "value",
-     "callback": "transform_fun(percent_as_numeric)"
+     "_comment": "2026-07-02 AUMC raw dictionary audit: added primary/secondary FiO2 percent channels with numeric 21-100-compatible values. | 2026-11-04 audit round 3 (F-04): removed 13076 'A_FiO2' (the APACHE II oxygenation points 0-4, read as FiO2 100% for a score of 1) and 20656 'ECMO - FiO2' (oxygenator sweep gas, not the inspired fraction)."
     }
    ],
    "eicu": [
@@ -7770,7 +7900,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(binary_op(`*`, 100))"
+     "callback": "transform_fun(percent_as_numeric)",
+     "_comment": "2026-11-04 audit round 3 (F-05): fractions (0-1] are scaled to percent; 32,985 rows already in percent (mostly 11545 Ht(v.Bgs)) were multiplied by 100 and then dropped by max 60."
     }
    ],
    "eicu": [
@@ -8428,6 +8559,7 @@
  "ins": {
   "unit": "units/hr",
   "min": 0,
+  "max": 50,
   "description": "insulin",
   "omopid": 42537007,
   "category": "medications",
@@ -8440,7 +8572,16 @@
       19129
      ],
      "sub_var": "itemid",
-     "table": "drugitems"
+     "table": "drugitems",
+     "dur_var": "stop",
+     "rate_var": "doserateunit",
+     "extra_vars": [
+      "doseunit",
+      "doserateunit"
+     ],
+     "callback": "aumc_rate",
+     "intermittent": "drop",
+     "_comment": "2026-11-04 audit round 3 (F-06): the infusion rate (IE/uur) over start..stop. One-minute Flush rows (pump speed 60-600 IE/uur) and intermittent doses (iscontinuous 0, subcutaneous or IV boluses without a rate unit) are not an infusion rate; doses read from the dose column were exported as units/hr at their start hour only."
     }
    ],
    "eicu": [
@@ -9067,7 +9208,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)labetalol|trandate",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -9077,7 +9234,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)labetalol|trandate",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -9289,7 +9462,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)levetiracetam|keppra",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -9299,7 +9488,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)levetiracetam|keppra",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -9614,6 +9819,18 @@
      "ids": "-lymphs",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      24000480
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "blood_cell_ratio",
+     "_comment": "2026-11-04 audit round 3 (M NEW-3): 24000480 'Lymphocytes [#/volume] in Blood' (G/l, 10,774 stays) as a percentage of the same-hour WBC, as AUMC; lymph, nlr and plr had no HiRID source."
     }
    ],
    "miiv": [
@@ -10492,10 +10709,12 @@
     {
      "ids": [
       224697,
-      444
+      444,
+      3503
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (M NEW-03): added CareVue NICU 3503 'Mean PAW [Meas]' (1,852 stays, none with 444/224697)."
     }
    ],
    "sic": [
@@ -10513,10 +10732,12 @@
     {
      "ids": [
       224697,
-      444
+      444,
+      3503
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (M NEW-03): added CareVue NICU 3503 'Mean PAW [Meas]' (1,852 stays, none with 444/224697)."
     }
    ]
   }
@@ -10728,6 +10949,37 @@
      "index_var": "treatmentoffset",
      "callback": "eicu_treatment_ventilation_evidence",
      "_comment": "Point evidence from the eICU treatment hierarchy. Explicit non-invasive descendants remain non-invasive; other mechanical-ventilation paths are invasive. No duration is manufactured from treatment documentation."
+    },
+    {
+     "ids": [
+      "B1: IPAP",
+      "B2: EPAP",
+      "B3: Est Mask Leak",
+      "CPAP",
+      "Compliance",
+      "Exhaled MV",
+      "Exhaled TV (machine)",
+      "Flow Sensitivity",
+      "Mean Airway Pressure",
+      "PEEP",
+      "PEEP/CPAP",
+      "Peak Flow",
+      "Peak Insp. Pressure",
+      "Plateau Pressure",
+      "Pressure Control",
+      "Pressure Support",
+      "Pressure to Trigger PS",
+      "RT Vent On/Off",
+      "TV/kg IBW",
+      "Tidal Volume (set)",
+      "Vent Rate"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "value_var": "respchartvalue",
+     "index_var": "respchartoffset",
+     "callback": "eicu_ventilator_setting_evidence",
+     "_comment": "Charted ventilator settings and measured ventilator data with a positive value, and RT Vent On/Off Start/Continued. vent_ind joins these points and respiratoryCare vent intervals into windows across gaps of at most 8 h (2026-11-04 audit round 3, R3-05)."
     }
    ],
    "miiv": [
@@ -11070,7 +11322,23 @@
      "ids": 225883,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)meropenem|merrem",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -11078,7 +11346,23 @@
      "ids": 225883,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)meropenem|merrem",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -11217,7 +11501,8 @@
      "ids": "magnesium",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "convert_unit(binary_op(`/`, 1.215), 'mg/dL', 'mEq/L')"
+     "callback": "convert_unit(binary_op(`*`, 1.215), 'mg/dL', 'meq/l')",
+     "_comment": "2026-11-04 audit round 3 (F-09): magnesium 1 mEq/L = 1.215 mg/dL (24.3 g/mol, valence 2); mEq/L rows (p50 1.61) are multiplied, not divided, giving p50 1.96 against 2.0 for mg/dL rows."
     }
    ],
    "eicu_demo": [
@@ -11225,7 +11510,8 @@
      "ids": "magnesium",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "convert_unit(binary_op(`/`, 1.215), 'mg/dL', 'mEq/L')"
+     "callback": "convert_unit(binary_op(`*`, 1.215), 'mg/dL', 'meq/l')",
+     "_comment": "2026-11-04 audit round 3 (F-09): magnesium 1 mEq/L = 1.215 mg/dL (24.3 g/mol, valence 2); mEq/L rows (p50 1.61) are multiplied, not divided, giving p50 1.96 against 2.0 for mg/dL rows."
     }
    ],
    "hirid": [
@@ -11788,18 +12074,15 @@
     {
      "ids": [
       8870,
-      8875,
-      9663,
       9668,
       12273,
       12357,
       12374,
-      12578,
       16244
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage. 2026-07-04 within-concept variant audit: added 12578 MVe Spontaan nieuw (new-software-version channel, ~14M rows; distribution matches mapped 8875 Mv Spontaan). | 2026-07-17 official-code audit (mechanical_ventilation.ipynb cell 21 lists 12374 MinVent, l/min): ADDED 12374. We already pull the other Bipap Vision channels (6698->pip, 12373->tidal_vol), so excluding its minute volume was internally inconsistent. | 2026-11-03 extraction audit round 2 (P5): removed the inspiratory 12276. Spontaneous minute-volume channels stay pooled, as in eICU and MIMIC-III (2026-07 semantic review); in controlled breaths they can read 0."
+     "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage. 2026-07-04 within-concept variant audit: added 12578 MVe Spontaan nieuw (new-software-version channel, ~14M rows; distribution matches mapped 8875 Mv Spontaan). | 2026-07-17 official-code audit (mechanical_ventilation.ipynb cell 21 lists 12374 MinVent, l/min): ADDED 12374. We already pull the other Bipap Vision channels (6698->pip, 12373->tidal_vol), so excluding its minute volume was internally inconsistent. | 2026-11-03 extraction audit round 2 (P5): removed the inspiratory 12276. Spontaneous minute-volume channels stay pooled, as in eICU and MIMIC-III (2026-07 semantic review); in controlled breaths they can read 0. | 2026-11-04 audit round 3 (R3-11): removed the spontaneous-only channels 8875 Mv Spontaan, 9663 Mv Spontaan(2) and 12578 MVe Spontaan nieuw (0 l/min during controlled ventilation in 16.3% of its 13.99 million rows); minute_vol is the total exhaled minute volume (12273 and the other VE/MinVent channels)."
     }
    ],
    "eicu": [
@@ -11923,9 +12206,11 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "drugname",
       "drugordercancelled"
      ],
-     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (29,601 rows in eICU v2.0). Cancelled orders are dropped."
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (29,601 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (F-12/F-14): rows with a drugname are already matched by name, so the HICL source keeps only unnamed orders (HICL 1694 also codes 1,324 named warfarin orders).",
+     "require_empty_var": "drugname"
     },
     {
      "regex": "morphine",
@@ -11967,9 +12252,11 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "drugname",
       "drugordercancelled"
      ],
-     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (29,601 rows in eICU v2.0). Cancelled orders are dropped."
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (29,601 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (F-12/F-14): rows with a drugname are already matched by name, so the HICL source keeps only unnamed orders (HICL 1694 also codes 1,324 named warfarin orders).",
+     "require_empty_var": "drugname"
     },
     {
      "regex": "morphine",
@@ -12286,11 +12573,25 @@
    ],
    "hirid": [
     {
-     "ids": 24000556,
+     "ids": [
+      24000556,
+      24000557
+     ],
      "table": "observations",
      "sub_var": "variableid",
      "class_name": "hrd_itm",
-     "_comment": "2026-11-03 extraction audit 2 (S8): segmented neutrophils % (p50 62.9%); 24000550 is not used, its values behave as an absolute count."
+     "_comment": "2026-11-04 audit round 3 (F-18): total neutrophils of a manual differential are segmented (24000556) plus band forms (24000557) charted at the same time (median 63% + 20%); segmented alone under-read by about 21 points. 24000550 is an absolute count and is not used.",
+     "callback": "sum_at_same_time"
+    },
+    {
+     "ids": [
+      24000550
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "blood_cell_ratio",
+     "_comment": "2026-11-04 audit round 3 (M S8): 24000550 is labelled 'Neutrophils/100 leukocytes' but holds an absolute count (median 9.2, p95 22 G/l); it is read as a count and divided by the same-hour WBC."
     }
    ],
    "miiv": [
@@ -12699,14 +13000,16 @@
      "infused_regex": "(?i)^(?:norepi|levophed)",
      "index_var": "drugstartoffset",
      "extra_vars": [
-      "drugstopoffset",
-      "drugordercancelled"
+      "drugname",
+      "drugordercancelled",
+      "drugstopoffset"
      ],
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
-     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped. HICL 2051/36346 (norepinephrine) orders without a drugname."
+     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped. HICL 2051/36346 (norepinephrine) orders without a drugname. | 2026-11-04 audit round 3 (F-12/F-14): rows with a drugname are already matched by name, so the HICL source keeps only unnamed orders (HICL 1694 also codes 1,324 named warfarin orders).",
+     "require_empty_var": "drugname"
     }
    ],
    "eicu_demo": [
@@ -12747,14 +13050,16 @@
      "infused_regex": "(?i)^(?:norepi|levophed)",
      "index_var": "drugstartoffset",
      "extra_vars": [
-      "drugstopoffset",
-      "drugordercancelled"
+      "drugname",
+      "drugordercancelled",
+      "drugstopoffset"
      ],
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
-     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped. HICL 2051/36346 (norepinephrine) orders without a drugname."
+     "_comment": "2026-11-03 audit round 2 (V1): norepinephrine orders of stays whose hospital charts no norepinephrine infusion in infusiondrug (11,454 of 24,591 stays with an order) are exposure spans (order start to stop, hours; owner concept/eicu_vasopressor_orders.py). Never a dose; stays with an infusion row keep infusion durations only. Cancelled orders are dropped. HICL 2051/36346 (norepinephrine) orders without a drugname. | 2026-11-04 audit round 3 (F-12/F-14): rows with a drugname are already matched by name, so the HICL source keeps only unnamed orders (HICL 1694 also codes 1,324 named warfarin orders).",
+     "require_empty_var": "drugname"
     }
    ],
    "hirid": [
@@ -12911,7 +13216,7 @@
    "mcgkgmin"
   ],
   "min": 0,
-  "max": 3,
+  "max": 5,
   "description": "norepinephrine rate",
   "omopid": 1321341,
   "category": "medications",
@@ -13085,6 +13390,13 @@
      "sub_var": "itemid",
      "callback": "arterial_specimen_only(transform_fun(binary_op(`*`, 100)))",
      "_comment": "2026-11-03 extraction audit: lab SaO2 keeps only arterial specimens, as in sao2 (rule owner concept/blood_gas_specimen.py)."
+    },
+    {
+     "ids": 8903,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as arterial (gases without a specimen record are kept, as for 12311). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -13404,8 +13716,8 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
-     "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (F-17): about half the pharma rows are givendose 0 start/stop markers; only a positive volume is a transfusion.",
+     "callback": "transform_fun(comp_na(`>`, 0))"
     }
    ],
    "eicu": [
@@ -13687,11 +13999,12 @@
      "ids": [
       778,
       3784,
-      3835
+      3835,
+      220235
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded. | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220235 'Arterial CO2 Pressure' (13,711 stays), the counterpart of CareVue 778."
     }
    ],
    "mimic_demo": [
@@ -13706,11 +14019,12 @@
      "ids": [
       778,
       3784,
-      3835
+      3835,
+      220235
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded. | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220235 'Arterial CO2 Pressure' (13,711 stays), the counterpart of CareVue 778."
     }
    ],
    "sic": [
@@ -13738,6 +14052,7 @@
   "_comment": "2026-11-03 extraction audit 3: the ventilator setting in every database, from the same sources as peep_set; total or measured PEEP is peep_total",
   "omopid": 4353936,
   "category": "ventilator",
+  "source_channel_priority": ["set", "measured", "lab"],
   "sources": {
    "aumc": [
     {
@@ -13776,7 +14091,17 @@
      "table": "observations",
      "sub_var": "variableid",
      "class_name": "hrd_itm",
-     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; 2600 'Positive end expiratory pressure setting'; 2610 'Positive end expiratory pressure' is the measured value and is not pooled."
+     "_comment": "2026-11-04 audit round 3 (M P4): 2600 'Positive end expiratory pressure setting' is preferred in each hour; measured 2610 fills the hours without a setting (5,137 ventilated hours).",
+     "source_channel": "set"
+    },
+    {
+     "ids": [
+      2610
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "source_channel": "measured"
     }
    ],
    "miiv": [
@@ -13799,7 +14124,17 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700/686 are peep_total. CareVue 505 'PEEP' is charted only in the NICU (1,871 of 1,872 stays) and never at the same time as 506 'PEEP Set' or 686 'Total PEEP Level'; it is that unit's ventilator PEEP."
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700/686 are peep_total. CareVue 505 'PEEP' is charted only in the NICU (1,871 of 1,872 stays) and never at the same time as 506 'PEEP Set' or 686 'Total PEEP Level'; it is that unit's ventilator PEEP.",
+     "source_channel": "set"
+    },
+    {
+     "ids": [
+      50819
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "source_channel": "lab",
+     "_comment": "2026-11-04 audit round 3 (M NEW-04): blood-gas 50819 'PEEP' (the setting written on the gas requisition) fills hours without a charted PEEP setting (379 stays have no chartevents PEEP)."
     }
    ],
    "sic": [
@@ -13819,7 +14154,17 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700/686 are peep_total. CareVue 505 'PEEP' is charted only in the NICU (1,871 of 1,872 stays) and never at the same time as 506 'PEEP Set' or 686 'Total PEEP Level'; it is that unit's ventilator PEEP."
+     "_comment": "2026-11-03 extraction audit 3: ventilator-set PEEP only, as peep_set; Total PEEP Level 224700/686 are peep_total. CareVue 505 'PEEP' is charted only in the NICU (1,871 of 1,872 stays) and never at the same time as 506 'PEEP Set' or 686 'Total PEEP Level'; it is that unit's ventilator PEEP.",
+     "source_channel": "set"
+    },
+    {
+     "ids": [
+      50819
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "source_channel": "lab",
+     "_comment": "2026-11-04 audit round 3 (M NEW-04): blood-gas 50819 'PEEP' (the setting written on the gas requisition) fills hours without a charted PEEP setting (379 stays have no chartevents PEEP)."
     }
    ]
   }
@@ -14125,7 +14470,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)phenytoin|dilantin|fosphenytoin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -14136,7 +14497,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)phenytoin|dilantin|fosphenytoin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -14439,7 +14816,6 @@
     {
      "ids": [
       12281,
-      8852,
       8877,
       6698,
       12365,
@@ -14447,7 +14823,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; 2026-07-02 added secondary Piek druk and Zephyros Ppeak channels."
+     "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; 2026-07-02 added secondary Piek druk and Zephyros Ppeak channels. | 2026-11-04 audit round 3 (F-07): removed 8852 'P max', the Evita pressure alarm limit (p50 39 mbar against 23 for the measured 8877 'Peak druk')."
     }
    ],
    "eicu": [
@@ -14489,11 +14865,12 @@
     {
      "ids": [
       535,
-      224695
+      224695,
+      507
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [506] (wrong concept); added []"
+     "_comment": "2026-05-27 audit fix: removed [506] (wrong concept); added [] | 2026-11-04 audit round 3 (M NEW-03): added CareVue NICU 507 'PIP' (1,198 stays, none with 535/224695)."
     }
    ],
    "sic": [
@@ -14507,11 +14884,12 @@
     {
      "ids": [
       535,
-      224695
+      224695,
+      507
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [506] (wrong concept); added []"
+     "_comment": "2026-05-27 audit fix: removed [506] (wrong concept); added [] | 2026-11-04 audit round 3 (M NEW-03): added CareVue NICU 507 'PIP' (1,198 stays, none with 535/224695)."
     }
    ]
   }
@@ -14524,6 +14902,26 @@
   "min": 0,
   "max": 100,
   "description": "Plateau Pressure",
+  "omopid": 4128731,
+  "category": "ventilator",
+  "concepts": [
+   "plateau_pres_raw",
+   "pip",
+   "peep"
+  ],
+  "callback": "plateau_pressure",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 audit round 3 (R3-18): a charted plateau above the same hour's PIP + 1 cmH2O or below its PEEP is not a plateau (HiRID 7.1%, eICU 3.2%, AUMC 2.9% above PIP; eICU 2.9% below PEEP) and is dropped; a plateau without a PIP or PEEP that hour is kept. The charted values are plateau_pres_raw."
+ },
+ "plateau_pres_raw": {
+  "unit": [
+   "cmH2O",
+   "mbar"
+  ],
+  "min": 0,
+  "max": 100,
+  "description": "Plateau Pressure as charted (before the PIP/PEEP consistency check)",
   "omopid": 4128731,
   "category": "ventilator",
   "sources": {
@@ -14678,14 +15076,13 @@
    "hirid": [
     {
      "ids": [
-      1000201,
-      1000245
+      1000201
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
-     "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (F-17): about half the pharma rows are givendose 0 start/stop markers; only a positive volume is a transfusion; removed 1000245, which has no rows.",
+     "callback": "transform_fun(comp_na(`>`, 0))"
     }
    ],
    "eicu": [
@@ -14897,11 +15294,12 @@
      "ids": [
       779,
       3785,
-      3837
+      3837,
+      220224
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2)."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2). | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220224 'Arterial O2 pressure' (13,711 stays), the counterpart of CareVue 779."
     }
    ],
    "mimic_demo": [
@@ -14916,11 +15314,12 @@
      "ids": [
       779,
       3785,
-      3837
+      3837,
+      220224
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2)."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2). | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220224 'Arterial O2 pressure' (13,711 stays), the counterpart of CareVue 779."
     }
    ],
    "sic": [
@@ -15055,9 +15454,14 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "routeadmin"
      ],
-     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (F-13): potassium by mouth or tube (routeadmin PO/oral/NG/tube; tablet, capsule, powder or ER formulations) is not intravenous replacement (>110,000 rows).",
+     "exclude_regex": {
+      "routeadmin": "(?i)^\\s*(po|oral|per os|sl|sublingual|buccal|ng|ngt|og|ogt|ft|peg|pegtube|j-?tube|g-?tube|gt|.*\\btube\\b.*|gastric.*|enteral.*|per ng.*|nasogastric.*)\\s*$",
+      "drugname": "(?i)\\b(po|oral|tab|tabs|tablet|tbcr|tbec|cap|caps|capsule|powd|powder|pack|packet|pkt|elix|elixir|liq|liquid|soln oral|er)\\b"
+     }
     },
     {
      "ids": [
@@ -15075,9 +15479,15 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugname",
+      "drugordercancelled",
+      "routeadmin"
      ],
-     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,197 rows in eICU v2.0). Cancelled orders are dropped."
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,197 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (F-12/F-14): rows with a drugname are already matched by name, so the HICL source keeps only unnamed orders (HICL 1694 also codes 1,324 named warfarin orders). | 2026-11-04 audit round 3 (F-13): potassium by mouth or tube (routeadmin PO/oral/NG/tube; tablet, capsule, powder or ER formulations) is not intravenous replacement (>110,000 rows).",
+     "require_empty_var": "drugname",
+     "exclude_regex": {
+      "routeadmin": "(?i)^\\s*(po|oral|per os|sl|sublingual|buccal|ng|ngt|og|ogt|ft|peg|pegtube|j-?tube|g-?tube|gt|.*\\btube\\b.*|gastric.*|enteral.*|per ng.*|nasogastric.*)\\s*$"
+     }
     }
    ],
    "eicu_demo": [
@@ -15092,9 +15502,14 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "routeadmin"
      ],
-     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (F-13): potassium by mouth or tube (routeadmin PO/oral/NG/tube; tablet, capsule, powder or ER formulations) is not intravenous replacement (>110,000 rows).",
+     "exclude_regex": {
+      "routeadmin": "(?i)^\\s*(po|oral|per os|sl|sublingual|buccal|ng|ngt|og|ogt|ft|peg|pegtube|j-?tube|g-?tube|gt|.*\\btube\\b.*|gastric.*|enteral.*|per ng.*|nasogastric.*)\\s*$",
+      "drugname": "(?i)\\b(po|oral|tab|tabs|tablet|tbcr|tbec|cap|caps|capsule|powd|powder|pack|packet|pkt|elix|elixir|liq|liquid|soln oral|er)\\b"
+     }
     },
     {
      "ids": [
@@ -15112,9 +15527,15 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugname",
+      "drugordercancelled",
+      "routeadmin"
      ],
-     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,197 rows in eICU v2.0). Cancelled orders are dropped."
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (21,197 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (F-12/F-14): rows with a drugname are already matched by name, so the HICL source keeps only unnamed orders (HICL 1694 also codes 1,324 named warfarin orders). | 2026-11-04 audit round 3 (F-13): potassium by mouth or tube (routeadmin PO/oral/NG/tube; tablet, capsule, powder or ER formulations) is not intravenous replacement (>110,000 rows).",
+     "require_empty_var": "drugname",
+     "exclude_regex": {
+      "routeadmin": "(?i)^\\s*(po|oral|per os|sl|sublingual|buccal|ng|ngt|og|ogt|ft|peg|pegtube|j-?tube|g-?tube|gt|.*\\btube\\b.*|gastric.*|enteral.*|per ng.*|nasogastric.*)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -16012,12 +16433,21 @@
    "hirid": [
     {
      "ids": [
-      300,
-      310
+      300
      ],
      "table": "observations",
      "sub_var": "variableid",
      "class_name": "hrd_itm"
+    },
+    {
+     "ids": [
+      310
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "transform_fun(na_below(1))",
+     "_comment": "2026-11-04 audit round 3 (M NEW-2): ventilator rate 310 reads 0 in standby (3,434,637 rows, 17.2%); a zero is not a respiratory rate and pulled the pooled hourly median down by >= 2/min in 101,668 hours."
     }
    ],
    "miiv": [
@@ -16301,19 +16731,23 @@
         "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
       },
       {
-       "table": "numericitems",
-       "sub_var": "itemid",
-       "ids": [
-        8805,
-        8806,
-        8808,
-        12091,
-        14838
-       ],
-       "callback": "transform_fun(set_val(TRUE))",
-       "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment."
+        "table": "numericitems",
+        "sub_var": "itemid",
+        "ids": [
+          7666,
+          7667,
+          7668,
+          7671,
+          8805,
+          8806,
+          8808,
+          12091,
+          14838
+        ],
+        "callback": "transform_fun(set_val(TRUE))",
+        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record)."
       }
-   ],
+    ],
    "hirid": [
     {
      "table": "observations",
@@ -16708,6 +17142,13 @@
      "sub_var": "itemid",
      "callback": "arterial_specimen_only(transform_fun(binary_op(`*`, 100)))",
      "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+    },
+    {
+     "ids": 8903,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as arterial (gases without a specimen record are kept, as for 12311). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -16819,39 +17260,55 @@
    "aumc": [
     {
      "ids": [
-      6641,
+      6641
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped. | 2026-11-04 audit round 3 (R3-16): invasive channel (6641 'ABP systolisch'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
       6678
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
-     "callback": "transform_fun(na_below(1))"
+     "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped. | 2026-11-04 audit round 3 (R3-16): nibp channel (6678 'Niet invasieve bloeddruk systolisch'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "nibp"
     }
    ],
    "eicu": [
     {
      "table": "vitalperiodic",
      "val_var": "systemicsystolic",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (vitalperiodic.systemicsystolic)."
     },
     {
      "table": "vitalaperiodic",
      "val_var": "noninvasivesystolic",
      "class_name": "col_itm",
-     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: sbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays)."
+     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: sbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays). | 2026-11-04 audit round 3 (R3-16): nibp channel (vitalaperiodic.noninvasivesystolic).",
+     "source_channel": "nibp"
     }
    ],
    "eicu_demo": [
     {
      "table": "vitalperiodic",
      "val_var": "systemicsystolic",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (vitalperiodic.systemicsystolic)."
     },
     {
      "table": "vitalaperiodic",
      "val_var": "noninvasivesystolic",
      "class_name": "col_itm",
-     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: sbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays)."
+     "_comment": "2026-11-03 extraction audit 2: non-invasive cuff pressure added: sbp pools arterial-line and cuff values in MIMIC-III/IV, AUMCdb and SICdb, and eICU map already pools vitalperiodic systemicmean with vitalaperiodic noninvasivemean (eICU v2.0: vitalperiodic arterial values 46.7k stays, vitalaperiodic cuff 189.6k stays). | 2026-11-04 audit round 3 (R3-16): nibp channel (vitalaperiodic.noninvasivesystolic).",
+     "source_channel": "nibp"
     }
    ],
    "hirid": [
@@ -16880,49 +17337,89 @@
     {
      "ids": [
       220050,
-      220179,
       225309
      ],
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added."
+     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added. | 2026-11-04 audit round 3 (R3-16): invasive channel (220050 'Arterial Blood Pressure systolic', 225309 'ART BP Systolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      220179
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "_comment": "2026-11-03 audit round 2 (H6): 225309/225310 'ART BP Systolic/Diastolic' (arterial line) added. | 2026-11-04 audit round 3 (R3-16): nibp channel (220179 'Non Invasive Blood Pressure systolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
+     "source_channel": "nibp"
     }
    ],
    "mimic": [
     {
      "ids": [
       51,
-      455,
       6701,
-      220050,
+      220050
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (51 'Arterial BP [Systolic]', 6701 'Arterial BP #2 [Systolic]', 220050 'Arterial Blood Pressure systolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
+    },
+    {
+     "ids": [
+      455,
       220179
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-04 audit round 3 (R3-16): nibp channel (455 'NBP [Systolic]', 220179 'Non Invasive Blood Pressure systolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
     }
    ],
    "mimic_demo": [
     {
      "ids": [
       51,
-      455,
       6701,
-      220050,
+      220050
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (51 'Arterial BP [Systolic]', 6701 'Arterial BP #2 [Systolic]', 220050 'Arterial Blood Pressure systolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
+    },
+    {
+     "ids": [
+      455,
       220179
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "nibp",
+     "_comment": "2026-11-04 audit round 3 (R3-16): nibp channel (455 'NBP [Systolic]', 220179 'Non Invasive Blood Pressure systolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
     }
    ],
    "sic": [
     {
      "ids": [
-      701,
+      701
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "source_channel": "invasive",
+     "_comment": "2026-11-04 audit round 3 (R3-16): invasive channel (701 'BloodPressureArterialSystolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
+    },
+    {
+     "ids": [
       704
      ],
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "source_channel": "nibp",
+     "_comment": "2026-11-04 audit round 3 (R3-16): nibp channel (704 'BloodPressureNISystolic'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py)."
     }
    ]
   }
@@ -16937,14 +17434,6 @@
   "max": 15,
   "sources": {
    "miiv": [],
-   "eicu": [
-    {
-     "table": "nursecharting",
-     "sub_var": "nursingchartcelltypevallabel",
-     "regex": "GCS.*prior.*sedation",
-     "class_name": "rgx_itm"
-    }
-   ],
    "aumc": [
     {
      "table": "numericitems",
@@ -17629,11 +18118,12 @@
    "ml",
    "mL"
   ],
-  "min": 0,
+  "min": 1,
   "max": 2000,
   "description": "Expiratory tidal volume (measured)",
   "omopid": 4314820,
   "category": "ventilator",
+  "source_channel_priority": ["ventilator", "lab"],
   "sources": {
    "aumc": [
     {
@@ -17655,8 +18145,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 1000), 'ml', 'l')",
-     "_comment": "2026-07-03 AUMC source audit: VTe and VTe(2) are recorded in liters; convert to ml before pooling with measured tidal volume."
+     "callback": "transform_fun(multiply_below(3, 1000))",
+     "_comment": "2026-07-03 AUMC source audit: VTe and VTe(2) are recorded in liters; convert to ml before pooling with measured tidal volume. | 2026-11-04 audit round 3 (M NEW-5): 1,078 rows (108 stays) are already in mL (p50 537); only values of 3 or less are litres and are multiplied by 1000."
     }
    ],
    "eicu": [
@@ -17721,7 +18211,17 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check. | 2026-11-03 extraction audit: removed inspiratory 502 and spontaneous-labelled Vt items; tidal_vol is the observed/expired tidal volume. 2026-11-03 extraction audit: removed the spontaneous channel 652 (Spon. Vt (L) (Mech.)); tidal_vol is the observed total."
+     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check. | 2026-11-03 extraction audit: removed inspiratory 502 and spontaneous-labelled Vt items; tidal_vol is the observed/expired tidal volume. 2026-11-03 extraction audit: removed the spontaneous channel 652 (Spon. Vt (L) (Mech.)); tidal_vol is the observed total.",
+     "source_channel": "ventilator"
+    },
+    {
+     "ids": [
+      50826
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "source_channel": "lab",
+     "_comment": "2026-11-04 audit round 3 (M NEW-04): blood-gas 50826 'Tidal Volume' fills hours without a charted tidal volume (1,229 stays have none in chartevents)."
     }
    ],
    "sic": [
@@ -17753,7 +18253,17 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check. | 2026-11-03 extraction audit: removed inspiratory 502 and spontaneous-labelled Vt items; tidal_vol is the observed/expired tidal volume. 2026-11-03 extraction audit: removed the spontaneous channel 652 (Spon. Vt (L) (Mech.)); tidal_vol is the observed total."
+     "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check. | 2026-11-03 extraction audit: removed inspiratory 502 and spontaneous-labelled Vt items; tidal_vol is the observed/expired tidal volume. 2026-11-03 extraction audit: removed the spontaneous channel 652 (Spon. Vt (L) (Mech.)); tidal_vol is the observed total.",
+     "source_channel": "ventilator"
+    },
+    {
+     "ids": [
+      50826
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "source_channel": "lab",
+     "_comment": "2026-11-04 audit round 3 (M NEW-04): blood-gas 50826 'Tidal Volume' fills hours without a charted tidal volume (1,229 stays have none in chartevents)."
     }
    ]
   }
@@ -24113,7 +24623,29 @@
      "ids": 225798,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)vancomycin|vancocin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "route"
+     ],
+     "exclude_regex": {
+      "route": "(?i)^\\s*(po|po/ng|ng|og|pr|pb|ip|lock|.*tube.*|sl|buccal|oral)\\s*$"
+     },
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Oral/enteral vancomycin (C. difficile) is not systemic and is excluded. Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -24121,7 +24653,29 @@
      "ids": 225798,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)vancomycin|vancocin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "route"
+     ],
+     "exclude_regex": {
+      "route": "(?i)^\\s*(po|po/ng|ng|og|pr|pb|ip|lock|.*tube.*|sl|buccal|oral)\\s*$"
+     },
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Oral/enteral vancomycin (C. difficile) is not systemic and is excluded. Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -24507,19 +25061,13 @@
      "class_name": "col_itm"
     },
     {
-     "ids": "respFlowPtVentData",
-     "table": "respiratorycharting",
-     "sub_var": "respcharttypecat",
-     "callback": "transform_fun(set_val(TRUE))"
-    },
-    {
      "ids": [
-      "Start",
-      "Continued"
+      "Start"
      ],
      "table": "respiratorycharting",
      "sub_var": "respchartvalue",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "RT Vent On/Off 'Start'. 'Continued' is not a start, and respFlowPtVentData rows (7.74 million) are ventilator readings, not starts (2026-11-04 audit round 3, F-15)."
     }
    ],
    "eicu_demo": [
@@ -24536,19 +25084,13 @@
      "class_name": "col_itm"
     },
     {
-     "ids": "respFlowPtVentData",
-     "table": "respiratorycharting",
-     "sub_var": "respcharttypecat",
-     "callback": "transform_fun(set_val(TRUE))"
-    },
-    {
      "ids": [
-      "Start",
-      "Continued"
+      "Start"
      ],
      "table": "respiratorycharting",
      "sub_var": "respchartvalue",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "RT Vent On/Off 'Start'. 'Continued' is not a start, and respFlowPtVentData rows (7.74 million) are ventilator readings, not starts (2026-11-04 audit round 3, F-15)."
     }
    ],
    "miiv": [
@@ -24622,7 +25164,6 @@
       224700,
       224701,
       224702,
-      224703,
       224704,
       224705,
       224706,
@@ -24637,7 +25178,14 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(standby|other/remarks|other)\\s*$"
+     },
+     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept."
     }
    ],
    "mimic_demo": [
@@ -24699,7 +25247,6 @@
       224700,
       224701,
       224702,
-      224703,
       224704,
       224705,
       224706,
@@ -24714,7 +25261,14 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(standby|other/remarks|other)\\s*$"
+     },
+     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept."
     }
    ],
    "aumc": [
@@ -24898,7 +25452,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)warfarin|coumadin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "mimic_demo": [
@@ -24908,7 +25478,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    },
+    {
+     "regex": "(?i)warfarin|coumadin",
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "callback": "mimic_prescription_noon",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ],
    "sic": [
@@ -25388,8 +25974,8 @@
      "ids": "ammonia",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "transform_fun(binary_op(`/`, 1.703))",
-     "_comment": "2026-07-17 unit fix: eICU lab stores mcg/dL (verified n=28,793 med 41.0); concept declares umol/L. NH3 MW 17.03 -> umol/L = ug/dL / 1.703."
+     "callback": "convert_unit(binary_op(`/`, 1.703), 'umol/L', '(u|mc)g/dl')",
+     "_comment": "2026-11-04 audit round 3 (F-09): only rows whose interface unit is ug/dL or mcg/dL (883 rows, p50 62-75) are converted (umol/L = ug/dL / 1.703); 96.5% are reported in umol/L (p50 41) and were divided too."
     }
    ],
    "eicu_demo": [
@@ -25397,8 +25983,8 @@
      "ids": "ammonia",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "transform_fun(binary_op(`/`, 1.703))",
-     "_comment": "2026-07-17 unit fix: eICU lab stores mcg/dL (verified n=28,793 med 41.0); concept declares umol/L. NH3 MW 17.03 -> umol/L = ug/dL / 1.703."
+     "callback": "convert_unit(binary_op(`/`, 1.703), 'umol/L', '(u|mc)g/dl')",
+     "_comment": "2026-11-04 audit round 3 (F-09): only rows whose interface unit is ug/dL or mcg/dL (883 rows, p50 62-75) are converted (umol/L = ug/dL / 1.703); 96.5% are reported in umol/L (p50 41) and were divided too."
     }
    ],
    "sic": [
@@ -25516,8 +26102,7 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`/`, 2), 'ng/mL', 'FEU')",
-     "_comment": "2026-11-03 extraction audit 3: rows whose valueuom contains FEU (fibrinogen-equivalent units) are divided by 2 and reported as ng/mL DDU (D-dimer units). One D-dimer unit corresponds to about two fibrinogen-equivalent units because the FEU calibrator is expressed as the mass of the fibrinogen molecule (~340 kDa) and DDU as the D-dimer fragment (~195 kDa); the factor 2 is the conventional assay-independent approximation of that ratio, not an assay-specific calibration, so converted values carry that approximation. MIMIC-IV charts both units under both itemids; MIMIC-III records no FEU rows."
+     "_comment": "2026-11-04 audit round 3 (F-21): no unit conversion. 50915 and 51196 rows labelled 'ng/mL' and 'ng/mL FEU' share the reference range 0-500 and the same distribution (p50 505 and 529 for 50915), so both are on the FEU scale; halving only the FEU-labelled rows put one scale into two."
     }
    ],
    "mimic": [
@@ -26860,10 +27445,13 @@
      "ids": [
       664,
       823,
-      838
+      838,
+      225674,
+      223772
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (M NEW-06): added MetaVision 225674 'Mixed Venous O2% Sat' and 223772 'SvO2' (3,894 stays)."
     }
    ],
    "mimic_demo": [
@@ -26871,10 +27459,13 @@
      "ids": [
       664,
       823,
-      838
+      838,
+      225674,
+      223772
      ],
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (M NEW-06): added MetaVision 225674 'Mixed Venous O2% Sat' and 223772 'SvO2' (3,894 stays)."
     }
    ],
    "aumc": [
@@ -26891,6 +27482,13 @@
      "sub_var": "itemid",
      "callback": "mixed_venous_specimen_only(transform_fun(binary_op(`*`, 100)))",
      "_comment": "2026-11-03 extraction audit 2: blood-gas O2 saturation 12311 (fraction) x100 where freetext 11646 'Afname (bloed)' at the same admissionid and measuredat records a mixed-venous sample (GEM.VEN./Gem. ven.: 8,426 samples, 3,048 admissions, median 0.67). Plain venous 'Ven.' samples are not mapped to scvo2: the venous site is not recorded. Rule owner: concept/blood_gas_specimen.py."
+    },
+    {
+     "ids": 8903,
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "mixed_venous_specimen_only",
+     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as mixed venous. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "hirid": [
@@ -29048,7 +29646,7 @@
   "description": "loop diuretic dose in mg intravenous furosemide equivalent, summed per hour at administration start (IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395)",
   "category": "medications",
   "aggregate": "sum",
-  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) and MIMIC-III CareVue (no bolus record) have none; MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg.",
+  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) has none; MIMIC-III CareVue counts furosemide doses charted with an amount (2026-11-04 round 3 F-23; infusion rows charted as a rate only and bumetanide charted in ml are not counted); MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg.",
   "sources": {
    "aumc": [
     {
@@ -29222,6 +29820,19 @@
       "Rewritten"
      ],
      "_comment": "2026-11-03 extraction audit 2: MetaVision IV amount mg; 'Rewritten' rows are superseded entries and are excluded. CareVue records furosemide infusions (30123) but not boluses, so CareVue stays have no dose source."
+    },
+    {
+     "ids": [
+      30123
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "fe_route": "iv",
+     "_comment": "2026-11-04 audit round 3 (F-23): CareVue furosemide doses with an amount in mg (86,985 rows). Infusion rows carry only a rate (mghr, no amount) and are not spread. CareVue bumetanide (41518, 43047, 45275, 46197, 46554, 46690) is charted in ml with no concentration and cannot be converted to mg."
     }
    ],
    "mimic_demo": [
@@ -29245,6 +29856,19 @@
       "Rewritten"
      ],
      "_comment": "2026-11-03 extraction audit 2: MetaVision IV amount mg; 'Rewritten' rows are superseded entries and are excluded. CareVue records furosemide infusions (30123) but not boluses, so CareVue stays have no dose source."
+    },
+    {
+     "ids": [
+      30123
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "callback": "furosemide_equivalent",
+     "fe_drug": "furosemide",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "fe_route": "iv",
+     "_comment": "2026-11-04 audit round 3 (F-23): CareVue furosemide doses with an amount in mg (86,985 rows). Infusion rows carry only a rate (mghr, no amount) and are not spread. CareVue bumetanide (41518, 43047, 45275, 46197, 46554, 46690) is charted in ml with no concentration and cannot be converted to mg."
     }
    ],
    "sic": [
@@ -29291,16 +29915,27 @@
    "aumc": [
     {
      "ids": [
-      8845
+      8845,
+      10387
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (M fio2-est): added 10387 'Zuurstof toediening (bloed)' (O2 L/min at the blood gas, 3,348 stays)."
     }
    ],
    "hirid": [
     {
      "ids": [
-      15001525,
+      15001525
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "apply_map(c(`1` = 1, `2` = 2, `3` = 3, `4` = 4, `5` = 5, `6` = 6, `7` = 7, `8` = 4, `9` = 8, `10` = 12, `11` = 8, `14` = 6, `15` = 10, `16` = 0, `17` = 1.5, `18` = 9))",
+     "_comment": "2026-11-04 audit round 3 (F-19): 15001525 'oxygen by nasal cannula' is an ordinal code (ordinal_vars_ref); its label is the flow in l/min, '2 x n' being two prongs of n l/min. Code 16 is 0 l/min, read as 16 before."
+    },
+    {
+     "ids": [
       15001555
      ],
      "table": "observations",

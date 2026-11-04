@@ -142,8 +142,34 @@ WINDOW_CONCEPTS = {
     # Sedation/analgesia rate concepts (2026-05-13)
     "propofol_rate", "fentanyl_rate", "midazolam_rate",
     # 注意: "dex" 不应该在这里！它的 target: "win_tbl" 意味着返回原始格式，不展开
-    # "ett_gcs" 也不应该展开，它使用 ts_to_win_tbl 回调返回窗口格式
+    # ett_gcs windows are recorded airway intervals in SICdb (median 16.9 h) and
+    # HiRID (median 4 h); as in ricu, a merged export expands them over their
+    # duration (2026-11-04 audit round 3, F-31).
+    "ett_gcs",
 }
+
+# Window ends a merged export recognises; a window without one is expanded
+# over its declared ``dur_var`` instead.
+INTERVAL_END_COLUMNS = ("endtime", "stop", "end_time", "end")
+
+
+def merged_window_duration_column(name: str, frame: pd.DataFrame, dur_var: Optional[str]) -> Optional[str]:
+    """Return the duration column a merged export expands ``name`` over, if any.
+
+    A window concept whose frame carries no recognised end column (SICdb and
+    HiRID mech_vent and ett_gcs) used to keep only its start hour in the
+    merged export (2026-11-04 audit round 3, F-31).  Its ``dur_var`` is used
+    only when its unit is declared as hours.
+    """
+    from ..table.duration import UNIT_HOURS, get_dur_var_unit
+
+    if name not in WINDOW_CONCEPTS or not dur_var or dur_var not in frame.columns:
+        return None
+    if any(column in frame.columns for column in INTERVAL_END_COLUMNS):
+        return None
+    if get_dur_var_unit(frame) != UNIT_HOURS:
+        return None
+    return dur_var
 
 # Concepts that intentionally combine point observations with explicit
 # treatment windows in at least one database.  When a multi-source frame has

@@ -15,6 +15,11 @@ start.  Stays that do chart the infusion keep their infusion-based durations
 only, so the two sources are never pooled.  Cancelled orders are dropped by
 the source's ``excluded_statuses`` before this callback.
 
+An order is exposure only while the patient is in the unit: its stop is
+clipped to ``patient.unitdischargeoffset`` and an order starting after
+discharge is dropped.  Unclipped spans reached 8,784 h (2026-11-04 audit
+round 3, R3-04).
+
 Dictionary use::
 
     "table": "medication", "sub_var": "drugname", "regex": "...",
@@ -26,7 +31,7 @@ Dictionary use::
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -36,20 +41,34 @@ INFUSED_REGEX_PARAM = "infused_regex"
 ID_COLUMN = "patientunitstayid"
 START_COLUMN = "drugstartoffset"
 STOP_COLUMN = "drugstopoffset"
+DISCHARGE_COLUMN = "unitdischargeoffset"
 #: Attribute naming how many stays came from orders only.
 ORDER_ONLY_STAYS_ATTR = "eicu_order_only_stays"
 
 
 def order_exposure_durations(
-    frame: pd.DataFrame, *, concept_name: str, infused_stays: Iterable
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    infused_stays: Iterable,
+    discharge_offsets: Mapping[Any, float] | None = None,
 ) -> pd.DataFrame:
-    """Order spans (hours) of stays without an infusion row."""
+    """Order spans (hours) of stays without an infusion row, inside the unit stay.
+
+    ``discharge_offsets`` maps a stay to its ``unitdischargeoffset`` (minutes);
+    a stay without one keeps its order span.
+    """
     missing = {ID_COLUMN, START_COLUMN, STOP_COLUMN} - set(frame.columns)
     if missing:
         raise ValueError(f"eicu_order_exposure_columns_missing:{sorted(missing)}")
     rows = frame.loc[~frame[ID_COLUMN].isin(set(infused_stays))]
     start = pd.to_numeric(rows[START_COLUMN], errors="coerce")
     stop = pd.to_numeric(rows[STOP_COLUMN], errors="coerce")
+    if discharge_offsets is not None:
+        discharge = pd.to_numeric(rows[ID_COLUMN].map(discharge_offsets), errors="coerce")
+        inside = ~(start >= discharge)
+        rows, start, stop, discharge = rows[inside], start[inside], stop[inside], discharge[inside]
+        stop = stop.where(~(stop > discharge), discharge)
     hours = ((stop - start) / 60.0).where(stop > start, 0.0)
     out = pd.DataFrame(
         {
@@ -92,7 +111,17 @@ def apply_order_exposure(
         re.compile(pattern), na=False
     )
     infused = set(infusions.loc[matched.fillna(False).to_numpy(), ID_COLUMN])
-    return order_exposure_durations(frame, concept_name=concept_name, infused_stays=infused)
+    patients = data_source.load_table(
+        "patient",
+        columns=[ID_COLUMN, DISCHARGE_COLUMN],
+        filters=[FilterSpec(ID_COLUMN, FilterOp.IN, stays)],
+        verbose=False,
+    )
+    patients = patients.data if hasattr(patients, "data") else patients
+    discharge = dict(zip(patients[ID_COLUMN], pd.to_numeric(patients[DISCHARGE_COLUMN], errors="coerce")))
+    return order_exposure_durations(
+        frame, concept_name=concept_name, infused_stays=infused, discharge_offsets=discharge
+    )
 
 
 __all__ = [

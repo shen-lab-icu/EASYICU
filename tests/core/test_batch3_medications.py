@@ -23,11 +23,22 @@ Specific design decisions enforced by tests:
 from __future__ import annotations
 
 import json
+import re
 import pathlib
 
 import pytest
 
 DICT = pathlib.Path(__file__).resolve().parents[2] / "src" / "easyicu" / "data" / "concept-dict.json"
+
+# Boolean medication sources mark an administration TRUE; MIMIC-III
+# prescriptions are placed at noon of their start day, and a HiRID zero
+# givendose (pump start/stop marker) is not an administration (2026-11-04
+# audit round 3, F-17/F-23).
+BOOLEAN_DRUG_CALLBACKS = {
+    "transform_fun(set_val(TRUE))",
+    "mimic_prescription_noon",
+    "transform_fun(comp_na(`>`, 0))",
+}
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
@@ -70,8 +81,8 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
-            assert src.get("callback") == "transform_fun(set_val(TRUE))", (
-                f"{name}/{db}: callback must be set_val(TRUE), got {src.get('callback')}"
+            assert src.get("callback") in BOOLEAN_DRUG_CALLBACKS, (
+                f"{name}/{db}: boolean callback expected, got {src.get('callback')}"
             )
 
 
@@ -108,21 +119,24 @@ def test_pantoprazole_cv_whitelist_is_curated(cdict):
     assert {40549, 40550, 41101, 225910} <= (ids | {225910})
 
 
-def test_vancomycin_mimic_is_mv_only(cdict):
-    """MIMIC-III CV inputevents only has enema/rectal vancomycin. Those are
-    NOT systemic vancomycin administration and must be excluded."""
+def test_vancomycin_mimic_uses_mv_and_systemic_prescriptions(cdict):
+    """MIMIC-III CV inputevents only has enema/rectal vancomycin, which is not
+    systemic; CareVue stays are covered by prescriptions without enteral
+    routes (2026-11-04 audit round 3, F-23)."""
     mimic = cdict["vancomycin"]["sources"]["mimic"]
-    tables = [s["table"] for s in mimic]
-    assert tables == ["inputevents_mv"], (
-        f"vancomycin MIMIC must be MV-only (CV has enema/rectal only), got {tables}"
-    )
+    assert [s["table"] for s in mimic] == ["inputevents_mv", "prescriptions"]
+    rx = mimic[1]
+    assert rx["callback"] == "mimic_prescription_noon"
+    assert "route" in rx["exclude_regex"]
+    assert re.search(rx["exclude_regex"]["route"], "PO")
+    assert re.search(rx["exclude_regex"]["route"], "PR")
+    assert not re.search(rx["exclude_regex"]["route"], "IV")
 
 
-def test_meropenem_mimic_is_mv_only(cdict):
-    """Meropenem has no MIMIC-III CareVue itemid."""
+def test_meropenem_mimic_uses_mv_and_prescriptions(cdict):
+    """Meropenem has no MIMIC-III CareVue itemid; prescriptions cover CareVue."""
     mimic = cdict["meropenem"]["sources"]["mimic"]
-    tables = [s["table"] for s in mimic]
-    assert tables == ["inputevents_mv"]
+    assert [s["table"] for s in mimic] == ["inputevents_mv", "prescriptions"]
     assert mimic[0]["ids"] == 225883
 
 

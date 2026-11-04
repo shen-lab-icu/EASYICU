@@ -40,6 +40,16 @@ from easyicu.utils.time_units import (
     minutes_to_hours_series,
 )
 
+class _EicuSourceWithoutCareIntervals:
+    """An eICU source whose respiratoryCare holds no vent start/end pair."""
+
+    def __init__(self, name):
+        self.config = SimpleNamespace(name=name)
+
+    def load_table(self, table, columns=None, filters=None, verbose=False):
+        return SimpleNamespace(data=pd.DataFrame({column: [] for column in columns}))
+
+
 pytestmark = pytest.mark.ricu_parity
 
 
@@ -298,12 +308,15 @@ class TestVentIndDtypeAlignment:
     def test_eicu_mech_vent_points_are_not_expanded_into_six_hour_windows(
         self, database
     ):
+        # Evidence hours at most eight hours apart form one window; an isolated
+        # point stays one hour and nothing extends past the last evidence
+        # (audit round 3, R3-05).
         mech = ICUTable(
             pd.DataFrame(
                 {
-                    "patientunitstayid": [10, 10],
-                    "charttime": [1.25, 8.5],
-                    "mech_vent": ["invasive", "noninvasive"],
+                    "patientunitstayid": [10, 10, 10],
+                    "charttime": [1.25, 8.5, 20.0],
+                    "mech_vent": ["invasive", "noninvasive", "invasive"],
                 }
             ),
             id_columns=["patientunitstayid"],
@@ -315,17 +328,15 @@ class TestVentIndDtypeAlignment:
             target="win_tbl",
             interval=pd.Timedelta(hours=1),
             resolver=None,
-            data_source=SimpleNamespace(config=SimpleNamespace(name=database)),
+            data_source=_EicuSourceWithoutCareIntervals(database),
             patient_ids=None,
         )
 
         out = _callback_vent_ind({"mech_vent": mech}, ctx)
 
         assert not hasattr(out, "dur_var")
-        assert out.data.to_dict("records") == [
-            {"patientunitstayid": 10, "charttime": 1.25, "vent_ind": True},
-            {"patientunitstayid": 10, "charttime": 8.5, "vent_ind": True},
-        ]
+        assert out.data["charttime"].tolist() == [float(h) for h in range(1, 9)] + [20.0]
+        assert out.data["vent_ind"].all()
 
     def test_eicu_point_contract_fails_closed_if_a_duration_appears(self):
         mech = ICUTable(
@@ -427,7 +438,7 @@ class TestVentIndDtypeAlignment:
             target="win_tbl",
             interval=pd.Timedelta(hours=1),
             resolver=None,
-            data_source=SimpleNamespace(config=SimpleNamespace(name="eicu")),
+            data_source=_EicuSourceWithoutCareIntervals("eicu"),
             patient_ids=None,
         )
 

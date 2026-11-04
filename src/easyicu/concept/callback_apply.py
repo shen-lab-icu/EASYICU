@@ -782,6 +782,53 @@ def _normalize_eicu_tidal_volume_frame(
 
 
 
+def _aumc_infusion_rows(frame: pd.DataFrame, source, *, value_column: str) -> pd.DataFrame:
+    """Keep AmsterdamUMCdb drugitems rows that state an infusion rate.
+
+    A ``Flush`` is a one-minute line flush whose pump speed is not a rate
+    (insulin flushes run at 60-600 IE/uur).  An intermittent dose
+    (``iscontinuous == 0``) is handled as its source declares with the
+    ``intermittent`` parameter: ``keep`` (default), ``drop``, or ``spread``, which
+    spreads its volume over the whole hours it spans, so a 20-minute 40%
+    glucose bag is not a continuous 800 ml/hr D10 infusion (2026-11-04 audit
+    round 3, F-03/F-06).
+    """
+    params = getattr(source, "params", None) or {}
+    out = frame
+    if "action" in out.columns:
+        flush = out["action"].astype("string").str.strip().str.casefold().eq("flush").fillna(False)
+        out = out.loc[~flush]
+    mode = str(params.get("intermittent", "keep"))
+    if mode == "keep" or out.empty:
+        return out
+    if "iscontinuous" not in out.columns:
+        raise ValueError(f"intermittent={mode!r} requires drugitems.iscontinuous in extra_vars")
+    intermittent = pd.to_numeric(out["iscontinuous"], errors="coerce").eq(0).fillna(False)
+    if mode == "drop":
+        return out.loc[~intermittent]
+    if mode != "spread":
+        raise ValueError(f"unknown intermittent mode {mode!r}")
+    start_col = source.index_var or "start"
+    stop_col = getattr(source, "dur_var", None) or params.get("dur_var") or params.get("stop_var") or "stop"
+    if start_col not in out.columns or stop_col not in out.columns:
+        raise ValueError("intermittent='spread' requires the start and stop columns")
+    out = out.copy()
+    start = pd.to_numeric(out[start_col], errors="coerce")
+    stop = pd.to_numeric(out[stop_col], errors="coerce")
+    minutes = (stop - start).clip(lower=1.0)
+    span = np.ceil(minutes / 60.0).clip(lower=1.0)
+    rate = pd.to_numeric(out[value_column], errors="coerce")
+    rows = intermittent & start.notna() & stop.notna()
+    out.loc[rows, value_column] = (rate * minutes / 60.0 / span)[rows]
+    out.loc[rows, stop_col] = (start + span * 60.0)[rows]
+    if "dur_var" in out.columns and stop_col != "dur_var":
+        # A precomputed duration keeps its own unit and stretches by the same factor.
+        stretch = span * 60.0 / minutes
+        dur = pd.to_numeric(out["dur_var"], errors="coerce")
+        out.loc[rows, "dur_var"] = (dur * stretch)[rows]
+    return out
+
+
 def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
     """Drop rows whose status a source excludes (``excluded_statuses``).
 
@@ -790,7 +837,10 @@ def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
     volume sources kept them, so rates disagreed with durations and MIMIC-III
     total intake was 38% too high.  (D3): eICU ``medication`` orders with
     ``drugordercancelled`` true were never given.  Statuses compare as
-    lower-case text, so a boolean flag is excluded as ``"true"``.
+    lower-case text, and boolean spellings are one status: the raw eICU CSV
+    writes the flag as ``Yes``/``No`` while a converted parquet may hold a
+    boolean, so ``"true"`` also excludes ``Yes`` (2026-11-04 audit round 3,
+    R3-03: 0 of 5,085 cancelled orders were dropped).
     """
 
     params = getattr(source, "params", None) or {}
@@ -798,9 +848,51 @@ def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
     status_var = str(params.get("status_var", "statusdescription"))
     if not excluded or frame is None or status_var not in frame.columns:
         return frame
-    excluded_lower = {str(value).strip().lower() for value in excluded}
+    excluded_lower = {_status_token(value) for value in excluded}
     status = frame[status_var].astype("string").str.strip().str.lower()
+    status = status.map(_status_token, na_action="ignore")
     return frame.loc[~status.isin(excluded_lower).fillna(False)]
+
+
+def _drop_declared_row_exclusions(frame: pd.DataFrame, source) -> pd.DataFrame:
+    """Apply a source's declared row filters before any value callback.
+
+    ``require_empty_var`` keeps rows whose named column is empty: an eICU HICL
+    source adds orders without a drugname, and HICL 1694 is also the code of
+    1,324 named warfarin orders.  ``exclude_regex`` maps a column to a pattern;
+    a row matching any pattern is dropped (eICU potassium given by mouth or tube
+    is not intravenous replacement).  2026-11-04 audit round 3, F-12/F-13.
+    """
+    params = getattr(source, "params", None) or {}
+    empty_var = params.get("require_empty_var")
+    patterns = params.get("exclude_regex") or {}
+    if frame is None or frame.empty or (not empty_var and not patterns):
+        return frame
+    keep = pd.Series(True, index=frame.index)
+    if empty_var:
+        if empty_var not in frame.columns:
+            raise KeyError(f"require_empty_var {empty_var!r} needs that column in extra_vars")
+        text = frame[empty_var].astype("string").str.strip()
+        keep &= (text.isna() | text.eq("")).fillna(True)
+    for column, pattern in dict(patterns).items():
+        if column not in frame.columns:
+            raise KeyError(f"exclude_regex column {column!r} needs that column in extra_vars")
+        hit = frame[column].astype("string").str.contains(str(pattern), regex=True, na=False)
+        keep &= ~hit.fillna(False)
+    return frame.loc[keep.to_numpy()]
+
+
+_TRUE_STATUS = frozenset({"true", "yes", "y", "t", "1", "1.0"})
+_FALSE_STATUS = frozenset({"false", "no", "n", "f", "0", "0.0"})
+
+
+def _status_token(value) -> str:
+    token = str(value).strip().lower()
+    if token in _TRUE_STATUS:
+        return "true"
+    if token in _FALSE_STATUS:
+        return "false"
+    return token
 
 def _apply_callback(
     frame: pd.DataFrame,
@@ -815,6 +907,7 @@ def _apply_callback(
     # A source's excluded statuses (MIMIC Rewritten orders, eICU cancelled
     # medication orders) are never data, whatever the value callback.
     frame = _drop_excluded_statuses(frame, source)
+    frame = _drop_declared_row_exclusions(frame, source)
     callback = source.callback
     if not callback:
         return frame
@@ -1203,6 +1296,23 @@ def _apply_callback(
         out[value_column] = mapped.loc[mapped.notna()]
         return out
 
+    if expr == "eicu_ventilator_setting_evidence":
+        from .eicu_ventilation_windows import setting_evidence
+
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else None
+        )
+        label_column = source.sub_var or "respchartvaluelabel"
+        if value_column is None or label_column not in frame.columns:
+            raise KeyError(
+                "eicu_ventilator_setting_evidence requires respchartvaluelabel and a value column"
+            )
+        return setting_evidence(frame, label_column=label_column, value_column=value_column)
+
     if expr == "eicu_treatment_ventilation_evidence":
         value_column = (
             concept_name
@@ -1318,6 +1428,9 @@ def _apply_callback(
             )
         dod = pd.to_numeric(df[dod_col], errors='coerce')
         dis = pd.to_numeric(df[dis_col], errors='coerce')
+        from ..source_death_times import aumc_registry_death_after_discharge
+
+        dod = aumc_registry_death_after_discharge(dod, dis, day=24 * 60)
         died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)
         # 2026-11-03 audit round 2 (R2-03): an ICU discharge to 'Overleden'
         # is a death in the ICU, also without a dateofdeath (57 stays), and
@@ -1374,11 +1487,18 @@ def _apply_callback(
                 "sic_death requires HospitalDischargeType; OffsetOfDeath alone "
                 "cannot identify in-hospital mortality"
             )
+        from ..source_death_times import SIC_HOSPITAL_SURVIVED, sic_recorded_death
+
         disp = pd.to_numeric(df[disp_col], errors='coerce')
-        died = (disp == 2028)  # 2028 = Deceased
+        state = next(
+            (df[c] for c in ('DischargeState', 'dischargestate') if c in df.columns),
+            pd.Series(np.nan, index=df.index),
+        )
+        # 2028 = Deceased in hospital; 2215 = deceased at ICU discharge.
+        died = sic_recorded_death(disp, state)
         # 2026-11-03 audit round 2 (R2-03): 2026 = Survived is False, timed at
         # ICU discharge (cases.TimeOfStay); an unrecorded disposition stays NA.
-        survived = (disp == 2026)
+        survived = (disp == SIC_HOSPITAL_SURVIVED) & ~died
         death_values = pd.Series(index=df.index, dtype=object)
         death_values[died] = True
         death_values[survived] = False
@@ -1388,12 +1508,18 @@ def _apply_callback(
             if c in df.columns:
                 stay_secs = pd.to_numeric(df[c], errors='coerce')
                 break
-        if stay_secs is None and bool(survived.any()):
+        # A death recorded without any OffsetOfDeath is timed at ICU discharge
+        # (R3-15); a non-finite offset is unusable and stays untimed.
+        offset_missing = (
+            offset_secs.isna() if offset_secs is not None else pd.Series(True, index=df.index)
+        )
+        if stay_secs is None and bool(survived.any() or (died & offset_missing).any()):
             raise ValueError(
-                "sic_death requires cases.TimeOfStay to time a survivor at ICU discharge"
+                "sic_death requires cases.TimeOfStay to time a survivor, or a "
+                "death without OffsetOfDeath, at ICU discharge"
             )
         df['charttime'] = np.nan
-        if bool(survived.any()) or (offset_secs is not None and bool(died.any())):
+        if bool(survived.any()) or bool(died.any()):
             # Official SICdb semantics: OffsetOfDeath counts seconds from the
             # primary admission. cases.ICUOffset is the first transfer to an
             # intensive or intermediate care unit; subtract it to express
@@ -1436,16 +1562,20 @@ def _apply_callback(
                     "sic_death found in-hospital death(s) without a usable "
                     "cases.ICUOffset"
                 )
+            valid_event = pd.Series(False, index=df.index)
             if offset_secs is not None:
                 valid_event = np.isfinite(offset_secs).fillna(False)
-                death_hours = ((offset_secs - icu_offset) / 3600.0)
+                # A recorded death a little before the ICU transfer is a
+                # death of this stay at its start (2026-11-04 audit round 3).
+                death_hours = ((offset_secs - icu_offset) / 3600.0).clip(lower=0)
                 df.loc[died & valid_event, 'charttime'] = death_hours[died & valid_event]
             if stay_secs is not None:
                 # The ICU episode ends at TimeOfStay on the ICUOffset clock,
-                # as the loader's episode bound does.
+                # as the loader's episode bound does.  A death without
+                # OffsetOfDeath is timed there too (R3-15).
                 discharge_hours = (stay_secs - icu_offset) / 3600.0
-                timed_survivor = survived & usable_origin
-                df.loc[timed_survivor, 'charttime'] = discharge_hours[timed_survivor]
+                timed_at_discharge = (survived | (died & offset_missing)) & usable_origin
+                df.loc[timed_at_discharge, 'charttime'] = discharge_hours[timed_at_discharge]
         known = (died | (survived & pd.to_numeric(df['charttime'], errors='coerce').notna())).to_numpy()
         df = df.loc[known].copy()
         df[concept_name] = died.to_numpy()[known]
@@ -2026,6 +2156,38 @@ def _apply_callback(
         if val_col in frame.columns:
             series = pd.to_numeric(frame[val_col], errors='coerce')
             frame[val_col] = series.where(series <= threshold)
+        return frame
+
+    # transform_fun(divide_above(<threshold>, <factor>)): a column that mixes two
+    # scales separated by a gap; values above the threshold are on the larger
+    # scale and are divided by the factor (2026-11-04 audit round 3, F-09: eICU
+    # ionized calcium is mostly in mg/dL whatever its interface label says).
+    match = re.fullmatch(
+        r"transform_fun\(divide_above\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)\)", expr
+    )
+    if match:
+        threshold, factor = float(match.group(1)), float(match.group(2))
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            series = pd.to_numeric(frame[val_col], errors='coerce')
+            frame[val_col] = series.where(~series.gt(threshold), series / factor)
+        return frame
+
+    # transform_fun(multiply_below(<threshold>, <factor>)): the mirror case, a
+    # column on the smaller scale with some rows already on the larger one;
+    # values at or below the threshold are multiplied (2026-11-04 audit round
+    # 3, M NEW-5: AUMC 8871 VTe is in litres except 1,078 rows charted in mL).
+    match = re.fullmatch(
+        r"transform_fun\(multiply_below\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)\)", expr
+    )
+    if match:
+        threshold, factor = float(match.group(1)), float(match.group(2))
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            series = pd.to_numeric(frame[val_col], errors='coerce')
+            frame[val_col] = series.where(~series.le(threshold), series * factor)
         return frame
 
     # Handle aggregate_fun('sum', 'units') - aggregate by sum and set unit
@@ -2833,6 +2995,7 @@ def _apply_callback(
         # For AUMC drugitems, the index_var should be 'start'
         if not index_var and source.table == 'drugitems':
             index_var = 'start'
+        frame = _aumc_infusion_rows(frame, source, value_column=val_var)
 
         # 🔧 FIX: 获取体重概念并合并到 frame 中
         # R ricu 在回调中使用 add_weight(res, env, "weight") 获取体重
@@ -2858,13 +3021,15 @@ def _apply_callback(
                         # 确保weight列是数值型
                         if 'weight' in weight_df.columns:
                             weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
-                            # 合并到frame
+                            # One weight per stay; merging every recorded
+                            # weight repeated each rate row once per weight.
                             if id_col in weight_df.columns:
-                                frame = frame.merge(
-                                    weight_df[[id_col, 'weight']].drop_duplicates(),
-                                    on=id_col,
-                                    how='left'
+                                per_stay = (
+                                    weight_df.loc[weight_df['weight'] > 0]
+                                    .groupby(id_col)['weight'].median()
+                                    .rename('weight').reset_index()
                                 )
+                                frame = frame.merge(per_stay, on=id_col, how='left')
             except Exception as e:
                 # 如果获取体重失败，使用默认值
                 if DEBUG_MODE:
@@ -3163,6 +3328,7 @@ def _apply_callback(
             rate_var = source.params.get("rate_var")
         unit_var = source.unit_var or unit_column
         val_var = source.value_var or concept_name
+        frame = _aumc_infusion_rows(frame, source, value_column=val_var)
 
         required_unit = source.params.get("required_volume_unit")
         if required_unit is not None:
@@ -3453,21 +3619,32 @@ def _apply_callback(
                         if 'weight' in weight_df.columns:
                             weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
                             if id_col in weight_df.columns:
-                                frame = frame.merge(
-                                    weight_df[[id_col, 'weight']].drop_duplicates(),
-                                    on=id_col,
-                                    how='left'
+                                # One weight per stay: merging every charted
+                                # weight repeated each rate row once per weight.
+                                per_stay = (
+                                    weight_df.loc[weight_df['weight'] > 0]
+                                    .groupby(id_col)['weight'].median()
+                                    .rename('weight').reset_index()
                                 )
+                                frame = frame.merge(per_stay, on=id_col, how='left')
             except Exception:
-                pass
-        
-        # Divide rate by weight
-        if 'weight' in frame.columns and val_var in frame.columns:
+                logger.warning("mimic_kg_rate: admission weight could not be loaded", exc_info=True)
+
+        # Divide rate by weight.  A rate charted per minute without a weight is
+        # not a per-kg rate and is NA (2026-11-04 audit round 3, R3-20: 22
+        # CareVue stays, 604 rows were passed through as mcg/kg/min).
+        if val_var in frame.columns:
             frame = frame.copy()
             frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
-            frame['weight'] = pd.to_numeric(frame['weight'], errors='coerce')
-            mask = frame['weight'] > 0
-            frame.loc[mask, val_var] = frame.loc[mask, val_var] / frame.loc[mask, 'weight']
+            weight = pd.to_numeric(frame.get('weight', pd.Series(np.nan, index=frame.index)), errors='coerce')
+            mask = weight > 0
+            frame.loc[mask, val_var] = frame.loc[mask, val_var] / weight[mask]
+            if bool((~mask).any()):
+                logger.warning(
+                    "mimic_kg_rate %s: %d row(s) without a weight; their per-kg rate is NA",
+                    concept_name, int((~mask).sum()),
+                )
+                frame.loc[~mask, val_var] = np.nan
             # Update unit
             if unit_var and unit_var in frame.columns:
                 frame[unit_var] = frame[unit_var].str.replace('mcgmin', 'mcg/kg/min', regex=False)
@@ -3935,6 +4112,7 @@ def _apply_callback(
         # mimv_rate 计算 rate = amount / duration，结果写入 rate 列
         rate_col = 'rate' if 'rate' in frame.columns else concept_name
         
+        bolus_min_hours = source.params.get("bolus_min_hours") if source.params else None
         return mimv_rate(
             frame,
             val_col=rate_col,
@@ -3942,6 +4120,7 @@ def _apply_callback(
             dur_var=duration_col,
             amount_var=amount_col,
             auom_var=auom_col,
+            bolus_min_hours=None if bolus_min_hours is None else float(bolus_min_hours),
             status_var=str(source.params.get("status_var", "statusdescription")),
         )
 
@@ -4011,6 +4190,35 @@ def _apply_callback(
             val_var=val_var,
             index_var=index_var,
         )
+
+    # sum_at_same_time: components charted at one time add up to the concept,
+    # e.g. HiRID neutrophils = segmented + band forms of the same differential
+    # (2026-11-04 audit round 3, F-18).
+    if expr.strip() == "sum_at_same_time":
+        if concept_name not in frame.columns:
+            raise KeyError("sum_at_same_time requires the concept value column")
+        index_column = source.index_var or next(
+            (c for c in ("datetime", "charttime", "measuredat", "time") if c in frame.columns), None
+        )
+        id_column = _patient_id_column(frame, data_source) if data_source is not None else None
+        id_column = id_column or next(
+            (c for c in ("patientid", "stay_id", "icustay_id", "admissionid", "patientunitstayid", "CaseID") if c in frame.columns),
+            None,
+        )
+        if index_column is None or id_column is None:
+            raise KeyError("sum_at_same_time requires an id and a time column")
+        work = frame.copy()
+        work[concept_name] = pd.to_numeric(work[concept_name], errors="coerce")
+        work = work.dropna(subset=[concept_name])
+        if work.empty:
+            return work
+        # A component re-entered at the same time (HiRID charts most of these
+        # two to seven times with one value) is one measurement, not a summand.
+        if source.sub_var and source.sub_var in work.columns:
+            work = work.drop_duplicates([id_column, index_column, source.sub_var], keep="last")
+        summed = work.groupby([id_column, index_column], as_index=False)[concept_name].sum()
+        first = work.drop(columns=[concept_name]).drop_duplicates([id_column, index_column])
+        return first.merge(summed, on=[id_column, index_column], how="inner")
 
     # blood_cell_ratio callback - convert absolute cell counts to percentage
     # R ricu logic: 100 * value / wbc

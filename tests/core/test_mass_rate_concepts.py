@@ -95,7 +95,10 @@ def test_mimic_source_covers_cv_and_mv(cdict, name, itemid, _u1, _u2, _max):
         f"{name} mimic tables changed: {sorted(tables)}"
     )
     mv = tables["inputevents_mv"]
-    assert mv["ids"] == itemid
+    # MetaVision 225942 'Fentanyl (Concentrate)' joined 221744 as in MIMIC-IV
+    # (2026-11-04 audit round 3, F-26).
+    declared = mv["ids"] if isinstance(mv["ids"], list) else [mv["ids"]]
+    assert itemid in declared
     assert mv["callback"] == "mimic_rate_mv"
 
     cv = tables["inputevents_cv"]

@@ -372,25 +372,16 @@ def test_wintbl_merge_uses_declared_duration_not_absolute_endtime() -> None:
     assert observed == [2.0, 3.0, 4.0, 5.0, 6.0]
 
 
-def test_existing_miiv_mech_vent_keeps_historical_merge_contract() -> None:
-    """The MIMIC-III repair must not change already-sealed MIIV intervals."""
-
+def _merge_mech_vent(frame: pd.DataFrame, database: str, dur_unit: str = "hours"):
     class DataSource:
-        config = load_data_sources().get("miiv")
+        config = load_data_sources().get(database)
 
     ventilation = WinTbl(
-        data=pd.DataFrame(
-            {
-                "stay_id": [1, 1],
-                "charttime": [2.0, 5.0],
-                "dur_var": [2.0, 1.0],
-                "mech_vent": ["invasive", "noninvasive"],
-            }
-        ),
+        data=frame,
         id_vars=["stay_id"],
         index_var="charttime",
         dur_var="dur_var",
-        dur_unit="hours",
+        dur_unit=dur_unit,
     )
     marker = ICUTable(
         data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "marker": [1.0]}),
@@ -398,16 +389,44 @@ def test_existing_miiv_mech_vent_keeps_historical_merge_contract() -> None:
         index_column="charttime",
         value_column="marker",
     )
-
     result = ConceptResolver(ConceptDictionary({}))._to_r_format_merged_enhanced(
         {"mech_vent": ventilation, "marker": marker},
         ["mech_vent", "marker"],
         pd.Timedelta(hours=1),
         data_source=DataSource(),
     )
+    return result.loc[result["mech_vent"].notna(), "charttime"].tolist()
 
-    observed = result.loc[result["mech_vent"].notna(), "charttime"].tolist()
-    assert observed == [2.0, 5.0]
+
+def test_window_without_end_column_expands_over_its_hours_duration() -> None:
+    """SICdb and HiRID mech_vent windows carry an hours dur_var and no end
+    column; the merged export used to keep only their start hour (2026-11-04
+    audit round 3, F-31: 338 SICdb rows for 6,459 ventilated hours)."""
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [2.0, 5.0],
+            "dur_var": [2.0, 1.0],
+            "mech_vent": ["invasive", "noninvasive"],
+        }
+    )
+    assert _merge_mech_vent(frame, "sic") == [2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_miiv_mech_vent_window_end_keeps_its_merge_contract() -> None:
+    """A MIIV window carries its own endtime; the export expands to it."""
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [2.0],
+            "dur_var": [2.0],
+            "endtime": [4.0],
+            "mech_vent": ["invasive"],
+        }
+    )
+    assert _merge_mech_vent(frame, "miiv") == [2.0, 3.0, 4.0]
 
 
 def test_unrelated_wintbl_keeps_historical_sparse_merge_contract() -> None:

@@ -595,17 +595,21 @@ def test_aumc_tidal_volume_liter_sources_are_converted_to_ml() -> None:
     assert liter_sources
     for source in liter_sources:
         callback = source.get("callback", "")
-        assert "convert_unit" in callback
-        assert "1000" in callback
+        # Litres are multiplied by 1000; 8871 rows already charted in mL
+        # (> 3) are kept (2026-11-04 audit round 3, M NEW-5).
+        assert "multiply_below(3, 1000)" in callback
 
 
 def test_minute_volume_semantic_coverage_keeps_observed_values_not_alarms() -> None:
     concept = _load_json("concept-dict.json")
 
     aumc_ids = set(concept["minute_vol"]["sources"]["aumc"][0]["ids"])
-    assert {8870, 8875, 9663, 9668}.issubset(aumc_ids)
+    assert {8870, 9668, 12273}.issubset(aumc_ids)
     assert 9619 not in aumc_ids  # Mv Lekkage
     assert 12276 not in aumc_ids  # inspiratory (extraction audit round 2, P5)
+    # Spontaneous-only channels read 0 l/min during controlled ventilation
+    # (extraction audit round 3, R3-11).
+    assert {8875, 9663, 12578}.isdisjoint(aumc_ids)
 
     eicu_ids = set(concept["minute_vol"]["sources"]["eicu"][0]["ids"])
     assert "Minute Volume, Spontaneous" in eicu_ids
@@ -808,7 +812,9 @@ def test_mech_vent_has_reference_mimiciii_intervals_and_eicu_point_evidence() ->
         assert procedure["status_var"] == "statusdescription"
         assert procedure["callback"] == "mimiciii_explicit_ventilation_interval"
 
-    airway, device, treatment = sources["eicu"]
+    airway, device, treatment, settings = sources["eicu"]
+    assert settings["table"] == "respiratorycharting"
+    assert settings["callback"] == "eicu_ventilator_setting_evidence"
     assert airway["table"] == "respiratorycare"
     assert airway["index_var"] == "ventstartoffset"
     assert "dur_var" not in airway
@@ -899,7 +905,9 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
         ]
         aumc_process = aumc_sources[0]
         aumc_readings = set(aumc_sources[1]["ids"])
-        assert aumc_readings == {8805, 8806, 8808, 12091, 14838}
+        # Legacy Braun CRRT circuit pressures 7666/7667/7668/7671 joined the
+        # current circuit readings (2026-11-04 audit round 3, M rrt-legacy).
+        assert aumc_readings == {7666, 7667, 7668, 7671, 8805, 8806, 8808, 12091, 14838}
         # Settings (ingesteld), alarm limits and treatment-order items can
         # outlast the treatment.
         assert not aumc_readings & {12451, 12452, 12454, 14840, 14848, 14849, 14850, 14851, 20538, 20543}
@@ -1021,7 +1029,9 @@ def test_cross_source_mechanism_concepts_do_not_use_ambiguous_indication_sources
             for source in ecmo_nurse_sources
         )
 
-        ecmo_indication_sources = concept["ecmo_indication"]["sources"][dataset]
+        # The eICU treatment regex matched no row and was removed
+        # (2026-11-04 audit round 3, F-11).
+        ecmo_indication_sources = concept["ecmo_indication"]["sources"].get(dataset, [])
         assert all(
             source.get("table") != "nursecharting"
             for source in ecmo_indication_sources
