@@ -36,14 +36,23 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
+from easyicu.concept.catalog import BOUNDS_AUDIT_CONCEPTS
 from easyicu.outcome_availability import ICU_DEATH, stated_mortality_settings
 
 from .concept_availability import explain_concept_availability, normalize_concept_name
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _DEFAULT_DICTS = ("concept-dict.json", "sofa2-dict.json")
+_Concept = TypeVar("_Concept")
+
+
+def research_selectable_concepts(concepts: Iterable[_Concept]) -> List[_Concept]:
+    """Exclude audit receipts, including renamed columns with an audit source."""
+    return [item for item in concepts if str(
+        getattr(item, "source_concept", None) or getattr(item, "name", item)
+    ).casefold() not in BOUNDS_AUDIT_CONCEPTS]
 
 # Generic trailing/structural words to strip when deriving a short alias from a
 # concept description (so "norepinephrine rate" also yields "norepinephrine").
@@ -613,7 +622,8 @@ def load_concept_catalog(
         If given (e.g. a manifest's ``selected_concepts`` or a prepared cohort's
         columns), the catalog is limited to these keys — derived concepts not in
         the JSON dictionaries are still included via ``DERIVED_CONCEPT_HINTS``.
-        If omitted, every dictionary concept is exposed.
+        Bounds audit channels are excluded even when present in a manifest;
+        they are review receipts, not automatically selectable research variables.
     dict_paths:
         Override the default ``concept-dict.json`` + ``sofa2-dict.json``.
     extra_aliases:
@@ -621,11 +631,13 @@ def load_concept_catalog(
         ones (escape hatch for phrasing the dictionary does not cover).
     """
     dicts = _load_dicts(dict_paths)
-
     if restrict_to is not None:
-        keys = _dedup(str(k) for k in restrict_to)
+        keys = _dedup(str(k) for k in restrict_to if str(k) not in BOUNDS_AUDIT_CONCEPTS)
     else:
-        keys = _dedup([*dicts.keys(), *DERIVED_CONCEPT_HINTS.keys()])
+        keys = _dedup([
+            *(key for key in dicts if key not in BOUNDS_AUDIT_CONCEPTS),
+            *DERIVED_CONCEPT_HINTS.keys(),
+        ])
 
     aliases: Dict[str, List[str]] = {}
     outcomes: Dict[str, Dict[str, str]] = {}

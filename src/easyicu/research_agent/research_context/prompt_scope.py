@@ -13,6 +13,7 @@ import json
 import re
 from typing import Iterable, Optional
 
+from ..concept_catalog import research_selectable_concepts
 from ..planning.analysis_types import canonical_analysis_family
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.step_families import (
@@ -971,6 +972,15 @@ def _planner_variable_catalog_line(
     return "- " + " | ".join(fields)
 
 
+def _without_bounds_audit(context: ResearchContext) -> ResearchContext:
+    selected = research_selectable_concepts(context.variables)
+    if len(selected) == len(context.variables):
+        return context
+    return project_research_context_variables(
+        context, selected, include_source_concept_siblings=False,
+    )
+
+
 def scoped_planner_context(
     context: ResearchContext,
     *,
@@ -983,6 +993,7 @@ def scoped_planner_context(
     original context remains the authority used to validate the returned plan.
     """
 
+    context = _without_bounds_audit(context)
     by_name = {variable.name.lower(): variable for variable in context.variables}
     direct_names = {
         str(value or "").strip().lower()
@@ -1094,6 +1105,7 @@ def planner_variable_catalog(
 ) -> str:
     """Render the omitted-variable discovery roster and projection receipt."""
 
+    full_context = _without_bounds_audit(full_context)
     selected = {variable.name.lower() for variable in scoped_context.variables}
     omitted = [
         variable

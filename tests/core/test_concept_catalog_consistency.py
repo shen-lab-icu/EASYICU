@@ -243,18 +243,21 @@ def test_static_data_catalog_js_matches_python_catalog() -> None:
 
 def test_extract_database_modules_use_the_shared_catalog() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
+    from easyicu.concept.catalog import BOUNDS_AUDIT_CONCEPTS
 
     assert EXTRACT_MODULES == {
         module: list(concepts)
         for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
     } | {"sic_case_landmark": [
         "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
-    ]}
+    ], "bounds_audit": list(BOUNDS_AUDIT_CONCEPTS)}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)
     assert len(EXTRACT_MODULE_ORDER) == len(CONCEPT_GROUPS_INTERNAL) == 19
     assert "sic_case_landmark" not in EXTRACT_MODULE_ORDER
+    # R5C-AUMC-010 et al.: raw/QC receipts require explicit audit-module selection.
+    assert "bounds_audit" not in EXTRACT_MODULE_ORDER
 
 
 def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:

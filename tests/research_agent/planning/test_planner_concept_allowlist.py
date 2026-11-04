@@ -102,7 +102,8 @@ def test_without_sealed_columns_the_dictionary_is_still_offered() -> None:
 
     rendered = _format_concept_id_allowlist([])
 
-    assert len(_listed_ids(rendered)) == len(known_concept_ids())
+    # Round-5 bounds receipts require explicit selection (R5C-HIRID-014).
+    assert len(_listed_ids(rendered)) == len(known_concept_ids(include_audit=False))
     assert "sealed columns were not" in rendered
 
 

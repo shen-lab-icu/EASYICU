@@ -633,6 +633,12 @@ CONCEPT_GROUPS_INTERNAL = {
 # Concepts present in the extraction dictionary but intentionally hidden from
 # the user-facing catalog.  They are loader entry points or legacy/source aliases
 # whose outputs are surfaced through canonical web concepts above.
+BOUNDS_AUDIT_CONCEPTS = tuple(
+    f"{name}_{suffix}"
+    for name in ("temp", "etco2", "hgb", "hct", "ph", "bun", "crea", "na", "myoglobin")
+    for suffix in ("raw", "qc")
+)
+
 HIDDEN_DICTIONARY_CONCEPTS = {
     'acute_rrt_input',
     'bicarb',
@@ -650,6 +656,9 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # Charted CVP before the arterial-diastolic and spike check; cvp is the
     # published concept (2026-11-04 audit round 4, R4-013).
     'cvp_raw',
+    # Round-5 bounds audit: explicit raw/QC receipts retain candidate extremes
+    # without replacing reviewed public ranges or claiming clinical validity.
+    *BOUNDS_AUDIT_CONCEPTS,
     # Non-urine output; surfaced through fluid_balance (2026-11-04 audit round 3).
     'other_output_ml',
 }

@@ -2500,6 +2500,41 @@ def _callback_anion_gap(
 _CVP_CAPPED_AT_30 = frozenset({"hirid"})
 
 
+def _callback_bounds_qc(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Flag source observations before aggregation without endorsing tails.
+
+    The public concept keeps its reviewed bounds. Its audit-only raw sibling
+    bypasses those bounds, retaining candidate extremes for specimen, repeat
+    and paired-panel review. Status 1 means outside the public range, never
+    "clinically confirmed"; 2 denotes a non-finite or non-numeric value.
+    """
+    name = ctx.concept_name.removesuffix("_qc")
+    raw_name = f"{name}_raw"
+    table = tables[raw_name]
+    definition = ctx.resolver.dictionary[name]
+    keys = list(table.id_columns) + ([table.index_column] if table.index_column else [])
+    out = table.data[keys + [raw_name]].copy()
+    numeric = pd.to_numeric(out[raw_name], errors="coerce")
+    finite = numeric.notna() & np.isfinite(numeric)
+    outside = pd.Series(False, index=out.index)
+    if definition.minimum is not None:
+        outside |= numeric.lt(definition.minimum)
+    if definition.maximum is not None:
+        outside |= numeric.gt(definition.maximum)
+    quality = pd.Series(np.nan, index=out.index, dtype="float64")
+    quality.loc[finite] = outside.loc[finite].astype(float)
+    quality.loc[out[raw_name].notna() & ~finite] = 2.0
+    out[ctx.concept_name] = quality
+    return _as_icutbl(
+        out[keys + [ctx.concept_name]],
+        id_columns=list(table.id_columns), index_column=table.index_column,
+        value_column=ctx.concept_name,
+    )
+
+
 def _callback_cvp_artefact_filter(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -9020,6 +9055,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "anion_gap": _callback_anion_gap,
     "plateau_pressure": _callback_plateau_pressure,
     "cvp_artefact_filter": _callback_cvp_artefact_filter,
+    "bounds_qc": _callback_bounds_qc,
     "persistent_critical_illness": _callback_persistent_critical_illness,
     "shock_index": _callback_shock_index,
     "modified_shock_index": _callback_modified_shock_index,

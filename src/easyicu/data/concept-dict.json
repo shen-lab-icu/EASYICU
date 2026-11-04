@@ -33444,5 +33444,1033 @@
     }
    ]
   }
+ },
+ "temp_raw": {
+  "requires_explicit_opt_in": true,
+  "unit": [
+   "C",
+   "°C"
+  ],
+  "description": "Charted temperature before range filtering",
+  "omopid": 4302666,
+  "category": "vitals",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8658,
+      13952,
+      16110,
+      13058
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-07-04 recall audit: added 13058 'Temp Rectaal' (core site, 387k rows); blood/bladder/esophagus already present. Peripheral sites (skin/axillary/groin) remain excluded."
+    },
+    {
+     "ids": [
+      13060,
+      13062,
+      13059,
+      13061,
+      14047
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "2026-11-03 extraction audit 2: temp pools measurement sites in the other databases (HiRID 400 axillary with 410 core; MIMIC/eICU temperature items carry no site), so AUMC adds 13060 Temp Axillair, 13062 Temp Oor, 13059 Temp Lies, 13061 Temp Oraal and 14047 PiCCO blood temperature (all degC). Same-hour difference to core sites: median -0.4 (axillary), -0.2 (groin), 0 (ear/oral/PiCCO). Skin, toe and set/heater temperatures stay excluded."
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "temperature",
+     "class_name": "col_itm",
+     "callback": "transform_fun(fahr_between(85, 110))",
+     "_comment": "2026-11-04 audit round 4 (R4-152): values 85-110 cannot be Celsius; they are Fahrenheit readings and are converted before the 32-42 C bounds (vitalperiodic 400,537 rows/462 stays; nursecharting 23,982 rows)."
+    },
+    {
+     "ids": "Temperature (C)",
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 extraction audit 2: nurse-charted temperature added (eICU v2.0 'Vital Signs'/'Temperature': 'Temperature (C)' 6,267,541 rows/187,371 stays; 'Temperature (F)' is the same reading in Fahrenheit and is not added). vitalperiodic temperature covers 19.0k stays. MIMIC-III/IV temp pools every charted site; the site ('Temperature Location') is not filtered. | 2026-11-04 audit round 4 (R4-152): values 85-110 cannot be Celsius; they are Fahrenheit readings and are converted before the 32-42 C bounds (vitalperiodic 400,537 rows/462 stays; nursecharting 23,982 rows).",
+     "callback": "transform_fun(fahr_between(85, 110))"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "temperature",
+     "class_name": "col_itm",
+     "callback": "transform_fun(fahr_between(85, 110))",
+     "_comment": "2026-11-04 audit round 4 (R4-152): values 85-110 cannot be Celsius; they are Fahrenheit readings and are converted before the 32-42 C bounds (vitalperiodic 400,537 rows/462 stays; nursecharting 23,982 rows)."
+    },
+    {
+     "ids": "Temperature (C)",
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "_comment": "2026-11-03 extraction audit 2: nurse-charted temperature added (eICU v2.0 'Vital Signs'/'Temperature': 'Temperature (C)' 6,267,541 rows/187,371 stays; 'Temperature (F)' is the same reading in Fahrenheit and is not added). vitalperiodic temperature covers 19.0k stays. MIMIC-III/IV temp pools every charted site; the site ('Temperature Location') is not filtered. | 2026-11-04 audit round 4 (R4-152): values 85-110 cannot be Celsius; they are Fahrenheit readings and are converted before the 32-42 C bounds (vitalperiodic 400,537 rows/462 stays; nursecharting 23,982 rows).",
+     "callback": "transform_fun(fahr_between(85, 110))"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      410,
+      400,
+      7100
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 223762,
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    },
+    {
+     "ids": [
+      223761
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "convert_unit(fahr_to_cels, 'C', 'f')",
+     "index_var": "charttime",
+     "_comment": "2026-11-04 audit round 4 (R4-114): 224027 Skin Temperature is a palpation category (Warm/Cool) with no numeric value."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      676,
+      677,
+      223762
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      678,
+      679,
+      223761
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "convert_unit(fahr_to_cels, 'C', 'f')",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): 224027 'Skin Temperature' is a qualitative Warm/Cool field (no numeric value)."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      676,
+      677,
+      223762
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      678,
+      679,
+      223761
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "callback": "convert_unit(fahr_to_cels, 'C', 'f')",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): 224027 'Skin Temperature' is a qualitative Warm/Cool field (no numeric value)."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 709,
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "temp_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for temperature",
+  "category": "vitals",
+  "concepts": [
+   "temp_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [32, 42]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "etco2_raw": {
+  "requires_explicit_opt_in": true,
+  "unit": [
+   "mmHg",
+   "kPa",
+   "%"
+  ],
+  "description": "Charted End-tidal CO2 before range filtering",
+  "omopid": 4353940,
+  "category": "ventilator",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6707,
+      8884,
+      8885,
+      9658,
+      12356,
+      12805
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 7.6), 'mmHg', 'None|Geen')"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      2200,
+      8290,
+      30010009
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228640
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      1817
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): 228640 has no rows in MIMIC-III."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 716,
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "(?i)etco2$",
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "class_name": "rgx_itm"
+    },
+    {
+     "table": "vitalperiodic",
+     "val_var": "etco2",
+     "class_name": "col_itm",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): monitor end-tidal CO2 (4.4 million 5-minute values, 8,346 stays, median 32 mmHg); zeros fall below the 10 mmHg minimum."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "(?i)etco2$",
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "class_name": "rgx_itm"
+    },
+    {
+     "table": "vitalperiodic",
+     "val_var": "etco2",
+     "class_name": "col_itm",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): monitor end-tidal CO2 (4.4 million 5-minute values, 8,346 stays, median 32 mmHg); zeros fall below the 10 mmHg minimum."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      1817
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): 228640 has no rows in MIMIC-III."
+    }
+   ]
+  }
+ },
+ "etco2_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for End-tidal CO2",
+  "category": "ventilator",
+  "concepts": [
+   "etco2_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [10, 60]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "hgb_raw": {
+  "requires_explicit_opt_in": true,
+  "source_channel_priority": ["lab", "chart"],
+  "source_channel_window_hours": 6,
+  "unit": "g/dL",
+  "description": "Charted hemoglobin before range filtering",
+  "omopid": 4118981,
+  "category": "hematology",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6778,
+      9553,
+      9960,
+      10286,
+      19703
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 1.611344), 'g/dL')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "Hgb",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "Hgb",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      24000548,
+      24000836,
+      20000900
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL', 'g/l')",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51222,
+      50811,
+      51640
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood-gas/chemistry hemoglobin duplicate itemids."
+    },
+    {
+     "ids": [
+      220228
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted hemoglobin channel."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      51222,
+      50811
+     ],
+     "table": "labevents",
+     "source_channel": "lab",
+     "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      814,
+      1165,
+      3759,
+      220228
+     ],
+     "table": "chartevents",
+     "source_channel": "chart",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted hematology hemoglobin channels."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      51222,
+      50811
+     ],
+     "table": "labevents",
+     "source_channel": "lab",
+     "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      814,
+      1165,
+      3759,
+      220228
+     ],
+     "table": "chartevents",
+     "source_channel": "chart",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted hematology hemoglobin channels."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      658,
+      289
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "hgb_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for hemoglobin",
+  "category": "hematology",
+  "concepts": [
+   "hgb_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [4, 18]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "hct_raw": {
+  "requires_explicit_opt_in": true,
+  "unit": "%",
+  "description": "Charted hematocrit before range filtering",
+  "omopid": 4151358,
+  "category": "hematology",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6777,
+      11423,
+      11545
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)",
+     "_comment": "2026-11-04 audit round 3 (F-05): fractions (0-1] are scaled to percent; 32,985 rows already in percent (mostly 11545 Ht(v.Bgs)) were multiplied by 100 and then dropped by max 60."
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "Hct",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "Hct",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 51221,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 51221,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 51221,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      217,
+      682
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "hct_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for hematocrit",
+  "category": "hematology",
+  "concepts": [
+   "hct_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [15, 60]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "ph_raw": {
+  "requires_explicit_opt_in": true,
+  "source_channel_priority": ["lab", "chart"],
+  "source_channel_window_hours": 6,
+  "description": "Charted pH of blood before range filtering",
+  "omopid": 4097822,
+  "category": "blood gas",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6848,
+      12310
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "pH",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "pH",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 20000300,
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 50820,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "specimen_id"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
+    },
+    {
+     "ids": [
+      223830
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 50820,
+     "table": "labevents",
+     "source_channel": "lab",
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+    },
+    {
+     "ids": [
+      780,
+      1126,
+      4753,
+      223830
+     ],
+     "table": "chartevents",
+     "source_channel": "chart",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 50820,
+     "table": "labevents",
+     "source_channel": "lab",
+     "sub_var": "itemid",
+     "callback": "arterial_specimen_only",
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+    },
+    {
+     "ids": [
+      780,
+      1126,
+      4753,
+      223830
+     ],
+     "table": "chartevents",
+     "source_channel": "chart",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 688,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ],
+     "_comment": "2026-11-03 arterial specimen fix: keep only LaboratoryType 2296 (Arterial in d_references); rows with an empty type are excluded. Rule owner: concept/blood_gas_specimen.py."
+    }
+   ]
+  }
+ },
+ "ph_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for pH of blood",
+  "category": "blood gas",
+  "concepts": [
+   "ph_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [6.8, 8]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "bun_raw": {
+  "requires_explicit_opt_in": true,
+  "unit": "mg/dL",
+  "description": "Charted blood urea nitrogen before range filtering",
+  "omopid": 4017361,
+  "category": "chemistry",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6850,
+      9943
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "BUN",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "BUN",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 20004100,
+     "table": "observations",
+     "sub_var": "variableid",
+     "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 51006,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 51006,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 51006,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": 355,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "transform_fun(binary_op(`*`, 0.467))"
+    }
+   ]
+  }
+ },
+ "bun_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for blood urea nitrogen",
+  "category": "chemistry",
+  "concepts": [
+   "bun_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [0, 200]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "crea_raw": {
+  "requires_explicit_opt_in": true,
+  "source_channel_priority": ["lab", "chart"],
+  "source_channel_window_hours": 6,
+  "unit": "mg/dL",
+  "description": "Charted creatinine before range filtering",
+  "omopid": 4013964,
+  "category": "chemistry",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6836,
+      9941,
+      14216,
+      13069,
+      14479,
+      16637
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+     "_comment": "2026-07-02 AUMC raw dictionary audit: added A_/RA_/MCA_Serum_Kreatinine channels, all umol/l."
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "creatinine",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "creatinine",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 20000600,
+     "table": "observations",
+     "sub_var": "variableid",
+     "callback": "convert_unit(binary_op(`*`, 0.011312), 'mg/dL')",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      50912,
+      52546,
+      52024
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "value_var": "valuenum",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV duplicate blood/whole-blood creatinine itemids."
+    },
+    {
+     "ids": [
+      220615,
+      229761
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted serum/whole-blood creatinine channels."
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 50912,
+     "table": "labevents",
+     "source_channel": "lab",
+     "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      791,
+      1525,
+      3750,
+      220615
+     ],
+     "table": "chartevents",
+     "source_channel": "chart",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted chemistry creatinine channels."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 50912,
+     "table": "labevents",
+     "source_channel": "lab",
+     "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      791,
+      1525,
+      3750,
+      220615
+     ],
+     "table": "chartevents",
+     "source_channel": "chart",
+     "sub_var": "itemid",
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted chemistry creatinine channels."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 367,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "crea_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for creatinine",
+  "category": "chemistry",
+  "concepts": [
+   "crea_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [0, 25]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "na_raw": {
+  "requires_explicit_opt_in": true,
+  "unit": [
+   "mEq/L",
+   "mmol/l"
+  ],
+  "description": "Charted sodium before range filtering",
+  "omopid": 4208938,
+  "category": "chemistry",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6840,
+      9555,
+      9924,
+      10284
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "sodium",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "sodium",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      20000400,
+      24000519,
+      24000658,
+      24000835,
+      24000866
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 50983,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 50983,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 50983,
+     "table": "labevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      469
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "_comment": "2026-11-03 extraction audit: removed 686 'Natrium (BGA)' (d_references notes known validity issues)."
+    }
+   ]
+  }
+ },
+ "na_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for sodium",
+  "category": "chemistry",
+  "concepts": [
+   "na_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [110, 165]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "myoglobin_raw": {
+  "requires_explicit_opt_in": true,
+  "unit": [
+   "ng/mL",
+   "µg/L",
+   "ug/L"
+  ],
+  "description": "Charted myoglobin before range filtering",
+  "category": "chemistry",
+  "_comment": "2026-11-04 bounds audit round 5: audit-only charted channel after existing unit/specimen rules, without the public range filter. Not a clinically confirmed observation; request the matching QC concept for range-review status. Existing public bounds and scores are unchanged pending clinical review.",
+  "sources": {
+   "sic": [
+    {
+     "ids": 260,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "myoglobin",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "myoglobin",
+     "table": "lab",
+     "sub_var": "labname"
+    }
+   ]
+  }
+ },
+ "myoglobin_qc": {
+  "requires_explicit_opt_in": true,
+  "min": 0,
+  "max": 2,
+  "description": "Range review status for myoglobin",
+  "category": "chemistry",
+  "concepts": [
+   "myoglobin_raw"
+  ],
+  "aggregate": "max",
+  "callback": "bounds_qc",
+  "class_name": "rec_cncpt",
+  "target": "ts_tbl",
+  "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [0, 20000]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  }
 }

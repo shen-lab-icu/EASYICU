@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Annotated, Any, Dict, Iterator, Literal, Optional, Sequence
 
 from pydantic import Field, PlainSerializer
+from easyicu.concept.catalog import BOUNDS_AUDIT_CONCEPTS
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -759,8 +760,8 @@ def concept_id_exists(concept_id: str) -> bool:
         return concept_id in _EXTRA_COHORT_CONCEPT_IDS
 
 
-@lru_cache(maxsize=1)
-def known_concept_ids() -> set[str]:
+@lru_cache(maxsize=2)
+def known_concept_ids(*, include_audit: bool = True) -> set[str]:
     concept_ids: set[str] = set()
     for path in _CONCEPT_DICT_PATHS:
         try:
@@ -768,7 +769,10 @@ def known_concept_ids() -> set[str]:
         except Exception:
             payload = {}
         if isinstance(payload, dict):
-            concept_ids.update(str(key) for key in payload)
+            concept_ids.update(
+                str(key) for key in payload
+                if include_audit or key not in BOUNDS_AUDIT_CONCEPTS
+            )
     return concept_ids
 
 

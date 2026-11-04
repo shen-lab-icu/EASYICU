@@ -19,7 +19,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Union
 import pandas as pd
 
 from ..base import BaseICULoader, detect_database_type, get_default_data_path
-from ..concept.catalog import CONCEPT_GROUPS_INTERNAL
+from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
 from ..utils.death_time_semantics import (
@@ -111,6 +111,9 @@ EXTRACT_MODULE_ORDER: List[str] = [
 EXTRACT_MODULES["sic_case_landmark"] = [
     "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
 ]
+# Audit values are available only when this module is explicitly requested.
+# Raw columns use the usual hourly median; QC is max over source observations.
+EXTRACT_MODULES["bounds_audit"] = list(BOUNDS_AUDIT_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.
