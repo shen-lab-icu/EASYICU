@@ -490,7 +490,8 @@ def test_r6_f042_charted_plateau_checks_pip_peep_without_using_niv_as_a_veto(tmp
 
 def test_r6_f043_sic_hpm_369_cannot_enter_creatinine_selector_or_reference_stage(tmp_path):
     definition = load_dictionary().get("crea")
-    assert [s.ids for s in definition.sources["sic"]] == [[367]]
+    # R6-F023 adds enzymatic creatinine 368; HPM 369 stays out.
+    assert [s.ids for s in definition.sources["sic"]] == [[367, 368]]
     source = _source(tmp_path, "sic", laboratory=pd.DataFrame({
         "CaseID": [1, 1, 1, 1], "LaboratoryID": [367, 369, 367, 369],
         # Both candidate values are inside the main concept's numeric bounds:
