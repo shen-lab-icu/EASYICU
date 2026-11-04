@@ -50,6 +50,26 @@ RESTART_FRACTION = 0.5
 REBOUND_FRACTION = 0.8
 
 
+def _isolated_counter_spikes(ids: np.ndarray, days: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Flag an isolated jump followed by a return to the prior trajectory.
+
+    R5C-HIRID-006: the jump must exceed twice both neighboring levels, and
+    the next level must continue the preceding trajectory within a factor
+    of two. A sustained rise or a drop below the prior level is retained:
+    the latter can be a genuine restart after a real large increment.
+    """
+    spike = np.zeros(len(values), dtype=bool)
+    previous, current, following = values[:-2], values[1:-1], values[2:]
+    same_day = ((ids[:-2] == ids[1:-1]) & (ids[1:-1] == ids[2:])
+                & (days[:-2] == days[1:-1]) & (days[1:-1] == days[2:]))
+    spike[1:-1] = (
+        same_day & (previous > 0) & (previous <= following)
+        & (following <= previous / RESTART_FRACTION)
+        & (current * RESTART_FRACTION > np.maximum(previous, following))
+    )
+    return spike
+
+
 def _restart_aware_increments(ids: np.ndarray, days: np.ndarray, values: np.ndarray) -> np.ndarray:
     """Increment of each reading over its block's running maximum.
 
@@ -63,7 +83,10 @@ def _restart_aware_increments(ids: np.ndarray, days: np.ndarray, values: np.ndar
     out = np.zeros(len(values), dtype=float)
     peak = 0.0
     n = len(values)
+    spikes = _isolated_counter_spikes(ids, days, values)
     for i in range(n):
+        if spikes[i]:
+            continue
         if i == 0 or ids[i] != ids[i - 1] or days[i] != days[i - 1]:
             peak = 0.0
         elif values[i] < RESTART_FRACTION * peak:
@@ -121,6 +144,12 @@ def counter_increments(
     offset = pd.Timedelta(hours=reset_hour)
     data["day_start"] = (data["end"] - offset).dt.normalize() + offset
     group = [id_col, "day_start"]
+    # Remove the spike's timestamp as well as its value: the next real
+    # increment spans from the preceding valid reading, conserving timing.
+    spikes = _isolated_counter_spikes(
+        data[id_col].to_numpy(), data["day_start"].to_numpy(), data["value"].to_numpy(dtype=float)
+    )
+    data = data.loc[~spikes].copy()
     data["volume"] = _restart_aware_increments(
         data[id_col].to_numpy(), data["day_start"].to_numpy(), data["value"].to_numpy(dtype=float)
     )

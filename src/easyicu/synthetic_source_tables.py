@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -108,8 +109,13 @@ def _events(database, config, concepts, p):
                     record.update(entertime=time, status=8, type="N", stringvalue=None)
                 else:
                     unit = "IU" if name == "adh_rate" else "mg"
+                    # R5C-HIRID-008: fixtures obey declared route eligibility,
+                    # including SC LMWH, instead of fabricating IV LMWH rows.
+                    route_pattern = (source.get("require_regex") or {}).get("route", ".*")
+                    route = next(r for r in ("i.v.", "iv-inf", "cv-inf", "sc-inj", "po")
+                                 if re.search(route_pattern, r))
                     record.update(enteredentryat=time, doseunit=unit, infusionid=p["stay"][index] * 100000 + int(item),
-                                  givendose=np.full(count, .1), route="i.v.", typeid=1, recordstatus=0)
+                                  givendose=np.full(count, .1), route=route, typeid=1, recordstatus=0)
             elif database == "aumc":
                 time = p["origin"][index] + hour * 3_600_000
                 record.update(admissionid=p["stay"][index], **{time_col: time})

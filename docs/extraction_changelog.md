@@ -4,6 +4,7 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+<<<<<<< ours
 ## 2026-11-04 — extraction audit round 5, MIMIC loader lane
 
 Synthetic regressions only; real-data coverage and export deltas have not
@@ -48,6 +49,69 @@ been measured in this lane.
   tolerance of `1e-12` hours with `rtol=0`. A long-stay clock therefore cannot
   turn a short positive infusion into a bolus. The conserved hourly volumes
   feed fluid balance and cumulative balance.
+=======
+## 2026-11-04 — extraction audit round 5, HiRID
+
+These changes are checked with synthetic sources. The audit's real-data
+aggregate counts have not been rerun in this lane.
+
+- **[R5C-HIRID-002/019]** Non-weight drug rates split each converted dose
+  over the preceding valid same-infusion interval, conserving amount. ADH
+  divides the hourly amount by 60; fentanyl and midazolam use their declared
+  mass/time units. Intervals over six hours are not spread across the gap.
+  Pharma `recordstatus` bits 2 and 32 exclude invalidated and not-administered
+  rows before aggregation, predecessor selection and episode boundaries.
+- **[R5C-HIRID-003]** Infusion duration and start retain the exact clock.
+  `*60` qualifies episodes by at least 60 actual minutes; occupancy covers
+  the original half-open interval, including short cross-hour infusions.
+  The public loader also preserves the start, so its hourly alignment cannot
+  shift the episode end before the indicator and qualification callbacks run.
+- **[R5C-HIRID-004/005]** Invasive airway windows expand in full. NIV,
+  no-airway and standby intervals stop inferred ventilation bridges.
+  Mixed invasive/NIV evidence within an hour retains its actual invasive
+  overlap. Advanced support includes reliable airway intervals, alongside
+  existing mode sources, and unknown support remains missing.
+  A transition from unknown to supported within one hour retains the support.
+  Interval boundaries are scanned in bulk instead of repeatedly searching
+  the full evidence table for each stay.
+- **[R5C-HIRID-006]** An isolated counter up-spike that immediately returns
+  to the preceding trajectory is excluded from both the running peak and
+  the allocation clock. Sustained increases and genuine restarts remain.
+- **[R5C-HIRID-007–012]** Add the audited antibiotic, LMWH, insulin,
+  magnesium, milrinone/terlipressin and diltiazem preparations. Positive-dose
+  thresholds remain; antibiotic/magnesium IV and LMWH SC eligibility are
+  explicit. The added insulin preparations affect the administration flag
+  only. HiRID diltiazem is enteral under the existing any-route definition,
+  and must not be interpreted as IV exposure.
+- **[R5C-HIRID-013]** HiRID CK-MB is available separately as
+  `ckmb_hirid_raw` in its native U/L. It no longer enters the `ckmb`
+  ng/mL pool. Assay identity remains unresolved; no fixed conversion is used.
+- **[R5C-HIRID-023]** The dex IV route filter now runs once before the
+  grouped callback. Both `route` and `infusionid` are loaded, and the complete
+  public extraction path is tested with concurrent IV and enteral groups.
+
+Round-5 secondary registrations do not establish clinical validity:
+
+- **[016/017]** Lymphocyte G/L identity and zero coding, and drainage volume
+  time semantics/overlap with the total-output counter, remain unresolved.
+  Neither candidate is mapped without that evidence.
+- **[025]** `plateau_pres_raw` remains the charted measurement. The PIP/PEEP
+  consistency screen in `plateau_pres` is a plausibility check, not a
+  mode-independent validation of plateau pressure. Assisted breaths or
+  active effort require special caution; controlled passive measurements
+  still need an adequate inspiratory hold. No clinical revalidation was run.
+- **[026]** Descriptive urine half-window coverage is distinct from a fully
+  assessable SOFA-2 evaluation window. Coverage-column publication and the
+  HiRID urine strategy belong to lane u5; this lane changes neither.
+- **[029]** The legacy `easyicu.callbacks.sofa_score` forward-fill contract
+  needs a separate cross-database API migration. This lane uses the current
+  resolver and does not claim the legacy path is repaired.
+- **[022/024/027/028/030/031/032]** Reference-only zero-event IDs, P/F
+  metadata, platelet/ICP/respiratory/neutrophil candidates and insulin timing
+  notes are registered without remapping or a scientific-status change.
+  HiRID `ins` is an hourly amount sum; it is not proof of continuous IV
+  insulin delivery.
+>>>>>>> theirs
 
 ## 2026-11-04 — extraction audit round 4
 

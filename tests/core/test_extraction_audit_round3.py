@@ -73,8 +73,8 @@ def test_r3_19_hirid_zero_doses_neither_rate_nor_extend_exposure():
     duration = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                               index_col="givenat", grp_var="infusionid")
     assert duration["patientid"].tolist() == [1]
-    # floor(12.5) - floor(10.5) from the floored start hour (F-20)
-    assert duration["givenat"].tolist() == [10.0]
+    # R5C-HIRID-003: the exact episode start is distinct from its hourly bin.
+    assert duration["givenat"].tolist() == [10.5]
     assert duration["norepi_dur"].tolist() == [2.0]
     rate = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
                          grp_var="infusionid", index_col="givenat", interval_minutes=60.0)

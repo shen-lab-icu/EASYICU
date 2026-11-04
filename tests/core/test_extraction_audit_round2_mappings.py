@@ -346,7 +346,8 @@ def test_v5_hirid_syringes_within_five_minutes_are_one_episode():
     })
     out = hirid_duration(frame, concept_name="norepi_dur", index_col="givenat", grp_var="infusionid")
     # Syringe 2 starts 3 minutes after syringe 1 ends; syringe 3 starts 2.8 h later.
-    assert out[["givenat", "norepi_dur"]].values.tolist() == [[0.0, 7.0], [10.0, 2.0]]
+    # R5C-HIRID-003: merged episodes retain their exact, unfloored duration.
+    assert out[["givenat", "norepi_dur"]].values.tolist() == [[0.0, 7.2], [10.0, 2.0]]
 
 
 def test_p6_sic_tidal_volume_below_100_ml_is_missing():
@@ -362,8 +363,8 @@ def test_s8_hirid_items_reach_their_concepts():
     # Segmented + band forms of one differential (summed), and 24000550, an
     # absolute count read against WBC (2026-11-04 audit round 3, F-18/S8).
     assert _ids("neut", "hirid") == {24000550, 24000556, 24000557}
-    # HiRID has only oral diltiazem; the concept is IV elsewhere (2026-07-17 decision).
-    assert "hirid" not in DICTIONARY["diltiazem"]["sources"]
+    # R5C-HIRID-012: its current any-route definition accepts enteral HiRID rows.
+    assert DICTIONARY["diltiazem"]["sources"]["hirid"][0]["ids"] == [1001071, 1000331]
     assert {1000793} <= set(sofa2["other_vaso"]["sources"]["hirid"][0]["ids"])
     for concept in ("epi_rate", "epi_dur"):
         assert _ids(concept, "hirid") == {1000649, 1000650}  # perfusors; no bolus or inhaled rows
