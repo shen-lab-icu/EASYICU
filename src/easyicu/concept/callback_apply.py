@@ -136,6 +136,7 @@ def _declared_extra_vars(source: ConceptSource) -> list:
 def _without_single_dose_flag(source: ConceptSource) -> ConceptSource:
     params = dict(source.params or {})
     params["extra_vars"] = [v for v in _declared_extra_vars(source) if v != _SIC_SINGLE_DOSE_FLAG]
+    params["sic_continuous_filtered"] = True
     return replace(source, params=params)
 
 
@@ -1001,6 +1002,11 @@ def _apply_callback(
             frame, concept_name=concept_name, data_source=data_source
         )
 
+    if expr.startswith("sicdb_"):
+        from .sicdb_sources import apply_source
+
+        return apply_source(frame, source=source, concept_name=concept_name, data_source=data_source)
+
     if expr == "emar_furosemide_equivalent":
         # MIMIC-IV eMAR loop-diuretic doses, deduplicated against inputevents
         # (owner: emar_diuretics; conversion: diuretics).
@@ -1061,6 +1067,7 @@ def _apply_callback(
             value_var=source.value_var,
             unit_var=source.unit_var,
             params=source.params,
+            data_source=data_source,
         )
 
     if expr == "transform_fun(miiv_age)":
@@ -3849,6 +3856,8 @@ def _apply_callback(
             index_col=index_var,
             stop_col=stop_var,
             target_unit=target_unit,
+            data_source=data_source,
+            continuous_filtered=bool(source.params.get("sic_continuous_filtered")),
         )
 
     # Handle SICdb sic_rate_kg / sic_rate_units callbacks
@@ -3929,59 +3938,15 @@ def _apply_callback(
                     index_var = candidate
                     break
         
-        if stop_var and stop_var in frame.columns and index_var and index_var in frame.columns:
-            # Offset and OffsetDrugEnd share the primary-admission origin.
-            # Subtract ICUOffset before hourly expansion, including fractional
-            # origins; absolute hour bins shift or lose real ICU records.
-            cases = data_source.load_table("cases", columns=["CaseID", "ICUOffset"], verbose=False)
-            cases = cases.data if hasattr(cases, "data") else cases
-            frame = frame.drop(columns=["ICUOffset"], errors="ignore").merge(
-                cases[["CaseID", "ICUOffset"]], on="CaseID", how="left", validate="many_to_one",
-            )
-            if frame["ICUOffset"].isna().any():
-                raise ValueError("SICdb medication rates require cases.ICUOffset for every case")
-            for column in (index_var, stop_var):
-                frame[column] = pd.to_numeric(frame[column], errors="coerce") - frame["ICUOffset"]
-            # R ricu expand(): generate hourly observations between start and stop
-            # Use standard patient-level ID columns only
-            _PATIENT_ID_COLS_E = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
-            id_cols = [c for c in _PATIENT_ID_COLS_E if c in frame.columns]
-            keep_cols = id_cols + [val_var] if val_var in frame.columns else id_cols
-            
-            expanded_rows = []
-            for _, row in frame.iterrows():
-                start_val = pd.to_numeric(row.get(index_var), errors='coerce')
-                stop_val = pd.to_numeric(row.get(stop_var), errors='coerce')
-                if pd.isna(start_val) or pd.isna(stop_val) or stop_val <= start_val:
-                    continue
-                # SICdb medication.Offset is in seconds → convert to hourly steps
-                # R ricu floor(): floor to nearest hour
-                start_hour = int(start_val // 3600)
-                stop_hour = int(stop_val // 3600)
-                for t in range(start_hour, stop_hour + 1):
-                    new_row = {index_var: t}  # Output Offset in hours
-                    for c in keep_cols:
-                        if c in row.index:
-                            new_row[c] = row[c]
-                    expanded_rows.append(new_row)
-            
-            if expanded_rows:
-                id_dtypes = {c: frame[c].dtype for c in id_cols}
-                frame = pd.DataFrame(expanded_rows)
-                # iterrows() upcasts an all-numeric row to float; keep the
-                # stay identifier in its source dtype.
-                frame = frame.astype({c: d for c, d in id_dtypes.items() if c in frame.columns})
-                frame.attrs["easyicu_time_columns"] = {index_var: "icu_relative_hours"}
-                # 🔧 FIX 2026-03-11: Do NOT hardcode median aggregation here!
-                # Previously this did groupby(...).agg({val_var: 'median'}) which pre-aggregated
-                # the expanded rates. This prevents vaso60 callback from getting raw per-interval
-                # rates needed for MAX aggregation (dobu60/norepi60/epi60/dopa60 etc).
-                # change_interval() in _load_single_concept handles aggregation correctly:
-                #   - standalone dobu_rate: change_interval(median) → correct median
-                #   - vaso60 sub-concept: change_interval(False) → preserves all rows → vaso60 takes max
-                if val_var in frame.columns:
-                    frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
-        
+        from .sicdb_sources import materialize_intervals
+
+        if not (stop_var and index_var):
+            raise ValueError("SICdb rates require explicit start and stop columns")
+        frame = frame.loc[pd.to_numeric(frame[val_var], errors="coerce").gt(0)].copy()
+        frame = materialize_intervals(
+            frame, start=index_var, stop=stop_var, data_source=data_source,
+        )
+
         return frame
 
     if expr.strip() == "distribute_amount":

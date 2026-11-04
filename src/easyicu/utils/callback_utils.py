@@ -4446,130 +4446,26 @@ def sic_rate_mass(
     index_col: Optional[str],
     stop_col: Optional[str],
     target_unit: str,
+    data_source=None,
+    continuous_filtered=False,
 ) -> pd.DataFrame:
-    """SIC non-kg mass-rate callback for sedatives/analgesics.
+    """Deprecated SIC mass API; delegate to the ICU-relative overlap owner.
 
-    Unlike vasopressors (where ``AmountPerMinute`` is a genuine g/min rate),
-    SIC sedatives store the **total bolus dose** in both ``Amount`` and
-    ``AmountPerMinute`` (see audit report 2026-05-13). The actual infusion
-    rate must be computed as:
-
-        rate = Amount / duration_seconds × conversion_factor
-
-    where ``duration_seconds = OffsetDrugEnd − Offset``.
-
-    SIC ``Amount`` is in **grams** (confirmed by d_references unit='g' for
-    DrugID 1480/1495/1499/1549). Conversion to target:
-
-      - mcg/hour: Amount_g × 1e6 / duration_seconds × 3600
-      - mg/hour:  Amount_g × 1e3 / duration_seconds × 3600
-      - mcg/min:  Amount_g × 1e6 / duration_seconds × 60
-      - mg/min:   Amount_g × 1e3 / duration_seconds × 60
-
-    Rows with zero or negative duration are dropped (single-push boluses
-    with no meaningful rate).
-
-    After rate computation, intervals are expanded to an hourly grid
-    (matching ``sic_rate_kg``'s expand logic).
-
-    Parameters
-    ----------
-    target_unit : str
-        One of ``mcg/hour``, ``mcg/min``, ``mg/hour``, ``mg/min``.
+    Amount is the total dose in grams, not an instantaneous rate. A known
+    ICU origin and an explicit continuous-dose flag are required.
     """
+    import warnings
+
+    from ..concept.schema import ConceptSource
+    from ..concept.sicdb_sources import amount_rate
+
+    warnings.warn("sic_rate_mass is deprecated; use sicdb_amount_rate", DeprecationWarning, stacklevel=2)
     target = target_unit.lower().replace("hr", "hour").strip()
-    if target not in {"mcg/hour", "mcg/min", "mg/hour", "mg/min"}:
+    factors = {"mcg/hour": 1e6, "mg/hour": 1e3, "mcg/min": 1e6/60, "mg/min": 1e3/60}
+    if target not in factors:
         raise ValueError(f"sic_rate_mass: unsupported target_unit {target_unit!r}")
-    target_mass, target_time = target.split("/")
-
-    # Mass multiplier: grams → target mass
-    mass_mult = {"mcg": 1e6, "mg": 1e3}[target_mass]
-    # Time multiplier: per-second → per-target_time
-    time_mult = {"hour": 3600.0, "min": 60.0}[target_time]
-
-    if frame.empty:
-        return frame
-
-    df = frame.copy()
-
-    # Resolve val_col (may have been renamed to concept_name)
-    actual_val = val_col if val_col in df.columns else (
-        concept_name if concept_name in df.columns else None
-    )
-    if actual_val is None:
-        return pd.DataFrame(columns=list(df.columns) + [concept_name])
-
-    # Use Amount column (total dose in grams) — NOT AmountPerMinute
-    # because for sedatives Amount == AmountPerMinute (audit finding).
-    # If val_col was set to AmountPerMinute in the dict, that's fine —
-    # the values are the same. We just need the duration to compute rate.
-    df[actual_val] = pd.to_numeric(df[actual_val], errors="coerce")
-    df = df.dropna(subset=[actual_val])
-    if df.empty:
-        return df
-
-    # Compute duration in seconds
-    if not index_col:
-        for cand in ["Offset", "OffsetDrugStart", "start", "charttime"]:
-            if cand in df.columns:
-                index_col = cand
-                break
-    if not stop_col:
-        for cand in ["OffsetDrugEnd", "stop", "endtime"]:
-            if cand in df.columns:
-                stop_col = cand
-                break
-
-    if not (index_col and stop_col and index_col in df.columns and stop_col in df.columns):
-        return pd.DataFrame(columns=list(df.columns) + [concept_name])
-
-    starts = pd.to_numeric(df[index_col], errors="coerce")
-    stops = pd.to_numeric(df[stop_col], errors="coerce")
-    duration_sec = stops - starts
-
-    # Drop zero/negative duration (bolus pushes with no meaningful rate)
-    valid = duration_sec > 0
-    df = df.loc[valid].copy()
-    duration_sec = duration_sec.loc[valid]
-    if df.empty:
-        return df
-
-    # Compute rate: Amount_g × mass_mult / duration_sec × time_mult
-    df[concept_name] = df[actual_val] * mass_mult / duration_sec * time_mult
-
-    # Drop implausible (NaN, inf, negative)
-    df = df[df[concept_name].notna() & np.isfinite(df[concept_name]) & (df[concept_name] > 0)]
-    if df.empty:
-        return df
-
-    # Expand intervals to hourly grid (same logic as sic_rate_kg in concept.py)
-    _PATIENT_ID_COLS = ["CaseID", "stay_id", "icustay_id", "patientunitstayid",
-                        "admissionid", "patientid"]
-    id_cols = [c for c in _PATIENT_ID_COLS if c in df.columns]
-    keep_cols = id_cols + [concept_name]
-
-    expanded_rows = []
-    for _, row in df.iterrows():
-        start_val = pd.to_numeric(row.get(index_col), errors="coerce")
-        stop_val = pd.to_numeric(row.get(stop_col), errors="coerce")
-        if pd.isna(start_val) or pd.isna(stop_val) or stop_val <= start_val:
-            continue
-        start_hour = int(start_val // 3600)
-        stop_hour = int(stop_val // 3600)
-        for t in range(start_hour, stop_hour + 1):
-            new_row = {index_col: t}
-            for c in keep_cols:
-                if c in row.index:
-                    new_row[c] = row[c]
-            expanded_rows.append(new_row)
-
-    if expanded_rows:
-        result = pd.DataFrame(expanded_rows)
-        if concept_name in result.columns:
-            result[concept_name] = pd.to_numeric(result[concept_name], errors="coerce")
-        return result
-    else:
-        return pd.DataFrame(columns=id_cols + [index_col, concept_name])
+    source = ConceptSource(value_var=val_col, index_var=index_col or "Offset", params={"stop_var": stop_col or "OffsetDrugEnd", "sic_continuous_filtered": continuous_filtered})
+    return amount_rate(frame, concept_name=concept_name, source=source, data_source=data_source, factor=factors[target])
 
 
 def aumc_rate_units_callback(mcg_to_units: float) -> Callable:

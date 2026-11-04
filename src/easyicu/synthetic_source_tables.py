@@ -151,7 +151,27 @@ def _events(database, config, concepts, p):
                               LaboratoryType=2296)
                 if table == "data_range":
                     record["Data"] = "synthetic ventilation"
+                if table == "medication" and item == 2148:
+                    # R5-SIC-002: the D50 fixture is a single-dose 50% push.
+                    record["IsSingleDose"] = True
+                if name == "cvp_raw":
+                    # R5-SIC-001: publication must retain a rejected raw value.
+                    record[value_col] = np.where((index == 0) & (hour == 0), 60., value)
             rows[table].append(pd.DataFrame(record, index=np.arange(count)))
+    if database == "sic":
+        # R5-SIC-012: invented reference units make glucose rates auditable.
+        rows["d_references"].append(pd.DataFrame({
+            "ReferenceGlobalID": [2043, 2044, 2045, 2148],
+            "ReferenceUnit": ["g", "ml", "g", "g"],
+            "ReferenceName": ["Glukose 5%", "Glukose 10%", "Glukose 33%", "Glukose 50%"],
+        }))
+        # R5-SIC-015: a controlled hour with opioid alone, outside the airway
+        # tolerance, exercises the separately exported sensitivity channel.
+        offset = (6 + p["stay"][0] % 4 * 3 + 2) * 3600
+        rows["data_float_h"].append(pd.DataFrame({
+            "CaseID": [int(p["stay"][0])]*2, "DataID": [2282, 3059],
+            "Offset": [offset]*2, "Val": [12., .1],
+        }))
     return rows
 
 

@@ -128,11 +128,14 @@ def test_mimic_cv_uses_pure_unit_itemids(cdict, name, expected_cv_ids):
 @pytest.mark.parametrize("name,_iid,_u1,_u2,_max",
                          RATE_CONCEPTS, ids=[c[0] for c in RATE_CONCEPTS])
 def test_other_dbs_intentionally_absent(cdict, name, _iid, _u1, _u2, _max):
-    """Explicit contract: SIC NOT yet wired. SIC uses AmountPerMinute whose
-    unit semantics are DrugID-dependent (vasopressors use grams/min, but
-    sedatives follow a different convention that hasn't been cross-validated
-    against ricu)."""
+    """R5-SIC-012: midazolam now uses verified total grams / duration."""
     sources = set(cdict[name]["sources"].keys())
+    if name == "midazolam_rate":
+        source = cdict[name]["sources"]["sic"][0]
+        assert source["callback"] == "sicdb_amount_rate"
+        assert source["sic_amount_factor"] == 1000
+        assert source["val_var"] == "Amount"
+        sources.remove("sic")
     assert sources == {"miiv", "mimic", "mimic_demo", "eicu", "eicu_demo", "aumc", "hirid"}, (
         f"{name} sources changed: {sorted(sources)}. If adding a new DB, "
         "confirm the callback preserves the native unit before relaxing this "
@@ -232,4 +235,4 @@ def test_registered_in_webapp_catalog(name, _iid, unit_primary, _u2, _max):
     assert "Rate" in en
     assert "速率" in zh
     assert unit == unit_primary
-    assert CONCEPT_DB_COVERAGE[name] == 5
+    assert CONCEPT_DB_COVERAGE[name] == (6 if name == "midazolam_rate" else 5)  # R5-SIC-012.

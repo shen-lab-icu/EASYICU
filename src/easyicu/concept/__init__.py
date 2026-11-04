@@ -2297,9 +2297,9 @@ class ConceptResolver:
         batch_loading = kwargs.get('_batch_loading', False)
         if batch_loading:
             verbose = False  # 批量加载时抑制verbose输出
-        definition = self.dictionary[concept_name]
-        
-        # 🔧 FIX 2025-02-14: vent_ind 是特殊的 rec_cncpt - 它有 callback 且需要正确的 win_tbl 格式
+        from .sicdb_sources import source_definition
+
+        definition = source_definition(self.dictionary[concept_name], data_source.config.name)
 
         # 🔧 FIX 2025-02-14: vent_ind 是特殊的 rec_cncpt - 它有 callback 且需要正确的 win_tbl 格式
         # 其他有 callback 的概念（如 gcs, sofa_*）可能有直接的数据源，应该优先使用直接加载
@@ -2418,6 +2418,9 @@ class ConceptResolver:
                 _MISSING_SOURCE_WARNED.add(warn_key)
             
             empty_df = pd.DataFrame(columns=default_id_cols + ['charttime', concept_name])
+            if definition.class_name in ("chr_cncpt", "fct_cncpt"):
+                # Preserve unavailable text receipts across Parquet (R5-SIC-015).
+                empty_df[concept_name] = pd.Series(dtype="string")
             return ICUTable(
                 data=empty_df,
                 id_columns=default_id_cols,
@@ -5155,6 +5158,10 @@ class ConceptResolver:
                 column="dur_var",
             )
             combined = pd.concat(frames, ignore_index=True)
+            if db_name in {"sic", "sic_demo"}:
+                from .sicdb_sources import restore_source_receipts
+
+                combined = restore_source_receipts(combined, frames)
             if combined_dur_unit:
                 set_dur_var_unit(combined, combined_dur_unit)
             
@@ -6660,9 +6667,9 @@ class ConceptResolver:
                     continue
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     max_abs = data[col].abs().max()
-                    # The native ICU origin is in seconds even below the
-                    # magnitude heuristic; declared ICU hours were skipped above.
-                    if col == "ICUOffset" or pd.notna(max_abs) and max_abs > 5000:
+                    # SIC's named raw offsets are seconds even near admission;
+                    # materialized ICU hours were explicitly skipped above.
+                    if col in {"ICUOffset", "Offset", "OffsetEnd", "OffsetDrugEnd"} or pd.notna(max_abs) and max_abs > 5000:
                         second_valued_cols.append(col)
 
             if second_valued_cols:
@@ -6707,6 +6714,8 @@ class ConceptResolver:
                     frame[col] = (
                         pd.to_numeric(frame[col], errors="coerce") - origin
                     ) / 3600.0
+                frame.attrs.update(data.attrs)
+                frame.attrs["easyicu_time_columns"] = {**data.attrs.get("easyicu_time_columns", {}), **dict.fromkeys(second_valued_cols, "icu_relative_hours")}
                 data = frame.drop(columns=[] if index_column == "ICUOffset" else ["ICUOffset"], errors="ignore")
 
             # SIC interval tables (notably data_range for mech_vent) produce

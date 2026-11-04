@@ -240,9 +240,10 @@ def test_r4_013_hirid_keeps_its_30_mmhg_cap():
 
 def test_r4_013_cvp_bounds_and_sicdb_source_cap():
     d = _dict("concept-dict.json")
+    # R5-SIC-001: the SIC-specific dictionary lifts only its raw bound.
     assert d["cvp"]["max"] == 50 and d["cvp_raw"]["max"] == 50
     assert d["cvp"]["concepts"] == ["cvp_raw", "dbp"]
-    assert d["cvp_raw"]["sources"]["sic"][0]["callback"] == "transform_fun(na_above(30))"
+    assert d["cvp_raw"]["sources"]["sic"][0]["callback"] == "sicdb_cvp_raw"
 
 
 def test_r4_029_hirid_short_episode_across_an_hour_is_not_one_hour():

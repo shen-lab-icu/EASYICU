@@ -88,6 +88,11 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
                 expected_table = "medication" if src["callback"] == "eicu_iv_exposure" else "infusiondrug"
                 assert src["table"] == expected_table
                 continue
+            if db == "sic" and name in ('calcium_iv', 'pantoprazole'):
+                # R5-SIC-026: observed Amount, preserving zero and missing.
+                assert src.get("callback") == "sicdb_exposure"
+                assert src.get("val_var") == "Amount"
+                continue
             assert src.get("callback") in BOOLEAN_DRUG_CALLBACKS, (
                 f"{name}/{db}: boolean callback expected, got {src.get('callback')}"
             )
@@ -180,7 +185,7 @@ def test_calcium_iv_aumc_round3_source_is_audited(cdict):
 
 def test_batch3_hirid_and_sic_sources_match_audited_scope(cdict):
     assert "hirid" not in cdict["pantoprazole"]["sources"]
-    assert cdict["pantoprazole"]["sources"]["sic"][0]["callback"] == "transform_fun(set_val(TRUE))"
+    assert cdict["pantoprazole"]["sources"]["sic"][0]["callback"] == "sicdb_exposure"  # R5-SIC-026
     for c in ["vancomycin", "meropenem", "calcium_iv"]:
         hirid = cdict[c]["sources"]["hirid"][0]
         assert hirid["callback"] == "transform_fun(comp_na(`>`, 0.000001))"

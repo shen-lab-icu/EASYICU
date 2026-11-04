@@ -2496,8 +2496,8 @@ def _callback_anion_gap(
     )
 
 
-# Databases whose CVP stays capped at 30 mmHg (audit rounds 2-3); SICdb caps
-# its hourly item 2018 at the source, HiRID is capped here per hour.
+# HiRID retains its unconditional hourly cap. SICdb's owner requires invasive
+# arterial evidence before lifting the cap and preserves charted CVP for QC.
 _CVP_CAPPED_AT_30 = frozenset({"hirid"})
 
 
@@ -2550,6 +2550,10 @@ def _callback_cvp_artefact_filter(
     above 30 mmHg, including real severe congestion (2026-11-04 extraction
     audit round 4, R4-013/017/023/025).
     """
+    if str(getattr(getattr(ctx.data_source, "config", None), "name", "")) in {"sic", "sic_demo"}:
+        from .sicdb_sources import filter_cvp
+
+        return filter_cvp(tables, ctx)
     merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     keep = id_columns + ([index_column] if index_column else [])
     if merged.empty or "cvp_raw" not in merged.columns:
@@ -5403,6 +5407,10 @@ def _callback_vent_ind(
         from .aumc_intervals import ventilation_indicator
 
         return ventilation_indicator(mech_tbl, interval) if not mech_tbl.data.empty else _empty_result()
+    # SICdb sources already materialize exact positive-overlap hours (R5-SIC-003).
+    # Keep the empty result too: no fallback may invent a six-hour episode.
+    if database_name in {"sic", "sic_demo"} and mech_tbl is not None:
+        return _normalize_result(_windows_from_mech(mech_tbl)) or _empty_result()
 
     # eICU's three mech_vent sources are deliberately point evidence only:
     # an invasive-airway start, a device charting row, or a treatment row.  None

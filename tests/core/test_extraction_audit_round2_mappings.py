@@ -101,7 +101,8 @@ def test_d2_eicu_hicl_only_diuretic_orders_are_read(concept, hicls):
 
 def test_h1_sic_cvp_drops_hours_above_30_mmhg():
     [source] = _sources("cvp_raw", "sic")
-    assert source["callback"] == "transform_fun(na_above(30))"
+    # R5-SIC-001: keep raw values; cvp caps unsupported hours and records QC.
+    assert source["callback"] == "sicdb_cvp_raw"
 
 
 @pytest.mark.parametrize("concept", ["map", "map_nibp", "map_invasive", "sbp", "dbp"])

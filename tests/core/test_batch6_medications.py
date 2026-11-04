@@ -61,6 +61,11 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
                 expected_table = "medication" if src["callback"] == "eicu_iv_exposure" else "infusiondrug"
                 assert src["table"] == expected_table
                 continue
+            if db == "sic" and name in ('neostigmine',):
+                # R5-SIC-026: observed Amount, preserving zero and missing.
+                assert src.get("callback") == "sicdb_exposure"
+                assert src.get("val_var") == "Amount"
+                continue
             # MIMIC-III prescriptions without a time sit at noon of their day
             # (extraction audit round 2, D5); the value is still TRUE.  A HiRID
             # zero givendose is not an administration (audit round 3).

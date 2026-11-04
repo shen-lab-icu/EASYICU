@@ -592,8 +592,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 3 (M NEW-4): added 1577 Cefuroxim (7,853 cases), 1401 Metronidazol (2,718) and 1456 Ceftriaxon (705), the most used SICdb antibiotics, which were unmapped. | 2026-11-04 audit round 4 (R4-060): systemic antibacterials added (1451 meropenem 18,908 rows/1,330 stays, 281 of them without another mapped antibiotic; 1439 ceftazidime, 1462 linezolid, 1455 rifampicin, 1628 fosfomycin, 1813 daptomycin, 1605 gentamicin, 1446 imipenem, 1948 ertapenem, 1606 teicoplanin, 1693, 1819, 1997, 1441); 1927 ofloxacin eye/ear drops removed. Colistin (1942/1925/1924) stays out because SICdb records no route and inhaled colistin is common; rifaximin, paromomycin and topical gentamicin are not systemic."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-04 audit round 3 (M NEW-4): added 1577 Cefuroxim (7,853 cases), 1401 Metronidazol (2,718) and 1456 Ceftriaxon (705), the most used SICdb antibiotics, which were unmapped. | 2026-11-04 audit round 4 (R4-060): systemic antibacterials added (1451 meropenem 18,908 rows/1,330 stays, 281 of them without another mapped antibiotic; 1439 ceftazidime, 1462 linezolid, 1455 rifampicin, 1628 fosfomycin, 1813 daptomycin, 1605 gentamicin, 1446 imipenem, 1948 ertapenem, 1606 teicoplanin, 1693, 1819, 1997, 1441); 1927 ofloxacin eye/ear drops removed. Colistin (1942/1925/1924) stays out because SICdb records no route and inhaled colistin is common; rifaximin, paromomycin and topical gentamicin are not systemic. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ]
   }
@@ -1630,7 +1631,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": " | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
     }
    ]
   }
@@ -1805,7 +1807,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
    ],
    "hirid": [
@@ -2539,8 +2543,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "_comment": "2026-07-17 recall: added 2042 'Natriumbikarbonat 8,4%' (847 pts) + 2041 '1,4%' (241) + 1867 'Natrium hydrogencarbonat' (54); 1774 alone reached 38 pts = 3% recall.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "_comment": "2026-07-17 recall: added 2042 'Natriumbikarbonat 8,4%' (847 pts) + 2041 '1,4%' (241) + 1867 'Natrium hydrogencarbonat' (54); 1774 alone reached 38 pts = 3% recall. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route.",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   }
@@ -3221,8 +3226,9 @@
       1476,
       1936
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: 1476 'Calciumglukonat 10%' (2,975 rows / 1,753 pts, all infusion) is the SIC IV calcium; 1936 'Calcium gluc.' alone reached 13 pts = 0.7% recall."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-07-17 recall: 1476 'Calciumglukonat 10%' (2,975 rows / 1,753 pts, all infusion) is the SIC IV calcium; 1936 'Calcium gluc.' alone reached 13 pts = 0.7% recall. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -3727,7 +3733,9 @@
     {
      "ids": 3120,
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 0.980665), 'mL/cmH2O', '^ml/mbar$')",
+     "_comment": " | R5-SIC-016: reference mbar pressures x100/98.0665; ml/mbar compliance x98.0665/100, before canonical bounds. These reference-defined channels require conversion even without a row unit column."
     }
    ],
    "mimic_demo": [
@@ -3904,11 +3912,13 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Drug 1525 Hydrocortison, 1506 MethylPREDNIsolon, 1397 PredniSOLON, 1524 DEXAmethason, 1751 Fludrocortison (systemic corticosteroids, as HiRID/AUMC map them). Inhaled budesonide (1571/1727) is not systemic and is excluded."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Drug 1525 Hydrocortison, 1506 MethylPREDNIsolon, 1397 PredniSOLON, 1524 DEXAmethason, 1751 Fludrocortison (systemic corticosteroids, as HiRID/AUMC map them). Inhaled budesonide (1571/1727) is not systemic and is excluded. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "crea": {
   "source_channel_priority": ["lab", "chart"],
@@ -4130,7 +4140,7 @@
   "callback": "cvp_artefact_filter",
   "class_name": "rec_cncpt",
   "target": "ts_tbl",
-  "_comment": "2026-11-04 audit round 4 (R4-013/017/023/025): rounds 2-3 capped CVP at 30 mmHg, which deleted real 30-50 mmHg values (severe congestion, RV failure, high PEEP). Values above 50 are dropped; an hourly value in (30, 50] is dropped only when it lies within 10 mmHg of the same hour's diastolic arterial pressure (an arterial waveform on the venous transducer) or is an isolated spike (both neighbouring hourly values within 6 h are at most 30 mmHg and at least 10 mmHg lower). SICdb (source cap on its hourly item 2018) and HiRID (hourly cap in the callback) keep the 30 mmHg cap. The charted values are cvp_raw."
+  "_comment": "2026-11-04 audit round 4 (R4-013/017/023/025): rounds 2-3 capped CVP at 30 mmHg, which deleted real 30-50 mmHg values (severe congestion, RV failure, high PEEP). Values above 50 are dropped; an hourly value in (30, 50] is dropped only when it lies within 10 mmHg of the same hour's diastolic arterial pressure (an arterial waveform on the venous transducer) or is an isolated spike (both neighbouring hourly values within 6 h are at most 30 mmHg and at least 10 mmHg lower). SICdb (source cap on its hourly item 2018) and HiRID (hourly cap in the callback) keep the 30 mmHg cap. The charted values are cvp_raw. | R5-SIC-001 supersedes the SIC source cap: cvp_raw preserves charted values; cvp uses arterial item 702 only and reverts to cap 30 for hours without that evidence. Above 50 is dropped from cvp, retaining the QC receipt. HiRID remains capped at 30."
  },
  "cvp_raw": {
   "unit": [
@@ -4259,8 +4269,8 @@
      "ids": 2018,
      "table": "data_float_h",
      "sub_var": "DataID",
-     "callback": "transform_fun(na_above(30))",
-     "_comment": "2026-11-03 audit round 2 (H1): 2018 is already an hourly value, so a median cannot smooth arterial or flush-pressure contamination; hours above 30 mmHg (15,663 hours, 3,924 cases at 30-50) are dropped."
+     "callback": "sicdb_cvp_raw",
+     "_comment": "R5-SIC-001: preserve charted values including above 30/50. cvp applies the shared artefact rule with same-hour invasive arterial diastolic item 702; absent arterial evidence keeps the 30 cap. The cvp QC receipt retains raw hourly values and rejection reasons."
     }
    ]
   }
@@ -4852,6 +4862,26 @@
      "interval": "00:01:00",
      "callback": "combine_callbacks(\n               grp_mount_to_rate(mins(1L), hours(1L)),\n               dex_to_10(30017L, 2)\n             )"
     }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2043,
+      2044,
+      2045,
+      2148
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sicdb_glucose_rate",
+     "_comment": "R5-SIC-012: positive continuous total Amount / elapsed seconds, then ICU-relative positive-overlap hours. Insulin 1557 is IE; midazolam 1495 is g. Glucose 2045/2148 are 33%/50%; reference amount units g or ml are required at runtime and converted to D10 ml/hr. 2043/2044 require an explicit glucose percentage in ReferenceName; unknown concentration or amount unit is unavailable; 1848 has no continuous records. Route is unknown in medication; single doses never enter rates."
+    }
    ]
   },
   "class_name": [
@@ -5384,13 +5414,16 @@
    "sic": [
     {
      "ids": [
-      2148,
-      2045
+      2148
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): 2045 'Glukose 33%' (1,239 rows, 652 stays) is the hypertonic glucose bolus SICdb uses; 2148 'Glukose 50%' has <10 rows."
+     "callback": "sicdb_exposure",
+     "_comment": "R5-SIC-002/026: only 2148 Glukose 50%, IsSingleDose=1 and positive Amount establish D50 push. 2045 is 33% and excluded; continuous 50% glucose belongs to dex.",
+     "val_var": "Amount",
+     "require_regex": {
+      "IsSingleDose": "^(?:1(?:\\.0+)?|True|true)$"
+     }
     }
    ],
    "hirid": [
@@ -6684,8 +6717,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 class: added 1534 'Dalteparin' (5,966 pts), the LMWH SIC actually stocks alongside enoxaparin. Concept is the LMWH class."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-07-17 class: added 1534 'Dalteparin' (5,966 pts), the LMWH SIC actually stocks alongside enoxaparin. Concept is the LMWH class. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -7292,7 +7326,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
    ],
    "hirid": [
@@ -7584,8 +7620,8 @@
      "sub_var": "DataID",
      "value_var": "DataID",
      "dur_var": "OffsetEnd",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: an endotracheal tube or tracheal cannula in place (SICdb d_references Airway 720 EndotrachealTube, 3041 TrachealCannula; data_range Offset..OffsetEnd), the airway that makes the GCS verbal response unassessable whether or not the ventilator is running."
+     "callback": "sicdb_airway_indicator",
+     "_comment": "2026-11-03 extraction audit 2: an endotracheal tube or tracheal cannula in place (SICdb d_references Airway 720 EndotrachealTube, 3041 TrachealCannula; data_range Offset..OffsetEnd), the airway that makes the GCS verbal response unassessable whether or not the ventilator is running. | R5-SIC-003: materialize positive overlaps on the cases.ICUOffset clock; retain per-interval first/last covered seconds."
     }
    ]
   },
@@ -7844,7 +7880,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
     }
    ]
   }
@@ -8515,6 +8553,15 @@
      "callback": "eicu_fio2_source",
      "_comment": "2026-11-04 audit round 3 (M G7): respiratorycharting 'O2 Percentage' (116,672 rows, median 40%)."
     }
+   ],
+   "sic": [
+    {
+     "ids": 2283,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "transform_fun(percent_as_numeric)",
+     "_comment": "R5-SIC-013: source-specific percent FiO2, fraction-to-percent conversion exactly as parent fio2; laboratory item 684 has reference unit percent."
+    }
    ]
   }
  },
@@ -8564,6 +8611,15 @@
       "labmeasurenameinterface": "(?i)lpm|l/min"
      },
      "val_var": "labresult"
+    }
+   ],
+   "sic": [
+    {
+     "ids": 684,
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "transform_fun(percent_as_numeric)",
+     "_comment": "R5-SIC-013: source-specific percent FiO2, fraction-to-percent conversion exactly as parent fio2; laboratory item 684 has reference unit percent."
     }
    ]
   }
@@ -9485,7 +9541,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
     }
    ]
   },
@@ -9972,6 +10030,24 @@
      ],
      "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
     }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1557
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sicdb_amount_rate",
+     "sic_amount_factor": 1.0,
+     "_comment": "R5-SIC-012: positive continuous 1557 total Amount in IE / elapsed time gives units/hr, on ICU-relative right-open overlap hours. Exclude single doses; 1848 has no verified continuous records and NPH/premix/lispro remain exposure-only. Medication route is unknown."
+    }
    ]
   }
  },
@@ -10124,12 +10200,15 @@
       1557,
       1848,
       1961,
-      1962
+      1962,
+      1964,
+      1975
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "_comment": "2026-05-27 added via SIC d_references audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "_comment": "2026-05-27 added via SIC d_references audit | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-005: include NPH/premix 1964 and lispro 1975 for any-route exposure, never an infusion rate.",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   }
@@ -10938,7 +11017,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": " | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
     }
    ],
    "hirid": [
@@ -12266,7 +12346,8 @@
       2279,
       712
      ],
-     "_comment": "2026-07-17 recall: 2279 'pMean' is SIC's primary mean-airway-pressure channel (549,290 rows / 17,766 pts, median 10.2 mbar, between PEEP 7.0 and pPeak 14.1); 712 alone reached only 2,923 pts = 16% recall. Parallels pip<-pPeak(2280)."
+     "_comment": "2026-07-17 recall: 2279 'pMean' is SIC's primary mean-airway-pressure channel (549,290 rows / 17,766 pts, median 10.2 mbar, between PEEP 7.0 and pPeak 14.1); 712 alone reached only 2,923 pts = 16% recall. Parallels pip<-pPeak(2280). | R5-SIC-016: reference mbar pressures x100/98.0665; ml/mbar compliance x98.0665/100, before canonical bounds. These reference-defined channels require conversion even without a row unit column.",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')"
     }
    ],
    "mimic_demo": [
@@ -12785,8 +12866,8 @@
      "sub_var": "DataID",
      "value_var": "DataID",
      "dur_var": "OffsetEnd",
-     "callback": "apply_map(c(`720` = 'invasive'),\n                                   var = 'sub_var')",
-     "_comment": "2026-11-03 extraction audit 2: an endotracheal-tube interval (d_references Airway 720 EndotrachealTube) is invasive ventilation as a whole. A tracheal-cannula interval (3041) no longer is: a tracheostomy off the ventilator is not ventilation, so its hours come from the second source only where a ventilator setting is charted."
+     "callback": "sicdb_airway_interval",
+     "_comment": "2026-11-03 extraction audit 2: an endotracheal-tube interval (d_references Airway 720 EndotrachealTube) is invasive ventilation as a whole. A tracheal-cannula interval (3041) no longer is: a tracheostomy off the ventilator is not ventilation, so its hours come from the second source only where a ventilator setting is charted. | R5-SIC-003: materialize positive overlaps on the cases.ICUOffset clock; retain per-interval first/last covered seconds."
     },
     {
      "ids": [
@@ -12800,7 +12881,7 @@
      "table": "data_float_h",
      "sub_var": "DataID",
      "callback": "sicdb_airway_attributed_ventilation",
-     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py. 2026-11-03 audit round 2 (P1): in ICU units 2-4, a set-rate (2282) or PressureOverPeep (3040) hour under propofol (3057 > 0) is invasive without an airway interval; the airway-only rule stays available as the strict sensitivity rule."
+     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py. 2026-11-03 audit round 2 (P1): in ICU units 2-4, a set-rate (2282) or PressureOverPeep (3040) hour under propofol (3057 > 0) is invasive without an airway interval; the airway-only rule stays available as the strict sensitivity rule. | R5-SIC-015: primary support requires airway proximity, propofol or ETCO2. Opioid-only controlled settings are sensitivity candidates; rule labels and coverage deltas are in the source receipt."
     }
    ]
   }
@@ -13465,7 +13546,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
     }
    ]
   }
@@ -13585,6 +13668,24 @@
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
      "callback": "hirid_rate_mass(target_unit = \"mg/hour\")"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1495
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sicdb_amount_rate",
+     "sic_amount_factor": 1000.0,
+     "_comment": "R5-SIC-012: positive continuous 1495 total Amount in grams / elapsed time gives mg/hour after x1000, on ICU-relative right-open overlap hours. Single doses never enter rates; medication route is unknown."
     }
    ]
   }
@@ -13825,7 +13926,8 @@
      ],
      "table": "data_float_h",
      "sub_var": "DataID",
-     "_comment": "713=MV (exp); 2019=MV (total minute volume); both unit L. 2019 added 2026-06-08 ricu-audit (docs/ricu_audit_results_20260608.md)"
+     "_comment": "R5-SIC-011: analytical ventilation values require >=1 L/min. Preserve raw hourly values and below-analysis-minimum QC reason in the source receipt; low values may be standby/disconnection, not assumed patient ventilation.",
+     "callback": "sicdb_minute_volume"
     }
    ],
    "mimic_demo": [
@@ -14070,7 +14172,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
     }
    ]
   }
@@ -14266,7 +14370,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
    ]
   }
@@ -14738,8 +14844,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: 1551 'Glyceroltrinitrat' (3,857 rows / 737 pts, ~100% AmountPerMinute>0 = IV infusion) + 1725 'Glyzeroltrinitrat' (123 pts); 1712 alone reached 8 pts. ISDN 1653 correctly excluded (different nitrate)."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-07-17 recall: 1551 'Glyceroltrinitrat' (3,857 rows / 737 pts, ~100% AmountPerMinute>0 = IV infusion) + 1725 'Glyzeroltrinitrat' (123 pts); 1712 alone reached 8 pts. ISDN 1653 correctly excluded (different nitrate). | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route.",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -15860,8 +15967,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "_comment": "2026-05-27 added via SIC d_references audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "_comment": "2026-05-27 added via SIC d_references audit | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted. | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route.",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   }
@@ -16099,7 +16207,8 @@
      "ids": 2278,
      "table": "data_float_h",
      "sub_var": "DataID",
-     "_comment": "2026-07-17 official-code audit + DATA CHECK: keep 2278 (RespiratorSetting) ONLY. d_references also lists 711 'PEEP' SignalFloat (measured), and the audit proposed pooling it to match HiRID (which pools set+measured). VERIFIED AGAINST THE DATA: DataID 711 has ZERO rows in data_float_h — SIC ships no measured-PEEP values, so there is nothing to pool. CAVEAT (documentation, not a wiring fix): SIC PEEP is therefore a SETTING-only construct while HiRID PEEP pools setting+measured. Any cross-DB PEEP contrast involving SIC vs HiRID compares partly different constructs — relevant to the 'HiRID/SIC = low-PEEP practice' reading."
+     "_comment": "2026-07-17 official-code audit + DATA CHECK: keep 2278 (RespiratorSetting) ONLY. d_references also lists 711 'PEEP' SignalFloat (measured), and the audit proposed pooling it to match HiRID (which pools set+measured). VERIFIED AGAINST THE DATA: DataID 711 has ZERO rows in data_float_h — SIC ships no measured-PEEP values, so there is nothing to pool. CAVEAT (documentation, not a wiring fix): SIC PEEP is therefore a SETTING-only construct while HiRID PEEP pools setting+measured. Any cross-DB PEEP contrast involving SIC vs HiRID compares partly different constructs — relevant to the 'HiRID/SIC = low-PEEP practice' reading. | R5-SIC-016: reference mbar pressures x100/98.0665; ml/mbar compliance x98.0665/100, before canonical bounds. These reference-defined channels require conversion even without a row unit column.",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')"
     }
    ],
    "mimic_demo": [
@@ -16198,7 +16307,8 @@
      "ids": 2278,
      "table": "data_float_h",
      "sub_var": "DataID",
-     "_comment": "2026-11-03 audit round 2 (P4): 2278 RespiratorSetting PEEP, the same item as peep."
+     "_comment": "2026-11-03 audit round 2 (P4): 2278 RespiratorSetting PEEP, the same item as peep. | R5-SIC-016: reference mbar pressures x100/98.0665; ml/mbar compliance x98.0665/100, before canonical bounds. These reference-defined channels require conversion even without a row unit column.",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')"
     }
    ],
    "eicu": [
@@ -16508,7 +16618,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
    ],
    "hirid": [
@@ -16887,7 +16999,9 @@
     {
      "ids": 715,
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
+     "_comment": " | R5-SIC-016: reference mbar pressures x100/98.0665; ml/mbar compliance x98.0665/100, before canonical bounds. These reference-defined channels require conversion even without a row unit column."
     }
    ],
    "mimic_demo": [
@@ -17667,8 +17781,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 4 (R4-178): 2086 Kaliummalat perfusor (534 rows/49 stays) is intravenous potassium."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-04 audit round 4 (R4-178): 2086 Kaliummalat perfusor (534 rows/49 stays) is intravenous potassium. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -17881,7 +17996,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
    ],
    "hirid": [
@@ -18104,7 +18221,9 @@
     {
      "ids": 2284,
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O', '^mbar$')",
+     "_comment": " | R5-SIC-016: reference mbar pressures x100/98.0665; ml/mbar compliance x98.0665/100, before canonical bounds. These reference-defined channels require conversion even without a row unit column."
     }
    ],
    "mimic_demo": [
@@ -18772,7 +18891,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount",
+     "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
    ]
   }
@@ -27342,8 +27463,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 class: added 1892 'Acenocoumarol' (23 pts) alongside 1657 'Phenprocoumon' (36); SIC has no true warfarin. Concept is the VKA class."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-07-17 class: added 1892 'Acenocoumarol' (23 pts) alongside 1657 'Phenprocoumon' (36); SIC has no true warfarin. Concept is the VKA class. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -31022,9 +31144,15 @@
    ],
    "sic": [
     {
-     "ids": 294,
+     "ids": [
+      293,
+      294
+     ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "source_label": "LaboratoryID",
+     "callback": "sicdb_labelled_value",
+     "_comment": "R5-SIC-017: 293 and 294 are the same total protein analyte, both reference g/dL. Pool by the ordinary hourly median; retain item labels in the source receipt, never sum."
     }
    ],
    "eicu": [
@@ -32088,7 +32216,8 @@
      "_comment": "2026-07-17 recall: 10187 'Vrij-T4 (bloed)' = free thyroxine (11,171 rows / 9,582 adm, median 16 pmol/L). Concept had no AUMC source though sibling tsh maps 11925. pmol/L -> ng/dL: 1 ng/dL = 12.87 pmol/L."
     }
    ]
-  }
+  },
+  "_comment": "R5-SIC-004: SIC laboratory item 576 remains unavailable pending a dated laboratory/reagent/unit version table. A published pmol/L label and numerical scale alone do not justify an ng/dL conversion."
  },
  "prealbumin": {
   "unit": [
@@ -33296,8 +33425,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 1398 'Xipamid', 1811 'Hydrochlorothiazid', 1832 'Indapamid' and every HCT fixed combination in d_references (with valsartan, lisinopril, bisoprolol, enalapril, ramipril, eprosartan, amilorid, irbesartan, amlodipin/valsartan, losartan, candesartan). | 2026-11-04 audit round 4 (R4-181): 1686 has no rows in SICdb; 1779 is the same combination."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-03 extraction audit 2: 1398 'Xipamid', 1811 'Hydrochlorothiazid', 1832 'Indapamid' and every HCT fixed combination in d_references (with valsartan, lisinopril, bisoprolol, enalapril, ramipril, eprosartan, amilorid, irbesartan, amlodipin/valsartan, losartan, candesartan). | 2026-11-04 audit round 4 (R4-181): 1686 has no rows in SICdb; 1779 is the same combination. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ]
   }
@@ -33470,8 +33600,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 1443 'Spironolacton', 1704 'Eplerenon', 1471 'Kaliumcanrenoat', 1452 'Triamteren', 1654 'Furosemid+Spironolacton', 1686/1779 HCT+Amilorid (d_references). | 2026-11-04 audit round 4 (R4-179): 1686 has no rows in SICdb; 1779 is the same combination."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-03 extraction audit 2: 1443 'Spironolacton', 1704 'Eplerenon', 1471 'Kaliumcanrenoat', 1452 'Triamteren', 1654 'Furosemid+Spironolacton', 1686/1779 HCT+Amilorid (d_references). | 2026-11-04 audit round 4 (R4-179): 1686 has no rows in SICdb; 1779 is the same combination. | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ]
   }
@@ -33873,10 +34004,11 @@
      "val_var": "Amount",
      "fe_amount_unit": "g",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: Amount in g (d_references unit 'g'); SICdb records no route, so furosemide is counted as IV (an upper bound for enteral doses). | 2026-11-04 audit round 3 (full-dictionary M): a perfusor row (IsSingleDose 0) holds the syringe amount for Offset..OffsetDrugEnd; the amount is shared hourly over that time instead of loading the start hour (1417: 6,108 continuous rows in 1,044 cases, median 5.8 h).",
+     "_comment": "2026-11-03 extraction audit 2: Amount in g (d_references unit 'g'); SICdb records no route, so furosemide is counted as IV (an upper bound for enteral doses). | 2026-11-04 audit round 3 (full-dictionary M): a perfusor row (IsSingleDose 0) holds the syringe amount for Offset..OffsetDrugEnd; the amount is shared hourly over that time instead of loading the start hour (1417: 6,108 continuous rows in 1,044 cases, median 5.8 h). | R5-SIC-009: cases.ICUOffset anchors hours; allocate each continuous Amount*overlap/duration, conserving its dose. Single doses remain point events. Unknown route retains the documented IV upper-bound assumption.",
      "fe_spread_end_var": "OffsetDrugEnd",
      "fe_spread_index_var": "Offset",
-     "fe_spread_single_var": "IsSingleDose"
+     "fe_spread_single_var": "IsSingleDose",
+     "fe_icu_clock": true
     },
     {
      "ids": [
@@ -33889,10 +34021,11 @@
      "val_var": "Amount",
      "fe_amount_unit": "g",
      "fe_route": "iv",
-     "_comment": "2026-11-03 extraction audit 2: Amount in g x 1000 x 2 (any route). | 2026-11-04 audit round 3 (full-dictionary M): a perfusor row (IsSingleDose 0) holds the syringe amount for Offset..OffsetDrugEnd; the amount is shared hourly over that time instead of loading the start hour (1417: 6,108 continuous rows in 1,044 cases, median 5.8 h).",
+     "_comment": "2026-11-03 extraction audit 2: Amount in g x 1000 x 2 (any route). | 2026-11-04 audit round 3 (full-dictionary M): a perfusor row (IsSingleDose 0) holds the syringe amount for Offset..OffsetDrugEnd; the amount is shared hourly over that time instead of loading the start hour (1417: 6,108 continuous rows in 1,044 cases, median 5.8 h). | R5-SIC-009: cases.ICUOffset anchors hours; allocate each continuous Amount*overlap/duration, conserving its dose. Single doses remain point events. Unknown route retains the documented IV upper-bound assumption.",
      "fe_spread_end_var": "OffsetDrugEnd",
      "fe_spread_index_var": "Offset",
-     "fe_spread_single_var": "IsSingleDose"
+     "fe_spread_single_var": "IsSingleDose",
+     "fe_icu_clock": true
     }
    ],
    "eicu": [
@@ -35228,5 +35361,119 @@
   "category": "output",
   "callback": "urine_output_evidence",
   "class_name": "rec_cncpt"
+ },
+ "cvp_qc": {
+  "class_name": "chr_cncpt",
+  "description": "SICdb central venous pressure exclusion reason",
+  "category": "vitals",
+  "sources": {
+   "sic": [
+    {
+     "ids": 2018,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "val_var": "Val",
+     "callback": "sicdb_cvp_qc"
+    }
+   ]
+  }
+ },
+ "minute_vol_raw": {
+  "unit": "L/min",
+  "description": "SICdb charted minute ventilation before the analytical gate",
+  "category": "ventilator",
+  "sources": {
+   "sic": [
+    {
+     "ids": [
+      713,
+      2019
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "_comment": "R5-SIC-011: raw minute volume including standby/disconnection candidates; no analytical gate."
+    }
+   ]
+  }
+ },
+ "minute_vol_qc": {
+  "class_name": "chr_cncpt",
+  "description": "SICdb minute ventilation analytical exclusion reason",
+  "category": "ventilator",
+  "sources": {
+   "sic": [
+    {
+     "ids": [
+      713,
+      2019
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "_comment": "R5-SIC-011: raw minute volume including standby/disconnection candidates; no analytical gate.",
+     "callback": "sicdb_minute_volume_qc"
+    }
+   ]
+  }
+ },
+ "mech_vent_rule": {
+  "class_name": "chr_cncpt",
+  "description": "SICdb primary ventilation attribution rule",
+  "category": "respiratory",
+  "aggregate": "first",
+  "sources": {
+   "sic": [
+    {
+     "ids": [
+      720
+     ],
+     "table": "data_range",
+     "sub_var": "DataID",
+     "value_var": "DataID",
+     "dur_var": "OffsetEnd",
+     "callback": "sicdb_airway_rule",
+     "_comment": "2026-11-03 extraction audit 2: an endotracheal-tube interval (d_references Airway 720 EndotrachealTube) is invasive ventilation as a whole. A tracheal-cannula interval (3041) no longer is: a tracheostomy off the ventilator is not ventilation, so its hours come from the second source only where a ventilator setting is charted. | R5-SIC-003: materialize positive overlaps on the cases.ICUOffset clock; retain per-interval first/last covered seconds."
+    },
+    {
+     "ids": [
+      2278,
+      2282,
+      2284,
+      3040,
+      2285,
+      3121
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "sicdb_ventilation_audit",
+     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py. 2026-11-03 audit round 2 (P1): in ICU units 2-4, a set-rate (2282) or PressureOverPeep (3040) hour under propofol (3057 > 0) is invasive without an airway interval; the airway-only rule stays available as the strict sensitivity rule. | R5-SIC-015: primary support requires airway proximity, propofol or ETCO2. Opioid-only controlled settings are sensitivity candidates; rule labels and coverage deltas are in the source receipt.",
+     "sic_audit_kind": "rule"
+    }
+   ]
+  }
+ },
+ "mech_vent_opioid_sensitivity": {
+  "class_name": "lgl_cncpt",
+  "description": "SICdb additional opioid-only controlled ventilation sensitivity hours",
+  "category": "respiratory",
+  "aggregate": "max",
+  "sources": {
+   "sic": [
+    {
+     "ids": [
+      2278,
+      2282,
+      2284,
+      3040,
+      2285,
+      3121
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "sicdb_ventilation_audit",
+     "_comment": "2026-11-03 extraction audit 2: SICdb RespiratorSetting hours (2278 PEEP, 2282 RespRate, 2284 PressureSupport, 3040 PressureOverPeep, 2285 IERatio, 3121 Trigger; FIO2 2283 alone is not positive-pressure evidence) are invasive ventilation when they fall in, or within one hour of, an endotracheal-tube or tracheal-cannula interval (data_range 720/3041). SICdb has no NIV interface item, so a setting hour away from any airway may be NIV and is not attributed (conservative rule; full source 2026-11-03: 208,389 such hours in 15,282 cases, of which 102,039 hours are runs starting at ICU admission). Owner: concept/sicdb_ventilation.py. 2026-11-03 audit round 2 (P1): in ICU units 2-4, a set-rate (2282) or PressureOverPeep (3040) hour under propofol (3057 > 0) is invasive without an airway interval; the airway-only rule stays available as the strict sensitivity rule. | R5-SIC-015: primary support requires airway proximity, propofol or ETCO2. Opioid-only controlled settings are sensitivity candidates; rule labels and coverage deltas are in the source receipt.",
+     "sic_audit_kind": "opioid_only"
+    }
+   ]
+  }
  }
 }

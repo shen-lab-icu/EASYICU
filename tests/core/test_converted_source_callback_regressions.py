@@ -22,8 +22,9 @@ def test_sic_rate_uses_the_icu_clock_once(origin, hour):
                              concept_name="norepi_rate", data_source=data_source)
     aligned = ConceptResolver.__new__(ConceptResolver)._align_time_to_admission(
         result, data_source, ["CaseID"], "Offset")
-    assert aligned.Offset.tolist() == [hour, hour + 1]
-    assert aligned.norepi_rate.tolist() == pytest.approx([.0125, .0125])
+    # R5-SIC-018: exact stop is right-open, on the same ICU clock.
+    assert aligned.Offset.tolist() == [hour]
+    assert aligned.norepi_rate.tolist() == pytest.approx([.0125])
 
 
 def test_aumc_fluid_totals_do_not_inherit_the_drug_dose_unit():

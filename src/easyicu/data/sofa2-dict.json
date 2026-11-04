@@ -496,8 +496,8 @@
      "sub_var": "DataID",
      "value_var": "DataID",
      "dur_var": "OffsetEnd",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2 (S1): the SICdb invasive-ventilation windows of mech_vent (endotracheal-tube interval 720)."
+     "callback": "sicdb_airway_indicator",
+     "_comment": "2026-11-03 extraction audit 2 (S1): the SICdb invasive-ventilation windows of mech_vent (endotracheal-tube interval 720). | R5-SIC-003: ICU-relative right-open positive overlaps retain boundary coverage seconds."
     },
     {
      "ids": [
@@ -1182,14 +1182,17 @@
      "sub_var": "DrugID",
      "ids": [
       1550,
-      1593
+      1593,
+      1560
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "1550=Vasopressin, 1593=Phenylephrin. 2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus. | 2026-11-04 audit round 3 (M NEW-2): an infusion covers every hour from its start to its end; only the start hour was marked (SICdb lost 69% of active vasopressin/phenylephrine hours).",
+     "callback": "sicdb_interval_exposure",
+     "_comment": "1550=Vasopressin, 1593=Phenylephrin. 2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus. | 2026-11-04 audit round 3 (M NEW-2): an infusion covers every hour from its start to its end; only the start hour was marked (SICdb lost 69% of active vasopressin/phenylephrine hours). | R5-SIC-010/003: add positive continuous milrinone 1560; expand ICU-relative right-open overlaps and retain boundary coverage seconds.",
      "extra_vars": [
       "IsSingleDose"
      ],
-     "dur_var": "OffsetDrugEnd"
+     "dur_var": "OffsetDrugEnd",
+     "val_var": "Amount",
+     "stop_var": "OffsetDrugEnd"
     }
    ],
    "mimic_demo": [
@@ -1398,8 +1401,9 @@
       1641,
       1912
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "1527=Haloperidol | 2026-11-04 audit round 3 (full-dictionary M): quetiapine 1440, risperidone 1432, olanzapine 1766, aripiprazole 1641 and ziprasidone 1912 added (the PADIS set mapped elsewhere)."
+     "callback": "sicdb_exposure",
+     "_comment": "1527=Haloperidol | 2026-11-04 audit round 3 (full-dictionary M): quetiapine 1440, risperidone 1432, olanzapine 1766, aripiprazole 1641 and ziprasidone 1912 added (the PADIS set mapped elsewhere). | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted.",
+     "val_var": "Amount"
     }
    ],
    "mimic_demo": [
@@ -1429,7 +1433,8 @@
      "_comment": "2026-11-04 audit round 3 (F-23): MetaVision alone was mapped (inputevents_mv), leaving CareVue stays without this drug; prescriptions are orders with date resolution placed at noon (as abx, day-level exposure). Rewritten MetaVision rows are excluded."
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "rrt": {
   "aggregate": "max",

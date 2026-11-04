@@ -195,7 +195,7 @@ def test_sic_sedation_and_end_tidal_co2_attribute_controlled_settings():
         "Offset": [0, HOUR, 2 * HOUR, 0],
     })
     source = _Tables(
-        cases=pd.DataFrame({"CaseID": [1, 2], "HospitalUnit": [3, 5]}),
+        cases=pd.DataFrame({"CaseID": [1, 2], "HospitalUnit": [3, 5], "ICUOffset": [0, 0]}),
         data_float_h=pd.DataFrame({
             "CaseID": [1, 1, 1, 1, 2],
             "DataID": [3059, 716, 716, 3058, 3057],
@@ -204,9 +204,9 @@ def test_sic_sedation_and_end_tidal_co2_attribute_controlled_settings():
         }),
     )
     out = _sedated_controlled_hours(settings, source, [1, 2], "CaseID", "Offset")
-    # Remifentanil at hour 0 and etCO2 35 at hour 1 attribute; etCO2 4 does not,
-    # and the NIV ward (unit 5) never does.
-    assert sorted(zip(out["CaseID"], out["_h"])) == [(1, 0.0), (1, 1.0)]
+    # R5-SIC-015: opioid-only hour 0 is sensitivity; etCO2 35 supports hour 1.
+    # etCO2 4 does not, and the NIV ward (unit 5) never does.
+    assert sorted(zip(out["CaseID"], out["_h"])) == [(1, 1.0)]
 
 
 # ── vasopressor indicator ───────────────────────────────────────────────
@@ -399,10 +399,12 @@ def test_sicdb_continuous_furosemide_amount_is_shared_over_its_running_hours():
         "IsSingleDose": [0, 1],
         "loop_diuretic_furosemide_eq": [0.05, 0.02],  # g
     })
-    out = furosemide_equivalent(frame, concept_name="loop_diuretic_furosemide_eq", value_var="Amount", unit_var=None, params=params)
+    # R5-SIC-009: even the zero-origin fixture declares its ICU anchor.
+    out = furosemide_equivalent(frame, concept_name="loop_diuretic_furosemide_eq", value_var="Amount", unit_var=None, params=params,
+                               data_source=_Tables(cases=pd.DataFrame({"CaseID": [1], "ICUOffset": [0]})))
     pieces = out.sort_values("Offset")
     # 50 mg over 2.5 h: 20, 20, 10 mg at 0, 3600 and 7200 s; the 20 mg single dose stays at its start.
-    assert pieces["Offset"].tolist() == [0, 3600, 7200, 10_000]
+    assert pieces["Offset"].tolist() == pytest.approx([0, 1, 2, 10_000/3600])
     assert pieces["loop_diuretic_furosemide_eq"].tolist() == pytest.approx([20.0, 20.0, 10.0, 20.0])
     assert out["loop_diuretic_furosemide_eq"].sum() == pytest.approx(70.0)
 
