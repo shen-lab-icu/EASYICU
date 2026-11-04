@@ -623,6 +623,29 @@ def _requested_dependency_overlap(
     return sorted(overlap)
 
 
+
+def _merge_eicu_time_columns(combined: pd.DataFrame, time_columns) -> tuple:
+    """Merge the eICU source offsets of a multi-table concept into 'charttime'.
+
+    Each source keeps its own offset column; a source whose loader already
+    named its time 'charttime' (an empty bucketed aggregate) joins the merge.
+    Renaming another offset onto it made two 'charttime' columns and the empty
+    one won: eICU monitor etco2 lost every row (2026-11-04 audit round 3).
+    The column with the most values leads; the others fill its gaps.
+    """
+    candidates = [col for col in combined.columns if col in time_columns or col == 'charttime']
+    if not candidates:
+        return combined, False
+    candidates = sorted(candidates, key=lambda col: combined[col].notna().sum(), reverse=True)
+    if candidates == ['charttime']:
+        return combined, False
+    merged_time = combined[candidates[0]]
+    for column in candidates[1:]:
+        merged_time = merged_time.fillna(combined[column])
+    combined = combined.drop(columns=candidates)
+    combined['charttime'] = merged_time
+    return combined, True
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -5126,27 +5149,8 @@ class ConceptResolver:
             # 🔧 CRITICAL FIX: 查找有效的时间列（非全NaN）
             # 当多个源合并时，如果第一个源是空的，index_column 可能指向一个全是 NaN 的列
             # 需要找到第一个有数据的时间列
-            offset_cols_in_data = [col for col in combined.columns if col in eicu_time_cols]
-            
-            # 对offset列按有效数据量排序，优先使用数据更多的列
-            def count_valid(col):
-                if col in combined.columns:
-                    return combined[col].notna().sum()
-                return 0
-            
-            offset_cols_in_data = sorted(offset_cols_in_data, key=count_valid, reverse=True)
-            
-            if offset_cols_in_data:
-                # 重命名第一个offset列为charttime
-                first_offset = offset_cols_in_data[0]
-                combined = combined.rename(columns={first_offset: 'charttime'})
-                
-                # 合并其他offset列到charttime（使用第一个非NaN值）
-                for offset_col in offset_cols_in_data[1:]:
-                    if offset_col in combined.columns:
-                        combined['charttime'] = combined['charttime'].fillna(combined[offset_col])
-                        combined = combined.drop(columns=[offset_col])
-                
+            combined, merged = _merge_eicu_time_columns(combined, eicu_time_cols)
+            if merged:
                 index_column = 'charttime'  # Update index_column for subsequent processing
         
         # 🔧 CRITICAL FIX 2026-02-05: AUMC 多源时间列统一

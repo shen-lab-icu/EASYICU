@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from typing import Iterable, Mapping, Optional
 
+import numpy as np
 import pandas as pd
 
 FUROSEMIDE_EQUIVALENT_CALLBACK = "furosemide_equivalent"
@@ -111,6 +112,44 @@ def _route_series(frame: pd.DataFrame, params: Mapping[str, object]) -> pd.Serie
     return pd.Series(oral.fillna(False).map({True: "oral", False: "iv"}).to_numpy(), index=frame.index)
 
 
+def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: Mapping[str, object]) -> pd.DataFrame:
+    """Share a continuous infusion's amount over its running time.
+
+    A SICdb perfusor row records the whole syringe amount at its start
+    ``Offset``; ``OffsetDrugEnd`` is its end, both in source seconds.  The
+    amount is split into consecutive ``fe_spread_step`` pieces (one hour) in
+    proportion to their running time, each timed at its own start, so the
+    hourly sum follows the infusion instead of loading its first hour
+    (2026-11-04 audit round 3, M SIC NEW-3).  Single doses stay as recorded.
+    """
+    end_var = params.get("fe_spread_end_var")
+    if not end_var or frame.empty:
+        return frame
+    index_var = str(params.get("fe_spread_index_var") or "")
+    single_var = params.get("fe_spread_single_var")
+    for column in (index_var, str(end_var)) + ((str(single_var),) if single_var else ()):
+        if column not in frame.columns:
+            raise DiureticSourceContractError("diuretic_spread_column_missing", column)
+    step = float(params.get("fe_spread_step") or 3600)
+    start = pd.to_numeric(frame[index_var], errors="coerce")
+    end = pd.to_numeric(frame[str(end_var)], errors="coerce")
+    spread = (end > start).fillna(False)
+    if single_var:
+        spread &= pd.to_numeric(frame[str(single_var)], errors="coerce").eq(0).fillna(False)
+    if not spread.any():
+        return frame
+    rows = frame.loc[spread.to_numpy()]
+    first, last = start[spread].to_numpy(dtype="float64"), end[spread].to_numpy(dtype="float64")
+    pieces = np.ceil((last - first) / step).astype("int64")
+    expanded = rows.loc[rows.index.repeat(pieces)].copy()
+    k = np.concatenate([np.arange(n) for n in pieces])
+    piece_start = np.repeat(first, pieces) + k * step
+    piece_len = np.minimum(step, np.repeat(last, pieces) - piece_start)
+    expanded[concept_name] = expanded[concept_name].to_numpy() * piece_len / np.repeat(last - first, pieces)
+    expanded[index_var] = piece_start.astype(frame[index_var].dtype) if pd.api.types.is_integer_dtype(frame[index_var]) else piece_start
+    return pd.concat([frame.loc[(~spread).to_numpy()], expanded], ignore_index=True)
+
+
 def furosemide_equivalent(
     frame: pd.DataFrame,
     *,
@@ -154,6 +193,7 @@ def furosemide_equivalent(
     }
     out = frame.loc[keep.to_numpy()].copy()
     out[concept_name] = mg_eq.loc[keep].to_numpy()
+    out = _spread_continuous_amounts(out, concept_name, params)
     out.attrs[AUDIT_ATTR] = audit
     return out
 

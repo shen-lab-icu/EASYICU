@@ -122,9 +122,14 @@ def test_ambiguous_cross_database_mappings_are_not_exported(concept_dict):
     assert "aumc" not in concept_dict["adh_rate"]["sources"]
     assert "aumc" not in concept_dict["d_dimer"]["sources"]
     # 2026-11-03 audit round 2 (S8): HiRID neut reads 24000556, segmented
-    # neutrophils per 100 leukocytes (median about 63%); 24000550 behaves as an
-    # absolute count and stays unmapped.
-    assert [s["ids"] for s in concept_dict["neut"]["sources"]["hirid"]] == [24000556]
+    # neutrophils per 100 leukocytes (median about 63%).  Audit round 3 (F-18)
+    # adds band forms 24000557 to it and reads 24000550, an absolute count,
+    # against WBC instead of exporting it as a percentage.
+    neut = concept_dict["neut"]["sources"]["hirid"]
+    assert [(s["ids"], s["callback"]) for s in neut] == [
+        ([24000556, 24000557], "sum_at_same_time"),
+        ([24000550], "blood_cell_ratio"),
+    ]
     assert "hirid" not in concept_dict["lymph"]["sources"]
 
     for dataset in ("miiv", "mimic", "mimic_demo"):

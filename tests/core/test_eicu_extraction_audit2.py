@@ -232,3 +232,21 @@ def test_rate_units_parser_reads_na_as_no_conversion(dictionary, tmp_path):
     result = _apply_callback(frame, source, "adh_rate")
     by_stay = result.groupby("patientunitstayid")["adh_rate"].max()
     assert np.isnan(by_stay.get(1, np.nan)) and by_stay.get(2) == pytest.approx(0.03)
+
+
+# --- end-tidal CO2 -----------------------------------------------------------
+
+@DATABASES
+def test_monitor_end_tidal_co2_survives_an_empty_charted_source(tmp_path, database):
+    # Audit round 3: the empty respiratorycharting source carried a
+    # 'charttime' column; the monitor offset renamed onto it was lost.
+    periodic = pd.DataFrame({
+        "vitalperiodicid": [1, 2, 3], "observationoffset": [65, 70, 130],
+        "etco2": [30.0, 34.0, 0.0], "heartrate": [80.0, 82.0, 84.0],
+    })
+    charted = pd.DataFrame({
+        "respchartid": [1], "respchartoffset": [65], "respchartentryoffset": [65],
+        "respchartvaluelabel": ["FiO2"], "respchartvalue": ["40"], "respcharttypecat": ["Respiratory Flowsheet"],
+    })
+    source = _eicu_source(tmp_path, database, vitalperiodic=periodic, respiratorycharting=charted)
+    assert _hourly(source, "etco2") == {1.0: 32.0}
