@@ -1724,6 +1724,17 @@ class ConceptResolver:
                         src = src_list[0]
                         if getattr(src, 'callback', None):
                             continue
+                        # Declared row filters need the row columns the batch
+                        # aggregate does not keep; the concept takes the
+                        # single-concept path, which applies them (eICU
+                        # differentials reported outside % were pooled into
+                        # basos/eos/lymph/...; 2026-11-04 audit round 4, R4-039).
+                        _params = getattr(src, 'params', None) or {}
+                        if any(
+                            _params.get(_key)
+                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var")
+                        ):
+                            continue
                         _sub_var = getattr(src, 'sub_var', None)
                         if not _sub_var:
                             continue
@@ -3644,6 +3655,13 @@ class ConceptResolver:
                         # would shift AUMC hours and turn SOFA's hourly
                         # minimum into a median (2026-11-03 audit #16).
                         or _select_channels
+                        # A pooled multi-source concept takes one median over
+                        # all raw rows; pre-sampling only the sources without
+                        # a callback weighted the hour toward the others
+                        # (HiRID resp: ventilator 310 standby readings
+                        # dominated; 2026-11-04 audit round 4, R4-008).
+                        or _block_duckdb_same_table
+                        or _block_duckdb_multi_numeric
                     )
                     
                     if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
@@ -5678,7 +5696,11 @@ class ConceptResolver:
                 'mimic_rate_cv', 'mimic_rate_mv', 'expand_intervals',
                 'hirid_rate', 'hirid_rate_kg', 'hirid_duration',
                 'eicu_rate', 'eicu_rate_kg',
-                'aumc_rate', 'aumc_rate_kg', 'aumc_rate_units', 'aumc_dur',
+                # Plain ``aumc_rate`` (AUMC insulin) only converts units, so
+                # the generic expansion spreads it over start..stop; matching
+                # it as a substring left 84% of infusion hours empty
+                # (2026-11-04 audit round 4, R4-007).
+                'aumc_rate_kg', 'aumc_rate_mass', 'aumc_rate_units', 'aumc_dur',
                 'sic_rate_kg', 'sic_rate_units', 'sic_dur',
                 # 🔧 FIX 2026-02-05: distribute_amount 内部已经处理时间展开，不需要再次 expand
                 # MIMIC-III ins 概念使用 inputevents_mv 的 distribute_amount callback
@@ -5916,6 +5938,7 @@ class ConceptResolver:
                     value_column=concept_name,
                     id_columns=id_columns,
                     time_column=index_column,
+                    window_hours=getattr(definition, "source_channel_window_hours", None),
                     minimum=definition.minimum,
                     maximum=definition.maximum,
                     time_in_hours=align_to_admission,
@@ -6006,6 +6029,7 @@ class ConceptResolver:
                     value_column=concept_name,
                     id_columns=id_columns,
                     time_column=index_column,
+                    window_hours=getattr(definition, "source_channel_window_hours", None),
                     minimum=definition.minimum,
                     maximum=definition.maximum,
                     time_in_hours=align_to_admission,
@@ -8154,7 +8178,8 @@ class ConceptResolver:
         elif callback == "service_at_admission":
             from .service_at_admission import service_at_admission
 
-            stay_column = "stay_id"
+            stay_config = data_source.config.id_configs.get("icustay")
+            stay_column = stay_config.id if stay_config is not None else "stay_id"
             if isinstance(patient_ids, Mapping):
                 values = patient_ids.get(stay_column)
                 selected_ids = list(values) if values is not None else None

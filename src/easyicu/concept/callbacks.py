@@ -9,7 +9,7 @@ well enough for the packaged concept dictionary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 from ..scores.urine_windows import assess_urine_windows, urine_evidence_columns
 from .free_days import free_days_callback
 
@@ -503,6 +503,31 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     limits = limits.replace([np.inf, -np.inf], np.nan).dropna(subset=["start", "end"])
     _set_cached_stay_limits(data_source, limits)
     return limits
+
+def _score_grid_and_window(
+    observed_interval: Optional[pd.Timedelta],
+    ctx: "ConceptCallbackContext",
+    win_length: pd.Timedelta,
+) -> Tuple[pd.Timedelta, pd.Timedelta]:
+    """Grid interval and ``slide`` lookback for a 24-hour worst-value score.
+
+    The grid follows the requested interval (``ctx.interval``); the observed
+    spacing is used only when none was requested.  ``slide(before=b)`` is
+    closed at both ends, so a 24-hour window on an hourly grid takes
+    ``before = 24 h - 1 h`` (24 cells, as mimic-code's 23 PRECEDING) rather
+    than 25 (2026-11-04 extraction audit round 4, R4-009/R4-064).
+    """
+    if ctx.kwargs.get("explicit_wins") is not None:
+        raise NotImplementedError(
+            "explicit_wins is not supported by the SOFA callbacks; only the "
+            "continuous 24-hour window is implemented (audit round 4, R4-101)"
+        )
+    interval = ctx.interval if ctx.interval is not None else observed_interval
+    if interval is None or interval <= pd.Timedelta(0):
+        interval = pd.Timedelta(hours=1)
+    before = win_length - interval if win_length >= interval else win_length
+    return interval, before
+
 
 def _compose_fill_limits(
     data: pd.DataFrame,
@@ -2470,6 +2495,80 @@ def _callback_anion_gap(
     )
 
 
+# Databases whose CVP stays capped at 30 mmHg (audit rounds 2-3); SICdb caps
+# its hourly item 2018 at the source, HiRID is capped here per hour.
+_CVP_CAPPED_AT_30 = frozenset({"hirid"})
+
+
+def _callback_cvp_artefact_filter(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Central venous pressure without arterial-waveform and spike artefacts.
+
+    An hourly CVP above 30 mmHg (up to the 50 mmHg bound) is kept unless it
+    lies within 10 mmHg of the same hour's diastolic arterial pressure (an
+    arterial waveform on the venous transducer) or is an isolated spike: both
+    neighbouring hourly CVP values of the stay, each within 6 hours, are at
+    most 30 mmHg and at least 10 mmHg lower.  Rounds 2-3 deleted every value
+    above 30 mmHg, including real severe congestion (2026-11-04 extraction
+    audit round 4, R4-013/017/023/025).
+    """
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    keep = id_columns + ([index_column] if index_column else [])
+    if merged.empty or "cvp_raw" not in merged.columns:
+        empty = merged[keep].copy() if all(c in merged.columns for c in keep) else pd.DataFrame(columns=keep)
+        empty["cvp"] = pd.Series(dtype="float64")
+        return _as_icutbl(empty, id_columns=id_columns, index_column=index_column, value_column="cvp")
+
+    data = merged.loc[pd.to_numeric(merged["cvp_raw"], errors="coerce").notna()].copy()
+    cvp = pd.to_numeric(data["cvp_raw"], errors="coerce")
+    database = str(getattr(getattr(ctx.data_source, "config", None), "name", "") or "")
+    if database in _CVP_CAPPED_AT_30:
+        drop = cvp.gt(30)
+    else:
+        dbp = pd.to_numeric(data.get("dbp", pd.Series(np.nan, index=data.index)), errors="coerce")
+        high = cvp.gt(30)
+        arterial = high & (cvp - dbp).abs().lt(10).fillna(False)
+        if index_column:
+            data = data.sort_values(keep)
+            cvp = cvp.loc[data.index]
+            high = high.loc[data.index]
+            arterial = arterial.loc[data.index]
+            time = data[index_column]
+            hours = (
+                (time - time.min()) / pd.Timedelta(hours=1)
+                if pd.api.types.is_datetime64_any_dtype(time) or pd.api.types.is_timedelta64_dtype(time)
+                else pd.to_numeric(time, errors="coerce")
+            )
+            group = data.groupby(id_columns, sort=False) if id_columns else None
+            prev_v = group["cvp_raw"].shift(1) if group is not None else cvp.shift(1)
+            next_v = group["cvp_raw"].shift(-1) if group is not None else cvp.shift(-1)
+            hours_s = pd.Series(hours.to_numpy(dtype=float), index=data.index)
+            hgroup = hours_s.groupby([data[c] for c in id_columns], sort=False) if id_columns else None
+            prev_t = hgroup.shift(1) if hgroup is not None else hours_s.shift(1)
+            next_t = hgroup.shift(-1) if hgroup is not None else hours_s.shift(-1)
+            prev_v = pd.to_numeric(prev_v, errors="coerce")
+            next_v = pd.to_numeric(next_v, errors="coerce")
+            near = (hours_s - prev_t).le(6) & (next_t - hours_s).le(6)
+            spike = (
+                high & near
+                & prev_v.le(30) & next_v.le(30)
+                & (cvp - np.maximum(prev_v, next_v)).ge(10)
+            ).fillna(False)
+        else:
+            spike = pd.Series(False, index=data.index)
+        drop = arterial | spike
+    out = data.loc[~drop.reindex(data.index).fillna(False).astype(bool), keep].copy()
+    out["cvp"] = pd.to_numeric(data.loc[out.index, "cvp_raw"], errors="coerce")
+    return _as_icutbl(
+        out.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="cvp",
+    )
+
+
 def _callback_plateau_pressure(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3316,8 +3415,9 @@ def _callback_sofa_score(
     for name in required:
         data[name] = data.get(name, np.nan)
     
-    # Fill gaps using data's inherent interval (matches R ricu fill_gaps(dat))
-    # R infers interval from data; we infer from median time diff in merged data
+    # Fill gaps on the requested interval; the median observed spacing is
+    # only a fallback (R4-064).
+    _, sofa_before = _score_grid_and_window(None, ctx, win_length)
     if index_column and index_column in data.columns:
         id_cols_to_group = list(id_columns) if id_columns else []
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
@@ -3334,17 +3434,15 @@ def _callback_sofa_score(
                 inferred_interval = _pos.median()
                 # Handle numeric (hours) vs timedelta
                 if isinstance(inferred_interval, (int, float)):
-                    interval = pd.Timedelta(hours=max(1, round(inferred_interval)))
+                    inferred = pd.Timedelta(hours=max(1, round(inferred_interval)))
                 else:
                     inferred_hours = round(inferred_interval.total_seconds() / 3600)
-                    interval = pd.Timedelta(hours=max(1, inferred_hours))
-                
-                # Fill gaps with inferred interval
-                # Replicate R ricu's collapse() → fill_gaps() → expand() interaction
+                    inferred = pd.Timedelta(hours=max(1, inferred_hours))
+                interval, sofa_before = _score_grid_and_window(inferred, ctx, win_length)
+
+                # fill_gaps takes absolute start/end limits; the end is not
+                # a duration (2026-11-04 audit round 4, R4-063).
                 limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
-                if limits_df is not None and 'start' in limits_df.columns and 'end' in limits_df.columns:
-                    limits_df = limits_df.copy()
-                    limits_df['end'] = limits_df['end'] - limits_df['start']
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
@@ -3367,13 +3465,13 @@ def _callback_sofa_score(
             if comp in data.columns:
                 agg_dict[comp] = worst_val_fun
         
-        # Apply slide (replicates R ricu slide(res, !
+        # Apply slide over the last 24 cells (R4-009)
         if agg_dict:
             data = slide(
                 data,
                 list(id_columns),
                 index_column,
-                before=win_length,
+                before=sofa_before,
                 after=pd.Timedelta(0),
                 agg_func=agg_dict,
                 full_window=full_window,
@@ -3504,6 +3602,7 @@ def _callback_sofa2_score(
     elif hasattr(win_length, "total_seconds"):
         win_length = pd.Timedelta(win_length)
 
+    _, sofa2_before = _score_grid_and_window(None, ctx, win_length)
     if index_column and index_column in data.columns:
         id_cols_to_group = list(id_columns) if id_columns else []
         sort_columns = id_cols_to_group + [index_column]
@@ -3537,14 +3636,15 @@ def _callback_sofa2_score(
             if len(positive_diffs) > 0:
                 inferred_interval = positive_diffs.median()
                 if isinstance(inferred_interval, (int, float)):
-                    interval = pd.Timedelta(
+                    inferred = pd.Timedelta(
                         hours=max(1, round(inferred_interval))
                     )
                 else:
                     inferred_hours = round(
                         inferred_interval.total_seconds() / 3600
                     )
-                    interval = pd.Timedelta(hours=max(1, inferred_hours))
+                    inferred = pd.Timedelta(hours=max(1, inferred_hours))
+                interval, sofa2_before = _score_grid_and_window(inferred, ctx, win_length)
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
@@ -3588,7 +3688,7 @@ def _callback_sofa2_score(
             data,
             list(id_columns),
             index_column,
-            before=win_length,
+            before=sofa2_before,
             after=pd.Timedelta(0),
             agg_func=agg_dict,
             full_window=full_window,
@@ -4724,21 +4824,87 @@ def _callback_supp_o2_aumc(
     )
 
 def _leveled_window_mask(df: pd.DataFrame, value_col: Optional[str]) -> pd.Series:
-    """Keep the ventilation windows of a mech_vent WinTbl that carry a level.
+    """Keep the invasive ventilation windows of a mech_vent WinTbl.
 
-    Every window row is ventilation, except a window whose level a source
-    mapped to NA where the other windows have a level: HiRID airway code 6
-    ('-', no airway) ends an episode and was padded into four ventilated
-    hours (2026-11-04 audit round 3, M R2-HIRID-28).  A table whose windows
-    carry no level at all is kept whole.
+    vent_ind is invasive ventilation: a 'noninvasive' window stays a
+    mech_vent level but is not vent_ind, and a window whose level a source
+    mapped to NA (HiRID airway code 6, '-', no airway) is not ventilation
+    (2026-11-04 audit rounds 3 and 4, M R2-HIRID-28, R4-014/R4-022).  Each
+    row is decided on its own level: keeping every window of a batch whose
+    windows all lacked a level made the same row flip with batch composition
+    (R4-066).  A table without a level column is kept whole.
     """
-    value_col = value_col or "mech_vent"
+    # A WinTbl reports its index as value_column; the level is mech_vent.
+    value_col = "mech_vent" if "mech_vent" in df.columns else (value_col or "mech_vent")
     if value_col not in df.columns:
         return pd.Series(True, index=df.index)
-    has_level = df[value_col].notna()
-    if not has_level.any():
-        return pd.Series(True, index=df.index)
-    return has_level
+    level = df[value_col].astype("string").str.strip().str.lower()
+    return level.eq("invasive").fillna(False).astype(bool)
+
+
+#: Ventilator evidence in HiRID: PEEP above zero with a measured end-tidal
+#: CO2 or tidal volume in the same hour.
+_HIRID_VENT_EVIDENCE = ("peep", ("etco2", "tidal_vol"))
+_HIRID_VENT_BRIDGE_HOURS = 8
+
+
+def _hirid_ventilator_evidence_hours(ctx, id_col: str) -> pd.DataFrame:
+    peep_name, companions = _HIRID_VENT_EVIDENCE
+    loaded = ctx.resolver.load_concepts(
+        [peep_name, *companions],
+        ctx.data_source,
+        merge=False,
+        patient_ids=ctx.patient_ids,
+        verbose=False,
+        interval=pd.Timedelta(hours=1),
+    )
+
+    def hours(name, positive=False):
+        table = loaded.get(name) if isinstance(loaded, dict) else None
+        if table is None or table.data.empty or id_col not in table.data.columns:
+            return pd.DataFrame(columns=[id_col, "hour"])
+        data = table.data
+        values = pd.to_numeric(data[table.value_column or name], errors="coerce")
+        keep = values.gt(0) if positive else values.notna()
+        time = pd.to_numeric(data[table.index_column], errors="coerce")
+        return pd.DataFrame({id_col: data[id_col], "hour": np.floor(time)}).loc[keep.to_numpy()].dropna()
+
+    measured = pd.concat([hours(name) for name in companions], ignore_index=True).drop_duplicates()
+    return hours(peep_name, positive=True).merge(measured, on=[id_col, "hour"]).drop_duplicates()
+
+
+def _hirid_bridge_ventilator_evidence(airway: ICUTable, ctx, id_col: str, time_column: str) -> ICUTable:
+    """Extend HiRID invasive airway hours across ventilator-evidence hours.
+
+    HiRID vent_ind came from airway records (15001552) alone: 10.9% of the
+    hours with PEEP > 0 had no vent_ind, most of them 2-6 h from a vent_ind
+    hour, with etCO2 and a tidal volume charted.  As for eICU (R3-05) and
+    SICdb (P1), evidence hours and airway hours join across gaps of at most
+    8 h, and only runs that contain an invasive airway hour are kept: the
+    evidence never starts ventilation on its own (2026-11-04 audit round 4,
+    R4-031).
+    """
+    from .eicu_ventilation_windows import bridge_hours
+
+    data = airway.data
+    invasive = pd.DataFrame({
+        id_col: data[id_col],
+        "hour": np.floor(pd.to_numeric(data[airway.index_column or time_column], errors="coerce")),
+    }).dropna().drop_duplicates()
+    evidence = _hirid_ventilator_evidence_hours(ctx, id_col)
+    evidence = evidence[evidence[id_col].isin(invasive[id_col])]
+    points = pd.concat([invasive, evidence], ignore_index=True).drop_duplicates()
+    hours = bridge_hours(
+        points, pd.DataFrame(columns=[id_col, "start_h", "end_h"]),
+        id_column=id_col, max_gap_hours=_HIRID_VENT_BRIDGE_HOURS,
+    ).drop_duplicates().sort_values([id_col, "hour"]).reset_index(drop=True)
+    run = (hours.groupby(id_col)["hour"].diff().ne(1)).cumsum()
+    seed = hours.merge(invasive.assign(_seed=True), on=[id_col, "hour"], how="left")["_seed"].eq(True)
+    hours = hours.loc[seed.groupby(run.to_numpy()).transform("any").to_numpy()]
+    out = hours.rename(columns={"hour": time_column})
+    out[time_column] = out[time_column].astype("float64")
+    out["vent_ind"] = True
+    return _as_icutbl(out.reset_index(drop=True), id_columns=[id_col], index_column=time_column, value_column="vent_ind")
 
 
 def _callback_vent_ind(
@@ -5025,6 +5191,11 @@ def _callback_vent_ind(
                     vent_mask = df["vent_flag"]
                 else:
                     vent_mask = ~df["vent_flag"].isin([False, 0, "0", "false", "False", "none", None])
+                # Levelled points (eICU evidence, expanded windows) count as
+                # vent_ind only when invasive, as windows do (R4-014/R4-022).
+                levels = df[value_col].astype("string").str.strip().str.lower()
+                if levels.isin(["invasive", "noninvasive"]).any():
+                    vent_mask = vent_mask & levels.eq("invasive").fillna(False)
             else:
                 vent_mask = pd.Series(True, index=df.index)
 
@@ -5306,6 +5477,20 @@ def _callback_vent_ind(
     #     return(res)  # Returns win_tbl format (mech_vent is already win_tbl)
     #   }
     
+    # HiRID airway records leave ventilated hours uncovered; bridge them with
+    # ventilator evidence (2026-11-04 audit round 4, R4-031).
+    if (
+        database_name == "hirid"
+        and mech_tbl is not None
+        and not mech_tbl.data.empty
+        and ctx.resolver is not None
+        and id_columns
+    ):
+        airway = _normalize_result(_windows_from_mech(mech_tbl))
+        if airway is None:
+            return _empty_result()
+        return _hirid_bridge_ventilator_evidence(airway, ctx, id_columns[0], time_column)
+
     # 🔧 PRIORITY: Try win_tbl format first (matches R ricu behavior)
     if mech_tbl is not None and not mech_tbl.data.empty:
         wintbl_result = _windows_from_mech_as_wintbl(mech_tbl)
@@ -5339,128 +5524,85 @@ def _urine24_batch(
     time_step: float,
     window_steps: int,
     min_steps: int,
-    step_factor: float,
+    cap_steps: int,
 ) -> pd.DataFrame:
-    """Batch-vectorized urine24 computation for all patients at once.
-    
-    🚀 Performance: Replaces per-patient loop (4796 calls to process_patient = 13.3s)
-    with batch operations:
-    - 1 groupby().agg() for patient stats
-    - 1 merge for urine values onto grid
-    - 1 groupby().rolling() for rolling sum
-    
-    Expected speedup: 13.3s → ~2-3s (5-6x faster)
-    
-    Args:
-        df: Input DataFrame with urine data
-        id_col: Patient ID column name
-        time_col: Time column name (numeric)
-        urine_col: Urine value column name
-        time_step: Time step size (in time column units)
-        window_steps: Rolling window size in steps (typically 24)
-        min_steps: Minimum window steps for non-NA output (typically 12)
-        step_factor: Scaling factor (typically 24.0)
+    """24-hour urine output from charted volumes with explicit coverage.
+
+    A charted volume is the urine collected since the previous record of the
+    stay; it is spread evenly over those grid cells (backward apportioning).
+    The first record of a stay covers its own cell.  A record more than
+    ``cap_steps`` cells after the previous one cannot be placed: its interval
+    is not assessable and covers no cell.  Cells covered by no record are
+    missing, not zero urine.
+
+    ``urine24`` at a cell sums the last ``window_steps`` cells (24 hours) and
+    is emitted only when at least ``min_steps`` of them are covered; with
+    fewer than all cells covered it is the covered volume scaled to 24 hours.
+    ricu filled every uncharted hour with zero and summed a closed 25-cell
+    window, so charting gaps read as oliguria (2026-11-04 extraction audit
+    round 4, R4-001/R4-010/R4-104).
     """
-    # Step 1: Compute per-patient stats
-    stats = df.groupby(id_col)[time_col].agg(['min', 'max']).reset_index()
-    # The grid runs from the first to the last urine time.  ricu used the
-    # duration (max - min) as the end time, which cut the tail of a stay
-    # starting after admission and padded zero urine past the last record of
-    # a stay with pre-ICU urine (2026-11-04 audit round 3, R3-09).
-    stats['grid_end'] = stats['max']
-    
-    # Step 2: Generate time grids for all patients (vectorized with numpy)
-    # Each patient needs: arange(start, end + step, step)
-    grid_sizes = np.maximum(1, np.floor(
-        (stats['grid_end'].values - stats['min'].values) / time_step + 1
-    ).astype(int))
-    
-    # Handle edge case: a single record (end == start)
-    grid_sizes = np.where(stats['grid_end'].values >= stats['min'].values, grid_sizes, 1)
-    
-    total_points = grid_sizes.sum()
+    out_cols = [id_col, time_col, "urine24"]
+    rec = df[[id_col, time_col, urine_col]].copy()
+    rec[urine_col] = pd.to_numeric(rec[urine_col], errors="coerce")
+    rec = rec.dropna(subset=[time_col, urine_col])
+    if rec.empty:
+        return pd.DataFrame(columns=out_cols)
+    rec["_k"] = np.floor(rec[time_col].to_numpy(dtype=np.float64) / time_step + 1e-9).astype(np.int64)
+    rec = rec.groupby([id_col, "_k"], sort=True, as_index=False)[urine_col].sum()
 
-    # Pre-allocate arrays for speed
-    all_times = np.empty(total_points, dtype=np.float64)
-    all_ids = np.empty(total_points, dtype=df[id_col].dtype)
-
-    # 2026-05-20 perf fix: previous code called `stats.iloc[i]['col']`
-    # three times per iteration of the per-patient loop. Each iloc call
-    # is O(N) in pandas and the loop ran once per patient — on a
-    # 60k-patient MIMIC-III run that was the dominant cost in urine24.
-    # Pull the arrays out of pandas once and index with plain numpy.
-    starts_arr = stats['min'].to_numpy()
-    ends_arr = stats['grid_end'].to_numpy()
-    id_arr = stats[id_col].to_numpy()
-
-    offset = 0
-    for i in range(len(stats)):
-        n = grid_sizes[i]
-        start = starts_arr[i]
-        end = ends_arr[i]
-        if end >= start:
-            times = np.arange(start, end + time_step * 0.5, time_step)[:n]
-        else:
-            times = np.array([start])
-            n = 1
-        actual_n = len(times)
-        all_times[offset:offset + actual_n] = times
-        all_ids[offset:offset + actual_n] = id_arr[i]
-        offset += actual_n
-    
-    full_grid = pd.DataFrame({
-        id_col: all_ids[:offset],
-        time_col: all_times[:offset],
+    gap = rec.groupby(id_col, sort=False)["_k"].diff().fillna(1).astype(np.int64).to_numpy()
+    placed = gap <= cap_steps
+    reps = gap[placed]
+    within = np.arange(int(reps.sum())) - np.repeat(np.cumsum(reps) - reps, reps)
+    cells = pd.DataFrame({
+        id_col: np.repeat(rec[id_col].to_numpy()[placed], reps),
+        "_k": np.repeat(rec["_k"].to_numpy()[placed] - reps + 1, reps) + within,
+        "_vol": np.repeat(rec[urine_col].to_numpy(dtype=np.float64)[placed] / reps, reps),
     })
-    
-    # Step 3: Merge original urine values onto grid (single merge!)
-    orig = df[[id_col, time_col, urine_col]].drop_duplicates([id_col, time_col])
-    full_grid = full_grid.merge(orig, on=[id_col, time_col], how='left')
-    full_grid[urine_col] = full_grid[urine_col].fillna(0.0)
-    full_grid = full_grid.sort_values([id_col, time_col]).reset_index(drop=True)
-    
-    # Step 4: Rolling sum using groupby().rolling() (single operation!)
-    rolling_sum = (
-        full_grid
-        .groupby(id_col, sort=True)[urine_col]
-        .rolling(window=window_steps, min_periods=min_steps, center=False)
+    cells["_cov"] = 1.0
+
+    bounds = rec.groupby(id_col, sort=True)["_k"].agg(["min", "max"])
+    sizes = (bounds["max"] - bounds["min"] + 1).to_numpy()
+    grid = pd.DataFrame({
+        id_col: np.repeat(bounds.index.to_numpy(), sizes),
+        "_k": np.repeat(bounds["min"].to_numpy(), sizes)
+        + (np.arange(int(sizes.sum())) - np.repeat(np.cumsum(sizes) - sizes, sizes)),
+    })
+    grid = grid.merge(cells, on=[id_col, "_k"], how="left")
+    grid[["_vol", "_cov"]] = grid[["_vol", "_cov"]].fillna(0.0)
+    grid = grid.sort_values([id_col, "_k"]).reset_index(drop=True)
+
+    rolled = (
+        grid.groupby(id_col, sort=True)[["_vol", "_cov"]]
+        .rolling(window=window_steps, min_periods=1)
         .sum()
+        .reset_index(level=0, drop=True)
+        .sort_index()
     )
-    # Drop group level from MultiIndex to align with full_grid
-    if isinstance(rolling_sum.index, pd.MultiIndex):
-        rolling_sum = rolling_sum.droplevel(0)
-    rolling_sum_vals = rolling_sum.values
-    
-    # Step 5: Calculate urine24 = rolling_sum * step_factor / actual_window_length
-    cumcount = full_grid.groupby(id_col).cumcount().values + 1
-    actual_window_lens = np.minimum(cumcount, window_steps)
-    
-    full_grid['urine24'] = np.where(
-        (actual_window_lens >= min_steps) & np.isfinite(rolling_sum_vals),
-        rolling_sum_vals * step_factor / actual_window_lens,
-        np.nan
+    covered = rolled["_cov"].to_numpy()
+    grid["urine24"] = np.where(
+        covered >= min_steps,
+        rolled["_vol"].to_numpy() * window_steps / np.where(covered > 0, covered, 1.0),
+        np.nan,
     )
-    
-    return full_grid[[id_col, time_col, 'urine24']]
+    grid[time_col] = grid["_k"].to_numpy(dtype=np.float64) * time_step
+    return grid[out_cols]
 
 
 def _callback_urine24(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """
-    Calculate 24-hour urine output (R ricu urine24 callback).
-    
-    Replicates R ricu's urine24 logic:
-    1. fill_gaps: Expand time series to hourly grid
-       - Uses collapse(min, max) to get the full time range
-       - Fills all hours between min and max
-    2. slide: Apply sliding window with urine_sum function
-       - Window is 24 hours lookback (left_closed=True)
-       - min_win = 12 hours (minimum window length for non-NA output)
-       - Formula: sum(x) * step_factor / length(x)
-       - step_factor = 24 (converts to 24h equivalent)
-       - length(x) = number of rows in window (not number of non-zero values)
+    """24-hour urine output over the last 24 grid hours.
+
+    Event volumes are spread back over the interval each record covers
+    (``max_gap``, default 12 h, beyond which an interval is not assessable);
+    uncharted hours are missing, and a value needs ``min_win`` (default 18 h)
+    of the 24 hours covered.  See ``_urine24_batch``.  ricu's urine24 filled
+    uncharted hours with zero over a closed 25-cell window (audit round 4,
+    R4-001/R4-010/R4-103/R4-104).  HiRID records an hourly rate and integrates
+    it over observed clock time.
     """
     # Load urine if not in tables - 🚀 优化：使用 get_raw_concept 缓存
     if "urine" not in tables:
@@ -5491,7 +5633,6 @@ def _callback_urine24(
     
     urine_tbl = _ensure_time_index(tables["urine"])
     interval = ctx.interval or pd.Timedelta(hours=1)
-    ctx.kwargs.get('min_win', pd.Timedelta(hours=12))
     
     df = urine_tbl.data.copy()
     key_cols = list(urine_tbl.id_columns) + [urine_tbl.index_column]
@@ -5552,144 +5693,51 @@ def _callback_urine24(
             value_column="urine24",
         )
 
-    # Event-volume sources use the ricu-compatible dense hourly grid below;
-    # an absent event in one populated grid hour represents zero output.
-    df[urine_col] = df[urine_col].fillna(0.0)
-    
-    is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
+    # Event-volume sources: charted volumes spread back over the interval
+    # they cover, uncharted hours missing, a 24-cell window with a coverage
+    # requirement (2026-11-04 audit round 4, R4-001/R4-010).
+    df = df.dropna(subset=[urine_col])
     interval_hours = interval.total_seconds() / 3600.0
-    
-    # Detect numeric time unit: SIC uses seconds (3600s/hr), others use hours (1.0/hr)
-    # Use per-patient diffs to avoid inter-patient zero-diffs contaminating the median
-    numeric_time_step = interval_hours  # default: 1 hour step
-    if is_numeric_time and len(df) > 1 and id_cols:
-        _per_pt_diffs = df.sort_values([id_cols[0], time_col]).groupby(id_cols[0])[time_col].diff().dropna()
-        _pos_diffs = _per_pt_diffs[_per_pt_diffs > 0]
-        if len(_pos_diffs) > 0:
-            median_diff = _pos_diffs.median()
-            # If median positive per-patient diff >= 60, time is in seconds (e.g., SIC: 3600)
-            if median_diff >= 60:
-                numeric_time_step = median_diff  # e.g., 3600 for SIC
-    
-    # Constants for ricu algorithm
-    # min_win = 12 hours，应转换为“步数”而不是固定写死 12。
-    # 例如 interval=6h 时，min_steps 应为 2，而不是 12。
-    step_factor = 24.0  # step_factor = 24
-    
-    # Compute window size in integer steps (same for all patients)
-    # CRITICAL: R ricu's slide_index(.before = hours(24)) uses a CLOSED interval [t-24h, t],
-    # which on an hourly grid includes 25 entries (not 24).
-    # We add +1 to window_steps to match R's closed-interval semantics.
-    # min_steps stays at ceil(12/step) without +1 to match R's min_win behavior.
-    if is_numeric_time:
-        step_hours = numeric_time_step / 3600.0 if numeric_time_step >= 60 else float(numeric_time_step)
-        window_steps = max(1, int(np.ceil(24.0 / step_hours)) + 1)
-        min_steps = max(1, int(np.ceil(12.0 / step_hours)))
-    else:
-        step_hours = interval.total_seconds() / 3600.0
-        window_steps = max(1, int(np.ceil(24.0 / step_hours)) + 1)
-        min_steps = max(1, int(np.ceil(12.0 / step_hours)))
+    min_cov_hours = pd.Timedelta(ctx.kwargs.get("min_win", pd.Timedelta(hours=18))).total_seconds() / 3600.0
+    max_gap_hours = pd.Timedelta(ctx.kwargs.get("max_gap", pd.Timedelta(hours=12))).total_seconds() / 3600.0
 
-    min_steps = min(min_steps, window_steps)
-    
-    n_patients = df[id_cols[0]].nunique() if id_cols else 1
-    
-    # 🚀 BATCH FAST PATH: process all patients in a single merge + rolling
-    # cProfile: per-patient loop (4796 calls to process_patient) = 13.3s
-    # Batch: single merge + single groupby().rolling() ≈ 2-3s
-    if id_cols and len(id_cols) == 1 and is_numeric_time and n_patients > 20:
-        try:
-            result_df = _urine24_batch(
-                df, id_cols[0], time_col, urine_col,
-                numeric_time_step, window_steps, min_steps, step_factor
-            )
-            output_cols = id_cols + [time_col, 'urine24']
-            available_cols = [c for c in output_cols if c in result_df.columns]
-            return _as_icutbl(
-                result_df[available_cols],
-                id_columns=urine_tbl.id_columns,
-                index_column=urine_tbl.index_column,
-                value_column="urine24"
-            )
-        except Exception:
-            pass  # Fall through to per-patient loop
-    
-    # === PER-PATIENT LOOP (fallback for small groups, datetime, multi-id) ===
-    def process_patient(group):
-        """Process urine24 for a single patient (ricu-compatible)."""
-        group = group.sort_values(time_col).reset_index(drop=True)
-        original_times = group[time_col].values
-        original_urine = group[urine_col].values
-        
-        if len(original_times) == 0:
-            return pd.DataFrame(columns=[time_col, urine_col, 'urine24'] + id_cols)
-        
-        start_time = original_times[0]
-        actual_end_time = original_times[-1]
-        duration = actual_end_time - start_time
-        
-        # The grid ends at the last urine time, not at the duration
-        # (ricu's seq(start, duration); 2026-11-04 audit round 3, R3-09).
-        if is_numeric_time:
-            ricu_end_time = actual_end_time
-            time_grid = np.arange(start_time, ricu_end_time + numeric_time_step * 0.5, numeric_time_step)
-        else:
-            ricu_end_time = pd.Timedelta(hours=duration) if isinstance(duration, (int, float)) else duration
-            time_grid = pd.date_range(start=start_time, end=start_time + ricu_end_time, freq=interval)
-        
-        filled_df = pd.DataFrame({time_col: time_grid})
-        orig_df = pd.DataFrame({time_col: original_times, urine_col: original_urine})
-        filled_df = filled_df.merge(orig_df, on=time_col, how='left')
-        filled_df[urine_col] = filled_df[urine_col].fillna(0.0)
-        filled_df = filled_df.sort_values(time_col).reset_index(drop=True)
-        
-        n = len(filled_df)
-        urine_vals = filled_df[urine_col].values
-        
-        rolling_sum = pd.Series(urine_vals).rolling(
-            window=window_steps, min_periods=min_steps, center=False
-        ).sum()
-        
-        positions = np.arange(n) + 1
-        actual_window_lens = np.minimum(positions, window_steps)
-        
-        urine24_values = np.where(
-            (actual_window_lens >= min_steps) & pd.notna(rolling_sum.values),
-            rolling_sum.values * step_factor / actual_window_lens,
-            np.nan
-        )
-        
-        filled_df['urine24'] = urine24_values
-        
-        for col in id_cols:
-            if col in group.columns:
-                filled_df[col] = group[col].iloc[0]
-            elif col in df.columns:
-                filled_df[col] = df[col].iloc[0]
-        
-        return filled_df
-    
-    # Process each patient
-    if id_cols:
-        df = df.sort_values(id_cols + [time_col]).reset_index(drop=True)
-        result_dfs = []
-        for keys, group in df.groupby(id_cols, sort=False):
-            patient_result = process_patient(group)
-            if isinstance(keys, tuple):
-                for i, col in enumerate(id_cols):
-                    if col not in patient_result.columns:
-                        patient_result[col] = keys[i]
-            else:
-                if id_cols[0] not in patient_result.columns:
-                    patient_result[id_cols[0]] = keys
-            result_dfs.append(patient_result)
-        
-        if result_dfs:
-            result_df = pd.concat(result_dfs, ignore_index=True)
-        else:
-            result_df = pd.DataFrame(columns=id_cols + [time_col, 'urine24'])
+    is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
+    work = df[id_cols + [time_col, urine_col]].copy()
+    origin = None
+    if is_numeric_time:
+        # SIC charts in seconds (median per-stay spacing >= 60), others in hours.
+        time_unit_hours = 1.0
+        if len(work) > 1 and id_cols:
+            per_stay = work.sort_values(id_cols + [time_col]).groupby(id_cols)[time_col].diff()
+            positive = per_stay[per_stay > 0]
+            if len(positive) > 0 and positive.median() >= 60:
+                time_unit_hours = 1.0 / 3600.0
+        work["_t"] = pd.to_numeric(work[time_col], errors="coerce").astype(np.float64) * time_unit_hours
     else:
-        result_df = process_patient(df)
+        stamps = pd.to_datetime(work[time_col], errors="coerce")
+        origin = stamps.min()
+        work["_t"] = (stamps - origin) / pd.Timedelta(hours=1)
+        time_unit_hours = None
+    key_cols = id_cols or ["_stay"]
+    if not id_cols:
+        work["_stay"] = 0
+    work["_key"] = work.groupby(key_cols, sort=True, dropna=False).ngroup()
+
+    window_steps = max(1, int(round(24.0 / interval_hours)))
+    min_steps = min(window_steps, max(1, int(np.ceil(min_cov_hours / interval_hours - 1e-9))))
+    cap_steps = max(1, int(np.floor(max_gap_hours / interval_hours + 1e-9)))
+    batch = _urine24_batch(
+        work, "_key", "_t", urine_col, interval_hours, window_steps, min_steps, cap_steps
+    )
+    keys = work.drop_duplicates("_key").set_index("_key")[key_cols]
+    result_df = batch.join(keys, on="_key")
+    if is_numeric_time:
+        result_df[time_col] = result_df["_t"] / time_unit_hours
+    else:
+        result_df[time_col] = origin + pd.to_timedelta(result_df["_t"], unit="h")
+    result_df = result_df[key_cols + [time_col, "urine24"]]
+    if not id_cols:
+        result_df = result_df.drop(columns=["_stay"])
     
     output_cols = id_cols + [time_col, 'urine24']
     available_cols = [c for c in output_cols if c in result_df.columns]
@@ -6476,7 +6524,9 @@ def _callback_vaso60(
     dur_df["__start"] = dur_df[dur_index_col]
     dur_df["__end"] = dur_df[dur_index_col] + dur_df["__duration"]
 
-    max_gap = pd.Timedelta(minutes=5)
+    # ricu's vaso60 merges episodes no further apart than max_gap (5 min by
+    # default); a caller's max_gap was ignored (2026-11-04 audit round 4, R4-105).
+    max_gap = pd.Timedelta(ctx.kwargs.get("max_gap", pd.Timedelta(minutes=5)))
 
     # Filter id_columns to only include columns that actually exist in dur_df
     # This handles cases where ID columns were filtered out during processing (e.
@@ -6651,9 +6701,24 @@ def _callback_vaso60(
     # easyicu's expand_intervals uses 1-hour steps, losing this cross-boundary effect.
     # This only affects MIMIC CareVue (mimic_rate_cv → expand_intervals path).
     # Other databases use different callbacks with proper start/stop expansion.
+    # A rate runs until the next chart of the stay, at most one hour, so it
+    # reaches the next hour only when that coverage crosses the boundary.
+    # Copying every row (including a down-titration charted in the same hour
+    # and on-the-hour charts) kept the higher previous rate for a whole extra
+    # hour (2026-11-04 audit round 4, R4-019).
     if ds_name.lower() in ('mimic', 'mimic_demo'):
-        rate_shifted = rate_df.copy()
-        rate_shifted[rate_index_col] = rate_shifted[rate_index_col] + pd.Timedelta(hours=1)
+        rate_df = rate_df.sort_values(id_columns + [rate_index_col], kind="mergesort")
+        next_time = (
+            rate_df.groupby(id_columns, dropna=False)[rate_index_col].shift(-1)
+            if id_columns else rate_df[rate_index_col].shift(-1)
+        )
+        reach = rate_df[rate_index_col] + (next_time - rate_df[rate_index_col]).clip(
+            upper=pd.Timedelta(hours=1)
+        ).fillna(pd.Timedelta(hours=1))
+        next_hour = rate_df[rate_index_col].dt.floor("h") + pd.Timedelta(hours=1)
+        crosses = (reach > next_hour).fillna(False)
+        rate_shifted = rate_df.loc[crosses].copy()
+        rate_shifted[rate_index_col] = next_hour[crosses]
         rate_df = pd.concat([rate_df, rate_shifted], ignore_index=True)
 
     merged = rate_df.merge(intervals.drop(columns=["__length"]), on=id_columns, how="inner")
@@ -7145,13 +7210,12 @@ def _callback_gcs(
     if sed_impute == "max":
         is_intubated = None
         if ignore_tgcs:
-            # MIIV/MIMICIV: prefer actual ett_gcs data when available (it correctly
-            # distinguishes intubated vgcs=1 from non-intubated vgcs=1).
-            # Only fall back to vgcs==1 proxy if ett_gcs is unavailable.
-            if ett_gcs is not None and isinstance(ett_gcs, pd.Series) and ett_gcs.any():
+            # MIIV/MIMICIV: airway evidence (ett_gcs) decides row by row.  The
+            # vgcs==1 proxy used when a batch had no ETT row at all made a
+            # stay's GCS depend on which stays shared its batch (2026-11-04
+            # audit round 4, R4-110); a verbal score of 1 is not an airway.
+            if ett_gcs is not None and isinstance(ett_gcs, pd.Series):
                 is_intubated = ett_gcs.where(ett_gcs.notna(), False).astype(bool)
-            elif vgcs is not None and isinstance(vgcs, pd.Series) and len(vgcs) > 0:
-                is_intubated = (vgcs == 1.0)
         elif ett_gcs is not None:
             is_intubated = ett_gcs.where(ett_gcs.notna(), False).astype(bool)
         
@@ -8955,6 +9019,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
     "plateau_pressure": _callback_plateau_pressure,
+    "cvp_artefact_filter": _callback_cvp_artefact_filter,
     "persistent_critical_illness": _callback_persistent_critical_illness,
     "shock_index": _callback_shock_index,
     "modified_shock_index": _callback_modified_shock_index,

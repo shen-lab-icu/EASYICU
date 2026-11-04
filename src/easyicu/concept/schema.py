@@ -181,6 +181,8 @@ class ConceptDefinition:
     pre_admission_lookback_hours: Optional[float] = None
     #: Ranked measurement channels (best first); see ``source_channel``.
     source_channel_priority: Optional[List[str]] = None
+    #: Select channels within +/- this many hours instead of the clock hour.
+    source_channel_window_hours: Optional[float] = None
 
     @classmethod
     def from_name_and_payload(
@@ -264,6 +266,9 @@ class ConceptDefinition:
                 [str(item) for item in payload["source_channel_priority"]]
                 if payload.get("source_channel_priority")
                 else None
+            ),
+            source_channel_window_hours=_maybe_float(
+                payload.get("source_channel_window_hours")
             ),
         )
 

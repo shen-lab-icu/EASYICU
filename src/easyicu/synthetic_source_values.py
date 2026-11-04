@@ -51,7 +51,7 @@ def numeric_values(name, definition, pop, index, hour, rng):
     centre = centres.get(name, np.full(len(index), lower + (upper - lower) * .25))
     noise = .02 * np.maximum(np.abs(centre), .1) * rng.normal(size=len(index))
     values = np.clip(centre + noise, lower, upper).astype(float)
-    if name in {"egcs", "mgcs", "vgcs", "rass"}:
+    if name in {"egcs", "mgcs", "vgcs", "rass", "gcs", "sedated_gcs"}:
         values = np.round(values)
     if name in CORE:
         values[(index % 11 == 3) & (hour == 6)] = np.nan

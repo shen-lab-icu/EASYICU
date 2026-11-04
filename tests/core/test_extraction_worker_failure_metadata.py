@@ -353,3 +353,70 @@ def test_streaming_special_worker_records_latest_batch_stage(tmp_path, monkeypat
     assert failure_context["batch_start"] in {0, 1}
     assert failure_context["batch_stop"] in {1, 2}
     assert len(failure_context["batch_ids_sha256"]) == 64
+
+
+def test_failed_native_publication_raises_and_leaves_no_raw_module_file(
+    tmp_path, monkeypatch
+):
+    """2026-11-04 audit round 4 (R4-004): one failed module stopped native-v2
+    publication, and the other modules' raw worker parquet files (source id
+    column, unclipped rows, internal columns) stayed in the output folder."""
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "notes.txt").write_text("kept", encoding="utf-8")
+
+    def failing_module(*args, **_kwargs):
+        pd.DataFrame({"admissionid": [1], "x": [1.0]}).to_parquet(
+            output_dir / "demographics.parquet"
+        )
+        raise RuntimeError("synthetic worker stop")
+
+    class InlineProcess:
+        def __init__(self, *, target, args, daemon):
+            self.target = target
+            self.args = args
+            self.exitcode = None
+
+        def start(self):
+            try:
+                self.target(*self.args)
+            except BaseException:
+                self.exitcode = 1
+            else:
+                self.exitcode = 0
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(api, "_extract_worker_env_setup", lambda *_args: None)
+    monkeypatch.setattr(
+        api, "_get_extraction_mp_context", lambda _mp: SimpleNamespace(Process=InlineProcess)
+    )
+    monkeypatch.setattr("easyicu.api.keep_cache", lambda **_kwargs: nullcontext(object()))
+    monkeypatch.setattr(api, "_run_module_extraction", failing_module)
+    monkeypatch.setattr(api, "_native_export_runtime_provenance", lambda **_: {"fixture": True})
+
+    with pytest.raises(api.NativeExportPublicationError) as raised:
+        api.extract_database(
+            "miiv",
+            data_path=str(tmp_path / "data"),
+            output_dir=str(output_dir),
+            modules=["demographics"],
+            patient_ids={"stay_id": [1]},
+            batch_size=1,
+            group_modules=False,
+            native_export_v2=True,
+            verbose=False,
+        )
+
+    assert "every requested module to finish" in str(raised.value)
+    visible = sorted(p.name for p in output_dir.iterdir() if not p.name.startswith("."))
+    assert visible == ["notes.txt"]
+    assert not (output_dir / "_manifest.json").exists()
+    quarantine = Path(raised.value.quarantine)
+    assert (quarantine / "demographics.parquet").exists()
+    record = json.loads((quarantine / "_publication_failed.json").read_text(encoding="utf-8"))
+    assert record["reason_code"] == "native_export_v2_publication_failed"
+    assert record["moved"] == ["demographics.parquet"]
+    assert _failure_records(output_dir)  # the worker failure record stays readable

@@ -1,5 +1,5 @@
 {
-  "concept_count": 289,
+  "concept_count": 290,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -152,7 +152,7 @@
           "status": "direct"
         }
       },
-      "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP) - validated: 39364 with PEEP, 39280 with Ventilator Type, 30177 Total PEEP, 4056 HFNC, 5762 BiPap, 2993 CPAP"
+      "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP)"
     },
     "age": {
       "category": "demographics",
@@ -1306,6 +1306,50 @@
       "category": "vitals",
       "databases": {
         "jinhua": {
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "missing_dependencies": [
+            "cvp_raw"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "missing_dependencies": [
+            "cvp_raw"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "cvp_raw",
+            "dbp"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "central venous pressure"
+    },
+    "cvp_raw": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
           "reason": "no validated native field/event in this release",
           "status": "unavailable"
         },
@@ -1324,7 +1368,7 @@
           "status": "direct"
         }
       },
-      "description": "central venous pressure"
+      "description": "Central venous pressure as charted (before the arterial-diastolic and spike check)"
     },
     "d_dimer": {
       "category": "chemistry",
@@ -1423,7 +1467,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Positive delirium assessment (CAM-ICU positive) - 72944 stays with assessment, 22462 stays with Positive result"
+      "description": "Positive delirium assessment (CAM-ICU positive)"
     },
     "delirium_tx": {
       "category": "neurology",
@@ -2053,7 +2097,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Extracorporeal membrane oxygenation in use - validated: 155 stays with Circuit Config, 150 with ECMO category items, 147 with Flow/Speed"
+      "description": "Extracorporeal membrane oxygenation in use"
     },
     "ecmo_indication": {
       "category": "respiratory",
@@ -2075,7 +2119,7 @@
           "status": "unavailable"
         }
       },
-      "description": "ECMO indication - MIMIC-IV 229268 has explicit VV/VA values (17950 VV, 9926 VA)"
+      "description": "ECMO indication (respiratory/cardiovascular); MIMIC-IV 229268 charts VV/VA explicitly"
     },
     "egcs": {
       "category": "neurological",
@@ -4055,7 +4099,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Mechanical circulatory support - validated: IABP (1232 stays with Assisted Systole), Impella (223), Tandem (41), LVAD (11), RVAD (6)"
+      "description": "Mechanical circulatory support (IABP/LVAD/RVAD/Impella/Tandem)"
     },
     "mech_vent": {
       "category": "respiratory",
@@ -5096,7 +5140,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Other vasoactive medication - validated: Phenylephrine (14428 stays), Vasopressin (5626), Milrinone (1279)"
+      "description": "Other vasoactive medication (phenylephrine, vasopressin, milrinone)"
     },
     "oxygenation_index": {
       "category": "respiratory",
@@ -8275,7 +8319,7 @@
           "status": "direct"
         }
       },
-      "description": "Expiratory tidal volume (measured)"
+      "description": "Expiratory tidal volume (measured) where available; SICdb uses inspiratory 717 (source_channel inspiratory) when no valid expiratory value exists, including all 2013 admissions"
     },
     "tidal_vol_set": {
       "category": "ventilator",
@@ -9104,23 +9148,23 @@
     "jinhua": {
       "derived": 19,
       "direct": 135,
-      "partial": 24,
+      "partial": 25,
       "unavailable": 111
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
-      "partial": 27,
+      "partial": 28,
       "unavailable": 106
     },
     "zhejiang_eicu": {
-      "derived": 25,
+      "derived": 26,
       "direct": 128,
       "partial": 23,
       "unavailable": 113
     },
     "zigong": {
-      "derived": 19,
+      "derived": 20,
       "direct": 125,
       "partial": 33,
       "unavailable": 112

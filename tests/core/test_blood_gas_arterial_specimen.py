@@ -48,16 +48,21 @@ def test_miiv_ph_drops_venous_lab_and_venous_chart_channels(tmp_path, scan):
 @pytest.mark.parametrize("database", ["mimic", "mimic_demo"])
 def test_mimic_iii_matches_specimen_type_by_subject_and_charttime(tmp_path, database, scan):
     source, id_column = mimic_source(tmp_path, database)
-    # MIX and ART+VEN are excluded, an unrecorded gas is kept; 490 (alveolar
+    # MIX and ART+VEN are excluded, as is an unrecorded gas; 490 (alveolar
     # PAO2, 300 mmHg) is no longer a PaO2 channel while 779 "Arterial PaO2" is.
-    assert hourly(source, id_column, "po2", parquet_scan=scan) == {0.0: 90.0, 2.0: 80.0, 5.0: 110.0}
+    # Since 2026-11-04 audit round 4 an unrecorded gas is dropped (R4-020),
+    # and the hour-5 chart 779 value, within 6 h of the hour-0 lab result, is
+    # a transcription of it (R4-016).
+    assert hourly(source, id_column, "po2", parquet_scan=scan) == {0.0: 90.0}
 
 
 @READERS
 def test_mimic_iii_ph_keeps_arterial_chart_channels_only(tmp_path, scan):
     source, id_column = mimic_source(tmp_path)
-    # 860 "Venous pH" and 4202 "pH (cap)" are removed; 780 "Arterial pH" stays.
-    assert hourly(source, id_column, "ph", parquet_scan=scan) == {0.0: 7.45, 2.0: 7.40}
+    # 860 "Venous pH" and 4202 "pH (cap)" are removed; 780 "Arterial pH" is a
+    # pH channel, but its hour-2 value lies within 6 h of the hour-0 lab
+    # result and is a transcription (2026-11-04 audit round 4, R4-016).
+    assert hourly(source, id_column, "ph", parquet_scan=scan) == {0.0: 7.45}
 
 
 @READERS

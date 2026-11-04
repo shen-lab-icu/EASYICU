@@ -259,7 +259,7 @@
  },
  "adv_resp": {
   "class_name": "lgl_cncpt",
-  "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP) - validated: 39364 with PEEP, 39280 with Ventilator Type, 30177 Total PEEP, 4056 HFNC, 5762 BiPap, 2993 CPAP",
+  "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP)",
   "category": "respiratory",
   "sources": {
    "miiv": [
@@ -282,7 +282,7 @@
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "223848=Ventilator Type (39280), 223849=Ventilator Mode (27164), 229314=Ventilator Mode Hamilton (16703), 220339=PEEP set (39364), 224700=Total PEEP Level (30177), 227577=BiPap Mode (3918), 227578=BiPap Mask (4262), 227579=BiPap EPAP (3840), 227580=BiPap IPAP (3604), 227583=Autoset/CPAP (2791), 225949=NIV Mask (2041) | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows).",
      "exclude_regex": {
-      "value": "(?i)^\\s*standby\\s*$"
+      "value": "(?i)^\\s*(?:standby|ambient|off|not applicable)\\s*$"
      },
      "extra_vars": [
       "value"
@@ -295,10 +295,10 @@
       226732
      ],
      "val_var": "value",
-     "regex": "High flow(?! neb)|HFNC|Bipap|CPAP|Endotracheal|Tracheostomy",
+     "regex": "High flow(?! neb)|HFNC|Bipap|CPAP|Endotracheal",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "226732=O2 Delivery Device: High flow nasal cannula (4056), Bipap mask (5762), CPAP mask (2993), Endotracheal tube (35879), Tracheostomy tube (3672) | 2026-11-04 audit round 3 (full-dictionary M): 'High flow neb' is an aerosol mask (18,878 rows; 1,472 stays had only it), not high-flow nasal oxygen."
+     "_comment": "226732=O2 Delivery Device: High flow nasal cannula (4056), Bipap mask (5762), CPAP mask (2993), Endotracheal tube (35879) | 2026-11-04 audit round 3 (full-dictionary M): 'High flow neb' is an aerosol mask (18,878 rows; 1,472 stays had only it), not high-flow nasal oxygen. | 2026-11-04 audit round 4 (R4-011): 'Tracheostomy tube' alone (trach mask or collar) is not advanced support; a ventilated tracheostomy is counted from the ventilator items."
     }
    ],
    "eicu": [
@@ -355,7 +355,13 @@
       9534
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "12290=Ventilatie Mode Set (15.6M records, main ventilator mode), 6685=Type Beademing Evita 4 (44K), 9534=Type beademing Evita 1 (42K)"
+     "_comment": "12290=Ventilatie Mode Set (15.6M records, main ventilator mode), 6685=Type Beademing Evita 4 (44K), 9534=Type beademing Evita 1 (42K) | 2026-11-04 audit round 4 (R4-085): listitems 12290 'Stand By' (ventilator in standby; 192 rows/123 stays) is not support.",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*stand\\s*by\\s*$"
+     }
     },
     {
      "table": "numericitems",
@@ -401,9 +407,9 @@
       225949
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows).",
+     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows). | 2026-11-04 audit round 4 (R4-072): explicit inactive values ('Not applicable' 5,012 rows on 225949 NIV Mask; 'Off'; 'Ambient') are not support, as for MIMIC-IV.",
      "exclude_regex": {
-      "value": "(?i)^\\s*standby\\s*$"
+      "value": "(?i)^\\s*(?:standby|ambient|off|not applicable)\\s*$"
      },
      "extra_vars": [
       "value"
@@ -419,6 +425,18 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "CV: 505=PEEP, 506=PEEP Set, 686=Total PEEP Level"
+    },
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      226732
+     ],
+     "val_var": "value",
+     "regex": "High flow(?! neb)|HFNC|Bipap|CPAP|Endotracheal",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 audit round 4 (R4-015): MetaVision 226732 O2 Delivery Device, as for MIMIC-IV: high-flow nasal cannula, BiPAP/CPAP mask and endotracheal tube (not 'High flow neb', an aerosol mask, nor 'Tracheostomy tube' alone)."
     }
    ],
    "mimic_demo": [
@@ -433,9 +451,9 @@
       225949
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows).",
+     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows). | 2026-11-04 audit round 4 (R4-072): explicit inactive values are not support, as for MIMIC-IV.",
      "exclude_regex": {
-      "value": "(?i)^\\s*standby\\s*$"
+      "value": "(?i)^\\s*(?:standby|ambient|off|not applicable)\\s*$"
      },
      "extra_vars": [
       "value"
@@ -451,6 +469,18 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "CV: 505=PEEP, 506=PEEP Set, 686=Total PEEP Level"
+    },
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      226732
+     ],
+     "val_var": "value",
+     "regex": "High flow(?! neb)|HFNC|Bipap|CPAP|Endotracheal",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 audit round 4 (R4-015): MetaVision 226732 O2 Delivery Device, as for MIMIC-IV: high-flow nasal cannula, BiPAP/CPAP mask and endotracheal tube (not 'High flow neb', an aerosol mask, nor 'Tracheostomy tube' alone)."
     }
    ],
    "sic": [
@@ -484,7 +514,7 @@
  },
  "ecmo": {
   "class_name": "lgl_cncpt",
-  "description": "Extracorporeal membrane oxygenation in use - validated: 155 stays with Circuit Config, 150 with ECMO category items, 147 with Flow/Speed",
+  "description": "Extracorporeal membrane oxygenation in use",
   "category": "respiratory",
   "sources": {
    "miiv": [
@@ -517,7 +547,13 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays)."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays). | 2026-11-04 audit round 4 (R4-072): an ECMO flow charted 'off' is not ECMO in use.",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
+     }
     }
    ],
    "mimic_demo": [
@@ -531,7 +567,13 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays)."
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays). | 2026-11-04 audit round 4 (R4-072): an ECMO flow charted 'off' is not ECMO in use.",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
+     }
     }
    ],
    "eicu": [
@@ -577,7 +619,7 @@
  },
  "ecmo_indication": {
   "class_name": "chr_cncpt",
-  "description": "ECMO indication - MIMIC-IV 229268 has explicit VV/VA values (17950 VV, 9926 VA)",
+  "description": "ECMO indication (respiratory/cardiovascular); MIMIC-IV 229268 charts VV/VA explicitly",
   "category": "respiratory",
   "sources": {
    "miiv": [
@@ -636,7 +678,8 @@
      ],
      "table": "nursecharting",
      "sub_var": "nursingchartcelltypevallabel",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): GCS motor charted under the 'Best Motor Response'/'Motor Response' labels (23,740 stays without a 'Motor' row), as mgcs."
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): GCS motor charted under the 'Best Motor Response'/'Motor Response' labels (23,740 stays without a 'Motor' row), as mgcs. 2026-11-04 audit round 4 (R4-043/048/055): coded values such as '6-->(M6) obeys commands' are parsed (score validated against the M code).",
+     "callback": "eicu_gcs_coded"
     }
    ],
    "aumc": [
@@ -710,7 +753,7 @@
  },
  "delirium_positive": {
   "class_name": "lgl_cncpt",
-  "description": "Positive delirium assessment (CAM-ICU positive) - 72944 stays with assessment, 22462 stays with Positive result",
+  "description": "Positive delirium assessment (CAM-ICU positive)",
   "category": "neurology",
   "sources": {
    "miiv": [
@@ -734,8 +777,17 @@
      "regex": "^Symptoms of Delirium Present$",
      "val_var": "nursingchartvalue",
      "class_name": "rgx_itm",
-     "callback": "apply_map(c(`Yes` = TRUE, `No` = FALSE), var = 'nursingchartvalue')",
-     "_comment": "Symptoms of Delirium Present: Yes=8766 (positive), No=243690 - use apply_map to convert to logical"
+     "callback": "apply_map(c(`Yes` = TRUE, `YES` = TRUE, `No` = FALSE, `NO` = FALSE), var = 'nursingchartvalue')",
+     "_comment": "Symptoms of Delirium Present: Yes=8766 (positive), No=243690 - use apply_map to convert to logical | 2026-11-04 audit round 4 (R4-041): upper-case YES/NO mapped; an unmapped value of a logical map is missing (it reached the concept as text before)."
+    },
+    {
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "regex": "^Delirium Scale/Score$",
+     "val_var": "nursingchartvalue",
+     "class_name": "rgx_itm",
+     "callback": "apply_map(c(`Yes` = TRUE, `YES` = TRUE, `No` = FALSE, `NO` = FALSE), var = 'nursingchartvalue')",
+     "_comment": "2026-11-04 audit round 4 (R4-041): the 'Delirium Scale/Score' form records the CAM-ICU result as Yes/No (Yes 33,883 rows/5,440 stays; the 'Symptoms of Delirium Present' label has a Yes in 2,413 stays). Scale names (CAM-ICU, ICDSC, None) and ICDSC numeric scores map to missing: an ICDSC threshold is a separate instrument choice."
     }
    ],
    "aumc": [
@@ -784,7 +836,7 @@
  },
  "mech_circ_support": {
   "class_name": "lgl_cncpt",
-  "description": "Mechanical circulatory support - validated: IABP (1232 stays with Assisted Systole), Impella (223), Tandem (41), LVAD (11), RVAD (6)",
+  "description": "Mechanical circulatory support (IABP/LVAD/RVAD/Impella/Tandem)",
   "category": "cardiovascular",
   "sources": {
    "miiv": [
@@ -810,7 +862,13 @@
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "IABP: 224309=Assisted Systole (1232), 224652=Unassisted Systole (1230), 224654=PAEDP (1229), 224311=BAEDP (1229), 224310=Augmented Diastole (1229), 224322=IABP Mean (1226), 227980=IABP Setting (1175), 228866=Plateau Pressure IABP (900), 225979=IABP Size (1154); Impella: 228154=Flow Rate (220), 228156=Performance (223), 228151=Aortic Pressure Diastolic (220), 228158=Purge Pressure (220); 228198=Tandem Heart Flow (41); 229254=Flow LVAD (11); 220128=RVAD Flow (6)"
+     "_comment": "IABP: 224309=Assisted Systole (1232), 224652=Unassisted Systole (1230), 224654=PAEDP (1229), 224311=BAEDP (1229), 224310=Augmented Diastole (1229), 224322=IABP Mean (1226), 227980=IABP Setting (1175), 228866=Plateau Pressure IABP (900), 225979=IABP Size (1154); Impella: 228154=Flow Rate (220), 228156=Performance (223), 228151=Aortic Pressure Diastolic (220), 228158=Purge Pressure (220); 228198=Tandem Heart Flow (41); 229254=Flow LVAD (11); 220128=RVAD Flow (6) | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use.",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
+     }
     },
     {
      "table": "procedureevents",
@@ -881,7 +939,13 @@
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded."
+     "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded. | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use.",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
+     }
     },
     {
      "ids": [
@@ -915,7 +979,13 @@
       220128
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded."
+     "_comment": "2026-07-26 audit: mirror only MetaVision items present in MIMIC-III; MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded. | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use.",
+     "extra_vars": [
+      "value"
+     ],
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
+     }
     },
     {
      "ids": [
@@ -932,7 +1002,7 @@
  },
  "other_vaso": {
   "class_name": "lgl_cncpt",
-  "description": "Other vasoactive medication - validated: Phenylephrine (14428 stays), Vasopressin (5626), Milrinone (1279)",
+  "description": "Other vasoactive medication (phenylephrine, vasopressin, milrinone)",
   "category": "cardiovascular",
   "sources": {
    "miiv": [
@@ -1026,8 +1096,8 @@
       113,
       1000793
      ],
-     "callback": "transform_fun(comp_na(`>`, 0))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0."
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
     }
    ],
    "mimic": [
@@ -1058,6 +1128,16 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "CV: 30051=Vasopressin, 30125=Milrinone"
+    },
+    {
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "ids": [
+      30127,
+      30128
+     ],
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "CV: 30127=Neosynephrine, 30128=Neosynephrine-k (phenylephrine), rows with a positive rate only. 2026-11-04 audit round 4 (R4-002): MetaVision phenylephrine 221749 was mapped but CareVue was not."
     }
    ],
    "sic": [
@@ -1104,6 +1184,16 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "CV: 30051=Vasopressin, 30125=Milrinone"
+    },
+    {
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "ids": [
+      30127,
+      30128
+     ],
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "CV: 30127=Neosynephrine, 30128=Neosynephrine-k (phenylephrine), rows with a positive rate only. 2026-11-04 audit round 4 (R4-002): MetaVision phenylephrine 221749 was mapped but CareVue was not."
     }
    ]
   }
@@ -1163,7 +1253,7 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "regex": "haloperidol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
+     "regex": "haloperidol|haldol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
      "excluded_statuses": [
@@ -1173,13 +1263,15 @@
      "extra_vars": [
       "drugordercancelled"
      ],
-     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-042): HALDOL added (555 named rows were missed)."
     },
     {
      "ids": [
+      1661,
+      1662,
       4137,
-      14015,
-      1661
+      11814,
+      14015
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
@@ -1192,9 +1284,9 @@
       "drugname",
       "drugordercancelled"
      ],
-     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,300 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): HICL 1661 haloperidol lactate (23,092 rows, 12,617 stays) added. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,300 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): HICL 1661 haloperidol lactate (23,092 rows, 12,617 stays) added. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-042): HICL 1662 (haloperidol; 2,647 rows/1,720 stays) and 11814 (olanzapine; 5,136 rows without a drugname, 2,759 stays) added.",
      "exclude_regex": {
-      "drugname": "(?i)(?:haloperidol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify)"
+      "drugname": "(?i)(?:haloperidol|haldol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify)"
      }
     }
    ],
@@ -1226,8 +1318,8 @@
       1000595,
       1000780
      ],
-     "callback": "transform_fun(comp_na(`>`, 0))",
-     "_comment": "2026-07-18 fix: id 239 (Haloperidol inj) has ZERO records in released HiRID pharma. Real antipsychotics present in pharma_bucket: 1000370/1000371 Haldol inj/drops(haloperidol), 1000874/1000875 Seroquel/Quetiapin(quetiapine), 1001094/1001074 Zyprexa(olanzapine), 1000595(...), 1000780 Risperdal(risperidone). PADIS antipsychotic set. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0."
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "_comment": "2026-07-18 fix: id 239 (Haloperidol inj) has ZERO records in released HiRID pharma. Real antipsychotics present in pharma_bucket: 1000370/1000371 Haldol inj/drops(haloperidol), 1000874/1000875 Seroquel/Quetiapin(quetiapine), 1001094/1001074 Zyprexa(olanzapine), 1000595(...), 1000780 Risperdal(risperidone). PADIS antipsychotic set. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
     }
    ],
    "mimic": [
@@ -1536,8 +1628,8 @@
       732,
       2022
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "723=CRRT Bloodflow, 730=CRRT DialysateFlow, 731=CRRT SubstitutePrae, 732=CRRT SubstitutePost, 2022=CRRT Withdrawal"
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "723=CRRT Bloodflow, 730=CRRT DialysateFlow, 731=CRRT SubstitutePrae, 732=CRRT SubstitutePost, 2022=CRRT Withdrawal | 2026-11-04 audit round 4 (R4-097): an hour is RRT when a CRRT channel charts a positive flow; an all-zero hour is not."
     }
    ],
    "hirid": [

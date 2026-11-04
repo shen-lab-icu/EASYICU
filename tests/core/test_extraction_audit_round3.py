@@ -79,7 +79,9 @@ def test_r3_19_hirid_zero_doses_neither_rate_nor_extend_exposure():
     rate = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
                          grp_var="infusionid", index_col="givenat", interval_minutes=60.0)
     assert (rate["norepi_rate"] > 0).all()
-    assert sorted(rate["givenat"].tolist()) == [11, 12]
+    # Each dose is split over the hours since the previous record, so the
+    # duration's first hour (10) has a rate (2026-11-04 audit round 4, R4-028).
+    assert sorted(rate["givenat"].tolist()) == [10, 11, 12]
 
 
 def test_r3_04_eicu_order_exposure_ends_at_unit_discharge():
@@ -106,7 +108,7 @@ def test_r3_09_urine24_grid_ends_at_the_last_urine_record(first_hour):
     hours = [first_hour + h for h in range(20)]
     frame = pd.DataFrame({"stay": [1] * 20, "t": hours, "urine": [50.0] * 20})
     out = _urine24_batch(frame, "stay", "t", "urine", time_step=1.0, window_steps=24,
-                         min_steps=12, step_factor=24.0)
+                         min_steps=12, cap_steps=12)
     # ricu ended the grid at the duration (19 h): a late first record lost
     # its tail, an early one padded zero urine past the last record.
     assert out["t"].min() == first_hour
@@ -138,7 +140,7 @@ def test_r3_18_derived_plateau_time_column_matches_item_level_peep_and_pip():
     assert out["driving_pres"].tolist() == [17.0]
 
 
-def test_r3_08_a_horizon_past_the_source_followup_bound_is_missing_for_the_dead_too(monkeypatch) -> None:
+def test_r3_08_r4_018_mimic_metavision_one_year_mortality_is_defined(monkeypatch) -> None:
     from easyicu.scores import outcomes
 
     tables = {
@@ -162,11 +164,12 @@ def test_r3_08_a_horizon_past_the_source_followup_bound_is_missing_for_the_dead_
 
     result = outcomes.load_outcomes("mimic").set_index("icustay_id")
 
-    # MetaVision deaths are linked for 90 days after discharge only, so one-year
-    # mortality is undefined for its dead as well as for its survivors.
-    assert pd.isna(result.loc[1, "mort_365d"])
-    assert pd.isna(result.loc[2, "mort_365d"])
-    assert pd.isna(result.loc[2, "followup_days_365d"])
+    # Round 4 (R4-018) reverted R3-08 for MIMIC-III: MetaVision deaths are
+    # linked well beyond 90 days after discharge (out-of-hospital deaths up to
+    # 1,734 days), so one-year mortality is defined as for CareVue.
+    assert bool(result.loc[1, "mort_365d"]) is False
+    assert bool(result.loc[2, "mort_365d"]) is True
+    assert result.loc[2, "followup_days_365d"] == pytest.approx(40.0)  # date-level DOD
     assert bool(result.loc[1, "mort_90d"]) is False
     assert bool(result.loc[2, "mort_90d"]) is True
     # CareVue's four-year linkage reaches one year for both.
@@ -247,10 +250,14 @@ def test_r3_05_eicu_ventilation_evidence_becomes_windows_across_gaps_of_up_to_8h
     from easyicu.concept.eicu_ventilation_windows import bridge_hours, care_intervals, setting_evidence
 
     charting = pd.DataFrame({
+        "patientunitstayid": 1, "respchartoffset": [60, 60, 90, 90, 90, 120, 150, 180],
         "respchartvaluelabel": ["PEEP", "PEEP", "Tidal Volume (set)", "LPM O2", "RR (patient)", "B1: IPAP", "RT Vent On/Off", "RT Vent On/Off"],
         "respchartvalue": ["5", "0", "450", "4", "18", "12", "Continued", "Off"],
     })
-    kept = setting_evidence(charting, label_column="respchartvaluelabel", value_column="respchartvalue")
+    # PEEP is shared with NIV; it takes the invasive level of the nearby set
+    # tidal volume (2026-11-04 audit round 4, R4-024).
+    kept = setting_evidence(charting, label_column="respchartvaluelabel", value_column="respchartvalue",
+                            id_column="patientunitstayid", time_column="respchartoffset")
     assert kept["respchartvalue"].tolist() == ["invasive", "invasive", "noninvasive", "invasive"]
 
     care = pd.DataFrame({

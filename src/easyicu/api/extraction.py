@@ -6862,6 +6862,73 @@ def _publish_native_export_v2(
     }
 
 
+class NativeExportPublicationError(ValueError):
+    """A native-v2 extraction could not be published.
+
+    Raised after the worker files this extraction wrote have been moved out of
+    the output folder, so the folder never holds uncanonicalised module files
+    (raw source id column, unclipped rows, internal columns) without a root
+    manifest.  ``quarantine`` names where they went.  2026-11-04 extraction
+    audit round 4, R4-004.
+    """
+
+    reason_code = "native_export_v2_publication_failed"
+
+    def __init__(self, message: str, *, quarantine: Optional[str]):
+        super().__init__(message)
+        self.quarantine = quarantine
+
+
+_UNPUBLISHED_DIRNAME = ".easyicu-unpublished"
+
+
+def _output_entries(output_dir: str) -> Dict[str, float]:
+    """Top-level visible entries and their mtimes, before an extraction."""
+    entries: Dict[str, float] = {}
+    for entry in os.scandir(output_dir):
+        if not entry.name.startswith("."):
+            entries[entry.name] = entry.stat(follow_symlinks=False).st_mtime
+    return entries
+
+
+def _quarantine_unpublished_outputs(
+    output_dir: str, before: Mapping[str, float], cause: BaseException
+) -> Optional[str]:
+    """Move entries this extraction created or rewrote out of ``output_dir``.
+
+    Hidden runtime folders (``.easyicu-failures`` and the quarantine itself)
+    stay where their owners read them.  Returns the quarantine path, or None
+    when the extraction left nothing to move.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    moved = [
+        name for name, mtime in _output_entries(output_dir).items()
+        if name not in before or mtime != before[name]
+    ]
+    if not moved:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    target = Path(output_dir) / _UNPUBLISHED_DIRNAME / stamp
+    target.mkdir(parents=True, exist_ok=False)
+    for name in sorted(moved):
+        os.replace(Path(output_dir) / name, target / name)
+    (target / "_publication_failed.json").write_text(
+        json.dumps(
+            {
+                "reason_code": NativeExportPublicationError.reason_code,
+                "error_type": type(cause).__name__,
+                "error": str(cause),
+                "moved": sorted(moved),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return str(target)
+
+
 def extract_database(
     database: str,
     data_path: Optional[Union[str, Path]] = None,
@@ -7107,6 +7174,7 @@ def extract_database(
                 "native_export_v2 refuses an existing root _manifest.json; "
                 "use a fresh output directory"
             )
+        entries_before_extraction = _output_entries(output_dir)
 
     if verbose:
         rss = get_rss_mb()
@@ -7663,16 +7731,25 @@ def extract_database(
 
     if native_export_v2:
         assert output_dir is not None
-        result["native_export_v2"] = _publish_native_export_v2(
-            database=database,
-            data_path=data_path,
-            output_dir=output_dir,
-            modules=modules,
-            max_patients=max_patients,
-            result=result,
-            require_stay_time_bounds=True,
-            expected_patient_ids=next(iter(patient_ids_filter.values())),
-        )
+        try:
+            result["native_export_v2"] = _publish_native_export_v2(
+                database=database,
+                data_path=data_path,
+                output_dir=output_dir,
+                modules=modules,
+                max_patients=max_patients,
+                result=result,
+                require_stay_time_bounds=True,
+                expected_patient_ids=next(iter(patient_ids_filter.values())),
+            )
+        except Exception as exc:
+            quarantine = _quarantine_unpublished_outputs(
+                output_dir, entries_before_extraction, exc
+            )
+            raise NativeExportPublicationError(
+                f"{exc} [unpublished files moved to {quarantine}]",
+                quarantine=quarantine,
+            ) from exc
 
     total_elapsed = time.time() - t_start
     result["total_elapsed"] = round(total_elapsed, 1)

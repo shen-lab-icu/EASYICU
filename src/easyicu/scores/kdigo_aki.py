@@ -597,6 +597,10 @@ def _resolve_time_unit(
     return normalized
 
 
+# Longest charting interval one urine record may be spread over (R4-001).
+_UO_MAX_GAP_HOURS = 12.0
+
+
 def _calculate_uo_rates_simple(
     urine_df: pd.DataFrame,
     weight_df: pd.DataFrame,
@@ -827,6 +831,17 @@ def _calculate_uo_rates_simple(
         if n > 1:
             hours_prev[1:] = np.maximum(np.diff(times_min) / 60.0, 0.0)
 
+        # A record more than _UO_MAX_GAP_HOURS after the previous one cannot
+        # be spread over that interval: it is not assessable and starts a new
+        # segment, and no window crosses the gap.  MIT-LCP spread it over the
+        # whole gap, so charting gaps read as oliguria (2026-11-04 audit
+        # round 4, R4-001).
+        breaks = hours_prev > _UO_MAX_GAP_HOURS
+        breaks[0] = False
+        hours_prev[breaks] = 0.0
+        u_vals = np.where(breaks, 0.0, u_vals)
+        segment_start = np.maximum.accumulate(np.where(breaks, np.arange(n), 0))
+
         # Missing urine values were removed before the timeline was built; no
         # failed conversion or absent measurement can become zero output.
         cum_u = np.concatenate([[0.0], np.cumsum(u_vals)])
@@ -837,8 +852,8 @@ def _calculate_uo_rates_simple(
             window = windows_min[w_idx]
             # For each i, find left boundary: first j where times_min[j] >= times_min[i] - window
             lefts = np.searchsorted(times_min, times_min - window, side='left')
-            # Clip: only look at j <= i (backward looking)
-            lefts = np.minimum(lefts, idx_arr)
+            # Clip: only look at j <= i (backward looking), within the segment
+            lefts = np.maximum(np.minimum(lefts, idx_arr), segment_start)
             # Windowed sums via prefix sums
             total_u = cum_u[idx_arr + 1] - cum_u[lefts]
             total_h = cum_h[idx_arr + 1] - cum_h[lefts]
@@ -912,7 +927,8 @@ def _calc_aki_stage_uo(
     
     # Stage 3: UO < 0.3 for ≥24h OR anuria (0) for ≥12h
     mask_3_oliguria = uo_24h_num < 0.3
-    mask_3_anuria = uo_12h_num < 0.01
+    # Anuria is zero output (R4-061); 0.01 mL/kg/h was a non-zero cut-off.
+    mask_3_anuria = uo_12h_num <= 1e-9
     stage[mask_3_oliguria | mask_3_anuria] = 3
     
     return stage

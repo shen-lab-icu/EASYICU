@@ -116,11 +116,14 @@ SPECIMEN_RULES = {
         value_column="value", arterial_tokens=frozenset({"ART."}),
         keep_unrecorded=False,
     ),
+    # MIMIC-III gases without a 50800 specimen record were kept, and about
+    # 28% of them are venous-like; only confirmed arterial gases are kept, as
+    # for MIMIC-IV (2026-11-04 audit round 4, R4-020/R4-021).
     "mimic": SpecimenRecordRule(
         table="labevents", item_column="itemid", item_id=50800,
         keys=("subject_id", "charttime"), patient_column="subject_id",
         value_column="value", arterial_tokens=frozenset({"ART"}),
-        keep_unrecorded=True,
+        keep_unrecorded=False,
     ),
     "aumc": SpecimenRecordRule(
         table="freetextitems", item_column="itemid", item_id=11646,

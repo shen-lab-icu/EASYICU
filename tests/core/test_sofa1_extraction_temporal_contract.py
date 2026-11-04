@@ -195,12 +195,16 @@ def test_sofa_module_to_native_preserves_callback_windows(
     backend = manifest["files"][0]["row_grain_audit"]["publication_backend"]
     assert ("duckdb" in backend) == force_duckdb
     actual = published.set_index(["stay_id", "charttime"])
-    assert actual.loc[(1, 24), "sofa"] == 4
+    # The window is the last 24 hourly cells, t-23..t (2026-11-04 audit
+    # round 4, R4-010): ricu's 25-cell window kept hour 0 at hour 24.
+    assert actual.loc[(1, 23), "sofa"] == 4
+    assert actual.loc[(1, 24), "sofa"] == 2
     assert actual.loc[(1, 25), "sofa"] == 2
-    assert actual.loc[(1, 27), "sofa"] == 0
+    assert actual.loc[(1, 26), "sofa"] == 0
     assert actual.loc[(3, 1), "sofa"] == 5
-    assert actual.loc[(3, 24), "sofa"] == 5
-    assert actual.loc[(3, 25), "sofa"] == 6
+    assert actual.loc[(3, 23), "sofa"] == 5
+    assert actual.loc[(3, 24), "sofa"] == 2
+    assert actual.loc[(3, 25), "sofa"] == 4
     assert actual.loc[(3, 26), "sofa"] == 4
     assert actual["sofa_renal"].isna().all()
     assert 4 not in actual.index.get_level_values("stay_id")

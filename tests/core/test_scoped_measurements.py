@@ -120,9 +120,10 @@ def test_unit_contract_without_silent_conversion(tmp_path, unit, status, retaine
         (220052, 250, True),
         (220052, 251, False),
         (220074, -5, True),
-        # cvp max is 30 mmHg (2026-11-04 extraction audit round 3, flush artefacts).
-        (220074, 30, True),
-        (220074, 30.1, False),
+        # cvp_raw max is 50 mmHg again (2026-11-04 audit round 4, R4-013);
+        # the published cvp adds an hourly arterial-diastolic check.
+        (220074, 50, True),
+        (220074, 50.1, False),
         (220074, -5.1, False),
     ],
 )
