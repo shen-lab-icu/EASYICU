@@ -57,13 +57,17 @@ def test_diuretic_concepts_are_registered_per_database():
     assert fe.maximum == 2000
     for database, sources in fe.sources.items():
         for source in sources:
+            if database in {"eicu", "eicu_demo"}:
+                # R5-EICU-021: actual charted rates, not medication order quantities.
+                assert source.callback == "eicu_loop_dose" and source.table == "infusiondrug"
+                continue
             # MIMIC-IV eMAR doses go through their own owner first (audit
             # round 2, D1), which then applies the same conversion.
             assert source.callback in {"furosemide_equivalent", "emar_furosemide_equivalent"}
             assert source.callback == "furosemide_equivalent" or source.table == "emar"
             assert source.params["fe_drug"] in {"furosemide", "bumetanide", "torasemide"}
-    # eICU records diuretic boluses as orders without administered amounts.
-    assert "eicu" not in fe.sources
+    # R5-EICU-021: order-only boluses remain excluded; charted mass rates are available.
+    assert "eicu" in fe.sources
     for name in FLAGS:
         definition = dictionary.get(name)
         assert definition.class_name == "lgl_cncpt" and definition.aggregate == "max"

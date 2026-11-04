@@ -85,11 +85,12 @@ def test_both_axes_use_identical_native_sources_in_all_supported_databases():
     dictionary = load_dictionary(include_sofa2=True)
     control = dictionary.get("vent_mode").sources
     sequence = dictionary.get("vent_breath_seq").sources
-    # eICU/SIC have no source for these canonical mode axes; this does not
-    # describe their IMV support. Zhejiang and Zigong use the same paired
+    # R5-EICU-022: eICU maps only explicit APV targets and SIMV/spontaneous
+    # sequences. SIC has no source. Zhejiang and Zigong use the same paired
     # community parser because their native labels are not in the legacy map.
     assert set(control) == set(sequence) == {
         "aumc",
+        "eicu",
         "hirid",
         "miiv",
         "mimic",
@@ -100,6 +101,7 @@ def test_both_axes_use_identical_native_sources_in_all_supported_databases():
     callback_pairs = {
         "vent_mode_control": "vent_mode_seq",
         "community_vent_mode_control": "community_vent_mode_seq",
+        "eicu_mode_target": "eicu_breath_sequence",
     }
     for database in control:
         assert all(source.callback in callback_pairs for source in control[database])

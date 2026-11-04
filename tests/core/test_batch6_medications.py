@@ -56,6 +56,11 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
+            # R5-EICU-023/037: IV routes and positive infusion rates are explicit owners.
+            if db in {"eicu", "eicu_demo"} and src.get("callback") in {"eicu_iv_exposure", "eicu_positive_infusion"}:
+                expected_table = "medication" if src["callback"] == "eicu_iv_exposure" else "infusiondrug"
+                assert src["table"] == expected_table
+                continue
             # MIMIC-III prescriptions without a time sit at noon of their day
             # (extraction audit round 2, D5); the value is still TRUE.  A HiRID
             # zero givendose is not an administration (audit round 3).

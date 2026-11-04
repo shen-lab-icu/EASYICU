@@ -63,6 +63,10 @@ def test_all_sources_use_set_val_true(name, _n, _dbs):
             items = [items]
         for item in items:
             cb = item.get("callback", "")
+            # R5-EICU-023/037: route and positive-rate owners replace unconditional TRUE.
+            if db in {"eicu", "eicu_demo"} and cb in {"eicu_iv_exposure", "eicu_positive_infusion"}:
+                assert item["table"] == ("medication" if cb == "eicu_iv_exposure" else "infusiondrug")
+                continue
             if db == "hirid":
                 # A zero HiRID dose is a pump marker (2026-11-04 audit round 3, R3-19).
                 assert "comp_na(`>`, 0.000001)" in cb, f"{name}/{db}: callback '{cb}' keeps zero doses"

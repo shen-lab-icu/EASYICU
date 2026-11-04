@@ -749,7 +749,8 @@ def test_database_class_inheritance_preserves_actual_and_dictionary_source_ident
     assert metadata.source_resolution_chain == ("eicu_demo", "eicu")
     assert metadata.source_declared_for_database is True
     assert metadata.availability_basis == "inherited_direct_source"
-    assert len(metadata.source_lineage) == 3
+    # R5-EICU-028: exact positive Actual Patient Fluid Removal adds one source.
+    assert len(metadata.source_lineage) == 4
     assert {entry.database for entry in metadata.source_lineage} == {"eicu"}
 
 

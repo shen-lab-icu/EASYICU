@@ -5427,7 +5427,7 @@ def _callback_vent_ind(
             )
         # Point evidence and respiratoryCare intervals become windows, bridging
         # gaps of at most eight hours (2026-11-04 audit round 3, R3-05).
-        from .eicu_ventilation_windows import bridge_hours, load_care_intervals
+        from .eicu_ventilation_windows import bridge_hours, cut_hours_at_barriers, load_care_intervals
 
         id_column = id_columns[0] if id_columns else "patientunitstayid"
         points = (
@@ -5443,7 +5443,9 @@ def _callback_vent_ind(
             }
         )
         stays = (
-            list(ctx.patient_ids)
+            list(ctx.patient_ids.get(id_column, []))
+            if isinstance(ctx.patient_ids, dict)
+            else list(ctx.patient_ids)
             if ctx.patient_ids is not None
             else pd.unique(mech_tbl.data[id_column].dropna()).tolist()
             if id_column in mech_tbl.data.columns
@@ -5451,6 +5453,7 @@ def _callback_vent_ind(
         )
         intervals = load_care_intervals(ctx.data_source, stays)
         hours = bridge_hours(point_hours, intervals, id_column=id_column)
+        hours = cut_hours_at_barriers(hours, point_hours, intervals, ctx.data_source, stays, id_column)
         if hours.empty:
             return _empty_result()
         hours = hours.rename(columns={"hour": time_column})

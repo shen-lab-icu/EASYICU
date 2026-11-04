@@ -944,6 +944,11 @@ def _apply_callback(
 
     expr = callback.strip()
 
+    from .eicu_source_callbacks import CALLBACKS as eicu_qc_callbacks, apply as apply_eicu_qc
+
+    if expr in eicu_qc_callbacks:
+        return apply_eicu_qc(frame, source, concept_name, data_source)
+
     # A SICdb medication source that declares IsSingleDose keeps continuous
     # rows only, whatever its value callback; nested callbacks then see a
     # source without the declaration and do not filter (or fail) again.
@@ -1370,6 +1375,7 @@ def _apply_callback(
             frame, label_column=label_column, value_column=value_column,
             id_column=next((c for c in ("patientunitstayid",) if c in frame.columns), None),
             time_column=source.index_var or "respchartoffset",
+            data_source=data_source,
         )
 
     if expr == "eicu_gcs_coded":
