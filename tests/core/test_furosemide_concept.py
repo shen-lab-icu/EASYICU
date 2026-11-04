@@ -125,6 +125,9 @@ def test_all_sources_use_set_val_true_callback(furosemide_entry):
         for src in sources:
             # HiRID doses above numerical noise; SICdb amounts above 0 (audit round 4, R4-088/R4-094).
             expected = {"hirid": "transform_fun(comp_na(`>`, 0.000001))", "sic": "transform_fun(comp_na(`>`, 0))"}.get(db, "transform_fun(set_val(TRUE))")
+            # R5-EICU-037: zero-rate rows are explicit stops, not exposure.
+            if db in {"eicu", "eicu_demo"} and src["table"] == "infusiondrug":
+                expected = "eicu_positive_infusion"
             if src["table"] == "prescriptions":
                 # MIMIC-III prescriptions are day-resolution orders anchored at
                 # noon (2026-11-04 audit round 3, M D5).

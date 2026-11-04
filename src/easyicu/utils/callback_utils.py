@@ -3369,61 +3369,12 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         else:
             frame['unit_var'] = 'Unknown'
         
-        # Get weight from patient table (following R ricu add_weight logic)
-        # First check if weight_var exists in frame
-        if weight_var in frame.columns:
-            frame['_weight'] = pd.to_numeric(frame[weight_var], errors='coerce')
-        else:
-            frame['_weight'] = np.nan
-        
-        # Load weight from patient table if data_source is available
-        if data_source is not None and frame['_weight'].isna().any():
-            try:
-                from ..datasource import FilterSpec, FilterOp
-                
-                # Determine ID column
-                id_col = None
-                for candidate in ['patientunitstayid', 'stay_id', 'hadm_id', 'icustay_id']:
-                    if candidate in frame.columns:
-                        id_col = candidate
-                        break
-                
-                if id_col:
-                    # Load weight concept
-                    patient_list = frame[id_col].unique().tolist()
-                    weight_table = data_source.load_table(
-                        'patient',
-                        columns=['patientunitstayid', 'admissionweight'],
-                        filters=[FilterSpec(column='patientunitstayid', op=FilterOp.IN, value=patient_list)]
-                    )
-                    
-                    # Extract DataFrame from ICUTable if needed
-                    if hasattr(weight_table, 'data'):
-                        weight_df = weight_table.data
-                    else:
-                        weight_df = weight_table
-                    
-                    if weight_df is not None and len(weight_df) > 0:
-                        weight_df = weight_df.rename(columns={'admissionweight': '_loaded_weight'})
-                        weight_df['_loaded_weight'] = pd.to_numeric(weight_df['_loaded_weight'], errors='coerce')
-                        
-                        # Merge weight
-                        frame = frame.merge(
-                            weight_df[['patientunitstayid', '_loaded_weight']],
-                            on='patientunitstayid',
-                            how='left'
-                        )
-                        
-                        # Fill NaN weights with loaded weight
-                        mask = frame['_weight'].isna()
-                        frame.loc[mask, '_weight'] = frame.loc[mask, '_loaded_weight']
-                        frame = frame.drop(columns=['_loaded_weight'], errors='ignore')
-            except Exception as e:
-                logging.warning("eICU kg-rate weight fallback failed; non-per-kg rates without patientweight are dropped: %s", e)
-        
-        frame['_weight'] = pd.to_numeric(frame['_weight'], errors='coerce')
-        frame.loc[frame['_weight'] <= 0, '_weight'] = np.nan
-        
+        # R5-EICU-036: one time-aware weight owner, including explicit kg/lb
+        # chart fallbacks after missing/nonpositive infusion and admission weights.
+        from ..concept.eicu_source_qc import rate_weights
+
+        frame['_weight'] = rate_weights(frame, data_source, weight_var)
+
         # 🚀 Vectorized unit conversion (replaces per-row apply, ~50x faster)
         _val = pd.to_numeric(frame[val_var], errors='coerce').values.astype(np.float64).copy()
         _unit = frame['unit_var'].astype(str).str.strip().str.lower()
@@ -3490,6 +3441,9 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         _normalizable = _no_kg & ~_wt_bad
         _val[_normalizable] /= _wt[_normalizable]
 
+        # R5-EICU-026: zero is a stop in every rate unit, even without
+        # concentration or weight. Keep it before constructing intervals.
+        _val[pd.to_numeric(frame[val_var], errors="coerce").eq(0).fillna(False).to_numpy(dtype=bool)] = 0.0
         frame[concept_name] = _val
         
         # Clean up temporary columns
@@ -3606,46 +3560,8 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # Sort final result
         expanded = expanded.sort_values([id_col, time_col]).reset_index(drop=True)
         
-        # 🔧 CRITICAL FIX: Apply LOCF (last observation carried forward) to fill gaps
-        # R ricu's expand_intervals creates the interval data, then locf fills gaps
-        # This ensures continuous time series from min to max hour
-        def fill_gaps_locf(group):
-            # pandas >=3 excludes grouping columns when include_groups=False.
-            # Reattach the physical eICU stay key before either return path;
-            # otherwise a one-point patient silently loses patientunitstayid.
-            patient_id = (
-                group.name if not isinstance(group.name, tuple) else group.name[0]
-            )
-            group = group.copy()
-            group[id_col] = patient_id
-            if len(group) < 2:
-                return group
-            
-            # Get hour range
-            min_hour = int(group[time_col].min() / 60)  # Convert back from minutes
-            max_hour = int(group[time_col].max() / 60)
-            
-            # Create complete hourly grid
-            all_hours = list(range(min_hour, max_hour + 1))
-            all_minutes = [h * 60 for h in all_hours]
-
-            # Create grid dataframe - get id from group.name (set by groupby)
-            grid = pd.DataFrame({
-                id_col: patient_id,
-                time_col: all_minutes
-            })
-            
-            # Merge with data
-            merged = grid.merge(group[[time_col, concept_name]], on=time_col, how='left')
-            
-            # Forward fill (locf)
-            merged[concept_name] = merged[concept_name].ffill()
-            
-            return merged
-        
-        expanded = expanded.groupby(id_col, group_keys=False).apply(fill_gaps_locf, include_groups=False)
-        expanded = expanded.reset_index(drop=True)
-        
+        # R5-EICU-026: interval expansion already caps support at six hours.
+        # An extra grid-wide LOCF would revive rates after that limit.
         return expanded
     
     return callback
@@ -3763,28 +3679,10 @@ def eicu_rate_units_callback(
     return callback
 
 def _eicu_stay_weight(frame: pd.DataFrame, data_source=None) -> np.ndarray:
-    """Weight (kg) per row: the charted ``patientweight``, else the stay's
-    ``patient.admissionweight``; a missing or non-positive weight is NaN."""
-    if "patientweight" in frame.columns:
-        weight = pd.to_numeric(frame["patientweight"], errors="coerce")
-    else:
-        weight = pd.Series(np.nan, index=frame.index)
-    if data_source is not None and weight.isna().any() and "patientunitstayid" in frame.columns:
-        from ..datasource import FilterOp, FilterSpec
+    """Time-aware eICU weight fallback shared with the kg-rate callback."""
+    from ..concept.eicu_source_qc import rate_weights
 
-        stays = frame["patientunitstayid"].dropna().unique().tolist()
-        table = data_source.load_table(
-            "patient", columns=["patientunitstayid", "admissionweight"],
-            filters=[FilterSpec(column="patientunitstayid", op=FilterOp.IN, value=stays)],
-        )
-        patient = getattr(table, "data", table)
-        if patient is not None and len(patient):
-            admission = pd.to_numeric(patient["admissionweight"], errors="coerce")
-            lookup = pd.Series(admission.to_numpy(), index=patient["patientunitstayid"].to_numpy())
-            lookup = lookup[~lookup.index.duplicated()]
-            weight = weight.fillna(frame["patientunitstayid"].map(lookup))
-    weight = weight.astype(np.float64)
-    return weight.where(weight > 0).to_numpy()
+    return rate_weights(frame, data_source)
 
 
 def eicu_rate_mass_callback(target_unit: str, mg_label_mcg_above: Optional[float] = None) -> Callable:
@@ -3940,6 +3838,9 @@ def eicu_rate_mass_callback(target_unit: str, mg_label_mcg_above: Optional[float
         _ok = _final_unit.str.lower().str.fullmatch(re.escape(target_norm)).fillna(False).values
         _val[~_ok] = np.nan
 
+        # R5-EICU-026: zero is a stop in every rate unit, even without
+        # concentration or weight. Keep it before constructing intervals.
+        _val[pd.to_numeric(frame[val_var], errors="coerce").eq(0).fillna(False).to_numpy(dtype=bool)] = 0.0
         frame[concept_name] = _val
         frame = frame.drop(columns=["unit_var"], errors="ignore")
 
@@ -4009,33 +3910,7 @@ def eicu_rate_mass_callback(target_unit: str, mg_label_mcg_above: Optional[float
         )
         expanded = expanded.sort_values([id_col, time_col]).reset_index(drop=True)
 
-        # LOCF gap-fill across each patient's [min, max] hour range
-        def fill_gaps_locf(group):
-            # include_groups=False drops the stay key; reattach it on both
-            # paths, or a stay with one infusion row loses its id (as in
-            # eicu_rate_kg; 2026-11-04 audit round 4, found with R4-046).
-            patient_id = group.name if not isinstance(group.name, tuple) else group.name[0]
-            group = group.copy()
-            group[id_col] = patient_id
-            if len(group) < 2:
-                return group
-            min_hour = int(group[time_col].min() / 60)
-            max_hour = int(group[time_col].max() / 60)
-            all_minutes = [h * 60 for h in range(min_hour, max_hour + 1)]
-            grid = pd.DataFrame({
-                id_col: patient_id,
-                time_col: all_minutes,
-            })
-            merged = grid.merge(
-                group[[time_col, concept_name]], on=time_col, how="left"
-            )
-            merged[concept_name] = merged[concept_name].ffill()
-            return merged
-
-        expanded = expanded.groupby(id_col, group_keys=False).apply(
-            fill_gaps_locf, include_groups=False
-        )
-        expanded = expanded.reset_index(drop=True)
+        # R5-EICU-026: retain gaps outside the bounded raw-rate intervals.
         return expanded
 
     return callback

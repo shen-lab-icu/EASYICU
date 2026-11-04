@@ -1428,13 +1428,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -1452,12 +1453,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -1472,9 +1474,13 @@
      "regex": "amiodarone|cordarone",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -1483,13 +1489,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -1507,12 +1514,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -1527,9 +1535,13 @@
      "regex": "amiodarone|cordarone",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -2342,12 +2354,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -2364,12 +2377,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -2387,12 +2401,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -2409,12 +2424,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -2965,8 +2981,11 @@
      "ids": "ionized calcium",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "transform_fun(divide_above(2.5, 4.008))",
-     "_comment": "2026-11-04 audit round 3 (F-09): eICU stores ionized calcium mostly in mg/dL (system unit; p50 4.4 even under an 'mmol/L' interface label), with some rows in mmol/L (about 1.1). Ionized calcium is 0.5-2 mmol/L and 2-8 mg/dL, so a value above 2.5 is mg/dL and is divided by 4.008 (40.08 g/mol, valence 2)."
+     "callback": "eicu_ionized_calcium",
+     "_comment": "2026-11-04 audit round 3 (F-09): eICU stores ionized calcium mostly in mg/dL (system unit; p50 4.4 even under an 'mmol/L' interface label), with some rows in mmol/L (about 1.1). Ionized calcium is 0.5-2 mmol/L and 2-8 mg/dL, so a value above 2.5 is mg/dL and is divided by 4.008 (40.08 g/mol, valence 2). | R5-EICU-003: explicit mg/dL above 2 also converts; other 2-2.5 values are not guessed.",
+     "extra_vars": [
+      "labmeasurenameinterface"
+     ]
     }
    ],
    "eicu_demo": [
@@ -2974,8 +2993,11 @@
      "ids": "ionized calcium",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "transform_fun(divide_above(2.5, 4.008))",
-     "_comment": "2026-11-04 audit round 3 (F-09): eICU stores ionized calcium mostly in mg/dL (system unit; p50 4.4 even under an 'mmol/L' interface label), with some rows in mmol/L (about 1.1). Ionized calcium is 0.5-2 mmol/L and 2-8 mg/dL, so a value above 2.5 is mg/dL and is divided by 4.008 (40.08 g/mol, valence 2)."
+     "callback": "eicu_ionized_calcium",
+     "_comment": "2026-11-04 audit round 3 (F-09): eICU stores ionized calcium mostly in mg/dL (system unit; p50 4.4 even under an 'mmol/L' interface label), with some rows in mmol/L (about 1.1). Ionized calcium is 0.5-2 mmol/L and 2-8 mg/dL, so a value above 2.5 is mg/dL and is divided by 4.008 (40.08 g/mol, valence 2). | R5-EICU-003: explicit mg/dL above 2 also converts; other 2-2.5 values are not guessed.",
+     "extra_vars": [
+      "labmeasurenameinterface"
+     ]
     }
    ],
    "hirid": [
@@ -3028,12 +3050,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugordercancelled",
       "routeadmin"
      ],
@@ -3050,12 +3073,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -3073,12 +3097,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugordercancelled",
       "routeadmin"
      ],
@@ -3095,12 +3120,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -3245,7 +3271,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     },
     {
      "table": "medication",
@@ -3289,7 +3320,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     },
     {
      "table": "medication",
@@ -3297,7 +3333,7 @@
      "regex": "(?i)cisatracurium|nimbex",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "_comment": "2026-07-17 recall: 'cisatracurium' in the medication table adds 618 distinct pts over the infusiondrug source (more than doubles). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
@@ -4572,17 +4608,24 @@
      "regex": "(d50|dextrose.+50 ?%)",
      "table": "medication",
      "sub_var": "drugname",
-     "dur_var": "drugstopoffset",
-     "callback": "eicu_dex_med",
+     "callback": "eicu_dex_order",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "routeadmin",
+      "drugname",
+      "drugstartoffset",
+      "drugstopoffset",
+      "drughiclseqno"
      ],
-     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | R5-EICU-005: strict g/mg/mL doses, positive <=12h duration and corroborating D50 infusion volume are required.",
+     "val_var": "dosage",
+     "target": "ts_tbl",
+     "index_var": "drugstartoffset"
     },
     {
      "regex": "(d10|dextrose.+10 ?%).+ml/hr",
@@ -4591,6 +4634,35 @@
      "callback": "eicu_dex_inf",
      "target": "ts_tbl",
      "class_name": "rgx_itm"
+    },
+    {
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "eicu_dex_order",
+     "class_name": "sel_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled",
+      "routeadmin",
+      "drugname",
+      "drugstartoffset",
+      "drugstopoffset",
+      "drughiclseqno"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | R5-EICU-005: strict g/mg/mL doses, positive <=12h duration and corroborating D50 infusion volume are required.",
+     "val_var": "dosage",
+     "ids": [
+      926
+     ],
+     "require_empty_var": "drugname",
+     "exclude_regex": {
+      "drugname": "(?i)(d50|dextrose.+50 ?%)"
+     },
+     "target": "ts_tbl",
+     "index_var": "drugstartoffset"
     }
    ],
    "eicu_demo": [
@@ -4598,17 +4670,24 @@
      "regex": "(d50|dextrose.+50 ?%)",
      "table": "medication",
      "sub_var": "drugname",
-     "dur_var": "drugstopoffset",
-     "callback": "eicu_dex_med",
+     "callback": "eicu_dex_order",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "routeadmin",
+      "drugname",
+      "drugstartoffset",
+      "drugstopoffset",
+      "drughiclseqno"
      ],
-     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | R5-EICU-005: strict g/mg/mL doses, positive <=12h duration and corroborating D50 infusion volume are required.",
+     "val_var": "dosage",
+     "target": "ts_tbl",
+     "index_var": "drugstartoffset"
     },
     {
      "regex": "(d10|dextrose.+10 ?%).+ml/hr",
@@ -4617,6 +4696,35 @@
      "callback": "eicu_dex_inf",
      "target": "ts_tbl",
      "class_name": "rgx_itm"
+    },
+    {
+     "table": "medication",
+     "sub_var": "drughiclseqno",
+     "callback": "eicu_dex_order",
+     "class_name": "sel_itm",
+     "excluded_statuses": [
+      "true"
+     ],
+     "status_var": "drugordercancelled",
+     "extra_vars": [
+      "drugordercancelled",
+      "routeadmin",
+      "drugname",
+      "drugstartoffset",
+      "drugstopoffset",
+      "drughiclseqno"
+     ],
+     "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | R5-EICU-005: strict g/mg/mL doses, positive <=12h duration and corroborating D50 infusion volume are required.",
+     "val_var": "dosage",
+     "ids": [
+      926
+     ],
+     "require_empty_var": "drugname",
+     "exclude_regex": {
+      "drugname": "(?i)(d50|dextrose.+50 ?%)"
+     },
+     "target": "ts_tbl",
+     "index_var": "drugstartoffset"
     }
    ],
    "hirid": [
@@ -4972,9 +5080,13 @@
      "regex": "dexmedetomidine|precedex",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -5019,9 +5131,13 @@
      "regex": "dexmedetomidine|precedex",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -5326,12 +5442,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -5348,12 +5465,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -5369,8 +5487,13 @@
      "sub_var": "drugname",
      "regex": "(?i)diltiazem|cardizem",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: IV diltiazem drip lives in infusiondrug ('diltiazem (ml/hr)' 42,938 rows, '(mg/hr)' 39,042); medication alone missed 2,932 distinct patients."
+     "callback": "eicu_positive_infusion",
+     "_comment": "2026-07-17 recall: IV diltiazem drip lives in infusiondrug ('diltiazem (ml/hr)' 42,938 rows, '(mg/hr)' 39,042); medication alone missed 2,932 distinct patients.",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -5379,12 +5502,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -5401,12 +5525,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -5422,8 +5547,13 @@
      "sub_var": "drugname",
      "regex": "(?i)diltiazem|cardizem",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "callback": "eicu_positive_infusion",
+     "_comment": "2026-07-17 recall: IV diltiazem drip lives in infusiondrug ('diltiazem (ml/hr)' 42,938 rows, '(mg/hr)' 39,042); medication alone missed 2,932 distinct patients.",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "miiv": [
@@ -7069,7 +7199,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -7078,7 +7213,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "miiv": [
@@ -7358,7 +7498,6 @@
   "aggregate": "max",
   "class_name": "lgl_cncpt",
   "description": "invasive airway (endotracheal tube or tracheostomy)",
-    "_comment": "2026-11-03 audit round 2 (S8): an invasive airway makes the GCS verbal score not assessable.",
   "omopid": 4097216,
   "category": "respiratory",
   "target": "win_tbl",
@@ -7449,7 +7588,8 @@
      "_comment": "2026-11-03 extraction audit 2: an endotracheal tube or tracheal cannula in place (SICdb d_references Airway 720 EndotrachealTube, 3041 TrachealCannula; data_range Offset..OffsetEnd), the airway that makes the GCS verbal response unassessable whether or not the ventilator is running."
     }
    ]
-  }
+  },
+  "_comment": "2026-11-03 audit round 2 (S8): an invasive airway makes the GCS verbal score not assessable. | R5-EICU-008: eICU uses the RASS <= -3 deep-sedation correction proxy, not a gold-standard airway. Use mech_vent for independent invasive-airway evidence and evaluate GCS sensitivity."
  },
  "fentanyl": {
   "class_name": "lgl_cncpt",
@@ -7473,13 +7613,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -7500,12 +7641,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -7520,11 +7662,12 @@
      "regex": "(?<!su)fentanyl",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
      "extra_vars": [
-      "drugname"
+      "drugname",
+      "drugrate"
      ],
      "exclude_regex": {
       "drugname": "(?i)(patch|transdermal|duragesic|bupivacaine|ropivacaine|epidural|lozenge|actiq|buccal)"
@@ -7538,13 +7681,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -7565,12 +7709,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -7585,11 +7730,12 @@
      "regex": "(?<!su)fentanyl",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
      "extra_vars": [
-      "drugname"
+      "drugname",
+      "drugrate"
      ],
      "exclude_regex": {
       "drugname": "(?i)(patch|transdermal|duragesic|bupivacaine|ropivacaine|epidural|lozenge|actiq|buccal)"
@@ -8077,14 +8223,14 @@
      "regex": "(?i)fio2",
      "table": "respiratorycharting",
      "sub_var": "respchartvaluelabel",
-     "callback": "transform_fun(percent_as_numeric)",
+     "callback": "eicu_fio2_parent",
      "class_name": "rgx_itm"
     },
     {
      "ids": "FiO2",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "combine_callbacks(convert_unit(set_val(NA), '%', 'mm\\\\(hg\\\\)'), transform_fun(percent_as_numeric))",
+     "callback": "eicu_fio2_parent",
      "_comment": "2026-11-04 audit round 3 (M G7): lab FiO2 charted as a fraction (0.21-1.0; 41,028 rows) is read as a percentage instead of falling below the 21% minimum. | 2026-11-04 audit round 4 (R4-079): lab FiO2 rows whose interface is lpm are oxygen flows (2,087 rows/1,178 stays), not FiO2.",
      "extra_vars": [
       "labmeasurenameinterface"
@@ -8099,7 +8245,7 @@
      ],
      "table": "nursecharting",
      "sub_var": "nursingchartcelltypevalname",
-     "callback": "transform_fun(na_below(21))",
+     "callback": "eicu_fio2_parent",
      "_comment": "2026-11-04 audit round 3 (M G7): nursecharting 'O2 L/%' values of 21-100 are the FiO2."
     },
     {
@@ -8109,7 +8255,7 @@
      "table": "respiratorycharting",
      "sub_var": "respchartvaluelabel",
      "val_var": "respchartvalue",
-     "callback": "transform_fun(percent_as_numeric)",
+     "callback": "eicu_fio2_parent",
      "_comment": "2026-11-04 audit round 3 (M G7): respiratorycharting 'O2 Percentage' (116,672 rows, median 40%)."
     }
    ],
@@ -8118,14 +8264,14 @@
      "regex": "(?i)fio2",
      "table": "respiratorycharting",
      "sub_var": "respchartvaluelabel",
-     "callback": "transform_fun(percent_as_numeric)",
+     "callback": "eicu_fio2_parent",
      "class_name": "rgx_itm"
     },
     {
      "ids": "FiO2",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "combine_callbacks(convert_unit(set_val(NA), '%', 'mm\\\\(hg\\\\)'), transform_fun(percent_as_numeric))",
+     "callback": "eicu_fio2_parent",
      "_comment": "2026-11-04 audit round 3 (M G7): lab FiO2 charted as a fraction (0.21-1.0; 41,028 rows) is read as a percentage instead of falling below the 21% minimum. | 2026-11-04 audit round 4 (R4-079): lab FiO2 rows whose interface is lpm are oxygen flows (2,087 rows/1,178 stays), not FiO2.",
      "extra_vars": [
       "labmeasurenameinterface"
@@ -8140,7 +8286,7 @@
      ],
      "table": "nursecharting",
      "sub_var": "nursingchartcelltypevalname",
-     "callback": "transform_fun(na_below(21))",
+     "callback": "eicu_fio2_parent",
      "_comment": "2026-11-04 audit round 3 (M G7): nursecharting 'O2 L/%' values of 21-100 are the FiO2."
     },
     {
@@ -8150,7 +8296,7 @@
      "table": "respiratorycharting",
      "sub_var": "respchartvaluelabel",
      "val_var": "respchartvalue",
-     "callback": "transform_fun(percent_as_numeric)",
+     "callback": "eicu_fio2_parent",
      "_comment": "2026-11-04 audit round 3 (M G7): respiratorycharting 'O2 Percentage' (116,672 rows, median 40%)."
     }
    ],
@@ -8339,6 +8485,36 @@
      "callback": "transform_fun(percent_as_numeric)",
      "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III CareVue/respiratory FiO2 channels; percent_as_numeric handles 0.21-1 and 21-100 encodings."
     }
+   ],
+   "eicu": [
+    {
+     "regex": "(?i)fio2",
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "callback": "eicu_fio2_source",
+     "class_name": "rgx_itm",
+     "val_var": "respchartvalue"
+    },
+    {
+     "ids": [
+      "O2 L/%"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "callback": "eicu_fio2_source",
+     "_comment": "2026-11-04 audit round 3 (M G7): nursecharting 'O2 L/%' values of 21-100 are the FiO2.",
+     "val_var": "nursingchartvalue"
+    },
+    {
+     "ids": [
+      "O2 Percentage"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue",
+     "callback": "eicu_fio2_source",
+     "_comment": "2026-11-04 audit round 3 (M G7): respiratorycharting 'O2 Percentage' (116,672 rows, median 40%)."
+    }
    ]
   }
  },
@@ -8372,6 +8548,22 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "transform_fun(percent_as_numeric)"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "FiO2",
+     "table": "lab",
+     "sub_var": "labname",
+     "callback": "eicu_fio2_source",
+     "_comment": "2026-11-04 audit round 3 (M G7): lab FiO2 charted as a fraction (0.21-1.0; 41,028 rows) is read as a percentage instead of falling below the 21% minimum. | 2026-11-04 audit round 4 (R4-079): lab FiO2 rows whose interface is lpm are oxygen flows (2,087 rows/1,178 stays), not FiO2.",
+     "extra_vars": [
+      "labmeasurenameinterface"
+     ],
+     "exclude_regex": {
+      "labmeasurenameinterface": "(?i)lpm|l/min"
+     },
+     "val_var": "labresult"
     }
    ]
   }
@@ -8481,9 +8673,13 @@
      "regex": "furosem|lasix",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -8527,9 +8723,13 @@
      "regex": "furosem|lasix",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -8977,14 +9177,26 @@
     {
      "table": "patient",
      "val_var": "admissionheight",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "callback": "eicu_height_qc",
+     "extra_vars": [
+      "age",
+      "admissionheight",
+      "admissionweight"
+     ]
     }
    ],
    "eicu_demo": [
     {
      "table": "patient",
      "val_var": "admissionheight",
-     "class_name": "col_itm"
+     "class_name": "col_itm",
+     "callback": "eicu_height_qc",
+     "extra_vars": [
+      "age",
+      "admissionheight",
+      "admissionweight"
+     ]
     }
    ],
    "hirid": [
@@ -9122,9 +9334,13 @@
      "regex": "heparin",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -9176,9 +9392,13 @@
      "regex": "heparin",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -9268,7 +9488,8 @@
      "callback": "transform_fun(set_val(TRUE))"
     }
    ]
-  }
+  },
+  "_comment": "R5-EICU-012: eICU medication orders include IV treatment and subcutaneous prophylactic exposure, not a therapeutic-IV-only endpoint. Retain route in source-level analyses."
  },
  "hgb": {
   "source_channel_priority": ["lab", "chart"],
@@ -9522,7 +9743,7 @@
  "infection_icd": {
   "class_name": "lgl_cncpt",
   "description": "infection present per keyword match on eICU diagnosisstring (NOT the Angus 2001 ICD-9 code list - see _comment)",
-  "_comment": "2026-07-17 provenance correction: this was described as 'based on Angus 2001 criteria'. Angus et al. 2001 is an ICD-9-CM code list; this implementation is a 30-keyword regex over eicu.diagnosis.diagnosisstring (392,374 / 2,710,672 rows match) and must not be cited as Angus. Known false positives: 'ulcerative colitis'/IBD (~709 rows), non-infectious pericarditis/cystitis variants. eICU's native 'infectious diseases|' top-level diagnosisstring category would be a cleaner anchor if this concept is ever promoted beyond exploratory use.",
+  "_comment": "2026-07-17 provenance correction: this was described as 'based on Angus 2001 criteria'. Angus et al. 2001 is an ICD-9-CM code list; this implementation is a 30-keyword regex over eicu.diagnosis.diagnosisstring (392,374 / 2,710,672 rows match) and must not be cited as Angus. Known false positives: 'ulcerative colitis'/IBD (~709 rows), non-infectious pericarditis/cystitis variants. eICU's native 'infectious diseases|' top-level diagnosisstring category would be a cleaner anchor if this concept is ever promoted beyond exploratory use. | R5-EICU-014: require positive structured diagnosis phrases; row-local negation and noninfectious/ischemic/IBD qualifiers are excluded. Independent positive rows remain eligible.",
   "category": "outcome",
   "sources": {
    "eicu": [
@@ -9531,7 +9752,7 @@
      "table": "diagnosis",
      "sub_var": "diagnosisstring",
      "val_var": "diagnosisstring",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_infection_evidence",
      "class_name": "rgx_itm"
     }
    ],
@@ -9541,11 +9762,12 @@
      "table": "diagnosis",
      "sub_var": "diagnosisstring",
      "val_var": "diagnosisstring",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_infection_evidence",
      "class_name": "rgx_itm"
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "inr_pt": {
   "description": "prothrombin time/international normalized ratio",
@@ -9642,7 +9864,15 @@
      "regex": "^insulin (250.+)?\\(((ml|units)/hr)?\\)$",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "callback": "eicu_insulin_units",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugname",
+      "drugamount",
+      "volumeoffluid"
+     ],
+     "_comment": "R5-EICU-017: units/h is direct; mL/h requires positive row-level drugamount/volumeoffluid concentration. Empty units are not a dose; insulin exposure remains separate."
     }
    ],
    "eicu_demo": [
@@ -9650,7 +9880,15 @@
      "regex": "^insulin (250.+)?\\(((ml|units)/hr)?\\)$",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "class_name": "rgx_itm"
+     "class_name": "rgx_itm",
+     "callback": "eicu_insulin_units",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugname",
+      "drugamount",
+      "volumeoffluid"
+     ],
+     "_comment": "R5-EICU-017: units/h is direct; mL/h requires positive row-level drugamount/volumeoffluid concentration. Empty units are not a dose; insulin exposure remains separate."
     }
    ],
    "hirid": [
@@ -9761,7 +9999,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -9770,7 +10013,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -10234,13 +10482,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "_comment": "2026-07-17 recall: added brands Trandate/Normodyne (+2,262 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): enteral routes and oral formulations are not the intravenous drug the concept describes (MIIV/MIMIC read it from IV inputevents).",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10256,12 +10505,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10279,13 +10529,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): enteral routes and oral formulations are not the intravenous drug the concept describes (MIIV/MIMIC read it from IV inputevents).",
+     "callback": "eicu_iv_exposure",
+     "_comment": "2026-07-17 recall: added brands Trandate/Normodyne (+2,262 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): enteral routes and oral formulations are not the intravenous drug the concept describes (MIIV/MIMIC read it from IV inputevents).",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10301,12 +10552,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10515,12 +10767,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10538,12 +10791,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10561,12 +10815,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -10584,12 +10839,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -11086,12 +11342,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugordercancelled",
       "routeadmin"
      ],
@@ -11108,12 +11365,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -11131,12 +11389,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugordercancelled",
       "routeadmin"
      ],
@@ -11153,12 +11412,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -11443,7 +11703,8 @@
      "callback": "transform_fun(set_val(TRUE))"
     }
    ]
-  }
+  },
+  "_comment": "R5-EICU-007: this release has no matching empty-name fallback rows for this drug; independently named orders/infusions remain sources. Empty fallback does not imply absent exposure."
  },
  "map": {
   "unit": [
@@ -12024,6 +12285,7 @@
  },
  "mech_circ_support": {
   "class_name": "lgl_cncpt",
+  "aggregate": "max",
   "description": "Mechanical circulatory support (IABP/LVAD/Impella)",
   "category": "cardiovascular",
   "sources": {
@@ -12072,9 +12334,13 @@
     {
      "table": "treatment",
      "sub_var": "treatmentstring",
-     "regex": "IABP|intra.?aortic|balloon pump|LVAD|VAD|Impella|Tandem|ventricular assist",
+     "regex": "(?i)IABP|intra.?aortic|balloon pump|LVAD|\\bVAD\\b|Impella|Tandem|ventricular assist",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_circulatory_support",
+     "val_var": "treatmentstring",
+     "extra_vars": [
+      "treatmentoffset"
+     ]
     }
    ],
    "aumc": [
@@ -13047,9 +13313,13 @@
      "regex": "midazolam|versed",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -13102,9 +13372,13 @@
      "regex": "midazolam|versed",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -13342,9 +13616,13 @@
      "regex": "milrinone|primacor",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -13368,9 +13646,13 @@
      "regex": "milrinone|primacor",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -13468,7 +13750,7 @@
     }
    ]
   },
-  "_comment": "2026-07-17: PDE3-inhibitor inotrope CLASS (milrinone or enoximone), not the milrinone molecule alone."
+  "_comment": "2026-07-17: PDE3-inhibitor inotrope CLASS (milrinone or enoximone), not the milrinone molecule alone. | R5-EICU-007: this release has no matching empty-name fallback rows for this drug; independently named orders/infusions remain sources. Empty fallback does not imply absent exposure."
  },
  "minute_vol": {
   "unit": [
@@ -13593,13 +13875,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -13618,12 +13901,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -13649,13 +13933,14 @@
      "table": "medication",
      "sub_var": "drugname",
      "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -13674,12 +13959,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -14177,8 +14463,13 @@
      "sub_var": "drugname",
      "regex": "(?i)nicardipine|cardene",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: IV nicardipine infusion lives in infusiondrug ('nicardipine (ml/hr)' 54,862 rows, '(mg/hr)' 52,585); medication source alone missed 4,256 distinct patients. Same wrong-table failure mode as the fixed octreotide/ffp."
+     "callback": "eicu_positive_infusion",
+     "_comment": "2026-07-17 recall: IV nicardipine infusion lives in infusiondrug ('nicardipine (ml/hr)' 54,862 rows, '(mg/hr)' 52,585); medication source alone missed 4,256 distinct patients. Same wrong-table failure mode as the fixed octreotide/ffp.",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -14229,8 +14520,13 @@
      "sub_var": "drugname",
      "regex": "(?i)nicardipine|cardene",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "callback": "eicu_positive_infusion",
+     "_comment": "2026-07-17 recall: IV nicardipine infusion lives in infusiondrug ('nicardipine (ml/hr)' 54,862 rows, '(mg/hr)' 52,585); medication source alone missed 4,256 distinct patients. Same wrong-table failure mode as the fixed octreotide/ffp.",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "miiv": [
@@ -14323,7 +14619,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     },
     {
      "table": "medication",
@@ -14347,7 +14648,12 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     },
     {
      "table": "medication",
@@ -14355,7 +14661,7 @@
      "regex": "(?i)nitroglycerin.*(d5w|iv|infusion|/hr|gtt)(?!.*(sl|subl|tab|oint|paste|patch))",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
+     "_comment": "2026-07-17 recall: IV nitroglycerin bags in the medication table (~+3,000 pts). STRICT route filter: require d5w/iv/infusion, EXCLUDE sl|subl|tab|oint|paste|patch|nitro-bid (the HiRID oral-capsule lesson -- do not absorb the ~9,776 SL/topical patients). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
@@ -15083,7 +15389,12 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "_comment": "2026-07-17: rewired from `medication` (0 rows - eICU medication holds no octreotide) to infusiondrug (41,474 rows / 1,661 stays).",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -15093,7 +15404,12 @@
      "sub_var": "drugname",
      "class_name": "rgx_itm",
      "_comment": "2026-07-17: rewired from `medication` (0 rows - eICU medication holds no octreotide) to infusiondrug (41,474 rows / 1,661 stays).",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "miiv": [
@@ -15355,12 +15671,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -15377,12 +15694,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -15398,8 +15716,13 @@
      "sub_var": "drugname",
      "regex": "(?i)pantoprazole|protonix",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: pantoprazole infusion lives in infusiondrug (+1,160 distinct pts over the medication source)."
+     "callback": "eicu_positive_infusion",
+     "_comment": "2026-07-17 recall: pantoprazole infusion lives in infusiondrug (+1,160 distinct pts over the medication source).",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -15408,12 +15731,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -15430,12 +15754,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -15451,8 +15776,13 @@
      "sub_var": "drugname",
      "regex": "(?i)pantoprazole|protonix",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: see eicu."
+     "callback": "eicu_positive_infusion",
+     "_comment": "2026-07-17 recall: pantoprazole infusion lives in infusiondrug (+1,160 distinct pts over the medication source).",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "miiv": [
@@ -15566,14 +15896,22 @@
     {
      "ids": "paCO2",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
     {
      "ids": "paCO2",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -15986,14 +16324,22 @@
     {
      "ids": "pH",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
     {
      "ids": "pH",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -16930,7 +17276,11 @@
      "ids": "paO2",
      "table": "lab",
      "sub_var": "labname",
-     "_comment": "2026-11-04 audit round 3 (M): eICU lab rows carry no specimen type, so venous and mixed samples cannot be told apart; 5.7% of po2 results are <= the same-time paCO2. They are kept (no specimen evidence to drop them) and analyses needing arterial PaO2 should treat eICU po2 as unspecified-specimen."
+     "_comment": "2026-11-04 audit round 3 (M): eICU lab rows carry no specimen type, so venous and mixed samples cannot be told apart; 5.7% of po2 results are <= the same-time paCO2. They are kept (no specimen evidence to drop them) and analyses needing arterial PaO2 should treat eICU po2 as unspecified-specimen.",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
@@ -16938,7 +17288,11 @@
      "ids": "paO2",
      "table": "lab",
      "sub_var": "labname",
-     "_comment": "2026-11-04 audit round 3 (M): eICU lab rows carry no specimen type, so venous and mixed samples cannot be told apart; 5.7% of po2 results are <= the same-time paCO2. They are kept (no specimen evidence to drop them) and analyses needing arterial PaO2 should treat eICU po2 as unspecified-specimen."
+     "_comment": "2026-11-04 audit round 3 (M): eICU lab rows carry no specimen type, so venous and mixed samples cannot be told apart; 5.7% of po2 results are <= the same-time paCO2. They are kept (no specimen evidence to drop them) and analyses needing arterial PaO2 should treat eICU po2 as unspecified-specimen.",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -17128,12 +17482,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -17156,12 +17511,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -17179,12 +17535,13 @@
      "table": "medication",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -17207,12 +17564,13 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "dosage",
       "drugname",
       "drugordercancelled",
       "routeadmin"
@@ -17394,9 +17752,13 @@
      "regex": "propofol|diprivan",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -17440,9 +17802,13 @@
      "regex": "propofol|diprivan",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
-     "class_name": "rgx_itm"
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "class_name": "rgx_itm",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "miiv": [
@@ -18490,6 +18856,16 @@
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
+    },
+    {
+     "table": "intakeoutput",
+     "sub_var": "celllabel",
+     "ids": [
+      "Actual Patient Fluid Removal"
+     ],
+     "val_var": "cellvaluenumeric",
+     "callback": "eicu_positive_value",
+     "_comment": "R5-EICU-028: positive removal is active RRT; zero is false and missing is unknown. Incremental stay coverage requires other-source overlap."
     }
    ],
     "aumc": [
@@ -18929,14 +19305,22 @@
     {
      "ids": "O2 Sat (%)",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
     {
      "ids": "O2 Sat (%)",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -25534,28 +25918,38 @@
      "table": "intakeoutput",
      "sub_var": "cellpath",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-04 audit round 3 (M F1): every Intake (ml) flowsheet entry, as the I&O system's own intaketotal: their sum equals intaketotal at 96.8% of charted times (a 10% stay sample), the former list of 492 IV labels at 37.9% (median 48% of it); 'I.V.', 'LR ', drug carrier volumes, transfusions and enteral/PO intake were missing. Totals such as 'Nutrition Total' are entries, not subtotals (excluding them broke the match). | 2026-11-04 audit round 4 (R4-083): 'Total Amount (mcg)' PCA entries are drug masses, not mL (3,376 rows/415 stays).",
+     "_comment": "2026-11-04 audit round 3 (M F1): every Intake (ml) flowsheet entry, as the I&O system's own intaketotal: their sum equals intaketotal at 96.8% of charted times (a 10% stay sample), the former list of 492 IV labels at 37.9% (median 48% of it); 'I.V.', 'LR ', drug carrier volumes, transfusions and enteral/PO intake were missing. Totals such as 'Nutrition Total' are entries, not subtotals (excluding them broke the match). | 2026-11-04 audit round 4 (R4-083): 'Total Amount (mcg)' PCA entries are drug masses, not mL (3,376 rows/415 stays). | R5-EICU-015: exclude cumulative/day totals and local irrigation. Explicit mL/h requires a subsequent same-channel timestamp within 6h and is integrated by hour.",
      "extra_vars": [
-      "cellpath"
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
      ],
      "exclude_regex": {
       "cellpath": "(?i)amount \\(mc?g\\)"
-     }
+     },
+     "callback": "eicu_systemic_intake",
+     "val_var": "cellvaluenumeric"
     }
    ],
    "eicu_demo": [
     {
-     "regex": "(?i)(IVF|IVPB|\\bIV\\b|\\bNS\\b|D5|D10|D50|D51|crystalloid|colloid|sodium chloride|saline|ringer|lactated|albumin|FFP|pRBC|plasma|platelet|continuous infusion|infusion meds|other meds|tpn|hetastarch|mannitol|bicarb)",
+     "regex": "^flowsheet\\|Flowsheet Cell Labels\\|I&O\\|Intake \\(ml\\)\\|",
      "table": "intakeoutput",
      "sub_var": "cellpath",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-04 audit round 3 (M F1): every Intake (ml) flowsheet entry, as the I&O system's own intaketotal: their sum equals intaketotal at 96.8% of charted times (a 10% stay sample), the former list of 492 IV labels at 37.9% (median 48% of it); 'I.V.', 'LR ', drug carrier volumes, transfusions and enteral/PO intake were missing. Totals such as 'Nutrition Total' are entries, not subtotals (excluding them broke the match). | 2026-11-04 audit round 4 (R4-083): 'Total Amount (mcg)' PCA entries are drug masses, not mL (3,376 rows/415 stays).",
+     "_comment": "2026-11-04 audit round 3 (M F1): every Intake (ml) flowsheet entry, as the I&O system's own intaketotal: their sum equals intaketotal at 96.8% of charted times (a 10% stay sample), the former list of 492 IV labels at 37.9% (median 48% of it); 'I.V.', 'LR ', drug carrier volumes, transfusions and enteral/PO intake were missing. Totals such as 'Nutrition Total' are entries, not subtotals (excluding them broke the match). | 2026-11-04 audit round 4 (R4-083): 'Total Amount (mcg)' PCA entries are drug masses, not mL (3,376 rows/415 stays). | R5-EICU-015: exclude cumulative/day totals and local irrigation. Explicit mL/h requires a subsequent same-channel timestamp within 6h and is integrated by hour.",
      "extra_vars": [
-      "cellpath"
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
      ],
      "exclude_regex": {
       "cellpath": "(?i)amount \\(mc?g\\)"
-     }
+     },
+     "callback": "eicu_systemic_intake",
+     "val_var": "cellvaluenumeric"
     }
    ],
    "sic": [
@@ -25866,7 +26260,8 @@
      "sub_var": "DataID"
     }
    ]
-  }
+  },
+  "_comment": "R5-EICU-031: raw hourly urine is volume booked at the chart timestamp, available at intakeoutputentryoffset, not the score-window redistribution. Actual coverage is unknown without adjacent observations."
  },
  "urine24": {
   "min": 0,
@@ -32007,6 +32402,21 @@
      "class_name": "hrd_itm",
      "callback": "vent_mode_control"
     }
+   ],
+   "eicu": [
+    {
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "ids": [
+      "Ventilator Mode",
+      "Vent Mode",
+      "Mode"
+     ],
+     "val_var": "respchartvalue",
+     "index_var": "respchartoffset",
+     "callback": "eicu_mode_target",
+     "_comment": "R5-EICU-022: APV target and explicit SIMV/spontaneous sequence only. AC/CMV initiation remains unknown."
+    }
    ]
   }
  },
@@ -32124,6 +32534,21 @@
      "sub_var": "variableid",
      "class_name": "hrd_itm",
      "callback": "vent_mode_seq"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "ids": [
+      "Ventilator Mode",
+      "Vent Mode",
+      "Mode"
+     ],
+     "val_var": "respchartvalue",
+     "index_var": "respchartoffset",
+     "callback": "eicu_breath_sequence",
+     "_comment": "R5-EICU-022: APV target and explicit SIMV/spontaneous sequence only. AC/CMV initiation remains unknown."
     }
    ]
   }
@@ -32484,10 +32909,14 @@
      "regex": "furosem|lasix|bumetan|bumex",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: infusions (Furosemide/Bumetanide mg/hr and ml/hr)."
+     "_comment": "2026-11-03 extraction audit 2: infusions (Furosemide/Bumetanide mg/hr and ml/hr).",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "eicu_demo": [
@@ -32510,12 +32939,13 @@
     {
      "ids": [
       3660,
-      3664
+      3664,
+      8829
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
+     "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2: 8829 torsemide (admissiondrug: torsemide/Demadex). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
      ],
@@ -32532,10 +32962,14 @@
      "regex": "furosem|lasix|bumetan|bumex",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
-     "_comment": "2026-11-03 extraction audit 2: infusions (Furosemide/Bumetanide mg/hr and ml/hr)."
+     "_comment": "2026-11-03 extraction audit 2: infusions (Furosemide/Bumetanide mg/hr and ml/hr).",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "hirid": [
@@ -33047,7 +33481,7 @@
   "description": "acetazolamide (carbonic anhydrase inhibitor) administration, any route",
   "category": "medications",
   "aggregate": "max",
-  "_comment": "2026-11-03 extraction audit 2: new flag (audit #19).",
+  "_comment": "2026-11-03 extraction audit 2: new flag (audit #19). | R5-EICU-007: this release has no matching empty-name fallback rows for this drug; independently named orders/infusions remain sources. Empty fallback does not imply absent exposure.",
   "sources": {
    "aumc": [
     {
@@ -33202,7 +33636,7 @@
   "description": "loop diuretic dose in mg intravenous furosemide equivalent, summed per hour at administration start (IV furosemide 1, enteral furosemide 0.5, bumetanide 40, torasemide 2 mg per mg; Brater, N Engl J Med 1998;339:387-395)",
   "category": "medications",
   "aggregate": "sum",
-  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) has none; MIMIC-III CareVue counts furosemide doses charted with an amount (2026-11-04 round 3 F-23; infusion rows charted as a rate only and bumetanide charted in ml are not counted); MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg.",
+  "_comment": "2026-11-03 extraction audit 2: new dose concept (audit #19), owner concept/diuretics.py. Only sources that record the administered amount of every dose: eICU (orders without administered amounts) has none; MIMIC-III CareVue counts furosemide doses charted with an amount (2026-11-04 round 3 F-23; infusion rows charted as a rate only and bumetanide charted in ml are not counted); MIMIC-IV/III MetaVision count IV doses only (enteral doses are not in inputevents); ethacrynic acid and fixed combinations are exposure-only. max 2000 mg per administration record is a plausibility bound applied per record before the hourly sum (more than ten times Brater's 160-200 mg IV ceiling dose and two days of a 40 mg/h maximal infusion); HiRID holds <10 such records, one oral torasemide entry of 102424 mg. | R5-EICU-021: eICU now uses charted mass-rate infusions with IV route evidence; orders without charting still contribute no dose.",
   "sources": {
    "aumc": [
     {
@@ -33459,6 +33893,21 @@
      "fe_spread_end_var": "OffsetDrugEnd",
      "fe_spread_index_var": "Offset",
      "fe_spread_single_var": "IsSingleDose"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "regex": "(?i)furosem|frusem|lasix|bumetan|bumex|burinex|torasem|torsem|demadex",
+     "class_name": "rgx_itm",
+     "val_var": "drugrate",
+     "extra_vars": [
+      "drugname",
+      "infusionoffset"
+     ],
+     "callback": "eicu_loop_dose",
+     "_comment": "R5-EICU-021: hourly charted mass-rate integral with explicit overlapping IV route evidence, <=6h support and zero stops. Medication quantities alone are not administered doses."
     }
    ]
   }
@@ -34135,14 +34584,18 @@
     {
      "ids": "pH",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": ["labresultoffset"]
     }
    ],
    "eicu_demo": [
     {
      "ids": "pH",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": ["labresultoffset"]
     }
    ],
    "hirid": [

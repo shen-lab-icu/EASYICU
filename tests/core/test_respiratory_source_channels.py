@@ -126,12 +126,12 @@ def test_source_contracts_do_not_invent_cross_database_support():
     dictionary = load_dictionary(include_sofa2=True)
     mimic = {"miiv", "mimic", "mimic_demo"}
     # Audit round 2 P4/P9: set and total PEEP channels mapped from each
-    # database's own ventilator items; FiO2 channels stay MIMIC-only.
+    # database's own ventilator items. R5-EICU-020 adds independent eICU FiO2.
     expected = {
         "peep_set": mimic | {"aumc", "eicu", "hirid", "sic"},
         "peep_total": mimic | {"aumc", "hirid"},
-        "fio2_chart": mimic | {"aumc"},  # R5C-AUMC-013
-        "fio2_lab": mimic,
+        "fio2_chart": mimic | {"aumc", "eicu"},  # R5C-AUMC-013, R5-EICU-020
+        "fio2_lab": mimic | {"eicu"},
     }
     for name in CHANNELS[2:]:
         assert set(dictionary.get(name).sources) == expected[name]

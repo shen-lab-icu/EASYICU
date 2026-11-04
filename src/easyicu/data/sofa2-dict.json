@@ -235,7 +235,8 @@
   "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
   "category": "output",
   "callback": "uo_6h",
-  "class_name": "rec_cncpt"
+  "class_name": "rec_cncpt",
+  "_comment": "R5-EICU-030: descriptive covered-hour rate differs from scoring assessment rate; report coverage and assessment eligibility separately."
  },
  "uo_12h": {
   "concepts": [
@@ -245,7 +246,8 @@
   "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
   "category": "output",
   "callback": "uo_12h",
-  "class_name": "rec_cncpt"
+  "class_name": "rec_cncpt",
+  "_comment": "R5-EICU-030: descriptive covered-hour rate differs from scoring assessment rate; report coverage and assessment eligibility separately."
  },
  "uo_24h": {
   "concepts": [
@@ -255,7 +257,8 @@
   "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
   "category": "output",
   "callback": "uo_24h",
-  "class_name": "rec_cncpt"
+  "class_name": "rec_cncpt",
+  "_comment": "R5-EICU-030: descriptive covered-hour rate differs from scoring assessment rate; report coverage and assessment eligibility separately."
  },
  "adv_resp": {
   "aggregate": "max",
@@ -326,7 +329,7 @@
      "sub_var": "respchartvaluelabel",
      "value_var": "respchartvalue",
      "index_var": "respchartoffset",
-     "callback": "combine_callbacks(eicu_respiratory_device_ventilation_evidence, transform_fun(set_val(TRUE)))",
+     "callback": "eicu_advanced_device",
      "_comment": "2026-11-04 audit round 3 (R3-06): the mech_vent ventilation evidence. The former respiratorycare ventstartoffset source read 685,205 placeholder rows (start = end = 0) as support."
     },
     {
@@ -510,7 +513,8 @@
      "_comment": "2026-11-03 extraction audit 2 (S1): ventilator-setting hours attributed to invasive ventilation by the mech_vent rule (concept/sicdb_ventilation.py). SICdb has no NIV or HFNC item, so NIV/HFNC support is not seen."
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "ecmo": {
   "aggregate": "max",
@@ -898,9 +902,13 @@
     {
      "table": "treatment",
      "sub_var": "treatmentstring",
-     "regex": "IABP|intra.?aortic|balloon pump|LVAD|VAD|Impella|Tandem|ventricular assist",
+     "regex": "(?i)IABP|intra.?aortic|balloon pump|LVAD|\\bVAD\\b|Impella|Tandem|ventricular assist",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_circulatory_support",
+     "val_var": "treatmentstring",
+     "extra_vars": [
+      "treatmentoffset"
+     ]
     }
    ],
    "aumc": [
@@ -1012,7 +1020,8 @@
      "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "other_vaso": {
   "aggregate": "max",
@@ -1043,7 +1052,7 @@
      "sub_var": "drugname",
      "regex": "vasopressin|phenylephrine|neo[- ]?synephrine|neosynsprine|milrinone|angiotensin",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "val_var": "drugname",
      "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -1051,7 +1060,9 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "dosage",
+      "drugordercancelled",
+      "routeadmin"
      ]
     },
     {
@@ -1063,10 +1074,12 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "extra_vars": [
+      "dosage",
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "routeadmin"
      ],
      "excluded_statuses": [
       "true"
@@ -1082,9 +1095,13 @@
      "sub_var": "drugname",
      "regex": "vasopressin|phenylephrine|neo[- ]?synephrine|neosynsprine|milrinone|angiotensin",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "val_var": "drugname",
-     "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate."
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate",
+     "_comment": "2026-11-03 extraction audit: added the Neo-Synephrine spellings used by phn_rate.",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ]
     }
    ],
    "aumc": [
@@ -1214,7 +1231,8 @@
      "_comment": "CV: 30127=Neosynephrine, 30128=Neosynephrine-k (phenylephrine), rows with a positive rate only. 2026-11-04 audit round 4 (R4-002): MetaVision phenylephrine 221749 was mapped but CareVue was not."
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "delirium_tx": {
   "concepts": "delirium_tx_proxy",
@@ -1491,39 +1509,49 @@
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
+    },
+    {
+     "table": "intakeoutput",
+     "sub_var": "celllabel",
+     "ids": [
+      "Actual Patient Fluid Removal"
+     ],
+     "val_var": "cellvaluenumeric",
+     "callback": "eicu_positive_value",
+     "_comment": "R5-EICU-028: positive removal is active RRT; zero is false and missing is unknown. Incremental stay coverage requires other-source overlap."
     }
    ],
-    "aumc": [
-      {
-        "table": "processitems",
-        "sub_var": "itemid",
-        "ids": [
-          12465,
-          16363
-        ],
-        "index_var": "start",
-        "dur_var": "stop",
-        "callback": "transform_fun(set_val(TRUE))",
-        "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
-      },
-      {
-        "table": "numericitems",
-        "sub_var": "itemid",
-        "ids": [
-          7666,
-          7667,
-          7668,
-          7671,
-          8805,
-          8806,
-          8808,
-          12091,
-          14838
-        ],
-        "callback": "aumc_rrt_evidence",
-        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no positive RRT evidence. R5C-AUMC-007: nonzero finite measured circuit pressures include negative access pressures; flow/removal readings require positive values. With no positive evidence status remains unknown."
-      }
-    ],
+   "aumc": [
+    {
+     "table": "processitems",
+     "sub_var": "itemid",
+     "ids": [
+      12465,
+      16363
+     ],
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-08-06 official AmsterdamUMCdb source audit: processitems stores continuous non-medication processes with explicit start/stop offsets. 12465=CVVH and 16363=Hemodialyse are treatment episodes; dialysis access items 9161/9162/9163 are deliberately excluded. The interval is expanded to active hourly RRT status."
+    },
+    {
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "ids": [
+      7666,
+      7667,
+      7668,
+      7671,
+      8805,
+      8806,
+      8808,
+      12091,
+      14838
+     ],
+     "callback": "aumc_rrt_evidence",
+     "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no positive RRT evidence. R5C-AUMC-007: nonzero finite measured circuit pressures include negative access pressures; flow/removal readings require positive values. With no positive evidence status remains unknown."
+    }
+   ],
    "mimic": [
     {
      "table": "procedureevents_mv",

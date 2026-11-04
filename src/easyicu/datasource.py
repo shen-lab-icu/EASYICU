@@ -784,6 +784,11 @@ class ICUDataSource:
         if self.config.name == 'miiv' and table_name == 'labevents':
             return load_miiv_labs(self, columns, filters)
 
+        # R5-EICU-006: identity requires ALL raw fields, before projection.
+        eicu_io = self.config.name in {"eicu", "eicu_demo"} and table_name == "intakeoutput"
+        if eicu_io:
+            columns = None
+
         # ✅ 关键修复：提前保存原始 stay_id 过滤器值
         # 因为后续对于 hospital tables (labevents等) 会将 stay_id 转换成 subject_id/hadm_id
         # 但转换后无法恢复原始 stay_id，导致 join 后引入额外患者
@@ -1414,6 +1419,11 @@ class ICUDataSource:
                     id_label,
                 )
 
+        if eicu_io:
+            from .concept.eicu_io import deduplicate_io
+
+            frame = deduplicate_io(frame)
+
         return ICUTable(
             data=frame,
             id_columns=id_columns,
@@ -1944,6 +1954,11 @@ class ICUDataSource:
         # 🔧 2024-12-02: 重新启用白名单过滤，白名单已包含所有 sofa2-dict.json 中定义的 itemid
         itemid_filter_config = None
         db_name = self.config.name
+
+        if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput" and (path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}):
+            from .concept.eicu_io import read_io_parquet
+
+            return read_io_parquet(path, columns, patient_ids_filter, concept_itemid_filter)
         
         # 🚀 优先使用概念特定的 itemid 过滤器（精确过滤，性能最佳）
         # 如果传入了 concept_itemid_filter，直接使用，跳过全局白名单
@@ -4068,12 +4083,19 @@ def load_bucketed_table_aggregated(
         default_unit_select = (
             ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
         )
+        eicu_read = f"read_parquet({glob_pattern}, union_by_name=true)"
+        io_audit = ""
+        if table_name == "intakeoutput":
+            from .concept.eicu_io import io_audit_select, io_relation_sql
+
+            eicu_read = io_relation_sql(conn, eicu_read, where_clause)
+            io_audit = io_audit_select()
         query = f"""
         SELECT 
             {id_col},
             {output_time_expr}{_select_itemid},
-            {_agg_value_expr}{default_unit_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true)
+            {_agg_value_expr}{default_unit_select}{io_audit}
+        FROM {eicu_read}
         {where_clause}
         GROUP BY {id_col}, {time_round_expr}{_group_itemid}
         ORDER BY {id_col}, 2{_order_itemid}
@@ -4145,6 +4167,10 @@ def load_bucketed_table_aggregated(
                 "bounds_unbounded_retry": unbounded_retry,
             }
             df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
+        if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput":
+            from .concept.eicu_io import finish_io_audit
+
+            df = finish_io_audit(df)
         if (
             bounds_diagnostics is not None
             and not value_transform
@@ -4537,10 +4563,19 @@ def load_bucketed_table_multi_aggregated(
         # Output hours (not minutes) — consistent with load_wide_table_aggregated
         # Batch results bypass _align_time_to_admission, so must output hours directly
         time_round_expr = f"FLOOR(o.{time_col} / {interval_minutes})"
+        eicu_read = f"read_parquet({glob_pattern}, union_by_name=true)"
+        io_audit = ""
+        if table_name == "intakeoutput":
+            from .concept.eicu_io import io_audit_select, io_relation_sql
+
+            # Keep the alias inside this subquery for the shared selector SQL.
+            raw_filter = f"WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}"
+            eicu_read = io_relation_sql(conn, eicu_read + " o", raw_filter)
+            io_audit = io_audit_select()
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
-            {select_sql}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+            {select_sql}{io_audit}
+        FROM {eicu_read} o
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
@@ -4568,6 +4603,10 @@ def load_bucketed_table_multi_aggregated(
         len(all_itemids),
         len(df),
     )
+    if _base_db == "eicu" and table_name == "intakeoutput":
+        from .concept.eicu_io import finish_io_audit
+
+        df = finish_io_audit(df)
     # Downcast float64 value columns to float32 (skip ID/time columns)
     _skip_cols = {id_col, 'charttime', 'measuredat_minutes'}
     for c in df.columns:
