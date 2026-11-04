@@ -1097,20 +1097,13 @@ class ICUDataSource:
         if index_column:
             time_like_cols.add(index_column)
         
-        # AUMC特殊处理：时间列是毫秒,需要转换为分钟 (参考R ricu的ms_as_mins)
-        # R ricu: ms_as_mins <- function(x) min_as_mins(as.integer(x / 6e4))
-        # 关键: as.integer() 会 floor 到整数分钟!
-        # 这样处理后,AUMC的时间单位与其他数据库一致(都是分钟)
+        # AUMC source milliseconds become exact minutes. Flooring before
+        # subtracting admittedat destroys short intervals and hour boundaries.
         if self.config.name == 'aumc':
             for column in time_like_cols:
                 if column in frame.columns and pd.api.types.is_numeric_dtype(frame[column]):
-                    # 将毫秒转换为整数分钟: floor(ms / 60000) - 匹配 R ricu 的 as.integer()
-                    # 🔧 PERFORMANCE FIX: Use numpy floor instead of slow apply+lambda
-                    # 🔧 FIX: Handle pd.NA values properly by converting to numpy float array first
-                    import numpy as np
-                    values = np.array(frame[column], dtype=float) / 60000.0
-                    frame[column] = np.where(np.isnan(values), np.nan, np.floor(values))
-        
+                    frame[column] = pd.to_numeric(frame[column], errors='coerce') / 60000.0
+
         for column in time_like_cols:
             # 只有当列存在且不是numeric类型时才转换
             # 如果已经是numeric，可能是已经对齐过的小时数

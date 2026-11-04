@@ -783,81 +783,25 @@ def _normalize_eicu_tidal_volume_frame(
 
 
 def _aumc_infusion_rows(frame: pd.DataFrame, source, *, value_column: str) -> pd.DataFrame:
-    """Keep AmsterdamUMCdb drugitems rows that state an infusion rate.
+    """Exclude AUMC line flushes and, when declared, intermittent doses.
 
-    A ``Flush`` is a one-minute line flush whose pump speed is not a rate
-    (insulin flushes run at 60-600 IE/uur).  An intermittent dose
-    (``iscontinuous == 0``) is handled as its source declares with the
-    ``intermittent`` parameter: ``keep`` (default), ``drop``, or ``spread``, which
-    spreads its volume over the whole hours it spans, so a 20-minute 40%
-    glucose bag is not a continuous 800 ml/hr D10 infusion (2026-11-04 audit
-    round 3, F-03/F-06).
+    R5C-AUMC-004: bag totals are handled by aumc_dextrose after unit and
+    concentration conversion. An infusion filter never changes source times.
     """
     params = getattr(source, "params", None) or {}
     out = frame
     if "action" in out.columns:
         flush = out["action"].astype("string").str.strip().str.casefold().eq("flush").fillna(False)
         out = out.loc[~flush]
-    out = _aumc_spread_intermittent(out, source, params, value_column)
-    if params.get("end_exclusive") and not out.empty:
-        # The hourly expansion samples start, start+1h, ..., stop inclusive;
-        # an infusion runs over [start, stop), so a 10-hour infusion gave 11
-        # rows.  One minute (the source resolution) off a positive-length
-        # stop yields one row per started hour (2026-11-04 audit round 4,
-        # R4-007).
-        start_col = source.index_var or "start"
-        stop_col = getattr(source, "dur_var", None) or params.get("stop_var") or "stop"
-        if start_col not in out.columns or stop_col not in out.columns:
-            raise ValueError("end_exclusive requires the start and stop columns")
-        out = out.copy()
-        start = pd.to_numeric(out[start_col], errors="coerce")
-        stop = pd.to_numeric(out[stop_col], errors="coerce")
-        minutes = stop - start
-        rows = (minutes > 0).fillna(False)
-        out.loc[rows, stop_col] = (stop - 1.0)[rows]
-        # The expansion may read a loaded duration instead of the stop; each
-        # keeps its own unit and shrinks by the same factor.
-        shrink = (minutes - 1.0) / minutes
-        for column in ("duration", "dur_var"):
-            if column in out.columns:
-                value = pd.to_numeric(out[column], errors="coerce")
-                out.loc[rows, column] = (value * shrink)[rows]
-    return out
-
-
-def _aumc_spread_intermittent(out: pd.DataFrame, source, params, value_column: str) -> pd.DataFrame:
     mode = str(params.get("intermittent", "keep"))
     if mode == "keep" or out.empty:
         return out
+    if mode != "drop":
+        raise ValueError("intermittent bags require the aumc_dextrose callback")
     if "iscontinuous" not in out.columns:
-        raise ValueError(f"intermittent={mode!r} requires drugitems.iscontinuous in extra_vars")
-    intermittent = pd.to_numeric(out["iscontinuous"], errors="coerce").eq(0).fillna(False)
-    if mode == "drop":
-        return out.loc[~intermittent]
-    if mode != "spread":
-        raise ValueError(f"unknown intermittent mode {mode!r}")
-    start_col = source.index_var or "start"
-    stop_col = getattr(source, "dur_var", None) or params.get("dur_var") or params.get("stop_var") or "stop"
-    if start_col not in out.columns or stop_col not in out.columns:
-        raise ValueError("intermittent='spread' requires the start and stop columns")
-    out = out.copy()
-    start = pd.to_numeric(out[start_col], errors="coerce")
-    stop = pd.to_numeric(out[stop_col], errors="coerce")
-    minutes = (stop - start).clip(lower=1.0)
-    span = np.ceil(minutes / 60.0).clip(lower=1.0)
-    rate = pd.to_numeric(out[value_column], errors="coerce")
-    rows = intermittent & start.notna() & stop.notna()
-    out.loc[rows, value_column] = (rate * minutes / 60.0 / span)[rows]
-    # The inclusive hourly expansion places a row at the stop itself, so the
-    # stop is one minute before start + span hours: span rows, not span + 1,
-    # which doubled a one-hour bag (2026-11-04 audit round 4, R4-056).
-    out.loc[rows, stop_col] = (start + span * 60.0 - 1.0)[rows]
-    if "dur_var" in out.columns and stop_col != "dur_var":
-        # A precomputed duration keeps its own unit and stretches by the same factor.
-        stretch = (span * 60.0 - 1.0) / minutes
-        dur = pd.to_numeric(out["dur_var"], errors="coerce")
-        out.loc[rows, "dur_var"] = (dur * stretch)[rows]
-    return out
+        raise ValueError("intermittent='drop' requires iscontinuous")
+    intermittent = pd.to_numeric(out["iscontinuous"], errors="coerce").eq(0)
+    return out.loc[~intermittent]
 
 
 def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
@@ -1030,6 +974,14 @@ def _apply_callback(
             data_source=data_source,
             interval=interval,
         )
+
+    if expr in {
+        "aumc_tidal_volume_set", "aumc_rrt_evidence", "aumc_central_saturation",
+        "aumc_dextrose", "aumc_respiratory_modes", "aumc_positive_dose",
+    }:
+        from .aumc_sources import apply_source_rule
+
+        return apply_source_rule(frame, source, concept_name, data_source, unit_column)
 
     if expr == RASS_SCALE_CALLBACK:
         # eICU sedation scores keep RASS-scale rows only (owner: eicu_sedation_scale).
@@ -3203,6 +3155,7 @@ def _apply_callback(
             rate_unit_col=rate_uom,
             index_col=index_var,
             stop_col=stop_var,
+            data_source=data_source,
         )
 
     # Handle aumc_rate_mass(target_unit = "mcg/hour") — non-kg mass-rate
@@ -3235,6 +3188,7 @@ def _apply_callback(
             index_col=index_var,
             stop_col=stop_var,
             target_unit=target_unit,
+            data_source=data_source,
         )
 
     # Handle hirid_duration callback - calculate infusion durations

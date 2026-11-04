@@ -70,6 +70,8 @@ def _events(database, config, concepts, p):
             item = ids[0] if isinstance(ids, list) else ids
             # One real channel per mapping, including aliases sharing a channel.
             key = (table, source.get("sub_var"), item, source.get("regex"))
+            if database == "aumc" and name == "scvo2":
+                key += ("central",)  # R5C-AUMC-012: separate sampled compartment
             if key in seen:
                 continue
             seen.add(key)
@@ -118,6 +120,16 @@ def _events(database, config, concepts, p):
                                   givendose=np.full(count, .1), route=route, typeid=1, recordstatus=0)
             elif database == "aumc":
                 time = p["origin"][index] + hour * 3_600_000
+                if name == "scvo2":
+                    # R5C-AUMC-012: central-line gases have a distinct sample
+                    # time and positive site evidence; never relabel arterial gases.
+                    time = time + 30 * 60_000
+                    rows["listitems"].append(pd.DataFrame({
+                        "admissionid": p["stay"][index], "itemid": 7432,
+                        "measuredat": time, "value": "Centrale lijn",
+                    }))
+                    value = value / 100.0  # first mapped channel 12311 is fractional
+                    record[value_col] = value
                 record.update(admissionid=p["stay"][index], **{time_col: time})
                 record.update(registeredat=time, updatedat=time, stop=time + 3_600_000,
                               duration=60, tag="+", unit=_aumc_unit(name, source), registeredby="synthetic",

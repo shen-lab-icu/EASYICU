@@ -2953,14 +2953,11 @@
    "aumc": [
     {
      "ids": [
-      8915,
-      9560,
-      9561,
-      10267
+      9560
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-11-04 audit round 4 (R4-156): legacy item 6815 has implausible values; 10267/9561/8915 are pH-7.4-normalised ionised calcium and 9560 is at actual pH, so this source is mainly pH-7.4-normalised."
+     "_comment": "R5C-AUMC-009: actual-pH ionized calcium only; pH-7.4-corrected items are kept in cai_ph74 and never pooled or used as an implicit fallback."
     }
    ],
    "eicu": [
@@ -4245,6 +4242,7 @@
   "category": "vitals",
   "source_channel_priority": [
    "invasive",
+   "invasive_secondary",
    "nibp"
   ],
   "sources": {
@@ -4258,6 +4256,16 @@
      "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped. | 2026-11-04 audit round 3 (R3-16): invasive channel (6643 'ABP diastolisch'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
      "callback": "transform_fun(na_below(1))",
      "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      8842
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive_secondary",
+     "_comment": "R5C-AUMC-017: secondary arterial line, below the primary arterial channel and above cuff; disconnected/zeroing values are excluded."
     },
     {
      "ids": [
@@ -4546,15 +4554,17 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "dur_var": "stop",
-     "rate_var": "doserateunit",
-     "required_volume_unit": "ml",
      "extra_vars": [
       "doseunit",
-      "doserateunit"
+      "doserateunit",
+      "action",
+      "iscontinuous",
+      "administered",
+      "administeredunit"
      ],
-     "callback": "combine_callbacks(\n                           aumc_rate,\n                           dex_to_10(list(7255L, 7256L, c(8940L, 9571L)),\n                                     c(2, 3, 4))\n                         )",
-     "intermittent": "spread",
-     "_comment": "2026-11-04 audit round 3 (F-03): Flush rows are not rates, and an intermittent bag (iscontinuous 0; 2,481 rows of 8940 glucose 40%, often 100 ml over 20-30 min) is spread over the whole hours it spans instead of counting as a continuous infusion at its pump speed."
+     "required_volume_unit": "ml",
+     "callback": "aumc_dextrose",
+     "_comment": "R5C-AUMC-004: exclude Flush and non-volume units; normalize rate-time and glucose concentration before allocating D10-equivalent totals in proportion to exact ICU-hour overlap. Continuous rates and intermittent bag totals are handled separately; do not stretch stop times."
     }
    ],
    "eicu": [
@@ -6137,6 +6147,7 @@
   "target": "ts_tbl"
  },
  "ecmo": {
+  "aggregate": "max",
   "class_name": "lgl_cncpt",
   "description": "Extracorporeal membrane oxygenation in use",
   "category": "respiratory",
@@ -6221,6 +6232,17 @@
     }
    ],
    "aumc": [
+    {
+     "table": "processitems",
+     "sub_var": "itemid",
+     "ids": [
+      20664
+     ],
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "R5C-AUMC-014: explicit ECMO treatment process over its exact half-open interval. Type remains from 20662; no VA/VV inference."
+    },
     {
      "table": "listitems",
      "sub_var": "itemid",
@@ -7333,6 +7355,7 @@
   }
  },
  "ett_gcs": {
+  "aggregate": "max",
   "class_name": "lgl_cncpt",
   "description": "invasive airway (endotracheal tube or tracheostomy)",
     "_comment": "2026-11-03 audit round 2 (S8): an invasive airway makes the GCS verbal score not assessable.",
@@ -7346,7 +7369,8 @@
      "table": "listitems",
      "sub_var": "itemid",
      "target": "ts_tbl",
-     "callback": "combine_callbacks(\n               transform_fun(comp_na(`==`, 'Geïntubeerd')),\n               ts_to_win_tbl(mins(1L))\n             )"
+     "callback": "transform_fun(comp_na(`==`, 'Geïntubeerd'))",
+     "_comment": "R5C-AUMC-008: a point airway assessment occupies only its recorded hour; it is not a one-minute artificial airway interval."
     },
     {
      "ids": [
@@ -8239,6 +8263,24 @@
   "description": "Inspired oxygen fraction from bedside chart records; may include set and analyzed chart channels",
   "category": "respiratory",
   "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6699,
+      12279,
+      12282,
+      12329,
+      12369,
+      16246,
+      20134
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "value_var": "value",
+     "chart_channel": "set_or_analyzed",
+     "_comment": "R5C-AUMC-013: audited bedside set/analyzed FiO2 pool, with original source item identities retained in this mapping. Device-specific set versus analyzed labels are not inferred from values; excludes ECMO sweep gas, APACHE points and oxygen flow."
+    }
+   ],
    "miiv": [
     {
      "ids": 223835,
@@ -12944,7 +12986,15 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^Niet iv"
+     },
+     "_comment": "R5C-AUMC-006: IV sedation requires a positive dose and excludes non-IV order categories."
     }
    ],
    "eicu": [
@@ -15834,6 +15884,10 @@
   }
  },
  "peep_total": {
+  "source_channel_priority": [
+   "primary",
+   "secondary"
+  ],
   "unit": "cmH2O",
   "min": 0,
   "max": 40,
@@ -15881,7 +15935,17 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-11-03 audit round 2 (P4): 12301 'PEEP tot' (Servo total PEEP after an expiratory hold); 6694/8879 measured end-expiratory pressure equals the set PEEP and is not total PEEP."
+     "_comment": "2026-11-03 audit round 2 (P4): 12301 'PEEP tot' (Servo total PEEP after an expiratory hold); 6694/8879 measured end-expiratory pressure equals the set PEEP and is not total PEEP.",
+     "source_channel": "primary"
+    },
+    {
+     "ids": [
+      12364
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "source_channel": "secondary",
+     "_comment": "R5C-AUMC-019: alternate total-PEEP channel as a fallback for 12301; do not add set PEEP or the routine measured end-expiratory pressure 8879."
     }
    ],
    "hirid": [
@@ -18218,7 +18282,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -18454,8 +18519,8 @@
           12091,
           14838
         ],
-        "callback": "transform_fun(comp_na(`>`, 0))",
-        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no RRT."
+        "callback": "aumc_rrt_evidence",
+        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no positive RRT evidence. R5C-AUMC-007: nonzero finite measured circuit pressures include negative access pressures; flow/removal readings require positive values. With no positive evidence status remains unknown."
       }
     ],
    "hirid": [
@@ -18967,6 +19032,7 @@
   "category": "vitals",
   "source_channel_priority": [
    "invasive",
+   "invasive_secondary",
    "nibp"
   ],
   "sources": {
@@ -18980,6 +19046,16 @@
      "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped. | 2026-11-04 audit round 3 (R3-16): invasive channel (6641 'ABP systolisch'); within each hour an invasive value is used when one is recorded, else the cuff value (owner concept/source_channel.py).",
      "callback": "transform_fun(na_below(1))",
      "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      8841
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive_secondary",
+     "_comment": "R5C-AUMC-017: secondary arterial line, below the primary arterial channel and above cuff; disconnected/zeroing values are excluded."
     },
     {
      "ids": [
@@ -20053,8 +20129,8 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "combine_callbacks(convert_unit(binary_op(`*`, 1000), 'ml'), transform_fun(na_above(1500)), transform_fun(na_below(100)))",
-     "_comment": "2026-11-03 extraction audit 2: restored 8851 'Tidal Volume (Set)' (Draeger Evita): values are litres despite the 'ml' label (p05/p50/p95 0.43/0.57/2.0, like VTe 8871 which is already x1000), so x1000. 2.0 L is the Evita knob maximum, charted in 28% of rows mostly in pressure-controlled/CPAP modes where no volume is set; it is dropped, not a 2000 mL setting. 12289 'Volume (Set)' l/min / 12283 rate is not mapped: it equals 12291 where both exist and is a delivered setting only in volume modes. 2026-11-03 audit round 2 (P5b): values outside 100-1,500 mL (170 zeros, 420 above 1,500 of 9,972) are dropped."
+     "callback": "aumc_tidal_volume_set",
+     "_comment": "R5C-AUMC-005: 8851 contains both litres and millilitres despite its ml label. Convert 0.1-1.5 L to mL; keep 100-1500 mL. Reject and count the ambiguous gap, zeros, and the parked 2 L maximum. 12291 is a separate mL set channel; expired tidal volume is not pooled into this concept."
     }
    ],
    "eicu": [
@@ -26894,7 +26970,8 @@
      "ids": [
       6802
      ],
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
      "_comment": "2026-07-17 class: 6802 'Acenocoumarol (Sintrom mitis)' (2,905 rows / 618 adm) is the Dutch VKA; warfarin is absent from AUMC. Concept broadened to VKA class."
     }
    ]
@@ -30834,6 +30911,18 @@
   "description": "central venous oxygen saturation (ScvO2)",
   "category": "cardiovascular",
   "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12311,
+      8903
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "aumc_central_saturation",
+     "_comment": "R5C-AUMC-012: every nonempty same-time 7432 site must be Centrale lijn, and no nonempty 11646 auxiliary specimen description may coexist. Conflicts, untyped, peripheral, pulmonary artery and circuit samples are excluded. 12311 fraction x100; 8903 percent unchanged."
+    }
+   ],
    "miiv": [
     {
      "ids": [
@@ -34531,5 +34620,26 @@
   "class_name": "rec_cncpt",
   "target": "ts_tbl",
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [0, 20000]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
+ },
+ "cai_ph74": {
+  "unit": "mmol/L",
+  "min": 0.5,
+  "max": 2,
+  "description": "ionized calcium standardized to pH 7.4",
+  "category": "blood gas",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8915,
+      9561,
+      10267
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "_comment": "R5C-AUMC-009: corrected ionized calcium, separate from actual-pH cai item 9560."
+    }
+   ]
+  }
  }
 }

@@ -348,6 +348,18 @@
    ],
    "aumc": [
     {
+     "table": "processitems",
+     "sub_var": "itemid",
+     "ids": [
+      9328,
+      10740
+     ],
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "R5C-AUMC-016: explicit ventilation processes are independent active-support evidence; a standby setting on another device does not negate an ongoing treatment process."
+    },
+    {
      "table": "listitems",
      "sub_var": "itemid",
      "ids": [
@@ -355,26 +367,12 @@
       6685,
       9534
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "12290=Ventilatie Mode Set (15.6M records, main ventilator mode), 6685=Type Beademing Evita 4 (44K), 9534=Type beademing Evita 1 (42K) | 2026-11-04 audit round 4 (R4-085): listitems 12290 'Stand By' (ventilator in standby; 192 rows/123 stays) is not support.",
+     "callback": "aumc_respiratory_modes",
+     "_comment": "12290=Ventilatie Mode Set (15.6M records, main ventilator mode), 6685=Type Beademing Evita 4 (44K), 9534=Type beademing Evita 1 (42K) | 2026-11-04 audit round 4 (R4-085): listitems 12290 'Stand By' (ventilator in standby; 192 rows/123 stays) is not support. | R5C-AUMC-016: compare mode evidence at the original time by device, suppress explicit standby on that device, retain independent active-device evidence with a counted conflict. PEEP settings alone do not establish active support.",
      "extra_vars": [
       "value"
      ],
-     "exclude_regex": {
-      "value": "(?i)^\\s*stand\\s*by\\s*$"
-     },
      "val_var": "value"
-    },
-    {
-     "table": "numericitems",
-     "sub_var": "itemid",
-     "ids": [
-      6694,
-      12284,
-      8862
-     ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "PEEP indicators: 6694=Eind exp. druk/PEEP (15.6M), 12284=PEEP Set (15.6M), 8862=PEEP/CPAP (85K)"
     }
    ],
    "hirid": [
@@ -515,6 +513,7 @@
   }
  },
  "ecmo": {
+  "aggregate": "max",
   "class_name": "lgl_cncpt",
   "description": "Extracorporeal membrane oxygenation in use",
   "category": "respiratory",
@@ -589,6 +588,17 @@
     }
    ],
    "aumc": [
+    {
+     "table": "processitems",
+     "sub_var": "itemid",
+     "ids": [
+      20664
+     ],
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "R5C-AUMC-014: explicit ECMO treatment process over its exact half-open interval. Type remains from 20662; no VA/VV inference."
+    },
     {
      "table": "listitems",
      "sub_var": "itemid",
@@ -1087,7 +1097,8 @@
       19929,
       7135
      ],
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
      "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5) | 2026-11-03 extraction audit: removed 9126 (ordercategory 'Niet iv Zalven/Crèmes/Druppels', eye drops). | 2026-11-03 extraction audit: added 7135 Isoprenaline (Isuprel) syringe-pump infusion. | 2026-11-04 audit round 3 (M NEW-2): an infusion covers every hour from its start to its end; only the start hour was marked (SICdb lost 69% of active vasopressin/phenylephrine hours).",
      "dur_var": "stop"
     }
@@ -1509,8 +1520,8 @@
           12091,
           14838
         ],
-        "callback": "transform_fun(comp_na(`>`, 0))",
-        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no RRT."
+        "callback": "aumc_rrt_evidence",
+        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no positive RRT evidence. R5C-AUMC-007: nonzero finite measured circuit pressures include negative access pressures; flow/removal readings require positive values. With no positive evidence status remains unknown."
       }
     ],
    "mimic": [

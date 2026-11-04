@@ -85,8 +85,8 @@ def test_g9_sic_bicarb_drops_667_like_bicar():
 
 def test_p5b_aumc_set_tidal_volume_keeps_100_to_1500_ml():
     [source] = [s for s in _sources("tidal_vol_set", "aumc") if s["ids"] == [8851]]
-    assert "na_above(1500)" in source["callback"]
-    assert "na_below(100)" in source["callback"]
+    # R5C-AUMC-005: bounds follow per-row litre/millilitre normalization.
+    assert source["callback"] == "aumc_tidal_volume_set"
 
 
 @pytest.mark.parametrize(
@@ -265,7 +265,7 @@ def test_v2_eicu_volume_rates_give_no_dose(concept):
 def test_p4_peep_set_and_total_have_sources_beyond_mimic():
     for database in ("aumc", "hirid", "eicu", "sic"):
         assert _sources("peep_set", database), database
-    assert _ids("peep_total", "aumc") == {12301}
+    assert _ids("peep_total", "aumc") == {12301, 12364}  # R5C-AUMC-019
     assert _ids("peep_total", "hirid") == {2610}
 
 
@@ -421,7 +421,10 @@ def test_g5_pafi_pairs_the_lowest_pao2_with_the_median_fio2_of_the_hour():
 
 @pytest.mark.parametrize(("concept", "invasive", "cuff"), [("sbp", 100, 600), ("dbp", 120, 620)])
 def test_h4_hirid_cuff_pressure_fills_hours_without_an_arterial_line(concept, invasive, cuff):
-    assert DICTIONARY[concept]["source_channel_priority"] == ["invasive", "nibp"]
+    # R5C-AUMC-017 adds an AUMC secondary artery rank; HiRID has no such
+    # source and still selects its invasive channel before its cuff.
+    priority = DICTIONARY[concept]["source_channel_priority"]
+    assert priority.index("invasive") < priority.index("nibp")
     channels = {s["source_channel"]: s["ids"] for s in _sources(concept, "hirid")}
     assert channels == {"invasive": [invasive], "nibp": [cuff]}
 

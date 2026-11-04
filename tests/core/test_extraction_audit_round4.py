@@ -174,16 +174,18 @@ def test_r4_007_aumc_insulin_rate_covers_each_infusion_hour(tmp_path):
 
 
 def test_r4_056_aumc_spread_bag_stops_inside_its_last_hour():
-    from types import SimpleNamespace
+    from easyicu.concept.callback_apply import _apply_callback
+    from easyicu.concept.schema import ConceptSource
 
-    from easyicu.concept.callback_apply import _aumc_infusion_rows
-
-    source = SimpleNamespace(index_var="start", dur_var="stop", params={"intermittent": "spread"})
-    frame = pd.DataFrame({"start": [30.0], "stop": [50.0], "dex": [1200.0], "iscontinuous": [0]})
-    out = _aumc_infusion_rows(frame, source, value_column="dex")
-    # 20 minutes at 1,200 ml/h = 400 ml, spread over one hour: one hourly row.
-    assert out["dex"].item() == pytest.approx(400.0)
-    assert out["stop"].item() == pytest.approx(89.0)  # start + 60 - 1 minute
+    # R5C-AUMC-004 supersedes stop stretching: 400 mL stays in the true hour.
+    mapping = _dict("concept-dict.json")["dex"]["sources"]["aumc"][0]
+    source = ConceptSource.from_mapping({**mapping, "val_var": "dose", "unit_var": "doseunit"})
+    frame = pd.DataFrame({"admissionid": [1], "itemid": [7254], "start": [30.0], "stop": [50.0],
+                          "dose": [1200.0], "doseunit": ["ml"], "doserateunit": ["uur"],
+                          "iscontinuous": [0], "action": ["Toedienen"]})
+    out = _apply_callback(frame, source, "dex", "doseunit")
+    assert out["dose"].item() == pytest.approx(400.0)
+    assert out["start"].item() == pytest.approx(0.0)
 
 
 def _cvp(cvp_rows, dbp_rows, database="miiv"):
@@ -798,7 +800,8 @@ def test_r4_l_items_dictionary_contracts():
     for concept in ("vent_mode", "vent_breath_seq"):
         assert excluded(d[concept]["sources"]["miiv"][0], "value", "Ambient")
     assert excluded(_src(s2, "adv_resp", "mimic", table="chartevents", ids=[223848, 223849, 220339, 224700, 225949]), "value", "Not applicable")
-    assert excluded(s2["adv_resp"]["sources"]["aumc"][0], "value", "Stand By")
+    # R5C-AUMC-016: original-time device arbitration owns standby now.
+    assert any(s.get("callback") == "aumc_respiratory_modes" for s in s2["adv_resp"]["sources"]["aumc"])
     for db in ("miiv", "mimic"):
         mcs = next(s for s in s2["mech_circ_support"]["sources"][db] if 227980 in s.get("ids", []))
         assert excluded(mcs, "value", "Off") and not excluded(mcs, "value", "1:1")

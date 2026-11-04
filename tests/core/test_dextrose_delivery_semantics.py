@@ -67,10 +67,11 @@ def test_aumc_drop_units_do_not_become_ml_and_minute_conversion_remains():
     frame = pd.DataFrame({"admissionid": [1, 2, 3, 4], "itemid": [8940]*4, "dose": [10.]*4,
                           "doseunit": ["druppel", " ML ", "ml", None], "doserateunit": ["uur", "uur", "min", "uur"],
                           # Continuous rows; intermittent bags are spread (F-03).
-                          "iscontinuous": [1]*4, "start": [0.]*4, "stop": [1.]*4})
+                          "iscontinuous": [1]*4, "start": [0.]*4, "stop": [1.]*4, "action": ["Toedienen"]*4})
     result = _apply_callback(frame, source, concept_name="dex", unit_column="doseunit")
     assert result.admissionid.tolist() == [2, 3]
-    assert result.dose.tolist() == [40., 2400.]
+    # R5C-AUMC-004: hour-bin averages conserve each one-minute infusion.
+    assert result.dose.tolist() == pytest.approx([40. / 60, 2400. / 60])
 
 
 def test_aumc_missing_declared_volume_unit_is_an_error():

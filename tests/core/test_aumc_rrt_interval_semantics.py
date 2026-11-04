@@ -41,8 +41,9 @@ def test_aumc_rrt_uses_treatment_process_intervals_only(
     readings = sources[1]
     assert readings["table"] == "numericitems"
     assert "dur_var" not in readings
-    # A zero blood flow or removal reading is not treatment (audit round 3).
-    assert readings["callback"] == "transform_fun(comp_na(`>`, 0))"
+    # R5C-AUMC-007: signed circuit pressures need the channel-aware rule;
+    # a zero or nonpositive removal reading leaves treatment unknown.
+    assert readings["callback"] == "aumc_rrt_evidence"
     assert len(sources) == 2
 
 

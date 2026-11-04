@@ -2108,7 +2108,11 @@ class ConceptResolver:
                 return tables
 
             # 🚀 如果有宽表批量加载的合并结果，直接使用（避免重复合并）
-            if wide_table_merged_df is not None and not r_compatible:
+            # R5 AUMC: a partial numeric batch must still merge the callback
+            # concepts (rates, windows, specimen-dependent measurements).
+            if wide_table_merged_df is not None and not r_compatible and (
+                db_name != "aumc" or wide_table_covered_names >= set(names)
+            ):
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
                 return self._downcast_float64_to_float32(
@@ -2226,6 +2230,12 @@ class ConceptResolver:
                     consume_sources=True,
                 )
 
+            if db_name == "aumc" and wide_table_merged_df is not None:
+                _materialize_covered_wide_tables_for_fallback()
+                for name in wide_table_covered_names:
+                    declare_resolved_time_index(
+                        tables[name], align_to_admission=align_to_admission, interval=interval,
+                    )
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(tables),
                 names,
@@ -3650,7 +3660,7 @@ class ConceptResolver:
                     # by changing every high-frequency fallback here.
                     skip_resample = (
                         has_callback
-                        or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2", "po2"})
+                        or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2", "po2", "fio2_chart", "cai", "cai_ph74"})
                         # Ranked channels (MAP) are selected per ICU-relative
                         # hour and then aggregated with the requested
                         # function; a median pre-sample on the absolute clock
@@ -4713,6 +4723,11 @@ class ConceptResolver:
                     data_source=data_source,
                     interval=interval,
                 )
+            from .aumc_intervals import expand_source_windows
+
+            frame = expand_source_windows(
+                frame, source, concept_name, source_index_column, data_source, interval,
+            )
             from ..table.duration import get_dur_var_unit
 
             # Keep the declaration outside DataFrame.attrs as the remaining
@@ -5982,7 +5997,9 @@ class ConceptResolver:
             # R ricu's expand.win_tbl uses raw start times: end = floor(raw_start + dur).
             # change_interval floors start first, causing precision loss:
             # floor(2.9 + 0.2)=3 vs floor(floor(2.9) + 0.2)=floor(2.2)=2
-            if agg_method != '__skip_change_interval__':
+            if agg_method != '__skip_change_interval__' and not (
+                db_name == 'aumc' and any(src.callback == 'aumc_dur' for src in sources)
+            ):
                 # Apply interval change with aggregation (SINGLE aggregation on relative time)
                 combined_result = change_interval(
                     temp_table,
@@ -6150,6 +6167,14 @@ class ConceptResolver:
             win_tbl._ts_source_rows = ts_source_rows
             return win_tbl
         
+        if db_name == "aumc" and is_win_tbl_target and interval is not None and index_column:
+            from .aumc_intervals import collapse_window_points
+
+            combined = collapse_window_points(
+                combined, ids=id_columns, index_col=index_column, value_col=concept_name,
+                logical='lgl_cncpt' in _cls_list, interval=interval,
+            )
+
         try:
             return ICUTable(
                 data=combined,
