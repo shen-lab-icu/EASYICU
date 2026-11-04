@@ -7,7 +7,7 @@ interval alignment, windowing, and time-based transformations.
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Optional, Union, List, Sequence
+from typing import Any, Dict, Optional, Union, List, Sequence
 
 import pandas as pd
 import numpy as np
@@ -116,6 +116,7 @@ def change_interval(
     time_unit: Optional[str] = None,
     row_evidence_columns: Optional[List[str]] = None,
     id_cols: Optional[List[str]] = None,
+    column_aggregations: Optional[Dict[str, str]] = None,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -136,6 +137,8 @@ def change_interval(
         id_cols: Patient/stay identifier columns for a plain DataFrame. When
             omitted, canonical ICU identifier columns are detected. These
             columns are always grouping keys and are never aggregated.
+        column_aggregations: Per-column overrides of ``aggregation`` for
+            numeric companion columns (e.g. ``{"po2_specimen_status": "min"}``).
 
     Returns:
         New ICUTable or DataFrame with adjusted time resolution
@@ -344,7 +347,7 @@ def change_interval(
         for col in df.columns:
             if col not in group_cols:
                 if pd.api.types.is_numeric_dtype(df[col]):
-                    agg_dict[col] = aggregation
+                    agg_dict[col] = (column_aggregations or {}).get(col, aggregation)
 
         if agg_dict:
             # Optimization: If all aggregations are 'first', use drop_duplicates (much faster)

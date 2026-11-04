@@ -1735,7 +1735,7 @@ class ConceptResolver:
                         _params = getattr(src, 'params', None) or {}
                         if any(
                             _params.get(_key)
-                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "deduplicate_by", "source_item_columns")
+                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "deduplicate_by", "source_item_columns", "specimen_status")
                         ):
                             continue
                         _sub_var = getattr(src, 'sub_var', None)
@@ -2953,7 +2953,7 @@ class ConceptResolver:
                         # frame no longer has them (2026-11-04 audit round 3).
                         if any(
                             source.params.get(_key)
-                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "deduplicate_by", "source_item_columns")
+                            for _key in ("excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "deduplicate_by", "source_item_columns", "specimen_status")
                         ):
                             _can_inline_callback = False
                         if signed_sum_bounds and interval is None:
@@ -5118,6 +5118,12 @@ class ConceptResolver:
                 from .source_channel import stamp_source_item_columns
 
                 frame_subset = stamp_source_item_columns(frame_subset, frame, source, concept_name)
+            from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
+
+            for _status_column in SPECIMEN_STATUS_OUTPUT_COLUMNS.get(concept_name, ()):
+                from .source_channel import stamp_specimen_status
+
+                frame_subset = stamp_specimen_status(frame_subset, frame, source, _status_column)
             
             if _select_channels:
                 from .source_channel import stamp_rank
@@ -6044,6 +6050,8 @@ class ConceptResolver:
 
                     urine_receipts = source_availability(combined, id_columns, index_column, interval)
                 # Apply interval change with aggregation (SINGLE aggregation on relative time)
+                from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
+
                 combined_result = change_interval(
                     temp_table,
                     interval=interval,
@@ -6052,6 +6060,10 @@ class ConceptResolver:
                     fill_method=fill_method,
                     copy=False,
                     time_unit="hours",
+                    # An hour publishes its weakest specimen evidence.
+                    column_aggregations={
+                        column: "min" for column in SPECIMEN_STATUS_OUTPUT_COLUMNS.get(concept_name, ())
+                    },
                 )
                 
                 # Extract data if ICUTable is returned
@@ -6136,6 +6148,12 @@ class ConceptResolver:
 
         if native_urine_receipts is not None:
             combined = combined.merge(native_urine_receipts, on=[*id_columns, index_column], how='left', validate='many_to_one')
+        from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
+
+        if concept_name in SPECIMEN_STATUS_OUTPUT_COLUMNS:
+            from .source_channel import decode_specimen_status
+
+            combined = decode_specimen_status(combined, SPECIMEN_STATUS_OUTPUT_COLUMNS[concept_name])
 
         # Other numeric concepts retain pre-aggregation bounds.
         
@@ -9983,9 +10001,10 @@ class ConceptResolver:
                 result_cols.append(value_cols[0])
                 value_col_name = value_cols[0]
 
-            from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
+            from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS, SPECIMEN_STATUS_OUTPUT_COLUMNS
 
             result_cols.extend(SOURCE_ITEM_OUTPUT_COLUMNS.get(concept_name, ()))
+            result_cols.extend(SPECIMEN_STATUS_OUTPUT_COLUMNS.get(concept_name, ()))
             # 确保只返回需要的列
             available_cols = [col for col in result_cols if col in frame.columns]
             result = frame[available_cols].copy()

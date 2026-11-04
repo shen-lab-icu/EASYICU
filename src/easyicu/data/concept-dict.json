@@ -2219,7 +2219,8 @@
      "ids": 20001300,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "miiv": [
@@ -2252,7 +2253,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "source_channel": "chart",
-     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic_demo": [
@@ -2272,7 +2274,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "source_channel": "chart",
-     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "sic": [
@@ -17664,7 +17667,8 @@
      "ids": 20001200,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "miiv": [
@@ -17696,7 +17700,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded. | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220235 'Arterial CO2 Pressure' (13,711 stays), the counterpart of CareVue 778. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3784 'PCO2' and 3835 'pCO2' belong to the same unspecified-specimen panels as 3785/3837 and are not mapped."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded. | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220235 'Arterial CO2 Pressure' (13,711 stays), the counterpart of CareVue 778. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3784 'PCO2' and 3835 'pCO2' belong to the same unspecified-specimen panels as 3785/3837 and are not mapped.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic_demo": [
@@ -17716,7 +17721,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded. | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220235 'Arterial CO2 Pressure' (13,711 stays), the counterpart of CareVue 778. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3784 'PCO2' and 3835 'pCO2' belong to the same unspecified-specimen panels as 3785/3837 and are not mapped."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded. | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220235 'Arterial CO2 Pressure' (13,711 stays), the counterpart of CareVue 778. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3784 'PCO2' and 3835 'pCO2' belong to the same unspecified-specimen panels as 3785/3837 and are not mapped.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "sic": [
@@ -18108,7 +18114,8 @@
      "ids": 20000300,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "miiv": [
@@ -18132,7 +18139,8 @@
      "sub_var": "itemid",
      "index_var": "charttime",
      "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains.",
-     "source_channel": "chart"
+     "source_channel": "chart",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic": [
@@ -18154,7 +18162,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown).",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic_demo": [
@@ -18176,7 +18185,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown).",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "sic": [
@@ -19079,14 +19089,14 @@
    "chart"
   ],
   "source_channel_window_hours": 6,
-   "unit": [
-    "mmHg",
-    "mm Hg"
-   ],
-   "min": 20,
-   "max": 600,
-   "_comment": "2026-09-18 v6: lowered from ricu-inherited 40 to clinically reviewed 20 (unmerged review tag archive/concept-clinical-bounds-ee33539 set po2 20-700). v5 sealed exports show min exactly 40.0 in all six DBs, proving true hypoxia <40 was silently discarded before aggregation. 20 keeps severe hypoxemia while still excluding junk/artefact tails; revisit 0 only with explicit artefact audit.",
-   "description": "O2 partial pressure",
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 20,
+  "max": 600,
+  "_comment": "2026-09-18 v6: lowered from ricu-inherited 40 to clinically reviewed 20 (unmerged review tag archive/concept-clinical-bounds-ee33539 set po2 20-700). v5 sealed exports show min exactly 40.0 in all six DBs, proving true hypoxia <40 was silently discarded before aggregation. 20 keeps severe hypoxemia while still excluding junk/artefact tails; revisit 0 only with explicit artefact audit.",
+  "description": "O2 partial pressure",
   "omopid": 4094581,
   "category": "blood gas",
   "sources": {
@@ -19132,7 +19142,8 @@
      "ids": 20000200,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "miiv": [
@@ -19165,7 +19176,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2). | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220224 'Arterial O2 pressure' (13,711 stays), the counterpart of CareVue 779. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3785 'PO2' and 3837 'pO2' are unspecified-specimen gases (p50 51 and 60 mmHg vs 111 for arterial 779) and are not mapped."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2). | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220224 'Arterial O2 pressure' (13,711 stays), the counterpart of CareVue 779. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3785 'PO2' and 3837 'pO2' are unspecified-specimen gases (p50 51 and 60 mmHg vs 111 for arterial 779) and are not mapped.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic_demo": [
@@ -19185,7 +19197,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2). | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220224 'Arterial O2 pressure' (13,711 stays), the counterpart of CareVue 779. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3785 'PO2' and 3837 'pO2' are unspecified-specimen gases (p50 51 and 60 mmHg vs 111 for arterial 779) and are not mapped."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded. 2026-11-03: removed 490 PAO2, which records alveolar PAO2 (same-time median about 316 vs 113 mmHg for 779 Arterial PaO2). | 2026-11-04 audit round 3 (M NEW-02): added MetaVision 220224 'Arterial O2 pressure' (13,711 stays), the counterpart of CareVue 779. | 2026-11-04 audit round 3 (full-dictionary M): CareVue 3785 'PO2' and 3837 'pO2' are unspecified-specimen gases (p50 51 and 60 mmHg vs 111 for arterial 779) and are not mapped.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "sic": [
@@ -21423,7 +21436,8 @@
      "ids": 20000800,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "miiv": [
@@ -21431,7 +21445,8 @@
      "ids": 220227,
      "table": "chartevents",
      "sub_var": "itemid",
-     "source_channel": "chart"
+     "source_channel": "chart",
+     "specimen_status": "label_defined_arterial"
     },
     {
      "ids": 50817,
@@ -21453,7 +21468,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): CareVue 834 'SaO2' is the continuous monitor saturation (1,714,025 rows, 18,054 stays) and stays in o2sat; sao2 keeps arterial gases."
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): CareVue 834 'SaO2' is the continuous monitor saturation (1,714,025 rows, 18,054 stays) and stays in o2sat; sao2 keeps arterial gases.",
+     "specimen_status": "label_defined_arterial"
     },
     {
      "ids": 50817,
@@ -21472,7 +21488,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): CareVue 834 'SaO2' is the continuous monitor saturation (1,714,025 rows, 18,054 stays) and stays in o2sat; sao2 keeps arterial gases."
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): CareVue 834 'SaO2' is the continuous monitor saturation (1,714,025 rows, 18,054 stays) and stays in o2sat; sao2 keeps arterial gases.",
+     "specimen_status": "label_defined_arterial"
     },
     {
      "ids": 50817,
@@ -22234,7 +22251,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "source_channel": "chart",
-     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic_demo": [
@@ -22254,7 +22272,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "source_channel": "chart",
-     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours.",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "sic": [
@@ -37111,7 +37130,9 @@
      "table": "lab",
      "sub_var": "labname",
      "callback": "eicu_arterial_gas",
-     "extra_vars": ["labresultoffset"]
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
@@ -37120,7 +37141,9 @@
      "table": "lab",
      "sub_var": "labname",
      "callback": "eicu_arterial_gas",
-     "extra_vars": ["labresultoffset"]
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -37128,7 +37151,8 @@
      "ids": 20000300,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "miiv": [
@@ -37152,7 +37176,8 @@
      "sub_var": "itemid",
      "index_var": "charttime",
      "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains.",
-     "source_channel": "chart"
+     "source_channel": "chart",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic": [
@@ -37174,7 +37199,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown).",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "mimic_demo": [
@@ -37196,7 +37222,8 @@
      "table": "chartevents",
      "source_channel": "chart",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown)."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded. 2026-11-03 arterial fix: kept 780 Arterial pH, 1126 Art.pH, 4753 pH (Art), 223830 PH (Arterial); removed 860 Venous pH, 3777 Mix Venous pH, 3839 ph (other), 4202 pH (cap), 220274 PH (Venous) and 1673 PH (no category, site unknown).",
+     "specimen_status": "label_defined_arterial"
     }
    ],
    "sic": [

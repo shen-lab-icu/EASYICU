@@ -197,10 +197,12 @@ def _companion_projection(
 
     from easyicu.concept.metadata_projection import ConceptColumnRole
     from easyicu.concept.metadata_sidecar import DerivationWindow
-    from easyicu.concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
+    from easyicu.concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS, SPECIMEN_STATUS_OUTPUT_COLUMNS
 
     if column in SOURCE_ITEM_OUTPUT_COLUMNS.get(concept, ()):
         return ConceptColumnRole.VALUE, None, "source_item"
+    if column in SPECIMEN_STATUS_OUTPUT_COLUMNS.get(concept, ()):
+        return ConceptColumnRole.VALUE, None, "specimen_status"
 
     escaped = re.escape(concept)
     match = re.fullmatch(
@@ -464,6 +466,10 @@ def build_export_file_metadata_binding(
             from .source_channel import source_item_definition
 
             definition = source_item_definition(definition, column)
+        elif transform == "specimen_status":
+            from .source_channel import specimen_status_definition
+
+            definition = specimen_status_definition(definition, column)
         _validate_metadata_series_domain(
             column=column, series=frame[column], role=role, file_name=relative_path
         )
