@@ -2,16 +2,20 @@
   "baseline_change_summary": {
     "source_digest_changes": [
       "src/easyicu/data/concept-dict.json",
-      "src/easyicu/data/sofa2-dict.json"
+      "src/easyicu/data/sofa2-dict.json",
+      "src/easyicu/research_agent/agents/planner.py",
+      "src/easyicu/research_agent/concept_catalog.py",
+      "src/easyicu/research_agent/planning/cohort_contract.py",
+      "src/easyicu/resources.py"
     ],
     "summary_changes": {
       "max_planner_with_resources_bytes": {
-        "now": 63581,
-        "was": 63569
+        "now": 63601,
+        "was": 63581
       },
       "max_planner_without_resources_bytes": {
-        "now": 59173,
-        "was": 59161
+        "now": 59193,
+        "was": 59173
       }
     }
   },
@@ -247,9 +251,30 @@
           "was": 59161
         }
       }
+    },
+    {
+      "reason": "Round-5 extraction audit: urine chain, companion concepts hidden from the Planner, opt-in bounds audit and the eighth dictionary reseal",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json",
+        "src/easyicu/data/sofa2-dict.json",
+        "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/concept_catalog.py",
+        "src/easyicu/research_agent/planning/cohort_contract.py",
+        "src/easyicu/resources.py"
+      ],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 63601,
+          "was": 63581
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 59193,
+          "was": 59173
+        }
+      }
     }
   ],
-  "baseline_reason": "2026-11-04 extraction audit round 4: seventh reseal of concept-dict and sofa2-dict",
+  "baseline_reason": "Round-5 extraction audit: urine chain, companion concepts hidden from the Planner, opt-in bounds audit and the eighth dictionary reseal",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -260,13 +285,13 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "6ebe04a1441ba9c06f975d6fb8df6c48779875a330da50b09ac811bcdbe7618a",
+    "src/easyicu/data/concept-dict.json": "80313dd8ab776e10f69f061192c0d22f161b9c8c55c9de1b846b5406ab8e3efb",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
-    "src/easyicu/data/sofa2-dict.json": "de98ce4cbe500b8ccf54820ca90fdaacca3015ee33a0239a3e6e7b95d2ae6cc3",
+    "src/easyicu/data/sofa2-dict.json": "d6f00cc7e1a4d31f85ee0078d636273788a6f3810e7303533251189508b167b8",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
     "src/easyicu/research_agent/agents/plan_payload.py": "aad4b7206bbe99dd170e2663c1d4d3054e2843cad0e7e384348ae9f2fcb0308e",
-    "src/easyicu/research_agent/agents/planner.py": "5d01bba07f26e0f2bee94cc0fd6df758c11212aec1b231a4dab28ec758fa66d2",
-    "src/easyicu/research_agent/concept_catalog.py": "a45063173da35f65c1a76a418c1d15cd6f00e423fda75ef806e35eb2e88fbd1e",
+    "src/easyicu/research_agent/agents/planner.py": "afbc95210e02dd859d9e901233ce1a5adfc1aab6e358616d5f5c732f67543873",
+    "src/easyicu/research_agent/concept_catalog.py": "293fe9a249ceccb4daa3983155bdc77787a11fdd65e8dacaf52359e0ddf8073e",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
     "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
@@ -274,7 +299,7 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_method_suite.py": "2b4eaed80f523388c75a6b8d9636819941e63febb84bd84d7c646fd99bee10dd",
     "src/easyicu/research_agent/planning/analysis_types.py": "019e3fd4bc15c78efc1679d3d9c316d6c97035d591772df0b7e0a43605fa6aa4",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "fba16caf43e3147418f66a7c385f90dd64ebece957be0c3fe7bd79710c27f969",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "4db7f47a946b0f6ccb22586e1945a4ff7d8619d27d004084d7a283cf17017723",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/method_adapter_catalog.py": "31ce210bede1f221cfd5f2eaac20fb20320639d9f52411bd08013067871bbbbd",
     "src/easyicu/research_agent/planning/scientific_action_catalog.py": "7efa6f31cdaae0fecc03f02483ae651eaf2010fe4fd43fa84fbf340a088df102",
@@ -291,14 +316,14 @@
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
     "src/easyicu/research_agent/schema.py": "4bfcee83665863afbe4c22ca98e5f37eadb92f323f75d25e641afbd1d7e61ea4",
-    "src/easyicu/resources.py": "7959ef19d818e93b7403c11b6ec7a8cc51e83cc6d1cd736bf39da1e7d43ac579",
+    "src/easyicu/resources.py": "f0f30158c9a39285e6b146fd652a180df352b5a32dfaa095ce5faf91d4a2842c",
     "tools/research_agent_resource_baseline.py": "643dd67bf97f51cf8ad87179404c6b29fbee7dffbb986fd7c1c15801b8d380e4"
   },
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 63581,
-    "max_planner_without_resources_bytes": 59173,
+    "max_planner_with_resources_bytes": 63601,
+    "max_planner_without_resources_bytes": 59193,
     "max_resource_added_bytes": 4565,
     "selected_resource_count": 7,
     "task_count": 9
@@ -889,15 +914,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15896,
+        "approx_input_tokens": 15901,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 50729,
+            "bytes": 50749,
             "included": true,
             "required": true,
-            "sha256": "1a9656b0a988b5b43337d2290466a3306b5c8e86f6c6dbf6b7b2b15c62dc4631"
+            "sha256": "491c55d21a2cf4c032bec2cfe15c3579ab97ac1a309d39d177c0716c2added9c"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -908,27 +933,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 63581,
+        "total_bytes": 63601,
         "truncated_strings": false,
-        "user_bytes": 55137
+        "user_bytes": 55157
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14794,
+        "approx_input_tokens": 14799,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 50729,
+            "bytes": 50749,
             "included": true,
             "required": true,
-            "sha256": "1a9656b0a988b5b43337d2290466a3306b5c8e86f6c6dbf6b7b2b15c62dc4631"
+            "sha256": "491c55d21a2cf4c032bec2cfe15c3579ab97ac1a309d39d177c0716c2added9c"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59173,
+        "total_bytes": 59193,
         "truncated_strings": false,
-        "user_bytes": 50729
+        "user_bytes": 50749
       },
       "planning_contract_bytes": 6797,
       "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",
