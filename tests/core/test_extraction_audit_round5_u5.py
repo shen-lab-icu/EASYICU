@@ -164,6 +164,7 @@ def test_all_databases_daily_gap_rejection_uses_source_clock_not_floor(database)
 def test_source_clock_gap_is_retained_after_hourly_pooling(database):
     urine = _table("urine", [0., 12., 18., 24., 30.], [1.] * 5)
     urine.data["_urine_available_at"] = [0.1, 12.9, 18.9, 24.9, 30.9]
+    urine.data["_urine_gap_h"] = np.r_[0., np.diff(urine.data._urine_available_at)]
     tables = {"urine": urine, "weight": _table("weight", [0.], [50.])}
     daily = callbacks._callback_urine24(tables, _context(database)).data.set_index("charttime")
     assert daily.loc[12., "urine24_covered_h"] == 0

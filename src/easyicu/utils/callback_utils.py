@@ -5562,13 +5562,14 @@ def hirid_urine(
             lag = lag / pd.Timedelta(hours=1)
         df['_urine_source_lag_h'] = lag + df.get('_urine_source_lag_h', 0.)
         df['_urine_first_lag_h'] = lag + df.get('_urine_first_lag_h', 0.)
+        df['_urine_availability_lag_h'] = lag + df.get('_urine_availability_lag_h', df.get('_urine_source_lag_h', 0.) - lag)
 
         # A rate may be recorded more than once in a target bin.  Average the
         # readings; summing rates creates chart-frequency-dependent urine output.
         df = df.dropna(subset=[time_col, actual_val_col])
         df = (
             df.groupby([id_col, time_col], as_index=False, sort=False)
-            .agg({actual_val_col: 'mean', '_urine_source_lag_h': 'max', '_urine_first_lag_h': 'min'})
+            .agg({actual_val_col: 'mean', '_urine_source_lag_h': 'max', '_urine_first_lag_h': 'min', '_urine_availability_lag_h': 'max'})
             .sort_values([id_col, time_col], kind="mergesort")
             .reset_index(drop=True)
         )

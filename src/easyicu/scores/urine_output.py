@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
+from pandas.api.indexers import BaseIndexer
 
 from easyicu.urine_weight_linkage import (
     resolve_keyed_unique_weights,
@@ -29,20 +30,178 @@ KDIGO_EVIDENCE_COLUMNS = [
 ]
 
 
+def urine_availability_columns(name: str) -> list[str]:
+    """Closed export contract for window receipts, in ICU-relative hours."""
+    if name in {"urine24", "urine24_est"}:
+        return [f"{name}_available_at"]
+    if name in {"kdigo_uo", "aki_stage_uo"}:
+        return ["aki_stage_uo_available_at"]
+    if name in {"kdigo_aki", "aki_stage_uo_reference"}:
+        return ["aki_stage_uo_reference_available_at"]
+    if name not in {"uo_6h", "uo_12h", "uo_24h"}:
+        return []
+    columns = [f"{name}_available_at", f"{name}_assessment_available_at"]
+    if name == "uo_6h":
+        columns.append("uo_6h_oliguria_available_at")
+    return columns
+
+
+def availability_fields(database: str, table: str | None = None) -> tuple[str, ...]:
+    """Urine entry/store clocks declared by data-sources.json; SIC has none."""
+    database = database.removesuffix("_demo")
+    source_tables = {"eicu": "intakeoutput", "mimic": "outputevents", "miiv": "outputevents",
+                     "hirid": "observations", "aumc": "numericitems"}
+    if table is not None and table != source_tables.get(database):
+        return ()
+    return {
+        "eicu": ("intakeoutputentryoffset",),
+        "mimic": ("storetime",), "miiv": ("storetime",),
+        "hirid": ("entertime",), "aumc": ("registeredat", "updatedat"),
+    }.get(database, ())
+
+
+def optional_availability_projection(path, columns, database, table):
+    """Older converted files can omit entry clocks; inspect only their schema."""
+    fields = set(availability_fields(database, table))
+    if columns is None or not fields.intersection(str(c).lower() for c in columns):
+        return columns
+    if path.suffix.lower() in {".parquet", ".pq"}:
+        import pyarrow.parquet as pq
+
+        available = pq.read_schema(path).names
+    elif path.name.lower().endswith((".csv", ".csv.gz")):
+        available = pd.read_csv(path, nrows=0).columns
+    else:
+        return columns
+    return available_source_columns(columns, available, database, table)
+
+
+def available_source_columns(columns, available, database, table):
+    """Only entry/store clocks are optional; required source fields stay strict."""
+    if columns is None:
+        return None
+    fields = set(availability_fields(database, table))
+    present = {str(c).lower() for c in available}
+    return [c for c in columns if str(c).lower() not in fields or str(c).lower() in present]
+
+
+def partitioned_source_columns(connection, relation, columns, database, table):
+    """Inspect the already selected partitions, preserving SQL row pushdown."""
+    if columns is None or not set(availability_fields(database, table)).intersection(str(c).lower() for c in columns):
+        return columns
+    available = [row[0] for row in connection.execute(f"SELECT * FROM {relation} LIMIT 0").description]
+    return available_source_columns(columns, available, database, table)
+
+
+def retain_availability_lag(frame, database, time):
+    """Capture entry minus chart before admission alignment or rate pooling.
+
+    DataSource has normalized AUMC to minutes; eICU offsets are also minutes.
+    A lag survives all subsequent clock-origin changes. Missing source fields
+    or per-record clocks fall back to chart time, never earlier than chart.
+    """
+    if "_urine_availability_lag_h" in frame or time not in frame:
+        return
+    lag = np.zeros(len(frame), dtype=float)
+    for column in availability_fields(database):
+        if column not in frame or frame[column].isna().all():
+            continue
+        entry = pd.to_datetime(frame[column], errors="coerce") if pd.api.types.is_datetime64_any_dtype(frame[time]) else frame[column]
+        delta = entry - frame[time]
+        if pd.api.types.is_timedelta64_dtype(delta):
+            delta = delta / pd.Timedelta(hours=1)
+        else:
+            delta = pd.to_numeric(delta, errors="coerce") / 60.
+        lag = np.fmax(lag, delta.to_numpy(dtype=float, na_value=np.nan))
+    frame["_urine_availability_lag_h"] = lag
+
+
+def source_time_select_sql(raw_hours, bucket_hours, valid, database, time, columns):
+    """SQL receipts share the raw-path clocks without materializing source rows."""
+    clock_lag = f"({raw_hours}) - ({bucket_hours})"
+    prefix = "" if database.startswith("eicu") else "o."
+    delays = ["0.0"]
+    for column in availability_fields(database):
+        if column not in columns:
+            continue
+        chart, entry = f'{prefix}"{time}"', f'{prefix}"{column}"'
+        if database == "aumc" or database.startswith("eicu"):
+            scale = 3600000. if database == "aumc" else 60.
+            delays.append(f"(TRY_CAST({entry} AS DOUBLE) - TRY_CAST({chart} AS DOUBLE)) / {scale}")
+        else:
+            delays.append(f"EPOCH(TRY_CAST({entry} AS TIMESTAMP) - TRY_CAST({chart} AS TIMESTAMP)) / 3600.0")
+    availability = f"({clock_lag}) + GREATEST({', '.join(delays)})"
+    return (f", MAX(CASE WHEN {valid} THEN {clock_lag} END) AS _urine_source_lag_h"
+            f", MIN(CASE WHEN {valid} THEN {clock_lag} END) AS _urine_first_lag_h"
+            f", MAX(CASE WHEN {valid} THEN {availability} END) AS _urine_availability_lag_h")
+
+
 def source_availability(frame, ids, time, interval):
     """Keep the latest contributing record time across hourly source pooling."""
     frame = frame.loc[frame.urine.notna()]
     receipts = frame[ids + [time]].copy()
     hours = time_hours(frame[time])
-    receipts['_urine_available_at'] = hours + frame.get('_urine_source_lag_h', 0.)
+    receipts['_urine_chart_at'] = hours + frame.get('_urine_source_lag_h', 0.)
+    receipts['_urine_available_at'] = hours + frame.get('_urine_availability_lag_h', frame.get('_urine_source_lag_h', 0.))
     receipts['_urine_first_at'] = hours + frame.get('_urine_first_lag_h', frame.get('_urine_source_lag_h', 0.))
-    width = pd.Timedelta(interval).total_seconds() / 3600
-    receipts[time] = np.floor(hours / width) * width
+    if interval is not None:
+        width = pd.Timedelta(interval).total_seconds() / 3600
+        receipts[time] = np.floor(hours / width) * width
     receipts = receipts.groupby(ids + [time], as_index=False).agg(
-        {'_urine_available_at': 'max', '_urine_first_at': 'min'},
+        {'_urine_available_at': 'max', '_urine_first_at': 'min', '_urine_chart_at': 'max'},
     )
-    receipts['_urine_gap_h'] = receipts['_urine_first_at'] - receipts.groupby(ids)['_urine_available_at'].shift()
-    return receipts.drop(columns='_urine_first_at')
+    receipts['_urine_gap_h'] = receipts['_urine_first_at'] - receipts.groupby(ids)['_urine_chart_at'].shift()
+    return receipts.drop(columns=['_urine_first_at', '_urine_chart_at'])
+
+
+class _CollectionIndexer(BaseIndexer):
+    """Monotone interval bounds; pandas computes maxima in compiled O(N) code."""
+
+    def get_window_bounds(self, num_values=0, min_periods=None, center=None, closed=None, step=None):
+        return self.index_array, np.arange(1, num_values + 1, dtype=np.int64)
+
+
+def interval_availability(source_times):
+    """Both endpoints determine an allocated interval, including its duration."""
+    times = np.asarray(source_times, dtype=float)
+    return np.fmax(times, np.r_[times[:1], times[:-1]])
+
+
+def window_availability(source_times, left, valid):
+    """Latest availability of every contributing interval, including zero urine."""
+    values = np.where(valid, interval_availability(source_times), np.nan)
+    return pd.Series(values).rolling(_CollectionIndexer(index_array=left.astype(np.int64)), min_periods=1).max().to_numpy()
+
+
+def collection_intervals(
+    ends: np.ndarray,
+    amounts: np.ndarray,
+    *,
+    source_is_rate: bool = False,
+    first_hours: float = 1.,
+    max_gap: float = 12.,
+    source_times: np.ndarray | None = None,
+    record_gaps: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Shared allocation and validity for one sorted stay, including suffixes."""
+    ends = np.asarray(ends, dtype=float)
+    amounts = np.asarray(amounts, dtype=float)
+    lengths = np.r_[0. if source_is_rate else first_hours, np.diff(ends)]
+    # Entry delays are provenance, not recording gaps. Raw chart gaps survive
+    # hourly pooling separately; without that receipt use the chart axis.
+    source_gaps = np.r_[0., np.diff(ends)]
+    if record_gaps is not None:
+        source_gaps = np.nan_to_num(record_gaps, nan=0.)
+    valid = np.isfinite(amounts) & (amounts >= 0) & (lengths > 0) & (lengths <= max_gap)
+    valid &= source_gaps <= max_gap
+    breaks = (lengths > max_gap) | (source_gaps > max_gap) | ~np.isfinite(amounts) | (amounts < 0)
+    segment = np.maximum.accumulate(np.where(breaks, np.arange(len(ends)), 0))
+    starts = ends - lengths
+    rates = amounts.copy() if source_is_rate else np.divide(
+        amounts, lengths, out=np.zeros_like(amounts), where=lengths > 0,
+    )
+    rates = np.where(valid, rates, 0.)
+    return starts, lengths, rates, valid, segment
 
 
 def collection_windows(
@@ -63,23 +222,13 @@ def collection_windows(
     record; an event source retains the existing first-bin convention.
     """
     ends = np.asarray(ends, dtype=float)
-    amounts = np.asarray(amounts, dtype=float)
     if not len(ends):
         return {w: (ends.copy(), ends.copy(), ends.copy()) for w in windows}
-    lengths = np.r_[0. if source_is_rate else first_hours, np.diff(ends)]
-    available_times = ends if source_times is None else np.asarray(source_times, dtype=float)
-    source_gaps = np.r_[0., np.diff(available_times)]
-    if record_gaps is not None:
-        source_gaps = np.nan_to_num(record_gaps, nan=0.)
-    valid = np.isfinite(amounts) & (amounts >= 0) & (lengths > 0) & (lengths <= max_gap)
-    valid &= source_gaps <= max_gap
-    breaks = (lengths > max_gap) | (source_gaps > max_gap) | ~np.isfinite(amounts) | (amounts < 0)
-    segment = np.maximum.accumulate(np.where(breaks, np.arange(len(ends)), 0))
-    starts = ends - lengths
-    rates = amounts.copy() if source_is_rate else np.divide(
-        amounts, lengths, out=np.zeros_like(amounts), where=lengths > 0,
+    starts, lengths, rates, valid, segment = collection_intervals(
+        ends, amounts, source_is_rate=source_is_rate, first_hours=first_hours,
+        max_gap=max_gap, source_times=source_times, record_gaps=record_gaps,
     )
-    rates = np.where(valid, rates, 0.)
+    available_times = ends if source_times is None else np.asarray(source_times, dtype=float)
     covered_lengths = np.where(valid, lengths, 0.)
     cumulative_h = np.r_[0., np.cumsum(covered_lengths)]
     cumulative_v = np.r_[0., np.cumsum(rates * covered_lengths)]
@@ -93,7 +242,7 @@ def collection_windows(
         trimmed = np.where(valid[left], trimmed, 0.)
         covered = np.maximum(cumulative_h[right + 1] - cumulative_h[left] - trimmed, 0.)
         volume = np.maximum(cumulative_v[right + 1] - cumulative_v[left] - rates[left] * trimmed, 0.)
-        available = np.where(covered > 1e-9, available_times, np.nan)
+        available = np.where(covered > 1e-9, window_availability(available_times, left, valid), np.nan)
         result[window] = (volume, covered, available)
     return result
 
@@ -157,6 +306,7 @@ def descriptive_windows(
         frame[name] = np.nan
         frame[f"{name}_covered_h"] = 0.
         frame[f"{name}_partial_window"] = True
+        frame[f"{name}_available_at"] = np.nan
         result[name] = frame
     for positions in data.groupby(ids, sort=False).indices.values():
         amounts = data.urine.to_numpy(dtype=float)[positions]
@@ -171,13 +321,14 @@ def descriptive_windows(
                                         if '_urine_gap_h' in data else None)
         weights = pd.to_numeric(data.weight.iloc[positions], errors="coerce").to_numpy(dtype=float)
         for window, minimum in windows:
-            volume, covered, _ = integrated[window]
+            volume, covered, available = integrated[window]
             valid = (covered >= minimum - 1e-9) & np.isfinite(weights) & (weights > 0)
             values = np.divide(volume, covered * weights, out=np.full(len(volume), np.nan), where=valid)
             name = f"uo_{window}h"
             result[name].loc[positions, name] = values
             result[name].loc[positions, f"{name}_covered_h"] = covered
             result[name].loc[positions, f"{name}_partial_window"] = covered < window - 1e-9
+            result[name].loc[positions, f"{name}_available_at"] = available
     return result
 
 
@@ -255,23 +406,26 @@ def daily_volume_batch(
         return pd.DataFrame(columns=out_cols)
     rec["_k"] = np.floor(rec[time_col].to_numpy(dtype=np.float64) / time_step + 1e-9).astype(np.int64)
     rec["_source_time"] = rec['_urine_available_at']
+    rec["_chart_time"] = rec[time_col]
     rec = rec.groupby([id_col, "_k"], sort=True, as_index=False).agg(
         **{urine_col: (urine_col, "sum"), "_source_time": ("_source_time", "max"),
-           '_urine_gap_h': ('_urine_gap_h', 'max')}
+           '_urine_gap_h': ('_urine_gap_h', 'max'), '_chart_time': ('_chart_time', 'max')}
     )
 
     gap = rec.groupby(id_col, sort=False)["_k"].diff().fillna(1).astype(np.int64).to_numpy()
-    elapsed = rec.groupby(id_col, sort=False)["_source_time"].diff().fillna(time_step).to_numpy()
+    elapsed = rec.groupby(id_col, sort=False)["_chart_time"].diff().fillna(time_step).to_numpy()
     if '_urine_gap_h' in df:
         elapsed = rec['_urine_gap_h'].fillna(time_step).to_numpy()
     rejected = (gap > cap_steps) | (elapsed > cap_steps * time_step)
     placed = ~rejected
     reps = gap[placed]
     within = np.arange(int(reps.sum())) - np.repeat(np.cumsum(reps) - reps, reps)
+    previous = rec.groupby(id_col, sort=False)["_source_time"].shift().to_numpy()
+    available = np.fmax(rec["_source_time"].to_numpy(), previous)
     cells = pd.DataFrame({
         id_col: np.repeat(rec[id_col].to_numpy()[placed], reps),
         "_k": np.repeat(rec["_k"].to_numpy()[placed] - reps + 1, reps) + within,
-        "_available": np.repeat(rec["_source_time"].to_numpy()[placed], reps),
+        "_available": np.repeat(available[placed], reps),
         "_vol": np.repeat(rec[urine_col].to_numpy(dtype=np.float64)[placed] / reps, reps),
     })
     cells["_cov"] = 1.0

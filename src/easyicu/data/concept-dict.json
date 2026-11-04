@@ -10875,7 +10875,7 @@
  },
  "kdigo_aki": {
   "class_name": "rec_cncpt",
-  "description": "Public-reference KDIGO staging plus a source-native comparison or explicit unavailability receipt",
+  "description": "Public-reference KDIGO staging plus a source-native comparison or explicit unavailability receipt; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "clinical_status": "validated_definition",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,
@@ -10911,7 +10911,7 @@
  },
  "kdigo_uo": {
   "class_name": "rec_cncpt",
-  "description": "KDIGO AKI urine output-based staging (mL/kg/h rates)",
+  "description": "KDIGO AKI urine output-based staging from rates in mL/kg/h; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "clinical_status": "validated_definition",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,
@@ -21225,7 +21225,7 @@
    "crea",
    "urine24"
   ],
-  "description": "SOFA renal: complete daily urine, else estimate with at least 18 covered hours",
+  "description": "SOFA renal: complete daily urine when present, otherwise a daily estimate extrapolated from 18 to less than 24 covered hours",
   "omopid": 1616355,
   "category": "outcome",
   "aggregate": [
@@ -27437,7 +27437,7 @@
   "unit": "mL/kg/h",
   "min": 0,
   "max": 20,
-  "description": "12-hour urine rate per covered hour, at least 6 hours; partial window flagged",
+  "description": "12-hour urine rate per covered hour, at least 6 hours; partial window flagged; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "concepts": [
    "urine",
    "weight"
@@ -27454,7 +27454,7 @@
   "unit": "mL/kg/h",
   "min": 0,
   "max": 20,
-  "description": "24-hour urine rate per covered hour, at least 12 hours; partial window flagged",
+  "description": "24-hour urine rate per covered hour, at least 12 hours; partial window flagged; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "concepts": [
    "urine",
    "weight"
@@ -27471,7 +27471,7 @@
   "unit": "mL/kg/h",
   "min": 0,
   "max": 20,
-  "description": "6-hour urine rate per covered hour, at least 3 hours; partial window flagged",
+  "description": "6-hour urine rate per covered hour, at least 3 hours; partial window flagged; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "concepts": [
    "urine",
    "weight"
@@ -27674,7 +27674,7 @@
     }
    ]
   },
-  "_comment": "R5-EICU-031: raw hourly urine is volume booked at the chart timestamp, available at intakeoutputentryoffset, not the score-window redistribution. Actual coverage is unknown without adjacent observations."
+  "_comment": "RU-03/RU-08: retrospective collection-interval values; real-time use must filter available_at <= t. Availability is the latest of chart time and all declared entry/store clocks: eICU intakeoutputentryoffset, MIMIC-III/IV storetime, HiRID entertime, AUMC registeredat and updatedat. SICdb data_float_h has no entry/store time, so Offset is the availability clock. Missing per-record entry/store clocks also fall back to chart time. Chart gaps remain separate from entry delays; all contributing interval endpoints determine the availability of each window. Raw urine stays booked at chart time."
  },
  "urine24": {
   "min": 0,
@@ -27683,7 +27683,7 @@
   "depends_on": [
    "urine"
   ],
-  "description": "Measured urine output with complete 24-hour coverage",
+  "description": "Measured urine output with complete 24-hour coverage; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "omopid": 4191836,
   "category": "output",
   "callback": "urine24",
@@ -36721,7 +36721,7 @@
   "depends_on": [
    "urine24"
   ],
-  "description": "Estimated daily urine volume scaled from 18 to less than 24 covered hours",
+  "description": "Estimated daily urine volume scaled from 18 to less than 24 covered hours; retrospective value; real-time use must filter availability time to no later than evaluation time",
   "category": "output",
   "callback": "urine24_est",
   "class_name": "rec_cncpt"
@@ -36753,7 +36753,7 @@
   "depends_on": [
    "urine24"
   ],
-  "description": "ICU-relative hour of the latest record used by measured daily urine volume",
+  "description": "Latest source availability for retrospective measured daily urine; includes entry or store time when present, otherwise chart time",
   "unit": "h",
   "category": "output",
   "callback": "urine_output_evidence",
@@ -36764,7 +36764,7 @@
   "depends_on": [
    "urine24"
   ],
-  "description": "ICU-relative hour of the latest record used by estimated daily urine volume",
+  "description": "Latest source availability for retrospective estimated daily urine; includes entry or store time when present, otherwise chart time",
   "unit": "h",
   "category": "output",
   "callback": "urine_output_evidence",

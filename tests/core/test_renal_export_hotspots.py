@@ -18,18 +18,8 @@ from tests.support.renal_export import write_renal_source
 
 
 def _assessment_reference(urine, weight, **kwargs):
-    """R5C-HIRID-001: the old reference runs independently per accepted segment."""
-    if not kwargs.get("source_is_rate") or urine.empty:
-        return old.assess_urine_windows(urine, weight, **kwargs)
-    ids = list(kwargs["id_columns"])
-    time = kwargs["time_column"]
-    data = urine.sort_values(ids + [time]).copy()
-    gaps = data.groupby(ids)[time].diff()
-    if pd.api.types.is_timedelta64_dtype(gaps):
-        gaps = gaps / pd.Timedelta(hours=1)
-    data["_audit_segment"] = gaps.gt(12).groupby([data[c] for c in ids]).cumsum()
-    options = dict(kwargs, id_columns=[*ids, "_audit_segment"])
-    return old.assess_urine_windows(data, weight, **options).drop(columns="_audit_segment")
+    """RU-01: parity oracle uses collection intervals for both source kinds."""
+    return old.assess_urine_windows(urine, weight, **kwargs)
 
 
 def test_three_requested_windows_assess_the_shared_source_once(monkeypatch):

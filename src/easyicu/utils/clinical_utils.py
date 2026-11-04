@@ -215,32 +215,11 @@ def supp_o2(o2_flow: Optional[Union[float, pd.Series]] = None,
 
 def urine24(urine_vol: Union[float, pd.Series],
             duration_hours: Optional[Union[float, pd.Series]] = None) -> Union[float, pd.Series]:
-    """Calculate 24-hour urine output (R ricu urine24).
-    
-    Args:
-        urine_vol: Urine volume in mL
-        duration_hours: Duration in hours (default: 24)
-        
-    Returns:
-        24-hour equivalent urine output
-        
-    Examples:
-        >>> urine24(1000, duration_hours=12)
-        2000.0
-    """
-    if duration_hours is None:
-        duration_hours = 24.0
-    
-    if isinstance(urine_vol, pd.Series) or isinstance(duration_hours, pd.Series):
-        urine_vol = pd.Series(urine_vol) if not isinstance(urine_vol, pd.Series) else urine_vol
-        duration_hours = pd.Series(duration_hours) if not isinstance(duration_hours, pd.Series) else duration_hours
-        result = urine_vol * (24.0 / duration_hours)
-        result[duration_hours <= 0] = np.nan
-        return result
-    
-    if duration_hours <= 0:
-        return np.nan
-    return urine_vol * (24.0 / duration_hours)
+    """Deprecated: a volume/duration pair has no collection or gap evidence."""
+    raise NotImplementedError(
+        "clinical_utils.urine24 is deprecated; use scores.urine_output "
+        "for measured daily volume and separately flagged partial estimates"
+    )
 
 def vaso60(rate: Union[float, pd.Series]) -> Union[bool, pd.Series]:
     """Vasoactive drug at 60 minutes indicator (R ricu vaso60).

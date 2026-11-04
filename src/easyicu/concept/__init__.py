@@ -2748,6 +2748,11 @@ class ConceptResolver:
                     unit_column=cached_table.unit_column,
                 )
                 
+                if concept_name == "urine":
+                    from ..scores.urine_output import retain_availability_lag
+
+                    retain_availability_lag(frame, db_name, table.index_column)
+
                 # 🔧 FIX: HiRID缓存分支时间转换
                 # 缓存的数据保留原始datetime格式，需要在使用时转换为相对小时数
                 # 这确保从缓存加载的概念也能正确处理时间
@@ -2827,6 +2832,10 @@ class ConceptResolver:
                                 "Concept source 'extra_vars' entries must be non-empty strings"
                             )
                         extra_columns.append(extra_var)
+                    if concept_name == "urine":
+                        from ..scores.urine_output import availability_fields
+
+                        extra_columns.extend(availability_fields(db_name))
                     extra_columns = list(dict.fromkeys(extra_columns))
                     
                     # 🚀 DuckDB层聚合优化：对有分桶目录的表直接在DuckDB中降采样
@@ -3602,6 +3611,11 @@ class ConceptResolver:
                             if len(unique_ids) <= 10:
                                 print(f"       ID列表: {sorted(unique_ids)}")
                     
+                    if concept_name == "urine":
+                        from ..scores.urine_output import retain_availability_lag
+
+                        retain_availability_lag(frame, db_name, table.index_column)
+
                     # 🔧 HiRID特殊处理：将datetime时间转换为相对入院时间的小时数
                     # HiRID使用绝对datetime时间戳，需要从general表获取admissiontime
                     # 🚀 但是跳过 general 表本身，它不需要时间转换（admissiontime 本身就是入院时间）
@@ -5041,7 +5055,7 @@ class ConceptResolver:
             ]
             ordered_cols.extend(extra_time)
             ordered_cols.append(concept_name)
-            ordered_cols.extend(c for c in ('_urine_source_lag_h', '_urine_first_lag_h') if c in frame)
+            ordered_cols.extend(c for c in ('_urine_source_lag_h', '_urine_first_lag_h', '_urine_availability_lag_h', 'vent_mode_interface') if c in frame)
             if source_unit_column and source_unit_column not in ordered_cols:
                 ordered_cols.append(source_unit_column)
             
@@ -6041,7 +6055,7 @@ class ConceptResolver:
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
                 if urine_receipts is not None:
-                    combined = combined.drop(columns=['_urine_source_lag_h', '_urine_first_lag_h'], errors='ignore').merge(
+                    combined = combined.drop(columns=['_urine_source_lag_h', '_urine_first_lag_h', '_urine_availability_lag_h'], errors='ignore').merge(
                         urine_receipts, on=[*id_columns, index_column], how='left', validate='many_to_one',
                     )
         elif align_to_admission:
@@ -6087,6 +6101,11 @@ class ConceptResolver:
                     per_stay=_channel_per_stay,
                 )
 
+        native_urine_receipts = None
+        if concept_name == 'urine' and interval is None and index_column:
+            from ..scores.urine_output import source_availability
+
+            native_urine_receipts = source_availability(combined, id_columns, index_column, None)
         if signed_sum_bounds and concept_name in combined.columns:
             from .signed_volume import bound_signed_total
 
@@ -6102,6 +6121,9 @@ class ConceptResolver:
             combined = bound_signed_total(
                 combined, concept_name, definition.minimum, definition.maximum
             )
+
+        if native_urine_receipts is not None:
+            combined = combined.merge(native_urine_receipts, on=[*id_columns, index_column], how='left', validate='many_to_one')
 
         # Other numeric concepts retain pre-aggregation bounds.
         
@@ -9002,8 +9024,10 @@ class ConceptResolver:
             frame = table.data.copy()
             # R5 daily estimate is also a first-class requested concept.
             # Its own table owns that value when both outputs are requested.
-            if name in {"urine24", "uo_6h", "uo_12h", "uo_24h"}:
+            if name in {"urine24", "urine24_est", "uo_6h", "uo_12h", "uo_24h"}:
                 frame = frame.drop(columns=[c for c in frame if c != name and c in tables])
+            if name == "urine24" and "urine24_est" in tables:
+                frame = frame.drop(columns=["urine24_est_available_at"], errors="ignore")
             table_index = table.index_var if isinstance(table, WinTbl) else table.index_column
             if table_index and table_index != aligned_index:
                 frame = frame.rename(columns={table_index: aligned_index})

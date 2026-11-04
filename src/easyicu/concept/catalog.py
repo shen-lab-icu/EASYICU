@@ -516,7 +516,7 @@ CONCEPT_DESCRIPTIONS = {
     'aki_reference': ('Yes when the KDIGO stage is 1 or higher', 'KDIGO 分期 ≥1 期即为是'),
     'aki_severe_reference': ('Yes when the KDIGO stage is 2 or 3', 'KDIGO 分期为 2 或 3 期即为是'),
     'aki_stage_creat_reference': ('Stage from serum creatinine alone: the rise over the lowest value of the past 48 hours and 7 days', '只按血肌酐分期：相对过去 48 小时和 7 天内最低值的升高'),
-    'aki_stage_uo_reference': ('Stage from urine output per kilogram alone, over 6-, 12- and 24-hour windows', '只按每公斤体重尿量分期（6、12、24 小时窗口）'),
+    'aki_stage_uo_reference': ('Retrospective urine stage over 6, 12 and 24 hours; real-time use must filter availability time to no later than evaluation time', '回顾性尿量分期，使用六、十二及二十四小时窗口；实时使用必须筛选可得时间不晚于评估时刻的结果'),
     'aki_stage_rrt_reference': ('Stage 3 while renal replacement therapy is running', '肾脏替代治疗进行期间记为 3 期'),
     'aki_stage_reference_smoothed_6h': ('The highest KDIGO stage within the preceding 6 hours, which evens out hour-to-hour swings', '前 6 小时内的最高 KDIGO 分期，减少逐小时波动'),
     'aki_stage_source_native': ("Stage by each database's own definition (its maintainer's or a published study's), kept beside the KDIGO stage for comparison; empty where a database has none", '按各库自己的定义分期（维护方或已发表研究的定义），与 KDIGO 分期并列供对照；某库没有时为空'),

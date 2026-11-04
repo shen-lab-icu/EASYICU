@@ -36,9 +36,9 @@ def evidence(times, amounts, *, interval=1, rate=False):
 @pytest.mark.parametrize(
     "times,amounts,coverage",
     [
-        (list(range(1, 24, 2)), [0.2] * 12, 6),
-        (list(range(1, 7)) + list(range(20, 26)), [0.2] * 12, 6),
-        (list(range(1, 13)), [0.0] * 11 + [np.nan], 11),
+        (list(range(1, 24, 2)), [0.2] * 12, 12),
+        (list(range(1, 7)) + list(range(20, 26)), [0.2] * 12, 5),
+        (list(range(1, 13)), [0.0] * 11 + [np.nan], 0),
         (list(range(1, 13)) * 2, [0.0] * 24, 12),
     ],
 )
@@ -48,11 +48,11 @@ def test_real_window_coverage(times, amounts, coverage):
     assert pd.notna(row.uo_12h_assessment_rate) == (coverage == 12)
 
 
-def test_nondividing_volume_bin_is_not_uniformly_apportioned():
+def test_nondividing_collection_interval_is_apportioned():
     row = evidence([5, 10, 15], [2.75] * 3, interval=5).iloc[-1]
     assert row.uo_6h_covered_h == 6
-    assert pd.isna(row.uo_6h_assessment_rate)
-    assert row.uo_6h_assessment_reason == "partial_volume_bin"
+    assert row.uo_6h_assessment_rate == pytest.approx(2.75 / 5)
+    assert row.uo_6h_assessment_reason == "complete_collection_intervals"
 
 
 def test_two_low_moving_averages_do_not_prove_low_union_rate():
@@ -264,5 +264,5 @@ def test_nullable_urine_hole_does_not_gain_coverage(dtype):
                           'urine':pd.Series([0.]*11+[pd.NA], dtype=dtype)})
     result = assess_urine_windows(urine, pd.DataFrame({'stay_id':[1],'weight':[70.]}),
         id_columns=['stay_id'],time_column='charttime',interval=pd.Timedelta(hours=1))
-    assert result.uo_12h_covered_h.iloc[-1] == 11.
+    assert result.uo_12h_covered_h.iloc[-1] == 0.
     assert pd.isna(result.uo_12h_assessment_rate.iloc[-1])

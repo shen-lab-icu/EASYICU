@@ -19,50 +19,11 @@ def rrt_criteria(
     ph: Optional[pd.Series] = None,
     bicarb: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """Determine if patient meets RRT (Renal Replacement Therapy) criteria.
-    
-    RRT criteria according to SOFA-2 footnote p:
-    - Base kidney injury: Creatinine > 1.2 mg/dL OR oliguria (<0.3 mL/kg/h for >6h)
-    - PLUS at least one of:
-      * Serum potassium ≥ 6.0 mmol/L
-      * Metabolic acidosis: pH ≤ 7.20 AND HCO3 ≤ 12 mmol/L
-    
-    Args:
-        crea: Serum creatinine (mg/dL)
-        uo_6h: 6-hour average urine output (mL/kg/h) - proxy for oliguria >6h
-        potassium: Serum potassium (mmol/L)
-        ph: Arterial pH
-        bicarb: Serum bicarbonate (mmol/L)
-        
-    Returns:
-        Boolean series indicating if RRT criteria are met
-    """
-    crea_num = pd.to_numeric(crea, errors="coerce")
-    
-    # Base kidney injury criteria
-    base_injury = crea_num > 1.2
-    
-    if uo_6h is not None:
-        uo_num = pd.to_numeric(uo_6h, errors="coerce")
-        oliguria = uo_num < 0.3
-        base_injury = base_injury | oliguria
-    
-    # Additional criteria
-    meets_additional = pd.Series(False, index=crea.index)
-    
-    if potassium is not None:
-        k_num = pd.to_numeric(potassium, errors="coerce")
-        hyperkalemia = k_num >= 6.0
-        meets_additional = meets_additional | hyperkalemia
-    
-    if ph is not None and bicarb is not None:
-        ph_num = pd.to_numeric(ph, errors="coerce")
-        hco3_num = pd.to_numeric(bicarb, errors="coerce")
-        acidosis = (ph_num <= 7.20) & (hco3_num <= 12)
-        meets_additional = meets_additional | acidosis
-    
-    # Meets RRT criteria if has base injury AND meets at least one additional criterion
-    return base_injury & meets_additional
+    """Deprecated: a descriptive six-hour average cannot prove >6h oliguria."""
+    raise NotImplementedError(
+        "callbacks_missing.rrt_criteria is deprecated; use the rrt_criteria "
+        "concept callback with collection-duration assessment evidence"
+    )
 
 
 def sum_components(*components: pd.Series) -> pd.Series:
