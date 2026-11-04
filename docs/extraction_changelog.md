@@ -4,6 +4,66 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — extraction audit round 4
+
+Numbers are 3,000-stay native-v2 samples, before (`5d0ed1256`) → after.
+Commits: `ade4802d7` (fixes), `6d3d52e92` (seventh reseal), `b21030f26`
+(follow-ups from the server regression). Every item with its status is in
+`outputs/extraction_audit_r4_receipt_20261104.md`.
+
+### Trunk fixes (R4)
+
+- **[R4-001/R4-010]** Uncharted urine hours are missing, not zero. A record
+  is spread back to the previous one over at most 12 h; `urine24` needs 18
+  covered hours of the last 24 cells and is scaled to 24 h. urine24 rows MIIV
+  197,138 → 158,643 (p05 49.9 → 330 mL), eICU 113,129 → 72,644 (p05 0 → 286).
+- **[R4-002]** MIMIC-III CareVue phenylephrine 30127/30128 is `other_vaso`
+  (TRUE rows 7,691 → 15,246; stays 355 → 604).
+- **[R4-003]** eICU `other_output_ml` never selects a urine row.
+- **[R4-004]** A failed native-v2 publication raises
+  `NativeExportPublicationError` (`native_export_v2_publication_failed`) and
+  moves the unpublished files to `.easyicu-unpublished/`.
+- **[R4-006]** MIMIC-III prescription points stay in `delirium_tx_proxy`
+  (rows 238 → 1,042).
+- **[R4-007]** AUMC insulin has a rate in every hour of [start, stop) (rows
+  31,953 → 185,789; median 2.7 → 2.0 U/h).
+- **[R4-008]** Pooled multi-source concepts take one median over all raw rows.
+
+### Trunk M items
+
+- **[R4-009]** SOFA-1/SOFA-2 worst-value windows are 24 hourly cells.
+- **[R4-013]** CVP above 50 mmHg is dropped; 30–50 is dropped only within
+  10 mmHg of the same-hour arterial diastolic or as an isolated spike (kept
+  (30,50] rows: MIIV 108, MIMIC-III 224, eICU 258, AUMC 90). SICdb and HiRID
+  keep their 30 mmHg caps; `cvp_raw` keeps the charted values.
+- **[R4-014/R4-024]** `vent_ind` takes invasive windows only; NIV stays a
+  `mech_vent` level. eICU vent_ind rows 48,502 → 44,600.
+- **[R4-016]** Lab concepts prefer the lab channel: a chart transcription
+  within 6 h of a lab result is dropped (MIMIC-III crea 26,236 → 21,042 rows).
+- **[R4-018]** MIMIC-III MetaVision `mort_365d` is restored (non-null 1,814 →
+  2,997), reversing R3-08.
+- **[R4-020/R4-021]** MIMIC gases without a specimen record are not arterial
+  (ph 26,796 → 20,529; sao2 8,043 → 5,807).
+- **[R4-034]** MIMIC-III `adm` is the service active at ICU intime (stays
+  2,530 → 2,999).
+- **[R4-035]** OR/PACU intake is not an ICU transfusion, in MIMIC-III and MIIV
+  (MIIV ffp 603 → 517).
+- **[R4-041/R4-043]** eICU 'Delirium Scale/Score' Yes/No is CAM-ICU
+  (delirium TRUE 95 → 425); coded GCS responses ('4-->(E4) …') are parsed (egcs
+  stays 2,003 → 2,116).
+- **[R4-046]** eICU per-kg infusion rates are multiplied by weight (fentanyl
+  rate median 50 → 73 µg/h).
+- **Route filters.** IV-defined drugs drop enteral orders in MIMIC-III, AUMC
+  and HiRID (HiRID levetiracetam 1,571 → 332 rows; AUMC pantoprazole 6,942 →
+  5,687).
+
+### Documented, not changed (round 4)
+
+- **MIIV ED labs** with `hadm_id` NULL (R4-012) and **chartevents ERROR rows**
+  (R4-073) need loader changes and are deferred.
+- **HiRID dex route** (R4-164): the route filter broke the grouped callback
+  and was reverted.
+
 ## 2026-11-04 — extraction audit round 3
 
 Numbers are 3,000-stay samples, before (`014aac14f`) → after. Commits:
