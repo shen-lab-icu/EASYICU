@@ -56,7 +56,8 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "_comment": "2026-07-03 full dictionary audit: removed legacy/non-current AUMC ids absent from drugitems.csv; 18860 was Hb pleural fluid in numericitems, not antibiotic. | 2026-11-04 audit round 3 (F-01): removed eye drops/ointments and burn cream (9070 Flammazine, 12997 ofloxacin eye drops, 13094 tobramycin and 13102 gentamicin eye ointment); added systemic antibacterials 7123 imipenem, 6917 ceftazidime, 8127 meropenem, 8546 clarithromycin, 9037 pheneticillin, 9047 chloramphenicol, 9075 fusidic acid, 19764 tigecycline, 20175 colistin, 14236 nitrofurantoin and the antituberculous 8230 isoniazid, 8231 pyrazinamide, 12953 ethambutol. Antivirals and antifungals (aciclovir, fluconazole) are not antibacterials and stay unmapped.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -64,8 +65,8 @@
      "regex": "merope?nem|merrem|bactrim|cipro|flagyl|metronidazole|zithromax|zosyn|(((amika|cleo|ofloxa)|(azithro|clinda|tobra|vanco)my)c|(ampi|oxa|peni|pipera)cill|cefazol|levaqu|rifamp)in",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
      "_comment": "2026-11-04 audit round 4 (R4-038): meropenem/Merrem added (6,633 named medication rows in 2,841 stays had no match)."
     },
@@ -137,8 +138,8 @@
      "regex": "merope?nem|merrem|bactrim|cipro|flagyl|metronidazole|zithromax|zosyn|(((amika|cleo|ofloxa)|(azithro|clinda|tobra|vanco)my)c|(ampi|oxa|peni|pipera)cill|cefazol|levaqu|rifamp)in",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
      "_comment": "2026-11-04 audit round 4 (R4-038): meropenem/Merrem added (6,633 named medication rows in 2,841 stays had no match)."
     },
@@ -1176,7 +1177,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -1189,15 +1199,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -1207,8 +1219,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue albumin (d_items: 30008 Albumin 5%, 30009 Albumin 25%, 30181 Serum Albumin 5%; amountuom ml). OR Albumin (44952) is not mapped, like MetaVision, whose albumin items exclude 226365 OR Colloid Intake; other free-text albumin labels each cover <10 stays."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue albumin (d_items: 30008 Albumin 5%, 30009 Albumin 25%, 30181 Serum Albumin 5%; amountuom ml). OR Albumin (44952) is not mapped, like MetaVision, whose albumin items exclude 226365 OR Colloid Intake; other free-text albumin labels each cover <10 stays.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -1221,15 +1237,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -1239,8 +1257,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue albumin (d_items: 30008 Albumin 5%, 30009 Albumin 25%, 30181 Serum Albumin 5%; amountuom ml). OR Albumin (44952) is not mapped, like MetaVision, whose albumin items exclude 226365 OR Colloid Intake; other free-text albumin labels each cover <10 stays."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue albumin (d_items: 30008 Albumin 5%, 30009 Albumin 25%, 30181 Serum Albumin 5%; amountuom ml). OR Albumin (44952) is not mapped, like MetaVision, whose albumin items exclude 226365 OR Colloid Intake; other free-text albumin labels each cover <10 stays.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -1253,7 +1275,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "aumc": [
@@ -1264,7 +1287,8 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "_comment": "2026-07-17: wired (was absent). 8933 'Albumine 20%' = 3,238 rows / 1,238 admissions.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ]
   }
@@ -1430,14 +1454,15 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
      "extra_vars": [
       "ordercategory"
      ],
      "exclude_regex": {
       "ordercategory": "(?i)^\\s*niet iv"
      },
-     "_comment": "2026-11-04 audit round 4 (R4-155): orders in a 'Niet iv ...' order category are not the IV drug the concept describes."
+     "_comment": "2026-11-04 audit round 4 (R4-155): orders in a 'Niet iv ...' order category are not the IV drug the concept describes.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -1584,7 +1609,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -1594,7 +1628,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -1603,15 +1641,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -1621,7 +1661,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -1630,15 +1674,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -1648,8 +1694,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": " | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
+     "callback": "sicdb_exposure",
+     "_comment": " | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route.",
+     "val_var": "Amount"
     }
    ]
   }
@@ -1699,7 +1746,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "miiv": [
@@ -1738,8 +1786,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17: added 9019 'Carbasalaatcalcium (Ascal)' (20,871 rows/3,620 adm) + 6908 'Carbasalaat Calcium' (374/68). Carbasalate calcium is the standard Dutch ASA formulation; without it we captured 745 of 4,433 AUMC aspirin admissions = 17%."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-07-17: added 9019 'Carbasalaatcalcium (Ascal)' (20,871 rows/3,620 adm) + 6908 'Carbasalaat Calcium' (374/68). Carbasalate calcium is the standard Dutch ASA formulation; without it we captured 745 of 4,433 AUMC aspirin admissions = 17%.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -2393,7 +2442,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -2500,7 +2550,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -2512,15 +2571,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 225165 'Bicarbonate Base' is the CRRT replacement-fluid base, not sodium bicarbonate given for acidosis."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 225165 'Bicarbonate Base' is the CRRT replacement-fluid base, not sodium bicarbonate given for acidosis.",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -2529,8 +2590,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue sodium bicarbonate (d_items: 30030 Sodium Bicarbonate, 30338 Sodium Bicarb Drip; amountuom mEq/ml). Free-text bicarbonate labels each cover <10 stays and are not mapped."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue sodium bicarbonate (d_items: 30030 Sodium Bicarbonate, 30338 Sodium Bicarb Drip; amountuom mEq/ml). Free-text bicarbonate labels each cover <10 stays and are not mapped.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -2542,15 +2607,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 225165 'Bicarbonate Base' is the CRRT replacement-fluid base, not sodium bicarbonate given for acidosis."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 225165 'Bicarbonate Base' is the CRRT replacement-fluid base, not sodium bicarbonate given for acidosis.",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -2559,8 +2626,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue sodium bicarbonate (d_items: 30030 Sodium Bicarbonate, 30338 Sodium Bicarb Drip; amountuom mEq/ml). Free-text bicarbonate labels each cover <10 stays and are not mapped."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue sodium bicarbonate (d_items: 30030 Sodium Bicarbonate, 30338 Sodium Bicarb Drip; amountuom mEq/ml). Free-text bicarbonate labels each cover <10 stays and are not mapped.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "hirid": [
@@ -3197,7 +3268,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -3394,13 +3474,14 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "_comment": "2026-07-17: added 7412 'Calcium Glubionaat (Calcium Sandoz)' (27,041 rows/7,361 adm). Previously 2,210 of ~9,571 admissions = 23%. Note HiRID already wires the identical Calcium Sandoz product (1000292), so omitting it here was self-contradictory. | 2026-11-04 audit round 4 (R4-155): orders in a 'Niet iv ...' order category are not the IV drug the concept describes.",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
      "extra_vars": [
       "ordercategory"
      ],
      "exclude_regex": {
       "ordercategory": "(?i)^\\s*niet iv"
-     }
+     },
+     "val_var": "dose"
     }
    ]
   }
@@ -3514,7 +3595,16 @@
      "ids": 221555,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -3528,21 +3618,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 221555,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -3556,21 +3652,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 221555,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -3580,8 +3682,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 4 (R4-173): 1871 has no rows in SICdb."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-04 audit round 4 (R4-173): 1871 has no rows in SICdb.",
+     "val_var": "Amount"
     }
    ]
   }
@@ -3909,7 +4012,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -4018,8 +4122,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 30069 'Solumedrol' (CareVue inputevents_cv; 123 ICU stays)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 30069 'Solumedrol' (CareVue inputevents_cv; 123 ICU stays).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -4037,8 +4145,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 30069 'Solumedrol' (CareVue inputevents_cv; 123 ICU stays)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 30069 'Solumedrol' (CareVue inputevents_cv; 123 ICU stays).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -5124,7 +5236,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -5199,7 +5312,8 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ]
   }
@@ -5332,7 +5446,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -5342,15 +5465,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -5358,8 +5483,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue dexmedetomidine (d_items: 30167 Precedex; rateuom mcgkghr)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue dexmedetomidine (d_items: 30167 Precedex; rateuom mcgkghr).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -5369,15 +5498,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -5385,8 +5516,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue dexmedetomidine (d_items: 30167 Precedex; rateuom mcgkghr)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue dexmedetomidine (d_items: 30167 Precedex; rateuom mcgkghr).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -5394,7 +5529,8 @@
      "ids": 1747,
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   }
@@ -5498,7 +5634,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -5508,14 +5653,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)dextrose 50|\\bd50",
@@ -5534,14 +5681,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)dextrose 50|\\bd50",
@@ -5608,7 +5757,8 @@
      "ids": 7174,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -5738,7 +5888,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -5748,15 +5907,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -5764,8 +5925,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue diltiazem (d_items: 30115 Diltiazem; amountuom mg, rateuom mghr)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue diltiazem (d_items: 30115 Diltiazem; amountuom mg, rateuom mghr).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -5775,15 +5940,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -5791,8 +5958,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue diltiazem (d_items: 30115 Diltiazem; amountuom mg, rateuom mghr)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue diltiazem (d_items: 30115 Diltiazem; amountuom mg, rateuom mghr).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -5802,7 +5973,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   }
@@ -6452,7 +6624,6 @@
   "target": "ts_tbl"
  },
  "ecmo": {
-  "aggregate": "max",
   "class_name": "lgl_cncpt",
   "description": "Extracorporeal membrane oxygenation in use",
   "category": "respiratory",
@@ -6553,7 +6724,15 @@
      "ids": [
       20662
      ],
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "value",
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:nee|no|false|off|0(?:\\.0+)?)\\s*$"
+     },
+     "require_regex": {
+      "value": "\\S"
+     },
+     "_comment": "RB-08: explicit negative and empty categories cannot establish support. The repository does not include the complete item category sets; their presence in real data is unverified."
     },
     {
      "table": "procedureorderitems",
@@ -6795,7 +6974,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -6805,14 +6993,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)enoxaparin|lovenox",
@@ -6831,14 +7021,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)enoxaparin|lovenox",
@@ -6898,8 +7090,9 @@
      "ids": [
       7625
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 class: 7625 'Nadroparine (Fraxiparine)' (9,817 adm) is the standard Dutch LMWH; concept broadened to LMWH class. Fondaparinux 13096 excluded (factor-Xa inhibitor, not LMWH)."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-07-17 class: 7625 'Nadroparine (Fraxiparine)' (9,817 adm) is the standard Dutch LMWH; concept broadened to LMWH class. Fondaparinux 13096 excluded (factor-Xa inhibitor, not LMWH).",
+     "val_var": "dose"
     }
    ]
   },
@@ -7366,7 +7559,8 @@
      "ids": 7213,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -7404,7 +7598,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -7414,15 +7617,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -7430,8 +7635,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue esmolol (d_items: 30117 Esmolol; rateuom mcgkgmin)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue esmolol (d_items: 30117 Esmolol; rateuom mcgkgmin).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -7441,15 +7650,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -7457,8 +7668,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue esmolol (d_items: 30117 Esmolol; rateuom mcgkgmin)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue esmolol (d_items: 30117 Esmolol; rateuom mcgkgmin).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -7782,7 +7997,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -7950,7 +8166,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -7963,7 +8188,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -7973,15 +8202,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -7994,7 +8225,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -8004,15 +8239,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -8212,8 +8449,17 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226367, 227072 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226367, 227072 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -8223,15 +8469,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226367, 227072 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226367, 227072 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -8240,8 +8488,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30005 Fresh Frozen Plasma, 30180 Fresh Froz Plasma, 30103 OR FFP; amountuom ml). 30103 mirrors MetaVision 226367 OR FFP Intake. Free-text FFP drip/GTT/PACU/ER labels each cover <10 stays and are not mapped; plasmapheresis and Plasma-Lyte labels are not FFP. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30103 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30005 Fresh Frozen Plasma, 30180 Fresh Froz Plasma, 30103 OR FFP; amountuom ml). 30103 mirrors MetaVision 226367 OR FFP Intake. Free-text FFP drip/GTT/PACU/ER labels each cover <10 stays and are not mapped; plasmapheresis and Plasma-Lyte labels are not FFP. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30103 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -8251,15 +8503,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226367, 227072 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226367, 227072 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -8268,8 +8522,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30005 Fresh Frozen Plasma, 30180 Fresh Froz Plasma, 30103 OR FFP; amountuom ml). 30103 mirrors MetaVision 226367 OR FFP Intake. Free-text FFP drip/GTT/PACU/ER labels each cover <10 stays and are not mapped; plasmapheresis and Plasma-Lyte labels are not FFP. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30103 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30005 Fresh Frozen Plasma, 30180 Fresh Froz Plasma, 30103 OR FFP; amountuom ml). 30103 mirrors MetaVision 226367 OR FFP Intake. Free-text FFP drip/GTT/PACU/ER labels each cover <10 stays and are not mapped; plasmapheresis and Plasma-Lyte labels are not FFP. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30103 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "eicu": [
@@ -8281,7 +8539,8 @@
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "_comment": "2026-07-17: rewired from `medication` (regex matched 0 rows - eICU medication holds no FFP) to intakeoutput.celllabel: 'FFP' (16,597 rows/5,209 stays) + 'Volume-Transfuse plasma' (1,748/605). Explicit ids not regex: rgx_itm on intakeoutput hits the charttime-in-minutes bug. 'Plasmalyte' (a crystalloid, 1,402 rows) deliberately excluded.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_value",
+     "val_var": "cellvaluenumeric"
     }
    ],
    "eicu_demo": [
@@ -8293,7 +8552,8 @@
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "_comment": "2026-07-17: rewired from `medication` (regex matched 0 rows - eICU medication holds no FFP) to intakeoutput.celllabel: 'FFP' (16,597 rows/5,209 stays) + 'Volume-Transfuse plasma' (1,748/605). Explicit ids not regex: rgx_itm on intakeoutput hits the charttime-in-minutes bug. 'Plasmalyte' (a crystalloid, 1,402 rows) deliberately excluded.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_value",
+     "val_var": "cellvaluenumeric"
     }
    ],
    "hirid": [
@@ -8316,7 +8576,8 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "sic": [
@@ -8326,8 +8587,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Fluid 2047 'Octaplas' (ml), pooled solvent/detergent-treated plasma given in place of fresh frozen plasma."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references Fluid 2047 'Octaplas' (ml), pooled solvent/detergent-treated plasma given in place of fresh frozen plasma.",
+     "val_var": "Amount"
     }
    ]
   }
@@ -8861,7 +9123,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -8986,7 +9249,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -8996,7 +9268,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -9005,15 +9281,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "regex": "furosem|lasix|frusemid",
@@ -9032,7 +9310,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -9041,15 +9323,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "regex": "furosem|lasix|frusemid",
@@ -9515,7 +9799,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -9654,7 +9939,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -9664,7 +9958,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -9673,15 +9971,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -9691,7 +9991,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -9700,15 +10004,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -10245,7 +10551,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -10305,8 +10612,17 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: added 223262 Humalog (16,250 stays), 223259 NPH (1,722), 229299 Novolog (249), 223257 70/30 (289), 223261 Humalog 75/25 (137), 229619 U500 (6). Concept already had Glargine (a SC analog), so excluding the rapid analogs+NPH was internally inconsistent. +6,641 stays."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-07-17 recall: added 223262 Humalog (16,250 stays), 223259 NPH (1,722), 229299 Novolog (249), 223257 70/30 (289), 223261 Humalog 75/25 (137), 229619 U500 (6). Concept already had Glargine (a SC analog), so excluding the rapid analogs+NPH was internally inconsistent. +6,641 stays.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -10317,7 +10633,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -10330,15 +10650,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "_comment": "2026-07-17 recall: added Humalog/NPH/70-30/75-25 analogs. NOTE 229299 (Novolog) and 229619 (U500) are MIMIC-IV-only itemids and do NOT exist in MIMIC-III inputevents_mv (0 rows) -- excluded here. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -10349,7 +10671,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -10362,15 +10688,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "_comment": "2026-07-17 recall: added Humalog/NPH/70-30/75-25 analogs. NOTE 229299 (Novolog) and 229619 (U500) are MIMIC-IV-only itemids and do NOT exist in MIMIC-III inputevents_mv (0 rows) -- excluded here. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -10612,7 +10940,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -10621,7 +10950,8 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate"
     }
    ],
    "eicu_demo": [
@@ -10630,7 +10960,8 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate"
     }
    ],
    "miiv": [
@@ -10638,7 +10969,16 @@
      "ids": 221712,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -10650,21 +10990,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 221712,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -10676,21 +11022,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 221712,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -10701,7 +11053,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -10731,7 +11084,8 @@
      "ids": 7151,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -10835,7 +11189,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -10845,14 +11208,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)labetalol|trandate",
@@ -10871,14 +11236,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)labetalol|trandate",
@@ -10897,7 +11264,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -11009,14 +11377,15 @@
      "ids": 13018,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
      "extra_vars": [
       "ordercategory"
      ],
      "exclude_regex": {
       "ordercategory": "(?i)^\\s*niet iv"
      },
-     "_comment": "2026-11-04 audit round 4 (R4-057; 2,069 rows/413 stays): orders in a 'Niet iv ...' (not intravenous) order category are enteral and are not the IV drug the concept describes."
+     "_comment": "2026-11-04 audit round 4 (R4-057; 2,069 rows/413 stays): orders in a 'Niet iv ...' (not intravenous) order category are enteral and are not the IV drug the concept describes.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -11122,7 +11491,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -11132,14 +11510,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)levetiracetam|keppra",
@@ -11164,14 +11544,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)levetiracetam|keppra",
@@ -11196,8 +11578,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": " | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route."
+     "callback": "sicdb_exposure",
+     "_comment": " | R5-SIC-020: medication has no route field or verified formulation-route join. SIC records drug exposure with route unknown; these rows alone do not prove IV administration. A continuous-only sensitivity restriction does not independently establish an IV route.",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -11226,7 +11609,8 @@
      "ids": 7165,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -11308,7 +11692,16 @@
      "ids": 221385,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -11316,21 +11709,27 @@
      "ids": 30141,
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 221385,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -11338,21 +11737,27 @@
      "ids": 30141,
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 221385,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -11362,7 +11767,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -11591,8 +11997,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): syringe-pump 9002 'Magnesiumsulfaat' (497 rows) added."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): syringe-pump 9002 'Magnesiumsulfaat' (497 rows) added.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -11698,7 +12105,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -11857,7 +12273,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -11895,7 +12312,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -11919,8 +12337,8 @@
      "regex": "mannitol",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm"
     }
    ],
@@ -11945,8 +12363,8 @@
      "regex": "mannitol",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm"
     }
    ],
@@ -11962,7 +12380,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -11978,7 +12405,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -11991,15 +12422,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -12015,7 +12448,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -12028,15 +12465,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -12049,7 +12488,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   },
@@ -12661,14 +13101,19 @@
       229254,
       220128
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: synchronized with SOFA-2 MIIV mechanical circulatory support coverage for IABP, Impella, Tandem Heart, LVAD, and RVAD. | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use.",
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-07-03 audit: synchronized with SOFA-2 MIIV mechanical circulatory support coverage for IABP, Impella, Tandem Heart, LVAD, and RVAD. | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use. | RB-04: numeric circulatory-support readings must be finite and positive; explicit IABP setting and size categories remain evidence.",
      "extra_vars": [
       "value"
      ],
      "exclude_regex": {
       "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     },
+     "val_var": "value",
+     "text_ids": [
+      227980,
+      225979
+     ]
     },
     {
      "table": "procedureevents",
@@ -12707,7 +13152,15 @@
      "ids": [
       6658
      ],
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "value",
+     "exclude_regex": {
+      "value": "(?i)^\\s*(?:nee|no|false|off|0(?:\\.0+)?)\\s*$"
+     },
+     "require_regex": {
+      "value": "\\S"
+     },
+     "_comment": "RB-08: explicit negative and empty categories cannot establish support. The repository does not include the complete item category sets; their presence in real data is unverified."
     },
     {
      "table": "processitems",
@@ -12742,14 +13195,19 @@
       228198,
       220128
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept). | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use.",
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept). | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use. | RB-04: numeric circulatory-support readings must be finite and positive; explicit IABP setting and size categories remain evidence.",
      "extra_vars": [
       "value"
      ],
      "exclude_regex": {
       "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     },
+     "val_var": "value",
+     "text_ids": [
+      227980,
+      225979
+     ]
     },
     {
      "ids": [
@@ -12757,9 +13215,12 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "value_var": "value",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map. | RB-04: numeric circulatory-support readings must be finite and positive; explicit IABP setting and size categories remain evidence.",
+     "val_var": "value",
+     "text_ids": [
+      225
+     ]
     }
    ],
    "mimic_demo": [
@@ -12782,14 +13243,19 @@
       228198,
       220128
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept). | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use.",
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-07-26 audit: MIMIC-III MetaVision includes the listed IABP/Impella/Tandem/RVAD items. MIMIC-IV-only 228866 (Plateau Pressure IABP) and 229254 (Flow LVAD) are deliberately excluded because they are absent from the MIMIC-III d_items catalog. Excludes CareVue low-number ambiguous itemids and ECMO (separate concept). | 2026-11-04 audit round 4 (R4-072/R4-113): 227980 Intra Aortic Balloon Pump Setting 'Off' (MIMIC-III 31 rows, MIMIC-IV 118 rows) is not support in use. | RB-04: numeric circulatory-support readings must be finite and positive; explicit IABP setting and size categories remain evidence.",
      "extra_vars": [
       "value"
      ],
      "exclude_regex": {
       "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     },
+     "val_var": "value",
+     "text_ids": [
+      227980,
+      225979
+     ]
     },
     {
      "ids": [
@@ -12797,9 +13263,12 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "value_var": "value",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-11-03 audit round 2 (H7): CareVue 225 'IABP setting' (any charted value, 804 stays) is IABP support; 224 'IABP Mean' stays out of map. | RB-04: numeric circulatory-support readings must be finite and positive; explicit IABP setting and size categories remain evidence.",
+     "val_var": "value",
+     "text_ids": [
+      225
+     ]
     }
    ]
   }
@@ -13166,7 +13635,8 @@
      "ids": 8127,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -13248,7 +13718,16 @@
      "ids": 225883,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -13256,14 +13735,16 @@
      "ids": 225883,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)meropenem|merrem",
@@ -13280,14 +13761,16 @@
      "ids": 225883,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)meropenem|merrem",
@@ -13306,7 +13789,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -13753,7 +14237,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -13763,7 +14256,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -13771,15 +14268,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -13789,7 +14288,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -13797,15 +14300,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -14043,7 +14548,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -14053,7 +14567,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -14061,15 +14579,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -14079,7 +14599,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -14087,15 +14611,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -14105,7 +14631,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "aumc": [
@@ -14115,8 +14642,9 @@
      "ids": [
       7196
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 class: 7196 'Enoximon (Perfan)' (13,556 rows / 2,459 adm) is the Dutch PDE3-inhibitor inotrope; milrinone is absent from AUMC. Concept broadened to PDE3i class."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-07-17 class: 7196 'Enoximon (Perfan)' (13,556 rows / 2,459 adm) is the Dutch PDE3-inhibitor inotrope; milrinone is absent from AUMC. Concept broadened to PDE3i class.",
+     "val_var": "dose"
     }
    ]
   },
@@ -14230,14 +14758,15 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
      "extra_vars": [
       "ordercategory"
      ],
      "exclude_regex": {
       "ordercategory": "(?i)^\\s*niet iv"
      },
-     "_comment": "2026-11-04 audit round 4 (R4-155): orders in a 'Niet iv ...' order category are not the IV drug the concept describes."
+     "_comment": "2026-11-04 audit round 4 (R4-155): orders in a 'Niet iv ...' order category are not the IV drug the concept describes.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -14293,8 +14822,8 @@
      "regex": "morphine",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm"
     }
    ],
@@ -14351,8 +14880,8 @@
      "regex": "morphine",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm"
     }
    ],
@@ -14376,7 +14905,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -14387,7 +14925,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -14395,15 +14937,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -14414,7 +14958,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -14422,15 +14970,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -14545,7 +15095,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -14629,7 +15180,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -14827,7 +15387,8 @@
      "ids": 7218,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -14952,7 +15513,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -14962,15 +15532,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -14978,8 +15550,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue nicardipine (d_items: 30178 Nicardipine; amountuom mg)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue nicardipine (d_items: 30178 Nicardipine; amountuom mg).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -14989,15 +15565,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -15005,8 +15583,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue nicardipine (d_items: 30178 Nicardipine; amountuom mg)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue nicardipine (d_items: 30178 Nicardipine; amountuom mg).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ]
   }
@@ -15024,8 +15606,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 4 (R4-155): 9113 Nitrobaat (sublingual/oral nitrate) is not IV nitroglycerin."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-04 audit round 4 (R4-155): 9113 Nitrobaat (sublingual/oral nitrate) is not IV nitroglycerin.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -15091,7 +15674,16 @@
      "ids": 222056,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -15102,21 +15694,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 222056,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -15127,21 +15725,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 222056,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -15795,7 +16399,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -15835,7 +16440,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -15845,15 +16459,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -15861,8 +16477,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue octreotide (d_items: 30133 Sandostatin; rateuom mcghr)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue octreotide (d_items: 30133 Sandostatin; rateuom mcghr).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -15872,15 +16492,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -15888,8 +16510,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue octreotide (d_items: 30133 Sandostatin; rateuom mcghr)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue octreotide (d_items: 30133 Sandostatin; rateuom mcghr).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -15899,7 +16525,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ]
   }
@@ -15918,8 +16545,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: 8429 'Gefiltreerde Erys' (leukocyte-filtered RBC, 20,834 rows / 6,350 adm) is the standard Dutch RBC unit; 7366 'Packed cells' alone reached 96 adm = 1.5% recall."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-07-17 recall: 8429 'Gefiltreerde Erys' (leukocyte-filtered RBC, 20,834 rows / 6,350 adm) is the standard Dutch RBC unit; 7366 'Packed cells' alone reached 96 adm = 1.5% recall.",
+     "val_var": "dose"
     }
    ],
    "miiv": [
@@ -15929,8 +16557,17 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226368, 227070 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226368, 227070 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -15940,15 +16577,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226368, 227070 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226368, 227070 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -15958,8 +16597,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30001 Packed RBC's, 30004 Washed PRBC's, 30179 PRBC's, 30104 OR Packed RBC's; amountuom ml). 30104 mirrors the MetaVision OR/PACU items already in this concept. Free-text CareVue labels (ER/PACU/pre-admit PRBC) each cover <10 stays and are not mapped. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30104 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30001 Packed RBC's, 30004 Washed PRBC's, 30179 PRBC's, 30104 OR Packed RBC's; amountuom ml). 30104 mirrors the MetaVision OR/PACU items already in this concept. Free-text CareVue labels (ER/PACU/pre-admit PRBC) each cover <10 stays and are not mapped. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30104 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -15969,15 +16612,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226368, 227070 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226368, 227070 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -15987,8 +16632,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30001 Packed RBC's, 30004 Washed PRBC's, 30179 PRBC's, 30104 OR Packed RBC's; amountuom ml). 30104 mirrors the MetaVision OR/PACU items already in this concept. Free-text CareVue labels (ER/PACU/pre-admit PRBC) each cover <10 stays and are not mapped. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30104 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30001 Packed RBC's, 30004 Washed PRBC's, 30179 PRBC's, 30104 OR Packed RBC's; amountuom ml). 30104 mirrors the MetaVision OR/PACU items already in this concept. Free-text CareVue labels (ER/PACU/pre-admit PRBC) each cover <10 stays and are not mapped. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30104 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -15998,7 +16647,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -16024,7 +16674,8 @@
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "_comment": "2026-07-17: wired (was absent). intakeoutput.celllabel 'pRBCs' (54,774 rows/17,575 stays), 'PRBC' (256/118), 'Volume-Transfuse red blood cells' (5,841/2,098), 'Volume (ml)-Transfuse - Leukoreduced Packed RB' (1,835/415). | 2026-11-04 audit round 4 (R4-147): the 'Volume (ml)-Transfuse - Leukoreduced Packed RB' label has no rows in eICU v2.0.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_value",
+     "val_var": "cellvaluenumeric"
     }
    ],
    "eicu_demo": [
@@ -16037,7 +16688,8 @@
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "_comment": "2026-07-17: wired (was absent). intakeoutput.celllabel 'pRBCs' (54,774 rows/17,575 stays), 'PRBC' (256/118), 'Volume-Transfuse red blood cells' (5,841/2,098), 'Volume (ml)-Transfuse - Leukoreduced Packed RB' (1,835/415). | 2026-11-04 audit round 4 (R4-147): the 'Volume (ml)-Transfuse - Leukoreduced Packed RB' label has no rows in eICU v2.0.",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_value",
+     "val_var": "cellvaluenumeric"
     }
    ]
   }
@@ -16071,14 +16723,15 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "aumc_positive_dose",
      "extra_vars": [
       "ordercategory"
      ],
      "exclude_regex": {
       "ordercategory": "(?i)^\\s*niet iv"
      },
-     "_comment": "2026-11-04 audit round 4 (R4-058; 10,000 rows/2,896 stays): orders in a 'Niet iv ...' (not intravenous) order category are enteral and are not the IV drug the concept describes."
+     "_comment": "2026-11-04 audit round 4 (R4-058; 10,000 rows/2,896 stays): orders in a 'Niet iv ...' (not intravenous) order category are enteral and are not the IV drug the concept describes.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -16206,7 +16859,16 @@
      "ids": 225910,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -16963,7 +17625,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -16974,14 +17645,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)phenytoin|dilantin|fosphenytoin",
@@ -17001,14 +17674,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)phenytoin|dilantin|fosphenytoin",
@@ -17103,8 +17778,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: drugitems 7222 'Fenytoine (Diphantoine)'."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: drugitems 7222 'Fenytoine (Diphantoine)'.",
+     "val_var": "dose"
     }
    ]
   }
@@ -17533,7 +18209,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "miiv": [
@@ -17543,8 +18220,17 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17: added 226369 'OR Platelet Intake' (2,552 rows/2,309 stays) + 227071 'PACU Platelet Intake' (26/25), mirroring ffp (226367/227072) and packed_rbc (226368/227070). Without them platelets was biased FALSE in exactly the perioperative population. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226369, 227071 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-07-17: added 226369 'OR Platelet Intake' (2,552 rows/2,309 stays) + 227071 'PACU Platelet Intake' (26/25), mirroring ffp (226367/227072) and packed_rbc (226368/227070). Without them platelets was biased FALSE in exactly the perioperative population. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226369, 227071 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -17554,15 +18240,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "_comment": "2026-11-03 extraction audit 2: 226369 OR Platelet Intake and 227071 PACU Platelet Intake (d_items, mL) added, mirroring ffp (226367/227072), packed_rbc (226368/227070) and the MIMIC-IV source. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226369, 227071 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -17570,8 +18258,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30006 Platelets, 30105 OR Platelets; amountuom ml). 30105 mirrors MetaVision 226369 OR Platelet Intake. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30105 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30006 Platelets, 30105 OR Platelets; amountuom ml). 30105 mirrors MetaVision 226369 OR Platelet Intake. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30105 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -17581,15 +18273,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "_comment": "2026-11-03 extraction audit 2: 226369 OR Platelet Intake and 227071 PACU Platelet Intake (d_items, mL) added, mirroring ffp (226367/227072), packed_rbc (226368/227070) and the MIMIC-IV source. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 226369, 227071 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -17597,8 +18291,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30006 Platelets, 30105 OR Platelets; amountuom ml). 30105 mirrors MetaVision 226369 OR Platelet Intake. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30105 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue transfusion (d_items: 30006 Platelets, 30105 OR Platelets; amountuom ml). 30105 mirrors MetaVision 226369 OR Platelet Intake. | 2026-11-04 audit round 4 (R4-035): OR/PACU intake items 30105 removed. They are charted at ICU admission for transfusions given in the operating room or recovery unit, before the ICU stay, and total_input_ml and urine already exclude OR/PACU items (MIMIC-III rows/stays: OR packed RBC 226368 2,002/1,726 and 30104 3,558/1,650; OR FFP 226367 998/883 and 30103 1,905/906; OR platelets 226369 781/684 and 30105 1,375/653).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -17609,7 +18307,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -17633,7 +18332,8 @@
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "_comment": "2026-07-17: wired (was absent). intakeoutput.celllabel 'Platelets' (8,571 rows/3,668 stays) + 'Volume-Transfuse platelet pheresis' (1,276/399).",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_value",
+     "val_var": "cellvaluenumeric"
     }
    ],
    "eicu_demo": [
@@ -17645,7 +18345,8 @@
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "_comment": "2026-07-17: wired (was absent). intakeoutput.celllabel 'Platelets' (8,571 rows/3,668 stays) + 'Volume-Transfuse platelet pheresis' (1,276/399).",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_value",
+     "val_var": "cellvaluenumeric"
     }
    ]
   }
@@ -17997,8 +18698,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-17 recall: added 8999 'Natrium-kalium-fosfaat' IV (8,898 rows / 4,207 adm; the K-phosphate the description names). Dropped 8020 'SlowK' (ORAL tablet, 180 adm) -- this concept is IV."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-07-17 recall: added 8999 'Natrium-kalium-fosfaat' IV (8,898 rows / 4,207 adm; the K-phosphate the description names). Dropped 8020 'SlowK' (ORAL tablet, 180 adm) -- this concept is IV.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -18117,7 +18819,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -18129,15 +18840,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227536 'KCl (CRRT)' is potassium added to CRRT fluid, not intravenous replacement."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227536 'KCl (CRRT)' is potassium added to CRRT fluid, not intravenous replacement.",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -18147,8 +18860,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue IV potassium (d_items: 30026 KCL, 30297 Potassium Chloride, 30029 Potassium Phosphate; amountuom mEq/ml, IV routes). 30299 Potassium Acetate is not mapped because the MetaVision source likewise excludes 222139 Potassium ACEtate (concept = KCl or K-phosphate). Free-text KCl/KPhos labels (maintenance fluids with added KCl, CVVH KCl) each cover <10 stays and are not mapped."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue IV potassium (d_items: 30026 KCL, 30297 Potassium Chloride, 30029 Potassium Phosphate; amountuom mEq/ml, IV routes). 30299 Potassium Acetate is not mapped because the MetaVision source likewise excludes 222139 Potassium ACEtate (concept = KCl or K-phosphate). Free-text KCl/KPhos labels (maintenance fluids with added KCl, CVVH KCl) each cover <10 stays and are not mapped.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "mimic_demo": [
@@ -18160,15 +18877,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227536 'KCl (CRRT)' is potassium added to CRRT fluid, not intravenous replacement."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227536 'KCl (CRRT)' is potassium added to CRRT fluid, not intravenous replacement.",
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -18178,8 +18897,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue IV potassium (d_items: 30026 KCL, 30297 Potassium Chloride, 30029 Potassium Phosphate; amountuom mEq/ml, IV routes). 30299 Potassium Acetate is not mapped because the MetaVision source likewise excludes 222139 Potassium ACEtate (concept = KCl or K-phosphate). Free-text KCl/KPhos labels (maintenance fluids with added KCl, CVVH KCl) each cover <10 stays and are not mapped."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue IV potassium (d_items: 30026 KCL, 30297 Potassium Chloride, 30029 Potassium Phosphate; amountuom mEq/ml, IV routes). 30299 Potassium Acetate is not mapped because the MetaVision source likewise excludes 222139 Potassium ACEtate (concept = KCl or K-phosphate). Free-text KCl/KPhos labels (maintenance fluids with added KCl, CVVH KCl) each cover <10 stays and are not mapped.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     }
    ],
    "sic": [
@@ -18234,7 +18957,8 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -18344,7 +19068,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -18354,7 +19087,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -18362,15 +19099,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -18380,7 +19119,11 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": [
@@ -18388,15 +19131,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "sic": [
@@ -19223,8 +19968,8 @@
      "regex": "rocuronium|esmeron",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm"
     }
    ],
@@ -19269,8 +20014,8 @@
      "regex": "rocuronium|esmeron",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm"
     }
    ],
@@ -19292,7 +20037,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "sic": [
@@ -19386,8 +20140,20 @@
       230177,
       227290
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: CRRT mode is direct evidence of active RRT; semantic coverage review added active dialysis circuit pressures, blood/dialysate/replacement rates, ultrafiltrate/hemodialysis/PD outputs, and PD dwell time. Access site/type/history remain excluded."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-07-03 audit: CRRT mode is direct evidence of active RRT; semantic coverage review added active dialysis circuit pressures, blood/dialysate/replacement rates, ultrafiltrate/hemodialysis/PD outputs, and PD dwell time. Access site/type/history remain excluded. | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value",
+     "text_ids": [
+      225976,
+      225977,
+      227290
+     ],
+     "pressure_ids": [
+      224149,
+      224150,
+      224151,
+      224152
+     ]
     },
     {
      "table": "procedureevents",
@@ -19418,16 +20184,18 @@
      "sub_var": "cellpath",
      "regex": "(Dialysis \\(ml\\)|Hemodialysis)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: active dialysis intake/output paths only; central-line flush paths mentioning dialysis access are excluded."
+     "callback": "eicu_positive_value",
+     "_comment": "2026-07-03 audit: active dialysis intake/output paths only; central-line flush paths mentioning dialysis access are excluded.",
+     "val_var": "cellvaluenumeric"
     },
     {
      "table": "intakeoutput",
      "sub_var": "celllabel",
      "regex": "^(CRRT(?!.*flush)|Hemofiltration)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
+     "callback": "eicu_positive_value",
+     "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded.",
+     "val_var": "cellvaluenumeric"
     },
     {
      "table": "intakeoutput",
@@ -19520,8 +20288,20 @@
       228006,
       227290
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
+     "callback": "mimic_support_evidence",
+     "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels. | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value",
+     "text_ids": [
+      225976,
+      225977,
+      227290
+     ],
+     "pressure_ids": [
+      224149,
+      224150,
+      224151,
+      224152
+     ]
     },
     {
      "table": "chartevents",
@@ -19533,8 +20313,17 @@
       173,
       192
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 coverage fix (MIMIC-III CareVue): 146 Dialysate Flow ml/hr, 150 Dialysis Machine, 152 Dialysis Type (CVVHD/CVVH/Peritoneal, the CareVue analogue of MetaVision 227290 CRRT mode), 173 Effluent Press mmHg and 192 Filter Pressure mmHg are charted on the running-circuit flowsheet (>=99.8% of their charted hours lie within 2 h of a dialysate-flow/effluent/filter-pressure reading). Excluded: 148 Dialysis Access Site, 149 Dialysis Access Type and 151 Dialysis Site Appear describe the catheter (71-88 stays chart them with no running circuit); 147 Dialysate Infusing can be 'No'; 225126 Dialysis patient is history, not current RRT."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-11-03 coverage fix (MIMIC-III CareVue): 146 Dialysate Flow ml/hr, 150 Dialysis Machine, 152 Dialysis Type (CVVHD/CVVH/Peritoneal, the CareVue analogue of MetaVision 227290 CRRT mode), 173 Effluent Press mmHg and 192 Filter Pressure mmHg are charted on the running-circuit flowsheet (>=99.8% of their charted hours lie within 2 h of a dialysate-flow/effluent/filter-pressure reading). Excluded: 148 Dialysis Access Site, 149 Dialysis Access Type and 151 Dialysis Site Appear describe the catheter (71-88 stays chart them with no running circuit); 147 Dialysate Infusing can be 'No'; 225126 Dialysis patient is history, not current RRT. | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value",
+     "text_ids": [
+      150,
+      152
+     ],
+     "pressure_ids": [
+      173,
+      192
+     ]
     },
     {
      "table": "outputevents",
@@ -19580,8 +20369,9 @@
       46464,
       46741
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays)."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays). | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value"
     },
     {
      "ids": [
@@ -19648,8 +20438,20 @@
       228006,
       227290
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
+     "callback": "mimic_support_evidence",
+     "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels. | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value",
+     "text_ids": [
+      225976,
+      225977,
+      227290
+     ],
+     "pressure_ids": [
+      224149,
+      224150,
+      224151,
+      224152
+     ]
     },
     {
      "table": "chartevents",
@@ -19661,8 +20463,17 @@
       173,
       192
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 coverage fix (MIMIC-III CareVue): 146 Dialysate Flow ml/hr, 150 Dialysis Machine, 152 Dialysis Type (CVVHD/CVVH/Peritoneal, the CareVue analogue of MetaVision 227290 CRRT mode), 173 Effluent Press mmHg and 192 Filter Pressure mmHg are charted on the running-circuit flowsheet (>=99.8% of their charted hours lie within 2 h of a dialysate-flow/effluent/filter-pressure reading). Excluded: 148 Dialysis Access Site, 149 Dialysis Access Type and 151 Dialysis Site Appear describe the catheter (71-88 stays chart them with no running circuit); 147 Dialysate Infusing can be 'No'; 225126 Dialysis patient is history, not current RRT."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-11-03 coverage fix (MIMIC-III CareVue): 146 Dialysate Flow ml/hr, 150 Dialysis Machine, 152 Dialysis Type (CVVHD/CVVH/Peritoneal, the CareVue analogue of MetaVision 227290 CRRT mode), 173 Effluent Press mmHg and 192 Filter Pressure mmHg are charted on the running-circuit flowsheet (>=99.8% of their charted hours lie within 2 h of a dialysate-flow/effluent/filter-pressure reading). Excluded: 148 Dialysis Access Site, 149 Dialysis Access Type and 151 Dialysis Site Appear describe the catheter (71-88 stays chart them with no running circuit); 147 Dialysate Infusing can be 'No'; 225126 Dialysis patient is history, not current RRT. | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value",
+     "text_ids": [
+      150,
+      152
+     ],
+     "pressure_ids": [
+      173,
+      192
+     ]
     },
     {
      "table": "outputevents",
@@ -19708,8 +20519,9 @@
       46464,
       46741
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays)."
+     "callback": "mimic_support_evidence",
+     "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded. | 2026-11-03: added 40286 Ultrafiltrate Ultrafiltrate (CareVue CRRT ultrafiltrate output, 1,161 stays). | RB-02: finite nonzero circuit pressures or positive flows and volumes establish support; explicit machine, fluid and mode text remains categorical evidence.",
+     "val_var": "value"
     },
     {
      "ids": [
@@ -26888,7 +27700,8 @@
      "ids": 7064,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -26976,7 +27789,16 @@
      "ids": 225798,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -26984,14 +27806,16 @@
      "ids": 225798,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)vancomycin|vancocin",
@@ -27014,14 +27838,16 @@
      "ids": 225798,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)vancomycin|vancocin",
@@ -27046,7 +27872,8 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
     }
    ],
    "hirid": [
@@ -27090,7 +27917,8 @@
      "ids": 9007,
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -27099,7 +27927,8 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate"
     }
    ],
    "eicu_demo": [
@@ -27108,7 +27937,8 @@
      "table": "infusiondrug",
      "sub_var": "drugname",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "eicu_positive_infusion",
+     "val_var": "drugrate"
     }
    ],
    "miiv": [
@@ -27116,7 +27946,16 @@
      "ids": 222062,
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -27127,21 +27966,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 222062,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "mimic_demo": [
@@ -27152,21 +27997,27 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "ids": 222062,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "val_var": "rate"
     }
    ],
    "hirid": [
@@ -27453,6 +28304,7 @@
   }
  },
  "vent_start": {
+  "aggregate": "max",
   "class_name": "lgl_cncpt",
   "description": "ventilation start",
   "category": "respiratory",
@@ -27588,18 +28440,65 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_support_evidence",
      "extra_vars": [
       "value"
      ],
      "exclude_regex": {
       "value": "(?i)^\\s*(standby|stand by|ambient|off|not applicable|other/remarks|other)\\s*$"
      },
-     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept. | R5C-III-009 review: Ambient/Off and missing mode text cannot start a ventilation window; filter the explicitly declared text value on all extraction paths.",
+     "_comment": "RB-03: numeric ventilation-start settings require finite positive values; channels mapped to numeric respiratory concepts cannot fall back to text; existing other textual evidence is retained. | 2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept. | R5C-III-009 review: Ambient/Off and missing mode text cannot start a ventilation window; filter the explicitly declared text value on all extraction paths.",
      "val_var": "value",
      "require_regex": {
       "value": "\\S"
-     }
+     },
+     "text_ids": [
+      1,
+      60,
+      218,
+      221,
+      223,
+      436,
+      437,
+      449,
+      459,
+      502,
+      503,
+      639,
+      654,
+      667,
+      668,
+      669,
+      670,
+      671,
+      672,
+      684,
+      1211,
+      1340,
+      1486,
+      1600,
+      1655,
+      2000,
+      3459,
+      5865,
+      5866,
+      223848,
+      223849,
+      224419,
+      224686,
+      224702,
+      224704,
+      224705,
+      224706,
+      224707,
+      224709,
+      224738,
+      224746,
+      224747,
+      224750,
+      226873,
+      227187
+     ]
     }
    ],
    "mimic_demo": [
@@ -27675,18 +28574,65 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_support_evidence",
      "extra_vars": [
       "value"
      ],
      "exclude_regex": {
       "value": "(?i)^\\s*(standby|stand by|ambient|off|not applicable|other/remarks|other)\\s*$"
      },
-     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept. | R5C-III-009 review: Ambient/Off and missing mode text cannot start a ventilation window; filter the explicitly declared text value on all extraction paths.",
+     "_comment": "RB-03: numeric ventilation-start settings require finite positive values; channels mapped to numeric respiratory concepts cannot fall back to text; existing other textual evidence is retained. | 2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept. | R5C-III-009 review: Ambient/Off and missing mode text cannot start a ventilation window; filter the explicitly declared text value on all extraction paths.",
      "val_var": "value",
      "require_regex": {
       "value": "\\S"
-     }
+     },
+     "text_ids": [
+      1,
+      60,
+      218,
+      221,
+      223,
+      436,
+      437,
+      449,
+      459,
+      502,
+      503,
+      639,
+      654,
+      667,
+      668,
+      669,
+      670,
+      671,
+      672,
+      684,
+      1211,
+      1340,
+      1486,
+      1600,
+      1655,
+      2000,
+      3459,
+      5865,
+      5866,
+      223848,
+      223849,
+      224419,
+      224686,
+      224702,
+      224704,
+      224705,
+      224706,
+      224707,
+      224709,
+      224738,
+      224746,
+      224747,
+      224750,
+      226873,
+      227187
+     ]
     }
    ],
    "aumc": [
@@ -27888,7 +28834,16 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     }
    ],
    "mimic": [
@@ -27898,14 +28853,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)warfarin|coumadin",
@@ -27924,14 +28881,16 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "regex": "(?i)warfarin|coumadin",
@@ -33485,8 +34444,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 7244 'Furosemide (Lasix)', 6882 'Bumetanide (Burinex)' (aumc_item_dict); AUMCdb has no torasemide item."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: 7244 'Furosemide (Lasix)', 6882 'Bumetanide (Burinex)' (aumc_item_dict); AUMCdb has no torasemide item.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -33622,8 +34582,17 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 221794/228340 Furosemide (Lasix), 229639 'Bumetanide (Bumex)' (d_items, mg)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: 221794/228340 Furosemide (Lasix), 229639 'Bumetanide (Bumex)' (d_items, mg).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "table": "emar",
@@ -33646,15 +34615,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "_comment": "2026-11-03 extraction audit 2: MetaVision furosemide (d_items). | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -33669,8 +34640,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: CareVue 30123 'Lasix'; free-form 41518 'bumex', 43047 'BUMEX 12mg/500ml', 45275 'Bumetanide', 46197 'BUMEX', 46554 'Bumex', 46690 'bumetanide', 46771 'Ethacrynate Sodium' (d_items)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: CareVue 30123 'Lasix'; free-form 41518 'bumex', 43047 'BUMEX 12mg/500ml', 45275 'Bumetanide', 46197 'BUMEX', 46554 'Bumex', 46690 'bumetanide', 46771 'Ethacrynate Sodium' (d_items).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
@@ -33690,15 +34665,17 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "_comment": "2026-11-03 extraction audit 2: MetaVision furosemide (d_items). | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "amount"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate"
     },
     {
      "ids": [
@@ -33713,8 +34690,12 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: CareVue 30123 'Lasix'; free-form 41518 'bumex', 43047 'BUMEX 12mg/500ml', 45275 'Bumetanide', 46197 'BUMEX', 46554 'Bumex', 46690 'bumetanide', 46771 'Ethacrynate Sodium' (d_items)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: CareVue 30123 'Lasix'; free-form 41518 'bumex', 43047 'BUMEX 12mg/500ml', 45275 'Bumetanide', 46197 'BUMEX', 46554 'Bumex', 46690 'bumetanide', 46771 'Ethacrynate Sodium' (d_items).",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount"
+     ]
     },
     {
      "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
@@ -33756,8 +34737,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 9062 'Hydrochloorthiazide (Esidrex)' (aumc_item_dict). | 2026-11-04 audit round 3 (full-dictionary M): 6942 'Chloortalidon (Hygroton)' (64 rows) added; no other thiazide is charted."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: 9062 'Hydrochloorthiazide (Esidrex)' (aumc_item_dict). | 2026-11-04 audit round 3 (full-dictionary M): 6942 'Chloortalidon (Hygroton)' (64 rows) added; no other thiazide is charted.",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -33941,8 +34923,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 7011 'Spironolacton (Aldactone)', 20177 'Eplerenon (Inspra)' (aumc_item_dict)."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: 7011 'Spironolacton (Aldactone)', 20177 'Eplerenon (Inspra)' (aumc_item_dict).",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -34115,8 +35098,9 @@
      ],
      "table": "drugitems",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 6804 'Acetazolamide (Diamox)' (aumc_item_dict)."
+     "callback": "aumc_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: 6804 'Acetazolamide (Diamox)' (aumc_item_dict).",
+     "val_var": "dose"
     }
    ],
    "eicu": [
@@ -34140,8 +35124,8 @@
      "regex": "acetazol|diamox",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: 'Diamox (ml/hr)' (<10 stays)."
     },
@@ -34187,8 +35171,8 @@
      "regex": "acetazol|diamox",
      "table": "infusiondrug",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: 'Diamox (ml/hr)' (<10 stays)."
     }
@@ -34248,8 +35232,9 @@
      ],
      "table": "medication",
      "sub_var": "DrugID",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: 1619 'Acetazolamid' (d_references)."
+     "callback": "sicdb_exposure",
+     "_comment": "2026-11-03 extraction audit 2: 1619 'Acetazolamid' (d_references).",
+     "val_var": "Amount"
     }
    ]
   }

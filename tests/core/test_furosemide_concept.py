@@ -115,8 +115,8 @@ def test_sic_source_uses_medication_drugid(furosemide_entry):
     assert sic[0]["ids"] == [1417, 1654]
 
 
-def test_all_sources_use_set_val_true_callback(furosemide_entry):
-    """Logical concept: every source emits TRUE.
+def test_sources_use_explicit_boolean_evidence(furosemide_entry):
+    """Logical concept: numeric sources require positive exposure evidence.
 
     HiRID pharma rows emit TRUE for a positive dose only: a zero dose is a
     pump marker (2026-11-04 audit round 3, R3-19).
@@ -125,6 +125,10 @@ def test_all_sources_use_set_val_true_callback(furosemide_entry):
         for src in sources:
             # HiRID doses above numerical noise; SICdb amounts above 0 (audit round 4, R4-088/R4-094).
             expected = {"hirid": "transform_fun(comp_na(`>`, 0.000001))", "sic": "transform_fun(comp_na(`>`, 0))"}.get(db, "transform_fun(set_val(TRUE))")
+            if src["table"] in {"inputevents", "inputevents_mv", "inputevents_cv"}:
+                expected = "mimic_positive_dose"
+            elif src["table"] == "drugitems":
+                expected = "aumc_positive_dose"
             # R5-EICU-037: zero-rate rows are explicit stops, not exposure.
             if db in {"eicu", "eicu_demo"} and src["table"] == "infusiondrug":
                 expected = "eicu_positive_infusion"

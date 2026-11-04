@@ -57,11 +57,21 @@ def test_db_coverage(cdict, name, required_dbs, _cov):
 
 
 @pytest.mark.parametrize("name,_dbs,_cov", BATCH8, ids=[m[0] for m in BATCH8])
-def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
+def test_sources_use_explicit_boolean_evidence(cdict, name, _dbs, _cov):
     for db, sources in cdict[name]["sources"].items():
         if isinstance(sources, dict):
             sources = [sources]
         for src in sources:
+            # RB-05/07: numeric exposure is interpreted by its table owner.
+            evidence = {
+                "inputevents": "mimic_positive_dose", "inputevents_mv": "mimic_positive_dose",
+                "inputevents_cv": "mimic_positive_dose", "drugitems": "aumc_positive_dose",
+                "medication": "sicdb_exposure", "intakeoutput": "eicu_positive_value",
+            }
+            table = src.get("table")
+            if table in evidence and (table != "medication" or db == "sic"):
+                assert src.get("callback") == evidence[table]
+                continue
             if db == "sic" and name in ('aspirin', 'enoxaparin', 'warfarin'):
                 # R5-SIC-026: observed Amount, preserving zero and missing.
                 assert src.get("callback") == "sicdb_exposure"

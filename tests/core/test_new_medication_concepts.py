@@ -58,11 +58,21 @@ def test_db_coverage(name, expected_count, required_dbs):
 
 # ── all sources use set_val(TRUE) ──
 @pytest.mark.parametrize("name,_n,_dbs", MEDICATIONS, ids=[m[0] for m in MEDICATIONS])
-def test_all_sources_use_set_val_true(name, _n, _dbs):
+def test_sources_use_explicit_boolean_evidence(name, _n, _dbs):
     for db, items in CDICT[name]["sources"].items():
         if not isinstance(items, list):
             items = [items]
         for item in items:
+            # RB-05/07: numeric exposure is interpreted by its table owner.
+            evidence = {
+                "inputevents": "mimic_positive_dose", "inputevents_mv": "mimic_positive_dose",
+                "inputevents_cv": "mimic_positive_dose", "drugitems": "aumc_positive_dose",
+                "medication": "sicdb_exposure", "intakeoutput": "eicu_positive_value",
+            }
+            table = item.get("table")
+            if table in evidence and (table != "medication" or db == "sic"):
+                assert item.get("callback") == evidence[table]
+                continue
             cb = item.get("callback", "")
             # R5-EICU-023/037: route and positive-rate owners replace unconditional TRUE.
             if db in {"eicu", "eicu_demo"} and cb in {"eicu_iv_exposure", "eicu_positive_infusion"}:
