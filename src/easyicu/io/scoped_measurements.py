@@ -22,6 +22,7 @@ from . import source_events as scoped
 from ..resources import load_dictionary, package_path
 
 CONCEPTS = ("crea", "map", "cvp")
+_RAW_SOURCE_CONCEPT = {"cvp": "cvp_raw"}
 # These are source dictionary labels, not inferred specimen or catheter types.
 CHANNELS = {
     ("labevents", 50912): ("crea", "lab_blood_chemistry", "Creatinine"),
@@ -100,7 +101,9 @@ def _specs(data_source, concepts):
     dictionary = load_dictionary()
     specs = []
     for name in concepts:
-        definition = dictionary[name]
+        # Raw source events carry the charted channel; the published cvp adds
+        # an hourly arterial-diastolic check (audit round 4, R4-013).
+        definition = dictionary[_RAW_SOURCE_CONCEPT.get(name, name)]
         sources = definition.for_data_source(data_source.config)
         actual = {(s.table, int(i)) for s in sources for i in s.ids}
         expected = {key for key, val in CHANNELS.items() if val[0] == name}

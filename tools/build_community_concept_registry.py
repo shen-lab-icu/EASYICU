@@ -172,7 +172,7 @@ def build_registry() -> dict[str, dict[str, Any]]:
         "sbp": "Blood_pressure_high",
         "dbp": "Blood_pressure_low",
         "map": "MAP",
-        "cvp": "Central_venous_pressure",
+        "cvp_raw": "Central_venous_pressure",
         "urine": "Urine_volume",
     }
     for concept, column in zg_vitals.items():
@@ -380,7 +380,7 @@ def build_registry() -> dict[str, dict[str, Any]]:
     # Output, neurological and ventilator measurements.
     add(registry, "urine", "zhejiang_eicu", numeric("nursingchart_io", ["小便", "尿量"], "NursingIO_item"))
     zh_vent = {
-        "cvp": ("中心静脉压", "convert_unit(binary_op(`*`, 0.735559), 'mmHg', '^cmH2O$')"),
+        "cvp_raw": ("中心静脉压", "convert_unit(binary_op(`*`, 0.735559), 'mmHg', '^cmH2O$')"),
         "minute_vol": ("分钟通气量", None), "ps": ("压力支持", None),
         "tidal_vol": (["吸入潮气量", "呼出潮气量"], None), "peep": ("呼吸末正压", None),
         "vent_rate": ("呼吸频率(设)", None), "pip": ("气道峰压", None),

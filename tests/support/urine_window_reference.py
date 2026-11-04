@@ -457,107 +457,38 @@ def _urine24_batch(
     time_step: float,
     window_steps: int,
     min_steps: int,
-    step_factor: float,
+    cap_steps: int,
 ) -> pd.DataFrame:
-    """Batch-vectorized urine24 computation for all patients at once.
+    """Plain per-stay reference for the round-4 (R4-001) coverage rule.
 
-    🚀 Performance: Replaces per-patient loop (4796 calls to process_patient = 13.3s)
-    with batch operations:
-    - 1 groupby().agg() for patient stats
-    - 1 merge for urine values onto grid
-    - 1 groupby().rolling() for rolling sum
-
-    Expected speedup: 13.3s → ~2-3s (5-6x faster)
-
-    Args:
-        df: Input DataFrame with urine data
-        id_col: Patient ID column name
-        time_col: Time column name (numeric)
-        urine_col: Urine value column name
-        time_step: Time step size (in time column units)
-        window_steps: Rolling window size in steps (typically 24)
-        min_steps: Minimum window steps for non-NA output (typically 12)
-        step_factor: Scaling factor (typically 24.0)
+    Each record covers the cells back to the previous record when that gap is
+    at most ``cap_steps`` cells; the first record covers its own cell. A window
+    of ``window_steps`` cells is evaluable with at least ``min_steps`` covered
+    cells, and its volume is scaled to the full window.
     """
-    # Step 1: Compute per-patient stats
-    stats = df.groupby(id_col)[time_col].agg(['min', 'max']).reset_index()
-    # The grid ends at the last urine time, as the production rule does since
-    # 2026-11-04 audit round 3 (R3-09); ricu used the duration as the end.
-    stats['ricu_end'] = stats['max']
-
-    # Step 2: Generate time grids for all patients (vectorized with numpy)
-    # Each patient needs: arange(start, ricu_end + step, step)
-    grid_sizes = np.maximum(1, np.floor(
-        (stats['ricu_end'].values - stats['min'].values) / time_step + 1
-    ).astype(int))
-
-    # Handle edge case: ricu_end < start (duration = 0)
-    grid_sizes = np.where(stats['ricu_end'].values >= stats['min'].values, grid_sizes, 1)
-
-    total_points = grid_sizes.sum()
-
-    # Pre-allocate arrays for speed
-    all_times = np.empty(total_points, dtype=np.float64)
-    all_ids = np.empty(total_points, dtype=df[id_col].dtype)
-
-    # 2026-05-20 perf fix: previous code called `stats.iloc[i]['col']`
-    # three times per iteration of the per-patient loop. Each iloc call
-    # is O(N) in pandas and the loop ran once per patient — on a
-    # 60k-patient MIMIC-III run that was the dominant cost in urine24.
-    # Pull the arrays out of pandas once and index with plain numpy.
-    starts_arr = stats['min'].to_numpy()
-    ends_arr = stats['ricu_end'].to_numpy()
-    id_arr = stats[id_col].to_numpy()
-
-    offset = 0
-    for i in range(len(stats)):
-        n = grid_sizes[i]
-        start = starts_arr[i]
-        end = ends_arr[i]
-        if end >= start:
-            times = np.arange(start, end + time_step * 0.5, time_step)[:n]
-        else:
-            times = np.array([start])
-            n = 1
-        actual_n = len(times)
-        all_times[offset:offset + actual_n] = times
-        all_ids[offset:offset + actual_n] = id_arr[i]
-        offset += actual_n
-
-    full_grid = pd.DataFrame({
-        id_col: all_ids[:offset],
-        time_col: all_times[:offset],
-    })
-
-    # Step 3: Merge original urine values onto grid (single merge!)
-    orig = df[[id_col, time_col, urine_col]].drop_duplicates([id_col, time_col])
-    full_grid = full_grid.merge(orig, on=[id_col, time_col], how='left')
-    full_grid[urine_col] = full_grid[urine_col].fillna(0.0)
-    full_grid = full_grid.sort_values([id_col, time_col]).reset_index(drop=True)
-
-    # Step 4: Rolling sum using groupby().rolling() (single operation!)
-    rolling_sum = (
-        full_grid
-        .groupby(id_col, sort=True)[urine_col]
-        .rolling(window=window_steps, min_periods=min_steps, center=False)
-        .sum()
-    )
-    # Drop group level from MultiIndex to align with full_grid
-    if isinstance(rolling_sum.index, pd.MultiIndex):
-        rolling_sum = rolling_sum.droplevel(0)
-    rolling_sum_vals = rolling_sum.values
-
-    # Step 5: Calculate urine24 = rolling_sum * step_factor / actual_window_length
-    cumcount = full_grid.groupby(id_col).cumcount().values + 1
-    actual_window_lens = np.minimum(cumcount, window_steps)
-
-    full_grid['urine24'] = np.where(
-        (actual_window_lens >= min_steps) & np.isfinite(rolling_sum_vals),
-        rolling_sum_vals * step_factor / actual_window_lens,
-        np.nan
-    )
-
-    return full_grid[[id_col, time_col, 'urine24']]
+    rows = []
+    for stay, part in df.groupby(id_col, sort=True):
+        cells = np.floor(part[time_col].to_numpy(dtype=float) / time_step + 1e-9).astype(int)
+        per_cell = pd.Series(part[urine_col].to_numpy(dtype=float)).groupby(cells).sum()
+        lo, hi = int(per_cell.index.min()), int(per_cell.index.max())
+        vol = {k: 0.0 for k in range(lo, hi + 1)}
+        cov = {k: 0 for k in range(lo, hi + 1)}
+        prev = None
+        for k, v in per_cell.items():
+            gap = 1 if prev is None else k - prev
+            prev = k
+            if gap > cap_steps:
+                continue
+            for j in range(k - gap + 1, k + 1):
+                vol[j] += v / gap
+                cov[j] += 1
+        for k in range(lo, hi + 1):
+            span = range(max(lo, k - window_steps + 1), k + 1)
+            covered = sum(cov[j] for j in span)
+            total = sum(vol[j] for j in span)
+            value = total * window_steps / covered if covered >= min_steps else np.nan
+            rows.append((stay, k * time_step, value))
+    return pd.DataFrame(rows, columns=[id_col, time_col, "urine24"])
 
 
 def _event_stage_at_exact_rows(

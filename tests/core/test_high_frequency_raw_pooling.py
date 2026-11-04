@@ -166,3 +166,30 @@ def test_builtin_aumc_po2_converts_kpa_before_bounds_and_pooling():
     )["po2"].data
     assert result.measuredat.tolist() == [0.]
     assert result.po2.tolist() == pytest.approx([75.0061683])
+
+
+def test_mixed_callback_sources_pool_raw_rows_together():
+    """2026-11-04 audit round 4 (R4-008): HiRID resp source 300 (no callback)
+    was pre-sampled to an hourly median while 310 (a callback) stayed raw, so
+    the pooled hour was weighted toward the ventilator source."""
+    sources = [
+        ConceptSource(table="events", sub_var="itemid", ids=[1]),
+        ConceptSource(table="events", sub_var="itemid", ids=[2],
+                      callback="transform_fun(binary_op(`*`, 1))"),
+    ]
+    definition = ConceptDefinition(name="resp", sources={"aumc": sources})
+    target = pd.DataFrame({
+        "admissionid": [1] * 4, "measuredat": [1., 2., 3., 4.],
+        "itemid": [1, 1, 1, 2], "value": [12., 12., 12., 2.],
+    })
+    padding = pd.DataFrame({
+        "admissionid": [2] * 1001, "measuredat": [1.] * 1001,
+        "itemid": [1] * 1001, "value": [15.] * 1001,
+    })
+    result = ConceptResolver(ConceptDictionary({"resp": definition})).load_concepts(
+        ["resp"], RawSource(pd.concat([target, padding], ignore_index=True)), merge=False,
+        r_compatible=False, interval=pd.Timedelta(hours=1), verbose=False, concept_workers=1,
+    )["resp"]
+    data = result.data if hasattr(result, "data") else result
+    # Pooled median of 12, 12, 12, 2 is 12; median(hourly 12, raw 2) was 7.
+    assert data.loc[data.admissionid == 1, "resp"].tolist() == [12.]

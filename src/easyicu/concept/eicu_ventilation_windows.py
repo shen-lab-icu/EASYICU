@@ -27,23 +27,31 @@ CARE_TABLE = "respiratorycare"
 DISCHARGE_COLUMN = "unitdischargeoffset"
 MAX_GAP_HOURS = 8
 
-# respiratoryCharting labels that only a ventilator reports or is set with.
+# respiratoryCharting labels that only an invasive ventilator is set with.
 INVASIVE_SETTING_LABELS = frozenset(
     {
         "Tidal Volume (set)",
         "TV/kg IBW",
         "Vent Rate",
+        "Pressure Control",
+        "Plateau Pressure",
+        "Exhaled TV (machine)",
+    }
+)
+# Settings and measurements an NIV ventilator reports as well.  They take the
+# level of the nearest invasive or NIV setting of the stay within
+# MAX_GAP_HOURS, invasive first, and carry no level otherwise: as invasive
+# evidence they made NIV stays invasive (2026-11-04 audit round 4, R4-024).
+SHARED_SETTING_LABELS = frozenset(
+    {
         "PEEP",
         "Pressure Support",
-        "Pressure Control",
         "Pressure to Trigger PS",
         "Flow Sensitivity",
         "Peak Flow",
         "Peak Insp. Pressure",
-        "Plateau Pressure",
         "Mean Airway Pressure",
         "Exhaled MV",
-        "Exhaled TV (machine)",
         "Compliance",
     }
 )
@@ -53,25 +61,62 @@ NONINVASIVE_SETTING_LABELS = frozenset(
 # The respiratory therapist's ventilator on/off log; Start and Continued mean on.
 VENT_ON_OFF_LABEL = "RT Vent On/Off"
 VENT_ON_VALUES = frozenset({"start", "continued"})
-SETTING_LABELS = INVASIVE_SETTING_LABELS | NONINVASIVE_SETTING_LABELS | {VENT_ON_OFF_LABEL}
+SETTING_LABELS = (
+    INVASIVE_SETTING_LABELS | SHARED_SETTING_LABELS | NONINVASIVE_SETTING_LABELS | {VENT_ON_OFF_LABEL}
+)
 
 
 def setting_evidence(
-    frame: pd.DataFrame, *, label_column: str, value_column: str
+    frame: pd.DataFrame,
+    *,
+    label_column: str,
+    value_column: str,
+    id_column: Optional[str] = None,
+    time_column: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Keep charted ventilator settings with a positive value, as a mech_vent level."""
+    """Keep charted ventilator settings with a positive value, as a mech_vent level.
+
+    ``time_column`` is the respiratoryCharting offset in minutes; without it a
+    shared setting cannot be placed and carries no level.
+    """
     labels = frame[label_column].astype("string").str.strip()
     raw = frame[value_column].astype("string").str.strip()
     vent_on = labels.eq(VENT_ON_OFF_LABEL).fillna(False) & raw.str.lower().isin(VENT_ON_VALUES).fillna(False)
+    values = pd.to_numeric(raw, errors="coerce")
+    positive = values.gt(0).fillna(False) | vent_on
     level = pd.Series(pd.NA, index=frame.index, dtype="object")
     invasive = labels.isin(INVASIVE_SETTING_LABELS).fillna(False) | vent_on
     level[invasive.to_numpy()] = "invasive"
     level[labels.isin(NONINVASIVE_SETTING_LABELS).fillna(False).to_numpy()] = "noninvasive"
-    values = pd.to_numeric(raw, errors="coerce")
-    valid = level.notna() & (values.gt(0).fillna(False) | vent_on)
+    shared = labels.isin(SHARED_SETTING_LABELS).fillna(False) & positive
+    if shared.any() and time_column in frame.columns and (id_column or ID_COLUMN) in frame.columns:
+        level.loc[shared] = _shared_setting_levels(
+            frame, level.where(positive), shared, id_column or ID_COLUMN, time_column
+        )
+    valid = level.notna() & positive
     out = frame.loc[valid].copy()
     out[value_column] = level.loc[valid]
     return out
+
+
+def _shared_setting_levels(frame, level, shared, id_column, time_column) -> pd.Series:
+    """Level of each shared-setting row from the stay's nearest levelled setting."""
+    minutes = pd.to_numeric(frame[time_column], errors="coerce").astype("float64")
+    tolerance = MAX_GAP_HOURS * 60.0
+    rows = pd.DataFrame({"_id": frame[id_column], "_t": minutes, "_row": np.arange(len(frame))})
+    target = rows.loc[shared.to_numpy() & minutes.notna().to_numpy()].sort_values("_t")
+    result = pd.Series(pd.NA, index=frame.index, dtype="object")
+    for name in ("noninvasive", "invasive"):  # invasive last: it wins
+        anchor = rows.loc[level.eq(name).fillna(False).to_numpy() & minutes.notna().to_numpy()]
+        if anchor.empty or target.empty:
+            continue
+        near = pd.merge_asof(
+            target, anchor.sort_values("_t")[["_id", "_t"]].assign(_hit=True),
+            on="_t", by="_id", direction="nearest", tolerance=tolerance,
+        )
+        hit = near["_hit"].eq(True).fillna(False).to_numpy()
+        result.iloc[near.loc[hit, "_row"].to_numpy()] = name
+    return result.loc[shared]
 
 
 def care_intervals(
@@ -174,6 +219,7 @@ def load_care_intervals(data_source, stays: Iterable[object]) -> pd.DataFrame:
 __all__ = [
     "MAX_GAP_HOURS",
     "SETTING_LABELS",
+    "SHARED_SETTING_LABELS",
     "bridge_hours",
     "care_intervals",
     "load_care_intervals",

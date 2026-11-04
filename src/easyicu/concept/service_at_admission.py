@@ -9,7 +9,10 @@ The generic hospital-table path assigned a service row to the stay whose
 ``outtime`` follows it and kept rows within 24 h before ``intime``: a service
 chosen more than a day before the ICU stay, or a second ICU stay in the same
 hospitalisation, had no admission type (17.6% of 3,000 stays; 2026-11-04
-extraction audit round 3, MIIV adm).
+extraction audit round 3, MIIV adm).  MIMIC-III ``services`` has the same
+columns and the same gap (15.8% of 3,000 stays; audit round 4, R4-034), so
+both databases use this rule; the stay column comes from the source's
+``icustay`` identifier.
 """
 
 from __future__ import annotations

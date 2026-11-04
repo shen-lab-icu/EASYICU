@@ -798,6 +798,34 @@ def _aumc_infusion_rows(frame: pd.DataFrame, source, *, value_column: str) -> pd
     if "action" in out.columns:
         flush = out["action"].astype("string").str.strip().str.casefold().eq("flush").fillna(False)
         out = out.loc[~flush]
+    out = _aumc_spread_intermittent(out, source, params, value_column)
+    if params.get("end_exclusive") and not out.empty:
+        # The hourly expansion samples start, start+1h, ..., stop inclusive;
+        # an infusion runs over [start, stop), so a 10-hour infusion gave 11
+        # rows.  One minute (the source resolution) off a positive-length
+        # stop yields one row per started hour (2026-11-04 audit round 4,
+        # R4-007).
+        start_col = source.index_var or "start"
+        stop_col = getattr(source, "dur_var", None) or params.get("stop_var") or "stop"
+        if start_col not in out.columns or stop_col not in out.columns:
+            raise ValueError("end_exclusive requires the start and stop columns")
+        out = out.copy()
+        start = pd.to_numeric(out[start_col], errors="coerce")
+        stop = pd.to_numeric(out[stop_col], errors="coerce")
+        minutes = stop - start
+        rows = (minutes > 0).fillna(False)
+        out.loc[rows, stop_col] = (stop - 1.0)[rows]
+        # The expansion may read a loaded duration instead of the stop; each
+        # keeps its own unit and shrinks by the same factor.
+        shrink = (minutes - 1.0) / minutes
+        for column in ("duration", "dur_var"):
+            if column in out.columns:
+                value = pd.to_numeric(out[column], errors="coerce")
+                out.loc[rows, column] = (value * shrink)[rows]
+    return out
+
+
+def _aumc_spread_intermittent(out: pd.DataFrame, source, params, value_column: str) -> pd.DataFrame:
     mode = str(params.get("intermittent", "keep"))
     if mode == "keep" or out.empty:
         return out
@@ -820,10 +848,13 @@ def _aumc_infusion_rows(frame: pd.DataFrame, source, *, value_column: str) -> pd
     rate = pd.to_numeric(out[value_column], errors="coerce")
     rows = intermittent & start.notna() & stop.notna()
     out.loc[rows, value_column] = (rate * minutes / 60.0 / span)[rows]
-    out.loc[rows, stop_col] = (start + span * 60.0)[rows]
+    # The inclusive hourly expansion places a row at the stop itself, so the
+    # stop is one minute before start + span hours: span rows, not span + 1,
+    # which doubled a one-hour bag (2026-11-04 audit round 4, R4-056).
+    out.loc[rows, stop_col] = (start + span * 60.0 - 1.0)[rows]
     if "dur_var" in out.columns and stop_col != "dur_var":
         # A precomputed duration keeps its own unit and stretches by the same factor.
-        stretch = span * 60.0 / minutes
+        stretch = (span * 60.0 - 1.0) / minutes
         dur = pd.to_numeric(out["dur_var"], errors="coerce")
         out.loc[rows, "dur_var"] = (dur * stretch)[rows]
     return out
@@ -865,6 +896,32 @@ def _declared_filter_column(frame: pd.DataFrame, source, column: str, concept_na
     if concept_name and column == getattr(source, "value_var", None) and concept_name in frame.columns:
         return frame[concept_name]
     return None
+
+
+_KEEP_UNMAPPED = object()
+
+
+_EICU_GCS_CODED = re.compile(r"^\s*([1-6])\s*-->\s*(?:\(\s*([EMVemv])\s*([1-6])\s*\))?")
+_EICU_GCS_ITEM_LETTER = {"egcs": "E", "mgcs": "M", "motor_response": "M", "vgcs": "V"}
+
+
+def _eicu_gcs_score(values: pd.Series, letter: str | None = None) -> pd.Series:
+    """Numeric GCS item scores, including eICU coded text ('4-->(E4) ...').
+
+    A coded value counts only when the (E/M/V) code, if present, names the
+    expected item and repeats the leading score.
+    """
+    numeric = pd.to_numeric(values, errors="coerce")
+    text = values.astype("string")
+    parts = text.str.extract(_EICU_GCS_CODED)
+    lead = pd.to_numeric(parts[0], errors="coerce")
+    item = parts[1].str.upper()
+    code = pd.to_numeric(parts[2], errors="coerce")
+    agrees = code.isna() | code.eq(lead)
+    if letter is not None:
+        agrees &= item.isna() | item.eq(letter)
+    coded = lead.where(agrees.fillna(False).astype(bool))
+    return numeric.fillna(coded)
 
 
 def _drop_declared_row_exclusions(frame: pd.DataFrame, source, concept_name=None) -> pd.DataFrame:
@@ -1353,7 +1410,29 @@ def _apply_callback(
             raise KeyError(
                 "eicu_ventilator_setting_evidence requires respchartvaluelabel and a value column"
             )
-        return setting_evidence(frame, label_column=label_column, value_column=value_column)
+        return setting_evidence(
+            frame, label_column=label_column, value_column=value_column,
+            id_column=next((c for c in ("patientunitstayid",) if c in frame.columns), None),
+            time_column=source.index_var or "respchartoffset",
+        )
+
+    if expr == "eicu_gcs_coded":
+        # eICU per-item GCS forms chart '4-->(E4) spontaneous'; numeric
+        # conversion lost 251,119 such rows (7,424 stays).  The leading score
+        # is kept when it agrees with the (E/M/V) code that follows it
+        # (2026-11-04 audit round 4, R4-043/048/055).
+        value_column = (
+            concept_name if concept_name in frame.columns
+            else source.value_var if source.value_var and source.value_var in frame.columns
+            else "nursingchartvalue"
+        )
+        if value_column not in frame.columns:
+            raise KeyError("eicu_gcs_coded requires the nursecharting value column")
+        frame = frame.copy()
+        frame[value_column] = _eicu_gcs_score(
+            frame[value_column], _EICU_GCS_ITEM_LETTER.get(concept_name or "")
+        )
+        return frame
 
     if expr == "eicu_treatment_ventilation_evidence":
         value_column = (
@@ -2188,6 +2267,23 @@ def _apply_callback(
             frame[val_col] = series.where(series >= threshold)
         return frame
 
+    # transform_fun(fahr_between(<lo>, <hi>)): a Celsius column that also holds
+    # Fahrenheit readings; a value in [lo, hi] cannot be Celsius and is
+    # converted (eICU temperature 85-110: 400,537 vitalperiodic rows in 462
+    # stays were dropped by the 42 C bound; 2026-11-04 audit round 4, R4-152).
+    match = re.fullmatch(
+        r"transform_fun\(fahr_between\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)\)", expr
+    )
+    if match:
+        low, high = float(match.group(1)), float(match.group(2))
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            series = pd.to_numeric(frame[val_col], errors='coerce')
+            fahrenheit = series.between(low, high)
+            frame[val_col] = series.mask(fahrenheit, (series - 32.0) * 5.0 / 9.0)
+        return frame
+
     # transform_fun(na_above(<threshold>)): values above a ceiling are a device
     # sentinel (e.g. a knob parked at its maximum), not a measurement.
     match = re.fullmatch(r"transform_fun\(na_above\(\s*(-?\d+(?:\.\d+)?)\s*\)\)", expr)
@@ -2333,7 +2429,13 @@ def _apply_callback(
     if match:
         mapping = _parse_mapping(match.group(1))
         var_param = match.group(2) if match.group(2) else None
-        
+        # A logical map (every target TRUE/FALSE) leaves an unmapped value
+        # missing, as ricu's map[x] does: eICU 'NO', 'CAM-ICU' or an ICDSC
+        # score reached delirium_positive as text (2026-11-04 audit round 4,
+        # R4-041).  Other maps keep an unmapped value for later checks.
+        logical_map = bool(mapping) and all(isinstance(v, (bool, np.bool_)) for v in mapping.values())
+        unmapped = None if logical_map else _KEEP_UNMAPPED
+
         frame = frame.copy()
         
         # 解析 var_param，如果是 'sub_var'，使用 source.sub_var 的实际值
@@ -2357,8 +2459,8 @@ def _apply_callback(
                 if pd.isna(val):
                     return val
                 # 尝试直接匹配，然后尝试字符串匹配
-                result = mapping.get(val, mapping.get(str(val), val))
-                return result
+                result = mapping.get(val, mapping.get(str(val), unmapped))
+                return val if result is _KEEP_UNMAPPED else result
             
             # 显式转换为 object 类型以避免 FutureWarning
             # 当映射值的类型与原列类型不兼容时（如字符串映射到 int32），需要先转换类型
@@ -2372,7 +2474,8 @@ def _apply_callback(
             def mapper(val):
                 if pd.isna(val):
                     return val
-                return mapping.get(val, mapping.get(str(val), val))
+                result = mapping.get(val, mapping.get(str(val), unmapped))
+                return val if result is _KEEP_UNMAPPED else result
             
             # 同样处理类型不兼容问题
             mapped_series = series.map(mapper)
@@ -2999,7 +3102,8 @@ def _apply_callback(
 
     # Handle eicu_rate_mass(target_unit = "mcg/hour") - non-kg mass-rate drugs
     match = re.fullmatch(
-        r"eicu_rate_mass\(\s*target_unit\s*=\s*['\"]?([^'\"\)]+?)['\"]?\s*\)",
+        r"eicu_rate_mass\(\s*target_unit\s*=\s*['\"]?([^'\"\),]+?)['\"]?\s*"
+        r"(?:,\s*mg_label_mcg_above\s*=\s*([0-9.]+)\s*)?\)",
         expr,
         flags=re.DOTALL,
     )
@@ -3007,7 +3111,8 @@ def _apply_callback(
         from ..utils.callback_utils import eicu_rate_mass_callback
 
         target_unit = match.group(1).strip()
-        callback_fn = eicu_rate_mass_callback(target_unit)
+        mcg_above = float(match.group(2)) if match.group(2) else None
+        callback_fn = eicu_rate_mass_callback(target_unit, mg_label_mcg_above=mcg_above)
 
         val_var = source.value_var or concept_name
         sub_var = source.sub_var

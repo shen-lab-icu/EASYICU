@@ -182,11 +182,12 @@ def test_aumc_uses_aumc_rate_mass(cdict, name, target_unit, aumc_itemid):
     assert src["stop_var"] == "stop"
 
 
-@pytest.mark.parametrize("name,target_unit", [
-    ("fentanyl_rate",  "mcg/hour"),
-    ("midazolam_rate", "mg/hour"),
+@pytest.mark.parametrize("name,target_unit,extra", [
+    # Fentanyl '(mg/hr)' rows above 10 are mislabelled mcg/hr (audit round 4, R4-046).
+    ("fentanyl_rate",  "mcg/hour", ", mg_label_mcg_above = 10"),
+    ("midazolam_rate", "mg/hour", ""),
 ], ids=["fentanyl_rate", "midazolam_rate"])
-def test_eicu_uses_eicu_rate_mass(cdict, name, target_unit):
+def test_eicu_uses_eicu_rate_mass(cdict, name, target_unit, extra):
     """eICU source must use the dedicated non-kg mass-rate callback with the
     correct target unit string. Any drift here (e.g. someone swapping in
     eicu_rate_kg) would silently divide by weight and produce bogus data."""
@@ -197,7 +198,7 @@ def test_eicu_uses_eicu_rate_mass(cdict, name, target_unit):
     assert src["sub_var"] == "drugname"
     assert src["class_name"] == "rgx_itm"
     # Exact callback string — any change requires explicit test update
-    expected_cb = f'eicu_rate_mass(target_unit = "{target_unit}")'
+    expected_cb = f'eicu_rate_mass(target_unit = "{target_unit}"{extra})'
     assert src["callback"] == expected_cb, (
         f"eICU callback drifted for {name}: {src['callback']!r}"
     )

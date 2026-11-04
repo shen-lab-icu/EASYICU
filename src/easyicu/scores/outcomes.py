@@ -232,14 +232,14 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     # parsing failures. Those do not establish follow-up.
     df["followup_days"] = np.where(documented_absence, 365.0, np.nan)
     if database in {"mimic", "mimic_demo"}:
-        # MIMIC-III patients.dod holds Social Security deaths up to 90 days
-        # after the hospital discharge for MetaVision patients and up to four
-        # years for CareVue patients (MIMIC-III patients table documentation).
-        # A stay charted in both systems takes the shorter bound.
+        # MIMIC-III patients.dod holds Social Security deaths for at least
+        # four years after the hospital discharge in both CareVue and
+        # MetaVision.  Rounds 1-3 bounded MetaVision at 90 days, but 1,762
+        # MetaVision stays die 91-365 days after discharge and out-of-hospital
+        # deaths reach 1,734 days, so every MetaVision mort_365d was missing
+        # (2026-11-04 audit round 4, R4-018; reverts R3-08 for MIMIC-III).
         dbsource = icu_source.reindex(df.index).astype("string").str.strip().str.lower()
-        bound_days = pd.Series(
-            np.where(dbsource.eq("carevue").fillna(False), 4 * 365.0, 90.0), index=df.index
-        )
+        bound_days = pd.Series(4 * 365.0, index=df.index)
         discharge_days = (df["dischtime"] - df["intime"]).dt.total_seconds() / 86400.0
         documented = (
             df["_merge"].eq("both")

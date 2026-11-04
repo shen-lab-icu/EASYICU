@@ -458,14 +458,15 @@ def distribute_amount(
             data.loc[zero_duration_mask, end_col] = end_time.loc[zero_duration_mask]
             time_diff_hours = end_time - start_time
         
-        # 计算速率 = amount / duration_hours
-        time_diff_hours = time_diff_hours.replace(0, 1)  # 避免除以零
-        data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / time_diff_hours
-        
-        # 向量化展开时间窗口
+        # Half-open hourly cells [floor(start), floor(end)), at least one, and
+        # the amount divided by their number, so the hourly values sum to the
+        # amount.  The closed expansion gave n + 1 cells at amount / n: a
+        # bolus appeared in two hours (insulin pushes doubled; 2026-11-04
+        # audit round 4, R4-033/R4-036).
         start_hrs = np.floor(start_time.values).astype(int)
         end_hrs = np.floor(end_time.values).astype(int)
-        n_points = np.maximum(end_hrs - start_hrs + 1, 1)
+        n_points = np.maximum(end_hrs - start_hrs, 1)
+        data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / n_points
         
         if n_points.sum() > 0:
             # Find ID columns present in data
@@ -567,17 +568,10 @@ def distribute_amount(
                 start_floor = np.floor(start_rel).astype(int)
                 end_floor = np.floor(end_rel).astype(int)
                 
-                # If end == start, set end = start + 1
-                same_mask = end_floor == start_floor
-                end_floor[same_mask] = start_floor[same_mask] + 1
-                
-                # Rate = amount / duration
-                duration = (end_floor - start_floor).astype(float)
-                duration[duration == 0] = 1.0
-                rates = amounts_v / duration
-                
-                # Expand
-                n_points = np.maximum(end_floor - start_floor + 1, 1)
+                # Half-open cells [start_floor, end_floor), at least one; the
+                # hourly values sum to the amount (R4-033/R4-036).
+                n_points = np.maximum(end_floor - start_floor, 1)
+                rates = amounts_v / n_points
                 total = n_points.sum()
                 if total > 0:
                     valid_ids = [c for c in id_cols if c in d_valid.columns]
@@ -4093,7 +4087,32 @@ def eicu_rate_units_callback(
 
     return callback
 
-def eicu_rate_mass_callback(target_unit: str) -> Callable:
+def _eicu_stay_weight(frame: pd.DataFrame, data_source=None) -> np.ndarray:
+    """Weight (kg) per row: the charted ``patientweight``, else the stay's
+    ``patient.admissionweight``; a missing or non-positive weight is NaN."""
+    if "patientweight" in frame.columns:
+        weight = pd.to_numeric(frame["patientweight"], errors="coerce")
+    else:
+        weight = pd.Series(np.nan, index=frame.index)
+    if data_source is not None and weight.isna().any() and "patientunitstayid" in frame.columns:
+        from ..datasource import FilterOp, FilterSpec
+
+        stays = frame["patientunitstayid"].dropna().unique().tolist()
+        table = data_source.load_table(
+            "patient", columns=["patientunitstayid", "admissionweight"],
+            filters=[FilterSpec(column="patientunitstayid", op=FilterOp.IN, value=stays)],
+        )
+        patient = getattr(table, "data", table)
+        if patient is not None and len(patient):
+            admission = pd.to_numeric(patient["admissionweight"], errors="coerce")
+            lookup = pd.Series(admission.to_numpy(), index=patient["patientunitstayid"].to_numpy())
+            lookup = lookup[~lookup.index.duplicated()]
+            weight = weight.fillna(frame["patientunitstayid"].map(lookup))
+    weight = weight.astype(np.float64)
+    return weight.where(weight > 0).to_numpy()
+
+
+def eicu_rate_mass_callback(target_unit: str, mg_label_mcg_above: Optional[float] = None) -> Callable:
     """eICU rate conversion for mass-rate drugs (no weight normalization).
 
     Mirrors :func:`eicu_rate_kg_callback` but omits the final ÷weight step,
@@ -4105,15 +4124,20 @@ def eicu_rate_mass_callback(target_unit: str) -> Callable:
     1. Parse the unit from ``drugname`` using the same ``(mcg/hr)``-style
        parenthesized suffix pattern used elsewhere in this module.
     2. Drop rows whose unit is NOT mass/time. Specifically incompatible:
-         - ``/kg/`` anything — these rows need weight re-normalization, which
-           would be a separate callback; mixing in this mass-rate pipeline
-           would silently inflate per-kg-rate patients.
+         - ``/kg/`` rows without a weight.  A weight-indexed rate is
+           multiplied by the stay's weight (charted ``patientweight``, else
+           ``admissionweight``): fentanyl charted in mcg/kg/hr or mcg/kg/min
+           (10,877 eICU rows) was dropped (2026-11-04 audit round 4, R4-046).
          - ``ml/`` anything — we don't know the drug concentration for every
            eICU drugname variant, so can't convert to mass rate safely.
          - Empty / ``unknown`` / ``nan`` / ``()`` / ``cont`` — unusable.
          - ``units/`` anything — for non-mass drugs.
     3. Convert the remaining mass/time rate to ``target_unit`` using the
-       same conversion factors as the kg variant.
+       same conversion factors as the kg variant.  With
+       ``mg_label_mcg_above``, a '(mg/...)' row above that value is a
+       microgram rate under a mislabelled unit (eICU fentanyl '(mg/hr)'
+       rows carry microgram-scale concentrations; 10 mg/hr is not a
+       fentanyl infusion), so it is read as mcg.
     4. Run the same interval-expansion logic as ``eicu_rate_kg_callback`` so
        rates align to the ricu hourly grid with LOCF gap filling.
 
@@ -4169,10 +4193,19 @@ def eicu_rate_mass_callback(target_unit: str) -> Callable:
         _unit = frame["unit_var"].astype(str).str.strip().str.lower()
         _unit_raw_na = frame["unit_var"].isna()
 
+        # A weight-indexed rate becomes a mass rate with the stay's weight.
+        _kg = _unit.str.contains("/kg/", na=False)
+        if _kg.any():
+            _weight = _eicu_stay_weight(frame, data_source)
+            _val[_kg.values] *= _weight[_kg.values]
+            _unit = _unit.mask(_kg, _unit.str.replace("/kg/", "/", regex=False))
+        if mg_label_mcg_above is not None:
+            _mislabelled = _unit.str.startswith("mg/", na=False).values & (_val > mg_label_mcg_above)
+            _unit = _unit.mask(_mislabelled, "mcg/" + _unit.str[3:])
+
         # Row-level invalid flags → NaN (will be dropped before expand)
         _invalid = (
             _unit_raw_na
-            | _unit.str.contains("/kg/", na=False)  # would need kg re-norm
             | _unit.str.startswith("ml/", na=False)  # no concentration
             | _unit.str.startswith("units/", na=False)  # non-mass
             | _unit.isin(["unknown", "ml", "", "nan", "none", "cont"])
@@ -4303,13 +4336,19 @@ def eicu_rate_mass_callback(target_unit: str) -> Callable:
 
         # LOCF gap-fill across each patient's [min, max] hour range
         def fill_gaps_locf(group):
+            # include_groups=False drops the stay key; reattach it on both
+            # paths, or a stay with one infusion row loses its id (as in
+            # eicu_rate_kg; 2026-11-04 audit round 4, found with R4-046).
+            patient_id = group.name if not isinstance(group.name, tuple) else group.name[0]
+            group = group.copy()
+            group[id_col] = patient_id
             if len(group) < 2:
                 return group
             min_hour = int(group[time_col].min() / 60)
             max_hour = int(group[time_col].max() / 60)
             all_minutes = [h * 60 for h in range(min_hour, max_hour + 1)]
             grid = pd.DataFrame({
-                id_col: group.name if not isinstance(group.name, tuple) else group.name[0],
+                id_col: patient_id,
                 time_col: all_minutes,
             })
             merged = grid.merge(
@@ -4365,7 +4404,7 @@ def eicu_dex_med(
     dur_var: str,
     concept_name: str,
 ) -> pd.DataFrame:
-    """Dexmedetomidine eICU infusion normalisation (R ricu eicu_dex_med).
+    """Dextrose (D50 medication orders as D10 ml/hr) eICU normalisation (R ricu eicu_dex_med).
     
     R ricu logic (callback-itm.R line 856-872):
     1. Split dosage into value and unit
@@ -4664,10 +4703,11 @@ def aumc_rate_kg(
     if valid_weight.any():
         df.loc[valid_weight, val_col] = df.loc[valid_weight, val_col] / df.loc[valid_weight, 'weight']
     if missing_weight.any():
-        # No weightgroup, no per-kg rate; the exposure stays in *_dur.  Say
-        # so instead of dropping the rows unseen (2026-11-04 audit round 3, R3-14).
+        # No weightgroup and no measured weight (R4-027), no per-kg rate; the
+        # exposure stays in *_dur.  Say so instead of dropping the rows unseen
+        # (2026-11-04 audit round 3, R3-14).
         logger.warning(
-            "aumc_rate_kg %s: %d absolute-dose row(s) have no admission weight; "
+            "aumc_rate_kg %s: %d absolute-dose row(s) have no weight; "
             "their per-kg rate is NA", concept_name, int(missing_weight.sum()),
         )
         df.loc[missing_weight, val_col] = np.nan
@@ -5490,6 +5530,65 @@ def sic_dur(
     return result
 
 
+# A givendose spread over a longer interval than this is not apportioned; it
+# stays in the hour of its record (HiRID records an infusion every few minutes).
+HIRID_APPORTION_MAX_HOURS = 6.0
+
+
+def _hirid_previous_record_time(df: pd.DataFrame, index_col: Optional[str], grp_var: Optional[str]) -> pd.DataFrame:
+    """Add ``_prev_t``: the time of the same infusion's previous record."""
+    time_col = index_col if index_col in df.columns else next(
+        (c for c in ('datetime', 'givenat', 'charttime', 'time') if c in df.columns), None
+    )
+    id_col = next((c for c in ('patientid', 'stay_id', 'admissionid', 'patientunitstayid') if c in df.columns), None)
+    if time_col is None or id_col is None or not pd.api.types.is_numeric_dtype(df[time_col]):
+        return df
+    keys = [id_col] + ([grp_var] if grp_var and grp_var in df.columns else [])
+    df = df.sort_values(keys + [time_col], kind='mergesort')
+    df['_prev_t'] = df.groupby(keys, dropna=False)[time_col].shift(1)
+    return df
+
+
+def _hirid_apportion_hourly(df: pd.DataFrame, time_col: str, dose_col: str) -> pd.DataFrame:
+    """Hour bins of each givendose, split by overlap with [previous record, record].
+
+    A givendose is the amount given since the infusion's previous record.  It
+    was summed into the hour of its record, so an infusion started at 10:50
+    and first charted at 11:05 had a duration hour 10 without a rate
+    (2026-11-04 audit round 4, R4-028).  The split conserves the dose.
+    """
+    t = pd.to_numeric(df[time_col], errors='coerce').to_numpy(dtype=float)
+    prev = (
+        pd.to_numeric(df['_prev_t'], errors='coerce').to_numpy(dtype=float)
+        if '_prev_t' in df.columns else np.full(len(df), np.nan)
+    )
+    span = t - prev
+    first = np.floor(prev)
+    split = np.isfinite(span) & (span > 0) & (span <= HIRID_APPORTION_MAX_HOURS) & (first < np.floor(t))
+    whole = df.loc[~split].copy()
+    whole['_time_bin'] = np.floor(t[~split]).astype(int)
+    if not split.any():
+        return whole.drop(columns=['_prev_t'], errors='ignore')
+    part = df.loc[split]
+    lo, hi, length = prev[split], t[split], span[split]
+    n_hours = (np.ceil(hi) - np.floor(lo)).astype(int)
+    rows = np.repeat(np.arange(len(part)), n_hours)
+    offset = np.arange(n_hours.sum()) - np.repeat(np.cumsum(n_hours) - n_hours, n_hours)
+    hour = np.floor(lo)[rows] + offset
+    overlap = np.minimum(hi[rows], hour + 1.0) - np.maximum(lo[rows], hour)
+    keep = overlap > 0
+    spread = part.iloc[rows[keep]].copy()
+    spread[dose_col] = spread[dose_col].to_numpy(dtype=float) * overlap[keep] / length[rows[keep]]
+    spread['_time_bin'] = hour[keep].astype(int)
+    out = pd.concat([whole, spread], ignore_index=True)
+    return out.drop(columns=['_prev_t'], errors='ignore')
+
+
+# A HiRID givendose at or below this is floating-point residue, not a dose
+# (2026-11-04 audit round 4, R4-030).
+HIRID_DOSE_EPSILON = 1e-6
+
+
 def hirid_rate_kg(
     frame: pd.DataFrame,
     *,
@@ -5547,9 +5646,14 @@ def hirid_rate_kg(
     
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
     df = df.dropna(subset=[actual_val_col])
+    # The time of each infusion's previous record (the zero-dose start marker
+    # included) bounds the interval its givendose was given over (R4-028).
+    df = _hirid_previous_record_time(df, index_col, grp_var)
     # A givendose of 0 is a stopped-pump record: nothing was given since the
     # previous record (2026-11-04 audit round 3, R3-19).
-    df = df[df[actual_val_col] != 0]
+    # Floating-point residue (0 < dose < 1e-6) is not a dose either
+    # (2026-11-04 audit round 4, R4-030).
+    df = df[df[actual_val_col].abs() > HIRID_DOSE_EPSILON]
     if df.empty:
         return empty_result
     
@@ -5598,7 +5702,7 @@ def hirid_rate_kg(
         time_series = df[index_col]
         if pd.api.types.is_numeric_dtype(time_series):
             if interval_minutes >= 60:
-                df['_time_bin'] = np.floor(time_series).astype(int)
+                df = _hirid_apportion_hourly(df, index_col, actual_val_col)
             else:
                 time_in_minutes = time_series * 60
                 df['_time_bin'] = np.floor(time_in_minutes).astype(int) / 60
@@ -5729,7 +5833,9 @@ def hirid_rate(
     df = df.dropna(subset=[actual_val_col])
     # A givendose of 0 is a stopped-pump record, as in hirid_rate_kg
     # (2026-11-04 audit round 3, M NEW-1).
-    df = df[df[actual_val_col] != 0]
+    # Floating-point residue (0 < dose < 1e-6) is not a dose either
+    # (2026-11-04 audit round 4, R4-030).
+    df = df[df[actual_val_col].abs() > HIRID_DOSE_EPSILON]
     if df.empty:
         return empty_result
     
@@ -5876,7 +5982,9 @@ def hirid_rate_mass(
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors="coerce")
     df = df.dropna(subset=[actual_val_col])
     # A givendose of 0 is a stopped-pump record (2026-11-04 audit round 3, M NEW-1).
-    df = df[df[actual_val_col] != 0]
+    # Floating-point residue (0 < dose < 1e-6) is not a dose either
+    # (2026-11-04 audit round 4, R4-030).
+    df = df[df[actual_val_col].abs() > HIRID_DOSE_EPSILON]
     if df.empty:
         return empty
 
@@ -6440,7 +6548,7 @@ def hirid_duration(
     # positive dose is not exposure (2026-11-04 audit round 3, R3-19).
     if dose_col is not None:
         dose = pd.to_numeric(df[dose_col], errors='coerce')
-        positive_time = df['_time_numeric'].where(dose > 0)
+        positive_time = df['_time_numeric'].where(dose > HIRID_DOSE_EPSILON)
         last_positive = positive_time.groupby([df[c] for c in group_cols], dropna=False).transform('max')
         df = df[last_positive.notna() & (df['_time_numeric'] <= last_positive)]
         if df.empty:
@@ -6471,6 +6579,13 @@ def hirid_duration(
     result = _merge_infusion_episodes(result, id_col, HIRID_EPISODE_GAP_HOURS)
 
     result[concept_name] = np.floor(result['_max_time']) - np.floor(result['_min_time'])
+    # The hour difference places the hourly rows; it is not the infusion
+    # length.  An episode shorter than one hour that crosses an hour boundary
+    # counted as one hour and passed the 60-minute qualification of the *60
+    # concepts; it keeps its exact length (2026-11-04 audit round 4, R4-029).
+    exact = result['_max_time'] - result['_min_time']
+    short = (exact < 1.0) & (result[concept_name] >= 1.0)
+    result.loc[short, concept_name] = exact[short]
     
     # The start is the floored hour the duration is counted from, so start +
     # duration is the last infusion hour (2026-11-04 audit round 3, F-20).

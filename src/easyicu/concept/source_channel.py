@@ -23,6 +23,13 @@ buckets, whatever interval the caller requests, so a native-resolution load
 and an hourly load make the same selection and coarser intervals aggregate
 already-selected hours.
 
+A concept may set ``source_channel_window_hours``: a row is then dropped when
+the same patient has a usable row of a better channel within that many hours
+either side, not only in the same clock hour.  MIMIC-III chartevents copies
+of laboratory results are charted hours after the labevents result, so the
+same-hour rule kept them as extra hours (2026-11-04 audit round 4, R4-016:
+99.4% of chart-only creatinine hours equal a lab value within 6 h).
+
 A static (``id_tbl``) concept such as weight has no hour to select in: the
 best channel with a usable value is chosen once per patient, so a charted
 daily weight fills in only for stays without an admission weight.
@@ -150,6 +157,7 @@ def select_preferred_channel(
     maximum: Optional[float] = None,
     time_in_hours: bool = True,
     per_stay: bool = False,
+    window_hours: Optional[float] = None,
 ) -> pd.DataFrame:
     """Keep, per patient and hour, only the best channel with a usable value.
 
@@ -189,6 +197,10 @@ def select_preferred_channel(
     if maximum is not None:
         usable &= values <= maximum
     rank = frame[RANK_COLUMN].astype("float64")
+    if window_hours is not None and not per_stay:
+        hours = _hours(frame[time_column])
+        drop = _covered_by_better_channel(frame[keys], hours, rank, usable, float(window_hours))
+        return frame.loc[~drop].drop(columns=[RANK_COLUMN])
     work = frame[keys].copy()
     work["__bucket"] = bucket.to_numpy()
     work["__usable_rank"] = rank.where(usable.to_numpy())
@@ -197,6 +209,39 @@ def select_preferred_channel(
     # the caller's bounds filter; otherwise only the best usable channel stays.
     keep = best.isna().to_numpy() | (rank.to_numpy() == best.to_numpy())
     return frame.loc[keep].drop(columns=[RANK_COLUMN])
+
+
+def _hours(times: pd.Series) -> pd.Series:
+    if pd.api.types.is_timedelta64_dtype(times):
+        return times.dt.total_seconds() / 3600.0
+    if pd.api.types.is_datetime64_any_dtype(times):
+        return (times - pd.Timestamp("2000-01-01")).dt.total_seconds() / 3600.0
+    return pd.to_numeric(times, errors="coerce").astype("float64")
+
+
+def _covered_by_better_channel(keys, hours, rank, usable, window) -> np.ndarray:
+    """Rows with a usable better-ranked row of the patient within ``window`` hours."""
+    work = keys.copy()
+    work["__t"] = hours.to_numpy(dtype=float)
+    work["__rank"] = rank.to_numpy()
+    work["__row"] = np.arange(len(work))
+    work = work[np.isfinite(work["__t"].to_numpy())]
+    by = [col for col in keys.columns]
+    drop = np.zeros(len(keys), dtype=bool)
+    usable = np.asarray(usable, dtype=bool)
+    for level in sorted(work["__rank"].dropna().unique())[1:]:
+        anchor = work[(work["__rank"] < level) & usable[work["__row"].to_numpy()]]
+        target = work[work["__rank"] == level]
+        if anchor.empty or target.empty:
+            continue
+        near = pd.merge_asof(
+            target.sort_values("__t"),
+            anchor.sort_values("__t")[by + ["__t"]].assign(__hit=True),
+            on="__t", by=by, direction="nearest", tolerance=window,
+        )
+        hit = near["__hit"].eq(True).fillna(False).to_numpy()
+        drop[near.loc[hit, "__row"].to_numpy()] = True
+    return drop
 
 
 def drop_rank(frame: pd.DataFrame) -> pd.DataFrame:

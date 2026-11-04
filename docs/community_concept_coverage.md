@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **289 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **290 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **289 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 27 | 106 |
-| zhejiang_eicu | 128 | 25 | 23 | 113 |
-| jinhua | 135 | 19 | 24 | 111 |
-| zigong | 125 | 19 | 33 | 112 |
+| nwicu | 137 | 19 | 28 | 106 |
+| zhejiang_eicu | 128 | 26 | 23 | 113 |
+| jinhua | 135 | 19 | 25 | 111 |
+| zigong | 125 | 20 | 33 | 112 |
 
 ## Complete matrix
 
@@ -67,7 +67,8 @@ concept (base dictionary plus SOFA-2 overlay): **289 concepts × 4 databases**.
 | `crea` | chemistry | direct | direct | direct | direct |
 | `crp` | chemistry | direct | direct | direct | direct |
 | `crrt_mode_input` | renal | unavailable | unavailable | unavailable | unavailable |
-| `cvp` | vitals | unavailable | direct | unavailable | direct |
+| `cvp` | vitals | partial | derived | partial | derived |
+| `cvp_raw` | vitals | unavailable | direct | unavailable | direct |
 | `d_dimer` | chemistry | direct | direct | direct | direct |
 | `dbp` | vitals | direct | direct | direct | direct |
 | `death` | outcome | direct | direct | direct | unavailable |

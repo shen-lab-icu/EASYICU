@@ -108,14 +108,15 @@ def test_eicu_other_output_drops_urine_counts_totals_and_rrt_labels():
     source_spec = _dictionary()["other_output_ml"]["sources"]["eicu"][0]
     source = types.SimpleNamespace(params={"exclude_regex": source_spec["exclude_regex"]})
     prefix = "flowsheet|Flowsheet Cell Labels|I&O|Output (ml)|"
-    kept = ["Chest Tube A Amount", "Gastric (NG)", "Stool", "Ventric #1", "Paracentesis Output", "Ileostomy"]
-    dropped = ["Urine", "Urine Count", "Stool Occurrence", "TOTAL OUT", "ChestTube Total", "CRRT Out",
+    kept = ["Chest Tube A Amount", "Gastric (NG)", "Ventric #1", "Paracentesis Output", "Ileostomy"]
+    # The plain 'Stool' label is an occurrence count (audit round 4, R4-003).
+    dropped = ["Stool", "Urine", "Urine Count", "Stool Occurrence", "TOTAL OUT", "ChestTube Total", "CRRT Out",
                "Actual Patient Fluid Removal", "Hemofiltration", "CBI/Bladder Irr Out",
                "Tube Feeding Residual Discarded (mL)", "OR EBL", "Incontinent", "Effluent"]
     frame = pd.DataFrame({"cellpath": [prefix + label for label in kept + dropped]})
     out = _drop_declared_row_exclusions(frame, source)
     assert [path[len(prefix):] for path in out["cellpath"]] == kept
-    assert re.match(source_spec["regex"], prefix + "Stool")
+    assert re.match(source_spec["regex"], prefix + "Ileostomy")
 
 
 # ── HiRID rates and doses ───────────────────────────────────────────────
@@ -179,8 +180,10 @@ def test_mech_vent_window_without_a_level_is_not_ventilation():
 
     windows = pd.DataFrame({"mech_vent": ["invasive", None, "invasive"]})
     assert _leveled_window_mask(windows, "mech_vent").tolist() == [True, False, True]
+    # Each row is decided on its own level (audit round 4, R4-066): a batch
+    # whose windows all lack a level is not ventilation either.
     unleveled = pd.DataFrame({"mech_vent": [None, None]})
-    assert _leveled_window_mask(unleveled, "mech_vent").tolist() == [True, True]
+    assert _leveled_window_mask(unleveled, "mech_vent").tolist() == [False, False]
 
 
 def test_sic_sedation_and_end_tidal_co2_attribute_controlled_settings():

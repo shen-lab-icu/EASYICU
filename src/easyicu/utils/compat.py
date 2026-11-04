@@ -188,6 +188,10 @@ MIXED_POINT_WINDOW_CONCEPTS = {
     # MIMIC-IV procedureevents IABP intervals beside charted device settings
     # (2026-11-04 audit round 3, full-dictionary M).
     "mech_circ_support",
+    # MIMIC-III MetaVision antipsychotic infusions beside CareVue
+    # prescriptions without an end time; the expansion dropped the
+    # prescriptions (2026-11-04 audit round 4, R4-006).
+    "delirium_tx_proxy",
 }
 
 # 点事件概念（不应展开为连续时间序列）
