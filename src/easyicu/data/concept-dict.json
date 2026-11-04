@@ -19810,7 +19810,7 @@
   ],
   "min": 1,
   "max": 2000,
-  "description": "Expiratory tidal volume (measured) where available; SICdb uses inspiratory 717 (source_channel inspiratory) when no valid expiratory value exists, including all 2013 admissions",
+  "description": "Expiratory tidal volume (measured) where available; SICdb uses inspiratory tidal volume 717 when no valid expiratory value exists, including all 2013 admissions",
   "omopid": 4314820,
   "category": "ventilator",
   "source_channel_priority": ["ventilator", "inspiratory", "lab"],

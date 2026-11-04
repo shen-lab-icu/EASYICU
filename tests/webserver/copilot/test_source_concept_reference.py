@@ -11,7 +11,8 @@ def test_reference_is_database_specific_and_does_not_claim_actual_reads():
     assert sic["database"] == "sic"
     assert sic["declared_units"] == ["mmol/L"]
     assert sic["declared_mappings"][0]["table"] == "laboratory"
-    assert set(sic["declared_mappings"][0]["ids"]) == {454, 465, 657}
+    # 454 is not a lactate item (extraction audit round 4, R4-176).
+    assert set(sic["declared_mappings"][0]["ids"]) == {465, 657}
     assert sic["declared_mappings"][0]["source_table_defaults"] == {
         "id_var": "CaseID", "index_var": "Offset", "val_var": "LaboratoryValue"
     }

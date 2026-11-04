@@ -1005,7 +1005,7 @@
  },
  "other_vaso": {
   "class_name": "lgl_cncpt",
-  "description": "Other vasoactive medication (phenylephrine, vasopressin, milrinone)",
+  "description": "Other vasoactive medication: phenylephrine, vasopressin or milrinone",
   "category": "cardiovascular",
   "sources": {
    "miiv": [

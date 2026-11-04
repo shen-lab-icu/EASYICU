@@ -5140,7 +5140,7 @@
           "status": "unavailable"
         }
       },
-      "description": "Other vasoactive medication (phenylephrine, vasopressin, milrinone)"
+      "description": "Other vasoactive medication: phenylephrine, vasopressin or milrinone"
     },
     "oxygenation_index": {
       "category": "respiratory",
@@ -8319,7 +8319,7 @@
           "status": "direct"
         }
       },
-      "description": "Expiratory tidal volume (measured) where available; SICdb uses inspiratory 717 (source_channel inspiratory) when no valid expiratory value exists, including all 2013 admissions"
+      "description": "Expiratory tidal volume (measured) where available; SICdb uses inspiratory tidal volume 717 when no valid expiratory value exists, including all 2013 admissions"
     },
     "tidal_vol_set": {
       "category": "ventilator",
