@@ -63,6 +63,10 @@ def test_all_sources_use_set_val_true(name, _n, _dbs):
             items = [items]
         for item in items:
             cb = item.get("callback", "")
+            if db == "hirid":
+                # A zero HiRID dose is a pump marker (2026-11-04 audit round 3, R3-19).
+                assert "comp_na(`>`, 0)" in cb, f"{name}/{db}: callback '{cb}' keeps zero doses"
+                continue
             assert "set_val(TRUE)" in cb, (
                 f"{name}/{db}: callback '{cb}' missing set_val(TRUE)"
             )

@@ -481,7 +481,9 @@ def _urine24_batch(
     """
     # Step 1: Compute per-patient stats
     stats = df.groupby(id_col)[time_col].agg(['min', 'max']).reset_index()
-    stats['ricu_end'] = stats['max'] - stats['min']  # ricu buggy behavior: duration as end
+    # The grid ends at the last urine time, as the production rule does since
+    # 2026-11-04 audit round 3 (R3-09); ricu used the duration as the end.
+    stats['ricu_end'] = stats['max']
 
     # Step 2: Generate time grids for all patients (vectorized with numpy)
     # Each patient needs: arange(start, ricu_end + step, step)

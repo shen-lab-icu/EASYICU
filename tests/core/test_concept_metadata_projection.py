@@ -112,7 +112,8 @@ def test_projects_lact_value_with_separate_extraction_analysis_and_run_authoriti
     assert lineage.database == "miiv"
     assert lineage.table == "labevents"
     assert lineage.selector_variable == "itemid"
-    assert lineage.to_dict()["item_ids"] == [50813, 52442, 53154]
+    # 52442/53154 have no ICU-window rows (2026-11-04 audit round 3).
+    assert lineage.to_dict()["item_ids"] == [50813]
 
 
 @pytest.mark.parametrize(

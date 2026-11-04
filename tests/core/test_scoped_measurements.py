@@ -120,7 +120,9 @@ def test_unit_contract_without_silent_conversion(tmp_path, unit, status, retaine
         (220052, 250, True),
         (220052, 251, False),
         (220074, -5, True),
-        (220074, 50, True),
+        # cvp max is 30 mmHg (2026-11-04 extraction audit round 3, flush artefacts).
+        (220074, 30, True),
+        (220074, 30.1, False),
         (220074, -5.1, False),
     ],
 )
