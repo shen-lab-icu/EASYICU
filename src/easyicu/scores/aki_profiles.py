@@ -1361,7 +1361,7 @@ def _mimic_iv_profile(
     display = result[[resolved_id, resolved_time]].copy()
     # Reserve zero for absent support. Shifting supported stages by one lets
     # the existing maximum kernel retain both normal zero and unavailable.
-    display["stage"] = (result["aki_stage_source_native"] + 1)
+    display["stage"] = (result["aki_stage_source_native"] + 1).where(observed, 0)
     smoothed = _rolling_stage_max(
         display,
         resolved_id,
