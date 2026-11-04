@@ -949,11 +949,13 @@ def _apply_callback(
 
     if expr in eicu_qc_callbacks:
         return apply_eicu_qc(frame, source, concept_name, data_source)
-    if expr in {"mimic_ecmo_evidence", "mimic_antibacterial_inputs", "mimic_other_vaso", "mimic_fentanyl_cv_mass", "mimic_positive_dose"}:
-        from .mimic_support import antibacterial_inputs, ecmo_evidence, fentanyl_cv_mass_rate, other_vaso_points, source_values
+    if expr in {"mimic_ecmo_evidence", "mimic_antibacterial_inputs", "mimic_other_vaso", "mimic_fentanyl_cv_mass", "mimic_positive_dose", "mimic_support_evidence"}:
+        from .mimic_support import antibacterial_inputs, ecmo_evidence, fentanyl_cv_mass_rate, other_vaso_points, source_values, support_evidence
 
         if expr == "mimic_ecmo_evidence":
             return ecmo_evidence(frame, source, concept_name)
+        if expr == "mimic_support_evidence":
+            return support_evidence(frame, source, concept_name)
         if expr == "mimic_positive_dose":
             amount = pd.to_numeric(source_values(frame, source, "amount", concept_name), errors="coerce")
             rate = pd.to_numeric(source_values(frame, source, "rate", concept_name), errors="coerce")

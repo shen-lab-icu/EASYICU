@@ -56,9 +56,8 @@ def test_carevue_holds_the_same_product_as_the_metavision_items(concept, databas
     present, absent = CAREVUE[concept]
     carevue = _sources(concept, database, "inputevents_cv")
     assert len(carevue) == 1
-    # R5C-III-016: magnesium administrations require a positive dose/rate.
-    expected = "mimic_positive_dose" if concept == "magnesium_iv" else "transform_fun(set_val(TRUE))"
-    assert carevue[0]["callback"] == expected
+    # RB-05: every drug and blood product requires a positive amount or rate.
+    assert carevue[0]["callback"] == "mimic_positive_dose"
     assert _ids(carevue) == present
     assert not _ids(_sources(concept, database)) & absent
     # The MetaVision source is kept alongside.

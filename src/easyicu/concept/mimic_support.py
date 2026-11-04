@@ -33,6 +33,28 @@ def source_values(frame: pd.DataFrame, source: ConceptSource, column: str, conce
     return pd.Series(np.nan, index=frame.index)
 
 
+def support_evidence(frame: pd.DataFrame, source: ConceptSource, concept: str) -> pd.DataFrame:
+    """Positive settings/flows, nonzero circuit pressures, or declared text channels.
+
+    Text channels are explicit source metadata, never a fallback for a failed
+    numeric reading. Zero, missing and nonfinite readings cannot become support.
+    """
+    if frame.empty:
+        return frame.assign(**{concept: pd.Series(index=frame.index, dtype=bool)})
+    values = source_values(frame, source, "value", concept).astype("string").str.strip().str.casefold()
+    numeric = _numeric(values)
+    item = _numeric(frame[source.sub_var or "itemid"])
+    pressure = item.isin(source.params.get("pressure_ids", []))
+    positive = np.isfinite(numeric) & (numeric.gt(0) | (pressure & numeric.ne(0)))
+    inactive = values.isin([
+        "", "no", "none", "false", "off", "not applicable", "standby", "stand by",
+        "ambient", "unknown", "other", "other/remarks", "nan", "na", "n/a", "null",
+        "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity",
+    ])
+    text = item.isin(source.params.get("text_ids", [])) & numeric.isna() & values.notna() & ~inactive
+    return frame.loc[(positive | text).fillna(False)].assign(**{concept: True})
+
+
 def ecmo_evidence(frame: pd.DataFrame, source: ConceptSource, concept: str) -> pd.DataFrame:
     """Parse flow, checkboxes and explicit state; ancillary site text is not on/off."""
     values = source_values(frame, source, "value", concept).astype("string").str.strip().str.casefold()
