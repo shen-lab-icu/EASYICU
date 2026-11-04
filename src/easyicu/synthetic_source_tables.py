@@ -120,6 +120,12 @@ def _events(database, config, concepts, p):
                                   givendose=np.full(count, .1), route=route, typeid=1, recordstatus=0)
             elif database == "aumc":
                 time = p["origin"][index] + hour * 3_600_000
+                if "arterial_specimen_only" in (source.get("callback") or ""):
+                    # R6: invented arterial gases need positive specimen evidence.
+                    rows["freetextitems"].append(pd.DataFrame({
+                        "admissionid": p["stay"][index], "itemid": 11646,
+                        "measuredat": time, "value": "ART.",
+                    }))
                 if name == "scvo2":
                     # R5C-AUMC-012: central-line gases have a distinct sample
                     # time and positive site evidence; never relabel arterial gases.

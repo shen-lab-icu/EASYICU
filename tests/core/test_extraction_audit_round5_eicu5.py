@@ -82,8 +82,9 @@ def test_r5_eicu_009_same_offset_specimen_rejects_venous_and_conflicts(name):
     f = pd.DataFrame({"patientunitstayid": [1] * 5, "labresultoffset": [0, 60, 120, 180, 240], "labresult": [7.4] * 5})
     samples = pd.DataFrame({"patientunitstayid": [1] * 5, "labotheroffset": [0, 60, 120, 120, 240], "labothername": ["Sample Type"] * 5, "labothervaluetext": ["Venous", "Arterial", "Arterial", "Venous", "Capillary"], "labotherresult": [""] * 5})
     out = _apply(name, _sources(name, "lab")[0], f, _fake(customlab=samples))
-    assert out.labresultoffset.tolist() == [60, 180]
-    assert out.attrs["eicu_specimen_audit"]["unknown_kept"] == 1
+    assert out.labresultoffset.tolist() == [60]
+    assert out.attrs["eicu_specimen_audit"]["unknown_kept"] == 0
+    assert out.attrs["eicu_specimen_audit"]["unknown_dropped"] == 1
 
 
 def test_r5_eicu_011_adult_height_keeps_raw_value_and_qc_reason():
@@ -269,11 +270,11 @@ def test_r5_eicu_021_loop_rejects_volume_rate_and_cancelled_route_evidence():
 
 
 @pytest.mark.parametrize("offset", [1.0, pd.Timedelta(hours=1), pd.Timestamp("2020-01-01")])
-def test_r5_eicu_009_missing_specimens_remain_unknown_for_each_clock(offset):
+def test_r5_eicu_009_missing_specimens_are_excluded_for_each_clock(offset):
     f = pd.DataFrame({"patientunitstayid": [1], "labresultoffset": [offset], "labresult": [80.0]})
     out = _apply("po2", _sources("po2")[0], f, _fake())
-    assert out.po2.tolist() == [80.0]
-    assert out.eicu_specimen_status.tolist() == ["unknown"]
+    assert out.empty
+    assert out.attrs["eicu_specimen_audit"]["unknown_dropped"] == 1
 
 
 def test_r5_eicu_020_explicit_chart_flow_label_is_not_a_percentage():

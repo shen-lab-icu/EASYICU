@@ -194,7 +194,7 @@ def test_r4_056_aumc_spread_bag_stops_inside_its_last_hour():
     source = ConceptSource.from_mapping({**mapping, "val_var": "dose", "unit_var": "doseunit"})
     frame = pd.DataFrame({"admissionid": [1], "itemid": [7254], "start": [30.0], "stop": [50.0],
                           "dose": [1200.0], "doseunit": ["ml"], "doserateunit": ["uur"],
-                          "iscontinuous": [0], "action": ["Toedienen"]})
+                          "iscontinuous": [0], "action": ["Toedienen"], "ordercategory": "IV"})
     out = _apply_callback(frame, source, "dex", "doseunit")
     assert out["dose"].item() == pytest.approx(400.0)
     assert out["start"].item() == pytest.approx(0.0)

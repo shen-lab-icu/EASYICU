@@ -175,7 +175,7 @@ def test_dictionary_binds_duration_and_vaso60_to_one_episode_contract() -> None:
         duration_name = f"{drug}_dur"
         source = dictionary[duration_name]["sources"]["aumc"][0]
         assert source["callback"] == "aumc_dur"
-        assert source["extra_vars"] == ["iscontinuous", "action"]
+        assert source["extra_vars"] == ["iscontinuous", "action", "ordercategory"]
         assert source["continuous_var"] == "iscontinuous"
         assert source["action_var"] == "action"
         assert source["merge_gap_minutes"] == 5

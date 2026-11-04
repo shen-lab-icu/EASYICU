@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 import numpy as np
 import pandas as pd
 
 STAY = "patientunitstayid"
+logger = logging.getLogger(__name__)
 
 
 def load_optional(data_source, table, stays, columns=None):
@@ -27,21 +29,22 @@ def load_optional(data_source, table, stays, columns=None):
 
 
 def arterial_gases(frame, data_source):
-    """Exclude explicit nonarterial specimens at the exact stay/offset key.
+    """Keep only confirmed arterial specimens at the exact stay/offset key.
 
-    Unknown and unpaired samples are retained and counted. Conflicting arterial
-    and nonarterial labels are excluded; no forward/nearest-time specimen join.
+    Unknown, unpaired and conflicting samples are excluded and counted. No
+    forward/nearest-time specimen join or inference from the analyte name.
     """
     samples = load_optional(data_source, "customlab", frame[STAY].dropna().unique())
     keys = [STAY, "labresultoffset"]
-    status = pd.DataFrame(columns=[*keys, "_nonarterial", "_arterial"])
+    status = pd.DataFrame(columns=[*keys, "_nonarterial", "_arterial", "_unknown"])
     if not samples.empty:
         samples = samples.loc[samples.labothername.astype("string").str.strip().str.casefold().eq("sample type")].copy()
         text = samples.labothervaluetext.astype("string").fillna("").str.strip()
         numeric_text = samples.labotherresult.astype("string").fillna("").str.strip()
         text = text.where(text.ne(""), numeric_text)
-        samples["_nonarterial"] = text.str.contains(r"\b(?:ven\w*|cap\w*)\b", case=False, na=False)
+        samples["_nonarterial"] = text.str.contains(r"\b(?:ven\w*|cap\w*|mixed|pa|pap|pulmonary\s+artery)\b", case=False, na=False)
         samples["_arterial"] = text.str.fullmatch(r"\s*(?:art(?:erial)?\.?)\s*", case=False, na=False)
+        samples["_unknown"] = text.ne("") & ~samples["_arterial"] & ~samples["_nonarterial"]
         offset = samples.labotheroffset
         if pd.api.types.is_timedelta64_dtype(frame.labresultoffset):
             offset = offset if pd.api.types.is_timedelta64_dtype(offset) else pd.to_timedelta(pd.to_numeric(offset, errors="coerce"), unit="m")
@@ -52,19 +55,23 @@ def arterial_gases(frame, data_source):
         else:
             offset = pd.to_numeric(offset, errors="coerce")
         samples["labresultoffset"] = offset
-        status = samples.groupby(keys, as_index=False)[["_nonarterial", "_arterial"]].any()
+        status = samples.groupby(keys, as_index=False)[["_nonarterial", "_arterial", "_unknown"]].any()
     if status.empty:
-        out = frame.copy()
-        out["eicu_specimen_status"] = "unknown"
-        out.attrs["eicu_specimen_audit"] = {"nonarterial_dropped": 0, "unknown_kept": len(frame)}
+        out = frame.iloc[:0].copy()
+        out["eicu_specimen_status"] = pd.Series(dtype="object")
+        out.attrs["eicu_specimen_audit"] = {"nonarterial_dropped": 0, "unknown_kept": 0, "unknown_dropped": len(frame)}
+        logger.info("eICU arterial specimen restriction audit=%s", out.attrs["eicu_specimen_audit"])
         return out
     keyed = frame[keys].reset_index(drop=True)
     joined = keyed.merge(status, on=keys, how="left", validate="many_to_one", sort=False)
     bad = joined["_nonarterial"].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
     known = joined["_arterial"].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
-    out = frame.loc[~bad].copy()
-    out.attrs["eicu_specimen_audit"] = {"nonarterial_dropped": int(bad.sum()), "unknown_kept": int((~bad & ~known).sum())}
-    out["eicu_specimen_status"] = np.where(known[~bad], "arterial", "unknown")
+    unknown = joined["_unknown"].eq(True).fillna(False).to_numpy(dtype=bool)  # noqa: E712
+    keep = known & ~bad & ~unknown
+    out = frame.loc[keep].copy()
+    out.attrs["eicu_specimen_audit"] = {"nonarterial_dropped": int(bad.sum()), "unknown_kept": 0, "unknown_dropped": int((~bad & ~keep).sum())}
+    logger.info("eICU arterial specimen restriction audit=%s", out.attrs["eicu_specimen_audit"])
+    out["eicu_specimen_status"] = "arterial"
     return out
 
 

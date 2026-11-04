@@ -132,6 +132,10 @@ def test_sources_use_explicit_boolean_evidence(furosemide_entry):
             # R5-EICU-037: zero-rate rows are explicit stops, not exposure.
             if db in {"eicu", "eicu_demo"} and src["table"] == "infusiondrug":
                 expected = "eicu_positive_infusion"
+            if db in {"eicu", "eicu_demo"} and src["table"] == "medication":
+                # RR-04: medication orders require positive dose text.
+                expected = "eicu_positive_value"
+                assert src["val_var"] == "dosage"
             if src["table"] == "prescriptions":
                 # MIMIC-III prescriptions are day-resolution orders anchored at
                 # noon (2026-11-04 audit round 3, M D5).

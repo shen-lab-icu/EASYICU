@@ -75,8 +75,10 @@ def test_sources_use_explicit_boolean_evidence(name, _n, _dbs):
                 continue
             cb = item.get("callback", "")
             # R5-EICU-023/037: route and positive-rate owners replace unconditional TRUE.
-            if db in {"eicu", "eicu_demo"} and cb in {"eicu_iv_exposure", "eicu_positive_infusion"}:
-                assert item["table"] == ("medication" if cb == "eicu_iv_exposure" else "infusiondrug")
+            if db in {"eicu", "eicu_demo"} and cb in {"eicu_iv_exposure", "eicu_positive_infusion", "eicu_positive_value"}:
+                assert item["table"] == ("infusiondrug" if cb == "eicu_positive_infusion" else "medication")
+                if cb == "eicu_positive_value":
+                    assert item["val_var"] == "dosage"
                 continue
             if db == "sic" and name in {"propofol", "midazolam", "fentanyl", "morphine", "heparin", "rocuronium"}:
                 # R5-SIC-026: dose-aware truth preserves zero and missing.

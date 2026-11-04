@@ -16,11 +16,11 @@ furosemide dose whose route stays unknown is not converted (oral and IV
 furosemide differ twofold); bumetanide and torasemide convert the same either
 way.  ``diuretics.furosemide_equivalent`` then owns the conversion.
 
-The same ICU dose can be charted in both eMAR and inputevents.  An eMAR dose
-is dropped only when the channels share an event identifier, IV route,
-matching mass dose and a start within ``DEDUP_WINDOW``. Time proximity alone
-cannot distinguish a copied administration from a second dose; ambiguous
-records remain, including every oral dose.
+The same ICU dose can be charted in both eMAR and inputevents. An eMAR dose
+is dropped only for an explicit IV route, the same admission and drug,
+matching positive mass dose and a start within ``DEDUP_WINDOW``. The real
+channels have no shared administration identifier. Each input row can remove
+at most one nearest eMAR copy; oral and unknown-route doses never deduplicate.
 
 Dictionary use::
 
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import numpy as np
 import pandas as pd
 
 from .diuretics import FUROSEMIDE_EQUIVALENT_FACTORS, furosemide_equivalent
@@ -60,7 +61,8 @@ def classify_route(route: pd.Series) -> pd.Series:
     text = route.astype("string").str.strip().str.upper()
     out = pd.Series(pd.NA, index=route.index, dtype="object")
     out[text.isin(ORAL_ROUTES).fillna(False).to_numpy()] = "oral"
-    out[text.str.contains("IV", na=False).to_numpy()] = "iv"
+    iv = text.str.fullmatch(r"(?:IV(?:PB|P)?|INTRAVENOUS)(?:\s+(?:DRIP|PUSH|PIGGYBACK|INFUSION|BOLUS))?", na=False)
+    out[iv.to_numpy()] = "iv"
     return out
 
 
@@ -79,37 +81,46 @@ def event_doses(details: pd.DataFrame) -> pd.DataFrame:
 
 
 def drop_inputevent_duplicates(
-    doses: pd.DataFrame, inputs: pd.DataFrame, *, key: str, time_col: str
+    doses: pd.DataFrame, inputs: pd.DataFrame, *, key: str, time_col: str, drug: str
 ) -> pd.DataFrame:
-    """Drop only verifiable copies, comparing event identity, route and mass dose."""
+    """Match IV copies by admission, drug, mass and nearest time, without IDs.
+
+    A sorted asof join bounds memory to the two channels' row counts instead
+    of constructing all dose pairs in an admission. A nearest input can remove
+    only one eMAR row, so repeated same-dose administrations are preserved.
+    Mass is compared in mg rounded to six decimals after unit conversion.
+    """
     if doses.empty or inputs.empty:
         return doses
-    identities = [c for c in ("emar_id", "orderid", "poe_id") if c in doses and c in inputs]
-    required = {"_route", "_dose", "_unit"}
-    if not identities or not required.issubset(doses) or not {"amount", "amountuom"}.issubset(inputs):
+    required = {key, time_col, "_route", "_dose", "_unit"}
+    if not required.issubset(doses) or not {key, "itemid", "starttime", "amount", "amountuom"}.issubset(inputs):
         return doses
     factors = {"mg": 1., "g": 1000., "gm": 1000., "mcg": .001, "ug": .001, "µg": .001}
-    left = doses.copy()
-    left["_row"] = range(len(left))
-    left["_mg"] = pd.to_numeric(left["_dose"], errors="coerce") * left["_unit"].astype("string").str.casefold().map(factors)
-    left = left.loc[left["_route"].eq("iv")]
-    right = inputs.copy()
+    left = doses.loc[:, [key, time_col, "_route", "_dose", "_unit"]].copy()
+    left["_row"] = np.arange(len(doses))
+    left["_mg"] = (pd.to_numeric(left["_dose"], errors="coerce") * left["_unit"].astype("string").str.strip().str.casefold().map(factors)).round(6)
+    left["_time"] = pd.to_datetime(left[time_col], errors="coerce").astype("datetime64[ns]")
+    left[key] = pd.to_numeric(left[key], errors="coerce").astype("Int64")
+    left = left.loc[left["_route"].eq("iv") & left["_mg"].gt(0) & np.isfinite(left["_mg"])].dropna(subset=[key, "_time"])
+    right = inputs.loc[inputs.itemid.isin(INPUTEVENT_ITEMS[drug])].copy()
     if "statusdescription" in right:
         right = right.loc[~right.statusdescription.astype("string").str.strip().str.casefold().eq("rewritten").fillna(False)]
-    right["_input_mg"] = pd.to_numeric(right["amount"], errors="coerce") * right["amountuom"].astype("string").str.casefold().map(factors)
-    duplicated = pd.Series(False, index=pd.RangeIndex(len(doses)))
-    for identity in identities:
-        a, b = left[identity].astype("string"), right[identity].astype("string")
-        # Join on the administration identifier as well as the admission:
-        # avoid a quadratic all-dose-pairs join for long ICU admissions.
-        left["__event_id"], right["__event_id"] = a, b
-        candidates = left.loc[a.notna() & a.str.strip().ne(""), [key, time_col, "_row", "_mg", "__event_id"]]
-        evidence = right.loc[b.notna() & b.str.strip().ne(""), [key, "starttime", "_input_mg", "__event_id"]]
-        pairs = candidates.merge(evidence, on=[key, "__event_id"])
-        gap = (pd.to_datetime(pairs[time_col]) - pd.to_datetime(pairs["starttime"])).abs()
-        same_dose = (pairs["_mg"] - pairs["_input_mg"]).abs().le(1e-6) & pairs["_mg"].gt(0)
-        duplicated.loc[pairs.loc[same_dose & gap.le(DEDUP_WINDOW), "_row"]] = True
-    return doses.iloc[~duplicated.to_numpy()]
+    right["_mg"] = (pd.to_numeric(right["amount"], errors="coerce") * right["amountuom"].astype("string").str.strip().str.casefold().map(factors)).round(6)
+    right["_input_time"] = pd.to_datetime(right["starttime"], errors="coerce").astype("datetime64[ns]")
+    right[key] = pd.to_numeric(right[key], errors="coerce").astype("Int64")
+    right = right.loc[right["_mg"].gt(0) & np.isfinite(right["_mg"])].dropna(subset=[key, "_input_time"])
+    if left.empty or right.empty:
+        return doses
+    right["_input_row"] = np.arange(len(right))
+    pairs = pd.merge_asof(
+        left.sort_values("_time"),
+        right[[key, "_mg", "_input_time", "_input_row"]].sort_values("_input_time"),
+        left_on="_time", right_on="_input_time", by=[key, "_mg"],
+        direction="nearest", tolerance=DEDUP_WINDOW,
+    ).dropna(subset=["_input_row"])
+    pairs["_gap"] = (pairs["_time"] - pairs["_input_time"]).abs()
+    matched = pairs.sort_values(["_gap", "_row"]).drop_duplicates("_input_row")["_row"]
+    return doses.iloc[~np.isin(np.arange(len(doses)), matched)]
 
 
 def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd.Series) -> pd.DataFrame:
@@ -185,11 +196,9 @@ def apply_emar_furosemide_equivalent(
     doses["pharmacy_id"] = pd.to_numeric(doses["pharmacy_id"], errors="coerce")
     doses = doses.merge(orders, on="pharmacy_id", how="left").set_axis(frame.index)
     doses["_route"] = classify_route(doses["_emar_route"].fillna(doses["_order_route"]))
+    audit["route_unknown_rows"] = int(doses["_route"].isna().sum())
     if FUROSEMIDE_EQUIVALENT_FACTORS[(drug, "iv")] != FUROSEMIDE_EQUIVALENT_FACTORS[(drug, "oral")]:
-        audit["route_unknown_rows"] = int(doses["_route"].isna().sum())
         doses = doses.loc[doses["_route"].notna()]
-    else:
-        doses["_route"] = doses["_route"].fillna("iv")
 
     items = INPUTEVENT_ITEMS[drug]
     if items and not doses.empty:
@@ -202,7 +211,7 @@ def apply_emar_furosemide_equivalent(
         )
         inputs = inputs.data if hasattr(inputs, "data") else inputs
         before = len(doses)
-        doses = drop_inputevent_duplicates(doses, inputs, key=key, time_col=time_col)
+        doses = drop_inputevent_duplicates(doses, inputs, key=key, time_col=time_col, drug=drug)
         audit["inputevents_duplicates_dropped"] = int(before - len(doses))
 
     # The loader names the medication text after the concept; the dose is

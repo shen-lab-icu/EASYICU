@@ -67,7 +67,8 @@ def test_aumc_drop_units_do_not_become_ml_and_minute_conversion_remains():
     frame = pd.DataFrame({"admissionid": [1, 2, 3, 4], "itemid": [8940]*4, "dose": [10.]*4,
                           "doseunit": ["druppel", " ML ", "ml", None], "doserateunit": ["uur", "uur", "min", "uur"],
                           # Continuous rows; intermittent bags are spread (F-03).
-                          "iscontinuous": [1]*4, "start": [0.]*4, "stop": [1.]*4, "action": ["Toedienen"]*4})
+                          "iscontinuous": [1]*4, "start": [0.]*4, "stop": [1.]*4, "action": ["Toedienen"]*4,
+                          "ordercategory": "IV"})
     result = _apply_callback(frame, source, concept_name="dex", unit_column="doseunit")
     assert result.admissionid.tolist() == [2, 3]
     # R5C-AUMC-004: hour-bin averages conserve each one-minute infusion.
@@ -77,7 +78,7 @@ def test_aumc_drop_units_do_not_become_ml_and_minute_conversion_remains():
 def test_aumc_missing_declared_volume_unit_is_an_error():
     source = ConceptSource.from_mapping({**dictionary_sources()["aumc"][0], "val_var": "dose", "unit_var": "doseunit"})
     frame = pd.DataFrame({"itemid": [8940], "dose": [30.], "doserateunit": ["uur"],
-                          "iscontinuous": [1], "start": [0.], "stop": [1.]})
+                          "iscontinuous": [1], "start": [0.], "stop": [1.], "ordercategory": "IV"})
     with pytest.raises(ValueError, match="volume-unit column"):
         _apply_callback(frame, source, concept_name="dex", unit_column="doseunit")
 

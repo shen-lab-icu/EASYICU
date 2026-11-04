@@ -74,8 +74,8 @@
      "regex": "merope?nem|merrem|cipro|flagyl|maxipime|metronidazole|tazobactam|zosyn|cef(azolin|epime)|(((azithro|clinda|vanco)my|ofloxa|vanco)c|levaqu|piperacill|roceph)in",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
@@ -83,7 +83,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-038): meropenem/Merrem added (6,633 named medication rows in 2,841 stays had no match). | 2026-11-04 audit round 4 (R4-123): ophthalmic, otic, topical, inhaled, nasal, rectal, vaginal and irrigation routes are not systemic antibiotic exposure; enteral antibiotics (oral vancomycin) stay.",
      "exclude_regex": {
@@ -116,7 +117,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
@@ -124,7 +126,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (121,206 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-038): HICL 11254 (meropenem) added for its 5,198 rows without a drugname (3,435 stays); named meropenem rows are counted by the name source. | 2026-11-04 audit round 4 (R4-123): ophthalmic, otic, topical, inhaled, nasal, rectal, vaginal and irrigation routes are not systemic antibiotic exposure; enteral antibiotics (oral vancomycin) stay.",
      "exclude_regex": {
@@ -147,8 +150,8 @@
      "regex": "merope?nem|merrem|cipro|flagyl|maxipime|metronidazole|tazobactam|zosyn|cef(azolin|epime)|(((azithro|clinda|vanco)my|ofloxa|vanco)c|levaqu|piperacill|roceph)in",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
@@ -156,7 +159,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-038): meropenem/Merrem added (6,633 named medication rows in 2,841 stays had no match). | 2026-11-04 audit round 4 (R4-123): ophthalmic, otic, topical, inhaled, nasal, rectal, vaginal and irrigation routes are not systemic antibiotic exposure; enteral antibiotics (oral vancomycin) stay.",
      "exclude_regex": {
@@ -189,7 +193,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
@@ -197,7 +202,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (121,206 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-038): HICL 11254 (meropenem) added for its 5,198 rows without a drugname (3,435 stays); named meropenem rows are counted by the name source. | 2026-11-04 audit round 4 (R4-123): ophthalmic, otic, topical, inhaled, nasal, rectal, vaginal and irrigation routes are not systemic antibiotic exposure; enteral antibiotics (oral vancomycin) stay.",
      "exclude_regex": {
@@ -658,7 +664,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_rate"
+     "callback": "hirid_rate",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -1105,14 +1117,17 @@
      "regex": "(?i)\\balbumin\\s+(human\\s+)?[245]\\s*%|albumin\\s+(human\\s+)?(5|25)|\\balbumin\\s+human\\b|\\balbumin\\s*\\(human\\)|buminate|plasbumin|albutein|albuked|flexbumin",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -1122,14 +1137,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (17,307 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -1142,14 +1160,17 @@
      "regex": "(?i)\\balbumin\\s+(human\\s+)?[245]\\s*%|albumin\\s+(human\\s+)?(5|25)|\\balbumin\\s+human\\b|\\balbumin\\s*\\(human\\)|buminate|plasbumin|albutein|albuked|flexbumin",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -1159,14 +1180,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (17,307 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -1295,7 +1319,13 @@
      "sub_var": "itemid",
      "_comment": "2026-07-17: wired (was absent). 8933 'Albumine 20%' = 3,238 rows / 1,238 admissions.",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ]
   }
@@ -1603,7 +1633,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -1803,15 +1839,17 @@
      "regex": "(?i)aspirin|acetylsalic|ecotrin",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-07-17 recall: added 'ecotrin' (enteric-coated aspirin brand, +3,883 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -1820,14 +1858,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (18,608 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -1840,15 +1880,17 @@
      "regex": "(?i)aspirin|acetylsalic|ecotrin",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -1857,14 +1899,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (18,608 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -2111,7 +2155,7 @@
   ],
   "min": -25,
   "max": 25,
-  "description": "base excess",
+  "description": "arterial base excess",
   "omopid": 4284393,
   "category": "blood gas",
   "sources": {
@@ -2132,28 +2176,42 @@
     {
      "ids": "Base Excess",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     },
     {
      "ids": "Base Deficit",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "transform_fun(binary_op(`*`, -1))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): lab 'Base Deficit' (65,999 rows, 17,773 stays) is negated base excess."
+     "callback": "combine_callbacks(eicu_arterial_gas, transform_fun(binary_op(`*`, -1)))",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): lab 'Base Deficit' (65,999 rows, 17,773 stays) is negated base excess.",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
     {
      "ids": "Base Excess",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     },
     {
      "ids": "Base Deficit",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "transform_fun(binary_op(`*`, -1))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): lab 'Base Deficit' (65,999 rows, 17,773 stays) is negated base excess."
+     "callback": "combine_callbacks(eicu_arterial_gas, transform_fun(binary_op(`*`, -1)))",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): lab 'Base Deficit' (65,999 rows, 17,773 stays) is negated base excess.",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -2221,7 +2279,11 @@
     {
      "ids": 668,
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ]
     }
    ]
   },
@@ -2450,7 +2512,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -2652,7 +2720,13 @@
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
      "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "sic": [
@@ -3468,7 +3542,13 @@
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
      "_comment": "2026-07-17 recall: added 1000687 'Calciumchlorid 5%' (145 pts, iv-inf). Concept covers gluconate or chloride; minor. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "aumc": [
@@ -3515,16 +3595,18 @@
     {
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "regex": "(?i)cisatracurium|nimbex",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-07-17 recall: 'cisatracurium' in the medication table adds 618 distinct pts over the infusiondrug source (more than doubles). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -3533,14 +3615,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,863 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -3564,16 +3648,18 @@
     {
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "regex": "(?i)cisatracurium|nimbex",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-07-17 recall: 'cisatracurium' in the medication table adds 618 distinct pts over the infusiondrug source (more than doubles). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -3582,14 +3668,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,863 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -4029,9 +4117,10 @@
     {
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "regex": "^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate)).*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone|solu.?medrol|solu.?cortef|decadron)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: systemic corticosteroids by drug name (generic and the brand names Solu-Medrol, Solu-Cortef, Decadron); topical, ophthalmic, otic, rectal, inhaled and nasal preparations, depot acetate suspensions and study drugs are excluded. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-129): inhaled, nasal, topical, ophthalmic, otic, rectal, epidural and intra-articular corticosteroids are not systemic; oral steroids stay.",
      "excluded_statuses": [
       "true"
@@ -4039,7 +4128,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "exclude_regex": {
       "routeadmin": "(?i)inhal|neb|nasal|topical|ophth|\\beye|otic|\\bear|rectal|\\bpr\\b|epidural|intra-?articular"
@@ -4060,7 +4150,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: medication rows without a drug name carry only the HICL code. The codes are those the named rows of the same table use for systemic corticosteroids: 2876 and 36808 methylprednisolone (sodium succinate) injection, 2866 and 36875 hydrocortisone sodium succinate injection, 2879 prednisone tablets, 2888 dexamethasone injection, 2889 oral dexamethasone (routes IV/PO). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. 2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (820 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-129): inhaled, nasal, topical, ophthalmic, otic, rectal, epidural and intra-articular corticosteroids are not systemic; oral steroids stay.",
      "excluded_statuses": [
       "true"
@@ -4069,7 +4160,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:^(?!.*(cream|oint|ophth|eye|otic|supp|enema|foam|rectal|lotion|topical|nasal|inhal|study|placebo|acetic|tobramycin|neomycin|sulfacetamide|moxiflo|prednisolone acetate)).*(prednisone|prednisolone|methylprednisolone|hydrocortisone|dexamethasone|fludrocortisone|solu.?medrol|solu.?cortef|decadron))",
@@ -4929,11 +5021,15 @@
       "action",
       "iscontinuous",
       "administered",
-      "administeredunit"
+      "administeredunit",
+      "ordercategory"
      ],
      "required_volume_unit": "ml",
      "callback": "aumc_dextrose",
-     "_comment": "R5C-AUMC-004: exclude Flush and non-volume units; normalize rate-time and glucose concentration before allocating D10-equivalent totals in proportion to exact ICU-hour overlap. Continuous rates and intermittent bag totals are handled separately; do not stretch stop times."
+     "_comment": "R5C-AUMC-004: exclude Flush and non-volume units; normalize rate-time and glucose concentration before allocating D10-equivalent totals in proportion to exact ICU-hour overlap. Continuous rates and intermittent bag totals are handled separately; do not stretch stop times.",
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -5226,14 +5322,16 @@
      "regex": "(?i)(dexamethasone|decadron)",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -5246,14 +5344,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,848 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -5266,14 +5366,16 @@
      "regex": "(?i)(dexamethasone|decadron)",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -5286,14 +5388,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,848 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -5401,15 +5505,17 @@
      "regex": "dexmedetomidine|precedex",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -5420,14 +5526,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (8,655 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -5452,15 +5561,17 @@
      "regex": "dexmedetomidine|precedex",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -5471,14 +5582,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (8,655 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -5507,7 +5621,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -5618,15 +5738,17 @@
      "regex": "(?i)(dextrose\\s+50|\\bd50\\b|d50w)",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-132): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -5639,7 +5761,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
@@ -5647,7 +5770,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (9,875 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-132): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -5661,15 +5785,17 @@
      "regex": "(?i)(dextrose\\s+50|\\bd50\\b|d50w)",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-132): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -5682,7 +5808,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
@@ -5690,7 +5817,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (9,875 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-132): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -5798,7 +5926,13 @@
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
      "_comment": "2026-07-17: dropped 1000835 'Glucose 20% /500ml' (11,460 rows/99 pts) - a 500 mL maintenance/nutrition bag, not a 50% rescue bolus; it supplied 63% of this concept's HiRID patients. 1000567 'Glucose 50%' (6,090 rows/57 pts) is the rescue product. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ]
   }
@@ -6081,12 +6215,16 @@
      "stop_var": "stop",
      "extra_vars": [
       "iscontinuous",
-      "action"
+      "action",
+      "ordercategory"
      ],
      "continuous_var": "iscontinuous",
      "action_var": "action",
      "merge_gap_minutes": 5,
-     "callback": "aumc_dur"
+     "callback": "aumc_dur",
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -6113,7 +6251,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_duration"
+     "callback": "hirid_duration",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -6257,13 +6401,15 @@
      "callback": "aumc_rate_kg",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -6294,7 +6440,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_rate_kg"
+     "callback": "hirid_rate_kg",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -6411,12 +6563,16 @@
      "stop_var": "stop",
      "extra_vars": [
       "iscontinuous",
-      "action"
+      "action",
+      "ordercategory"
      ],
      "continuous_var": "iscontinuous",
      "action_var": "action",
      "merge_gap_minutes": 5,
-     "callback": "aumc_dur"
+     "callback": "aumc_dur",
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -6578,13 +6734,15 @@
      "callback": "aumc_rate_kg",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -6982,14 +7140,16 @@
      "regex": "(?i)enoxaparin|lovenox",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -7000,14 +7160,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (15,534 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -7020,14 +7182,16 @@
      "regex": "(?i)enoxaparin|lovenox",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -7038,14 +7202,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (15,534 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -7305,12 +7471,16 @@
      "stop_var": "stop",
      "extra_vars": [
       "iscontinuous",
-      "action"
+      "action",
+      "ordercategory"
      ],
      "continuous_var": "iscontinuous",
      "action_var": "action",
      "merge_gap_minutes": 5,
-     "callback": "aumc_dur"
+     "callback": "aumc_dur",
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -7341,7 +7511,13 @@
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
      "callback": "hirid_duration",
-     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions."
+     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions.",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -7487,13 +7663,15 @@
      "callback": "aumc_rate_kg",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -7550,7 +7728,13 @@
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
      "callback": "hirid_rate_kg",
-     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions."
+     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions.",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "mimic": [
@@ -8091,7 +8275,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -8247,6 +8437,9 @@
      ],
      "exclude_regex": {
       "route": "(?i)^\\s*(?:enteral|ms|p\\s*os|p\\.\\s*ms|ep-.*|sc.*|s\\.c\\..*|inh.*)\\s*$"
+     },
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
      }
     }
    ],
@@ -8512,13 +8705,15 @@
      "callback": "aumc_rate_mass(target_unit = \"mcg/hour\")",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -8531,7 +8726,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_rate_mass(target_unit = \"mcg/hour\")"
+     "callback": "hirid_rate_mass(target_unit = \"mcg/hour\")",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ]
   }
@@ -9252,15 +9453,16 @@
      "regex": "furosem|lasix",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -9270,7 +9472,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -9278,7 +9481,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:furosem|lasix)"
@@ -9302,15 +9506,16 @@
      "regex": "furosem|lasix",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -9320,7 +9525,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only HICL 3660 (every named row with HICL 3660 is furosemide/Lasix): 19,522 rows/9,863 stays in eICU v2.0, +4,420 stays. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -9328,7 +9534,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:furosem|lasix)"
@@ -9908,7 +10115,7 @@
  },
  "heparin": {
   "class_name": "lgl_cncpt",
-  "description": "heparin administration — IV anticoagulation (therapeutic + prophylaxis)",
+  "description": "heparin intravenous anticoagulation",
   "category": "medications",
   "aggregate": "max",
   "sources": {
@@ -9920,7 +10127,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -9928,8 +10141,8 @@
      "regex": "heparin",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
@@ -9937,7 +10150,9 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-136): heparin flush and lock orders (5,553 rows/2,894 stays) keep catheters patent; they are not anticoagulation.",
      "exclude_regex": {
@@ -9954,14 +10169,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (48,111 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -9986,8 +10204,8 @@
      "regex": "heparin",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
@@ -9995,7 +10213,9 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-136): heparin flush and lock orders (5,553 rows/2,894 stays) keep catheters patent; they are not anticoagulation.",
      "exclude_regex": {
@@ -10012,14 +10232,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (48,111 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -10048,7 +10271,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-07-04 recall audit: added 107 'Liquemin 5000 U/ml' (therapeutic UFH, 3.7M rows) — was missing; 1000373 'Heparin Bichsel 500 E' is an 11-row flush. Fraxiparine (nadroparin) is LMWH, not added here. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-07-04 recall audit: added 107 'Liquemin 5000 U/ml' (therapeutic UFH, 3.7M rows) — was missing; 1000373 'Heparin Bichsel 500 E' is an 11-row flush. Fraxiparine (nadroparin) is LMWH, not added here. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -11726,7 +11955,13 @@
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
      "_comment": "2026-05-27 added via HiRID Pharma reference table audit | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-059): pharmaid 1000676 removed; its pharma.route is 'p os' (9,861 rows) or 'p.ms' (3,383 rows) and never intravenous, while 1000756 and 1001175 are 'iv-inf'. (The round-3 receipt was wrong that HiRID records no route.) | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ]
   }
@@ -11751,14 +11986,16 @@
      "regex": "(?i)lorazepam|ativan",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -11768,14 +12005,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (16,487 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -11788,14 +12027,16 @@
      "regex": "(?i)lorazepam|ativan",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -11805,14 +12046,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (16,487 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -12132,7 +12375,13 @@
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): syringe-pump 9002 'Magnesiumsulfaat' (497 rows) added.",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -12446,7 +12695,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -12454,15 +12709,17 @@
      "regex": "mannitol",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -12480,15 +12737,17 @@
      "regex": "mannitol",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -12640,6 +12899,7 @@
   "category": "vitals",
   "source_channel_priority": [
    "invasive",
+   "invasive_secondary",
    "nibp"
   ],
   "_comment": "2026-11-03 extraction audit 2: within each hour since ICU admission an arterial-line (invasive) value is used when one is recorded, else the cuff (nibp) value; the channels are never pooled in one median (owner concept/source_channel.py). The channels alone are map_invasive and map_nibp. | 2026-11-04 audit round 3 (M, hemodynamics): the lower bound is 1 mmHg in every database; a pressure <= 0 is a disconnected or zeroing transducer or cuff (HiRID 110 had them; AUMC had a source-level na_below(1)).",
@@ -12647,14 +12907,23 @@
    "aumc": [
     {
      "ids": [
-      6642,
-      8843
+      6642
      ],
      "table": "numericitems",
      "sub_var": "itemid",
      "source_channel": "invasive",
      "_comment": "2026-11-03 extraction audit 2: invasive channel: 6642 'ABP gemiddeld', 8843 'ABP gemiddeld II' (aumc_item_dict, mmHg). 2026-07-02 source-dictionary audit: added non-invasive mean blood pressure channel. | 2026-07-17 official-code audit (amsterdamumcdb/sql/common/legacy/mean_abp.sql uses 6642/6679/8843): ADDED 8843 'ABP gemiddeld II' (second arterial line). MAP feeds SOFA-cardio and the M4 state; omitting it dropped MAP for patients with a 2nd/femoral art line. 2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped.",
      "callback": "transform_fun(na_below(1))"
+    },
+    {
+     "ids": [
+      8843
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "source_channel": "invasive_secondary",
+     "callback": "transform_fun(na_below(1))",
+     "_comment": "R6 RR-08: the second arterial line fills hours without primary 6642, before cuff 6679; it is never pooled with the primary line."
     },
     {
      "ids": [
@@ -13810,15 +14079,17 @@
      "regex": "(?i)meropenem|meronem|merrem",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-07-17 recall: added brand Merrem (+714 pts). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -13827,14 +14098,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (5,369 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -13847,15 +14120,17 @@
      "regex": "(?i)meropenem|meronem|merrem",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "_comment": "2026-07-17 recall: see eicu. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -13864,14 +14139,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (5,369 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -14258,7 +14535,7 @@
       "ordercategory"
      ],
      "exclude_regex": {
-      "ordercategory": "(?i)^Niet iv"
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "R5C-AUMC-006: IV sedation requires a positive dose and excludes non-IV order categories."
     }
@@ -14268,8 +14545,8 @@
      "regex": "midazolam|versed",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
@@ -14277,7 +14554,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-140): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -14293,7 +14571,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
@@ -14301,7 +14580,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (14,889 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-140): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -14327,8 +14607,8 @@
      "regex": "midazolam|versed",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
@@ -14336,7 +14616,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-140): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -14352,7 +14633,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
@@ -14360,7 +14642,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (14,889 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-140): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -14393,7 +14676,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -14594,13 +14883,15 @@
      "callback": "aumc_rate_mass(target_unit = \"mg/hour\")",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -14614,7 +14905,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
-     "callback": "hirid_rate_mass(target_unit = \"mg/hour\")"
+     "callback": "hirid_rate_mass(target_unit = \"mg/hour\")",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "sic": [
@@ -14648,15 +14945,17 @@
      "regex": "milrinone|primacor",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -14678,15 +14977,17 @@
      "regex": "milrinone|primacor",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -14711,7 +15012,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -14817,7 +15124,13 @@
      ],
      "callback": "aumc_positive_dose",
      "_comment": "2026-07-17 class: 7196 'Enoximon (Perfan)' (13,556 rows / 2,459 adm) is the Dutch PDE3-inhibitor inotrope; milrinone is absent from AUMC. Concept broadened to PDE3i class.",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ]
   },
@@ -15068,7 +15381,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-07-17 recall: added 1000716 'PCA-Morphin' (314 pts, iv). MST oral retard stays excluded. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | 2026-11-04 audit round 4 (R4-168): 1000932 is oral morphine solution (route p os)."
+     "_comment": "2026-07-17 recall: added 1000716 'PCA-Morphin' (314 pts, iv). MST oral retard stays excluded. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE). | 2026-11-04 audit round 4 (R4-168): 1000932 is oral morphine solution (route p os).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -15277,14 +15596,16 @@
      "regex": "(?i)neostigmine",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -15294,14 +15615,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,269 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -15314,14 +15637,16 @@
      "regex": "(?i)neostigmine",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -15331,14 +15656,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,269 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -15561,7 +15888,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -15569,15 +15902,17 @@
      "regex": "(?i)nicardipine|cardene",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-144): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -15591,7 +15926,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
@@ -15599,7 +15935,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,179 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-144): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -15626,15 +15963,17 @@
      "regex": "(?i)nicardipine|cardene",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 4 (R4-144): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -15648,7 +15987,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
@@ -15656,7 +15996,8 @@
      "extra_vars": [
       "drugname",
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,179 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others. | 2026-11-04 audit round 4 (R4-144): enteral and other non-IV routes (topical, rectal, irrigation, inhaled, IM, subcutaneous) are not the intravenous drug the concept describes.",
      "exclude_regex": {
@@ -15781,7 +16122,13 @@
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
      "_comment": "2026-11-04 audit round 4 (R4-155): 9113 Nitrobaat (sublingual/oral nitrate) is not IV nitroglycerin.",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -15800,16 +16147,19 @@
     {
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "regex": "(?i)nitroglycerin.*(d5w|iv|infusion|/hr|gtt)(?!.*(sl|subl|tab|oint|paste|patch))",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "_comment": "2026-07-17 recall: IV nitroglycerin bags in the medication table (~+3,000 pts). STRICT route filter: require d5w/iv/infusion, EXCLUDE sl|subl|tab|oint|paste|patch|nitro-bid (the HiRID oral-capsule lesson -- do not absorb the ~9,776 SL/topical patients). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ]
     }
    ],
@@ -15829,16 +16179,19 @@
     {
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "regex": "(?i)nitroglycerin.*(d5w|iv|infusion|/hr|gtt)(?!.*(sl|subl|tab|oint|paste|patch))",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_iv_exposure",
      "_comment": "2026-07-17 recall: IV nitroglycerin bags in the medication table (~+3,000 pts). STRICT route filter: require d5w/iv/infusion, EXCLUDE sl|subl|tab|oint|paste|patch|nitro-bid (the HiRID oral-capsule lesson -- do not absorb the ~9,776 SL/topical patients). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ]
     }
    ],
@@ -15945,7 +16298,13 @@
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
      "_comment": "2026-07-17 route fix: 117 'Nitroglycerin Kps 0.8mg' is an ORAL capsule (11 rows/10 pts) but this concept is IV nitroglycerin. HiRID's IV product is Perlinganit: 1000243 (74,697 rows/1,257 pts) + 1000734 Perfusor (83/4). Verified against pharma/*.parquet. Nitroderm TTS patches 1000458/1000459 correctly remain excluded. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ]
   }
@@ -15980,12 +16339,16 @@
      "stop_var": "stop",
      "extra_vars": [
       "iscontinuous",
-      "action"
+      "action",
+      "ordercategory"
      ],
      "continuous_var": "iscontinuous",
      "action_var": "action",
      "merge_gap_minutes": 5,
-     "callback": "aumc_dur"
+     "callback": "aumc_dur",
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -16099,7 +16462,13 @@
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
      "callback": "hirid_duration",
-     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline)."
+     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -16258,13 +16627,15 @@
      "callback": "aumc_rate_kg",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -16319,7 +16690,13 @@
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
      "callback": "hirid_rate_kg",
-     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline)."
+     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "mimic": [
@@ -16440,7 +16817,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as arterial (gases without a specimen record are kept, as for 12311). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as arterial (gases without a specimen record are excluded, as for 12311). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -16453,7 +16830,11 @@
     {
      "ids": "O2 Sat (%)",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
@@ -16466,7 +16847,11 @@
     {
      "ids": "O2 Sat (%)",
      "table": "lab",
-     "sub_var": "labname"
+     "sub_var": "labname",
+     "callback": "eicu_arterial_gas",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "hirid": [
@@ -17249,7 +17634,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only(convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$'))",
-     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py. 2026-11-03 audit round 2 (G4): 21213 PCO2 (bloed) is charted in kPa; labelled kPa rows are converted to mmHg as for po2."
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are excluded. Rule owner: concept/blood_gas_specimen.py. 2026-11-03 audit round 2 (G4): 21213 PCO2 (bloed) is charted in kPa; labelled kPa rows are converted to mmHg as for po2."
     }
    ],
    "eicu": [
@@ -17693,7 +18078,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -17928,7 +18313,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): enteral routes and oral formulations are not the intravenous drug the concept describes (MIIV/MIMIC read it from IV inputevents).",
      "excluded_statuses": [
       "true"
@@ -17936,7 +18322,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "exclude_regex": {
       "routeadmin": "(?i)^\\s*(po|oral|per os|sl|sublingual|buccal|ng|ngt|og|ogt|ft|peg|pegtube|j-?tube|g-?tube|gt|.*\\btube\\b.*|gastric.*|enteral.*|per ng.*|nasogastric.*)\\s*$"
@@ -17953,7 +18340,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: in-ICU orders only (medication). eICU medication charts phenytoin with an empty drugname, so the source is the HICL sequence number; admissionDrug (pre-admission home-medication list) is no longer a source. HICLs from eICU admissionDrug names: 1877 DILANTIN/PHENYTOIN SODIUM EXTENDED, 1878 PHENYTOIN SODIUM, 1879 PHENYTOIN/DILANTIN, 11679 FOSPHENYTOIN/CEREBYX; medication rows with these HICLs carry phenytoin doses (100-300 mg PO, 1000 mg IV load). eICU v2.0: 8,618 rows/3,293 stays (admissionDrug had 1,251 rows/493 stays). infusionDrug holds no phenytoin. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): enteral routes and oral formulations are not the intravenous drug the concept describes (MIIV/MIMIC read it from IV inputevents).",
      "excluded_statuses": [
       "true"
@@ -17961,7 +18349,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugordercancelled",
-      "routeadmin"
+      "routeadmin",
+      "dosage"
      ],
      "exclude_regex": {
       "routeadmin": "(?i)^\\s*(po|oral|per os|sl|sublingual|buccal|ng|ngt|og|ogt|ft|peg|pegtube|j-?tube|g-?tube|gt|.*\\btube\\b.*|gastric.*|enteral.*|per ng.*|nasogastric.*)\\s*$"
@@ -18120,13 +18509,15 @@
     "_comment": "2026-11-03 extraction audit 2: drugitems 19929 'Fenylefrine' syringe-pump infusion, same rate callback as norepi_rate 7229; bolus rows without a dose rate are dropped by aumc_rate_kg. | 2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates.",
     "extra_vars": [
      "action",
-     "iscontinuous"
+     "iscontinuous",
+     "ordercategory"
     ],
     "require_regex": {
      "iscontinuous": "^(1|1\\.0|True|true)$"
     },
     "exclude_regex": {
-     "action": "(?i)^\\s*flush\\s*$"
+     "action": "(?i)^\\s*flush\\s*$",
+     "ordercategory": "(?i)^\\s*niet iv"
     }
    }
   ]
@@ -18709,7 +19100,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only(convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$'))",
-     "_comment": "AUMC official legacy pO2_FiO2_estimated.sql converts kPa (unitid 152) to mmHg before evaluation. Convert labelled kPa rows before bounds and pooling; preserve labelled mmHg values. This changes the loader, not sealed historical exports. 2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "AUMC official legacy pO2_FiO2_estimated.sql converts kPa (unitid 152) to mmHg before evaluation. Convert labelled kPa rows before bounds and pooling; preserve labelled mmHg values. This changes the loader, not sealed historical exports. 2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -18717,7 +19108,7 @@
      "ids": "paO2",
      "table": "lab",
      "sub_var": "labname",
-     "_comment": "2026-11-04 audit round 3 (M): eICU lab rows carry no specimen type, so venous and mixed samples cannot be told apart; 5.7% of po2 results are <= the same-time paCO2. They are kept (no specimen evidence to drop them) and analyses needing arterial PaO2 should treat eICU po2 as unspecified-specimen.",
+     "_comment": "R6 RR-01: only a confirmed arterial Sample Type at the exact stay and original offset admits a lab gas; unknown, unpaired, venous and conflicting samples are excluded and counted by eicu_source_qc.",
      "callback": "eicu_arterial_gas",
      "extra_vars": [
       "labresultoffset"
@@ -18729,7 +19120,7 @@
      "ids": "paO2",
      "table": "lab",
      "sub_var": "labname",
-     "_comment": "2026-11-04 audit round 3 (M): eICU lab rows carry no specimen type, so venous and mixed samples cannot be told apart; 5.7% of po2 results are <= the same-time paCO2. They are kept (no specimen evidence to drop them) and analyses needing arterial PaO2 should treat eICU po2 as unspecified-specimen.",
+     "_comment": "R6 RR-01: only a confirmed arterial Sample Type at the exact stay and original offset admits a lab gas; unknown, unpaired, venous and conflicting samples are excluded and counted by eicu_source_qc.",
      "callback": "eicu_arterial_gas",
      "extra_vars": [
       "labresultoffset"
@@ -18915,7 +19306,13 @@
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
      "_comment": "2026-07-17 recall: added 8999 'Natrium-kalium-fosfaat' IV (8,898 rows / 4,207 adm; the K-phosphate the description names). Dropped 8020 'SlowK' (ORAL tablet, 180 adm) -- this concept is IV.",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -19154,6 +19551,9 @@
      ],
      "exclude_regex": {
       "route": "(?i)^\\s*(?:enteral|ms|p\\s*os|p\\.\\s*ms|ep-.*|sc.*|s\\.c\\..*|inh.*)\\s*$"
+     },
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
      }
     }
    ]
@@ -19173,7 +19573,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -19181,15 +19587,17 @@
      "regex": "propofol|diprivan",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -19199,14 +19607,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,063 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -19231,15 +19642,17 @@
      "regex": "propofol|diprivan",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -19249,14 +19662,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (11,063 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -19387,7 +19803,13 @@
      "sub_var": "pharmaid",
      "class_name": "hrd_itm",
      "_comment": "2026-05-27 audit + 2026-05-27 correction: verified 7 Disoprivan items (replaced fabricated 1001114-1001117 IDs) | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ]
   }
@@ -19413,13 +19835,15 @@
      "callback": "aumc_rate_kg",
      "extra_vars": [
       "action",
-      "iscontinuous"
+      "iscontinuous",
+      "ordercategory"
      ],
      "require_regex": {
       "iscontinuous": "^(1|1\\.0|True|true)$"
      },
      "exclude_regex": {
-      "action": "(?i)^\\s*flush\\s*$"
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
      },
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
     }
@@ -19516,7 +19940,13 @@
      "sub_var": "pharmaid",
      "grp_var": "infusionid",
      "callback": "hirid_rate_kg",
-     "_comment": "2026-11-03 extraction audit 2: HiRID pharma 208 and 1001050 'Disoprivan 2%' infusions (2,168,479 rows in 48,592 infusionids; 17,386 rows in 195), read per infusionid as for norepi_rate (mg converted to mcg, per kg per minute). The BOLUS items 1000691/1000699/1001052 and 'Disoprivan 1%' 1000491/1001053, which carry about one row per infusionid (single doses), are excluded."
+     "_comment": "2026-11-03 extraction audit 2: HiRID pharma 208 and 1001050 'Disoprivan 2%' infusions (2,168,479 rows in 48,592 infusionids; 17,386 rows in 195), read per infusionid as for norepi_rate (mg converted to mcg, per kg per minute). The BOLUS items 1000691/1000699/1001052 and 'Disoprivan 1%' 1000491/1001053, which carry about one row per infusionid (single doses), are excluded.",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "sic": [
@@ -20148,7 +20578,13 @@
      "table": "drugitems",
      "sub_var": "itemid",
      "callback": "aumc_positive_dose",
-     "val_var": "dose"
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
    ],
    "eicu": [
@@ -20156,15 +20592,17 @@
      "regex": "rocuronium|esmeron",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -20174,14 +20612,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,418 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -20202,15 +20643,17 @@
      "regex": "rocuronium|esmeron",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "class_name": "rgx_itm",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -20220,14 +20663,17 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_iv_exposure",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage",
+      "routeadmin"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (3,418 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -20251,7 +20697,13 @@
      "table": "pharma",
      "sub_var": "pharmaid",
      "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE)."
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0. | 2026-11-04 audit round 4 (R4-088): givendose above 1e-6 (numerical noise 0<x<1e-6 in 3,673 pharma rows set 315 patient-hours TRUE).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
     }
    ],
    "miiv": [
@@ -20934,14 +21386,14 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only(transform_fun(binary_op(`*`, 100)))",
-     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are excluded. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": 8903,
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as arterial (gases without a specimen record are kept, as for 12311). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-04 audit round 3 (R3-10): 8903 'SO2' is a blood-gas saturation in percent (24,404 rows, 1,007 admissions in the older software era); kept where freetext 11646 records the specimen as arterial (gases without a specimen record are excluded, as for 12311). Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [
@@ -21749,7 +22201,7 @@
   ],
   "min": 5,
   "max": 60,
-  "description": "totcal CO2",
+  "description": "arterial total CO2",
   "omopid": 4193415,
   "category": "blood gas",
   "sources": {
@@ -21758,8 +22210,11 @@
      "ids": "Total CO2",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "combine_callbacks(convert_unit(set_val(NA), 'mEq/L', '(lpm|mm\\\\(hg\\\\))'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol'))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): rows in mm(hg) (3,806 rows, p50 40) are a pCO2 under the Total CO2 label and are dropped."
+     "callback": "combine_callbacks(eicu_arterial_gas, combine_callbacks(convert_unit(set_val(NA), 'mEq/L', '(lpm|mm\\\\(hg\\\\))'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol')))",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): rows in mm(hg) (3,806 rows, p50 40) are a pCO2 under the Total CO2 label and are dropped.",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "eicu_demo": [
@@ -21767,8 +22222,11 @@
      "ids": "Total CO2",
      "table": "lab",
      "sub_var": "labname",
-     "callback": "combine_callbacks(convert_unit(set_val(NA), 'mEq/L', '(lpm|mm\\\\(hg\\\\))'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol'))",
-     "_comment": "2026-11-04 audit round 3 (full-dictionary M): rows in mm(hg) (3,806 rows, p50 40) are a pCO2 under the Total CO2 label and are dropped."
+     "callback": "combine_callbacks(eicu_arterial_gas, combine_callbacks(convert_unit(set_val(NA), 'mEq/L', '(lpm|mm\\\\(hg\\\\))'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol')))",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): rows in mm(hg) (3,806 rows, p50 40) are a pCO2 under the Total CO2 label and are dropped.",
+     "extra_vars": [
+      "labresultoffset"
+     ]
     }
    ],
    "miiv": [
@@ -21828,7 +22286,11 @@
      "ids": 670,
      "table": "laboratory",
      "sub_var": "LaboratoryID",
-     "_comment": "2026-07-03 module coverage audit: SIC d_references 670 = CtCo2 (BGA), mmol/L. DataID 716 = etCO2 is intentionally excluded."
+     "_comment": "2026-07-03 module coverage audit: SIC d_references 670 = CtCo2 (BGA), mmol/L. DataID 716 = etCO2 is intentionally excluded.",
+     "callback": "arterial_specimen_only",
+     "extra_vars": [
+      "LaboratoryType"
+     ]
     }
    ]
   },
@@ -28035,14 +28497,16 @@
      "regex": "(?i)vancomycin|vancocin|\\bvanco\\b",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -28055,14 +28519,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (36,392 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -28075,14 +28541,16 @@
      "regex": "(?i)vancomycin|vancocin|\\bvanco\\b",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -28095,14 +28563,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (36,392 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -29135,14 +29605,16 @@
      "regex": "(?i)warfarin|coumadin",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -29152,14 +29624,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (22,456 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -29172,14 +29646,16 @@
      "regex": "(?i)warfarin|coumadin",
      "table": "medication",
      "sub_var": "drugname",
+     "val_var": "dosage",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped."
     },
@@ -29189,14 +29665,16 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (22,456 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "exclude_regex": {
@@ -34555,17 +35033,31 @@
   "description": "mean arterial pressure from an arterial line (invasive channel of map)",
   "category": "vitals",
   "_comment": "2026-11-03 extraction audit 2: the invasive channel of map, listed per database from each source dictionary's labels (audit #16). | 2026-11-04 audit round 3 (M, hemodynamics): the lower bound is 1 mmHg in every database; a pressure <= 0 is a disconnected or zeroing transducer or cuff (HiRID 110 had them; AUMC had a source-level na_below(1)).",
+  "source_channel_priority": [
+   "invasive",
+   "invasive_secondary"
+  ],
   "sources": {
    "aumc": [
     {
      "ids": [
-      6642,
-      8843
+      6642
      ],
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive",
      "_comment": "2026-11-03 audit round 2 (H2): a pressure <= 0 is a disconnected or zeroing transducer/cuff, not a measurement (cuff MAP 6679: 9,015 rows in 2,162 admissions passed the [0, 250] bounds), so it is dropped."
+    },
+    {
+     "ids": [
+      8843
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "source_channel": "invasive_secondary",
+     "callback": "transform_fun(na_below(1))",
+     "_comment": "R6 RR-08: preserve the primary then secondary arterial-line priority of map."
     }
    ],
    "eicu": [
@@ -34838,8 +35330,8 @@
      "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: named orders. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -34847,7 +35339,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -34858,7 +35351,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2: 8829 torsemide (admissiondrug: torsemide/Demadex). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -34866,7 +35360,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin)"
@@ -34891,8 +35386,8 @@
      "regex": "furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: named orders. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -34900,7 +35395,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -34911,7 +35407,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: orders with an empty drugname carry only the HICL: 3660 furosemide, 3664 bumetanide (every named row with these HICLs is furosemide/Lasix or bumetanide/Bumex; mixed HICLs such as 18084 are not used). 2026-11-03 audit round 2: 8829 torsemide (admissiondrug: torsemide/Demadex). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -34919,7 +35416,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:furosem|lasix|frusemid|bumetan|bumex|burinex|torsem|torasem|demadex|ethacryn|edecrin)"
@@ -35131,8 +35629,8 @@
      "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 audit round 2 (D2): named orders; HICL-only orders are the next source (the earlier note that eICU has only HCTZ was wrong). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -35140,7 +35638,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -35156,7 +35655,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 audit round 2 (D2): orders with an empty drugname carry only the HICL; admissiondrug names them: 3649 hydrochlorothiazide, 3663 metolazone, 3646 chlorothiazide, 3662 chlorthalidone, 3665 indapamide, and the HCTZ combinations 3647 triamterene-HCTZ, 131 lisinopril-HCTZ, 9863 losartan-HCTZ. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -35164,7 +35664,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril)"
@@ -35176,8 +35677,8 @@
      "regex": "thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: named orders (only hydrochlorothiazide occurs in eICU v2.0). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -35185,7 +35686,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -35194,7 +35696,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: 3649 hydrochlorothiazide (orders with an empty drugname). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -35202,7 +35705,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:thiazid|metolaz|zaroxolyn|chlorthalid|chlortalid|indapam|xipam|hctz|diuril)"
@@ -35317,8 +35821,8 @@
      "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -35326,7 +35830,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -35339,7 +35844,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (M D2): added 3647 triamterene-HCTZ, 24316 eplerenone, 3667 amiloride and 3666 triamterene (orders with an empty drugname; 880 stays). | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -35347,7 +35853,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide)"
@@ -35359,8 +35866,8 @@
      "regex": "spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: named orders (only spironolactone occurs in eICU v2.0). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -35368,7 +35875,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -35381,7 +35889,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 extraction audit 2: 2901 spironolactone (orders with an empty drugname). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (M D2): added 3647 triamterene-HCTZ, 24316 eplerenone, 3667 amiloride and 3666 triamterene (orders with an empty drugname; 880 stays). | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -35389,7 +35898,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:spironol|aldacton|eplereno|inspra|amilorid|triamter|canreno|dyazide|maxzide)"
@@ -35492,8 +36002,8 @@
      "regex": "acetazol|diamox",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 audit round 2: named orders (none in eICU v2.0 medication). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -35501,7 +36011,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -35519,7 +36030,8 @@
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "_comment": "2026-11-03 audit round 2 (D2): 3641 acetazolamide (admissiondrug: acetazolamide/Diamox), orders with an empty drugname. 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
      "excluded_statuses": [
       "true"
@@ -35527,7 +36039,8 @@
      "status_var": "drugordercancelled",
      "extra_vars": [
       "drugname",
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ],
      "exclude_regex": {
       "drugname": "(?i)(?:acetazol|diamox)"
@@ -35539,8 +36052,8 @@
      "regex": "acetazol|diamox",
      "table": "medication",
      "sub_var": "drugname",
-     "val_var": "drugname",
-     "callback": "transform_fun(set_val(TRUE))",
+     "val_var": "dosage",
+     "callback": "eicu_positive_value",
      "class_name": "rgx_itm",
      "_comment": "2026-11-03 extraction audit 2: named orders (none in eICU v2.0 medication). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped.",
      "excluded_statuses": [
@@ -35548,7 +36061,8 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
-      "drugordercancelled"
+      "drugordercancelled",
+      "dosage"
      ]
     },
     {
@@ -36612,7 +37126,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are kept. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: freetext 11646 Afname (bloed) at the same admissionid and measuredat must be ART./Art.; venous, mixed-venous, capillary and laboratory status codes are excluded, gases without a specimen record are excluded. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "eicu": [

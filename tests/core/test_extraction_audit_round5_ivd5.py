@@ -136,38 +136,34 @@ def test_r5c_iv_015_aspirin_combination_retains_aspirin_ingredient():
     assert _apply(spec, frame, "aspirin").aspirin.tolist() == [True] * 3
 
 
-def test_r5c_iv_016_diuretic_dedup_requires_route_dose_and_event_evidence():
+def test_r5c_iv_016_diuretic_dedup_requires_route_dose_and_drug_evidence():
     from easyicu.concept.emar_diuretics import drop_inputevent_duplicates
     t = pd.Timestamp("2150-02-01 10:00")
     doses = pd.DataFrame({"hadm_id": 1, "charttime": [t] * 5, "_route": ["oral", "iv", "iv", "iv", "iv"],
                           "_dose": [40., 40., 80., 40., 40.], "_unit": "mg",
                           "emar_id": list("abcde")})
-    inputs = pd.DataFrame({"hadm_id": [1], "starttime": [t], "amount": [40.], "amountuom": ["mg"],
+    inputs = pd.DataFrame({"hadm_id": [1], "itemid": [221794], "starttime": [t], "amount": [40.], "amountuom": ["mg"],
                            "orderid": [123], "statusdescription": ["FinishedRunning"]})
-    # Close IV rows without a cross-channel event identifier remain ambiguous.
-    kept = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime")
-    assert kept.index.tolist() == [0, 1, 2, 3, 4]
-    inputs["emar_id"] = "d"
-    kept = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime")
-    assert kept.index.tolist() == [0, 1, 2, 4]
+    # A real input copy can suppress only one matching IV administration.
+    kept = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime", drug="furosemide")
+    assert kept.index.tolist() == [0, 2, 3, 4]
     rewritten = inputs.assign(statusdescription="Rewritten")
-    assert len(drop_inputevent_duplicates(doses, rewritten, key="hadm_id", time_col="charttime")) == 5
-    # A matching identifier alone cannot erase another route or another dose.
-    for event in ["a", "c"]:
-        assert len(drop_inputevent_duplicates(doses, inputs.assign(emar_id=event), key="hadm_id", time_col="charttime")) == 5
+    assert len(drop_inputevent_duplicates(doses, rewritten, key="hadm_id", time_col="charttime", drug="furosemide")) == 5
+    # Another drug, route or mass cannot erase the dose.
+    assert len(drop_inputevent_duplicates(doses, inputs.assign(itemid=229639), key="hadm_id", time_col="charttime", drug="furosemide")) == 5
+    assert len(drop_inputevent_duplicates(doses.iloc[[0, 2]], inputs, key="hadm_id", time_col="charttime", drug="furosemide")) == 2
 
 
 @pytest.mark.parametrize("index", [[20, 30, 40], [0, 0, 0]])
-def test_r5c_iv_016_blank_event_ids_are_not_shared_administration_evidence(index):
+def test_r5c_iv_016_one_input_cannot_erase_repeated_emar_doses_with_duplicate_indices(index):
     from easyicu.concept.emar_diuretics import drop_inputevent_duplicates
     t = pd.Timestamp("2150-02-01 10:00")
     doses = pd.DataFrame({"hadm_id": [1, 1, 1], "charttime": t, "_route": "iv", "_dose": 40., "_unit": "mg",
                           "emar_id": ["", "   ", "known-event"]}, index=index)
-    inputs = pd.DataFrame({"hadm_id": [1, 1, 1], "starttime": t, "amount": 40., "amountuom": "mg",
-                           "emar_id": ["", "   ", "known-event"]})
-    out = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime")
-    assert out.index.tolist() == index[:2]
-    assert out.emar_id.tolist() == ["", "   "]
+    inputs = pd.DataFrame({"hadm_id": [1], "itemid": 221794, "starttime": t, "amount": 40., "amountuom": "mg"})
+    out = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime", drug="furosemide")
+    assert out.index.tolist() == index[1:]
+    assert out.emar_id.tolist() == ["   ", "known-event"]
 
 
 def test_r5c_iii_009_inactive_modes_do_not_extend_ventilation():
