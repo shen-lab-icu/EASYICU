@@ -2169,7 +2169,7 @@
      "sub_var": "itemid",
      "dir_var": "tag",
      "callback": "arterial_specimen_only(aumc_bxs)",
-     "_comment": "2026-11-03 extraction audit 3: arterial samples only (freetext 11646 'Afname (bloed)' at the same measuredat; a gas without a specimen record is kept), as po2 (owner concept/blood_gas_specimen.py)."
+     "_comment": "2026-11-03 extraction audit 3: arterial samples only (freetext 11646 'Afname (bloed)' at the same measuredat; a gas without a specimen record is excluded), as po2 (owner concept/blood_gas_specimen.py)."
     }
    ],
    "eicu": [
@@ -2313,7 +2313,7 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 extraction audit 3: AUMCdb 6810/9992 are blood-gas bicarbonate; arterial samples only (freetext 11646 at the same measuredat; a gas without a specimen record is kept). MIMIC-III/IV bicar stays the serum chemistry item 50882."
+     "_comment": "2026-11-03 extraction audit 3: AUMCdb 6810/9992 are blood-gas bicarbonate; arterial samples only (freetext 11646 at the same measuredat; a gas without a specimen record is excluded). MIMIC-III/IV bicar stays the serum chemistry item 50882."
     }
    ],
    "eicu": [

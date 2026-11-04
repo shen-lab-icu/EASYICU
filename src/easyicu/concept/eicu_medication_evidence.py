@@ -35,15 +35,30 @@ def normalize_routes(values):
     return pd.Series(np.select([noniv, has_iv & rest.eq("")], ["noniv", "iv"], default="unknown"), index=values.index)
 
 
+_DOSE_NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?"
+# eICU dosage text is "<amount> <unit>", where the unit is a word ("81 mg") or
+# a numeric unit code ("81 3"); "1,000 mg" uses thousands separators and PRN
+# orders give ranges ("2-4 mg"). A decimal comma ("0,5") stays unparsed.
+_DOSE_TEXT = (
+    rf"^\s*(?P<sign>[+-]?)(?P<low>{_DOSE_NUMBER})"
+    rf"(?:\s*-\s*(?P<high>{_DOSE_NUMBER}))?(?=\s*(?:[a-zA-Zµμ%]|$)|\s+\d)"
+)
+
+
 def _positive_dose(values):
-    """Read a numeric dose prefix; zero is false and invalid doses are unknown."""
-    text = values.astype("string")
-    number = text.str.extract(
-        r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?=\s*(?:[a-zA-Zµμ%]|$))",
-        expand=False,
+    """Read a numeric dose prefix; zero is false and invalid doses are unknown.
+
+    A range is positive only when its lower bound is; a range from zero to a
+    positive amount (a sliding scale) cannot say whether a dose was given.
+    """
+    parts = values.astype("string").str.extract(_DOSE_TEXT)
+    low, high = (
+        pd.to_numeric(parts[c].str.replace(",", "", regex=False), errors="coerce").astype("float64")
+        for c in ("low", "high")
     )
-    amount = pd.to_numeric(number, errors="coerce").astype("float64")
-    return amount.gt(0).astype("boolean").mask(~np.isfinite(amount) | amount.lt(0))
+    low = low.where(parts["sign"].ne("-"), -low)
+    unknown = ~np.isfinite(low) | low.lt(0) | (low.eq(0) & high.gt(0)) | high.lt(low)
+    return low.gt(0).astype("boolean").mask(unknown)
 
 
 def positive_value(frame, column):

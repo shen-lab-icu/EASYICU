@@ -365,3 +365,17 @@ def test_rr_08_secondary_map_follows_primary_then_secondary_then_cuff(tmp_path, 
             (125, 8843, 0., "mmHg"), (125, 6679, 90., "mmHg")]
     expected = {0.: 100., 1.: 80., 2.: 90.} if name == "map" else {0.: 100., 1.: 80.}
     assert _load(_db(tmp_path, numeric=rows), name) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("81 3", True), ("12.5 3", True), ("0 3", False),     # numeric unit codes
+    ("1,000 mg", True), ("1,000", True), ("1,00 mg", None),  # thousands separators
+    ("2-4 mg", True), ("2 - 4 mg", True), ("2.5-5 mg", True),
+    ("0-2 mg", None), ("4-2 mg", None), ("0,5 mg", None),   # sliding scale, reversed, decimal comma
+    ("325 mg (1 tab)", True), ("100mg", True), ("held", None),
+])
+def test_rr_04_dose_text_reads_unit_codes_separators_and_ranges(text, expected):
+    from easyicu.concept.eicu_medication_evidence import _positive_dose
+
+    got = _positive_dose(pd.Series([text], dtype=object)).iloc[0]
+    assert (None if pd.isna(got) else bool(got)) is expected
