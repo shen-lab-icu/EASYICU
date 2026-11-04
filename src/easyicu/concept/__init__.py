@@ -1551,7 +1551,7 @@ class ConceptResolver:
 
             concepts_info_filtered = [
                 (name, val_var) for name, val_var in concepts_info
-                if aggregators.get(name) in (None, False, 'auto', 'median')
+                if aggregators.get(name) in (None, 'auto', 'median')
                 and name not in multi_source_concepts
                 and _wide_batch_callback_safe(name)
             ]
@@ -2723,6 +2723,10 @@ class ConceptResolver:
                     cached_table = self._table_cache.get(cache_key)
                     if cached_table is not None:
                         self._cache_touch('table', cache_key)
+            # A table's default projection can omit a wide-table value column
+            # (e.g. CVP). Reload with this source's projection in that case.
+            if cached_table is not None and source.value_var and source.value_var not in cached_table.data:
+                cached_table = None
             if cached_table is not None:
                 if verbose or DEBUG_MODE:
                     if DEBUG_MODE: print(f"   ♻️  使用缓存的表: {source.table} (跳过 {len(patient_filter_in_filters.value) if patient_filter_in_filters else 0} 个患者的加载)")
@@ -3491,10 +3495,13 @@ class ConceptResolver:
                         _convert_unit_callback_for_duckdb = True
                     elif (
                         _has_bucket_dir
+                        and aggregator is not False
+                        and interval is not None
                         and not has_sub_var
                         and not getattr(source, 'ids', None)
                         and getattr(source, 'value_var', None)
                         and not has_callback
+                        and _can_inline_callback
                         and _target != 'id_tbl'
                     ):
                         logger.debug(f"🚀 宽表单列DuckDB聚合触发: {source.table}.{source.value_var}")
@@ -3509,7 +3516,7 @@ class ConceptResolver:
                         _wt_table_cfg = data_source.config.get_table(source.table)
                         _wt_id_col = _wt_table_cfg.defaults.id_var or 'patientunitstayid'
                         _wt_time_col = _wt_table_cfg.defaults.index_var or 'observationoffset'
-                        _wt_interval_minutes = 60.0
+                        _wt_interval_minutes = interval.total_seconds() / 60.0 if hasattr(interval, 'total_seconds') else float(interval) * 60.0
 
                         _wt_agg_func = 'MEDIAN'
                         if isinstance(aggregator, str) and aggregator in ('min', 'max', 'mean', 'sum'):
@@ -3534,16 +3541,23 @@ class ConceptResolver:
                                 _wt_ids_str = ','.join(str(x) for x in _wt_pid_list)
                                 _wt_pid_filter = f'AND {_wt_id_col} IN ({_wt_ids_str})'
 
-                            # Output in ORIGINAL time units (minutes for eICU) but floored to hourly
+                            # Keep native minutes on the requested aggregation grid.
                             # This keeps compatibility with raw loading path — downstream
                             # time alignment and change_interval work unchanged
                             _wt_time_expr = f'FLOOR({_wt_time_col} / {_wt_interval_minutes}) * {_wt_interval_minutes}'
+                            # Match ordinary loading: filter raw observations
+                            # before an hourly median can conceal an outlier.
+                            _wt_bounds = ''
+                            if definition.minimum is not None:
+                                _wt_bounds += f' AND {_wt_val_var} >= {float(definition.minimum)}'
+                            if definition.maximum is not None:
+                                _wt_bounds += f' AND {_wt_val_var} <= {float(definition.maximum)}'
                             _wt_query = f"""
                                 SELECT {_wt_id_col},
                                        {_wt_time_expr} AS {_wt_time_col},
                                        {_wt_agg_func}({_wt_val_var}) AS {_wt_val_var}
                                 FROM read_parquet('{_wt_glob}', union_by_name=true)
-                                WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter}
+                                WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_bounds}
                                 GROUP BY {_wt_id_col}, {_wt_time_expr}
                                 ORDER BY {_wt_id_col}, 2
                             """

@@ -4403,7 +4403,7 @@
   "callback": "cvp_artefact_filter",
   "class_name": "rec_cncpt",
   "target": "ts_tbl",
-  "_comment": "2026-11-04 audit round 4 (R4-013/017/023/025): rounds 2-3 capped CVP at 30 mmHg, which deleted real 30-50 mmHg values (severe congestion, RV failure, high PEEP). Values above 50 are dropped; an hourly value in (30, 50] is dropped only when it lies within 10 mmHg of the same hour's diastolic arterial pressure (an arterial waveform on the venous transducer) or is an isolated spike (both neighbouring hourly values within 6 h are at most 30 mmHg and at least 10 mmHg lower). SICdb (source cap on its hourly item 2018) and HiRID (hourly cap in the callback) keep the 30 mmHg cap. The charted values are cvp_raw. | R5-SIC-001 supersedes the SIC source cap: cvp_raw preserves charted values; cvp uses arterial item 702 only and reverts to cap 30 for hours without that evidence. Above 50 is dropped from cvp, retaining the QC receipt. HiRID remains capped at 30."
+  "_comment": "R6-F008 supersedes the round-4 artefact exclusions and SIC/HiRID caps: R2 retains 30-50 mmHg inclusively with high-value, arterial-proximity and isolated-spike flags in cvp_qc. Only values outside the existing -5 to 50 bounds are dropped. SIC uses invasive arterial diastolic item 702; absent evidence is flagged, never a reason to cap at 30. cvp_raw retains its existing source-specific bounds and charted values."
  },
  "cvp_raw": {
   "unit": [
@@ -4412,7 +4412,7 @@
   ],
   "min": -5,
   "max": 50,
-  "description": "Central venous pressure as charted (before the arterial-diastolic and spike check)",
+  "description": "Central venous pressure as charted before quality assessment",
   "omopid": 21490852,
   "category": "vitals",
   "source_channel_priority": ["manual", "transducer"],
@@ -4533,7 +4533,7 @@
      "table": "data_float_h",
      "sub_var": "DataID",
      "callback": "sicdb_cvp_raw",
-     "_comment": "R5-SIC-001: preserve charted values including above 30/50. cvp applies the shared artefact rule with same-hour invasive arterial diastolic item 702; absent arterial evidence keeps the 30 cap. The cvp QC receipt retains raw hourly values and rejection reasons."
+     "_comment": "R5-SIC-001: preserve charted values including above 30/50. R6-F008: cvp retains 30-50 under R2; same-hour invasive arterial diastolic item 702, absent evidence and isolated spikes produce QC flags. Above 50 is excluded from cvp and retained here for inspection."
     }
    ]
   }
@@ -37072,19 +37072,12 @@
  },
  "cvp_qc": {
   "class_name": "chr_cncpt",
-  "description": "SICdb central venous pressure exclusion reason",
+  "description": "Central venous pressure quality flags",
   "category": "vitals",
-  "sources": {
-   "sic": [
-    {
-     "ids": 2018,
-     "table": "data_float_h",
-     "sub_var": "DataID",
-     "val_var": "Val",
-     "callback": "sicdb_cvp_qc"
-    }
-   ]
-  }
+  "concepts": ["cvp_raw", "dbp"],
+  "callback": "cvp_artefact_filter",
+  "target": "ts_tbl",
+  "_comment": "R6-F008: shares the exact hourly inputs and R2 rule with cvp in every database. Multiple flags are joined with a vertical bar. High values in 30-50 are retained in cvp; suspected arterial mixing and isolated spikes are flags only. SIC raw values beyond the main bounds remain inspectable with exclusion reasons."
  },
  "minute_vol_raw": {
   "unit": "L/min",

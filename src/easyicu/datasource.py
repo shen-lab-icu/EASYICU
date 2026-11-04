@@ -4908,7 +4908,7 @@ def load_wide_table_aggregated(
         _wide_query_tpl = (
             "SELECT\n"
             f"    {id_col},\n"
-            f"    FLOOR({time_col} / {interval_hours * 60.0}) as charttime,\n"
+            f"    FLOOR({time_col} / {interval_hours * 60.0}) * {interval_hours} as charttime,\n"
             f"    {agg_exprs}\n"
             "FROM {read_expr}\n"
             f"{where_clause}\n"
