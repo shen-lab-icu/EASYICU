@@ -8151,6 +8151,29 @@ class ConceptResolver:
                 data=derived[["CaseID", concept_name]], id_columns=["CaseID"],
                 index_column=None, value_column=concept_name,
             )
+        elif callback == "service_at_admission":
+            from .service_at_admission import service_at_admission
+
+            stay_column = "stay_id"
+            if isinstance(patient_ids, Mapping):
+                values = patient_ids.get(stay_column)
+                selected_ids = list(values) if values is not None else None
+            else:
+                selected_ids = list(patient_ids) if patient_ids is not None else None
+            stay_filters = [FilterSpec(column=stay_column, op=FilterOp.IN, value=selected_ids)] if selected_ids is not None else None
+            stays = data_source.load_table("icustays", columns=[stay_column, "hadm_id", "intime"], filters=stay_filters, verbose=False).data
+            if selected_ids is not None:
+                stays = stays.loc[stays[stay_column].isin(selected_ids)]
+            hadm_ids = stays["hadm_id"].dropna().unique().tolist()
+            services = data_source.load_table(
+                "services", columns=["hadm_id", "transfertime", "curr_service"],
+                filters=[FilterSpec(column="hadm_id", op=FilterOp.IN, value=hadm_ids)], verbose=False,
+            ).data
+            derived = service_at_admission(
+                stays, services, service_map=source.params.get("service_map") or {},
+                stay_column=stay_column, value_column=concept_name,
+            )
+            raw = ICUTable(data=derived, id_columns=[stay_column], index_column=None, value_column=concept_name)
         elif "fwd_concept" in callback:
             raw = self._load_fun_item_forward(
                 concept_name,
@@ -8164,6 +8187,9 @@ class ConceptResolver:
             )
 
         agg_value = aggregator
+        if callback == "service_at_admission":
+            # One service per stay by construction.
+            aggregator = False
         if callback == "sic_case_landmark_fields":
             if aggregator not in (None, False, "auto"):
                 raise ValueError("SIC case landmark fields cannot be re-aggregated")

@@ -424,3 +424,24 @@ def test_eicu_time_merge_keeps_offsets_beside_an_empty_source_charttime():
     merged, changed = _merge_eicu_time_columns(combined, ["observationoffset", "respchartoffset"])
     assert changed and list(merged.columns).count("charttime") == 1
     assert merged["charttime"].tolist() == [65.0, 130.0]
+
+
+def test_miiv_admission_type_is_the_service_active_at_icu_intime():
+    from easyicu.concept.service_at_admission import service_at_admission
+
+    spec = _dictionary()["adm"]["sources"]["miiv"][0]
+    assert (spec["class_name"], spec["callback"]) == ("fun_itm", "service_at_admission")
+    stays = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "hadm_id": [10, 10, 20],
+        "intime": pd.to_datetime(["2150-01-05", "2150-01-20", "2150-03-01"]),
+    })
+    services = pd.DataFrame({
+        "hadm_id": [10, 10, 20],
+        # Chosen days before the first ICU stay; changed between the two stays;
+        # recorded only after the third stay began.
+        "transfertime": ["2150-01-01 08:00", "2150-01-12 09:00", "2150-03-01 06:00"],
+        "curr_service": ["MED", "CSURG", "TRAUM"],
+    })
+    out = service_at_admission(stays, services, service_map=spec["service_map"], stay_column="stay_id", value_column="adm")
+    assert out.set_index("stay_id")["adm"].to_dict() == {1: "med", 2: "surg", 3: "surg"}

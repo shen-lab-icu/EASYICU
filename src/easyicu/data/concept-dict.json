@@ -723,10 +723,32 @@
    ],
    "miiv": [
     {
-     "table": "services",
-     "val_var": "curr_service",
-     "callback": "apply_map(\n            c(MED   = 'med',   SURG  = 'surg', CMED = 'med',  CSURG  = 'surg',\n              VSURG = 'surg',  NSURG = 'surg', NB   = 'other', NMED  = 'med',\n              ORTHO = 'surg',  TRAUM = 'surg', OMED = 'med',   GU    = 'other',\n              NBB   = 'other', TSURG = 'surg', GYN  = 'other', PSURG = 'surg',\n              OBS   = 'other', ENT   = 'surg', DENT = 'surg',  PSYCH = 'other',\n              EYE   = 'surg')\n          )",
-     "class_name": "col_itm"
+     "class_name": "fun_itm",
+     "callback": "service_at_admission",
+     "service_map": {
+      "MED": "med",
+      "SURG": "surg",
+      "CMED": "med",
+      "CSURG": "surg",
+      "VSURG": "surg",
+      "NSURG": "surg",
+      "NB": "other",
+      "NMED": "med",
+      "ORTHO": "surg",
+      "TRAUM": "surg",
+      "OMED": "med",
+      "GU": "other",
+      "NBB": "other",
+      "TSURG": "surg",
+      "GYN": "other",
+      "PSURG": "surg",
+      "OBS": "other",
+      "ENT": "surg",
+      "DENT": "surg",
+      "PSYCH": "other",
+      "EYE": "surg"
+     },
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): the admission type is the hospital service active at ICU intime (last services change at or before intime in the hospitalisation, else its first service). The hospital-table path kept services rows within 24 h before intime and gave a second ICU stay none: 560 of 3,000 stays had no type."
     }
    ],
    "mimic": [
