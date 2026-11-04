@@ -2,9 +2,9 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "9853788d69c42ab7d805ddb45c224454313c49514308a8894054d068a6334b58",
-  "sofa2_dict_sha256": "8ceb447f2a6e0c6a22edfa083457bea212926233ba901f07ae980375f65eff43",
-  "total_concepts": 270,
+  "concept_dict_sha256": "a6c37e10f6b539e5f357337f746da3840880a934aaf7503a342fdbc404a54e1c",
+  "sofa2_dict_sha256": "efa28bb8af36e536d31068eacf0edd4a61466f9e89ed0794329f660affbca0bd",
+  "total_concepts": 271,
   "new_this_round": [],
   "pending_foundation_changes": [],
   "previous_published_lock": {
@@ -148,6 +148,10 @@
     {
       "git_commit": "4b2664127c05e25adffa55b063cfa0eb9fc8809e",
       "change": "User-requested 2026-11-04 sixth reseal of concept-dict.json and sofa2-dict.json (extraction audit round 3, R3/F/M items): weight in kg on the DuckDB path; vasopressor 60-minute durations clipped at discharge; eICU ventilation windows from charted settings and care intervals; adv_resp for eICU/HiRID; AUMC specimen, minute volume, ETT and running-infusion rates; MIMIC-III CareVue prescriptions, furosemide, vasopressin units and 640 extubation; blood-pressure, PEEP, tidal-volume, heart-rate and oxygen-flow channels; HiRID zero doses and summed syringes; fluid balance minus non-urine output (other_output_ml); eICU GCS labels, base deficit, differential percentages, HICL dedupe and IV-route filters; MIIV High flow neb, bicarbonate 50803 and CAM-ICU overall result; AUMC IABP intervals and ASB; SICdb perfusor furosemide over its running hours; eICU monitor etCO2; MIIV admission type from the service at ICU intime; arterial pressures and plateau at least 1."
+    },
+    {
+      "git_commit": "ade4802d7ad17ff27bd559621edc8196b3cb9ac7",
+      "change": "User-requested 2026-11-04 seventh reseal of concept-dict.json and sofa2-dict.json (extraction audit round 4, R4-001..R4-184): urine24 and SOFA/SOFA-2 24-cell windows with urine coverage rules; CVP kept to 50 mmHg with an arterial-diastolic and spike check (cvp_raw; SICdb/HiRID caps unchanged); vent_ind from invasive windows only; MIMIC-III CareVue phenylephrine, OR/PACU transfusions removed, admission type from the service at ICU intime, D-dimer on the FEU scale, lab-before-chart transcriptions and arterial-only blood gases; eICU other output without urine rows, coded GCS items, CAM-ICU Delirium Scale/Score, meropenem, haloperidol/olanzapine HICLs, IV-route filters, potassium HICLs, weight-based fentanyl rates and Fahrenheit temperatures; AUMC tracheostoma, measured weight, insulin end, non-IV order categories; HiRID ventilator bridging, dose noise threshold and non-IV routes; SICdb antibiotics, positive RRT flows and dead sources; inactive device states and non-systemic routes excluded."
     }
   ]
 }

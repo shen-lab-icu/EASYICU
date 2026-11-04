@@ -625,10 +625,17 @@ def _assert_sic_overlay_profile_keeps_history(profile):
         "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
     }
     # So does the sixth (2026-11-04 audit round 3).
-    assert profile.version == "20261104-sic-overlay-v8"
-    assert profile.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT6.expected_concept_dict_sha
-    assert profile.expected_sofa2_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT6.expected_sofa2_dict_sha
-    assert {key for key, value in asdict(profile).items() if value != asdict(v7)[key]} == {
+    v8 = profiles.get_submission_profile(f"{profile.name}/20261104-sic-overlay-v8")
+    assert v8.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT6.expected_concept_dict_sha
+    assert v8.expected_sofa2_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT6.expected_sofa2_dict_sha
+    assert {key for key, value in asdict(v8).items() if value != asdict(v7)[key]} == {
+        "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
+    }
+    # So does the seventh (2026-11-04 audit round 4).
+    assert profile.version == "20261104-sic-overlay-v9"
+    assert profile.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT7.expected_concept_dict_sha
+    assert profile.expected_sofa2_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_04_AUDIT7.expected_sofa2_dict_sha
+    assert {key for key, value in asdict(profile).items() if value != asdict(v8)[key]} == {
         "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
     }
 
