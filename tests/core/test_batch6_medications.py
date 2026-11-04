@@ -63,6 +63,7 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
                 "transform_fun(set_val(TRUE))",
                 "mimic_prescription_noon",
                 "transform_fun(comp_na(`>`, 0))",
+                "transform_fun(comp_na(`>`, 0.000001))",  # HiRID, audit round 4 (R4-088)
             )
 
 
@@ -93,7 +94,7 @@ def test_dexamethasone_uses_prescriptions_not_inputevents(cdict):
     assert cdict["dexamethasone"]["sources"]["miiv"][0]["table"] == "prescriptions"
     assert cdict["dexamethasone"]["sources"]["mimic"][0]["table"] == "prescriptions"
     assert cdict["dexamethasone"]["sources"]["aumc"][0]["ids"] == [6995]
-    assert cdict["dexamethasone"]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0))"
+    assert cdict["dexamethasone"]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"
 
 
 def test_neostigmine_no_mimic_iii_mv(cdict):
@@ -124,4 +125,4 @@ def test_batch6_hirid_scope_matches_audit(cdict):
     for c in ["octreotide", "neostigmine"]:
         assert "hirid" not in cdict[c]["sources"]
     for c in ["levetiracetam", "dexamethasone"]:
-        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0))"
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"

@@ -43,6 +43,8 @@ BOOLEAN_DRUG_CALLBACKS = {
     "transform_fun(set_val(TRUE))",
     "mimic_prescription_noon",
     "transform_fun(comp_na(`>`, 0))",
+    # HiRID doses above numerical noise (2026-11-04 audit round 4, R4-088).
+    "transform_fun(comp_na(`>`, 0.000001))",
 }
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
@@ -162,12 +164,13 @@ def test_packed_rbc_eicu_uses_intakeoutput_not_medication(cdict):
     assert "pRBCs" in ids
 
 
-def test_packed_rbc_includes_or_pacu_intake(cdict):
-    """MIMIC-IV splits RBC into 225168 (primary), 226368 (OR intake),
-    227070 (PACU intake). All three are RBC administration events."""
+def test_packed_rbc_excludes_or_pacu_intake(cdict):
+    """MIMIC-IV 226368 (OR intake) and 227070 (PACU intake) are charted at ICU
+    admission for transfusions given before the stay; total_input_ml excludes
+    them too (2026-11-04 audit round 4, R4-035). 225168 is the ICU transfusion."""
     miiv = cdict["packed_rbc"]["sources"]["miiv"]
     ids = set(miiv[0]["ids"] if isinstance(miiv, list) else miiv["ids"])
-    assert {225168, 226368, 227070} <= ids
+    assert 225168 in ids and not {226368, 227070} & ids
 
 
 def test_batch4_hirid_scope_matches_audit(cdict):
@@ -184,7 +187,7 @@ def test_batch4_hirid_scope_matches_audit(cdict):
     # 2026-07-17 recall: added the IV concentrates 1000080 'K-Cl conc' (3,421 pts) and
     # 1000082 'K-Pi conc' (487 pts) that are added to infusions, on top of the bagged products.
     assert {1000396, 1000395, 1000836, 1000080, 1000082}.issubset(set(hirid_k["ids"]))
-    assert hirid_k["callback"] == "transform_fun(comp_na(`>`, 0))"
+    assert hirid_k["callback"] == "transform_fun(comp_na(`>`, 0.000001))"
     assert {1000612, 1000393}.isdisjoint(set(hirid_k["ids"])), "oral potassium must stay out"
 
     for c in ["albumin_iv"]:

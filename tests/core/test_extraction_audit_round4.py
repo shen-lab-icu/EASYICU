@@ -839,13 +839,16 @@ def test_r4_l_items_dictionary_contracts():
     assert excluded(_src(d, "heparin", "eicu", table="medication", sub_var="drugname"), "drugname", "HEPARIN LOCK FLUSH")
     for concept in ("amiodarone", "calcium_iv", "morphine"):
         assert excluded(d[concept]["sources"]["aumc"][0], "ordercategory", "Niet iv CZS/Sedatie/Analgetica")
-    for concept in ("dex", "fentanyl", "potassium_iv"):
+    for concept in ("fentanyl", "potassium_iv"):
         spec = _src(d, concept, "hirid", table="pharma")
         assert excluded(spec, "route", "enteral") and excluded(spec, "route", "p os") and not excluded(spec, "route", "iv-inf")
     # R4-089 / R4-154 / R4-169: descriptions carry no other database's counts
     for concept in ("adv_resp", "ecmo", "mech_circ_support", "other_vaso", "delirium_positive"):
         assert "validated" not in s2[concept]["description"] and not re.search(r"\d{3,}", s2[concept]["description"])
     assert d["icp"]["min"] == -10 and d["plt"]["min"] == 1  # R4-112 / R4-158
+    assert (d["hbco"]["min"], d["hbco"]["max"]) == (0, 100)  # R4-135 / R4-174
+    # Pooled TRUE/FALSE rows: an hour is positive when any row is (a median gave 0.5).
+    assert s2["delirium_positive"]["aggregate"] == "max" and s2["rrt"]["aggregate"] == d["rrt"]["aggregate"] == "max"
 
 
 def test_r4_110_miiv_gcs_does_not_read_a_verbal_score_of_1_as_intubation():
@@ -865,3 +868,26 @@ def test_r4_110_miiv_gcs_does_not_read_a_verbal_score_of_1_as_intubation():
     out = _callback_gcs({"egcs": table("egcs", [3.0, 3.0]), "mgcs": table("mgcs", [5.0, 5.0]),
                          "vgcs": table("vgcs", [1.0, 1.0])}, ctx)
     assert out.data["gcs"].tolist() == [9.0, 9.0]
+
+
+def test_r4_085_row_filters_on_a_default_value_column_declare_it():
+    # The loader renames a table's default value column to the concept name;
+    # a filter on it finds the column only through a declared val_var (AUMC
+    # adv_resp 'Stand By' broke the respiratory and SOFA-2 modules otherwise).
+    import json
+    from pathlib import Path
+
+    import easyicu
+
+    data = Path(easyicu.__file__).parent / "data"
+    tables = {s["name"]: s["tables"] for s in json.loads((data / "data-sources.json").read_text())}
+    offenders = []
+    for name in ("concept-dict.json", "sofa2-dict.json"):
+        for concept, spec in _dict(name).items():
+            for db, sources in (spec.get("sources") or {}).items() if isinstance(spec, dict) else ():
+                for source in sources:
+                    default = ((tables.get(db) or {}).get(source.get("table"), {}).get("defaults") or {}).get("val_var")
+                    filtered = set(source.get("exclude_regex") or {}) | set(source.get("require_regex") or {})
+                    if default in filtered and not (source.get("val_var") or source.get("value_var")):
+                        offenders.append((name, concept, db))
+    assert offenders == []

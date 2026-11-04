@@ -63,7 +63,7 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
         for src in sources:
             # A HiRID zero givendose is a pump marker, not an administration
             # (2026-11-04 audit round 3).
-            expected = "transform_fun(comp_na(`>`, 0))" if db == "hirid" else "transform_fun(set_val(TRUE))"
+            expected = "transform_fun(comp_na(`>`, 0.000001))" if db == "hirid" else "transform_fun(set_val(TRUE))"
             assert src.get("callback") == expected, (
                 f"{name}/{db}: callback must be set_val(TRUE), got {src.get('callback')}"
             )
@@ -123,4 +123,4 @@ def test_vecuronium_hirid_added_but_sic_still_absent(cdict):
     assert "sic" not in sources
     hirid = cdict["vecuronium"]["sources"]["hirid"][0]
     assert hirid["ids"] == [198]
-    assert hirid["callback"] == "transform_fun(comp_na(`>`, 0))"
+    assert hirid["callback"] == "transform_fun(comp_na(`>`, 0.000001))"

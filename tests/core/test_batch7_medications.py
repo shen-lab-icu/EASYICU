@@ -26,6 +26,8 @@ BOOLEAN_DRUG_CALLBACKS = {
     "transform_fun(set_val(TRUE))",
     "mimic_prescription_noon",
     "transform_fun(comp_na(`>`, 0))",
+    # HiRID doses above numerical noise (2026-11-04 audit round 4, R4-088).
+    "transform_fun(comp_na(`>`, 0.000001))",
 }
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
@@ -118,7 +120,7 @@ def test_phenytoin_uses_eicu_in_icu_medication_and_aumc_drugitems(cdict):
     assert [s["table"] for s in cdict["phenytoin"]["sources"]["eicu"]] == ["medication"]
     # AUMC drugitems 7222 'Fenytoine (Diphantoine)'.
     assert cdict["phenytoin"]["sources"]["aumc"][0]["ids"] == [7222]
-    assert cdict["phenytoin"]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0))"
+    assert cdict["phenytoin"]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"
 
 
 def test_batch7_hirid_scope_matches_audit(cdict):
@@ -126,4 +128,4 @@ def test_batch7_hirid_scope_matches_audit(cdict):
     # 2026-07-17: diltiazem joined nicardipine as HiRID-absent -- see the BATCH7 note.
     assert "hirid" not in cdict["diltiazem"]["sources"]
     for c in ["phenytoin", "labetalol", "esmolol"]:
-        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0))"
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"

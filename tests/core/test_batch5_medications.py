@@ -32,6 +32,8 @@ BOOLEAN_DRUG_CALLBACKS = {
     "transform_fun(set_val(TRUE))",
     "mimic_prescription_noon",
     "transform_fun(comp_na(`>`, 0))",
+    # HiRID doses above numerical noise (2026-11-04 audit round 4, R4-088).
+    "transform_fun(comp_na(`>`, 0.000001))",
 }
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 

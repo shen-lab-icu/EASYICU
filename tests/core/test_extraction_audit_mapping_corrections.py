@@ -43,7 +43,7 @@ def _ids(concept: str, database: str, dictionary: dict = CONCEPTS) -> set[int]:
         ("milrinone", "mimic", set(), {30125}),
         ("urine", "mimic", {40086, 40065}, {40651}),  # drain; OR/PACU urine
         ("na", "sic", {686}, {469}),  # BGA sodium with a validity note
-        ("bicar", "sic", {667}, {451, 456, 666}),  # standard bicarbonate
+        ("bicar", "sic", {667, 451}, {456, 666}),  # standard bicarbonate; 451 has no rows (R4-171)
         ("hr", "sic", set(), {707, 708}),
         # 2026-11-04 audit round 3: 2282 is the set ventilator rate.
         ("resp", "sic", {2282}, {719, 2274}),

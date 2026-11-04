@@ -70,7 +70,7 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
                 expected = "mimic_prescription_noon"
             elif db == "hirid":
                 # A zero givendose is a pump marker (audit round 3).
-                expected = "transform_fun(comp_na(`>`, 0))"
+                expected = "transform_fun(comp_na(`>`, 0.000001))"
             else:
                 expected = "transform_fun(set_val(TRUE))"
             assert src.get("callback") == expected
@@ -126,7 +126,7 @@ def test_aspirin_mimic_and_miiv_use_prescriptions(cdict):
 def test_batch8_hirid_scope_matches_audit(cdict):
     assert "hirid" not in cdict["apixaban"]["sources"]
     for c in ["warfarin", "enoxaparin", "aspirin"]:
-        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0))"
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"
 
 
 def test_anticoagulation_group_includes_batch8(cdict):

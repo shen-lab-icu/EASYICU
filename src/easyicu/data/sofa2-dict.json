@@ -361,7 +361,8 @@
      ],
      "exclude_regex": {
       "value": "(?i)^\\s*stand\\s*by\\s*$"
-     }
+     },
+     "val_var": "value"
     },
     {
      "table": "numericitems",
@@ -451,7 +452,7 @@
       225949
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows). | 2026-11-04 audit round 4 (R4-072): explicit inactive values are not support, as for MIMIC-IV.",
+     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows). | 2026-11-04 audit round 4 (R4-072): explicit inactive values ('Not applicable' 5,012 rows on 225949 NIV Mask; 'Off'; 'Ambient') are not support, as for MIMIC-IV.",
      "exclude_regex": {
       "value": "(?i)^\\s*(?:standby|ambient|off|not applicable)\\s*$"
      },
@@ -752,6 +753,8 @@
   }
  },
  "delirium_positive": {
+  "aggregate": "max",
+  "_comment_aggregate": "2026-11-04 audit round 4: an hour is positive when any source row is (a median of pooled TRUE/FALSE rows gave 0.5 and stopped the eICU native-v2 publication).",
   "class_name": "lgl_cncpt",
   "description": "Positive delirium assessment (CAM-ICU positive)",
   "category": "neurology",
@@ -1395,6 +1398,8 @@
   }
  },
  "rrt": {
+  "aggregate": "max",
+  "_comment_aggregate": "2026-11-04 audit round 4: an hour is positive when any source row is (a median of pooled TRUE/FALSE rows gave 0.5 and stopped the eICU native-v2 publication).",
   "class_name": "lgl_cncpt",
   "description": "Renal replacement therapy - active RRT evidence only; dialysis access/catheter placement is excluded",
   "category": "renal",

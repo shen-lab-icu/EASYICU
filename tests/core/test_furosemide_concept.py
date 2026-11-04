@@ -123,7 +123,8 @@ def test_all_sources_use_set_val_true_callback(furosemide_entry):
     """
     for db, sources in furosemide_entry["sources"].items():
         for src in sources:
-            expected = "transform_fun(comp_na(`>`, 0))" if db == "hirid" else "transform_fun(set_val(TRUE))"
+            # HiRID doses above numerical noise; SICdb amounts above 0 (audit round 4, R4-088/R4-094).
+            expected = {"hirid": "transform_fun(comp_na(`>`, 0.000001))", "sic": "transform_fun(comp_na(`>`, 0))"}.get(db, "transform_fun(set_val(TRUE))")
             if src["table"] == "prescriptions":
                 # MIMIC-III prescriptions are day-resolution orders anchored at
                 # noon (2026-11-04 audit round 3, M D5).
