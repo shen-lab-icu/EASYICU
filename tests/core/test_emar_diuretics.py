@@ -39,9 +39,12 @@ def test_route_classes():
 
 def test_an_emar_dose_charted_in_inputevents_within_an_hour_is_dropped():
     t = pd.Timestamp("2150-01-01 10:00")
-    doses = pd.DataFrame({"hadm_id": [1, 1, 2],
+    # R5C-IV-016: proximity needs a shared event id and matching IV mass dose.
+    doses = pd.DataFrame({"hadm_id": [1, 1, 2], "emar_id": ["a", "b", "c"],
+                          "_route": "iv", "_dose": 40., "_unit": "mg",
                           "charttime": [t, t + pd.Timedelta(hours=3), t]})
-    inputs = pd.DataFrame({"hadm_id": [1, 2], "starttime": [t + pd.Timedelta(minutes=45),
+    inputs = pd.DataFrame({"hadm_id": [1, 2], "emar_id": ["a", "c"], "amount": 40., "amountuom": "mg",
+                          "starttime": [t + pd.Timedelta(minutes=45),
                                                            t + pd.Timedelta(minutes=61)]})
     kept = drop_inputevent_duplicates(doses, inputs, key="hadm_id", time_col="charttime")
     assert kept.index.tolist() == [1, 2]

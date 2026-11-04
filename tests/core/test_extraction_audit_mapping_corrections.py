@@ -147,7 +147,11 @@ def test_o2sat_lab_saturation_follows_the_arterial_specimen_rule_of_sao2(databas
 )
 def test_blood_gas_base_excess_and_bicarbonate_are_arterial_only(concept, database, callback):
     # 2026-11-03 audit 3: as po2/pco2/ph/sao2. MIMIC bicar is serum 50882.
-    assert [source["callback"] for source in CONCEPTS[concept]["sources"][database]] == [callback]
+    # R5C-III-011: confirmed arterial charts supplement strictly arterial labs.
+    sources = CONCEPTS[concept]["sources"][database]
+    primary = [s for s in sources if not (database in {"mimic", "mimic_demo"} and s["table"] == "chartevents")]
+    assert [source["callback"] for source in primary] == [callback]
+    assert all(s.get("source_channel") == "chart" for s in sources if s not in primary)
     # Serum 50882 has no specimen rule; blood-gas 50803 (2026-11-04 audit
     # round 3) is arterial only.
     for source in CONCEPTS["bicar"]["sources"]["miiv"]:

@@ -18,12 +18,9 @@ Per-database evidence (see :data:`SPECIMEN_RULES`):
   A gas without a specimen record is dropped, as in mimic-code.
 * MIMIC-III: lab item 50800 "SPECIMEN TYPE" with the same subject and
   ``charttime`` (MIMIC-III has no specimen id; mimic-code ``pivoted_bg``
-  groups the panel by admission and ``charttime``).  A gas without a specimen
-  record is kept, as in AUMCdb: about a quarter of 50821 rows have none, they
-  are mostly arterial (median PO2 108 mmHg on the full database), and dropping
-  them removes PaO2 from about 30% of stays.  mimic-code instead keeps them
-  when its logistic specimen-prediction model says arterial, which is not
-  reproduced here; recorded venous, mixed and conflicting samples are dropped.
+  groups the panel by admission and ``charttime``). A gas without a specimen
+  record is dropped: the specimen-prediction fallback in mimic-code is not
+  reproduced here. Recorded venous, mixed and conflicting samples are dropped.
 * AUMCdb: freetext item 11646 "Afname (bloed)" at the same admission and
   ``measuredat``.  A gas without a specimen record is kept (most AUMC gases
   are arterial and the specimen item is not charted for every gas); every

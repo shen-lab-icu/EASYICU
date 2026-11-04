@@ -1059,6 +1059,7 @@ _SOFA2_TRIGGER_CONCEPTS = frozenset(
         "sedated_gcs",
         "mech_circ_support",
         "other_vaso",
+        "vaso_ind",  # R5C-III-012: the overlay includes adjunct infusion support.
         "delirium_tx",
         "delirium_tx_proxy",
         "delirium_tx_evidence",

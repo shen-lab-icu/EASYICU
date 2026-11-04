@@ -488,7 +488,7 @@ class ConceptLoader:
                               'sofa2_renal',
                               'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
                               'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
-                              'mech_circ_support', 'other_vaso', 'delirium_tx',
+                              'mech_circ_support', 'other_vaso', 'vaso_ind', 'delirium_tx',
                               'delirium_tx_proxy', 'delirium_tx_evidence',
                               'motor_response', 'delirium_positive'}
             include_sofa2 = any(c in sofa2_concepts for c in concepts)

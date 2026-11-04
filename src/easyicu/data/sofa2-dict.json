@@ -441,6 +441,18 @@
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-11-04 audit round 4 (R4-015): MetaVision 226732 O2 Delivery Device, as for MIMIC-IV: high-flow nasal cannula, BiPAP/CPAP mask and endotracheal tube (not 'High flow neb', an aerosol mask, nor 'Tracheostomy tube' alone)."
+    },
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      467
+     ],
+     "val_var": "value",
+     "regex": "(?i)\\b(?:bi[ -]?pap|cpap)\\b",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 round 5 R5C-III-010: CareVue BiPAP/CPAP delivery devices, excluding ordinary oxygen and nebulizers; pooled with other support by max."
     }
    ],
    "mimic_demo": [
@@ -485,6 +497,18 @@
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-11-04 audit round 4 (R4-015): MetaVision 226732 O2 Delivery Device, as for MIMIC-IV: high-flow nasal cannula, BiPAP/CPAP mask and endotracheal tube (not 'High flow neb', an aerosol mask, nor 'Tracheostomy tube' alone)."
+    },
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      467
+     ],
+     "val_var": "value",
+     "regex": "(?i)\\b(?:bi[ -]?pap|cpap)\\b",
+     "class_name": "rgx_itm",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 round 5 R5C-III-010: CareVue BiPAP/CPAP delivery devices, excluding ordinary oxygen and nebulizers; pooled with other support by max."
     }
    ],
    "sic": [
@@ -538,8 +562,9 @@
       228193,
       224660
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "229268=Circuit Configuration (155), 229270=Flow ECMO (147), 229277=Speed ECMO (147), 229278=Sweep ECMO (146), 229280=FiO2 ECMO (146), 229274=Oxygenator visible (150), 229266=Cannula sites (150), 228193=Oxygenator/ECMO (41), 224660=ECMO Hemodynamics (5)"
+     "callback": "mimic_ecmo_evidence",
+     "_comment": "229268=Circuit Configuration (155), 229270=Flow ECMO (147), 229277=Speed ECMO (147), 229278=Sweep ECMO (146), 229280=FiO2 ECMO (146), 229274=Oxygenator visible (150), 229266=Cannula sites (150), 228193=Oxygenator/ECMO (41), 224660=ECMO Hemodynamics (5)",
+     "val_var": "value"
     }
    ],
    "mimic": [
@@ -552,14 +577,13 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_ecmo_evidence",
      "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays). | 2026-11-04 audit round 4 (R4-072): an ECMO flow charted 'off' is not ECMO in use.",
      "extra_vars": [
       "value"
      ],
-     "exclude_regex": {
-      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     "exclude_regex": {},
+     "val_var": "value"
     }
    ],
    "mimic_demo": [
@@ -572,14 +596,13 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_ecmo_evidence",
      "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays). | 2026-11-04 audit round 4 (R4-072): an ECMO flow charted 'off' is not ECMO in use.",
      "extra_vars": [
       "value"
      ],
-     "exclude_regex": {
-      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     "exclude_regex": {},
+     "val_var": "value"
     }
    ],
    "eicu": [
@@ -632,7 +655,8 @@
      "_comment": "2026-11-03 extraction audit 2: SICdb d_references SignalFloat 2023 'ECMO PumpSpeed' (U/min) and 2024 'ECMO BloodFlow' (L/min). A running pump (value > 0) is ECMO in use; a charted 0 is a stopped circuit (FALSE). 2025 'ECMO FI' (sweep-gas FiO2) alone does not establish flow."
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "ecmo_indication": {
   "class_name": "chr_cncpt",
@@ -1145,15 +1169,19 @@
       222315,
       221986
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "callback": "mimic_other_vaso",
+     "_comment": "2026-11-04 round 5 R5C-III-012: positive-rate support spans; CV spans require observed repeat/stop boundaries, MV uses explicit intervals. Zero/Stopped terminates CV support; amount-only administration stays a point, missing evidence stays absent.",
      "extra_vars": [
+      "amount",
+      "endtime",
       "statusdescription"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate",
+     "stop_var": "endtime"
     },
     {
      "table": "inputevents_cv",
@@ -1162,8 +1190,14 @@
       30051,
       30125
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "CV: 30051=Vasopressin, 30125=Milrinone"
+     "callback": "mimic_other_vaso",
+     "_comment": "2026-11-04 round 5 R5C-III-012: positive-rate support spans; CV spans require observed repeat/stop boundaries, MV uses explicit intervals. Zero/Stopped terminates CV support; amount-only administration stays a point, missing evidence stays absent.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "stopped",
+      "linkorderid"
+     ]
     },
     {
      "table": "inputevents_cv",
@@ -1172,8 +1206,14 @@
       30127,
       30128
      ],
-     "callback": "transform_fun(comp_na(`>`, 0))",
-     "_comment": "CV: 30127=Neosynephrine, 30128=Neosynephrine-k (phenylephrine), rows with a positive rate only. 2026-11-04 audit round 4 (R4-002): MetaVision phenylephrine 221749 was mapped but CareVue was not."
+     "callback": "mimic_other_vaso",
+     "_comment": "2026-11-04 round 5 R5C-III-012: positive-rate support spans; CV spans require observed repeat/stop boundaries, MV uses explicit intervals. Zero/Stopped terminates CV support; amount-only administration stays a point, missing evidence stays absent.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "stopped",
+      "linkorderid"
+     ]
     }
    ],
    "sic": [
@@ -1204,15 +1244,19 @@
       222315,
       221986
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "callback": "mimic_other_vaso",
+     "_comment": "2026-11-04 round 5 R5C-III-012: positive-rate support spans; CV spans require observed repeat/stop boundaries, MV uses explicit intervals. Zero/Stopped terminates CV support; amount-only administration stays a point, missing evidence stays absent.",
      "extra_vars": [
+      "amount",
+      "endtime",
       "statusdescription"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "val_var": "rate",
+     "stop_var": "endtime"
     },
     {
      "table": "inputevents_cv",
@@ -1221,8 +1265,14 @@
       30051,
       30125
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "CV: 30051=Vasopressin, 30125=Milrinone"
+     "callback": "mimic_other_vaso",
+     "_comment": "2026-11-04 round 5 R5C-III-012: positive-rate support spans; CV spans require observed repeat/stop boundaries, MV uses explicit intervals. Zero/Stopped terminates CV support; amount-only administration stays a point, missing evidence stays absent.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "stopped",
+      "linkorderid"
+     ]
     },
     {
      "table": "inputevents_cv",
@@ -1231,8 +1281,14 @@
       30127,
       30128
      ],
-     "callback": "transform_fun(comp_na(`>`, 0))",
-     "_comment": "CV: 30127=Neosynephrine, 30128=Neosynephrine-k (phenylephrine), rows with a positive rate only. 2026-11-04 audit round 4 (R4-002): MetaVision phenylephrine 221749 was mapped but CareVue was not."
+     "callback": "mimic_other_vaso",
+     "_comment": "2026-11-04 round 5 R5C-III-012: positive-rate support spans; CV spans require observed repeat/stop boundaries, MV uses explicit intervals. Zero/Stopped terminates CV support; amount-only administration stays a point, missing evidence stays absent.",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "stopped",
+      "linkorderid"
+     ]
     }
    ]
   },
@@ -1832,5 +1888,15 @@
    "aumc": []
   },
   "callback": "rrt_criteria"
+ },
+ "vaso_ind": {
+  "concepts": [
+   "dopa_dur",
+   "norepi_dur",
+   "dobu_dur",
+   "epi_dur",
+   "other_vaso"
+  ],
+  "_comment": "2026-11-04 round 5 R5C-III-012: the SOFA-2 dictionary supplies explicit adjunct support to vaso_ind. The callback unions these boolean grid points for MIMIC-III only; it never interprets TRUE as a duration. Other databases retain their existing indicator contract."
  }
 }

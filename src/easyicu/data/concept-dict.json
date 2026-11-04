@@ -303,7 +303,7 @@
    ],
    "miiv": [
     {
-     "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn",
+     "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(triaxone|taroline|tolozane|ixime|dinir|ditoren|tibuten|azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn|(?:erta|imi|mero|dori)penem|linezolid|daptomycin|tigecycline|colistin|polymyxin|sulbactam|tedizolid|dalbavancin|oritavancin|telavancin|fosfomycin|cefoxitin|isoniazid|pyrazinamide|ethambutol|cefiderocol|avibactam|relebactam|vaborbactam|rocephin|zyvox|cubicin|merrem|invanz|primaxin",
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
@@ -375,12 +375,23 @@
      ],
      "table": "inputevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_antibacterial_inputs",
+     "antibacterial_regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(triaxone|taroline|tolozane|ixime|dinir|ditoren|tibuten|azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn|(?:erta|imi|mero|dori)penem|linezolid|daptomycin|tigecycline|colistin|polymyxin|sulbactam|tedizolid|dalbavancin|oritavancin|telavancin|fosfomycin|cefoxitin|isoniazid|pyrazinamide|ethambutol|cefiderocol|avibactam|relebactam|vaborbactam|rocephin|zyvox|cubicin|merrem|invanz|primaxin",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ],
+     "_comment": "2026-11-04 round 5 R5C-IV-006/R5C-III-006: systemic antibacterials only, matching the prescription whitelist against d_items labels; antiviral/antifungal inputs and zero doses are excluded."
     }
    ],
    "mimic": [
     {
-     "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn",
+     "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(triaxone|taroline|tolozane|ixime|dinir|ditoren|tibuten|azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn|(?:erta|imi|mero|dori)penem|linezolid|daptomycin|tigecycline|colistin|polymyxin|sulbactam|tedizolid|dalbavancin|oritavancin|telavancin|fosfomycin|cefoxitin|isoniazid|pyrazinamide|ethambutol|cefiderocol|avibactam|relebactam|vaborbactam|rocephin|zyvox|cubicin|merrem|invanz|primaxin",
      "table": "prescriptions",
      "sub_var": "drug",
      "interval": "00:01:00",
@@ -452,20 +463,23 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_antibacterial_inputs",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 round 5 R5C-IV-006/R5C-III-006: systemic antibacterials only, matching the prescription whitelist against d_items labels; antiviral/antifungal inputs and zero doses are excluded.",
+     "antibacterial_regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(triaxone|taroline|tolozane|ixime|dinir|ditoren|tibuten|azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn|(?:erta|imi|mero|dori)penem|linezolid|daptomycin|tigecycline|colistin|polymyxin|sulbactam|tedizolid|dalbavancin|oritavancin|telavancin|fosfomycin|cefoxitin|isoniazid|pyrazinamide|ethambutol|cefiderocol|avibactam|relebactam|vaborbactam|rocephin|zyvox|cubicin|merrem|invanz|primaxin",
+     "val_var": "amount"
     }
    ],
    "mimic_demo": [
     {
-     "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn",
+     "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(triaxone|taroline|tolozane|ixime|dinir|ditoren|tibuten|azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn|(?:erta|imi|mero|dori)penem|linezolid|daptomycin|tigecycline|colistin|polymyxin|sulbactam|tedizolid|dalbavancin|oritavancin|telavancin|fosfomycin|cefoxitin|isoniazid|pyrazinamide|ethambutol|cefiderocol|avibactam|relebactam|vaborbactam|rocephin|zyvox|cubicin|merrem|invanz|primaxin",
      "table": "prescriptions",
      "sub_var": "drug",
      "interval": "00:01:00",
@@ -537,15 +551,18 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_antibacterial_inputs",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 round 5 R5C-IV-006/R5C-III-006: systemic antibacterials only, matching the prescription whitelist against d_items labels; antiviral/antifungal inputs and zero doses are excluded.",
+     "antibacterial_regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(triaxone|taroline|tolozane|ixime|dinir|ditoren|tibuten|azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn|(?:erta|imi|mero|dori)penem|linezolid|daptomycin|tigecycline|colistin|polymyxin|sulbactam|tedizolid|dalbavancin|oritavancin|telavancin|fosfomycin|cefoxitin|isoniazid|pyrazinamide|ethambutol|cefiderocol|avibactam|relebactam|vaborbactam|rocephin|zyvox|cubicin|merrem|invanz|primaxin",
+     "val_var": "amount"
     }
    ],
    "sic": [
@@ -1836,7 +1853,7 @@
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-05-27 Round 3. MIIV/MIIIv aspirin via prescriptions table (not in inputevents). | 2026-11-04 audit round 3 (full-dictionary M): ophthalmic, otic, topical, vaginal, irrigation, inhaled, catheter-lock and desensitisation products are not systemic exposure (abx: 4,005 rows, 1,960 stays). Prescriptions stay the source: eMAR covers 28-31% of 2008-2013 ICU stays.",
      "exclude_regex": {
-      "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b|butalbital"
+      "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b"
      },
      "extra_vars": [
       "drug"
@@ -2110,7 +2127,18 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (50800 SPECIMEN TYPE = ART at the same charttime; a gas without a specimen record is kept), as po2 (owner concept/blood_gas_specimen.py)."
+     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (50800 SPECIMEN TYPE = ART at the same charttime; a gas without a specimen record is excluded), as po2 (owner concept/blood_gas_specimen.py).",
+     "source_channel": "lab"
+    },
+    {
+     "ids": [
+      776,
+      224828
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "chart",
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
     }
    ],
    "mimic_demo": [
@@ -2119,7 +2147,18 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (50800 SPECIMEN TYPE = ART at the same charttime; a gas without a specimen record is kept), as po2 (owner concept/blood_gas_specimen.py)."
+     "_comment": "2026-11-03 extraction audit 3: blood-gas base excess, arterial samples only (50800 SPECIMEN TYPE = ART at the same charttime; a gas without a specimen record is excluded), as po2 (owner concept/blood_gas_specimen.py).",
+     "source_channel": "lab"
+    },
+    {
+     "ids": [
+      776,
+      224828
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "chart",
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
     }
    ],
    "sic": [
@@ -2129,7 +2168,12 @@
      "sub_var": "LaboratoryID"
     }
    ]
-  }
+  },
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
+  "source_channel_window_hours": 6
  },
  "bicar": {
   "unit": [
@@ -3167,7 +3211,14 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate"
+     ]
     },
     {
      "ids": [
@@ -3176,15 +3227,56 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227525 'Calcium Gluconate (CRRT)' is the citrate-circuit calcium, not a calcium replacement."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227525 'Calcium Gluconate (CRRT)' is the citrate-circuit calcium, not a calcium replacement.",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount"
+    },
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)calcium\\s*(?:gluconate|chloride)",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [
+      {
+       "table": "inputevents_cv",
+       "ids": [
+        30023,
+        30022,
+        30300,
+        41807,
+        46291
+       ]
+      },
+      {
+       "table": "inputevents_mv",
+       "ids": [
+        221456,
+        228317
+       ]
+      }
+     ],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
     }
    ],
    "mimic_demo": [
@@ -3198,7 +3290,14 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate"
+     ]
     },
     {
      "ids": [
@@ -3207,15 +3306,56 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227525 'Calcium Gluconate (CRRT)' is the citrate-circuit calcium, not a calcium replacement."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | 2026-11-04 audit round 3 (full-dictionary M): 227525 'Calcium Gluconate (CRRT)' is the citrate-circuit calcium, not a calcium replacement.",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount"
+    },
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)calcium\\s*(?:gluconate|chloride)",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [
+      {
+       "table": "inputevents_cv",
+       "ids": [
+        30023,
+        30022,
+        30300,
+        41807,
+        46291
+       ]
+      },
+      {
+       "table": "inputevents_mv",
+       "ids": [
+        221456,
+        228317
+       ]
+      }
+     ],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
     }
    ],
    "sic": [
@@ -3981,7 +4121,8 @@
      "sub_var": "itemid",
      "index_var": "charttime",
      "value_var": "valuenum",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV duplicate blood/whole-blood creatinine itemids."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV duplicate blood/whole-blood creatinine itemids.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -3991,7 +4132,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted serum/whole-blood creatinine channels."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted serum/whole-blood creatinine channels.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -6330,8 +6472,9 @@
       228193,
       224660
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-03 audit: synchronized with SOFA-2 ECMO coverage; includes circuit configuration, flow/speed/sweep/FiO2, oxygenator/cannula indicators, and legacy ECMO hemodynamics."
+     "callback": "mimic_ecmo_evidence",
+     "_comment": "2026-07-03 audit: synchronized with SOFA-2 ECMO coverage; includes circuit configuration, flow/speed/sweep/FiO2, oxygenator/cannula indicators, and legacy ECMO hemodynamics.",
+     "val_var": "value"
     }
    ],
    "mimic": [
@@ -6344,14 +6487,13 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_ecmo_evidence",
      "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays). | 2026-11-04 audit round 4 (R4-072): an ECMO flow charted 'off' is not ECMO in use.",
      "extra_vars": [
       "value"
      ],
-     "exclude_regex": {
-      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     "exclude_regex": {},
+     "val_var": "value"
     }
    ],
    "mimic_demo": [
@@ -6364,14 +6506,13 @@
      ],
      "table": "chartevents",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_ecmo_evidence",
      "_comment": "2026-11-03 extraction audit 2: MIMIC-III d_items 228193 'Oxygenator/ECMO' (MetaVision checkbox) and 224660 'ECMO' (MetaVision flow, L/min) are the items MIMIC-IV maps; 2957 'ECMO FLOW' and 3265 'ecmo flow' are the CareVue charting of the circuit flow. Rare in MIMIC-III (about 20 ICU stays). | 2026-11-04 audit round 4 (R4-072): an ECMO flow charted 'off' is not ECMO in use.",
      "extra_vars": [
       "value"
      ],
-     "exclude_regex": {
-      "value": "(?i)^\\s*(?:off|not applicable)\\s*$"
-     }
+     "exclude_regex": {},
+     "val_var": "value"
     }
    ],
    "eicu": [
@@ -6434,7 +6575,8 @@
      "_comment": "2026-11-03 extraction audit 2: SICdb d_references SignalFloat 2023 'ECMO PumpSpeed' (U/min) and 2024 'ECMO BloodFlow' (L/min). A running pump (value > 0) is ECMO in use; a charted 0 is a stopped circuit (FALSE). 2025 'ECMO FI' (sweep-gas FiO2) alone does not establish flow."
     }
    ]
-  }
+  },
+  "aggregate": "max"
  },
  "ecmo_indication": {
   "class_name": "chr_cncpt",
@@ -7922,6 +8064,22 @@
      "callback": "mimic_rate_cv"
     },
     {
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "ids": [
+      30308
+     ],
+     "val_var": "rate",
+     "unit_var": "rateuom",
+     "extra_vars": [
+      "stopped",
+      "linkorderid"
+     ],
+     "grp_var": "linkorderid",
+     "callback": "mimic_fentanyl_cv_mass",
+     "_comment": "2026-11-04 round 5 R5C-III-021: mcg/kg/hour multiplied by measured stay weight before interval expansion; no weight means no mass rate, with a missing-weight audit count."
+    },
+    {
      "ids": [
       221744,
       225942
@@ -7950,6 +8108,22 @@
      ],
      "grp_var": "linkorderid",
      "callback": "mimic_rate_cv"
+    },
+    {
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "ids": [
+      30308
+     ],
+     "val_var": "rate",
+     "unit_var": "rateuom",
+     "extra_vars": [
+      "stopped",
+      "linkorderid"
+     ],
+     "grp_var": "linkorderid",
+     "callback": "mimic_fentanyl_cv_mass",
+     "_comment": "2026-11-04 round 5 R5C-III-021: mcg/kg/hour multiplied by measured stay weight before interval expansion; no weight means no mass rate, with a missing-weight audit count."
     },
     {
      "ids": [
@@ -8389,7 +8563,8 @@
     {
      "ids": 50816,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)"
     }
    ],
    "mimic_demo": [
@@ -8419,7 +8594,8 @@
     {
      "ids": 50816,
      "table": "labevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "transform_fun(percent_as_numeric)"
     }
    ],
    "sic": [
@@ -9142,7 +9318,8 @@
      "_comment": "2026-11-03 extraction audit 2: SICdb d_references Laboratory 660 'CO-Hämoglobin (BGA)' (%), the blood-gas analyser channel the other databases map (MIMIC 50805)."
     }
    ]
-  }
+  },
+  "unit": "%"
  },
  "hct": {
   "unit": "%",
@@ -9609,7 +9786,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood-gas/chemistry hemoglobin duplicate itemids."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood-gas/chemistry hemoglobin duplicate itemids.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -9618,7 +9796,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted hemoglobin channel."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted hemoglobin channel.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -11531,15 +11710,20 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount"
     },
     {
      "ids": [
@@ -11547,8 +11731,48 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue magnesium (d_items: 30027 Magnesium Sulfate; amountuom gm/ml, IV routes)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue magnesium (d_items: 30027 Magnesium Sulfate; amountuom gm/ml, IV routes).",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate"
+     ]
+    },
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)magnesium\\s*sulfate",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [
+      {
+       "table": "inputevents_mv",
+       "ids": [
+        222011,
+        227523,
+        227524
+       ]
+      },
+      {
+       "table": "inputevents_cv",
+       "ids": [
+        30027
+       ]
+      }
+     ],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
     }
    ],
    "mimic_demo": [
@@ -11560,15 +11784,20 @@
      ],
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount"
     },
     {
      "ids": [
@@ -11576,8 +11805,48 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue magnesium (d_items: 30027 Magnesium Sulfate; amountuom gm/ml, IV routes)."
+     "callback": "mimic_positive_dose",
+     "_comment": "2026-11-03 extraction audit 2: MIMIC-III CareVue magnesium (d_items: 30027 Magnesium Sulfate; amountuom gm/ml, IV routes).",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate"
+     ]
+    },
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)magnesium\\s*sulfate",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [
+      {
+       "table": "inputevents_mv",
+       "ids": [
+        222011,
+        227523,
+        227524
+       ]
+      },
+      {
+       "table": "inputevents_cv",
+       "ids": [
+        30027
+       ]
+      }
+     ],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
     }
    ],
    "sic": [
@@ -14374,6 +14643,46 @@
      "val_var": "Amount",
      "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
+   ],
+   "mimic": [
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)neostigmine",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)neostigmine",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
+    }
    ]
   }
  },
@@ -15913,21 +16222,70 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate"
+     ]
     },
     {
      "ids": 225910,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount"
+    },
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)pantoprazole|protonix",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [
+      {
+       "table": "inputevents_cv",
+       "ids": [
+        40549,
+        40550,
+        40700,
+        41101,
+        41583,
+        44008,
+        44793
+       ]
+      },
+      {
+       "table": "inputevents_mv",
+       "ids": [
+        225910
+       ]
+      }
+     ],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
     }
    ],
    "mimic_demo": [
@@ -15943,21 +16301,70 @@
      ],
      "table": "inputevents_cv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "mimic_positive_dose",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount",
+     "extra_vars": [
+      "rate"
+     ]
     },
     {
      "ids": 225910,
      "table": "inputevents_mv",
      "sub_var": "itemid",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_positive_dose",
      "extra_vars": [
-      "statusdescription"
+      "statusdescription",
+      "rate"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
      ],
-     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each)."
+     "_comment": "2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "exposure_kind": "administered",
+     "time_precision": "event",
+     "route": "iv",
+     "val_var": "amount"
+    },
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)pantoprazole|protonix",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [
+      {
+       "table": "inputevents_cv",
+       "ids": [
+        40549,
+        40550,
+        40700,
+        41101,
+        41583,
+        44008,
+        44793
+       ]
+      },
+      {
+       "table": "inputevents_mv",
+       "ids": [
+        225910
+       ]
+      }
+     ],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
     }
    ],
    "sic": [
@@ -16049,7 +16456,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -16069,7 +16476,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -16470,7 +16877,8 @@
      "extra_vars": [
       "specimen_id"
      ],
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -16479,7 +16887,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -16489,7 +16898,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -16511,7 +16920,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -17299,7 +17708,8 @@
      "table": "labevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood platelet-count duplicate itemid."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood platelet-count duplicate itemid.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -17308,7 +17718,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted platelet-count channel."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted platelet-count channel.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -17437,7 +17848,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -17457,7 +17868,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -18895,6 +19306,46 @@
      "val_var": "Amount",
      "_comment": " | R5-SIC-026: Amount>0 is administration, zero is false, missing/negative unknown; hourly max. GivenState is not interpreted."
     }
+   ],
+   "mimic": [
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)rocuronium|esmeron",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
+    }
+   ],
+   "mimic_demo": [
+    {
+     "table": "prescriptions",
+     "sub_var": "drug",
+     "val_var": "drug",
+     "index_var": "startdate",
+     "regex": "(?i)rocuronium|esmeron",
+     "class_name": "rgx_itm",
+     "callback": "mimic_prescription_noon",
+     "extra_vars": [
+      "drug",
+      "route"
+     ],
+     "exposure_kind": "ordered",
+     "time_precision": "day",
+     "route": "iv",
+     "administered_sources": [],
+     "_comment": "2026-11-04 round 5 R5C-III-015..019: IV order proxy at noon of its start date only, never a continuous administered interval. Same-day documented administrations supersede the proxy. Source lineage distinguishes ordered/day/IV from administered/event/IV."
+    }
    ]
   }
  },
@@ -19456,7 +19907,8 @@
     {
      "ids": 220227,
      "table": "chartevents",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "source_channel": "chart"
     },
     {
      "ids": 50817,
@@ -19466,7 +19918,8 @@
      "extra_vars": [
       "specimen_id"
      ],
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py.",
+     "source_channel": "lab"
     }
    ],
    "mimic": [
@@ -19485,7 +19938,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "mimic_demo": [
@@ -19504,7 +19957,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     }
    ],
    "sic": [
@@ -20217,7 +20670,18 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2."
+     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2.",
+     "source_channel": "lab"
+    },
+    {
+     "ids": [
+      777,
+      225698
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "chart",
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
     }
    ],
    "mimic_demo": [
@@ -20226,7 +20690,18 @@
      "table": "labevents",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2."
+     "_comment": "2026-11-03 audit round 2 (G8): 50804 'Calculated Total CO2' is a blood-gas value; arterial samples only (lab 52033/50800 specimen type), as po2/pco2.",
+     "source_channel": "lab"
+    },
+    {
+     "ids": [
+      777,
+      225698
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "source_channel": "chart",
+     "_comment": "2026-11-04 round 5 R5C-III-011: documented arterial chart gases fill gaps in strictly confirmed arterial labs, with lab priority within six hours."
     }
    ],
    "sic": [
@@ -20237,7 +20712,12 @@
      "_comment": "2026-07-03 module coverage audit: SIC d_references 670 = CtCo2 (BGA), mmol/L. DataID 716 = etCO2 is intentionally excluded."
     }
    ]
-  }
+  },
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
+  "source_channel_window_hours": 6
  },
  "temp": {
   "unit": [
@@ -27113,9 +27593,13 @@
       "value"
      ],
      "exclude_regex": {
-      "value": "(?i)^\\s*(standby|other/remarks|other)\\s*$"
+      "value": "(?i)^\\s*(standby|stand by|ambient|off|not applicable|other/remarks|other)\\s*$"
      },
-     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept."
+     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept. | R5C-III-009 review: Ambient/Off and missing mode text cannot start a ventilation window; filter the explicitly declared text value on all extraction paths.",
+     "val_var": "value",
+     "require_regex": {
+      "value": "\\S"
+     }
     }
    ],
    "mimic_demo": [
@@ -27196,9 +27680,13 @@
       "value"
      ],
      "exclude_regex": {
-      "value": "(?i)^\\s*(standby|other/remarks|other)\\s*$"
+      "value": "(?i)^\\s*(standby|stand by|ambient|off|not applicable|other/remarks|other)\\s*$"
      },
-     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept."
+     "_comment": "2026-11-04 audit round 3 (F-29): a ventilator charted in Standby (223849, 5,388 rows) or a mode/type charted as Other (720 'Other/Remarks', 223848 'Other', excluded likewise by the MIT-LCP ventilation classification) is not ventilation. 224703 is 'ZATC Tube #' (0 rows), removed. A spontaneous mode such as CPAP/PSV cannot tell a mask from a tube and is kept. | R5C-III-009 review: Ambient/Off and missing mode text cannot start a ventilation window; filter the explicitly declared text value on all extraction paths.",
+     "val_var": "value",
+     "require_regex": {
+      "value": "\\S"
+     }
     }
    ],
    "aumc": [
@@ -27552,7 +28040,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood WBC duplicate itemids."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood WBC duplicate itemids.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -27561,7 +28050,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted WBC channel."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted WBC channel.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -27785,14 +28275,16 @@
      "val_var": "patientweight",
      "class_name": "col_itm",
      "source_channel": "order",
-     "_comment": "2026-11-03 audit round 2 (W1): MetaVision infusion orders carry the weight used for dosing; last resort. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "_comment": "2026-11-03 audit round 2 (W1): MetaVision infusion orders carry the weight used for dosing; last resort. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | R5C-III-030: patientweight is already kg; replace the table default medication rate-unit label with kg without scaling the weight.",
      "extra_vars": [
       "statusdescription"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "unit_var": "rateuom",
+     "callback": "convert_unit(binary_op(`*`, 1), 'kg')"
     }
    ],
    "mimic_demo": [
@@ -27833,14 +28325,16 @@
      "val_var": "patientweight",
      "class_name": "col_itm",
      "source_channel": "order",
-     "_comment": "2026-11-03 audit round 2 (W1): MetaVision infusion orders carry the weight used for dosing; last resort. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "_comment": "2026-11-03 audit round 2 (W1): MetaVision infusion orders carry the weight used for dosing; last resort. | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each). | R5C-III-030: patientweight is already kg; replace the table default medication rate-unit label with kg without scaling the weight.",
      "extra_vars": [
       "statusdescription"
      ],
      "status_var": "statusdescription",
      "excluded_statuses": [
       "Rewritten"
-     ]
+     ],
+     "unit_var": "rateuom",
+     "callback": "convert_unit(binary_op(`*`, 1), 'kg')"
     }
    ],
    "sic": [
@@ -33887,7 +34381,7 @@
      ],
      "callback": "emar_furosemide_equivalent",
      "fe_drug": "furosemide",
-     "_comment": "2026-11-03 audit round 2 (D1): MIMIC-IV eMAR administrations (dose_given summed over emar_detail; route from emar_detail, else the prescriptions order), dropped when inputevents has the same drug within 60 min of the dose (owner concept/emar_diuretics.py)."
+     "_comment": "2026-11-04 round 5 R5C-IV-016: administered eMAR dose. Deduplication requires a shared event identifier, matching IV route and mass dose within 60 minutes; ambiguous proximity and all oral doses are retained (concept/emar_diuretics.py)."
     },
     {
      "table": "emar",
@@ -33902,7 +34396,7 @@
      ],
      "callback": "emar_furosemide_equivalent",
      "fe_drug": "bumetanide",
-     "_comment": "2026-11-03 audit round 2 (D1): MIMIC-IV eMAR administrations (dose_given summed over emar_detail; route from emar_detail, else the prescriptions order), dropped when inputevents has the same drug within 60 min of the dose (owner concept/emar_diuretics.py)."
+     "_comment": "2026-11-04 round 5 R5C-IV-016: administered eMAR dose. Deduplication requires a shared event identifier, matching IV route and mass dose within 60 minutes; ambiguous proximity and all oral doses are retained (concept/emar_diuretics.py)."
     },
     {
      "table": "emar",
@@ -33917,7 +34411,7 @@
      ],
      "callback": "emar_furosemide_equivalent",
      "fe_drug": "torasemide",
-     "_comment": "2026-11-03 audit round 2 (D1): MIMIC-IV eMAR administrations (dose_given summed over emar_detail; route from emar_detail, else the prescriptions order), dropped when inputevents has the same drug within 60 min of the dose (owner concept/emar_diuretics.py)."
+     "_comment": "2026-11-04 round 5 R5C-IV-016: administered eMAR dose. Deduplication requires a shared event identifier, matching IV route and mass dose within 60 minutes; ambiguous proximity and all oral doses are retained (concept/emar_diuretics.py)."
     }
    ],
    "mimic": [
@@ -34524,7 +35018,8 @@
      ],
      "table": "labevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood-gas/chemistry hemoglobin duplicate itemids."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood-gas/chemistry hemoglobin duplicate itemids.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -34533,7 +35028,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted hemoglobin channel."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted hemoglobin channel.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -34749,7 +35245,8 @@
      "extra_vars": [
       "specimen_id"
      ],
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 52033 Specimen Type (same specimen_id) is ART. (mimic-code bg/first_day_bg_art); venous/mixed/central-venous and unrecorded specimens are excluded. Rule owner: concept/blood_gas_specimen.py.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -34758,7 +35255,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded. 2026-11-03 arterial fix: removed 220274 PH (Venous); only 223830 PH (Arterial) remains.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [
@@ -34768,7 +35266,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -34790,7 +35288,7 @@
      "source_channel": "lab",
      "sub_var": "itemid",
      "callback": "arterial_specimen_only",
-     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are kept (mostly arterial; mimic-code's specimen-prediction fallback is not reproduced). Rule owner: concept/blood_gas_specimen.py."
+     "_comment": "2026-11-03 arterial specimen fix: keep only samples whose lab 50800 SPECIMEN TYPE at the same subject and charttime is ART (mimic-code pivoted_bg); MIX/VEN/CENTRAL VENOUS and conflicting specimens are excluded; gases without a specimen record are excluded; mimic-code's specimen-prediction fallback is not reproduced. Rule owner: concept/blood_gas_specimen.py."
     },
     {
      "ids": [
@@ -34982,7 +35480,8 @@
      "sub_var": "itemid",
      "index_var": "charttime",
      "value_var": "valuenum",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV duplicate blood/whole-blood creatinine itemids."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV duplicate blood/whole-blood creatinine itemids.",
+     "source_channel": "lab"
     },
     {
      "ids": [
@@ -34992,7 +35491,8 @@
      "table": "chartevents",
      "sub_var": "itemid",
      "index_var": "charttime",
-     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted serum/whole-blood creatinine channels."
+     "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted serum/whole-blood creatinine channels.",
+     "source_channel": "chart"
     }
    ],
    "mimic": [

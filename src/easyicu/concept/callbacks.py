@@ -5672,6 +5672,13 @@ def _callback_vaso_ind(
     expands seq(start, start + duration, 1). ricu's own callback used the
     duration as the end time (seq(start, duration)); that is not reproduced.
     """
+    # Split boolean adjunct support (SOFA-2 vaso_ind) off first: it recurses with
+    # the four duration tables only, so no database reads TRUE as a duration.
+    if "other_vaso" in tables:
+        from .mimic_support import union_vaso_indicator
+
+        return union_vaso_indicator(tables, ctx, _callback_vaso_ind)
+
     if getattr(getattr(ctx.data_source, "config", None), "name", "") == "aumc":
         from .aumc_intervals import vaso_indicator
 

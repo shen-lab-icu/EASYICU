@@ -949,6 +949,27 @@ def _apply_callback(
 
     if expr in eicu_qc_callbacks:
         return apply_eicu_qc(frame, source, concept_name, data_source)
+    if expr in {"mimic_ecmo_evidence", "mimic_antibacterial_inputs", "mimic_other_vaso", "mimic_fentanyl_cv_mass", "mimic_positive_dose"}:
+        from .mimic_support import antibacterial_inputs, ecmo_evidence, fentanyl_cv_mass_rate, other_vaso_points, source_values
+
+        if expr == "mimic_ecmo_evidence":
+            return ecmo_evidence(frame, source, concept_name)
+        if expr == "mimic_positive_dose":
+            amount = pd.to_numeric(source_values(frame, source, "amount", concept_name), errors="coerce")
+            rate = pd.to_numeric(source_values(frame, source, "rate", concept_name), errors="coerce")
+            return frame.loc[amount.gt(0) | rate.gt(0)].assign(**{concept_name: True})
+        if expr == "mimic_antibacterial_inputs":
+            return antibacterial_inputs(frame, source, concept_name, data_source)
+        if expr == "mimic_other_vaso":
+            id_col = _patient_id_column(frame, data_source)
+            bounds = _load_mimic_icu_outtimes(data_source, frame, [id_col])
+            return other_vaso_points(frame, source, concept_name, icu_stays=bounds)
+        normalized = fentanyl_cv_mass_rate(frame, source, concept_name, resolver=resolver, data_source=data_source)
+        audit = normalized.attrs["mimic_mass_rate_audit"]
+        result = _apply_callback(normalized, replace(source, callback="mimic_rate_cv"), concept_name,
+                                 unit_column, resolver=resolver, data_source=data_source, interval=interval)
+        result.attrs["mimic_mass_rate_audit"] = audit
+        return result
 
     # A SICdb medication source that declares IsSingleDose keeps continuous
     # rows only, whatever its value callback; nested callbacks then see a
@@ -1137,6 +1158,9 @@ def _apply_callback(
         values = frame[value_column].astype("string")
         valid = itemids.isin(_MIMICIII_VENT_CLASSIFICATION_ITEMIDS)
         valid &= values.notna() & frame[time_column].notna()
+        # Inactive mode rows neither initiate nor bridge an invasive episode.
+        inactive = values.str.strip().str.casefold().isin({"standby", "stand by", "ambient", "off", "not applicable"})
+        valid &= ~(itemids.isin([720, 223848, 223849]) & inactive)
         if "error" in frame.columns:
             valid &= pd.to_numeric(frame["error"], errors="coerce").ne(1)
 
@@ -3710,6 +3734,10 @@ def _apply_callback(
     # mimic_prescription_noon is the same placement for non-antibiotic orders
     # (2026-11-03 audit round 2, D5).
     if expr in ("mimic_abx_presc", PRESCRIPTION_NOON_CALLBACK):
+        if source.params.get("exposure_kind") == "ordered":
+            from .mimic_prescription_time import ordered_iv_proxy
+
+            return ordered_iv_proxy(frame, source=source, concept_name=concept_name, data_source=data_source)
         frame = frame.copy()
         index_col = source.index_var
         if not index_col:

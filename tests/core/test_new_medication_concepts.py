@@ -29,7 +29,8 @@ MEDICATIONS = [
     # 2026-07-17: milrinone redefined as the PDE3-inhibitor inotrope CLASS; AUMC stocks
     # enoximone (7196, 2,459 adm) not milrinone, so it gains an AUMC source -> 6/6.
     ("milrinone",        6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
-    ("rocuronium",       5, {"miiv", "eicu", "aumc", "hirid", "sic"}),
+    # R5C-III-019: MIMIC-III has an explicitly ordered/day-level IV proxy.
+    ("rocuronium",       6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
 ]
 
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
@@ -70,6 +71,10 @@ def test_all_sources_use_set_val_true(name, _n, _dbs):
             if db == "sic" and name in {"propofol", "midazolam", "fentanyl", "morphine", "heparin", "rocuronium"}:
                 # R5-SIC-026: dose-aware truth preserves zero and missing.
                 assert cb == "sicdb_exposure" and item["val_var"] == "Amount"
+                continue
+            if name == "rocuronium" and db in {"mimic", "mimic_demo"}:
+                # R5C-III-019: noon is a coarse order proxy, not a timed dose.
+                assert cb == "mimic_prescription_noon" and item["exposure_kind"] == "ordered"
                 continue
             if db == "hirid":
                 # A zero HiRID dose is a pump marker (2026-11-04 audit round 3, R3-19).

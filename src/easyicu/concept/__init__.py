@@ -9343,6 +9343,18 @@ class ConceptResolver:
                         allow_aggregated=not _is_specific_agg,
                         cache_scope=raw_cache_scope,
                     )
+                # The raw key carries no grid: a sub-concept cached on its parent's
+                # grid (vaso_ind loads other_vaso per minute) must not answer a
+                # request on another grid, or the result depends on request order.
+                cached_interval = getattr(raw_cached, "interval", None)
+                if (
+                    raw_cached is not None
+                    and interval is not None
+                    and cached_interval is not None
+                    and not pd.isna(cached_interval)
+                    and pd.Timedelta(cached_interval) != pd.Timedelta(interval)
+                ):
+                    raw_cached = None
                 if raw_cached is not None:
                     if hasattr(raw_cached, 'copy'):
                         raw_cached = raw_cached.copy()
