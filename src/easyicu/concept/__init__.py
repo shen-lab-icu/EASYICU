@@ -2966,57 +2966,22 @@ class ConceptResolver:
                                         # DuckDB convert_unit inline — CASE WHEN unit filter → convert, ELSE → raw
                                         _idtbl_val_expr = f'TRY_CAST("{_idtbl_val_var}" AS DOUBLE)'
                                         if is_convert_unit and source.callback:
-                                            import re as _re_cu
-                                            _cu_m = _re_cu.match(r"convert_unit\((.+)\)", source.callback.strip(), _re_cu.DOTALL)
-                                            if _cu_m:
-                                                _cu_args_str = _cu_m.group(1)
-                                                _cu_args = []
-                                                _cu_lvl, _cu_cur = 0, []
-                                                for _cu_ch in _cu_args_str:
-                                                    if _cu_ch == '(': _cu_lvl += 1
-                                                    elif _cu_ch == ')': _cu_lvl -= 1
-                                                    elif _cu_ch == ',' and _cu_lvl == 0:
-                                                        _cu_args.append(''.join(_cu_cur).strip())
-                                                        _cu_cur = []
-                                                        continue
-                                                    _cu_cur.append(_cu_ch)
-                                                if _cu_cur: _cu_args.append(''.join(_cu_cur).strip())
-                                                # Get unit column name
-                                                _cu_unit_col = None
-                                                try:
-                                                    _cu_tcfg = data_source.config.get_table(source.table)
-                                                    _cu_unit_col = getattr(_cu_tcfg.defaults, 'unit_var', None)
-                                                except Exception:
-                                                    pass
-                                                if not _cu_unit_col:
-                                                    # Fallback: known unit column names per DB
-                                                    _cu_unit_col = {'aumc': 'unitname', 'sic': 'Unit'}.get(db_name, 'valueuom')
-                                                _cu_filter = _cu_args[2].strip().strip("'\"") if len(_cu_args) > 2 else None
-                                                _cu_first = _cu_args[0].strip() if _cu_args else ''
-                                                _cu_bm = _re_cu.match(r"binary_op\(`(.+?)`,\s*(.+)\)", _cu_first)
-                                                if _cu_bm and _cu_filter and _cu_unit_col:
-                                                    _cu_op = _cu_bm.group(1)
-                                                    _cu_factor = _cu_bm.group(2)
-                                                    _idtbl_val_expr = (
-                                                        f'CASE WHEN REGEXP_MATCHES(LOWER("{_cu_unit_col}"), \'{_cu_filter}\') '
-                                                        f'THEN TRY_CAST("{_idtbl_val_var}" AS DOUBLE) {_cu_op} {_cu_factor} '
-                                                        f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
-                                                    )
-                                                    _convert_unit_callback_for_duckdb = True
-                                                elif _cu_first == 'set_val(NA)' and _cu_filter and _cu_unit_col:
-                                                    _idtbl_val_expr = (
-                                                        f'CASE WHEN REGEXP_MATCHES(LOWER("{_cu_unit_col}"), \'{_cu_filter}\') '
-                                                        f'THEN NULL '
-                                                        f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
-                                                    )
-                                                    _convert_unit_callback_for_duckdb = True
-                                                elif _cu_first == 'fahr_to_cels' and _cu_filter and _cu_unit_col:
-                                                    _idtbl_val_expr = (
-                                                        f'CASE WHEN REGEXP_MATCHES(LOWER("{_cu_unit_col}"), \'{_cu_filter}\') '
-                                                        f'THEN (TRY_CAST("{_idtbl_val_var}" AS DOUBLE) - 32.0) * 5.0 / 9.0 '
-                                                        f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
-                                                    )
-                                                    _convert_unit_callback_for_duckdb = True
+                                            _cu_unit_col = None
+                                            try:
+                                                _cu_tcfg = data_source.config.get_table(source.table)
+                                                _cu_unit_col = getattr(_cu_tcfg.defaults, 'unit_var', None)
+                                            except Exception:
+                                                pass
+                                            if not _cu_unit_col:
+                                                # Fallback: known unit column names per DB
+                                                _cu_unit_col = {'aumc': 'unitname', 'sic': 'Unit'}.get(db_name, 'valueuom')
+                                            from .duckdb_convert_unit import convert_unit_value_sql
+                                            _cu_expr = convert_unit_value_sql(source.callback, _idtbl_val_var, _cu_unit_col)
+                                            if _cu_expr is None:
+                                                # An unexpressed callback must not be published as applied.
+                                                raise ValueError(f'convert_unit not expressible in SQL: {source.callback}')
+                                            _idtbl_val_expr = _cu_expr
+                                            _convert_unit_callback_for_duckdb = True
                                         # Query: GROUP BY patient, MEDIAN(value). The alias keeps
                                         # the configured id spelling: DuckDB returns a column as
                                         # the file spells it (MIMIC-III exports ICUSTAY_ID).
