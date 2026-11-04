@@ -184,7 +184,7 @@ def test_batch4_hirid_scope_matches_audit(cdict):
     # 2026-07-17 recall: added the IV concentrates 1000080 'K-Cl conc' (3,421 pts) and
     # 1000082 'K-Pi conc' (487 pts) that are added to infusions, on top of the bagged products.
     assert {1000396, 1000395, 1000836, 1000080, 1000082}.issubset(set(hirid_k["ids"]))
-    assert hirid_k["callback"] == "transform_fun(set_val(TRUE))"
+    assert hirid_k["callback"] == "transform_fun(comp_na(`>`, 0))"
     assert {1000612, 1000393}.isdisjoint(set(hirid_k["ids"])), "oral potassium must stay out"
 
     for c in ["albumin_iv"]:

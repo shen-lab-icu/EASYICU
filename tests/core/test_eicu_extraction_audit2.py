@@ -198,7 +198,8 @@ def test_phenytoin_is_an_in_icu_medication_order_not_a_home_medication(tmp_path,
         "writtenineicu": ["No"], "drugadmitfrequency": [""],
     })
     source = _eicu_source(tmp_path, database, medication=medication, admissiondrug=home)
-    assert _hourly(source, "phenytoin", aggregate="max") == {2.0: True, 5.0: True}
+    # The oral order at minute 120 is not IV phenytoin (audit round 3).
+    assert _hourly(source, "phenytoin", aggregate="max") == {5.0: True}
 
 
 # --- vasopressin ---------------------------------------------------------------

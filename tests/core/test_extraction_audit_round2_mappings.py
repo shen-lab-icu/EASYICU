@@ -280,7 +280,8 @@ def test_g6_g7_supp_o2_reads_oxygen_flow_everywhere():
     assert "o2_flow" in DICTIONARY["supp_o2"]["concepts"]
     assert 223834 in _ids("o2_flow", "miiv")
     assert {470, 223834} <= _ids("o2_flow", "mimic")
-    assert _ids("o2_flow", "eicu") == {"LPM O2"}
+    # eICU charts the flow as 'O2 L/%' and 'Oxygen Flow Rate' (audit round 3).
+    assert {"LPM O2", "Oxygen Flow Rate"} <= _ids("o2_flow", "eicu")
 
 
 def test_g8_safi_is_pulse_oximetry_and_tco2_is_arterial():
@@ -297,12 +298,23 @@ def test_h7_carevue_iabp_setting_is_mechanical_support(dictionary):
 
 def test_h5_h6_arterial_line_channels():
     assert {225309} <= _ids("sbp", "miiv") and {225310} <= _ids("dbp", "miiv")
-    invasive = [s for s in _sources("map", "eicu") if s.get("table") == "nursecharting"]
-    assert invasive and {s["source_channel"] for s in invasive} == {"invasive"}
+    charted = {
+        s["ids"][0]: s["source_channel"] for s in _sources("map", "eicu") if s.get("table") == "nursecharting"
+    }
+    # Charted non-invasive means are the nibp channel (audit round 3).
+    assert charted == {
+        "Invasive BP Mean": "invasive",
+        "Arterial Line MAP (mmHg)": "invasive",
+        "Non-Invasive BP Mean": "nibp",
+    }
     for concept in ("hr", "resp", "spo2"):
         assert DICTIONARY[concept]["source_channel_priority"] == ["monitor", "charted"]
         channels = {s["table"]: s["source_channel"] for s in _sources(concept, "eicu")}
-        assert channels == {"vitalperiodic": "monitor", "nursecharting": "charted"}
+        expected = {"vitalperiodic": "monitor", "nursecharting": "charted"}
+        if concept == "resp":
+            # Ventilator 'Total RR' is charted too (audit round 3).
+            expected["respiratorycharting"] = "charted"
+        assert channels == expected
 
 
 def test_w2_weight_fallbacks_rank_after_admission_weight():
@@ -338,8 +350,11 @@ def test_v5_hirid_syringes_within_five_minutes_are_one_episode():
 
 
 def test_p6_sic_tidal_volume_below_100_ml_is_missing():
-    [source] = _sources("tidal_vol", "sic")
-    assert source["ids"] == [718] and source["callback"] == "transform_fun(na_below(100))"
+    # 718 'TV (exp)' minus 2013 admissions (minute volume); inspiratory 717 fills
+    # hours without it (audit round 3).
+    sources = {s["ids"][0]: s["callback"] for s in _sources("tidal_vol", "sic")}
+    assert set(sources) == {717, 718}
+    assert all("transform_fun(na_below(100))" in callback for callback in sources.values())
 
 
 def test_s8_hirid_items_reach_their_concepts():

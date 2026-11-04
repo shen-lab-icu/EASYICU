@@ -647,6 +647,8 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # Charted plateau before the PIP/PEEP consistency check; plateau_pres is
     # the published concept (2026-11-04 audit round 3, R3-18).
     'plateau_pres_raw',
+    # Non-urine output; surfaced through fluid_balance (2026-11-04 audit round 3).
+    'other_output_ml',
 }
 
 # 双语显示名称映射（优化：更清晰的命名区分评分vs诊断，包含准确特征数量）

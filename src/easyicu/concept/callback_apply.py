@@ -854,7 +854,20 @@ def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
     return frame.loc[~status.isin(excluded_lower).fillna(False)]
 
 
-def _drop_declared_row_exclusions(frame: pd.DataFrame, source) -> pd.DataFrame:
+def _declared_filter_column(frame: pd.DataFrame, source, column: str, concept_name):
+    """Return the column a row filter names, after the loader's renaming.
+
+    The loader renames a source's value column to the concept name, so a filter
+    on ``val_var`` (MIMIC 223849 'Standby') reads the concept column.
+    """
+    if column in frame.columns:
+        return frame[column]
+    if concept_name and column == getattr(source, "value_var", None) and concept_name in frame.columns:
+        return frame[concept_name]
+    return None
+
+
+def _drop_declared_row_exclusions(frame: pd.DataFrame, source, concept_name=None) -> pd.DataFrame:
     """Apply a source's declared row filters before any value callback.
 
     ``require_empty_var`` keeps rows whose named column is empty: an eICU HICL
@@ -862,11 +875,16 @@ def _drop_declared_row_exclusions(frame: pd.DataFrame, source) -> pd.DataFrame:
     1,324 named warfarin orders.  ``exclude_regex`` maps a column to a pattern;
     a row matching any pattern is dropped (eICU potassium given by mouth or tube
     is not intravenous replacement).  2026-11-04 audit round 3, F-12/F-13.
+    ``require_regex`` maps a column to a pattern every kept row must match; an
+    empty value does not match (MIMIC-III 640 'Significant Events' is an
+    extubation only when it says so; an eICU differential is a percentage only
+    in rows reported in %).
     """
     params = getattr(source, "params", None) or {}
     empty_var = params.get("require_empty_var")
     patterns = params.get("exclude_regex") or {}
-    if frame is None or frame.empty or (not empty_var and not patterns):
+    required = params.get("require_regex") or {}
+    if frame is None or frame.empty or (not empty_var and not patterns and not required):
         return frame
     keep = pd.Series(True, index=frame.index)
     if empty_var:
@@ -875,10 +893,17 @@ def _drop_declared_row_exclusions(frame: pd.DataFrame, source) -> pd.DataFrame:
         text = frame[empty_var].astype("string").str.strip()
         keep &= (text.isna() | text.eq("")).fillna(True)
     for column, pattern in dict(patterns).items():
-        if column not in frame.columns:
+        values = _declared_filter_column(frame, source, column, concept_name)
+        if values is None:
             raise KeyError(f"exclude_regex column {column!r} needs that column in extra_vars")
-        hit = frame[column].astype("string").str.contains(str(pattern), regex=True, na=False)
+        hit = values.astype("string").str.contains(str(pattern), regex=True, na=False)
         keep &= ~hit.fillna(False)
+    for column, pattern in dict(required).items():
+        values = _declared_filter_column(frame, source, column, concept_name)
+        if values is None:
+            raise KeyError(f"require_regex column {column!r} needs that column in extra_vars")
+        hit = values.astype("string").str.contains(str(pattern), regex=True, na=False)
+        keep &= hit.fillna(False)
     return frame.loc[keep.to_numpy()]
 
 
@@ -907,7 +932,7 @@ def _apply_callback(
     # A source's excluded statuses (MIMIC Rewritten orders, eICU cancelled
     # medication orders) are never data, whatever the value callback.
     frame = _drop_excluded_statuses(frame, source)
-    frame = _drop_declared_row_exclusions(frame, source)
+    frame = _drop_declared_row_exclusions(frame, source, concept_name)
     callback = source.callback
     if not callback:
         return frame
@@ -984,6 +1009,23 @@ def _apply_callback(
             frame, source=source, concept_name=concept_name,
             id_col="patientid", time_col=source.index_var or "datetime",
         )
+
+    # sic_exclude_admission_years(<year>, ...): a SICdb item whose meaning
+    # changed with the charting system.  In 2013 admissions 718 'TV (exp)'
+    # holds the minute volume (median 7.9 L/min; 281 rows of 100-2000 mL/min
+    # survived the tidal-volume bounds) (2026-11-04 audit round 3, M P6).
+    match = re.fullmatch(r"sic_exclude_admission_years\(([\d,\s]+)\)", expr)
+    if match:
+        years = {int(y) for y in re.findall(r"\d+", match.group(1))}
+        if frame.empty or "CaseID" not in frame.columns:
+            return frame
+        if data_source is None:
+            raise ValueError("sic_exclude_admission_years requires a data source for cases.AdmissionYear")
+        cases = data_source.load_table("cases", columns=["CaseID", "AdmissionYear"], verbose=False)
+        cases = getattr(cases, "data", cases)
+        by_case = cases.drop_duplicates(subset=["CaseID"], keep="last").set_index("CaseID")["AdmissionYear"]
+        year = pd.to_numeric(frame["CaseID"].map(by_case), errors="coerce")
+        return frame.loc[~year.isin(years).to_numpy()]
 
     if expr == "emar_administered":
         from .emar_administration import keep_administered
@@ -4308,7 +4350,10 @@ def _apply_callback(
             # Find index column for merging (time column)
             index_col = source.index_var
             if not index_col:
-                for possible_idx in ['measuredat', 'charttime', 'starttime', 'labresultoffset']:
+                # HiRID observations are indexed by datetime and SICdb by
+                # Offset; without them every HiRID ratio was unavailable
+                # (2026-11-04 audit round 3, M NEW-3).
+                for possible_idx in ['measuredat', 'charttime', 'starttime', 'labresultoffset', 'datetime', 'Offset']:
                     if possible_idx in frame.columns:
                         index_col = possible_idx
                         break

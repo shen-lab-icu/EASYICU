@@ -176,4 +176,4 @@ def test_batch3_hirid_and_sic_sources_match_audited_scope(cdict):
     assert cdict["pantoprazole"]["sources"]["sic"][0]["callback"] == "transform_fun(set_val(TRUE))"
     for c in ["vancomycin", "meropenem", "calcium_iv"]:
         hirid = cdict[c]["sources"]["hirid"][0]
-        assert hirid["callback"] == "transform_fun(set_val(TRUE))"
+        assert hirid["callback"] == "transform_fun(comp_na(`>`, 0))"

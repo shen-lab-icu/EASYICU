@@ -280,7 +280,13 @@
       225949
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "223848=Ventilator Type (39280), 223849=Ventilator Mode (27164), 229314=Ventilator Mode Hamilton (16703), 220339=PEEP set (39364), 224700=Total PEEP Level (30177), 227577=BiPap Mode (3918), 227578=BiPap Mask (4262), 227579=BiPap EPAP (3840), 227580=BiPap IPAP (3604), 227583=Autoset/CPAP (2791), 225949=NIV Mask (2041)"
+     "_comment": "223848=Ventilator Type (39280), 223849=Ventilator Mode (27164), 229314=Ventilator Mode Hamilton (16703), 220339=PEEP set (39364), 224700=Total PEEP Level (30177), 227577=BiPap Mode (3918), 227578=BiPap Mask (4262), 227579=BiPap EPAP (3840), 227580=BiPap IPAP (3604), 227583=Autoset/CPAP (2791), 225949=NIV Mask (2041) | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows).",
+     "exclude_regex": {
+      "value": "(?i)^\\s*standby\\s*$"
+     },
+     "extra_vars": [
+      "value"
+     ]
     },
     {
      "table": "chartevents",
@@ -289,10 +295,10 @@
       226732
      ],
      "val_var": "value",
-     "regex": "High flow|HFNC|Bipap|CPAP|Endotracheal|Tracheostomy",
+     "regex": "High flow(?! neb)|HFNC|Bipap|CPAP|Endotracheal|Tracheostomy",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "226732=O2 Delivery Device: High flow nasal cannula (4056), Bipap mask (5762), CPAP mask (2993), Endotracheal tube (35879), Tracheostomy tube (3672)"
+     "_comment": "226732=O2 Delivery Device: High flow nasal cannula (4056), Bipap mask (5762), CPAP mask (2993), Endotracheal tube (35879), Tracheostomy tube (3672) | 2026-11-04 audit round 3 (full-dictionary M): 'High flow neb' is an aerosol mask (18,878 rows; 1,472 stays had only it), not high-flow nasal oxygen."
     }
    ],
    "eicu": [
@@ -395,7 +401,13 @@
       225949
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask"
+     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows).",
+     "exclude_regex": {
+      "value": "(?i)^\\s*standby\\s*$"
+     },
+     "extra_vars": [
+      "value"
+     ]
     },
     {
      "table": "chartevents",
@@ -421,7 +433,13 @@
       225949
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask"
+     "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask | 2026-11-04 audit round 3 (full-dictionary M): 223849 'Ventilator Mode' rows reading Standby are a ventilator on standby, not support (10,127 rows).",
+     "exclude_regex": {
+      "value": "(?i)^\\s*standby\\s*$"
+     },
+     "extra_vars": [
+      "value"
+     ]
     },
     {
      "table": "chartevents",
@@ -610,6 +628,15 @@
      "ids": "Motor",
      "table": "nursecharting",
      "sub_var": "nursingchartcelltypevalname"
+    },
+    {
+     "ids": [
+      "Best Motor Response",
+      "Motor Response"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): GCS motor charted under the 'Best Motor Response'/'Motor Response' labels (23,740 stays without a 'Motor' row), as mgcs."
     }
    ],
    "aumc": [
@@ -697,21 +724,7 @@
      "regex": "^Positive$",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "228332=Delirium assessment: Positive=119052 records (22462 stays), Negative=361125, UTA=130455"
-    },
-    {
-     "table": "chartevents",
-     "sub_var": "itemid",
-     "ids": [
-      229326,
-      228337,
-      228300
-     ],
-     "val_var": "value",
-     "regex": "^Yes|Positive|Acute",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "229326=CAM-ICU MS Change (46961), 228337=CAM-ICU MS Change (23703), 228300=CAM-ICU MS change (1665) - Yes indicates positive"
+     "_comment": "228332=Delirium assessment: Positive=119052 records (22462 stays), Negative=361125, UTA=130455 | 2026-11-04 audit round 3 (full-dictionary M): only a 'Positive' overall CAM-ICU result is delirium; MIMIC-III marked every charted result TRUE (Negative 26,462, UTA 10,960 of 42,780 rows). A single CAM-ICU feature (228300 'Yes (Continue)' is feature 1; 228337 and 229326 are later features) is not a positive result and is no longer mapped."
     }
    ],
    "eicu": [
@@ -750,19 +763,7 @@
      "regex": "^Positive$",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "228332=Delirium assessment: Positive (MetaVision)"
-    },
-    {
-     "table": "chartevents",
-     "sub_var": "itemid",
-     "ids": [
-      228300
-     ],
-     "val_var": "value",
-     "regex": "^Yes|Positive|Acute",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "228300=CAM-ICU MS Change (MetaVision)"
+     "_comment": "228332=Delirium assessment: Positive (MetaVision) | 2026-11-04 audit round 3 (full-dictionary M): only a 'Positive' overall CAM-ICU result is delirium; MIMIC-III marked every charted result TRUE (Negative 26,462, UTA 10,960 of 42,780 rows). A single CAM-ICU feature (228300 'Yes (Continue)' is feature 1; 228337 and 229326 are later features) is not a positive result and is no longer mapped."
     }
    ],
    "mimic_demo": [
@@ -776,19 +777,7 @@
      "regex": "^Positive$",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "228332=Delirium assessment: Positive (MetaVision)"
-    },
-    {
-     "table": "chartevents",
-     "sub_var": "itemid",
-     "ids": [
-      228300
-     ],
-     "val_var": "value",
-     "regex": "^Yes|Positive|Acute",
-     "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "228300=CAM-ICU MS Change (MetaVision)"
+     "_comment": "228332=Delirium assessment: Positive (MetaVision) | 2026-11-04 audit round 3 (full-dictionary M): only a 'Positive' overall CAM-ICU result is delirium; MIMIC-III marked every charted result TRUE (Negative 26,462, UTA 10,960 of 42,780 rows). A single CAM-ICU feature (228300 'Yes (Continue)' is feature 1; 228337 and 229326 are later features) is not a positive result and is no longer mapped."
     }
    ]
   }
@@ -822,6 +811,15 @@
      ],
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "IABP: 224309=Assisted Systole (1232), 224652=Unassisted Systole (1230), 224654=PAEDP (1229), 224311=BAEDP (1229), 224310=Augmented Diastole (1229), 224322=IABP Mean (1226), 227980=IABP Setting (1175), 228866=Plateau Pressure IABP (900), 225979=IABP Size (1154); Impella: 228154=Flow Rate (220), 228156=Performance (223), 228151=Aortic Pressure Diastolic (220), 228158=Purge Pressure (220); 228198=Tandem Heart Flow (41); 229254=Flow LVAD (11); 220128=RVAD Flow (6)"
+    },
+    {
+     "table": "procedureevents",
+     "sub_var": "itemid",
+     "ids": [
+      224272
+     ],
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): procedureevents 224272 'IABP line' (669 rows, 605 stays), as in concept-dict."
     }
    ],
    "eicu": [
@@ -848,6 +846,18 @@
       6658
      ],
      "callback": "transform_fun(set_val(TRUE))"
+    },
+    {
+     "table": "processitems",
+     "sub_var": "itemid",
+     "ids": [
+      10430,
+      9164
+     ],
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): IABP device intervals 10430 'IABP' (442 rows/427 admissions, median 40 h) and 9164 'IABP femoralis' (89/86, median 42 h)."
     }
    ],
    "mimic": [
@@ -970,13 +980,17 @@
      "sub_var": "drughiclseqno",
      "callback": "transform_fun(set_val(TRUE))",
      "extra_vars": [
+      "drugname",
       "drugordercancelled"
      ],
      "excluded_statuses": [
       "true"
      ],
      "status_var": "drugordercancelled",
-     "_comment": "2026-11-03 audit round 2 (V3): orders with an empty drugname carry only the HICL: 2839 vasopressin, 2087 phenylephrine (named rows of the same HICL confirm the drug). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. 2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,487 rows in eICU v2.0). Cancelled orders are dropped."
+     "_comment": "2026-11-03 audit round 2 (V3): orders with an empty drugname carry only the HICL: 2839 vasopressin, 2087 phenylephrine (named rows of the same HICL confirm the drug). 2026-11-03 audit round 2 (D3): cancelled orders (drugordercancelled) are dropped. 2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (1,487 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
+     "exclude_regex": {
+      "drugname": "(?i)(?:vasopressin|phenylephrine|neo[- ]?synephrine|neosynsprine|milrinone|angiotensin)"
+     }
     },
     {
      "table": "infusiondrug",
@@ -999,7 +1013,8 @@
       7135
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5) | 2026-11-03 extraction audit: removed 9126 (ordercategory 'Niet iv Zalven/Crèmes/Druppels', eye drops). | 2026-11-03 extraction audit: added 7135 Isoprenaline (Isuprel) syringe-pump infusion."
+     "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5) | 2026-11-03 extraction audit: removed 9126 (ordercategory 'Niet iv Zalven/Crèmes/Druppels', eye drops). | 2026-11-03 extraction audit: added 7135 Isoprenaline (Isuprel) syringe-pump infusion. | 2026-11-04 audit round 3 (M NEW-2): an infusion covers every hour from its start to its end; only the start hour was marked (SICdb lost 69% of active vasopressin/phenylephrine hours).",
+     "dur_var": "stop"
     }
    ],
    "hirid": [
@@ -1011,7 +1026,8 @@
       113,
       1000793
      ],
-     "callback": "transform_fun(set_val(TRUE))"
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0."
     }
    ],
    "mimic": [
@@ -1024,7 +1040,14 @@
       221986
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone"
+     "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "table": "inputevents_cv",
@@ -1046,10 +1069,11 @@
       1593
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "1550=Vasopressin, 1593=Phenylephrin. 2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus.",
+     "_comment": "1550=Vasopressin, 1593=Phenylephrin. 2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus. | 2026-11-04 audit round 3 (M NEW-2): an infusion covers every hour from its start to its end; only the start hour was marked (SICdb lost 69% of active vasopressin/phenylephrine hours).",
      "extra_vars": [
       "IsSingleDose"
-     ]
+     ],
+     "dur_var": "OffsetDrugEnd"
     }
    ],
    "mimic_demo": [
@@ -1062,7 +1086,14 @@
       221986
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone"
+     "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone | 2026-11-04 audit round 3 (M V8): MetaVision 'Rewritten' rows are superseded entries, not administrations (insulin 11,687 rows; boolean drugs 9,050-23,233 rows each).",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
     },
     {
      "table": "inputevents_cv",
@@ -1118,7 +1149,13 @@
      "regex": "[Hh]aloperidol|[Qq]uetiapine|[Ss]eroquel|[Oo]lanzapine|[Zz]yprexa|[Rr]isperidone|[Rr]isperdal|[Zz]iprasidone|[Gg]eodon|[Aa]ripiprazole|[Aa]bilify",
      "class_name": "rgx_itm",
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "Per PADIS Guidelines: Haloperidol=16219, Quetiapine=14883, Olanzapine=13571, Risperidone=3847, Ziprasidone=672, Aripiprazole=2849 patients"
+     "_comment": "Per PADIS Guidelines: Haloperidol=16219, Quetiapine=14883, Olanzapine=13571, Risperidone=3847, Ziprasidone=672, Aripiprazole=2849 patients | 2026-11-04 audit round 3 (full-dictionary M): ophthalmic, otic, topical, vaginal, irrigation, inhaled, catheter-lock and desensitisation products are not systemic exposure (abx: 4,005 rows, 1,960 stays). Prescriptions stay the source: eMAR covers 28-31% of 2008-2013 ICU stays.",
+     "exclude_regex": {
+      "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b|butalbital"
+     },
+     "extra_vars": [
+      "drug"
+     ]
     }
    ],
    "eicu": [
@@ -1141,7 +1178,8 @@
     {
      "ids": [
       4137,
-      14015
+      14015,
+      1661
      ],
      "table": "medication",
      "sub_var": "drughiclseqno",
@@ -1151,9 +1189,13 @@
      ],
      "status_var": "drugordercancelled",
      "extra_vars": [
+      "drugname",
       "drugordercancelled"
      ],
-     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,300 rows in eICU v2.0). Cancelled orders are dropped."
+     "_comment": "2026-11-03 extraction audit 2 (S6): HICL codes whose named medication rows match this concept's name pattern (>=95% of named rows); they add the orders with an empty drugname (10,300 rows in eICU v2.0). Cancelled orders are dropped. | 2026-11-04 audit round 3 (full-dictionary M): HICL 1661 haloperidol lactate (23,092 rows, 12,617 stays) added. | 2026-11-04 audit round 3 (full-dictionary M): rows whose drugname matches the name source are already counted there; the HICL source adds the others.",
+     "exclude_regex": {
+      "drugname": "(?i)(?:haloperidol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify)"
+     }
     }
    ],
    "aumc": [
@@ -1184,8 +1226,8 @@
       1000595,
       1000780
      ],
-     "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "2026-07-18 fix: id 239 (Haloperidol inj) has ZERO records in released HiRID pharma. Real antipsychotics present in pharma_bucket: 1000370/1000371 Haldol inj/drops(haloperidol), 1000874/1000875 Seroquel/Quetiapin(quetiapine), 1001094/1001074 Zyprexa(olanzapine), 1000595(...), 1000780 Risperdal(risperidone). PADIS antipsychotic set."
+     "callback": "transform_fun(comp_na(`>`, 0))",
+     "_comment": "2026-07-18 fix: id 239 (Haloperidol inj) has ZERO records in released HiRID pharma. Real antipsychotics present in pharma_bucket: 1000370/1000371 Haldol inj/drops(haloperidol), 1000874/1000875 Seroquel/Quetiapin(quetiapine), 1001094/1001074 Zyprexa(olanzapine), 1000595(...), 1000780 Risperdal(risperidone). PADIS antipsychotic set. | 2026-11-04 audit round 3 (M R2-HIRID-42/NEW-1): a zero givendose is a pump start/stop marker, not an administration (739,720 of 10,535,890 rows of these HiRID sources; 569 patient-drug pairs had only zero doses), so the value is givendose > 0."
     }
    ],
    "mimic": [
@@ -1220,10 +1262,15 @@
      "table": "medication",
      "sub_var": "DrugID",
      "ids": [
-      1527
+      1527,
+      1440,
+      1432,
+      1766,
+      1641,
+      1912
      ],
      "callback": "transform_fun(set_val(TRUE))",
-     "_comment": "1527=Haloperidol"
+     "_comment": "1527=Haloperidol | 2026-11-04 audit round 3 (full-dictionary M): quetiapine 1440, risperidone 1432, olanzapine 1766, aripiprazole 1641 and ziprasidone 1912 added (the PADIS set mapped elsewhere)."
     }
    ],
    "mimic_demo": [
@@ -1361,8 +1408,8 @@
           12091,
           14838
         ],
-        "callback": "transform_fun(set_val(TRUE))",
-        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record)."
+        "callback": "transform_fun(comp_na(`>`, 0))",
+        "_comment": "2026-11-03 coverage fix: hourly treatment evidence from numericitems, beyond the processitems episodes. 8805 CVVH Onttrokken and 12091 CVVH-Vochtverlies stand are CVVH fluid-removal readings (89%/94% of rows inside a CVVH process +-1 h); 8806 Hemodialyse onttrekken and 8808 Peritoneaaldialyse are HD/PD session volumes, which processitems mostly lacks (16363 has 46 admissions); 14838 MFT_TMP is the measured transmembrane pressure of a running circuit (97% inside a process; the other MFT measured pressures 14835-14837/14839 are written in the same machine record, so one carries the same hourly evidence). Excluded: MFT/CVVH settings (ingesteld), alarm limits (onder/bovengrens) and 'behandel afspraken' orders, which can outlast the treatment. | 2026-11-04 audit round 3 (M rrt-legacy): added the legacy Braun CRRT circuit pressures 7666/7667/7668/7671 (522 stays; 21 stays had no other RRT record). | 2026-11-04 audit round 3 (full-dictionary M): a zero (8808 'MFT_Krijgt_CVVH' = 0 in 173,634 rows of 555 stays) is no RRT."
       }
     ],
    "mimic": [

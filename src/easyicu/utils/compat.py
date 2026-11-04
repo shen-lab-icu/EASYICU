@@ -137,6 +137,8 @@ STATIC_CONCEPTS = {"age", "sex", "bmi", "height", "weight", "los_icu"}
 WINDOW_CONCEPTS = {
     "mech_vent", "vent_ind", "supp_o2",
     "rrt",  # Sources with explicit treatment intervals expand; point-only sources remain points.
+    "other_vaso",  # Likewise (2026-11-04 audit round 3, M NEW-2).
+    "mech_circ_support",  # MIIV IABP procedure intervals beside charted device rows.
     "norepi_rate", "epi_rate", "dobu_rate", "adh_rate",
     "dopa_rate", "phn_rate", "vaso_ind",
     # Sedation/analgesia rate concepts (2026-05-13)
@@ -179,6 +181,13 @@ def merged_window_duration_column(name: str, frame: pd.DataFrame, dur_var: Optio
 # can drop the window rows too).
 MIXED_POINT_WINDOW_CONCEPTS = {
     "rrt",
+    # Infusions with an end time (MIIV, MIMIC-III MetaVision, AUMC, SICdb)
+    # beside charted points (CareVue, eICU, HiRID); 2026-11-04 audit round 3,
+    # M NEW-2.
+    "other_vaso",
+    # MIMIC-IV procedureevents IABP intervals beside charted device settings
+    # (2026-11-04 audit round 3, full-dictionary M).
+    "mech_circ_support",
 }
 
 # 点事件概念（不应展开为连续时间序列）
