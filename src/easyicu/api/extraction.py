@@ -4221,7 +4221,7 @@ def _native_export_physical_value_columns(
     values accompany their pooled measurement without becoming public concepts.
     """
 
-    from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
+    from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS, SPECIMEN_STATUS_OUTPUT_COLUMNS
     from ..scores.urine_output import urine_availability_columns
 
     columns: List[str] = []
@@ -4230,6 +4230,7 @@ def _native_export_physical_value_columns(
         columns.append(concept)
         columns.extend(urine_availability_columns(concept))
         columns.extend(SOURCE_ITEM_OUTPUT_COLUMNS.get(concept, ()))
+        columns.extend(SPECIMEN_STATUS_OUTPUT_COLUMNS.get(concept, ()))
         event_time = _NATIVE_EXPORT_EVENT_TIME_COMPANIONS.get(concept)
         if event_time is not None:
             columns.append(event_time)
@@ -4243,7 +4244,10 @@ def _native_export_physical_value_columns(
 def _native_export_storage_kind(concept_id: str, dictionary) -> str:
     """Return the deterministic physical type family for one public concept."""
     from ..concept.catalog import CONCEPT_DICTIONARY
+    from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
 
+    if any(concept_id in columns for columns in SPECIMEN_STATUS_OUTPUT_COLUMNS.values()):
+        return "string"
     if any(
         str(concept_id).endswith(suffix)
         for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES

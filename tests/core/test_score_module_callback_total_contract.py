@@ -306,7 +306,12 @@ def test_every_score_module_exports_its_callback_total(
     # Other module fields may add keys where this score is unavailable. Keep
     # nulls in the comparison, so a publisher cannot invent a normal zero there.
     index = expected.index.union(published.index)
+    published, expected = published.reindex(index), expected.reindex(index)
+    if pd.api.types.is_numeric_dtype(published) and pd.api.types.is_numeric_dtype(expected):
+        # A nullable-integer total (pd.NA) and its float export (NaN) are the
+        # same missing value; pandas 3 no longer equates them across dtypes.
+        published, expected = published.astype("float64"), expected.astype("float64")
     pd.testing.assert_series_equal(
-        published.reindex(index), expected.reindex(index), check_dtype=False,
+        published, expected, check_dtype=False,
         check_exact=False, rtol=1e-6, atol=1e-6,
     )

@@ -86,6 +86,61 @@ def stamp_source_item_columns(
     return frame
 
 
+def stamp_specimen_status(
+    frame: pd.DataFrame, original: pd.DataFrame, source: ConceptSource, column: str,
+) -> pd.DataFrame:
+    """Carry each row's R6 specimen status as an ordinal through aggregation.
+
+    A specimen callback stamps ``specimen_status`` per row; a source whose item
+    is arterial by name declares it once (``specimen_status`` parameter).
+    """
+    from ..concept_output_sources import SPECIMEN_STATUS_LEVELS
+
+    codes = {name: float(rank) for rank, name in enumerate(SPECIMEN_STATUS_LEVELS, start=1)}
+    if "specimen_status" in original.columns:
+        status = original["specimen_status"]
+    else:
+        status = pd.Series(source.params.get("specimen_status"), index=original.index, dtype="object")
+    unknown = set(status.dropna().unique()) - set(codes)
+    if unknown:
+        raise SourceChannelContractError("specimen_status_not_admitted", f"{column}: {sorted(map(str, unknown))}")
+    frame = frame.copy()
+    frame[column] = status.map(codes).astype("float64")
+    return frame
+
+
+def decode_specimen_status(frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    """Turn aggregated specimen ordinals back into their status names."""
+    from ..concept_output_sources import SPECIMEN_STATUS_LEVELS
+
+    names = {float(rank): name for rank, name in enumerate(SPECIMEN_STATUS_LEVELS, start=1)}
+    present = [column for column in columns if column in frame.columns]
+    if not present:
+        return frame
+    frame = frame.copy()
+    for column in present:
+        values = frame[column]
+        if pd.api.types.is_numeric_dtype(values):
+            frame[column] = values.map(names).astype("object")
+    return frame
+
+
+def specimen_status_definition(definition: ConceptDefinition, column: str) -> ConceptDefinition:
+    """Categorical metadata of an arterial gas concept's specimen-status companion."""
+    from ..concept_output_sources import SPECIMEN_STATUS_LEVELS
+
+    return replace(
+        definition, units=["category"], minimum=None, maximum=None, class_name="fct_cncpt",
+        levels=list(SPECIMEN_STATUS_LEVELS), aggregate=None,
+        description=(
+            f"Specimen evidence of {definition.name} in the hour (R6, weakest admitted row): "
+            "explicit_arterial = recorded arterial specimen; label_defined_arterial = item or "
+            "analyte arterial by name; co_measured_arterial = same stay and time as an "
+            "arterial PaO2/PaCO2. Venous or unknown specimens are excluded and counted, not published."
+        ),
+    )
+
+
 def source_item_definition(definition: ConceptDefinition, column: str) -> ConceptDefinition:
     """Narrow a physical item's metadata to its exact source identity."""
     for database, sources in definition.sources.items():
@@ -307,7 +362,10 @@ __all__ = [
     "select_preferred_channel",
     "source_channel",
     "source_item_definition",
+    "specimen_status_definition",
     "stamp_rank",
     "stamp_source_item_columns",
+    "stamp_specimen_status",
+    "decode_specimen_status",
     "validate_sources",
 ]

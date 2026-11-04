@@ -97,6 +97,18 @@ SOURCE_ITEM_OUTPUT_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
                         (6699, 12279, 12282, 12329, 12369, 16246, 20134)),
 })
 
+#: R6 specimen evidence of arterial blood-gas concepts, weakest first. An hour
+#: publishes the weakest status among its admitted rows; excluded rows
+#: (``excluded_venous``/``excluded_unknown``) are counted in the source audit,
+#: never published.
+SPECIMEN_STATUS_LEVELS: tuple[str, ...] = (
+    "co_measured_arterial", "label_defined_arterial", "explicit_arterial",
+)
+SPECIMEN_STATUS_OUTPUT_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    concept: (f"{concept}_specimen_status",)
+    for concept in ("po2", "pco2", "ph", "sao2", "be", "tco2")
+})
+
 
 @dataclass(frozen=True, slots=True)
 class CompositeLoaderSupport:
@@ -317,6 +329,8 @@ def compile_concept_load_plan(output_concepts: Sequence[str]) -> ConceptLoadPlan
 
 __all__ = [
     "SOURCE_ITEM_OUTPUT_COLUMNS",
+    "SPECIMEN_STATUS_LEVELS",
+    "SPECIMEN_STATUS_OUTPUT_COLUMNS",
     "COMPOSITE_CONCEPT_OUTPUT_SOURCES",
     "COMPOSITE_LOADER_SUPPORT",
     "CONCEPT_OUTPUT_LOAD_SOURCES",
