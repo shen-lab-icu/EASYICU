@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import logging
 import re
@@ -781,6 +781,8 @@ class ICUDataSource:
         """Load and wrap a table according to the stored configuration."""
         
         table_cfg = self.config.get_table(table_name)
+        if self.config.name == 'miiv' and table_name == 'labevents':
+            return load_miiv_labs(self, columns, filters)
 
         # ✅ 关键修复：提前保存原始 stay_id 过滤器值
         # 因为后续对于 hospital tables (labevents等) 会将 stay_id 转换成 subject_id/hadm_id
@@ -806,7 +808,10 @@ class ICUDataSource:
                 preloaded_frame = self._preloaded_tables[table_name]
 
         if preloaded_frame is not None:
-            frame_view = preloaded_frame
+            frame_view = drop_mimic_chart_errors(preloaded_frame, self.config.name, table_name)
+            if self.config.name in {'mimic', 'mimic_demo'}:
+                frame_view = frame_view.rename(columns=lambda c: c.lower() if isinstance(c, str) else c)
+            columns = mimic_source_columns(self.config.name, table_name, columns, frame_view.columns)
 
             # 应用列过滤（避免提前复制整张表）
             if columns is not None:
@@ -1570,13 +1575,11 @@ class ICUDataSource:
                         patient_ids_filter=patient_ids_filter,
                     )
                     
-                    if not frame.empty:
-                        # Cache and return
-                        if enable_caching:
-                            with self._lock:
-                                self._table_cache[cache_key] = frame
-                        return frame
-                    # If CSV fallback returns empty, continue to normal error handling
+                    # An error-only or unmatched selection is a valid empty source.
+                    if enable_caching:
+                        with self._lock:
+                            self._table_cache[cache_key] = frame
+                    return frame
             
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
@@ -1609,7 +1612,7 @@ class ICUDataSource:
                 )
         if callable(loader):
             frame = loader()
-        else:
+        elif loader is not None:
             frame = self._read_file(
                 Path(loader), columns, 
                 patient_ids_filter=patient_ids_filter, 
@@ -1628,6 +1631,8 @@ class ICUDataSource:
         if should_lowercase and hasattr(frame, 'columns'):
             frame.columns = [c.lower() if isinstance(c, str) else c for c in frame.columns]
 
+        frame = drop_mimic_chart_errors(frame, db_name, table_name)
+        columns = mimic_source_columns(db_name, table_name, columns, frame.columns)
         if columns is not None:
             if should_lowercase:
                 # MIMIC-III: 列名匹配时也转为小写
@@ -1973,6 +1978,7 @@ class ICUDataSource:
             itemid_filter_config = ('variableid', HIRID_OBSERVATIONS_VARIABLEIDS)
         
         # Handle directory (partitioned data)
+        columns = mimic_disk_columns(self, path, table_name, columns)
         if path.is_dir():
             if DEBUG_MODE:
                 logger.debug(f"读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
@@ -2425,6 +2431,9 @@ class ICUDataSource:
         
         # Build WHERE conditions
         where_conditions = []
+        quality_sql = mimic_chart_quality_sql(self.config.name, 'chartevents', pd.read_csv(csv_path, nrows=0).columns, alias='') if csv_path.name.upper().startswith('CHARTEVENTS') else ''
+        if quality_sql:
+            where_conditions.append(quality_sql.removeprefix(' AND '))
         
         # ITEMID filter (critical for performance - filters 330M rows to small subset)
         if itemid_filter:
@@ -3099,9 +3108,21 @@ class ICUDataSource:
                 f"Failed to initialise dataset for table '{table_name}' at {root_path}: {exc}"
             ) from exc
 
+        # Native MIMIC-III headers are uppercase; Arrow projection and filters
+        # are case-sensitive, unlike the DuckDB path.
+        if self.config.name in {'mimic', 'mimic_demo'}:
+            by_lower = {c.lower(): c for c in dataset.schema.names}
+            if columns is not None:
+                columns = [by_lower.get(c.lower(), c) for c in columns]
+            if patient_ids_filter is not None:
+                patient_ids_filter = replace(
+                    patient_ids_filter,
+                    column=by_lower.get(patient_ids_filter.column.lower(), patient_ids_filter.column),
+                )
         filter_expr = self._build_dataset_filter(patient_ids_filter) if patient_ids_filter else None
         logger.info("📁 Using PyArrow dataset for %s (%s)", table_name, root_path)
 
+        columns = mimic_source_columns(self.config.name, table_name, columns, dataset.schema.names)
         requested_columns = list(columns) if columns is not None else None
         effective_columns: Optional[List[str]] = None
         missing_columns: List[str] = []
@@ -3756,12 +3777,21 @@ def load_bucketed_table_aggregated(
         _mimic_where = _mimic_where.replace(
             f"{value_column} IS NOT NULL", f"o.{value_column} IS NOT NULL"
         )
+        _mimic_where += mimic_chart_quality_sql(db_name, table_name, raw_columns_by_lower.values())
 
         _read_func = (
             "read_csv" if str(icustays_path).endswith(".csv.gz") else "read_parquet"
         )
 
-        if join_left_col == "hadm_id":
+        if db_name == 'miiv' and table_name == 'labevents':
+            query = miiv_lab_aggregation_sql(
+                glob_pattern,
+                f"SELECT * FROM {_read_func}('{_duckdb_path(icustays_path)}')",
+                ', '.join(str(int(i)) for i in itemids), patient_ids, _interval_hours,
+                _mimic_agg_expr, time_col, value_column,
+                source_columns=raw_columns_lower,
+            )
+        elif join_left_col == "hadm_id":
             # Hospital tables (labevents, prescriptions, etc.): need rolling join
             # R ricu uses data.table rolling join with roll=-Inf on outtime:
             # - For each event, find the ICU stay with smallest outtime >= charttime (NOCB)
@@ -4083,7 +4113,7 @@ def load_bucketed_table_aggregated(
             return conn.execute(sql).fetchdf()
 
     try:
-        df = _execute_aggregation(query)
+        df = finish_miiv_lab_frame(_execute_aggregation(query))
         bounds_diagnostics = None
         if _needs_bounds_diagnostics and _raw_count_col in df.columns:
             raw_non_null = int(
@@ -4111,7 +4141,7 @@ def load_bucketed_table_aggregated(
                     raise RuntimeError(
                         "Could not construct unbounded retry for unit-suspect values"
                     )
-                df = _execute_aggregation(unbounded_query)
+                df = finish_miiv_lab_frame(_execute_aggregation(unbounded_query))
                 unbounded_retry = True
             df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
             bounds_diagnostics = {
@@ -4298,6 +4328,7 @@ def load_bucketed_table_multi_aggregated(
         # 而 Python 端 `in` 判断区分大小写，会错判 hospital_tables 是否需要 hadm_id rolling join。
         # DuckDB 本身 case-insensitive，所以 SQL 端无需改动，只需要这里小写化比较。
         raw_columns_lower = {str(c).lower() for c in raw_columns}
+        non_null_clause += mimic_chart_quality_sql(db_name, table_name, raw_columns)
         patient_filter_col = id_col
         patient_filter_values = patient_ids
         join_left_col = id_col
@@ -4324,7 +4355,14 @@ def load_bucketed_table_multi_aggregated(
         p_clause = _patient_clause(patient_filter_col, patient_filter_values)
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
 
-        if join_left_col == 'hadm_id':
+        if _base_db == 'miiv' and table_name == 'labevents':
+            query = miiv_lab_aggregation_sql(
+                glob_pattern,
+                f"SELECT * FROM {_read_func}('{_duckdb_path(icustays_path)}')",
+                all_ids_sql, patient_ids, _interval_hours, select_sql, time_col, value_column,
+                source_columns=raw_columns_lower,
+            )
+        elif join_left_col == 'hadm_id':
             # Hospital tables (labevents): need rolling join to assign events to correct ICU stay
             # Matches the single-concept load_bucketed_table_aggregated rolling JOIN approach
 
@@ -4529,6 +4567,7 @@ def load_bucketed_table_multi_aggregated(
         except Exception as fallback_error:
             _raise_if_duckdb_interrupted(fallback_error)
             raise
+    df = finish_miiv_lab_frame(df)
     logger.info(
         "Bucketed multi-concept DuckDB aggregation complete: %s concepts=%d itemids=%d -> %d rows",
         table_name,
@@ -4854,3 +4893,223 @@ enumerate_bucket_parquet_files = _enumerate_bucket_parquet_files
 __all__ = [
     "enumerate_bucket_parquet_files",
 ]
+
+
+# MIMIC source quality and MIIV lab attribution share these rules across all loaders.
+LAB_WINDOW_HOURS = 24
+LAB_AUDIT_ATTR = "easyicu_miiv_lab_attribution"
+LAB_OPTIONAL_COLUMNS = ("valueuom", "value", "specimen_id", "labevent_id")
+
+
+def mimic_source_columns(database: str, table: str, columns, available):
+    """Keep source quality/dimension fields even under minimal projection."""
+    if columns is None:
+        return None
+    optional = []
+    if database in {"mimic", "mimic_demo"} and table == "chartevents":
+        optional = ["error"]
+    elif database == "miiv" and table == "labevents":
+        optional = list(LAB_OPTIONAL_COLUMNS)
+    elif database in {"miiv", "mimic", "mimic_demo"} and table in {"inputevents", "inputevents_mv"}:
+        optional = ["rateuom", "patientweight", "statusdescription"]
+    by_lower = {str(c).lower(): c for c in available}
+    return list(dict.fromkeys([*columns, *(by_lower[c] for c in optional if c in by_lower)]))
+
+
+def mimic_disk_columns(source, path: Path, table: str, columns):
+    """Inspect only schemas/CSV headers to retain optional MIMIC fields."""
+    requested = mimic_source_columns(source.config.name, table, columns, ["error", "rateuom", "patientweight", "statusdescription", *LAB_OPTIONAL_COLUMNS])
+    if requested == columns:
+        return columns
+    if path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}:
+        files = enumerate_bucket_parquet_files(path) if path.is_dir() else [path]
+        available = source._get_parquet_columns_for_files(files)
+    elif path.name.lower().endswith((".csv", ".csv.gz")):
+        available = pd.read_csv(path, nrows=0).columns
+    else:
+        available = []
+    return mimic_source_columns(source.config.name, table, columns, available)
+
+
+def drop_mimic_chart_errors(frame: pd.DataFrame, database: str, table: str) -> pd.DataFrame:
+    """ERROR=1 is a rejected observation; NULL and zero remain usable."""
+    if database not in {"mimic", "mimic_demo"} or table != "chartevents":
+        return frame
+    error = next((c for c in frame if str(c).lower() == "error"), None)
+    if error is None:
+        return frame
+    rejected = pd.to_numeric(frame[error], errors="coerce").eq(1).fillna(False)
+    return frame.loc[~rejected].copy()
+
+
+def mimic_chart_quality_sql(database: str, table: str, columns, alias="o") -> str:
+    """SQL equivalent of the raw-source ERROR rule, before aggregation."""
+    if database not in {"mimic", "mimic_demo"} or table != "chartevents":
+        return ""
+    error = next((c for c in columns if str(c).lower() == "error"), None)
+    if error is None:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f" AND TRY_CAST({prefix}{_duckdb_identifier(error)} AS DOUBLE) IS DISTINCT FROM 1"
+
+
+def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="valuenum") -> str:
+    """One attribution policy shared by pandas sources and DuckDB aggregates.
+
+    Admission-linked rows retain the existing forward-outtime rolling rule.
+    NULL-admission rows require exactly one candidate ICU window, considering
+    every stay/admission of the subject, before filtering requested stays.
+    Only cross-channel duplicates are removed; equal independent events in
+    one channel keep their multiplicity.
+    """
+    return f"""
+    raw_events AS (SELECT * REPLACE (TRY_CAST({time_col} AS TIMESTAMP) AS {time_col}),
+        ROW_NUMBER() OVER () AS __lab_row FROM ({events_sql})),
+    all_stays AS (
+        SELECT DISTINCT subject_id, hadm_id, stay_id,
+            TRY_CAST(intime AS TIMESTAMP) AS intime, TRY_CAST(outtime AS TIMESTAMP) AS outtime
+        FROM ({stays_sql})
+    ),
+    hadm_ranked AS (
+        SELECT e.*, s.stay_id, s.hadm_id AS attributed_hadm_id, s.intime, s.outtime,
+            'hadm_id' AS lab_attribution_basis,
+            ROW_NUMBER() OVER (PARTITION BY e.__lab_row ORDER BY
+                CASE WHEN s.outtime >= e.{time_col} THEN s.outtime END ASC NULLS LAST,
+                s.outtime DESC, s.stay_id) AS __rank
+        FROM raw_events e JOIN all_stays s
+          ON e.subject_id = s.subject_id AND e.hadm_id = s.hadm_id
+        WHERE e.hadm_id IS NOT NULL
+    ),
+    hadm_assigned AS (SELECT * EXCLUDE (__rank) FROM hadm_ranked WHERE __rank = 1),
+    null_candidates AS (
+        SELECT e.*, s.stay_id, s.hadm_id AS attributed_hadm_id, s.intime, s.outtime,
+            'subject_id_charttime' AS lab_attribution_basis,
+            COUNT(*) OVER (PARTITION BY e.__lab_row) AS __candidates
+        FROM raw_events e JOIN all_stays s ON e.subject_id = s.subject_id
+        WHERE e.hadm_id IS NULL AND e.{time_col} BETWEEN
+            s.intime - INTERVAL '{LAB_WINDOW_HOURS} hours' AND s.outtime + INTERVAL '{LAB_WINDOW_HOURS} hours'
+    ),
+    unique_null AS (SELECT * EXCLUDE (__candidates) FROM null_candidates WHERE __candidates = 1),
+    null_kept AS (
+        SELECT n.* FROM unique_null n WHERE NOT EXISTS (
+            SELECT 1 FROM hadm_assigned h WHERE n.subject_id = h.subject_id AND n.stay_id = h.stay_id
+              AND n.{time_col} = h.{time_col} AND n.itemid = h.itemid
+              AND n.{value_col} IS NOT DISTINCT FROM h.{value_col}
+              AND n.valueuom IS NOT DISTINCT FROM h.valueuom
+              AND n.specimen_id IS NOT DISTINCT FROM h.specimen_id
+              AND n.labevent_id IS NOT DISTINCT FROM h.labevent_id
+              AND (n.{value_col} IS NOT NULL OR n.value IS NOT DISTINCT FROM h.value)
+        )
+    ),
+    assigned AS (SELECT * FROM hadm_assigned UNION ALL BY NAME SELECT * FROM null_kept),
+    lab_audit AS (
+        SELECT
+            (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates WHERE __candidates > 1) AS __audit_ambiguous_null_hadm_rows,
+            (SELECT COUNT(*) FROM raw_events WHERE hadm_id IS NULL) -
+                (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates) AS __audit_unmatched_null_hadm_rows,
+            (SELECT COUNT(*) FROM unique_null) - (SELECT COUNT(*) FROM null_kept) AS __audit_deduplicated_null_hadm_rows,
+            (SELECT COUNT(*) FROM null_kept) AS __audit_attributed_null_hadm_rows,
+            (SELECT COUNT(*) FROM hadm_assigned) AS __audit_hadm_rows
+    )"""
+
+
+def _lab_query(events_sql: str, stays_sql: str, result_sql: str, time_col="charttime", value_col="valuenum") -> str:
+    return f"""WITH {_lab_ctes(events_sql, stays_sql, time_col, value_col)},
+        lab_result AS ({result_sql})
+        SELECT r.*, a.* FROM lab_audit a LEFT JOIN lab_result r ON TRUE"""
+
+
+def finish_miiv_lab_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Retain audit counts even when every candidate was rejected."""
+    audit_cols = [c for c in frame if c.startswith("__audit_")]
+    if not audit_cols:
+        return frame
+    audit = {c.removeprefix("__audit_"): int(frame[c].iloc[0]) for c in audit_cols}
+    audit["window_before_hours"] = audit["window_after_hours"] = LAB_WINDOW_HOURS
+    frame = frame.loc[frame.stay_id.notna()].drop(columns=audit_cols).reset_index(drop=True)
+    frame.attrs[LAB_AUDIT_ATTR] = audit
+    logger.info("MIIV lab attribution: %s", audit)
+    return frame
+
+
+def miiv_lab_aggregation_sql(parquet_sql, stays_sql, itemids_sql, patient_ids, interval_hours,
+                             aggregate_sql, time_col="charttime", value_col="valuenum", *, source_columns) -> str:
+    subjects = ""
+    targets = ""
+    if patient_ids is not None:
+        literals = ", ".join(_duckdb_sql_literal(x) for x in patient_ids) or "NULL"
+        subjects = f" AND subject_id IN (SELECT subject_id FROM ({stays_sql}) WHERE stay_id IN ({literals}))"
+        targets = f"WHERE o.stay_id IN ({literals})"
+    optional = "".join(f", NULL AS {c}" for c in LAB_OPTIONAL_COLUMNS if c not in source_columns)
+    events = f"SELECT *{optional} FROM read_parquet({parquet_sql}, union_by_name=true) WHERE itemid IN ({itemids_sql}){subjects} AND {value_col} IS NOT NULL"
+    # Group on the ICU clock only after unique attribution and channel deduplication.
+    hour = f"FLOOR(EPOCH(o.{time_col} - o.intime) / 3600.0 / {interval_hours}) * {interval_hours}"
+    result = f"""SELECT o.stay_id, {hour} AS charttime, {aggregate_sql},
+        STRING_AGG(DISTINCT o.lab_attribution_basis, ',') AS lab_attribution_basis
+        FROM assigned o {targets} GROUP BY o.stay_id, {hour}"""
+    return _lab_query(events, stays_sql, result, time_col, value_col)
+
+
+def attribute_miiv_labs(frame: pd.DataFrame, source, patient_ids=None) -> pd.DataFrame:
+    """Map a raw MIIV lab frame; load all stays of its subjects for ambiguity."""
+    if frame.empty:
+        return frame.assign(stay_id=pd.Series(dtype="int64"), lab_attribution_basis=pd.Series(dtype="string"))
+    subjects = frame.subject_id.dropna().unique().tolist()
+    stays = source.load_table("icustays", filters=[FilterSpec("subject_id", FilterOp.IN, subjects)], verbose=False).data
+    raw = frame.drop(columns=["stay_id", "intime", "outtime", "attributed_hadm_id", "lab_attribution_basis"], errors="ignore").copy()
+    raw["charttime"] = pd.to_datetime(raw.charttime, errors="coerce")
+    for column in LAB_OPTIONAL_COLUMNS:
+        if column not in raw:
+            raw[column] = None
+    conn = _get_duckdb_connection()
+    conn.register("__miiv_labs", raw)
+    conn.register("__miiv_stays", stays)
+    try:
+        query = _lab_query("SELECT * FROM __miiv_labs", "SELECT * FROM __miiv_stays",
+                           "SELECT * EXCLUDE (__lab_row) FROM assigned")
+        result = finish_miiv_lab_frame(conn.execute(query).fetchdf())
+    finally:
+        conn.unregister("__miiv_labs")
+        conn.unregister("__miiv_stays")
+    if patient_ids is not None:
+        filters = patient_ids if isinstance(patient_ids, dict) else {"stay_id": patient_ids}
+        for column, values in filters.items():
+            # Keep the raw NULL hadm_id for provenance; selection uses the
+            # uniquely attributed admission, just as the source-load path does.
+            attributed_column = "attributed_hadm_id" if column == "hadm_id" else column
+            result = result.loc[result[attributed_column].isin(values)].copy()
+    result = result.drop(columns=["intime", "outtime"], errors="ignore")
+    result["stay_id"] = result.stay_id.astype("int64")
+    return result
+
+
+def load_miiv_labs(source, columns, filters):
+    """Use subject pushdown so a hadm/stay request retains NULL-hadm labs."""
+    filters = list(filters or [])
+    identity_filters = [f for f in filters if f.column in {"stay_id", "subject_id", "hadm_id"}]
+    stay_filters = list(identity_filters)
+    for spec in identity_filters:
+        if spec.metadata and 'original_stay_ids' in spec.metadata:
+            stay_filters.append(FilterSpec('stay_id', FilterOp.IN, spec.metadata['original_stay_ids']))
+    selected = source.load_table("icustays", filters=stay_filters or None, verbose=False).data
+    # The general source loader pushes down one identity filter. Intersect
+    # every requested identity here before extracting subjects and stays.
+    for spec in stay_filters:
+        selected = spec.apply(selected)
+    subjects = selected.subject_id.dropna().unique().tolist()
+    requested = None if columns is None else list(dict.fromkeys([
+        *columns, "subject_id", "hadm_id", "charttime", "itemid", "valuenum",
+    ]))
+    patient_filter = FilterSpec("subject_id", FilterOp.IN, subjects)
+    item_filter = next(((f.column, set(f.value)) for f in filters if f.column == "itemid" and f.op == FilterOp.IN), None)
+    with source._lock:
+        preloaded = source._preloaded_tables.get("labevents")
+    frame = (preloaded.copy() if preloaded is not None else source._load_raw_frame(
+        "labevents", requested, patient_ids_filter=patient_filter, concept_itemid_filter=item_filter))
+    frame = patient_filter.apply(frame)
+    for spec in filters:
+        if spec not in identity_filters:
+            frame = spec.apply(frame)
+    result = attribute_miiv_labs(frame, source, selected.stay_id.tolist())
+    return ICUTable(result, id_columns=["stay_id"], index_column="charttime",
+                    value_column="valuenum", unit_column="valueuom")

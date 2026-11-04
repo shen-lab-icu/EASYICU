@@ -3943,6 +3943,12 @@ class ConceptResolver:
                     if DEBUG_MODE:
                         logger.warning(f"patients 表关联失败: {e}")
             
+            if (data_source.config.name == 'miiv' and source.table == 'labevents'
+                    and 'stay_id' not in frame.columns):
+                from ..datasource import attribute_miiv_labs
+                frame = attribute_miiv_labs(frame, data_source, patient_ids)
+                id_columns = ['stay_id']
+
             # MIMIC-IV特殊处理：若表为labevents/microbiologyevents/inputevents，仅有subject_id，按时间窗口映射到对应ICU stay
             if DEBUG_MODE:
                 print(f"   📊 加载后数据: {source.table}, 行数={len(frame)}, itemid过滤={source.ids}")
