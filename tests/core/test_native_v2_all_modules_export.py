@@ -65,6 +65,13 @@ def test_synthetic_source_publishes_all_modules(tmp_path, database):
         modules=list(EXTRACT_MODULE_ORDER), native_export_v2=True, verbose=False,
     )
     _assert_published(database, output, result)
+    if database == "aumc":
+        from easyicu.concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
+
+        # R6-F019: source values travel through publication as companions of
+        # fio2_chart, without adding independently selectable public concepts.
+        respiratory = pq.read_table(output / "respiratory.parquet")
+        assert set(SOURCE_ITEM_OUTPUT_COLUMNS["fio2_chart"]) <= set(respiratory.column_names)
     if database == "sic":
         # R5-SIC-001: raw CVP survives publication beside the exclusion reason.
         vitals = pq.read_table(output / "vitals.parquet").to_pandas()

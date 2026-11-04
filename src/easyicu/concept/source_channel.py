@@ -42,10 +42,13 @@ not in the priority list, is a dictionary contract error.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+from .schema import ConceptDefinition, ConceptSource
 
 #: Source parameter naming a source's measurement channel.
 SOURCE_CHANNEL_PARAM = "source_channel"
@@ -62,6 +65,47 @@ class SourceChannelContractError(ValueError):
         self.reason = reason
         self.detail = detail
         super().__init__(f"{reason}: {detail}" if detail else reason)
+
+
+def stamp_source_item_columns(
+    frame: pd.DataFrame, original: pd.DataFrame, source: ConceptSource, concept_name: str,
+) -> pd.DataFrame:
+    """Retain each declared item's values alongside the unchanged pooled value.
+
+    The normal bounds, time alignment and aggregation then act on these rows.
+    The loop is over the small source mapping, never over clinical rows.
+    """
+    columns = source.params.get("source_item_columns") or {}
+    if not columns:
+        return frame
+    items = pd.to_numeric(original[source.sub_var], errors="coerce")
+    values = pd.to_numeric(original[concept_name], errors="coerce")
+    frame = frame.copy()
+    for item, column in columns.items():
+        frame[column] = values.where(items.eq(int(item)))
+    return frame
+
+
+def source_item_definition(definition: ConceptDefinition, column: str) -> ConceptDefinition:
+    """Narrow a physical item's metadata to its exact source identity."""
+    for database, sources in definition.sources.items():
+        for source in sources:
+            columns = source.params.get("source_item_columns") or {}
+            for item, output in columns.items():
+                if output != column:
+                    continue
+                selected = [value for value in source.ids if str(value) == item]
+                if len(selected) != 1:
+                    raise SourceChannelContractError("source_item_identity_not_declared", column)
+                params = {key: value for key, value in source.params.items() if key != "source_item_columns"}
+                narrowed = replace(source, ids=selected, params=params)
+                return replace(
+                    definition, sources={database: [narrowed]},
+                    description=f"{definition.description}; source item {item} from {database.upper()}",
+                )
+    # A custom definition without the source declaration must not lend its
+    # other databases' sources to an unavailable physical companion.
+    return replace(definition, sources={})
 
 
 def channel_priority(definition: object) -> Tuple[str, ...]:
@@ -262,6 +306,8 @@ __all__ = [
     "one_source_per_channel",
     "select_preferred_channel",
     "source_channel",
+    "source_item_definition",
     "stamp_rank",
+    "stamp_source_item_columns",
     "validate_sources",
 ]

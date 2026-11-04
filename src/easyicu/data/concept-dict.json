@@ -4182,7 +4182,10 @@
   "aggregate": "max"
  },
  "crea": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": "mg/dL",
   "min": 0,
@@ -4299,9 +4302,18 @@
    ],
    "sic": [
     {
-     "ids": 367,
+     "ids": [
+      367,
+      368
+     ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "deduplicate_by": [
+      "CaseID",
+      "Offset"
+     ],
+     "_comment": "R6-F023: 368 Kreatinin enzymatisch (ZL), reference mg/dl, joins 367 in canonical mg/dL; identical same-time results count once. HPM 369 is not established and stays excluded.",
+     "val_var": "LaboratoryValue"
     }
    ]
   }
@@ -4610,6 +4622,30 @@
      "sub_var": "nursingchartcelltypevalname",
      "source_channel": "nibp",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): nursecharting 'Non-Invasive BP Diastolic' added to the nibp channel, as for map."
+    },
+    {
+     "ids": [
+      "Invasive BP Diastolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      "Arterial Line DBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "invasive",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Diastolic$"
+     },
+     "_comment": "R6-F035: rows also selected by the exact valname source count once; this label source covers the remaining arterial measurements."
     }
    ],
    "eicu_demo": [
@@ -4635,6 +4671,30 @@
      "sub_var": "nursingchartcelltypevalname",
      "source_channel": "nibp",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): nursecharting 'Non-Invasive BP Diastolic' added to the nibp channel, as for map."
+    },
+    {
+     "ids": [
+      "Invasive BP Diastolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      "Arterial Line DBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "invasive",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Diastolic$"
+     },
+     "_comment": "R6-F035: rows also selected by the exact valname source count once; this label source covers the remaining arterial measurements."
     }
    ],
    "hirid": [
@@ -8819,7 +8879,8 @@
      "ids": 2010,
      "table": "observations",
      "sub_var": "variableid",
-     "class_name": "hrd_itm"
+     "class_name": "hrd_itm",
+     "callback": "transform_fun(percent_as_numeric)"
     }
    ],
    "miiv": [
@@ -8939,8 +9000,18 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "value_var": "value",
-     "chart_channel": "set_or_analyzed",
-     "_comment": "R5C-AUMC-013: audited bedside set/analyzed FiO2 pool, with original source item identities retained in this mapping. Device-specific set versus analyzed labels are not inferred from values; excludes ECMO sweep gas, APACHE points and oxygen flow."
+     "chart_channel": "unknown",
+     "_comment": "R6-F019: preserve the audited bedside FiO2 pool. Per-item respiratory columns expose each contributing source; device channel definitions are not verified, so each is unknown. No channel priority is inferred from values; excludes ECMO sweep gas, APACHE points and oxygen flow.",
+     "chart_channel_reason": "device_channel_definition_not_verified",
+     "source_item_columns": {
+      "6699": "fio2_chart_aumc_6699",
+      "12279": "fio2_chart_aumc_12279",
+      "12282": "fio2_chart_aumc_12282",
+      "12329": "fio2_chart_aumc_12329",
+      "12369": "fio2_chart_aumc_12369",
+      "16246": "fio2_chart_aumc_16246",
+      "20134": "fio2_chart_aumc_20134"
+     }
     }
    ],
    "miiv": [
@@ -9039,6 +9110,15 @@
      "sub_var": "DataID",
      "callback": "transform_fun(percent_as_numeric)",
      "_comment": "R5-SIC-013: source-specific percent FiO2, fraction-to-percent conversion exactly as parent fio2; laboratory item 684 has reference unit percent."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 2010,
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "transform_fun(percent_as_numeric)"
     }
    ]
   }
@@ -10073,7 +10153,10 @@
   "_comment": "R5-EICU-012: eICU medication orders include IV treatment and subcutaneous prophylactic exposure, not a therapeutic-IV-only endpoint. Retain route in source-level analyses."
  },
  "hgb": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": "g/dL",
   "min": 4,
@@ -10417,7 +10500,7 @@
   "unit": "units/hr",
   "min": 0,
   "max": 50,
-  "description": "insulin",
+  "description": "Insulin administered per hour bin; for HiRID, units/hr is the total U in a one hour bin, not an instantaneous continuous IV infusion rate",
   "omopid": 42537007,
   "category": "medications",
   "sources": {
@@ -10482,7 +10565,10 @@
      ],
      "table": "pharma",
      "sub_var": "pharmaid",
-     "callback": "aggregate_fun('sum', 'units')"
+     "callback": "aggregate_fun('sum', 'units')",
+     "time_basis": "one_hour_bin_total",
+     "quantity_kind": "administered_amount",
+     "continuous_iv_rate": false
     }
    ],
    "miiv": [
@@ -17138,7 +17224,10 @@
   }
  },
  "pco2": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": [
    "mmHg",
@@ -17584,7 +17673,10 @@
   }
  },
  "ph": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "min": 6.8,
   "max": 8,
@@ -18146,7 +18238,8 @@
      "sub_var": "respchartvaluelabel",
      "val_var": "respchartvalue",
      "ids": [
-      "Peak Insp. Pressure"
+      "Peak Insp. Pressure",
+      "Peak Pressure"
      ]
     },
     {
@@ -18468,7 +18561,10 @@
   }
  },
  "plt": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": [
    "K/uL",
@@ -18587,7 +18683,10 @@
   }
  },
   "po2": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
    "unit": [
     "mmHg",
@@ -20814,7 +20913,10 @@
   }
  },
  "sao2": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": [
    "%",
@@ -21018,6 +21120,30 @@
      "sub_var": "nursingchartcelltypevalname",
      "source_channel": "nibp",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): nursecharting 'Non-Invasive BP Systolic' added to the nibp channel, as for map."
+    },
+    {
+     "ids": [
+      "Invasive BP Systolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      "Arterial Line SBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "invasive",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Systolic$"
+     },
+     "_comment": "R6-F035: rows also selected by the exact valname source count once; this label source covers the remaining arterial measurements."
     }
    ],
    "eicu_demo": [
@@ -21043,6 +21169,30 @@
      "sub_var": "nursingchartcelltypevalname",
      "source_channel": "nibp",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): nursecharting 'Non-Invasive BP Systolic' added to the nibp channel, as for map."
+    },
+    {
+     "ids": [
+      "Invasive BP Systolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      "Arterial Line SBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "source_channel": "invasive",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Systolic$"
+     },
+     "_comment": "R6-F035: rows also selected by the exact valname source count once; this label source covers the remaining arterial measurements."
     }
    ],
    "hirid": [
@@ -27766,14 +27916,21 @@
       226584,
       227488,
       227489,
-      40651
+      40651,
+      41184
      ],
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
      "bounds_stage": "post_sum",
      "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
-     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation. | 2026-11-03 extraction audit: removed 40086 'Drain Out #2 Pigtail' (a drain) and 40065 'OR Out PACU Urine' (OR/PACU urine is not counted for MetaVision either). | 2026-11-03 extraction audit: added 40651 'Urine Out Ureteral Stent #2'."
+     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation. | 2026-11-03 extraction audit: removed 40086 'Drain Out #2 Pigtail' (a drain) and 40065 'OR Out PACU Urine' (OR/PACU urine is not counted for MetaVision either). | 2026-11-03 extraction audit: added 40651 'Urine Out Ureteral Stent #2'. | R6-F022: 41184 is nephrostomy urine volume. Unverified 41868, ordinary drains, irrigation-only channels and standardized rates stay excluded; repeated identical same-item volumes count once before signed netting.",
+     "deduplicate_by": [
+      "icustay_id",
+      "charttime",
+      "itemid"
+     ],
+     "val_var": "value"
     }
    ],
    "mimic_demo": [
@@ -27818,14 +27975,21 @@
       226584,
       227488,
       227489,
-      40651
+      40651,
+      41184
      ],
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
      "bounds_stage": "post_sum",
      "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
-     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation. | 2026-11-03 extraction audit: removed 40086 'Drain Out #2 Pigtail' (a drain) and 40065 'OR Out PACU Urine' (OR/PACU urine is not counted for MetaVision either). | 2026-11-03 extraction audit: added 40651 'Urine Out Ureteral Stent #2'."
+     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation. | 2026-11-03 extraction audit: removed 40086 'Drain Out #2 Pigtail' (a drain) and 40065 'OR Out PACU Urine' (OR/PACU urine is not counted for MetaVision either). | 2026-11-03 extraction audit: added 40651 'Urine Out Ureteral Stent #2'. | R6-F022: 41184 is nephrostomy urine volume. Unverified 41868, ordinary drains, irrigation-only channels and standardized rates stay excluded; repeated identical same-item volumes count once before signed netting.",
+     "deduplicate_by": [
+      "icustay_id",
+      "charttime",
+      "itemid"
+     ],
+     "val_var": "value"
     }
    ],
    "sic": [
@@ -29156,7 +29320,10 @@
   "_comment": "2026-07-17: vitamin-K-antagonist CLASS (warfarin/phenprocoumon/acenocoumarol), not the warfarin molecule. HiRID 1000476 is phenprocoumon (Marcoumar), SIC 1657 phenprocoumon."
  },
  "wbc": {
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": [
    "K/uL",
@@ -36193,7 +36360,10 @@
  },
  "hgb_raw": {
   "requires_explicit_opt_in": true,
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": "g/dL",
   "description": "Charted hemoglobin before range filtering",
@@ -36423,7 +36593,10 @@
  },
  "ph_raw": {
   "requires_explicit_opt_in": true,
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "description": "Charted pH of blood before range filtering",
   "omopid": 4097822,
@@ -36655,7 +36828,10 @@
  },
  "crea_raw": {
   "requires_explicit_opt_in": true,
-  "source_channel_priority": ["lab", "chart"],
+  "source_channel_priority": [
+   "lab",
+   "chart"
+  ],
   "source_channel_window_hours": 6,
   "unit": "mg/dL",
   "description": "Charted creatinine before range filtering",
@@ -36770,9 +36946,18 @@
    ],
    "sic": [
     {
-     "ids": 367,
+     "ids": [
+      367,
+      368
+     ],
      "table": "laboratory",
-     "sub_var": "LaboratoryID"
+     "sub_var": "LaboratoryID",
+     "deduplicate_by": [
+      "CaseID",
+      "Offset"
+     ],
+     "_comment": "R6-F023: 368 Kreatinin enzymatisch (ZL), reference mg/dl, joins 367 in canonical mg/dL; identical same-time results count once. HPM 369 is not established and stays excluded.",
+     "val_var": "LaboratoryValue"
     }
    ]
   }

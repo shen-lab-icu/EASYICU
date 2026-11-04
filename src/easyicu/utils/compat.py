@@ -884,6 +884,9 @@ def merge_concepts_r_style(
         keep_cols = ["id", "time"]
         if name in df.columns:
             keep_cols.append(name)
+        from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
+
+        keep_cols.extend(SOURCE_ITEM_OUTPUT_COLUMNS.get(name, ()))
         # Some clinical concept owners emit evidence receipts beside the
         # public value.  They are part of that value's meaning, not separate
         # selectable concepts.  The R-style merger previously projected only

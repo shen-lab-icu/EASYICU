@@ -4217,9 +4217,11 @@ def _native_export_physical_value_columns(
     available, and unavailable component values.  Native-v2 must preserve
     those receipts as physical companion columns even though they are not
     independently selectable public concepts. Urine windows also own source
-    availability receipts, expressed in ICU-relative hours.
+    availability receipts, expressed in ICU-relative hours, and source-item
+    values accompany their pooled measurement without becoming public concepts.
     """
 
+    from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS
     from ..scores.urine_output import urine_availability_columns
 
     columns: List[str] = []
@@ -4227,6 +4229,7 @@ def _native_export_physical_value_columns(
         concept = str(raw_concept)
         columns.append(concept)
         columns.extend(urine_availability_columns(concept))
+        columns.extend(SOURCE_ITEM_OUTPUT_COLUMNS.get(concept, ()))
         event_time = _NATIVE_EXPORT_EVENT_TIME_COMPANIONS.get(concept)
         if event_time is not None:
             columns.append(event_time)
