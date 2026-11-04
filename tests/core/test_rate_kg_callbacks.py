@@ -170,6 +170,7 @@ def test_hirid_rate_kg_missing_weight_drops_patient_instead_of_defaulting_to_70k
             "givendose": [120.0, 120.0],
             "doseunit": ["ug", "ug"],
             "weight": [60.0, np.nan],
+            "recordstatus": 0,
         }
     )
 
@@ -196,6 +197,7 @@ def test_hirid_rate_kg_without_weight_column_returns_empty():
             "infusionid": [10],
             "givendose": [120.0],
             "doseunit": ["ug"],
+            "recordstatus": 0,
         }
     )
 
@@ -229,6 +231,7 @@ def test_hirid_rate_kg_with_value_column_pre_renamed_to_concept_name():
             "norepi_rate": [60.0, 60.0],
             "doseunit": ["ug", "ug"],
             "weight": [60.0, 60.0],
+            "recordstatus": 0,
         }
     )
 

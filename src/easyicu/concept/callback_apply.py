@@ -817,17 +817,26 @@ def _drop_excluded_statuses(frame: pd.DataFrame, source) -> pd.DataFrame:
     writes the flag as ``Yes``/``No`` while a converted parquet may hold a
     boolean, so ``"true"`` also excludes ``Yes`` (2026-11-04 audit round 3,
     R3-03: 0 of 5,085 cancelled orders were dropped).
+    A declared ``cancel_var`` also excludes nonzero procedure cancellation
+    codes; missing and zero codes retain the existing procedure semantics.
     """
 
     params = getattr(source, "params", None) or {}
     excluded = params.get("excluded_statuses")
     status_var = str(params.get("status_var", "statusdescription"))
-    if not excluded or frame is None or status_var not in frame.columns:
+    if frame is None:
         return frame
-    excluded_lower = {_status_token(value) for value in excluded}
-    status = frame[status_var].astype("string").str.strip().str.lower()
-    status = status.map(_status_token, na_action="ignore")
-    return frame.loc[~status.isin(excluded_lower).fillna(False)]
+    if excluded and status_var in frame.columns:
+        excluded_lower = {_status_token(value) for value in excluded}
+        status = frame[status_var].astype("string").str.strip().str.lower()
+        status = status.map(_status_token, na_action="ignore")
+        frame = frame.loc[~status.isin(excluded_lower).fillna(False)]
+    # Procedure cancellation codes are independent of statusdescription.
+    cancel_var = params.get("cancel_var")
+    if cancel_var and cancel_var in frame.columns:
+        cancelled = pd.to_numeric(frame[cancel_var], errors="coerce").fillna(0).ne(0)
+        frame = frame.loc[~cancelled]
+    return frame
 
 
 def _declared_filter_column(frame: pd.DataFrame, source, column: str, concept_name):
@@ -930,8 +939,10 @@ def _apply_callback(
     patient_ids: Optional[List] = None,
     data_source: Optional['ICUDataSource'] = None,
     interval: Optional[Union[str, pd.Timedelta]] = None,
+    *,
+    _source_rows_validated: bool = False,
 ) -> pd.DataFrame:
-    if getattr(source, "table", None) == "pharma" and getattr(getattr(data_source, "config", None), "name", "") == "hirid":
+    if not _source_rows_validated and getattr(source, "table", None) == "pharma" and getattr(getattr(data_source, "config", None), "name", "") == "hirid":
         from ..utils.callback_utils import _hirid_valid_pharma_rows
 
         frame = _hirid_valid_pharma_rows(frame)
@@ -1199,7 +1210,7 @@ def _apply_callback(
             try:
                 extubation_table = data_source.load_table(
                     "procedureevents_mv",
-                    columns=[id_column, "starttime", "itemid"],
+                    columns=[id_column, "starttime", "itemid", "statusdescription", "cancelreason"],
                     filters=[
                         FilterSpec(
                             column="itemid",
@@ -1235,6 +1246,10 @@ def _apply_callback(
                 ) from exc
 
             if not extubation.empty:
+                extubation = _drop_excluded_statuses(extubation, ConceptSource(params={
+                    "excluded_statuses": ["Rewritten", "Cancelled", "Canceled"],
+                    "status_var": "statusdescription", "cancel_var": "cancelreason",
+                }))
                 extubation = extubation.loc[
                     extubation[id_column].isin(stay_ids)
                     & extubation["starttime"].notna(),
@@ -1291,7 +1306,7 @@ def _apply_callback(
         if status_var in frame.columns:
             valid &= ~frame[status_var].astype("string").str.strip().str.lower().eq(
                 "rewritten"
-            )
+            ).fillna(False)
         if "dur_var" in frame.columns:
             valid &= pd.to_numeric(
                 frame["dur_var"], errors="coerce"
@@ -2544,13 +2559,13 @@ def _apply_callback(
             # can consume route/status columns (HiRID dex, R5C-HIRID-023).
             nested_source = replace(source, callback=nested, params={
                 key: value for key, value in source.params.items()
-                if key not in {"excluded_statuses", "exclude_regex", "require_regex", "require_empty_var"}
+                if key not in {"excluded_statuses", "exclude_regex", "require_regex", "require_empty_var", "cancel_var"}
             })
             previous_frame = frame_result
             frame_result = _apply_callback(
                 frame_result, nested_source, concept_name, unit_column,
                 resolver=resolver, patient_ids=patient_ids, data_source=data_source,
-                interval=interval,
+                interval=interval, _source_rows_validated=True,
             )
             frame_result = _preserve_callback_dur_var_unit(
                 previous_frame,

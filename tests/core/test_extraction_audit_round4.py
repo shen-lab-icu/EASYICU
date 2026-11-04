@@ -254,6 +254,7 @@ def test_r4_029_hirid_short_episode_across_an_hour_is_not_one_hour():
         "patientid": [1, 1, 2, 2], "infusionid": [10, 10, 20, 20],
         "givenat": [2 + 40 / 60, 3.5, 2 + 50 / 60, 17 + 5 / 60],
         "givendose": [0.0, 5.0, 0.0, 5.0],
+        "recordstatus": 0,
     })
     out = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                          index_col="givenat", grp_var="infusionid").set_index("patientid")
@@ -267,6 +268,7 @@ def test_r4_030_hirid_floating_point_residue_is_not_a_dose():
 
     frame = pd.DataFrame({
         "patientid": [1, 1], "infusionid": [10, 10], "givenat": [1.0, 3.0], "givendose": [0.0, 1e-9],
+        "recordstatus": 0,
     })
     out = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                          index_col="givenat", grp_var="infusionid")
@@ -366,6 +368,7 @@ def test_r4_028_hirid_dose_is_split_over_the_hours_it_was_given_in():
         "patientid": 1, "infusionid": 7, "doseunit": "µg", "weight": 50.0,
         # Start marker 10:50, 25 ug by 11:05, 60 ug by 12:05.
         "givenat": [10 + 50 / 60, 11 + 5 / 60, 12 + 5 / 60], "givendose": [0.0, 25.0, 60.0],
+        "recordstatus": 0,
     })
     rate = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
                          grp_var="infusionid", index_col="givenat")

@@ -141,6 +141,8 @@ def write_renal_source(
                     "endtime": pd.Timestamp("2200-01-01") + pd.to_timedelta(rrt_hours + 4, unit="h"),
                     "itemid": np.full(len(rid), 225441), "value": np.ones(len(rid)),
                     "valueuom": np.full(len(rid), "hour", dtype=object),
+                    "statusdescription": np.full(len(rid), "FinishedRunning", dtype=object),
+                    "cancelreason": np.zeros(len(rid), dtype="int64"),
                 }))
     finally:
         for writer in writers.values():

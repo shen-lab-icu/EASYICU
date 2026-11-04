@@ -40,6 +40,7 @@ def test_r5c_hirid_002_non_weight_rates_split_previous_valid_interval(name, unit
     frame = pd.DataFrame({
         "patientid": 1, "infusionid": 7, "doseunit": unit,
         "givenat": [0.75, 1.25, 2.0, 10.0], "givendose": [0.0, 12.0, 6.0, 3.0],
+        "recordstatus": 0,
     })
     kwargs = dict(concept_name=name, val_col="givendose", unit_col="doseunit",
                   grp_var="infusionid", index_col="givenat")
@@ -82,6 +83,7 @@ def test_r5c_hirid_003_exact_duration_and_original_half_open_occupancy(prefix):
         "patientid": [1, 1, 2, 2, 3, 3], "infusionid": [7, 7, 8, 8, 9, 9],
         "givenat": [0.75, 2.25, 4.9, 5.1, 7.0, 8.0],
         "givendose": [0., 6., 0., 2., 0., 3.],
+        "recordstatus": 0,
     })
     duration = hirid_duration(frame, concept_name=name, val_col="givendose",
                               index_col="givenat", grp_var="infusionid")

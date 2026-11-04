@@ -8334,13 +8334,15 @@ def _callback_fluid_balance_admitted(
 
         # Load inputevents with amount and unit columns
         from ..datasource import FilterSpec, FilterOp
+        from .callback_apply import _drop_excluded_statuses
+        from .schema import ConceptSource
 
         # Get patient IDs from urine data
         stay_ids = urine_df[id_col].unique().tolist()
 
         input_df = data_source.load_table(
             table_name,
-            columns=[id_col, "starttime", amount_col, unit_col],
+            columns=[id_col, "starttime", amount_col, unit_col, "statusdescription"],
             filters=[
                 FilterSpec(column=id_col, op=FilterOp.IN, value=stay_ids),
             ],
@@ -8360,6 +8362,9 @@ def _callback_fluid_balance_admitted(
             )
 
         # Filter to mL-valued rows only (approved default: stance A)
+        input_df = _drop_excluded_statuses(input_df, ConceptSource(params={
+            "excluded_statuses": ["Rewritten"], "status_var": "statusdescription",
+        }))
         input_df = input_df[input_df[unit_col].astype(str).str.strip().str.lower() == unit_value.lower()].copy()
         input_df[amount_col] = pd.to_numeric(input_df[amount_col], errors="coerce")
         input_df = input_df.dropna(subset=[amount_col])

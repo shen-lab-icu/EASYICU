@@ -250,7 +250,8 @@ def test_r5c_iii_008_projection_never_discards_the_error_filter(tmp_path, storag
 def test_r5c_iv_010_source_projection_keeps_rate_units_and_dosing_weight(tmp_path):
     rows = pd.DataFrame({"stay_id": [101], "hadm_id": [11], "starttime": [0.25], "endtime": [0.75],
                          "itemid": [222168], "amount": [60.], "amountuom": ["mg"],
-                         "rate": [600.], "rateuom": ["mg/hour"], "patientweight": [50.], "linkorderid": [1]})
+                         "rate": [600.], "rateuom": ["mg/hour"], "patientweight": [50.], "linkorderid": [1],
+                         "statusdescription": "FinishedRunning"})
     rows.to_parquet(tmp_path / "inputevents.parquet", index=False)
     source = ICUDataSource(load_src_cfg("miiv"), base_path=tmp_path, enable_cache=False)
     result = ConceptResolver(load_dictionary("miiv")).load_concepts(
@@ -265,7 +266,7 @@ def test_r5c_iv_012_public_insulin_load_preserves_hourly_total(tmp_path):
     rows = pd.DataFrame({"stay_id": [101] * 3, "hadm_id": [11] * 3, "itemid": [223258, 223258, 223260],
                          "starttime": [.5, 1.2, 1.7], "endtime": [2.5, 1.2, 1.7],
                          "amount": [12., 3., 5.], "amountuom": "units", "rate": [6., None, None],
-                         "linkorderid": [1, 2, 3]})
+                         "linkorderid": [1, 2, 3], "statusdescription": "FinishedRunning"})
     for column in ("starttime", "endtime"):
         rows[column] = pd.Timestamp("2140-01-02") + pd.to_timedelta(rows[column], unit="h")
     rows.to_parquet(tmp_path / "inputevents.parquet", index=False)

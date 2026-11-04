@@ -202,6 +202,7 @@ def test_v6_hirid_rate_is_hourly_mass_over_60_min_at_any_concept_interval(interv
     frame = pd.DataFrame({
         "patientid": [1, 1], "givenat": [2.1, 2.6], "infusionid": [10, 10],
         "givendose": [60.0, 60.0], "doseunit": ["µg", "µg"], "weight": [50.0, 50.0],
+        "recordstatus": 0,
     })
     source = ConceptSource(callback="hirid_rate_kg", value_var="givendose",
                            unit_var="doseunit", index_var="givenat")
@@ -331,6 +332,7 @@ def test_v5_hirid_concurrent_syringes_add_up_in_the_hour():
     frame = pd.DataFrame({
         "patientid": [1, 1], "givenat": [2.2, 2.7], "infusionid": [10, 11],
         "givendose": [60.0, 60.0], "doseunit": ["µg", "µg"], "weight": [50.0, 50.0],
+        "recordstatus": 0,
     })
     out = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
                         grp_var="infusionid", index_col="givenat", interval_minutes=60.0)
@@ -344,6 +346,7 @@ def test_v5_hirid_syringes_within_five_minutes_are_one_episode():
         "patientid": [1] * 6,
         "givenat": [0.0, 3.5, 3.55, 7.2, 10.0, 12.0],
         "infusionid": [1, 1, 2, 2, 3, 3],
+        "recordstatus": 0,
     })
     out = hirid_duration(frame, concept_name="norepi_dur", index_col="givenat", grp_var="infusionid")
     # Syringe 2 starts 3 minutes after syringe 1 ends; syringe 3 starts 2.8 h later.

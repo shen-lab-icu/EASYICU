@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 from .concept import Concept, load_dictionary
+from .concept.errors import ConceptExtractionUnavailable
 from .config import DataSourceConfig, TableConfig, load_src_cfg
 from .datasource import ICUDataSource
 from .table import load_table
@@ -559,6 +560,8 @@ class ConceptLoader:
                             print(f"  ✅ {concept.name}")
                         if data is not None and len(data) > 0:
                             results[concept.name] = data
+                    except ConceptExtractionUnavailable:
+                        raise
                     except Exception as e:
                         if verbose:
                             print(f"  ❌ {concept.name}: {e}")
@@ -960,6 +963,11 @@ class ConceptLoader:
             
             return df
         
+        if self._src_name == 'hirid' and table_name == 'pharma':
+            from .utils.callback_utils import _hirid_valid_pharma_rows
+
+            df = _hirid_valid_pharma_rows(df)
+
         # 4. 确定值列（无callback时的原有逻辑）
         val_col = source.value_var or 'valuenum'  # 默认使用 valuenum
         if val_col not in df.columns:
