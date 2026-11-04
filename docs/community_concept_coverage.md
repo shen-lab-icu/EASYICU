@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **327 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 34 | 137 |
-| zhejiang_eicu | 128 | 38 | 23 | 138 |
-| jinhua | 135 | 19 | 31 | 142 |
-| zigong | 125 | 26 | 39 | 137 |
+| nwicu | 137 | 19 | 35 | 136 |
+| zhejiang_eicu | 128 | 39 | 23 | 137 |
+| jinhua | 135 | 19 | 32 | 141 |
+| zigong | 125 | 27 | 39 | 136 |
 
 ## Complete matrix
 
@@ -74,7 +74,7 @@ concept (base dictionary plus SOFA-2 overlay): **327 concepts × 4 databases**.
 | `crp` | chemistry | direct | direct | direct | direct |
 | `crrt_mode_input` | renal | unavailable | unavailable | unavailable | unavailable |
 | `cvp` | vitals | partial | derived | partial | derived |
-| `cvp_qc` | vitals | unavailable | unavailable | unavailable | unavailable |
+| `cvp_qc` | vitals | partial | derived | partial | derived |
 | `cvp_raw` | vitals | unavailable | direct | unavailable | direct |
 | `d_dimer` | chemistry | direct | direct | direct | direct |
 | `dbp` | vitals | direct | direct | direct | direct |
