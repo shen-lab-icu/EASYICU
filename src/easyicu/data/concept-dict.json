@@ -6727,12 +6727,12 @@
      "callback": "transform_fun(set_val(TRUE))",
      "val_var": "value",
      "exclude_regex": {
-      "value": "(?i)^\\s*(?:nee|no|false|off|0(?:\\.0+)?)\\s*$"
+      "value": "(?i)^\\s*(?:nee|no|false|off|uit|0(?:\\.0+)?)\\s*$"
      },
      "require_regex": {
       "value": "\\S"
      },
-     "_comment": "RB-08: explicit negative and empty categories cannot establish support. The repository does not include the complete item category sets; their presence in real data is unverified."
+     "_comment": "RB-08: explicit negative and empty categories cannot establish support. Real AUMCdb value sets (lead, aggregate check 2026-11-04): 6658 IABP Frequentie 1:1, 1:2, 1:3 and Uit (off, fewer than 10 rows); 20662 ECMO - Type VA ECMO only."
     },
     {
      "table": "procedureorderitems",
@@ -13155,12 +13155,12 @@
      "callback": "transform_fun(set_val(TRUE))",
      "val_var": "value",
      "exclude_regex": {
-      "value": "(?i)^\\s*(?:nee|no|false|off|0(?:\\.0+)?)\\s*$"
+      "value": "(?i)^\\s*(?:nee|no|false|off|uit|0(?:\\.0+)?)\\s*$"
      },
      "require_regex": {
       "value": "\\S"
      },
-     "_comment": "RB-08: explicit negative and empty categories cannot establish support. The repository does not include the complete item category sets; their presence in real data is unverified."
+     "_comment": "RB-08: explicit negative and empty categories cannot establish support. Real AUMCdb value sets (lead, aggregate check 2026-11-04): 6658 IABP Frequentie 1:1, 1:2, 1:3 and Uit (off, fewer than 10 rows); 20662 ECMO - Type VA ECMO only."
     },
     {
      "table": "processitems",
