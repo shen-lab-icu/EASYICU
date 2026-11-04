@@ -3274,9 +3274,23 @@ def driving_pressure(
     """
     # Identify ID and time columns
     id_cols = [col for col in plateau_pres.columns if 'id' in col.lower() and col in peep.columns]
-    time_cols = [col for col in plateau_pres.columns if 'time' in col.lower() or col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime']]
-    time_cols = [col for col in time_cols if col in peep.columns]
-    
+
+    def _time_like(df):
+        return [col for col in df.columns if 'time' in col.lower() or col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime']]
+
+    time_cols = [col for col in _time_like(plateau_pres) if col in peep.columns]
+    plateau_time = _time_like(plateau_pres)
+    if not time_cols and len(plateau_time) == 1:
+        # A derived plateau_pres carries the merged index name ('charttime')
+        # while item-level PEEP and PIP keep the source name (AUMC
+        # 'measuredat_minutes'): align them (2026-11-04 audit round 3).
+        def _align(df):
+            own = _time_like(df) if df is not None else []
+            return df.rename(columns={own[0]: plateau_time[0]}) if len(own) == 1 else df
+        peep = _align(peep)
+        pip = _align(pip) if pip is not None and not getattr(pip, 'empty', True) else pip
+        time_cols = [col for col in plateau_time if col in peep.columns]
+
     if not time_cols:
         raise ValueError("No time column found in input DataFrames")
     

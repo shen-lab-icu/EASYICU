@@ -124,6 +124,20 @@ def test_r3_17_driving_pressure_matches_peep_within_one_hour_of_relative_time():
     assert out["driving_pres"].tolist() == [17.0]
 
 
+def test_r3_18_derived_plateau_time_column_matches_item_level_peep_and_pip():
+    from easyicu.callbacks import driving_pressure
+
+    # The derived plateau_pres carries the merged 'charttime'; AUMC PEEP and
+    # PIP keep 'measuredat_minutes' (native-v2 ventilator module failed on it).
+    plateau = pd.DataFrame({"admissionid": [1, 1], "charttime": [10.0, 20.0], "plateau_pres": [25.0, 40.0]})
+    peep = pd.DataFrame({"admissionid": [1, 1], "measuredat_minutes": [10.0, 20.0], "peep": [8.0, 8.0]})
+    pip = pd.DataFrame({"admissionid": [1, 1], "measuredat_minutes": [10.0, 20.0], "pip": [30.0, 30.0]})
+    out = driving_pressure(plateau, peep, match_win=pd.Timedelta(hours=1), pip=pip)
+    # The 20 h plateau is above PIP + 1 and gives no driving pressure.
+    assert out["charttime"].tolist() == [10.0]
+    assert out["driving_pres"].tolist() == [17.0]
+
+
 def test_r3_08_a_horizon_past_the_source_followup_bound_is_missing_for_the_dead_too(monkeypatch) -> None:
     from easyicu.scores import outcomes
 
