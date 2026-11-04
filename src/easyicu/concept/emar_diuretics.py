@@ -32,6 +32,7 @@ Dictionary use::
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
@@ -142,6 +143,11 @@ def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd
         return pd.DataFrame(columns=columns)
     directory = data_source.resolve_flat_parquet_directory(table)
     files = enumerate_bucket_parquet_files(directory) if directory is not None else []
+    if not files:
+        # The MIMIC-IV demo converts each table to one parquet file.
+        resolved = data_source.resolve_loader_from_disk(table)
+        if isinstance(resolved, Path) and resolved.is_file() and resolved.suffix.lower() in {".parquet", ".pq"}:
+            files = [resolved]
     if not files:
         raise ValueError(f"emar_diuretic_table_unavailable:{table}")
     paths = ", ".join("'" + str(path).replace("'", "''") + "'" for path in files)

@@ -308,8 +308,9 @@ def test_rr_06_iv_route_filter_preserves_separate_infusion_groups(tmp_path, name
         assert set(direct.infusionid) == {7, 8}
 
 
+@pytest.mark.parametrize("layout", ["directory", "file"])  # full MIMIC-IV / public demo conversion
 @pytest.mark.parametrize("drug,item,dose", [("furosemide", 221794, 40.), ("bumetanide", 229639, 1.)])
-def test_rr_07_emar_dedup_matches_real_drug_dose_time_and_preserves_oral(tmp_path, drug, item, dose):
+def test_rr_07_emar_dedup_matches_real_drug_dose_time_and_preserves_oral(tmp_path, drug, item, dose, layout):
     from tests.core.test_extraction_audit_round5_ivd5 import _synthetic_source, _load
 
     t = pd.Timestamp("2150-01-01")
@@ -332,7 +333,7 @@ def test_rr_07_emar_dedup_matches_real_drug_dose_time_and_preserves_oral(tmp_pat
     inputs["endtime"] = inputs.starttime + pd.Timedelta(minutes=1)
     orders = pd.DataFrame({"pharmacy_id": range(n), "route": routes})
     ds = _synthetic_source(tmp_path, "miiv", emar=emar, emar_detail=details, prescriptions=orders, inputevents=inputs)
-    for table in ("emar_detail", "prescriptions"):
+    for table in ("emar_detail", "prescriptions") if layout == "directory" else ():
         directory = tmp_path / table
         directory.mkdir()
         (tmp_path / f"{table}.parquet").rename(directory / "part.parquet")
