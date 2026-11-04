@@ -1,5 +1,5 @@
 {
-  "concept_count": 290,
+  "concept_count": 327,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -893,6 +893,74 @@
       },
       "description": "BUN-to-creatinine ratio (pre-renal azotemia marker)"
     },
+    "bun_qc": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "bun_raw"
+          ],
+          "missing_dependencies": [
+            "bun_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "bun_raw"
+          ],
+          "missing_dependencies": [
+            "bun_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "bun_raw"
+          ],
+          "missing_dependencies": [
+            "bun_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "bun_raw"
+          ],
+          "missing_dependencies": [
+            "bun_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for blood urea nitrogen"
+    },
+    "bun_raw": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted blood urea nitrogen before range filtering"
+    },
     "ca": {
       "category": "chemistry",
       "databases": {
@@ -944,6 +1012,28 @@
         }
       },
       "description": "calcium ionized"
+    },
+    "cai_ph74": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ionized calcium standardized to pH 7.4"
     },
     "calcium_iv": {
       "category": "medications",
@@ -1071,6 +1161,28 @@
         }
       },
       "description": "creatine kinase MB"
+    },
+    "ckmb_hirid_raw": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "HiRID CK-MB raw measurement"
     },
     "cl": {
       "category": "chemistry",
@@ -1254,6 +1366,74 @@
       },
       "description": "creatinine"
     },
+    "crea_qc": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "crea_raw"
+          ],
+          "missing_dependencies": [
+            "crea_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "crea_raw"
+          ],
+          "missing_dependencies": [
+            "crea_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "crea_raw"
+          ],
+          "missing_dependencies": [
+            "crea_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "crea_raw"
+          ],
+          "missing_dependencies": [
+            "crea_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for creatinine"
+    },
+    "crea_raw": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted creatinine before range filtering"
+    },
     "crp": {
       "category": "chemistry",
       "databases": {
@@ -1345,6 +1525,28 @@
         }
       },
       "description": "central venous pressure"
+    },
+    "cvp_qc": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "SICdb central venous pressure exclusion reason"
     },
     "cvp_raw": {
       "category": "vitals",
@@ -2408,6 +2610,74 @@
       },
       "description": "End-tidal CO2"
     },
+    "etco2_qc": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "etco2_raw"
+          ],
+          "missing_dependencies": [
+            "etco2_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "etco2_raw"
+          ],
+          "missing_dependencies": [
+            "etco2_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "etco2_raw"
+          ],
+          "missing_dependencies": [
+            "etco2_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "etco2_raw"
+          ],
+          "missing_dependencies": [
+            "etco2_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for End-tidal CO2"
+    },
+    "etco2_raw": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted End-tidal CO2 before range filtering"
+    },
     "ett_gcs": {
       "category": "respiratory",
       "databases": {
@@ -2979,6 +3249,74 @@
       },
       "description": "hematocrit"
     },
+    "hct_qc": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "hct_raw"
+          ],
+          "missing_dependencies": [
+            "hct_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "hct_raw"
+          ],
+          "missing_dependencies": [
+            "hct_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "hct_raw"
+          ],
+          "missing_dependencies": [
+            "hct_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "hct_raw"
+          ],
+          "missing_dependencies": [
+            "hct_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for hematocrit"
+    },
+    "hct_raw": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted hematocrit before range filtering"
+    },
     "hdl": {
       "category": "chemistry",
       "databases": {
@@ -3081,6 +3419,74 @@
         }
       },
       "description": "hemoglobin"
+    },
+    "hgb_qc": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "hgb_raw"
+          ],
+          "missing_dependencies": [
+            "hgb_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "hgb_raw"
+          ],
+          "missing_dependencies": [
+            "hgb_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "hgb_raw"
+          ],
+          "missing_dependencies": [
+            "hgb_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "hgb_raw"
+          ],
+          "missing_dependencies": [
+            "hgb_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for hemoglobin"
+    },
+    "hgb_raw": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted hemoglobin before range filtering"
     },
     "hr": {
       "category": "vitals",
@@ -4125,6 +4531,50 @@
       },
       "description": "mechanical ventilation windows"
     },
+    "mech_vent_opioid_sensitivity": {
+      "category": "respiratory",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "SICdb additional opioid-only controlled ventilation sensitivity hours"
+    },
+    "mech_vent_rule": {
+      "category": "respiratory",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "SICdb primary ventilation attribution rule"
+    },
     "meropenem": {
       "category": "medications",
       "databases": {
@@ -4383,6 +4833,50 @@
       },
       "description": "Minute Ventilation (exhaled)"
     },
+    "minute_vol_qc": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "SICdb minute ventilation analytical exclusion reason"
+    },
+    "minute_vol_raw": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "SICdb charted minute ventilation before the analytical gate"
+    },
     "modified_shock_index": {
       "category": "cardiovascular",
       "databases": {
@@ -4553,6 +5047,74 @@
       },
       "description": "myoglobin (blood)"
     },
+    "myoglobin_qc": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "myoglobin_raw"
+          ],
+          "missing_dependencies": [
+            "myoglobin_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "myoglobin_raw"
+          ],
+          "missing_dependencies": [
+            "myoglobin_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "myoglobin_raw"
+          ],
+          "missing_dependencies": [
+            "myoglobin_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "myoglobin_raw"
+          ],
+          "missing_dependencies": [
+            "myoglobin_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for myoglobin"
+    },
+    "myoglobin_raw": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted myoglobin before range filtering"
+    },
     "na": {
       "category": "chemistry",
       "databases": {
@@ -4577,6 +5139,74 @@
         }
       },
       "description": "sodium"
+    },
+    "na_qc": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "na_raw"
+          ],
+          "missing_dependencies": [
+            "na_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "na_raw"
+          ],
+          "missing_dependencies": [
+            "na_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "na_raw"
+          ],
+          "missing_dependencies": [
+            "na_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "na_raw"
+          ],
+          "missing_dependencies": [
+            "na_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for sodium"
+    },
+    "na_raw": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted sodium before range filtering"
     },
     "neostigmine": {
       "category": "medications",
@@ -5558,6 +6188,74 @@
         }
       },
       "description": "pH of blood"
+    },
+    "ph_qc": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "ph_raw"
+          ],
+          "missing_dependencies": [
+            "ph_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "ph_raw"
+          ],
+          "missing_dependencies": [
+            "ph_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "ph_raw"
+          ],
+          "missing_dependencies": [
+            "ph_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "ph_raw"
+          ],
+          "missing_dependencies": [
+            "ph_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for pH of blood"
+    },
+    "ph_raw": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted pH of blood before range filtering"
     },
     "phenytoin": {
       "category": "medications",
@@ -7620,7 +8318,7 @@
           "status": "partial"
         }
       },
-      "description": "SOFA-2 renal component with duration-based UO. RRT event evidence scores the active treatment time; intermittent off-days/chronic state and non-renal-only exclusion require explicit episode/indication inputs and remain database ascertainment limitations."
+      "description": "SOFA-2 renal component using weight-normalized urine rates with complete 6, 12 or 24-hour coverage. RRT event evidence scores active treatment; intermittent off-days, chronic state and non-renal-only exclusion require explicit episode and indication inputs."
     },
     "sofa2_resp": {
       "category": "outcome",
@@ -7932,7 +8630,7 @@
           "status": "derived"
         }
       },
-      "description": "SOFA renal component"
+      "description": "SOFA renal: complete daily urine, else estimate with at least 18 covered hours"
     },
     "sofa_resp": {
       "category": "outcome",
@@ -8227,6 +8925,74 @@
         }
       },
       "description": "temperature"
+    },
+    "temp_qc": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "temp_raw"
+          ],
+          "missing_dependencies": [
+            "temp_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "temp_raw"
+          ],
+          "missing_dependencies": [
+            "temp_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "temp_raw"
+          ],
+          "missing_dependencies": [
+            "temp_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "temp_raw"
+          ],
+          "missing_dependencies": [
+            "temp_raw"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "Range review status for temperature"
+    },
+    "temp_raw": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted temperature before range filtering"
     },
     "tgcs": {
       "category": "neurological",
@@ -8562,7 +9328,93 @@
           "status": "partial"
         }
       },
-      "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)"
+      "description": "12-hour urine rate per covered hour; SOFA-2 uses complete-duration assessment"
+    },
+    "uo_12h_covered_h": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "partial_dependencies": [
+            "uo_12h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "partial_dependencies": [
+            "uo_12h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "partial_dependencies": [
+            "uo_12h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "Covered collection hours within the past 12 hours"
+    },
+    "uo_12h_partial_window": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "partial_dependencies": [
+            "uo_12h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "partial_dependencies": [
+            "uo_12h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "uo_12h"
+          ],
+          "partial_dependencies": [
+            "uo_12h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "Collection coverage is shorter than the nominal 12-hour urine window"
     },
     "uo_24h": {
       "category": "output",
@@ -8609,7 +9461,93 @@
           "status": "partial"
         }
       },
-      "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)"
+      "description": "24-hour urine rate per covered hour; SOFA-2 uses complete-duration assessment"
+    },
+    "uo_24h_covered_h": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "partial_dependencies": [
+            "uo_24h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "partial_dependencies": [
+            "uo_24h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "partial_dependencies": [
+            "uo_24h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "Covered collection hours within the past 24 hours"
+    },
+    "uo_24h_partial_window": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "partial_dependencies": [
+            "uo_24h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "partial_dependencies": [
+            "uo_24h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "uo_24h"
+          ],
+          "partial_dependencies": [
+            "uo_24h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "Collection coverage is shorter than the nominal 24-hour urine window"
     },
     "uo_6h": {
       "category": "output",
@@ -8656,7 +9594,93 @@
           "status": "partial"
         }
       },
-      "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)"
+      "description": "6-hour urine rate per covered hour; SOFA-2 uses complete-duration assessment"
+    },
+    "uo_6h_covered_h": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "partial_dependencies": [
+            "uo_6h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "partial_dependencies": [
+            "uo_6h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "partial_dependencies": [
+            "uo_6h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "Covered collection hours within the past 6 hours"
+    },
+    "uo_6h_partial_window": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "partial_dependencies": [
+            "uo_6h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "partial_dependencies": [
+            "uo_6h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "uo_6h"
+          ],
+          "partial_dependencies": [
+            "uo_6h"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "Collection coverage is shorter than the nominal 6-hour urine window"
     },
     "uric_acid": {
       "category": "chemistry",
@@ -8745,7 +9769,247 @@
           "status": "derived"
         }
       },
-      "description": "urine output per 24h"
+      "description": "Measured urine output with complete 24-hour coverage"
+    },
+    "urine24_available_at": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "ICU-relative hour of the latest record used by measured daily urine volume"
+    },
+    "urine24_covered_h": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "Covered hours in the daily urine evaluation window"
+    },
+    "urine24_est": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "Estimated daily urine volume scaled from 18 to less than 24 covered hours"
+    },
+    "urine24_est_available_at": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "ICU-relative hour of the latest record used by estimated daily urine volume"
+    },
+    "urine24_observed_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "Observed urine volume within the daily evaluation window"
+    },
+    "urine24_uses_future": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "missing_dependencies": [
+            "urine24"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine24"
+          ],
+          "reason": "all declared dependencies are available",
+          "status": "derived"
+        }
+      },
+      "description": "Daily urine value depends on a record charted after the evaluation hour"
     },
     "vancomycin": {
       "category": "medications",
@@ -8781,13 +10045,15 @@
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -8797,13 +10063,15 @@
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -8813,13 +10081,15 @@
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -8829,13 +10099,15 @@
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "missing_dependencies": [
             "dopa_dur",
             "norepi_dur",
             "dobu_dur",
-            "epi_dur"
+            "epi_dur",
+            "other_vaso"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -9148,26 +10420,26 @@
     "jinhua": {
       "derived": 19,
       "direct": 135,
-      "partial": 25,
-      "unavailable": 111
+      "partial": 31,
+      "unavailable": 142
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
-      "partial": 28,
-      "unavailable": 106
+      "partial": 34,
+      "unavailable": 137
     },
     "zhejiang_eicu": {
-      "derived": 26,
+      "derived": 38,
       "direct": 128,
       "partial": 23,
-      "unavailable": 113
+      "unavailable": 138
     },
     "zigong": {
-      "derived": 20,
+      "derived": 26,
       "direct": 125,
-      "partial": 33,
-      "unavailable": 112
+      "partial": 39,
+      "unavailable": 137
     }
   },
   "databases": [
