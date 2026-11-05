@@ -4305,10 +4305,6 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
             # and _align_time_to_admission will convert to hours.
             
             if pd.api.types.is_numeric_dtype(df[index_col]):
-                # Save original times in minutes
-                start_min = df[index_col].copy()
-                stop_min = df[stop_col].copy()
-                
                 # Convert to hours for expand (step_size is in hours)
                 df[index_col] = df[index_col] / 60.0
                 df[stop_col] = df[stop_col] / 60.0
@@ -4332,10 +4328,10 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
                     # Convert back to minutes for _align_time_to_admission
                     if index_col in df.columns:
                         df[index_col] = df[index_col] * 60.0
-                except Exception:
-                    # If expand fails, restore original times and continue
-                    df[index_col] = start_min
-                    df[stop_col] = stop_min
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"aumc_rate_units_expand_failed: ({type(exc).__name__}: {exc})"
+                    ) from exc
             else:
                 try:
                     df = expand(
@@ -4346,9 +4342,10 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
                         id_cols=id_cols,
                         keep_vars=keep_vars,
                     )
-                except Exception:
-                    pass
-                pass
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"aumc_rate_units_expand_failed: ({type(exc).__name__}: {exc})"
+                    ) from exc
 
         result_cols = list(dict.fromkeys(id_cols))
         if index_col and index_col in df.columns:

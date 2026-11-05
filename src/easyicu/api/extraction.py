@@ -3575,15 +3575,12 @@ def _run_special_extraction(
         failure_context["stage"] = "special_load_dependencies"
     try:
         merged = _lc(concepts=deps, **load_kw)
-    except Exception:
-        # sofa2 可能不可用，回退到仅 sofa
-        try:
-            merged = _lc(concepts=["susp_inf", "sofa"], **load_kw)
-            need_sofa2 = False
-        except Exception as e:
-            traceback.print_exc()
-            errors.append(f"Failed to load dependencies {deps}: {e}")
-            merged = pd.DataFrame()
+    except Exception as e:
+        # A sofa2 failure is not "sofa2 unavailable": retrying without it
+        # silently left sep3_sofa2 unproduced and sealed as absent.
+        traceback.print_exc()
+        errors.append(f"sepsis_dependency_load_failed: {deps}: {e}")
+        merged = pd.DataFrame()
 
     if isinstance(merged, pd.DataFrame) and not merged.empty:
         # 检测 ID 和时间列

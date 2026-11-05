@@ -1538,11 +1538,7 @@ def _apply_callback(
         axis = "control" if expr == "vent_mode_control" else "seq"
         out_column = "vent_mode" if expr == "vent_mode_control" else "vent_breath_seq"
         val_col = concept_name if concept_name in frame.columns else (source.value_var or "value")
-        db_name = None
-        try:
-            db_name = data_source.config.name
-        except Exception:
-            pass
+        db_name = getattr(getattr(data_source, "config", None), "name", None)
         result = apply_vent_mode_frame(frame, val_col, db_name, axis, out_column)
         # rename the harmonised column to concept_name if the loader expects it there
         if out_column in result.columns and concept_name != out_column:
@@ -3393,9 +3389,11 @@ def _apply_callback(
                     if weight_per_patient is not None and not weight_per_patient.empty:
                         frame = frame.merge(weight_per_patient, on=id_col, how='left')
             except Exception as e:
-                if DEBUG_MODE:
-                    logger.warning(f"获取体重失败: {e}")
-                pass
+                # A load failure is not "no weight" (see mimic_kg_rate).
+                raise RuntimeError(
+                    f"hirid_rate_kg_weight_load_failed: weight for {concept_name} "
+                    f"could not be loaded ({type(e).__name__}: {e})"
+                ) from e
 
         # 🔧 FIX: Calculate interval_minutes from concept's interval
         # R ricu uses frac = 1 / interval(x), where interval(x) is the concept's interval.
@@ -3950,8 +3948,11 @@ def _apply_callback(
                             if weight_id_col:
                                 weight_agg = weight_df.groupby(weight_id_col)['weight'].first().reset_index()
                                 frame = frame.merge(weight_agg, on=weight_id_col, how='left')
-            except Exception:
-                logger.warning("SICdb %s: weight lookup failed; rates without weight are dropped", concept_name)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"sic_rate_kg_weight_load_failed: weight for {concept_name} "
+                    f"could not be loaded ({type(exc).__name__}: {exc})"
+                ) from exc
 
         # Convert source grams/min to mcg/kg/min using the weight concept's kg.
         # A row without a usable weight has no mcg/kg/min value: keeping the raw
@@ -4509,11 +4510,10 @@ def _apply_callback(
             return result.drop(columns=["_wbc_row_position", "_wbc_aligned_hour"])
 
         except Exception as e:
-            if DEBUG_CALLBACK:
-                print(f"    [EXCEPTION] {type(e).__name__}: {e}")
-                import traceback
-                traceback.print_exc()
-            return unavailable("wbc_ratio_calculation_failed")
+            # A failed computation is not an unavailable WBC: surface it.
+            raise RuntimeError(
+                f"wbc_ratio_calculation_failed: {concept_name} ({type(e).__name__}: {e})"
+            ) from e
 
     raise NotImplementedError(
         f"Callback '{callback}' is not yet supported."

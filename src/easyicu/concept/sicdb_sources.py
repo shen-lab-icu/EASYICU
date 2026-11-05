@@ -333,7 +333,11 @@ def filter_cvp(tables, ctx):
         refs["Val"] = values.where(values.between(1, 200))
         lookup = refs.groupby(["CaseID", "_hour"]).Val.median()
         arterial = pd.Series(pd.MultiIndex.from_arrays([data.CaseID, np.floor(pd.to_numeric(data[time], errors="coerce"))]).map(lookup).to_numpy(), index=data.index, dtype=float)
-    except (KeyError, ValueError, TypeError, AttributeError, OSError):
-        pass  # Missing evidence is reported as QC; R2 still retains 30--50.
+    except (KeyError, ValueError, TypeError, AttributeError, OSError) as exc:
+        # Absent arterial rows already give an empty reference (reported as
+        # QC); a failed read would flag every DBP row cuff-only.
+        raise RuntimeError(
+            f"sicdb_cvp_arterial_reference_read_failed: ({type(exc).__name__}: {exc})"
+        ) from exc
     dbp = pd.to_numeric(data.get("dbp", pd.Series(np.nan, index=data.index)), errors="coerce")
     return _cvp_quality_result(data, ids, time, ctx, arterial, arterial.isna() & dbp.notna())

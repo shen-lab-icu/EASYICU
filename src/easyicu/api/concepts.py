@@ -1958,7 +1958,9 @@ def load_concepts(
                         for c in columns:
                             special_dict[c] = aki_df[id_time + [c]].copy()
             except Exception as e:
-                logger.warning(f"renal AKI bundle loading failed: {e}")
+                # A producer failure is not an unavailable concept: native-v2
+                # would seal the missing column as structurally absent.
+                raise RuntimeError(f"renal_aki_bundle_load_failed: {e}") from e
         if _need_circ:
             try:
                 from ..scores.circ_failure import load_circ_failure
@@ -1991,7 +1993,7 @@ def load_concepts(
                         if c in cf_df.columns:
                             special_dict[c] = cf_df[id_time + [c]].copy()
             except Exception as e:
-                logger.warning(f"load_circ_failure failed: {e}")
+                raise RuntimeError(f"circ_failure_load_failed: {e}") from e
         if _need_comorb:
             # 'charlson' -> charlson_index, 'elixhauser' -> elixhauser_vw.
             # The full per-condition flags remain available via
@@ -2014,8 +2016,7 @@ def load_concepts(
                         verbose=verbose,
                     )
                 except Exception as e:
-                    logger.warning(f"load_comorbidity({c}) failed: {e}")
-                    continue
+                    raise RuntimeError(f"comorbidity_load_failed:{c}: {e}") from e
                 if not isinstance(como, pd.DataFrame) or como.empty:
                     continue
                 id_cols = [
@@ -2041,8 +2042,7 @@ def load_concepts(
             except Exception as e:
                 if "icu_death" in _need_outcome:
                     raise
-                logger.warning(f"load_outcomes failed: {e}")
-                oc = None
+                raise RuntimeError(f"outcomes_load_failed: {e}") from e
             if isinstance(oc, pd.DataFrame) and not oc.empty:
                 id_cols = [
                     col
@@ -2070,8 +2070,7 @@ def load_concepts(
                     verbose=verbose,
                 )
             except Exception as e:
-                logger.warning(f"load_microbiology failed: {e}")
-                mic = None
+                raise RuntimeError(f"microbiology_load_failed: {e}") from e
             if isinstance(mic, pd.DataFrame) and not mic.empty:
                 id_cols = [
                     col
@@ -2130,9 +2129,9 @@ def load_concepts(
                             try:
                                 result = result.merge(sdf, on=join_cols, how="outer")
                             except Exception as e:
-                                logger.warning(
-                                    f"failed to merge special concept {name!r}: {e}"
-                                )
+                                raise RuntimeError(
+                                    f"special_concept_merge_failed:{name!r}: {e}"
+                                ) from e
                         elif result.empty:
                             # No standard concepts at all — return the
                             # special frame as-is for this single-concept

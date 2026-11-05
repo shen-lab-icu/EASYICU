@@ -794,7 +794,9 @@ def _load_concept_for_callback(ctx: ConceptCallbackContext, concept_name: str) -
             elif isinstance(result, pd.DataFrame):
                 return result
     except Exception as e:
-        logger.debug(f"Failed to load concept '{concept_name}' in callback: {e}")
+        raise RuntimeError(
+            f"callback_concept_load_failed: {concept_name} ({type(e).__name__}: {e})"
+        ) from e
     return None
 
 
@@ -1420,8 +1422,10 @@ def _merge_tables(
                     if len(actual_key_cols) < len(key_cols):
                         missing_in_frame = [col for col in key_cols if col not in frame.columns]
                         missing_in_merged = [col for col in key_cols if col not in merged.columns]
-                        logging.debug(f"跳过 '{name}': 缺少合并键列 (frame缺少: {missing_in_frame}, merged缺少: {missing_in_merged})")
-                        continue
+                        raise ValueError(
+                            f"concept_component_merge_failed: {name!r} lacks merge keys "
+                            f"(component missing {missing_in_frame}, merged missing {missing_in_merged})"
+                        )
 
                     duplicate_cols = [c for c in frame.columns if c in merged.columns and c not in actual_key_cols]
                     if duplicate_cols:
@@ -1454,7 +1458,11 @@ def _merge_tables(
 
                     merged = merged.merge(frame, on=actual_key_cols, how=how)
                 except (ValueError, KeyError) as e:
-                    logger.warning(f"跳过 '{name}': merge失败 - {e}")
+                    if str(e).startswith("concept_component_merge_failed"):
+                        raise
+                    raise ValueError(
+                        f"concept_component_merge_failed: {name!r} ({type(e).__name__}: {e})"
+                    ) from e
                 continue
 
     if merged is None:
@@ -2086,10 +2094,9 @@ def _callback_blood_cell_ratio(
                 data[assessment_column] = "missing_wbc_time_alignment"
                     
     except Exception as e:
-        import logging
-        logging.debug(f"blood_cell_ratio: WBC loading failed: {e}; failing closed")
-        data[value_column] = np.nan
-        data[assessment_column] = "wbc_load_failed"
+        raise RuntimeError(
+            f"wbc_ratio_calculation_failed: {value_column} ({type(e).__name__}: {e})"
+        ) from e
 
     # Never return an absolute numerator under a percentage concept. Retaining
     # the structured reason keeps the unavailable value attributable.
@@ -2397,7 +2404,10 @@ def _callback_mimic_kg_rate(
                     normalized = True
                     data = data.drop(columns=["__weight_kg"], errors='ignore')
     except Exception as exc:
-        logger.debug("Failed to load weight for mimic_kg_rate callback: %s", exc)
+        raise RuntimeError(
+            f"mimic_kg_rate_weight_load_failed: weight for {value_column} "
+            f"could not be loaded ({type(exc).__name__}: {exc})"
+        ) from exc
 
     if not normalized:
         data[value_column] = np.nan
@@ -5611,10 +5621,11 @@ def _callback_urine24(
                     tables.update(loaded)
                 elif isinstance(loaded, ICUTable):
                     tables["urine"] = loaded
-        except (KeyError, ValueError):
-            # Return empty table if urine cannot be loaded
-            cols = DAILY_COLUMNS
-            return _as_icutbl(pd.DataFrame(columns=cols), id_columns=[], index_column=None, value_column="urine24")
+        except (KeyError, ValueError) as exc:
+            # A failed urine load is not a stay without urine output.
+            raise RuntimeError(
+                f"urine24_urine_load_failed: ({type(exc).__name__}: {exc})"
+            ) from exc
     
     urine_tbl = _ensure_time_index(tables["urine"])
     interval = ctx.interval or pd.Timedelta(hours=1)
@@ -8924,6 +8935,10 @@ def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
     vm = _load_vent_mode_map()
     db_key = {"eicu_demo": "eicu", "mimic_demo": "mimic"}.get(db_name, db_name)
     submap = vm.get(db_key)
+    if not frame.empty and (submap is None or value_column not in frame.columns):
+        raise ValueError(
+            f"vent_mode_map_unavailable: database={db_name!r} column={value_column!r}"
+        )
     if submap is None or value_column not in frame.columns:
         frame = frame.copy()
         frame[out_column] = _pd.Series([None] * len(frame), index=frame.index, dtype=object)

@@ -30,8 +30,14 @@ def load_optional(data_source, table, stays, columns=None, *, selectors=()):
             table, columns=columns,
             filters=[*filters, *selectors], verbose=False,
         )
-    except (FileNotFoundError, KeyError):
+    except FileNotFoundError:
+        # An absent optional table carries no evidence.  A KeyError is a
+        # schema or code fault, not absence, and must not empty the channel.
         return pd.DataFrame(columns=columns)
+    except KeyError as exc:
+        raise RuntimeError(
+            f"eicu_optional_channel_read_failed: {table} ({exc})"
+        ) from exc
     return result.data if hasattr(result, "data") else result
 
 

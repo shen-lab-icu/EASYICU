@@ -940,7 +940,12 @@ class ICUDataSource:
                                     if verbose:
                                         logger.info(f"✅ [{table_name}] 映射成功: {len(spec.value)} stay_ids -> {len(valid_hadm_ids)} hadm_ids")
                             except Exception as e:
-                                logger.warning(f"⚠️ [{table_name}] 过滤器映射失败: {e}")
+                                # Left on stay_id, a hospital table without that
+                                # column would come back empty for the batch.
+                                raise RuntimeError(
+                                    f"hospital_table_hadm_mapping_failed: {table_name} "
+                                    f"({type(e).__name__}: {e})"
+                                ) from e
                         
                         # 只在verbose模式下输出，且只输出一次
                         if verbose:
@@ -1315,13 +1320,12 @@ class ICUDataSource:
                             logger.debug(f"[{table_name}] 补全 {target_id_col} 后更新 id_columns: subject_id → {target_id_col}")
                         
                 except Exception as e:
-                    # 如果补全失败，记录警告但不中断流程
-                    logger.warning(
-                        "⚠️  表 %s: 无法补全 %s: %s",
-                        table_name,
-                        target_id_col,
-                        str(e)
-                    )
+                    # A half-joined frame (no stay column, or rows not yet
+                    # deduplicated to the target stays) must not be returned.
+                    raise RuntimeError(
+                        f"hospital_table_stay_id_fill_failed: {table_name} -> {target_id_col} "
+                        f"({type(e).__name__}: {e})"
+                    ) from e
 
         if verbose and logger.isEnabledFor(logging.INFO):
             id_label = id_columns[0] if id_columns else defaults.id_var or "N/A"
@@ -2320,8 +2324,9 @@ class ICUDataSource:
             return df
             
         except Exception as e:
-            logger.error("MIMIC-III CSV fallback failed: %s", e)
-            return pd.DataFrame()
+            raise RuntimeError(
+                f"mimic3_chartevents_csv_read_failed: ({type(e).__name__}: {e})"
+            ) from e
     
     def _resolve_mimic3_csv(self, table_name: str) -> Optional[Path]:
         """Find an original MIMIC-III CSV/CSV.GZ file for a table.
@@ -2730,9 +2735,12 @@ class ICUDataSource:
                         return pd.DataFrame()
             
             except Exception as e:
-                # 最终回退到原始实现
-                logger.warning(f"优化读取失败: {e}，回退到fallback方法")
-                return self._read_partitioned_data_fallback(directory, columns, patient_ids_filter)
+                # Both the dataset scan and the per-file read failed on the
+                # resolved files.  The legacy fallback globs only top-level
+                # files, so a bucketed table would come back silently empty.
+                raise RuntimeError(
+                    f"partitioned_read_failed: {directory.name} ({type(e).__name__}: {e})"
+                ) from e
     
     def _read_partitioned_data_fallback(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         """Read partitioned data from a directory, respecting format priority."""

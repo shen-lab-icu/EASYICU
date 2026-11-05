@@ -435,8 +435,12 @@ def load_circ_failure(
                                       max_patients=max_patients, patient_ids=patient_ids, verbose=False)
                     if isinstance(r, pd.DataFrame) and not r.empty:
                         loaded_dfs[c] = r
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Grading without a drug's evidence would silently lower
+                    # circulatory-failure levels for the whole batch.
+                    raise RuntimeError(
+                        f"circ_failure_dependency_load_failed: {c} ({type(exc).__name__}: {exc})"
+                    ) from exc
     
     # Normalize time columns to 'charttime' (merge=False returns raw column names
     # like 'measuredat_minutes' / 'start' / 'starttime' that differ from merge=True's 'charttime')

@@ -2390,9 +2390,12 @@ class ConceptResolver:
                             if sub_result is not None:
                                 tables[sub_name] = sub_result
                         except Exception as e:
-                            if DEBUG_MODE:
-                                logger.debug(f"Failed to load sub-concept {sub_name}: {e}")
-                            continue
+                            # A callback run without one of its inputs would
+                            # publish a partial or empty concept.
+                            raise RuntimeError(
+                                f"sub_concept_load_failed: {sub_name} for {concept_name} "
+                                f"({type(e).__name__}: {e})"
+                            ) from e
                 
                 callback_context = ConceptCallbackContext(
                     concept_name=concept_name,
