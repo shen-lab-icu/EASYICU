@@ -43,6 +43,16 @@ separate cut.
   where FiO2 is charted often (HiRID P/F median 184 -> 221 mmHg; AUMC
   215 -> 220; MIIV and eICU < 2%).
 
+## 2026-11-05 — AUMC D-dimer is published in ng/mL [round 12, R7]
+
+- The `d_dimer` column's canonical unit is ng/mL. AUMC 10393/12163 values
+  (mg/l, R5C-AUMC-011) were published unconverted under that label. They are
+  now converted by mass (1 mg/l = 1000 ng/mL), so label and value agree.
+- Only the mass unit changes. The FEU/DDU reporting basis stays unverified and
+  unconverted, so AUMC and MIMIC assay scales are still not harmonized.
+- Values above 50 mg/l now exceed the concept's 50,000 ng/mL bound, as in every
+  source (full source: 25 of 929 rows, maximum 239 mg/l).
+
 ## 2026-11-05 — eICU order-derived norepinephrine is marked [V1, `fa80e951e`] (new column only)
 
 - `norepi_dur` in eICU takes the order window of a norepinephrine order for

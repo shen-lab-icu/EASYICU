@@ -52,7 +52,7 @@ def test_extra_labs_cover_five_databases():
     for lab in EXTRA_LABS:
         srcs = set(d[lab].sources)
         assert {"miiv", "mimic"} <= srcs
-    # R5C-AUMC-011: AUMC keeps native mg/l with its assay basis unverified.
+    # R5C-AUMC-011: AUMC mg/l is published in ng/mL; its assay basis is unverified.
     assert "sic" in d["ferritin"].sources
     assert "aumc" in d["ldh"].sources
     assert "sic" not in d["d_dimer"].sources

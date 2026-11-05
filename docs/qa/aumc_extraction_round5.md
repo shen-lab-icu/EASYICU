@@ -42,10 +42,12 @@ protected community registry and catalog summary after merging the lanes.
 
 D-dimer items 10393 `D-dimeren (bloed)` and 12163 `D-DIMEER (bloed)` are mapped
 after the 2026-11-05 round-11 review (R5C-AUMC-011). Only `numericitems.unit`
-equal to `mg/l` (case insensitive) is accepted; values remain unchanged in native
-mg/l. The AUMC assay reporting basis (FEU/DDU) is unverified. No conversion or
-assay classification is inferred from value ranges or from MIMIC's separate
-reference-range evidence. No D-dimer unit/assay companion exists; the dictionary
+equal to `mg/l` (case insensitive) is accepted. Round 12 (R7): the published
+column's canonical unit is ng/mL, so mg/l is converted by mass (x1000) and the
+label matches the values; values above 50 mg/l exceed the concept's 50,000 ng/mL
+bound. The AUMC assay reporting basis (FEU/DDU) is unverified. No FEU/DDU
+conversion or assay classification is inferred from value ranges or from MIMIC's
+separate reference-range evidence. No D-dimer unit/assay companion exists; the dictionary
 source comment and catalog record this boundary. AUMC values must not be pooled
 with MIMIC's ng/mL FEU values as if their units and assay bases were harmonized.
 

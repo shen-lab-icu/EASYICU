@@ -30493,7 +30493,7 @@
   "max": 50000,
   "description": "D-dimer (blood)",
   "category": "chemistry",
-  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. Output is ng/mL on the FEU (fibrinogen-equivalent unit) scale as charted, with no conversion, in MIMIC-IV and MIMIC-III: both label variants of 50915/51196 share the reference range 0-500 and one distribution (2026-11-04 audit rounds 3 and 4, F-21, R4-032). AUMC reports native mg/l without conversion; its FEU/DDU assay reporting basis is unverified and must not be assumed equivalent to the MIMIC FEU scale. SIC remains unavailable.",
+  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. Output is ng/mL on the FEU (fibrinogen-equivalent unit) scale as charted, with no conversion, in MIMIC-IV and MIMIC-III: both label variants of 50915/51196 share the reference range 0-500 and one distribution (2026-11-04 audit rounds 3 and 4, F-21, R4-032). AUMC mg/l is converted by mass to ng/mL (x1000); its FEU/DDU assay reporting basis is unverified and must not be assumed equivalent to the MIMIC FEU scale. SIC remains unavailable.",
   "sources": {
    "miiv": [
     {
@@ -30544,7 +30544,8 @@
      "require_regex": {
       "unit": "(?i)^mg/l$"
      },
-     "_comment": "2026-11-05 round-11 review (R5C-AUMC-011): 10393 D-dimeren (bloed) and 12163 D-DIMEER (bloed) are blood D-dimer reported in mg/l. Require mg/l and retain native values unchanged. The AUMC assay reporting basis (FEU/DDU) is unverified; do not infer it from value ranges or convert to the MIMIC FEU scale."
+     "callback": "convert_unit(binary_op(`*`, 1000), 'ng/mL', '(?i)^mg/l$')",
+     "_comment": "2026-11-05 round-11 review (R5C-AUMC-011): 10393 D-dimeren (bloed) and 12163 D-DIMEER (bloed) are blood D-dimer reported in mg/l. Require mg/l and retain native values unchanged. The AUMC assay reporting basis (FEU/DDU) is unverified; do not infer it from value ranges or convert to the MIMIC FEU scale. | Round-12 (R7): the published column's canonical unit is ng/mL, so mg/l is converted by mass (1 mg/l = 1000 ng/mL); the FEU/DDU basis stays unverified and unconverted. Values above 50 mg/l (25 of 929 rows in the full source, max 239) exceed the concept's 50,000 ng/mL bound as in every source."
     }
    ]
   }

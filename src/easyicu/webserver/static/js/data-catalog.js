@@ -386,7 +386,7 @@
     persistent_critical_illness: ["Persistent Critical Illness", "持续危重症", "boolean"],
     ammonia: ["Ammonia", "氨", "umol/L"],
     amylase: ["Amylase", "淀粉酶", "U/L"],
-    d_dimer: ["D-dimer", "D-二聚体", "ng/mL (MIMIC); mg/l (AUMC)"],
+    d_dimer: ["D-dimer", "D-二聚体", "ng/mL"],
     ferritin: ["Ferritin", "铁蛋白", "ng/mL"],
     ldh: ["Lactate Dehydrogenase", "乳酸脱氢酶", "U/L"],
     lipase: ["Lipase", "脂肪酶", "U/L"],
@@ -554,7 +554,7 @@
 
   // short descriptions where available (en, zh)
   const desc = {
-    d_dimer: ["Blood D-dimer: MIMIC uses ng/mL FEU; AUMC keeps native mg/l with FEU/DDU reporting basis unverified. Values are not harmonized across these sources.", "血液D-二聚体：MIMIC为ng/mL FEU；AUMC保留原始mg/l，FEU/DDU报告依据未核实。两类来源数值未统一换算。"],
+    d_dimer: ["Blood D-dimer in ng/mL: MIMIC is FEU as charted; AUMC mg/l is converted by mass (x1000) with its FEU/DDU reporting basis unverified, so the assay scales are not harmonized.", "血液D-二聚体，单位ng/mL：MIMIC按原始FEU；AUMC的mg/l按质量换算（×1000），FEU/DDU报告依据未核实，两类来源的检测口径未统一。"],
     sofa2: ["Database operationalization of SOFA-2 with conservative handling of unconfirmed delirium-treatment proxies", "SOFA-2数据库操作化实现；对未确认的谵妄治疗代理采取保守处理"],
     sofa2_resp: ["Respiratory: PaO2/FiO2 (or SpO2/FiO2 if unavailable), scores 3-4 require advanced respiratory support (IMV/NIV/HFNC) or ECMO", "呼吸系统：基于氧合指数，3-4分需要高级呼吸支持（IMV/NIV/HFNC）或ECMO"],
     sofa2_coag: ["Coagulation: platelet count with updated thresholds (≤50→4, ≤80→3, ≤100→2, ≤150→1)", "凝血系统：基于血小板计数，使用更新的阈值（≤50→4分，≤80→3分，≤100→2分，≤150→1分）"],

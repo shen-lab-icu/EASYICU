@@ -120,13 +120,15 @@ def test_incompatible_unit_mix_has_a_conversion(concept_dict):
 def test_cross_database_semantic_uncertainty_is_explicit(concept_dict):
     """Unconfirmed semantics require exclusion or an explicit native-unit boundary."""
     assert "aumc" not in concept_dict["adh_rate"]["sources"]
-    # R5C-AUMC-011: native AUMC mg/l is available without an FEU/DDU conversion.
+    # R5C-AUMC-011: AUMC mg/l is available without an FEU/DDU conversion.
+    # Round 12 (R7): the label is the canonical ng/mL, so mg/l is converted by
+    # mass only (x1000).
     d_dimer = concept_dict["d_dimer"]
     source = d_dimer["sources"]["aumc"][0]
     assert source["ids"] == [10393, 12163]
     assert source["unit_var"] == "unit"
-    assert "callback" not in source
-    assert "mg/l" in d_dimer["unit"]
+    assert source["callback"] == "convert_unit(binary_op(`*`, 1000), 'ng/mL', '(?i)^mg/l$')"
+    assert d_dimer["unit"][0] == "ng/mL"
     assert "unverified" in source["_comment"]
     assert "FEU/DDU" in source["_comment"]
     # 2026-11-03 audit round 2 (S8): HiRID neut reads 24000556, segmented

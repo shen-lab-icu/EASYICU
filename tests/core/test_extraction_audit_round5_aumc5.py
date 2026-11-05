@@ -100,10 +100,13 @@ def test_r5c_aumc_009_calcium_actual_ph_does_not_pool_corrected_measurements(tmp
 
 @pytest.mark.parametrize("layout", ["file", "bucket"])
 @pytest.mark.parametrize("merged", [False, True])
-def test_r5c_aumc_011_d_dimer_keeps_native_mg_per_litre_only(tmp_path, layout, merged):
+def test_r5c_aumc_011_d_dimer_mg_per_litre_is_published_in_the_canonical_ng_per_ml(tmp_path, layout, merged):
+    # Round-12 (R7): the column's canonical unit is ng/mL, so AUMC's mg/l values
+    # are converted by mass (x1000); FEU/DDU stays unverified and unconverted.
+    # 60 mg/l is 60,000 ng/mL, above the concept's 50,000 bound like any source.
     rows = [(5, 10393, .73, "mg/l"), (65, 12163, 1.25, "mg/l"),
             (125, 10393, 3.5, "mg/l"), (5, 6845, 60., "U/l"),
-            (185, 10394, 9., "mg/l")]
+            (185, 10394, 9., "mg/l"), (545, 10393, 60., "mg/l")]
     for i, unit in enumerate(("ng/mL", "mg/dl", "mg/l FEU", "", None)):
         rows.extend((245 + 60 * i, item, 12., unit) for item in (10393, 12163))
     # Wrong-unit rows in an otherwise accepted hour must not enter its median.
@@ -118,8 +121,8 @@ def test_r5c_aumc_011_d_dimer_keeps_native_mg_per_litre_only(tmp_path, layout, m
     frame = result if merged else result["d_dimer"].data
     time = next(c for c in ("charttime", "measuredat", "measuredat_minutes") if c in frame) if merged else result["d_dimer"].index_column
     actual = frame.dropna(subset=["d_dimer"]).set_index(time).d_dimer.to_dict()
-    assert actual == pytest.approx({0.: .73, 1.: 1.25, 2.: 3.5})
-    assert "mg/l" in dictionary["d_dimer"].units
+    assert actual == pytest.approx({0.: 730., 1.: 1250., 2.: 3500.})
+    assert dictionary["d_dimer"].units[0] == "ng/mL"
 
 
 def test_r5c_aumc_012_scvo2_requires_unanimous_central_site_without_extra_specimen(tmp_path):
