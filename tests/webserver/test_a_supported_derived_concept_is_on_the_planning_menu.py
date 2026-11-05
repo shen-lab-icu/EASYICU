@@ -36,6 +36,8 @@ PROVENANCE_COLUMNS = frozenset({
     "uo_rt_6hr_covered_h", "uo_rt_12hr_covered_h", "uo_rt_24hr_covered_h",
     "aki_stage_uo_reference_available_at",
     "rrt_evidence_reason", "rrt_evidence_status", "urine_evidence_status",
+    # Round 12: follow-up assumption receipts on the mortality outcomes.
+    "mort_28d_assumption_based", "mort_90d_assumption_based", "mort_365d_assumption_based",
 })
 
 

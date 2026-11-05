@@ -43,6 +43,35 @@ separate cut.
   where FiO2 is charted often (HiRID P/F median 184 -> 221 mmHg; AUMC
   215 -> 220; MIIV and eICU < 2%).
 
+## 2026-11-05 — follow-up assumptions are cited or flagged [round 12; `951d566b6`, `9802ce1fa`] (new columns only)
+
+New outcome columns `mort_28d_assumption_based`, `mort_90d_assumption_based`
+and `mort_365d_assumption_based` are TRUE where a survivor is known only
+through an undocumented follow-up assumption. They are FALSE for recorded
+deaths and documented follow-up, and missing where the endpoint is missing.
+`mort_*` and `followup_days_*` values do not change. A paper should use the
+flagged cells of these databases only in sensitivity analyses.
+
+- **AmsterdamUMCdb.** A missing `dateofdeath` is taken as one year of survival
+  from ICU admission. No official source supports that horizon: the admissions
+  table documents `dateofdeath` as "the date on which the patient died ... if
+  applicable (non-null)" (AmsterdamUMCdb wiki, admissions). The descriptor
+  paper (Thoral et al., Crit Care Med 2021) reports deaths < 1 year after
+  discharge but no follow-up method. Every AUMC survivor without a death date
+  is flagged.
+- **SICdb.** The categories are documented, so they keep the values unflagged:
+  - `d_references` labels 3076 "6 Months" and 3077 "1 Year" for
+    `EstimatedSurvivalObservationTime`.
+  - The SICdb wiki (Mortality): "For technical reasons observation time is only
+    6 month for some patients".
+  - PhysioNet SICdb 1.0.8: `OffsetOfDeath` "is capped at one year" from
+    admission and includes out-of-hospital deaths from governmental data.
+  - The 2023 descriptor paper counts the year from hospital discharge; the
+    admission start used here is the shorter, conservative reading.
+  - The one-day grace that lets a survivor whose ICU transfer came hours after
+    admission reach the horizon is not documented, so survivors who need it
+    are flagged.
+
 ## 2026-11-05 — SOFA-2 all-missing flag and one SOFA owner for web exports [GW1, GW2, `4cc1de6bf`]
 
 - Native-v2 research export: `sofa2_score` gains `sofa2_all_components_missing`,

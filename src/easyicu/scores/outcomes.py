@@ -312,6 +312,14 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
         text = followup.astype(str).str.strip().str.lower()
         followup_days.loc[text.str.contains("6 month", na=False)] = 180.0
         followup_days.loc[text.str.contains("1 year", na=False)] = 365.0
+        # Source (round-12 citations): d_references labels 3076 "6 Months" and
+        # 3077 "1 Year" (ReferenceName EstimatedSurvivalObservationTime); the
+        # SICdb wiki says "For technical reasons observation time is only 6
+        # month for some patients" (sicdb.com, Mortality) and PhysioNet that
+        # OffsetOfDeath "is capped at one year" from admission and includes
+        # out-of-hospital deaths from governmental data (SICdb 1.0.8). The
+        # 2023 descriptor paper measures the year from hospital discharge
+        # instead; the admission start used here is the shorter reading.
         # SICdb's registry death offset is capped at one year from primary
         # admission. Conservatively treat the 6-month/one-year follow-up
         # category as beginning there too, then move its bound to the first
@@ -326,7 +334,8 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     # Moving the bound to the ICU transfer leaves it a few hours short of a
     # horizon equal to the category (median transfer 2 h after admission).
     # Accept a shortfall under one day: censoring every such survivor would
-    # define the one-year horizon for the dead only.
+    # define the one-year horizon for the dead only. No source documents this
+    # grace, so survivors who need it are flagged ``mort_<h>_assumption_based``.
     df["followup_grace_days"] = 1.0
     df["hadm_id"] = np.nan
     return df
@@ -353,6 +362,10 @@ def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
     # admission-year groups (2003-2009 and 2010-2016); survivors are taken as
     # followed for one year from ICU admission and no further.
     df["followup_days"] = np.where(dod.isna(), 365.0, np.nan)
+    # The source documents dateofdeath only "if applicable (non-null)" and
+    # states no follow-up horizon (AmsterdamUMCdb wiki, admissions table), so
+    # that year is an assumption (round-12 ruling): survivors are flagged.
+    df["followup_assumed"] = dod.isna().to_numpy()
     df["hadm_id"] = np.nan
     return df
 
@@ -433,6 +446,10 @@ def _load_followup_outcomes(
         base.get("source_bound_days", pd.Series(np.nan, index=base.index)),
         errors="coerce",
     ).to_numpy()
+    followup_assumed = (
+        base.get("followup_assumed", pd.Series(False, index=base.index))
+        .astype("boolean").fillna(False).to_numpy(dtype=bool)
+    )
     for name, horizon in _HORIZONS.items():
         unreachable = np.isfinite(source_bound) & (source_bound + grace_days < horizon)
         died_by = has_death & (dtd <= horizon) & (dtd >= 0) & ~unreachable
@@ -443,6 +460,16 @@ def _load_followup_outcomes(
         endpoint[died_by] = True
         endpoint[known_alive] = False
         out[name] = endpoint
+        # A survivor known only through an undocumented follow-up assumption:
+        # an assumed horizon (AUMC) or a horizon reached by the grace day
+        # (SICdb). Recorded deaths and documented follow-up are not assumed.
+        assumed = known_alive & ~has_death & (
+            followup_assumed | ~(followup_days >= horizon)
+        )
+        flag = pd.array([pd.NA] * len(base), dtype="boolean")
+        flag[died_by | known_alive] = False
+        flag[assumed] = True
+        out[f"{name}_assumption_based"] = flag
         followup_name = FIXED_HORIZON_MORTALITY_ENDPOINTS[name].followup_concept
         followup_time = np.full(len(base), np.nan, dtype="float64")
         followup_time[died_by] = dtd[died_by]
