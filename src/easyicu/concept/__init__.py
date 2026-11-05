@@ -3804,6 +3804,10 @@ class ConceptResolver:
                                         agg_match = re_module.search(r"aggregate_fun\(['\"]([^'\"]+)['\"]", source.callback)
                                         if agg_match:
                                             agg_func = agg_match.group(1)  # e.g., 'sum'
+                                    # The requested concept aggregator (for example po2/pafi min) must survive
+                                    # pre-sampling; a median here raised HiRID P/F (2026-11-05 audit R7-F002).
+                                    if isinstance(aggregator, str) and aggregator in ('min', 'max', 'mean', 'median', 'sum', 'first', 'last'):
+                                        agg_func = aggregator
                                     group_cols = id_cols + [time_col + '_rounded']
                                     
                                     # 保留所有列，不只是value_col
@@ -3857,6 +3861,10 @@ class ConceptResolver:
                                             agg_match = re_module.search(r"aggregate_fun\(['\"]([^'\"]+)['\"]", source.callback)
                                             if agg_match:
                                                 agg_func = agg_match.group(1)  # e.g., 'sum'
+                                        # The requested concept aggregator (for example po2/pafi min) must survive
+                                        # pre-sampling; a median here raised HiRID P/F (2026-11-05 audit R7-F002).
+                                        if isinstance(aggregator, str) and aggregator in ('min', 'max', 'mean', 'median', 'sum', 'first', 'last'):
+                                            agg_func = aggregator
                                         
                                         for group_id, group_df in frame.groupby(id_cols):
                                             group_df = group_df.set_index(time_col)

@@ -1356,7 +1356,9 @@ def sofa2_renal(
         score[(c > 2.0) | (u12 < 0.5)] = np.maximum(score[(c > 2.0) | (u12 < 0.5)], 2)
         score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)] = np.maximum(score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)], 3)
 
-        if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None):
+        # Each metabolic route stands alone: a missing optional potassium input
+        # must not disable the pH/HCO3 route, nor missing pH/HCO3 the potassium route.
+        if any(series is not None for series in (potassium, ph, bicarbonate_series)):
             base_injury = (c > 1.2) | oligo_evidence
             metabolic_crisis = (potassium_value >= 6.0) | (
                 (ph_value <= 7.20) & (bicarbonate_value <= 12)
@@ -1366,7 +1368,7 @@ def sofa2_renal(
         return score
 
     # Check if patient meets RRT criteria but not receiving RRT (e.g., ceiling of care)
-    if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None) and (urine_mlkgph is not None):
+    if any(series is not None for series in (potassium, ph, bicarbonate_series)):
         # SOFA-2 footnote (p): a patient NOT on RRT scores 4 if they meet RRT
         # criteria, i.e. (creatinine >1.2 mg/dL OR oliguria <0.3 mL/kg/h for >6 h)
         # AND (K ≥6.0 mmol/L OR (pH ≤7.20 AND HCO3 ≤12 mmol/L)).
