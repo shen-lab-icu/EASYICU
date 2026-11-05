@@ -43,6 +43,25 @@ separate cut.
   where FiO2 is charted often (HiRID P/F median 184 -> 221 mmHg; AUMC
   215 -> 220; MIIV and eICU < 2%).
 
+## 2026-11-05 — SOFA-2 all-missing flag and one SOFA owner for web exports [GW1, GW2, `4cc1de6bf`]
+
+- Native-v2 research export: `sofa2_score` gains `sofa2_all_components_missing`,
+  TRUE in hours where all six SOFA-2 components are missing, so the total is a
+  pure normal-value imputation (0, as ricu's na.rm sum). Existing columns keep
+  identical values, dtypes, order and rows (6-database regression).
+- Web export job (`webserver/dataio.py` `make_export_runner`): it used to call
+  `api.load_concepts(..., use_sofa2=..., merge=True)` for the SOFA modules. That
+  requested the six organs as separate point concepts, so point states replaced
+  the aggregate callback's rolling companions and changed the row set. On the
+  eICU demo the grouped and web exports disagreed: SOFA-1 189,380 vs 189,401
+  rows and SOFA-2 179,859 vs 178,536 rows (GW1).
+- The web job now calls the grouped export's owner,
+  `api/extraction._load_module_concepts`, and reuses the native total rebuild.
+  Web and native SOFA-1/SOFA-2 exports therefore share one definition: the same
+  row keys, totals, six organs and flag
+  (`tests/core/test_grouped_web_sofa_gw1.py`). Web receipt dtypes are kept.
+  This is intended (GW1 ruling: "keep the web-side fix"), not a side effect.
+
 ## 2026-11-05 — AUMC D-dimer is published in ng/mL [round 12, R7]
 
 - The `d_dimer` column's canonical unit is ng/mL. AUMC 10393/12163 values
