@@ -184,14 +184,18 @@ def test_rr_01_unknown_specimens_never_enter_arterial_sources(database, name, ca
             # few Sample Type rows. paO2/paCO2 are arterial by name; pH and
             # SaO2 need a same-offset paO2/paCO2, absent from this source.
             audit = out.attrs["eicu_specimen_audit"]
+            # Round 8 (R7-F018): a recorded blank/Unspecified sample is not
+            # "no sample"; the label and same-panel fallbacks do not apply.
             if name in {"po2", "pco2"}:
-                assert out.index.tolist() == [0, 2, 3, 5, 7]
-                assert audit == {"explicit_arterial": 2, "label_defined_arterial": 3,
-                                 "co_measured_arterial": 0, "excluded_venous": 3, "excluded_unknown": 0}
+                assert out.index.tolist() == [0, 5, 7]
+                assert audit == {"explicit_arterial": 2, "label_defined_arterial": 1,
+                                 "co_measured_arterial": 0, "excluded_venous": 3,
+                                 "excluded_recorded_unknown": 2, "excluded_unknown": 0}
             else:
                 assert out.index.tolist() == [0, 5]
                 assert audit == {"explicit_arterial": 2, "label_defined_arterial": 0,
-                                 "co_measured_arterial": 0, "excluded_venous": 3, "excluded_unknown": 3}
+                                 "co_measured_arterial": 0, "excluded_venous": 3,
+                                 "excluded_recorded_unknown": 2, "excluded_unknown": 1}
             assert any(record.args == audit for record in caplog.records)
             continue
         assert out.index.tolist() == [0]
@@ -414,7 +418,7 @@ def test_r6_eicu_ambiguous_gases_need_a_same_offset_arterial_anchor(database, na
     assert set(out.specimen_status) == {"co_measured_arterial"}
     assert out.attrs["eicu_specimen_audit"] == {
         "explicit_arterial": 0, "label_defined_arterial": 0, "co_measured_arterial": 2,
-        "excluded_venous": 1, "excluded_unknown": 2}
+        "excluded_venous": 1, "excluded_recorded_unknown": 0, "excluded_unknown": 2}
 
 
 def test_r6_eicu_total_co2_is_not_an_arterial_tco2_source():

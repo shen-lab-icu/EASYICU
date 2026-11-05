@@ -46,18 +46,25 @@ def _offset_like(values, like):
 
 
 def _sample_types(data_source, stays, like):
-    """Per stay/offset: recorded non-arterial and arterial Sample Type flags."""
+    """Per stay/offset: recorded non-arterial, arterial and unknown Sample Type flags.
+
+    ``_unknown`` marks a Sample Type record that names neither specimen
+    (Unknown, Unspecified, blank): a sample was recorded, so the label and
+    same-panel fallbacks do not apply to it (round-8 R7-F018).
+    """
     keys = [STAY, "labresultoffset"]
+    flags = ["_nonarterial", "_arterial", "_unknown"]
     samples = load_optional(data_source, "customlab", stays)
     if samples.empty:
-        return pd.DataFrame(columns=[*keys, "_nonarterial", "_arterial"])
+        return pd.DataFrame(columns=[*keys, *flags])
     samples = samples.loc[samples.labothername.astype("string").str.strip().str.casefold().eq("sample type")].copy()
     text = samples.labothervaluetext.astype("string").fillna("").str.strip()
     text = text.where(text.ne(""), samples.labotherresult.astype("string").fillna("").str.strip())
     samples["_nonarterial"] = text.str.contains(_NONARTERIAL_SAMPLE, case=False, na=False)
     samples["_arterial"] = text.str.fullmatch(_ARTERIAL_SAMPLE, case=False, na=False) & ~samples["_nonarterial"]
+    samples["_unknown"] = ~samples["_nonarterial"] & ~samples["_arterial"]
     samples["labresultoffset"] = _offset_like(samples.labotheroffset, like)
-    return samples.groupby(keys, as_index=False)[["_nonarterial", "_arterial"]].any()
+    return samples.groupby(keys, as_index=False)[flags].any()
 
 
 def _arterial_anchor_keys(data_source, stays, like):
@@ -101,7 +108,9 @@ def arterial_gases(frame, data_source, analytes=()):
 
     1. A recorded Sample Type decides first: venous, capillary, mixed or
        central samples drop every gas at that stay/offset; an arterial sample
-       admits them (``explicit_arterial``).
+       admits them (``explicit_arterial``). A recorded sample that names
+       neither (Unknown, Unspecified, blank) is ``excluded_recorded_unknown``;
+       the fallbacks below apply only where no Sample Type was recorded.
     2. eICU has no per-sample specimen field otherwise. paO2 and paCO2 are
        arterial by definition (``label_defined_arterial``).
     3. pH, base excess/deficit and O2 Sat (%) do not name a specimen; they enter
@@ -125,14 +134,15 @@ def arterial_gases(frame, data_source, analytes=()):
     samples = _sample_types(data_source, stays, frame.labresultoffset)
     venous = flag(samples, "_nonarterial")
     explicit = flag(samples, "_arterial") & ~venous
+    unknown = flag(samples, "_unknown") & ~venous & ~explicit
     if label_defined:
         anchored = np.ones(len(work), dtype=bool)
     else:
         anchors = _arterial_anchor_keys(data_source, stays, frame.labresultoffset)
         anchored = flag(anchors.assign(_anchor=True), "_anchor")
     status = np.select(
-        [venous, explicit, anchored],
-        ["excluded_venous", "explicit_arterial",
+        [venous, explicit, unknown, anchored],
+        ["excluded_venous", "explicit_arterial", "excluded_recorded_unknown",
          "label_defined_arterial" if label_defined else "co_measured_arterial"],
         default="excluded_unknown",
     )
@@ -143,7 +153,7 @@ def arterial_gases(frame, data_source, analytes=()):
     out.attrs["eicu_specimen_audit"] = {
         name: int(counts.get(name, 0))
         for name in ("explicit_arterial", "label_defined_arterial", "co_measured_arterial",
-                     "excluded_venous", "excluded_unknown")
+                     "excluded_venous", "excluded_recorded_unknown", "excluded_unknown")
     }
     logger.info("eICU arterial specimen restriction audit=%s", out.attrs["eicu_specimen_audit"])
     return out
