@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
 import enum
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import logging
@@ -4155,13 +4156,18 @@ def load_bucketed_table_aggregated(
         """
     
     def _execute_aggregation(sql: str) -> pd.DataFrame:
-        try:
-            arrow_table = conn.execute(sql).fetch_arrow_table()
-            result = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-            del arrow_table
-            return result
-        except Exception:
-            return conn.execute(sql).fetchdf()
+        lab_admissions = (
+            _miiv_lab_admissions(data_source, conn, patient_ids)
+            if db_name == "miiv" and table_name == "labevents" else nullcontext()
+        )
+        with lab_admissions:
+            try:
+                arrow_table = conn.execute(sql).fetch_arrow_table()
+                result = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+                del arrow_table
+                return result
+            except Exception:
+                return conn.execute(sql).fetchdf()
 
     try:
         df = finish_miiv_lab_frame(_execute_aggregation(query))
@@ -4620,17 +4626,22 @@ def load_bucketed_table_multi_aggregated(
     else:
         raise ValueError(f"Unsupported database for multi-concept batch: {db_name}")
 
-    try:
-        arrow_table = conn.execute(query).fetch_arrow_table()
-        df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-        del arrow_table
-    except Exception as error:
-        _raise_if_duckdb_interrupted(error)
+    lab_admissions = (
+        _miiv_lab_admissions(data_source, conn, patient_ids)
+        if _base_db == "miiv" and table_name == "labevents" else nullcontext()
+    )
+    with lab_admissions:
         try:
-            df = conn.execute(query).fetchdf()
-        except Exception as fallback_error:
-            _raise_if_duckdb_interrupted(fallback_error)
-            raise
+            arrow_table = conn.execute(query).fetch_arrow_table()
+            df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+            del arrow_table
+        except Exception as error:
+            _raise_if_duckdb_interrupted(error)
+            try:
+                df = conn.execute(query).fetchdf()
+            except Exception as fallback_error:
+                _raise_if_duckdb_interrupted(fallback_error)
+                raise
     df = finish_miiv_lab_frame(df)
     logger.info(
         "Bucketed multi-concept DuckDB aggregation complete: %s concepts=%d itemids=%d -> %d rows",
@@ -5025,15 +5036,50 @@ def mimic_chart_quality_sql(database: str, table: str, columns, alias="o") -> st
     return f" AND TRY_CAST({prefix}{_duckdb_identifier(error)} AS DOUBLE) IS DISTINCT FROM 1"
 
 
+@contextmanager
+def _miiv_lab_admissions(source, conn, patient_ids=None, *, subjects=None):
+    """Expose source admissions, including non-ICU admissions, for one lab query."""
+    if subjects is None and patient_ids is not None:
+        stays = source.load_table(
+            "icustays", columns=["subject_id", "stay_id"],
+            filters=[FilterSpec("stay_id", FilterOp.IN, patient_ids)], verbose=False,
+        ).data
+        subjects = stays.subject_id.dropna().unique().tolist()
+    columns = ["subject_id", "hadm_id", "admittime", "dischtime"]
+    admissions = source.load_table(
+        "admissions", columns=columns,
+        filters=None if subjects is None else [FilterSpec("subject_id", FilterOp.IN, subjects)],
+        verbose=False,
+    ).data
+    if admissions.empty:
+        # Partial/demo sources may omit admissions; no known interval restricts ED1.
+        admissions = pd.DataFrame({
+            column: pd.Series(dtype="int64" if column.endswith("_id") else "datetime64[ns]")
+            for column in columns
+        })
+    conn.register("__miiv_lab_admissions", admissions)
+    try:
+        yield
+    finally:
+        conn.unregister("__miiv_lab_admissions")
+
+
 def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="valuenum") -> str:
     """One attribution policy shared by pandas sources and DuckDB aggregates.
 
     Admission-linked rows retain the existing forward-outtime rolling rule.
-    NULL-admission rows require exactly one candidate ICU window, considering
-    every stay/admission of the subject, before filtering requested stays.
+    NULL-admission rows use that same rolling rule among bounded ICU windows,
+    considering every stay/admission of the subject before selecting targets.
+    If charttime lies inside source admission intervals (inclusive), only
+    stays of those admissions are eligible; never fall back to another
+    admission when none of their ICU windows contains the row.
+    Choose the first candidate outtime >= charttime, or the last candidate
+    when all outtimes precede it. Overlapping windows are counted, not rejected.
     Only cross-channel duplicates are removed; equal independent events in
     one channel keep their multiplicity.
     """
+    rolling_order = f"""CASE WHEN s.outtime >= e.{time_col} THEN s.outtime END ASC NULLS LAST,
+                s.outtime DESC, s.stay_id"""
     return f"""
     raw_events AS (SELECT * REPLACE (TRY_CAST({time_col} AS TIMESTAMP) AS {time_col}),
         ROW_NUMBER() OVER () AS __lab_row FROM ({events_sql})),
@@ -5042,12 +5088,16 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
             TRY_CAST(intime AS TIMESTAMP) AS intime, TRY_CAST(outtime AS TIMESTAMP) AS outtime
         FROM ({stays_sql})
     ),
+    null_admissions AS (
+        SELECT e.__lab_row, a.hadm_id
+        FROM raw_events e JOIN __miiv_lab_admissions a ON e.subject_id = a.subject_id
+        WHERE e.hadm_id IS NULL AND e.{time_col} BETWEEN
+            TRY_CAST(a.admittime AS TIMESTAMP) AND TRY_CAST(a.dischtime AS TIMESTAMP)
+    ),
     hadm_ranked AS (
         SELECT e.*, s.stay_id, s.hadm_id AS attributed_hadm_id, s.intime, s.outtime,
             'hadm_id' AS lab_attribution_basis,
-            ROW_NUMBER() OVER (PARTITION BY e.__lab_row ORDER BY
-                CASE WHEN s.outtime >= e.{time_col} THEN s.outtime END ASC NULLS LAST,
-                s.outtime DESC, s.stay_id) AS __rank
+            ROW_NUMBER() OVER (PARTITION BY e.__lab_row ORDER BY {rolling_order}) AS __rank
         FROM raw_events e JOIN all_stays s
           ON e.subject_id = s.subject_id AND e.hadm_id = s.hadm_id
         WHERE e.hadm_id IS NOT NULL
@@ -5056,14 +5106,21 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
     null_candidates AS (
         SELECT e.*, s.stay_id, s.hadm_id AS attributed_hadm_id, s.intime, s.outtime,
             'subject_id_charttime' AS lab_attribution_basis,
-            COUNT(*) OVER (PARTITION BY e.__lab_row) AS __candidates
+            COUNT(*) OVER (PARTITION BY e.__lab_row) AS __candidates,
+            ROW_NUMBER() OVER (PARTITION BY e.__lab_row ORDER BY {rolling_order}) AS __rank
         FROM raw_events e JOIN all_stays s ON e.subject_id = s.subject_id
         WHERE e.hadm_id IS NULL AND e.{time_col} BETWEEN
             s.intime - INTERVAL '{LAB_WINDOW_HOURS} hours' AND s.outtime + INTERVAL '{LAB_WINDOW_HOURS} hours'
     ),
-    unique_null AS (SELECT * EXCLUDE (__candidates) FROM null_candidates WHERE __candidates = 1),
+    null_assigned AS (
+        SELECT n.* EXCLUDE (__candidates, __rank) FROM null_candidates n
+        WHERE NOT EXISTS (SELECT 1 FROM null_admissions a WHERE a.__lab_row = n.__lab_row)
+           OR EXISTS (SELECT 1 FROM null_admissions a
+                      WHERE a.__lab_row = n.__lab_row AND a.hadm_id = n.attributed_hadm_id)
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY n.__lab_row ORDER BY n.__rank) = 1
+    ),
     null_kept AS (
-        SELECT n.* FROM unique_null n WHERE NOT EXISTS (
+        SELECT n.* FROM null_assigned n WHERE NOT EXISTS (
             SELECT 1 FROM hadm_assigned h WHERE n.subject_id = h.subject_id AND n.stay_id = h.stay_id
               AND n.{time_col} = h.{time_col} AND n.itemid = h.itemid
               AND n.{value_col} IS NOT DISTINCT FROM h.{value_col}
@@ -5079,9 +5136,14 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
             (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates WHERE __candidates > 1) AS __audit_ambiguous_null_hadm_rows,
             (SELECT COUNT(*) FROM raw_events WHERE hadm_id IS NULL) -
                 (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates) AS __audit_unmatched_null_hadm_rows,
-            (SELECT COUNT(*) FROM unique_null) - (SELECT COUNT(*) FROM null_kept) AS __audit_deduplicated_null_hadm_rows,
+            (SELECT COUNT(*) FROM null_assigned) - (SELECT COUNT(*) FROM null_kept) AS __audit_deduplicated_null_hadm_rows,
             (SELECT COUNT(*) FROM null_kept) AS __audit_attributed_null_hadm_rows,
-            (SELECT COUNT(*) FROM hadm_assigned) AS __audit_hadm_rows
+            (SELECT COUNT(*) FROM hadm_assigned) AS __audit_hadm_rows,
+            (SELECT COUNT(*) FROM null_candidates c JOIN null_assigned n USING (__lab_row)
+                WHERE c.__rank = 1 AND c.attributed_hadm_id IS DISTINCT FROM n.attributed_hadm_id)
+                AS __audit_null_hadm_rows_in_other_admission_reassigned,
+            (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates) - (SELECT COUNT(*) FROM null_assigned)
+                AS __audit_null_hadm_rows_in_other_admission_dropped
     )"""
 
 
@@ -5116,7 +5178,7 @@ def miiv_lab_aggregation_sql(parquet_sql, stays_sql, itemids_sql, patient_ids, i
         targets = f"WHERE o.stay_id IN ({literals})"
     optional = "".join(f", NULL AS {c}" for c in LAB_OPTIONAL_COLUMNS if c not in source_columns)
     events = f"SELECT *{optional} FROM read_parquet({parquet_sql}, union_by_name=true) WHERE itemid IN ({itemids_sql}){subjects} AND {value_col} IS NOT NULL"
-    # Group on the ICU clock only after unique attribution and channel deduplication.
+    # Group on the ICU clock only after rolling attribution and channel deduplication.
     hour = f"FLOOR(EPOCH(o.{time_col} - o.intime) / 3600.0 / {interval_hours}) * {interval_hours}"
     result = f"""SELECT o.stay_id, {hour} AS charttime, {aggregate_sql},
         STRING_AGG(DISTINCT o.lab_attribution_basis, ',') AS lab_attribution_basis
@@ -5140,10 +5202,11 @@ def attribute_miiv_labs(frame: pd.DataFrame, source, patient_ids=None) -> pd.Dat
     conn.register("__miiv_labs", raw)
     conn.register("__miiv_stays", stays)
     try:
-        query = _lab_query("SELECT * FROM __miiv_labs", "SELECT * FROM __miiv_stays",
-                           "SELECT * EXCLUDE (__lab_row) FROM assigned ORDER BY __lab_row",
-                           order_sql="ORDER BY r.stay_id NULLS LAST, r.charttime")
-        result = finish_miiv_lab_frame(conn.execute(query).fetchdf())
+        with _miiv_lab_admissions(source, conn, subjects=subjects):
+            query = _lab_query("SELECT * FROM __miiv_labs", "SELECT * FROM __miiv_stays",
+                               "SELECT * EXCLUDE (__lab_row) FROM assigned ORDER BY __lab_row",
+                               order_sql="ORDER BY r.stay_id NULLS LAST, r.charttime")
+            result = finish_miiv_lab_frame(conn.execute(query).fetchdf())
     finally:
         conn.unregister("__miiv_labs")
         conn.unregister("__miiv_stays")

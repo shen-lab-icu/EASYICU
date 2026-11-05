@@ -4,6 +4,48 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — MIMIC-IV ED lab attribution [ED1, ED2-1]
+
+- NULL-`hadm_id` labevents use `subject_id` and the existing inclusive window
+  from 24 h before ICU admission to 24 h after ICU discharge. Round 5 already
+  recovered rows with one candidate; overlapping windows now use the hospital
+  rolling rule instead of dropping the row: choose the first candidate stay
+  whose outtime is not before charttime, or the last candidate if all outtimes
+  precede charttime. Equal outtimes use the lowest stay ID, as admission-linked
+  labs already do. Each source row goes to exactly one stay. Consider all
+  stays/admissions of the subject before applying requested stay/admission
+  filters.
+- **[ED2-1]** Hospital admission intervals take precedence over this subject
+  fallback: if a NULL-admission lab's charttime lies in a source `admissions`
+  interval `[admittime, dischtime]` (inclusive), restrict candidates to ICU
+  stays of that admission, keeping the same inclusive ICU window and rolling
+  rule. With overlapping hospital admissions, roll over the eligible stays of
+  those admissions only. If none of their ICU windows contains the lab (including
+  admissions without an ICU stay), drop it; never fall back to an ICU stay of
+  another admission. Outside all admission intervals, keep the ED1 subject/window
+  rule. Source admission timestamps may be strings and use `TRY_CAST` to
+  timestamps; partial/demo sources without admissions have no known intervals.
+- This hybrid rule is an explicit exception to ricu: ricu loads MIIV labevents
+  by `hadm_id` and `upgrade_id` rolls on `(hadm_id, time)`, so NULL-admission
+  rows never acquire a stay. It also differs from MIT-LCP mimic-code's
+  subject/window attribution, which counts a row for every overlapping stay.
+  The rationale is to recover pre-ICU ED labs, including baseline creatinine,
+  without double counting or moving an inpatient lab to another admission.
+- Pandas, preloaded, single-concept and multi-concept DuckDB loads consult the
+  same `_lab_ctes` owner. Subject-level pushdown retains NULL-admission labs;
+  raw `hadm_id` stays NULL and `attributed_hadm_id` records the selected admission.
+  Admission-linked assignment and cross-channel deduplication are unchanged.
+  `ambiguous_null_hadm_rows` still counts rows with overlapping ICU windows,
+  and `unmatched_null_hadm_rows` still counts rows with no such window, both
+  before the admission restriction. Two additional counters record its effect:
+  `null_hadm_rows_in_other_admission_reassigned` counts rows whose selected
+  admission changes from the unrestricted ED1 winner, before cross-channel
+  deduplication; `null_hadm_rows_in_other_admission_dropped` counts rows with
+  ICU-window candidates but no eligible stay after the admission restriction.
+  `attributed_null_hadm_rows` and `deduplicated_null_hadm_rows` retain their
+  meanings for the final assignment.
+  Validation uses synthetic records only; real-data coverage awaits lead checks.
+
 ## 2026-11-05 — extraction audit round 8 (last batch; no dictionary change)
 
 - **[R7-F005 follow-up]** MIMIC-III source alignment floors minutes from whole
@@ -287,7 +329,8 @@ been measured in this lane.
   `subject_id` and the bounded window from 24 h before ICU admission to 24 h
   after ICU discharge. Attribution considers all stays of the subject before
   selecting requested stays. Multiple candidate stays or admissions reject
-  the row. Requested-stay filters survive subject-level read pushdown.
+  the row in round 5; ED1 above supersedes that rejection with rolling
+  attribution. Requested-stay filters survive subject-level read pushdown.
   Admission-linked duplicate events take precedence; available event and
   specimen identifiers distinguish independent equal results, and text-only
   specimen labels remain distinct when they disagree. Missing optional units
@@ -539,10 +582,9 @@ expands windows that carry an hours duration (SICdb mech_vent 338 → 6,459).
 
 ### Documented, not changed (round 3)
 
-- **MIIV ED labs.** Labs with `hadm_id` NULL drawn in the ED before admission
-  are not attributed to the ICU stay (ricu convention; 10-30% of stays for ~30
-  lab concepts per the audit). Attribution by subject and time needs a loader
-  change on three query paths and is tracked separately.
+- **MIIV ED labs.** Subject/time attribution of NULL-`hadm_id` labs was deferred
+  in round 3. Round 5 added bounded single-candidate recovery across loaders;
+  ED1 above completes overlapping-window attribution with the rolling rule.
 - **MIMIC-III prescriptions** are day-resolution (noon); eMAR does not exist.
 - **Lab specimens.** `lact`, `be`, `tco2`, `hbco`, `methb`, `cai` and `o2sat`
   are not arterial-only concepts; arterial-only variables carry

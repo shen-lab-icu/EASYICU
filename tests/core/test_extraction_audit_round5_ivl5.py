@@ -69,13 +69,13 @@ def _labs():
 
 
 @pytest.mark.parametrize("path", ["source", "bucket", "batch", "resolver", "resolver_hadm"])
-def test_r5c_iv_008_null_hadm_labs_have_bounded_unambiguous_attribution(tmp_path, path, monkeypatch):
+def test_r5c_iv_008_null_hadm_labs_have_bounded_rolling_attribution(tmp_path, path, monkeypatch):
     source = _source(tmp_path, "miiv", "labevents", _labs())
     if path == "source":
         frame = source.load_table("labevents", filters=[
             FilterSpec("hadm_id", FilterOp.IN, [11, 21, 31]),
         ]).data
-        assert sorted(frame.loc[frame.itemid.eq(50912), "valuenum"]) == [1.2, 2.0, 4.0]
+        assert sorted(frame.loc[frame.itemid.eq(50912), "valuenum"]) == [1.2, 2.0, 4.0, 8.0, 9.0]
         assert set(frame.lab_attribution_basis) == {"hadm_id", "subject_id_charttime"}
         audit = frame.attrs["easyicu_miiv_lab_attribution"]
         assert audit["ambiguous_null_hadm_rows"] == 2
@@ -114,7 +114,7 @@ def test_r5c_iv_008_null_hadm_labs_have_bounded_unambiguous_attribution(tmp_path
                                        interval=pd.Timedelta(hours=1), merge=False,
                                        r_compatible=False, concept_workers=1)["crea"].data
         values = frame.set_index("charttime").crea
-    assert set(frame.stay_id) == {101}
+    assert set(frame.stay_id) == ({101} if path == "resolver_hadm" else {101, 201, 301})
     assert values.loc[-12] == pytest.approx(1.2)
     assert values.loc[2] == pytest.approx(3.0 if path.startswith("resolver") else 6.0)
 
@@ -279,7 +279,7 @@ def test_r5c_iv_012_public_insulin_load_preserves_hourly_total(tmp_path):
 
 
 @pytest.mark.parametrize("path", ["source", "bucket", "batch"])
-def test_r5c_iv_008_ambiguity_is_counted_even_when_no_lab_survives(tmp_path, path):
+def test_r5c_iv_008_overlap_is_counted_and_resolved_by_rolling_attribution(tmp_path, path):
     rows = _labs().loc[lambda x: x.subject_id.eq(2)]
     source = _source(tmp_path, "miiv", "labevents", rows)
     if path == "source":
@@ -288,8 +288,9 @@ def test_r5c_iv_008_ambiguity_is_counted_even_when_no_lab_survives(tmp_path, pat
         result = load_bucketed_table_aggregated(source, "labevents", "valuenum", [50912], patient_ids=[201])
     else:
         result = load_bucketed_table_multi_aggregated(source, "labevents", {"crea": [50912]}, patient_ids=[201])
-    assert result.empty
+    assert result.stay_id.tolist() == [201]
     assert result.attrs["easyicu_miiv_lab_attribution"]["ambiguous_null_hadm_rows"] == 1
+    assert result.attrs["easyicu_miiv_lab_attribution"]["attributed_null_hadm_rows"] == 1
 
 
 def test_r5c_iii_008_error_only_csv_is_a_valid_empty_source(tmp_path):
