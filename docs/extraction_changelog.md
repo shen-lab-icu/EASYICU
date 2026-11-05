@@ -72,6 +72,16 @@ flagged cells of these databases only in sensitivity analyses.
     admission reach the horizon is not documented, so survivors who need it
     are flagged.
 
+Flagged stays in the full databases (round-12 code, aggregates only):
+
+| Database | Stays | Horizon | Flagged (TRUE) | Survivors (`mort_*` FALSE) | `mort_*` missing |
+|---|---|---|---|---|---|
+| AUMC | 23,106 | 28 d / 90 d / 365 d | 15,364 at each | 20,275 / 19,369 / 18,331 | 0 |
+| SICdb | 27,386 | 28 d / 90 d | 0 | 25,200 / 24,085 | 0 |
+| SICdb | 27,386 | 365 d | 11,263 | 19,608 | 3,189 (6-month category) |
+
+No recorded death is flagged in either database.
+
 ## 2026-11-05 — SOFA-2 all-missing flag and one SOFA owner for web exports [GW1, GW2, `4cc1de6bf`]
 
 - Native-v2 research export: `sofa2_score` gains `sofa2_all_components_missing`,
