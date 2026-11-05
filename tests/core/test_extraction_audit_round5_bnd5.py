@@ -1,5 +1,9 @@
 """Synthetic round-5 bounds receipts; flagged tails are not clinical gold standards."""
 
+from tests.support.bucket_storage import write_fixture_parquet
+
+from tests.support.bucket_storage import synthetic_data_source
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -157,15 +161,15 @@ def test_eicu_public_filter_and_raw_quality_receipt_are_independent(tmp_path):
     from easyicu.config import load_src_cfg
     from easyicu.datasource import ICUDataSource
 
-    pd.DataFrame({
+    write_fixture_parquet(pd.DataFrame({
         "patientunitstayid": [1], "patienthealthsystemstayid": [11], "uniquepid": ["synthetic"],
         "hospitaladmitoffset": [0], "hospitaldischargeoffset": [720], "unitdischargeoffset": [720],
-    }).to_parquet(tmp_path / "patient.parquet", index=False)
-    pd.DataFrame({
+    }), tmp_path / "patient.parquet", index=False)
+    write_fixture_parquet(pd.DataFrame({
         "patientunitstayid": 1, "labid": [1, 2, 3, 4], "labname": "Hgb",
         "labresultoffset": [0, 5, 60, 120], "labresultrevisedoffset": [0, 5, 60, 120],
         "labresult": [3.0, 12.0, 12.0, 20.0], "labmeasurenameinterface": "g/dL",
-    }).to_parquet(tmp_path / "lab.parquet", index=False)
+    }), tmp_path / "lab.parquet", index=False)
     source = ICUDataSource(load_src_cfg("eicu"), base_path=tmp_path, enable_cache=False)
     resolver = ConceptResolver(ConceptDictionary.from_json(DICTIONARY_PATH))
     result = resolver.load_concepts(
@@ -198,38 +202,38 @@ def _source_fixture(root, database, name, values, layout):
     unit = dictionary[name].get("unit", "")
     unit = unit[0] if isinstance(unit, list) else unit
     if database == "eicu":
-        pd.DataFrame({"patientunitstayid": [1], "patienthealthsystemstayid": [11],
+        write_fixture_parquet(pd.DataFrame({"patientunitstayid": [1], "patienthealthsystemstayid": [11],
                       "uniquepid": ["synthetic"], "hospitaladmitoffset": [0],
-                      "hospitaldischargeoffset": [720], "unitdischargeoffset": [720]}).to_parquet(root / "patient.parquet")
+                      "hospitaldischargeoffset": [720], "unitdischargeoffset": [720]}), root / "patient.parquet")
         rows = pd.DataFrame({"patientunitstayid": 1, "labid": range(4), "labname": item,
                              "labresultoffset": minutes, "labresultrevisedoffset": minutes,
                              "labresult": values, "labmeasurenameinterface": unit})
         if name == "ph":
-            pd.DataFrame({"patientunitstayid": 1, "labotheroffset": minutes,
+            write_fixture_parquet(pd.DataFrame({"patientunitstayid": 1, "labotheroffset": minutes,
                           "labothername": "Sample Type", "labothervaluetext": "Arterial",
-                          "labotherresult": ""}).to_parquet(root / "customlab.parquet", index=False)
+                          "labotherresult": ""}), root / "customlab.parquet", index=False)
     elif database in {"miiv", "mimic"}:
         stay = "stay_id" if database == "miiv" else "icustay_id"
-        pd.DataFrame({stay: [1], "subject_id": [1], "hadm_id": [11], "intime": [start],
-                      "outtime": [start + pd.Timedelta(hours=12)], "los": [0.5]}).to_parquet(root / "icustays.parquet")
+        write_fixture_parquet(pd.DataFrame({stay: [1], "subject_id": [1], "hadm_id": [11], "intime": [start],
+                      "outtime": [start + pd.Timedelta(hours=12)], "los": [0.5]}), root / "icustays.parquet")
         rows = pd.DataFrame({"subject_id": 1, "hadm_id": 11, "itemid": item,
                              "charttime": times, "valuenum": values, "valueuom": unit})
     elif database == "aumc":
-        pd.DataFrame({"admissionid": [1], "patientid": [1], "admittedat": [0],
-                      "dischargedat": [43_200_000]}).to_parquet(root / "admissions.parquet")
+        write_fixture_parquet(pd.DataFrame({"admissionid": [1], "patientid": [1], "admittedat": [0],
+                      "dischargedat": [43_200_000]}), root / "admissions.parquet")
         rows = pd.DataFrame({"admissionid": 1, "itemid": item,
                              "measuredat": np.array(minutes) * 60_000, "value": values, "unit": unit,
                              "tag": "+", "registeredat": np.array(minutes) * 60_000,
                              "updatedat": np.array(minutes) * 60_000})
     elif database == "hirid":
-        pd.DataFrame({"patientid": [1], "admissiontime": [str(start)], "age": [60],
-                      "sex": ["M"]}).to_parquet(root / "general.parquet")
+        write_fixture_parquet(pd.DataFrame({"patientid": [1], "admissiontime": [str(start)], "age": [60],
+                      "sex": ["M"]}), root / "general.parquet")
         rows = pd.DataFrame({"patientid": 1, "variableid": item, "datetime": times,
                              "entertime": times, "value": np.array(values) * (10 if name == "hgb" else 1),
                              "status": 8, "type": "N", "stringvalue": None})
     else:
-        pd.DataFrame({"CaseID": [1], "PatientID": [1], "ICUOffset": [0],
-                      "TimeOfStay": [43_200]}).to_parquet(root / "cases.parquet")
+        write_fixture_parquet(pd.DataFrame({"CaseID": [1], "PatientID": [1], "ICUOffset": [0],
+                      "TimeOfStay": [43_200]}), root / "cases.parquet")
         rows = pd.DataFrame({"CaseID": 1, "LaboratoryID": item, "Offset": np.array(minutes) * 60,
                              "LaboratoryValue": values, "LaboratoryType": 2296})
     table = source["table"]
@@ -243,7 +247,7 @@ def _source_fixture(root, database, name, values, layout):
         # Flat parquet directories exercise the same DuckDB aggregate owners as buckets.
         path = root / table / "part.parquet"
         path.parent.mkdir()
-    rows.to_parquet(path, index=False)
+    write_fixture_parquet(rows, path, index=False)
     return ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False)
 
 
@@ -295,7 +299,7 @@ def test_source_tails_and_flags_survive_individual_batch_and_native_export(
     frame = frame.rename(columns={batch[raw].id_columns[0]: "stay_id", time: "charttime"})
     out = tmp_path / "out"
     out.mkdir()
-    frame.to_parquet(out / "bounds_audit.parquet", index=False)
+    write_fixture_parquet(frame, out / "bounds_audit.parquet", index=False)
     extraction._publish_native_export_v2(
         database=database, data_path=str(tmp_path), output_dir=str(out),
         modules=["bounds_audit"], max_patients=None,

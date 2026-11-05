@@ -1,6 +1,12 @@
 """Round-6 loader and CVP rules, using invented observations only."""
 
+from tests.support.bucket_storage import move_fixture_parquet
+
+from tests.support.bucket_storage import write_fixture_parquet
+
 from dataclasses import replace
+from tests.support.bucket_storage import synthetic_data_source
+
 import json
 from types import SimpleNamespace
 
@@ -36,16 +42,16 @@ def _write_table(root, database, table, frame, layout="file"):
         path.parent.mkdir()
     else:
         path = root / f"{'general_table' if database == 'hirid' and table == 'general' else table}.parquet"
-    frame.to_parquet(path, index=False)
+    write_fixture_parquet(frame, path, index=False)
 
 
 def _eicu_pressures(path, database, layout="flat"):
     stays = range(1, 21)
-    pd.DataFrame({
+    write_fixture_parquet(pd.DataFrame({
         "patientunitstayid": stays, "patienthealthsystemstayid": stays,
         "uniquepid": [f"synthetic-{i}" for i in stays],
         "unitdischargeoffset": 24 * 60, "hospitaladmitoffset": 0,
-    }).to_parquet(path / "patient.parquet", index=False)
+    }), path / "patient.parquet", index=False)
     periodic, aperiodic, nursing = [], [], []
     labels = [
         ("Invasive BP Mean", "", 100.),
@@ -186,13 +192,13 @@ def test_r6_f008_cvp_keeps_30_to_50_with_flags_and_bounds(database, clock):
 
 
 def test_r6_f008_sic_qc_and_map_minus_cvp_share_retained_values(tmp_path):
-    pd.DataFrame({"CaseID": [1], "PatientID": [11], "ICUOffset": [1800],
-                  "TimeOfStay": [24 * 3600], "HospitalUnit": [3]}).to_parquet(tmp_path / "cases.parquet")
+    write_fixture_parquet(pd.DataFrame({"CaseID": [1], "PatientID": [11], "ICUOffset": [1800],
+                  "TimeOfStay": [24 * 3600], "HospitalUnit": [3]}), tmp_path / "cases.parquet")
     rows = [(1, 2018, h, v) for h, v in enumerate([20., 45., 20., 40., 50., 50.1, 30.])]
     rows += [(1, 702, 3, 42.)] + [(1, 703, h, 80.) for h in range(7)]
     frame = pd.DataFrame(rows, columns=["CaseID", "DataID", "Offset", "Val"])
     frame.Offset = frame.Offset * 3600 + 1800
-    frame.to_parquet(tmp_path / "data_float_h.parquet")
+    write_fixture_parquet(frame, tmp_path / "data_float_h.parquet")
     source = ICUDataSource(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
     results = ConceptResolver(load_dictionary(source_name="sic")).load_concepts(
         ["map", "cvp", "cvp_raw", "cvp_qc"], source, merge=False, r_compatible=False,
@@ -225,7 +231,7 @@ def _native_vitals(root, database, names, identifier, patients, streamed):
         )
         manifest = json.loads((output / "_manifest.json").read_text())
         assert manifest["errors"] == []
-        (output / "_manifest.json").rename(output / "vitals.manifest.json")
+        move_fixture_parquet(output / "_manifest.json", output / "vitals.manifest.json")
         extraction._publish_native_export_v2(
             database=database, data_path=str(root), output_dir=str(output), modules=["vitals"],
             max_patients=None, result={"modules": {"vitals": manifest}},
@@ -267,7 +273,7 @@ def test_r6_f006_wide_path_respects_raw_requests_and_requested_grid(tmp_path, mo
     frame = pd.read_parquet(periodic).iloc[:7].copy()
     frame["observationoffset"] = [1, 2, 3, 4, 5, 31, 61]
     frame["cvp"] = [10., 10., 10., 10., 10., 40., 40.]
-    frame.to_parquet(periodic, index=False)
+    write_fixture_parquet(frame, periodic, index=False)
     definition = load_dictionary(source_name="eicu")["cvp_raw"]
     dictionary = ConceptDictionary({"cvp_raw": replace(
         definition, sources={"eicu": definition.sources["eicu"][:1]},

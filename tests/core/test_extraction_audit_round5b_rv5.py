@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from tests.support.bucket_storage import move_fixture_parquet
+
+from tests.support.bucket_storage import write_fixture_parquet
+
+from tests.support.bucket_storage import synthetic_data_source
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,20 +48,20 @@ def _dictionary(filename="concept-dict.json"):
 
 def _source(tmp_path, db, table, rows, storage="flat"):
     stay = "stay_id" if db == "miiv" else "icustay_id"
-    pd.DataFrame({
+    write_fixture_parquet(pd.DataFrame({
         "subject_id": [1, 2], "hadm_id": [11, 22], stay: [101, 102],
         "intime": pd.to_datetime(["2140-01-02"] * 2),
         "outtime": pd.to_datetime(["2140-01-04"] * 2),
-    }).to_parquet(tmp_path / "icustays.parquet", index=False)
+    }), tmp_path / "icustays.parquet", index=False)
     config = load_src_cfg(db).model_copy(deep=True)
     if storage == "bucket":
         directory = tmp_path / f"{table}_bucket" / "bucket_id=0"
         directory.mkdir(parents=True)
-        rows.to_parquet(directory / "part.parquet", index=False)
+        write_fixture_parquet(rows, directory / "part.parquet", index=False)
     elif storage == "csv":
         rows.rename(columns=str.upper).to_csv(tmp_path / f"{table.upper()}.csv.gz", index=False)
     elif storage not in {"callable", "preloaded"}:
-        rows.to_parquet(tmp_path / f"{table}.parquet", index=False)
+        write_fixture_parquet(rows, tmp_path / f"{table}.parquet", index=False)
         if storage == "dataset":
             config.tables[table].dataset = DatasetOptions(path=f"{table}.parquet")
     source = ICUDataSource(config, base_path=tmp_path, enable_cache=False)
@@ -275,9 +281,9 @@ def test_RV_05_hirid_missing_pharma_status_is_typed_unavailability(tmp_path, pat
             if path.endswith("bucket"):
                 directory = tmp_path / "pharma_bucket" / "bucket_id=0"
                 directory.mkdir(parents=True)
-                rows.to_parquet(directory / "part.parquet", index=False)
+                write_fixture_parquet(rows, directory / "part.parquet", index=False)
             else:
-                rows.to_parquet(tmp_path / "pharma.parquet", index=False)
+                write_fixture_parquet(rows, tmp_path / "pharma.parquet", index=False)
             source = ICUDataSource(load_src_cfg("hirid"), base_path=tmp_path, enable_cache=False)
             _load(source, {"ins": _dictionary()["ins"]}, ["ins"])
     assert caught.value.database == "hirid"
@@ -303,9 +309,9 @@ def test_RV_03_auxiliary_void_extubation_does_not_split_chart_ventilation(tmp_pa
     if storage == "bucket":
         directory = tmp_path / "procedureevents_mv_bucket" / "bucket_id=0"
         directory.mkdir(parents=True)
-        procedures.to_parquet(directory / "part.parquet", index=False)
+        write_fixture_parquet(procedures, directory / "part.parquet", index=False)
     else:
-        procedures.to_parquet(tmp_path / "procedureevents_mv.parquet", index=False)
+        write_fixture_parquet(procedures, tmp_path / "procedureevents_mv.parquet", index=False)
     spec = _dictionary()["mech_vent"]["sources"][db][0]
     result = _apply_callback(charts, ConceptSource.from_mapping(spec), "mech_vent", data_source=source)
     assert result.charttime.tolist() == [times[0]]
@@ -349,7 +355,7 @@ def _native_module(tmp_path, db, module, concept, table, rows, storage, streamed
         )
         manifest = json.loads((output / "_manifest.json").read_text())
         assert manifest["errors"] == []
-        (output / "_manifest.json").rename(output / f"{module}.manifest.json")
+        move_fixture_parquet(output / "_manifest.json", output / f"{module}.manifest.json")
         api._publish_native_export_v2(
             database=db, data_path=str(raw), output_dir=str(output), modules=[module],
             max_patients=None, result={"modules": {module: manifest}},
@@ -432,14 +438,14 @@ def test_RV_05_compatibility_loader_preserves_status_and_fails_closed(tmp_path, 
         loader = loader_class("hirid", data_path=str(tmp_path), low_memory=True)
         return loader._load_concept_source(spec, "ins", None, "patient", None)
 
-    pd.concat([
+    write_fixture_parquet(pd.concat([
         rows.assign(recordstatus=0), rows.assign(givendose=999., recordstatus=2),
         rows.assign(givendose=888., recordstatus=32),
-    ], ignore_index=True).to_parquet(path, index=False)
+    ], ignore_index=True), path, index=False)
     valid = load()
     column = "ins" if callback else "value"
     assert valid[column].tolist() == pytest.approx([2. / 60 if callback else 2.])
-    rows.to_parquet(path, index=False)
+    write_fixture_parquet(rows, path, index=False)
     with pytest.raises(ConceptExtractionUnavailable, match="recordstatus"):
         load()
 
@@ -452,11 +458,11 @@ def test_RV_05_native_module_records_missing_status_as_unavailable(tmp_path, str
     raw, output = tmp_path / "source", tmp_path / "native"
     raw.mkdir()
     output.mkdir()
-    pd.DataFrame({
+    write_fixture_parquet(pd.DataFrame({
         "patientid": [101], "givenat": [1.], "pharmaid": [1000724],
         "givendose": [2.], "doseunit": ["units"], "route": ["iv-inf"], "infusionid": [7],
-    }).to_parquet(raw / "pharma.parquet", index=False)
-    pd.DataFrame({"patientid": [101], "admissiontime": [pd.Timestamp("2140-01-02")]}).to_parquet(
+    }), raw / "pharma.parquet", index=False)
+    write_fixture_parquet(pd.DataFrame({"patientid": [101], "admissiontime": [pd.Timestamp("2140-01-02")]}),
         raw / "general_table.parquet", index=False,
     )
     try:
@@ -476,11 +482,11 @@ def test_RV_05_native_module_records_missing_status_as_unavailable(tmp_path, str
 def test_RV_05_compatibility_public_loader_propagates_unavailability(tmp_path, workers):
     from importlib import import_module
 
-    pd.DataFrame({
+    write_fixture_parquet(pd.DataFrame({
         "patientid": [101, 101], "givenat": [1., 1.], "enteredentryat": [1., 1.],
         "pharmaid": [1000724, 1000690], "givendose": [2., 3.], "doseunit": ["units", "ml"],
         "route": "iv-inf", "infusionid": [7, 8],
-    }).to_parquet(tmp_path / "pharma.parquet", index=False)
+    }), tmp_path / "pharma.parquet", index=False)
     loader = import_module("easyicu.load_concepts").ConceptLoader("hirid", data_path=str(tmp_path), low_memory=True)
     with pytest.raises(ConceptExtractionUnavailable, match="recordstatus"):
         loader.load_concepts(["ins", "dex"], id_type="patient", merge_data=False,

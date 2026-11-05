@@ -1,3 +1,8 @@
+
+from tests.support.bucket_storage import move_fixture_parquet
+
+from tests.support.bucket_storage import write_fixture_parquet
+from tests.support.bucket_storage import declare_single_bucket_fixtures
 """Invented source regressions for the round-8 AUMC/HiRID audit."""
 
 import json
@@ -56,13 +61,14 @@ def test_r8_a1_hyperkalemia_renal_agrees_across_module_single_and_batch(tmp_path
     stays = pd.read_parquet(demographics).iloc[[0]]
     stays = stays.loc[stays.index.repeat(len(cohort_ids))].reset_index(drop=True)
     stays[identifier] = cohort_ids
-    stays.to_parquet(demographics, index=False)
+    write_fixture_parquet(stays, demographics, index=False)
     events = root / ("numericitems_bucket/bucket_id=0/part.parquet" if database == "aumc" else "observations/1.parquet")
     frame = pd.read_parquet(events)
     padding = frame.iloc[[1]]
     padding = padding.loc[padding.index.repeat(len(cohort_ids) - 1)].reset_index(drop=True)
     padding[identifier] = cohort_ids[1:]
-    pd.concat([frame, padding], ignore_index=True).to_parquet(events, index=False)
+    write_fixture_parquet(pd.concat([frame, padding], ignore_index=True), events, index=False)
+    declare_single_bucket_fixtures(root)
 
     def check(frame):
         actual = frame.loc[frame[identifier].eq(1)].set_index("charttime").sofa2_renal
@@ -105,7 +111,7 @@ def test_r8_a2_partial_wide_materializes_exact_intervals_before_merge(tmp_path, 
              "infusionid": 1, "givendose": .2, "route": "iv"},
         ])
         if layout == "file":
-            (root / "observations/1.parquet").rename(root / "observations.parquet")
+            move_fixture_parquet(root / "observations/1.parquet", root / "observations.parquet")
             (root / "observations").rmdir()
     names = ["hr", "k", "na", "lact", "norepi_dur", "vaso_ind", "norepi60", "norepi_rate"]
     ledger = _load(root, database, ["norepi_dur"], merge=False, r_compatible=False, interval=None)["norepi_dur"]

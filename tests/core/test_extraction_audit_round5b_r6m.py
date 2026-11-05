@@ -1,5 +1,9 @@
 """Round-6 mappings and legacy GCS; all input records are invented."""
 
+
+from tests.support.bucket_storage import move_fixture_parquet
+from tests.support.bucket_storage import declare_single_bucket_fixtures
+
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +33,7 @@ def _dictionary():
 
 
 def _load(source, names, id_column, *, interval=pd.Timedelta(hours=1)):
+    declare_single_bucket_fixtures(source.base_path)
     dictionary = _dictionary()
     # Do not rely on identifier/value columns invented only by the fixtures.
     for name in names:
@@ -53,7 +58,7 @@ def _bucket_tables(root, names):
             original = root / name / "part.parquet"
         target = root / f"{name}_bucket" / "bucket_id=0" / "part.parquet"
         target.parent.mkdir(parents=True)
-        original.replace(target)
+        move_fixture_parquet(original, target)
         if original.parent != root:
             original.parent.rmdir()
 

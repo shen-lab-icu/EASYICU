@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from tests.support.bucket_storage import move_fixture_parquet
+
+from tests.support.bucket_storage import write_fixture_parquet
+
+from tests.support.bucket_storage import synthetic_data_source
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -301,7 +307,7 @@ def _disk_source(root, database, concept, table, item, bucketed):
         stays_table = "cases"
         stays = pd.DataFrame({identifier: ids, "PatientID": ids, "ICUOffset": 21600,
                               "TimeOfStay": 194400, "HospitalUnit": 3})
-    stays.to_parquet(root / f"{stays_table}.parquet", index=False)
+    write_fixture_parquet(stays, root / f"{stays_table}.parquet", index=False)
     filename = "sofa2-dict.json" if concept in {"other_vaso", "adv_resp"} else "concept-dict.json"
     spec = next(s for s in _dictionary(filename)[concept]["sources"][database]
                 if s["table"] == table and ("ids" not in s or item in s["ids"]))
@@ -348,7 +354,7 @@ def _disk_source(root, database, concept, table, item, bucketed):
     if bucketed:
         path = root / f"{table}_bucket" / "bucket_id=0" / "part.parquet"
         path.parent.mkdir(parents=True)
-    rows.to_parquet(path, index=False)
+    write_fixture_parquet(rows, path, index=False)
     # Empty ancillary sources retain their real schemas, as an empty patient
     # projection would. Never invent columns to make a callback succeed.
     from easyicu.concept.loader import load_dictionary
@@ -361,7 +367,7 @@ def _disk_source(root, database, concept, table, item, bucketed):
             "col_integer": "Int64", "col_double": "float64", "col_datetime": "datetime64[ns]",
             "col_logical": "boolean",
         }.get(spec["spec"], "string")) for spec in columns.values()})
-        empty.to_parquet(root / f"{name}.parquet", index=False)
+        write_fixture_parquet(empty, root / f"{name}.parquet", index=False)
     return ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False), identifier, expected
 
 
@@ -394,7 +400,7 @@ def test_rb_01_to_08_real_schema_loader_and_native_paths(tmp_path, monkeypatch, 
             )
             manifest = json.loads((output / "_manifest.json").read_text())
             assert manifest["errors"] == []
-            (output / "_manifest.json").rename(output / f"{module}.manifest.json")
+            move_fixture_parquet(output / "_manifest.json", output / f"{module}.manifest.json")
             api._publish_native_export_v2(
                 database=database, data_path=str(raw), output_dir=str(output), modules=[module],
                 max_patients=None, result={"modules": {module: manifest}},

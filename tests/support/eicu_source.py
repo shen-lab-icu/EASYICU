@@ -1,6 +1,10 @@
 """Small invented eICU source tables for source-contract regression tests."""
 
+from tests.support.bucket_storage import write_fixture_parquet
+
 from pathlib import Path
+
+from tests.support.bucket_storage import synthetic_data_source
 
 import numpy as np
 import pandas as pd
@@ -14,7 +18,7 @@ DICTIONARY = Path(__file__).resolve().parents[2] / "src/easyicu/data/concept-dic
 
 def _write(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(path, index=False)
+    write_fixture_parquet(frame, path, index=False)
 
 def _eicu_source(tmp_path: Path, database: str, **tables) -> ICUDataSource:
     _write(pd.DataFrame({

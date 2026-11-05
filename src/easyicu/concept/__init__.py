@@ -26,7 +26,7 @@ from ..config import DataSourceConfig
 from ..hospital_mortality import DENSE_STATUS_BINDINGS
 from ..datasource import (
     DuckDBQueryInterrupted, FilterOp, FilterSpec, ICUDataSource,
-    _duckdb_path, enumerate_bucket_parquet_files,
+    _duckdb_path,
 )
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
@@ -1381,6 +1381,9 @@ class ConceptResolver:
         aggregators = self._normalise_aggregators(aggregate, required_names)
         config = data_source.config
         db_name = config.name if hasattr(config, 'name') else 'unknown'
+        if isinstance(data_source, ICUDataSource):
+            from ..storage_layout import validate_concept_layouts
+            validate_concept_layouts(data_source, self.dictionary, names)
         # Callbacks need to distinguish an observed empty component from an
         # absent source even when the caller did not request an audit sink.
         availability_context = (
@@ -2995,30 +2998,10 @@ class ConceptResolver:
                                     _idtbl_conn = _get_duckdb_connection()
                                     _idtbl_sub_var = source.sub_var
                                     _idtbl_val_var = getattr(source, 'value_var', None) or 'value'
-                                    # Resolve bucket/flat directory
-                                    _idtbl_bucket_dir = storage.resolve_bucket_directory(source.table)
-                                    _idtbl_flat_dir = None
-                                    if _idtbl_bucket_dir is None:
-                                        _idtbl_flat_dir = storage.resolve_flat_parquet_directory(source.table)
-                                    if _idtbl_bucket_dir is not None or _idtbl_flat_dir is not None:
-                                        # Build read_parquet source: 显式文件列表，过滤 AppleDouble (._*.parquet)
-                                        # 否则在 macFUSE/NTFS/exFAT 上 DuckDB 的 ** glob 会把 macOS sidecar 元数据
-                                        # 当真 parquet 读，触发 "No magic bytes found" 错误。
-                                        if _idtbl_bucket_dir is not None:
-                                            _idtbl_target_path = Path(_idtbl_bucket_dir) if not isinstance(_idtbl_bucket_dir, Path) else _idtbl_bucket_dir
-                                        else:
-                                            _idtbl_target_path = Path(_idtbl_flat_dir) if not isinstance(_idtbl_flat_dir, Path) else _idtbl_flat_dir
-                                        _idtbl_files = enumerate_bucket_parquet_files(_idtbl_target_path)
-                                        if _idtbl_files:
-                                            _idtbl_files_sql = "[" + ", ".join(f"'{f}'" for f in _idtbl_files) + "]"
-                                            _idtbl_read_expr = f"read_parquet({_idtbl_files_sql}, hive_partitioning=true, union_by_name=true)"
-                                        else:
-                                            # 退化为原 glob (空目录边界场景)
-                                            if _idtbl_bucket_dir is not None:
-                                                _idtbl_glob = _duckdb_path(_idtbl_target_path / '**' / '*.parquet')
-                                            else:
-                                                _idtbl_glob = _duckdb_path(_idtbl_target_path / '*.parquet')
-                                            _idtbl_read_expr = f"read_parquet('{_idtbl_glob}', hive_partitioning=true, union_by_name=true)"
+                                    from ..storage_layout import parquet_relation
+                                    _idtbl_files = storage.resolve_target_files(source.table, _idtbl_sub_var, _idtbl_ids)
+                                    if _idtbl_files:
+                                        _idtbl_read_expr = parquet_relation(_idtbl_files)
                                         # Determine ID column
                                         _idtbl_id_cfg = data_source.config.id_configs.get('icustay') or data_source.config.id_configs.get('patient')
                                         _idtbl_id_col = _idtbl_id_cfg.id if hasattr(_idtbl_id_cfg, 'id') else _idtbl_id_cfg
@@ -8726,7 +8709,6 @@ class ConceptResolver:
                 # 新方案：DuckDB SELECT MAX(datetime) GROUP BY patientid → ~100MB内存, <2s
                 if hasattr(data_source, 'base_path') and data_source.base_path is not None:
                     base_path = Path(data_source.base_path)
-                    bucket_path = base_path / 'observations_bucket'
                     obs_path = base_path / 'observations'
 
                     read_expr = None
@@ -8765,9 +8747,9 @@ class ConceptResolver:
                             logger.debug("HiRID observation part index lookup failed: %s", index_error)
 
                     if read_expr is None:
-                        if bucket_path.is_dir():
-                            glob_pattern = _duckdb_path(bucket_path / '**' / '*.parquet')
-                            read_expr = f"read_parquet('{glob_pattern}', hive_partitioning=true)"
+                        if data_source.resolve_bucket_directory("observations") is not None:
+                            from ..storage_layout import parquet_relation
+                            read_expr = parquet_relation(data_source.resolve_target_files("observations", "patientid", target_patients))
                         elif obs_path.is_dir():
                             glob_pattern = _duckdb_path(obs_path / '*.parquet')
                             # 🚀 perf B1 (hirid LOS): same-dir parquets share schema.

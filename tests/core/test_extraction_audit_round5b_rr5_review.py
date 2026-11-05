@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from tests.support.bucket_storage import move_fixture_parquet
+
+
 import pandas as pd
 import pytest
 
@@ -37,7 +40,7 @@ def test_rr_01_only_admitted_pressure_results_anchor_other_gases(
         directory = tmp_path / "lab_bucket" / "bucket_id=0"
         directory.mkdir(parents=True)
         (directory.parent / "_COMPLETE").write_text("ready")
-        (tmp_path / "lab.parquet").rename(directory / "part.parquet")
+        move_fixture_parquet(tmp_path / "lab.parquet", directory / "part.parquet")
     if layout == "table":
         source.resolve_bucket_directory = lambda _: None
         source.resolve_flat_parquet_directory = lambda _: None
@@ -113,12 +116,12 @@ def _partial_panel(tmp_path, database, layout):
     flat = root / table
     if not flat.is_dir():
         flat.mkdir()
-        (root / f"{table}.parquet").rename(flat / "part.parquet")
+        move_fixture_parquet(root / f"{table}.parquet", flat / "part.parquet")
     if layout == "bucket":
         directory = root / f"{table}_bucket" / "bucket_id=0"
         directory.mkdir(parents=True)
         for file in flat.glob("*.parquet"):
-            file.rename(directory / file.name)
+            move_fixture_parquet(file, directory / file.name)
         (directory.parent / "_COMPLETE").write_text("ready")
     return source
 
@@ -295,7 +298,7 @@ def test_rr_01_rr_04_native_modules_keep_specimen_and_medication_evidence(tmp_pa
             directory = source.base_path / f"{table}_bucket" / "bucket_id=0"
             directory.mkdir(parents=True)
             (directory.parent / "_COMPLETE").write_text("ready")
-            (source.base_path / f"{table}.parquet").rename(directory / "part.parquet")
+            move_fixture_parquet(source.base_path / f"{table}.parquet", directory / "part.parquet")
     for compatible in (False, True):
         merged = ConceptResolver(load_dictionary()).load_concepts(
             gas_names + drugs, source, merge=True, r_compatible=compatible,

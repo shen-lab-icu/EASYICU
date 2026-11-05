@@ -1,5 +1,9 @@
 """Round-5 eICU regressions; all records below are invented fixtures."""
 
+from tests.support.bucket_storage import move_fixture_parquet
+
+from tests.support.bucket_storage import synthetic_data_source
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -342,7 +346,7 @@ def _review_io_source(tmp_path, layout):
     if layout != "file":
         folder = tmp_path / ("intakeoutput_bucket/bucket_id=0" if layout == "bucket" else "intakeoutput")
         folder.mkdir(parents=True)
-        (tmp_path / "intakeoutput.parquet").rename(folder / "part.parquet")
+        move_fixture_parquet(tmp_path / "intakeoutput.parquet", folder / "part.parquet")
     return ds
 
 

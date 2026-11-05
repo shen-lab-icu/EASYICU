@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
+from . import storage_layout
 import enum
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
@@ -149,97 +150,16 @@ def _is_valid_parquet_name(name: str) -> bool:
 
 
 def _enumerate_bucket_parquet_files(directory) -> List[str]:
-    """Return a sorted list of valid parquet file paths under a bucket-style dir.
+    """Enumerate only validated bucket installations or ordinary flat files."""
+    return storage_layout.enumerate_parquet_files(Path(directory))
 
-    Supports both layouts:
-    - directory/bucket_id=N/*.parquet  (canonical EasyICU bucket dir)
-    - directory/*.parquet              (flat parquet dir)
-    Always filters out AppleDouble / hidden sidecar files so DuckDB
-    read_parquet([...]) never sees garbage. Returns DuckDB-safe forward-slash
-    paths (suitable for embedding in SQL literals).
-
-    ⚡ 性能：在 macFUSE/NTFS 等慢盘上直接 glob 82 个目录每次 ~12s。
-    若目录里存在 ``_BUCKET_MANIFEST.json``（与 ``_COMPLETE`` mtime 绑定），
-    直接读 manifest，跳过所有 listdir。
-    """
-    import json as _json
-    from pathlib import Path as _Path
-    base = _Path(directory)
-    files: List[str] = []
-    if not base.exists():
-        return files
-
-    # Fast path: 跨进程持久化 manifest（由 ICUDataSource._get_bucket_layout 写入）
-    complete_marker = base / "_COMPLETE"
-    manifest_path = base / "_BUCKET_MANIFEST.json"
-    if complete_marker.exists() and manifest_path.exists():
-        try:
-            stat = complete_marker.stat()
-            with manifest_path.open('r', encoding='utf-8') as fh:
-                m = _json.load(fh)
-            if (
-                isinstance(m, dict)
-                and m.get('complete_mtime_ns') == stat.st_mtime_ns
-                and m.get('complete_size') == stat.st_size
-                and isinstance(m.get('files_by_bucket'), dict)
-            ):
-                for rels in m['files_by_bucket'].values():
-                    for rel in rels:
-                        name = _Path(rel).name
-                        if _is_valid_parquet_name(name):
-                            files.append(_duckdb_path(base / rel))
-                files.sort()
-                return files
-        except Exception as exc:
-            # Fallback kept: unreadable/stale manifest → live scan below.
-            # Count the degradation so silent manifest rot is observable.
-            global _BUCKET_MANIFEST_DEGRADED_COUNT
-            _BUCKET_MANIFEST_DEGRADED_COUNT += 1
-            logger.warning(
-                "bucket manifest degraded, falling back to live scan: dir=%s "
-                "failure=%s degraded_count=%d",
-                str(base),
-                type(exc).__name__,
-                _BUCKET_MANIFEST_DEGRADED_COUNT,
-            )
-
-    # bucket layout first (cheap glob)
-    bucket_dirs = [d for d in base.glob('bucket_id=*') if d.is_dir()]
-    if bucket_dirs:
-        for sub in bucket_dirs:
-            for p in sub.glob('*.parquet'):
-                if _is_valid_parquet_name(p.name):
-                    files.append(_duckdb_path(p))
-    else:
-        # flat or hive_partitioning=false case
-        for p in base.rglob('*.parquet'):
-            if _is_valid_parquet_name(p.name):
-                files.append(_duckdb_path(p))
-    files.sort()
-    return files
 
 
 def _duckdb_read_parquet_clause(directory, *, union_by_name: bool = True,
                                  hive_partitioning: Optional[bool] = None) -> str:
-    """Build a DuckDB ``read_parquet([...])`` SQL fragment from a directory.
-
-    Returns a SQL clause like ``read_parquet(['a','b'], union_by_name=true)``.
-    Filters out AppleDouble / hidden sidecar files at enumeration time so
-    no garbage path enters DuckDB. Falls back to a glob pattern only when the
-    directory is empty (DuckDB will still error, but with a clearer message).
-    """
+    """Build the validated logical Parquet relation, hiding physical fields."""
     files = _enumerate_bucket_parquet_files(directory)
-    opts: List[str] = []
-    if union_by_name:
-        opts.append('union_by_name=true')
-    if hive_partitioning is not None:
-        opts.append(f"hive_partitioning={'true' if hive_partitioning else 'false'}")
-    opt_str = (', ' + ', '.join(opts)) if opts else ''
-    if not files:
-        # Fall back to glob (will most likely error downstream but preserves prior behaviour)
-        return f"read_parquet('{_duckdb_path(directory)}/**/*.parquet'{opt_str})"
-    files_sql = '[' + ', '.join(f"'{f}'" for f in files) + ']'
-    return f"read_parquet({files_sql}{opt_str})"
+    return storage_layout.parquet_relation(tuple(Path(p) for p in files))
 
 
 def _coerce_string_dtypes(df: pd.DataFrame) -> pd.DataFrame:
@@ -1693,54 +1613,36 @@ class ICUDataSource:
         return self._resolve_loader_from_disk(table_name)
 
     def _resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
-        """
-        🚀 优先检查分桶目录（性能最优）
-        
-        分桶目录使用 bucket_id=* 子目录结构，通过 hash(itemid) % num_buckets 实现
-        读取时只需扫描相关桶，跳过 99% 无关数据
-        
-        检查位置：
-        - base_path / {table_name}_bucket
-        - base_path / icu / {table_name}_bucket  (MIIV)
-        - base_path / hosp / {table_name}_bucket  (MIIV)
-        
-        Returns:
-            分桶目录路径（如果存在且有效），否则 None
-        """
+        """Prefer a validated installation; reject corrupt caches without a flat source."""
         if not self.base_path:
             return None
-
-        cache_key = str(table_name).lower()
-        with self._lock:
-            cached_dir = self._bucket_dir_cache.get(cache_key)
-        if cached_dir is not None:
-            return cached_dir
-        
-        # 可能的表名变体
-        name_variants = [table_name, table_name.lower()]
-        
-        # 可能的分桶目录位置
-        for name in name_variants:
-            possible_bucket_dirs = [
-                self.base_path / f"{name}_bucket",  # 直接在 base_path 下
-                self.base_path / "icu" / f"{name}_bucket",  # MIIV icu 子目录
-                self.base_path / "hosp" / f"{name}_bucket",  # MIIV hosp 子目录
-            ]
-            for bucket_dir in possible_bucket_dirs:
-                if bucket_dir.is_dir():
-                    # 检查是否有 bucket_id=* 子目录（分桶格式标识）
-                    bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-                    if bucket_subdirs:
-                        # 🔧 避免重复日志：只在首次发现时打印info
-                        bucket_key = str(bucket_dir)
-                        if bucket_key not in self._bucket_dir_logged:
-                            self._bucket_dir_logged.add(bucket_key)
-                            logger.info("Using bucket directory: %s (%d buckets)", bucket_dir, len(bucket_subdirs))
-                        with self._lock:
-                            self._bucket_dir_cache[cache_key] = bucket_dir
-                        return bucket_dir
-        
+        failure = None
+        for base in (self.base_path, self.base_path / "icu", self.base_path / "hosp"):
+            for name in dict.fromkeys((table_name, table_name.lower())):
+                root = base / f"{name}_bucket"
+                if not root.is_dir():
+                    continue
+                try:
+                    storage_layout.read_bucket_contract(
+                        root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
+                    )
+                except storage_layout.BucketLayoutError as exc:
+                    failure = exc
+                    continue
+                self._bucket_dir_cache[str(table_name).lower()] = root
+                return root
+        if failure is not None:
+            if not storage_layout.flat_table_files(self, table_name):
+                raise failure
+            logger.warning("Ignoring physical cache: %s", failure.reason)
         return None
+
+    def resolve_target_files(
+        self, table_name: str, selector_column: Optional[str] = None,
+        selector_values: Optional[Iterable[object]] = None,
+    ) -> Tuple[Path, ...]:
+        """Resolve table + selector through the single storage policy owner."""
+        return storage_layout.resolve_table_files(self, table_name, selector_column, selector_values)
 
     def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
         """检查扁平 parquet 目录（无 bucket_id 子目录结构）"""
@@ -2133,7 +2035,7 @@ class ICUDataSource:
             f"Unsupported file format '{path.suffix}' for {path.name}. Only Parquet format is supported."
         )
     
-    def _compute_target_buckets(self, itemids: set, num_buckets: int, duckdb_module) -> set:
+    def _compute_target_buckets(self, itemids: set, num_buckets: int, duckdb_module, *, key_type: Optional[str] = None) -> set:
         """使用 DuckDB hash 计算 itemid 对应的目标桶 ID
         
         必须使用 DuckDB 的 hash() 函数，因为分桶时使用的是 DuckDB hash。
@@ -2150,7 +2052,7 @@ class ICUDataSource:
         bucket_count = int(num_buckets)
         itemid_list = sorted(itemids, key=lambda item: (type(item).__name__, str(item)))
         normalized_items = tuple(self._bucket_item_cache_key(item) for item in itemid_list)
-        cache_key = (bucket_count, normalized_items)
+        cache_key = (bucket_count, key_type, normalized_items)
         with self._lock:
             cached = self._bucket_hash_cache.get(cache_key)
         if cached is not None:
@@ -2160,7 +2062,7 @@ class ICUDataSource:
         missing_items = []
         with self._lock:
             for item in itemid_list:
-                item_key = (bucket_count, self._bucket_item_cache_key(item))
+                item_key = (bucket_count, key_type, self._bucket_item_cache_key(item))
                 cached_bucket = self._bucket_hash_item_cache.get(item_key)
                 if cached_bucket is None:
                     missing_items.append(item)
@@ -2171,11 +2073,14 @@ class ICUDataSource:
         conn = _get_duckdb_connection()
         try:
             if missing_items:
+                if key_type is not None and key_type not in storage_layout.KEY_TYPES:
+                    raise ValueError("unsupported bucket key type")
+                parameter = "?" if key_type is None else f"CAST(? AS {key_type}[])"
                 conn.execute(
-                    """
+                    f"""
                     CREATE OR REPLACE TEMP TABLE items AS
                     SELECT row_number() OVER () - 1 AS _easyicu_ord, itemid
-                    FROM (SELECT UNNEST(?) AS itemid)
+                    FROM (SELECT UNNEST({parameter}) AS itemid)
                     """,
                     [missing_items],
                 )
@@ -2188,7 +2093,7 @@ class ICUDataSource:
                         bucket = bucket_by_ord[idx]
                         computed_buckets.add(bucket)
                         self._bucket_hash_item_cache[
-                            (bucket_count, self._bucket_item_cache_key(item))
+                            (bucket_count, key_type, self._bucket_item_cache_key(item))
                         ] = bucket
 
             buckets = frozenset(cached_buckets | computed_buckets)
@@ -2204,136 +2109,33 @@ class ICUDataSource:
         return (item_type.__module__, item_type.__qualname__, str(item), repr(item))
 
     def _get_bucket_layout(self, bucket_dir: Path) -> Tuple[int, Dict[int, Tuple[Path, ...]]]:
-        """Return bucket count and parquet files per bucket.
-
-        Bucketed datasets are immutable after conversion in normal EasyICU use.
-        When the converter writes a ``_COMPLETE`` marker we use it as a cheap
-        cache signature; directories without the marker are read live to avoid
-        stale partial-conversion metadata.
-
-        ⚡ 性能：在 macFUSE/NTFS 等慢盘上，``glob('bucket_id=*')`` + 每个子目录
-        ``glob('*.parquet')`` 一次就要 10+s。我们在磁盘上缓存一份
-        ``_BUCKET_MANIFEST.json``：第一次扫描后写入，后续进程（包括子进程）
-        直接读 manifest，跳过 82 次 listdir。manifest 与 ``_COMPLETE`` mtime
-        绑定校验，转换器重写时自动失效。
-        """
-        import json as _json
-
-        bucket_dir = Path(bucket_dir)
-        complete_marker = bucket_dir / "_COMPLETE"
-        manifest_path = bucket_dir / "_BUCKET_MANIFEST.json"
-        cache_key = str(bucket_dir.resolve())
-        cache_signature = None
-        if complete_marker.exists():
-            stat = complete_marker.stat()
-            cache_signature = (stat.st_mtime_ns, stat.st_size)
-            with self._lock:
-                cached = self._bucket_layout_cache.get(cache_key)
-            if cached is not None and cached[0] == cache_signature:
-                return cached[1], dict(cached[2])
-
-            # 进程级 cache miss → 尝试磁盘 manifest（跨进程加速）
-            if manifest_path.exists():
-                try:
-                    with manifest_path.open('r', encoding='utf-8') as fh:
-                        m = _json.load(fh)
-                    if (
-                        isinstance(m, dict)
-                        and m.get('complete_mtime_ns') == stat.st_mtime_ns
-                        and m.get('complete_size') == stat.st_size
-                        and isinstance(m.get('files_by_bucket'), dict)
-                    ):
-                        files_by_bucket = {
-                            int(bid): tuple(bucket_dir / rel for rel in rels)
-                            for bid, rels in m['files_by_bucket'].items()
-                        }
-                        num_buckets = int(m.get('num_buckets', 0))
-                        with self._lock:
-                            self._bucket_layout_cache[cache_key] = (
-                                cache_signature, num_buckets, files_by_bucket,
-                            )
-                        return num_buckets, files_by_bucket
-                except Exception:
-                    pass  # manifest corrupt → fall through to live scan
-
-        bucket_ids = set()
-        files_by_bucket: Dict[int, Tuple[Path, ...]] = {}
-        for bucket_subdir in bucket_dir.glob("bucket_id=*"):
-            if not bucket_subdir.is_dir():
-                continue
-            try:
-                bucket_id = int(bucket_subdir.name.split("=", 1)[1])
-            except (IndexError, ValueError):
-                continue
-            bucket_ids.add(bucket_id)
-            # 过滤 macOS AppleDouble 元数据（NTFS/exFAT 等非 Apple 文件系统上自动产生 ._*.parquet）
-            # DuckDB read_parquet 会把它们当真 parquet 读，触发 'No magic bytes found' 错误
-            files = tuple(
-                sorted(
-                    p for p in bucket_subdir.glob("*.parquet")
-                    if not p.name.startswith(".")
-                )
-            )
-            if files:
-                files_by_bucket[bucket_id] = files
-
-        num_buckets = max(bucket_ids) + 1 if bucket_ids else 0
-
-        if cache_signature is not None:
-            with self._lock:
-                self._bucket_layout_cache[cache_key] = (
-                    cache_signature,
-                    num_buckets,
-                    files_by_bucket,
-                )
-            # 写入磁盘 manifest 让后续进程跳过 listdir（best-effort，写失败忽略）
-            try:
-                rels = {
-                    str(bid): [str(p.relative_to(bucket_dir)) for p in files]
-                    for bid, files in files_by_bucket.items()
-                }
-                tmp = manifest_path.with_suffix('.json.tmp')
-                with tmp.open('w', encoding='utf-8') as fh:
-                    _json.dump({
-                        'complete_mtime_ns': cache_signature[0],
-                        'complete_size': cache_signature[1],
-                        'num_buckets': num_buckets,
-                        'files_by_bucket': rels,
-                    }, fh)
-                tmp.replace(manifest_path)
-            except Exception:
-                pass
-
-        return num_buckets, files_by_bucket
+        """Read the validated contract; never infer a modulus or write metadata."""
+        root = Path(bucket_dir)
+        if not root.name.endswith("_bucket") and not (root / storage_layout.MANIFEST).exists() and not any(root.glob("bucket_id=*")):
+            return 0, {}
+        layout = storage_layout.read_bucket_contract(
+            root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
+        )
+        return layout.modulus, layout.files_by_bucket
 
     def get_bucket_files_for_ids(
-        self,
-        bucket_dir: Path,
-        itemids: Iterable[object],
-        duckdb_module,
+        self, bucket_dir: Path, itemids: Iterable[object], duckdb_module,
+        *, selector_column: Optional[str] = None,
     ) -> Tuple[set, int, Tuple[Path, ...]]:
-        """Resolve bucket files through the public concept storage contract."""
-
-        return self._get_bucket_files_for_ids(bucket_dir, itemids, duckdb_module)
+        """Compatibility facade; pruning requires an explicit selector column."""
+        if selector_column is None:
+            return self._get_bucket_files_for_ids(bucket_dir, itemids, duckdb_module)
+        return self._get_bucket_files_for_ids(bucket_dir, itemids, duckdb_module, selector_column=selector_column)
 
     def _get_bucket_files_for_ids(
-        self,
-        bucket_dir: Path,
-        itemids: Iterable[object],
-        duckdb_module,
+        self, bucket_dir: Path, itemids: Iterable[object], duckdb_module,
+        *, selector_column: Optional[str] = None,
     ) -> Tuple[set, int, Tuple[Path, ...]]:
-        """Resolve the parquet files that can contain the requested bucket keys."""
-        num_buckets, files_by_bucket = self._get_bucket_layout(bucket_dir)
-        if num_buckets <= 0:
-            return set(), 0, tuple()
-
-        target_buckets = self._compute_target_buckets(set(itemids), num_buckets, duckdb_module)
-        target_files = tuple(
-            file_path
-            for bucket_id in sorted(target_buckets)
-            for file_path in files_by_bucket.get(bucket_id, tuple())
+        layout = storage_layout.read_bucket_contract(
+            Path(bucket_dir), allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
         )
-        return target_buckets, num_buckets, target_files
+        targets, files = layout.select(self, selector_column, itemids)
+        return targets, layout.modulus, files
 
     def _get_parquet_columns_for_files(self, files: Iterable[Path]) -> set:
         """Return the union of Parquet schema columns for an explicit file list."""
@@ -2578,54 +2380,18 @@ class ICUDataSource:
             # DuckDB 未安装，回退到 PyArrow
             return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
-        # 🚀 检测目录结构：分桶格式 vs 普通分区
-        num_buckets, files_by_bucket = self._get_bucket_layout(directory)
-        if files_by_bucket:
-            # 🚀 关键优化：如果有 itemid 过滤条件，计算目标桶，只扫描这些桶
-            if itemid_filter_config:
-                filter_col, filter_ids = itemid_filter_config
-                # 只有数值型 itemid 才能使用 hash 分桶
-                numeric_ids = {int(x) for x in filter_ids if isinstance(x, (int, float)) and not isinstance(x, bool)}
-                if numeric_ids:
-                    # 使用 DuckDB hash 计算目标桶（与分桶转换时一致）
-                    target_buckets, _, target_files = self._get_bucket_files_for_ids(directory, numeric_ids, duckdb)
-                    if target_files:
-                        # 使用精确的文件列表而非全扫描
-                        file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
-                        glob_pattern = f"[{file_list_str}]"
-                        logger.debug(
-                            "Bucket targeted read: %d/%d buckets, %d files",
-                            len(target_buckets),
-                            num_buckets,
-                            len(target_files),
-                        )
-                    else:
-                        # 目标桶不存在，可能是空数据 — 退化为全扫描但过滤 AppleDouble
-                        logger.warning("Target bucket does not exist: bucket_id in %s", target_buckets)
-                        _full = _enumerate_bucket_parquet_files(directory)
-                        glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _full) + "]") if _full else _duckdb_path(directory / "**/*.parquet")
-                else:
-                    # 字符串型 ID，无法使用 hash 分桶优化 — 列出所有有效 parquet。
-                    _full = _enumerate_bucket_parquet_files(directory)
-                    glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _full) + "]") if _full else _duckdb_path(directory / "**/*.parquet")
-                    logger.debug("Using bucket read mode (full scan, %d files): %s", len(_full), directory.name)
-            else:
-                # 没有 itemid 过滤，全扫描 — 同样走显式文件列表
-                _full = _enumerate_bucket_parquet_files(directory)
-                glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _full) + "]") if _full else _duckdb_path(directory / "**/*.parquet")
-                logger.debug("Using bucket read mode (no filter, %d files): %s", len(_full), directory.name)
-        else:
-            # 普通分区: directory/*.parquet — 同样走显式文件列表过滤 AppleDouble
-            _flat = _enumerate_bucket_parquet_files(directory)
-            glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _flat) + "]") if _flat else _duckdb_path(directory / "*.parquet")
-        
+        filter_col, filter_ids = itemid_filter_config or (None, None)
+        target_files = self.resolve_target_files(table_name, filter_col, filter_ids) if table_name else storage_layout.files_for_directory(self, directory, filter_col, filter_ids)
+        if not target_files:
+            return storage_layout.empty_frame(directory, columns)
+        target_relation = storage_layout.parquet_relation(target_files)
+
         # Entry clocks are optional in older converted partitions. Inspect the
         # selected relation before SQL projection, so absence never forces a
         # full-table Arrow fallback or fabricates a numeric timestamp column.
         from .scores.urine_output import partitioned_source_columns
 
-        relation_path = glob_pattern if glob_pattern.startswith("[") else f"'{glob_pattern}'"
-        columns = partitioned_source_columns(_get_duckdb_connection(), f"read_parquet({relation_path}, union_by_name=true)", columns, self.config.name, table_name)
+        columns = partitioned_source_columns(_get_duckdb_connection(), target_relation, columns, self.config.name, table_name)
         # 列选择
         if columns:
             select_cols = ", ".join(list(columns))
@@ -2734,16 +2500,8 @@ class ICUDataSource:
             except Exception as e:
                 logger.debug(f"无法获取表配置进行预排序: {e}")
         
-        # 🔧 CRITICAL FIX: 使用 union_by_name=true 处理不同分区的 schema 差异
-        # HiRID observations 的不同分区有不同的列类型（如 stringvalue）
-        # 注意：glob_pattern 可能是单引号包裹的路径，也可能是列表语法 [...]
-        if glob_pattern.startswith("["):
-            # 列表语法：多个文件
-            query = f"SELECT {select_cols} FROM read_parquet({glob_pattern}, union_by_name=true) {where_clause}{order_by_clause}"
-        else:
-            # 路径/glob 语法
-            query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}', union_by_name=true) {where_clause}{order_by_clause}"
-        
+        query = f"SELECT {select_cols} FROM {target_relation} {where_clause}{order_by_clause}"
+
         try:
             con = _get_duckdb_connection()
             try:
@@ -2770,12 +2528,16 @@ class ICUDataSource:
         ):
             return pd.DataFrame(columns=list(columns) if columns else [])
 
+        filter_col, filter_values = itemid_filter_config or (None, None)
+        resolved_files = storage_layout.files_for_directory(self, directory, filter_col, filter_values)
+        if not resolved_files:
+            return storage_layout.empty_frame(directory, columns)
         try:
             import pyarrow.dataset as ds
             
             # 🚀 使用PyArrow Dataset - 最快的方式
             dataset = ds.dataset(
-                directory,
+                [str(p) for p in resolved_files],
                 format='parquet',
                 partitioning=None,
                 exclude_invalid_files=True
@@ -2859,6 +2621,8 @@ class ICUDataSource:
                 for expr in filter_exprs[1:]:
                     filter_expr = filter_expr & expr
 
+            if actual_columns is not None and storage_layout.ORDINAL in schema_names:
+                actual_columns.append(storage_layout.ORDINAL)
             # 批量读取，启用受控的 PyArrow 全局 CPU 线程池。
             #
             # Dataset.to_table(use_threads=...) 接受的是 bool，不是线程数。旧代码
@@ -2910,6 +2674,7 @@ class ICUDataSource:
 
             # 转换为 pandas，使用 zero-copy 优化
             frame = _arrow_to_pandas_compat(table, split_blocks=True)
+            frame = storage_layout.restore_frame_order(frame)
             if requested_columns is not None:
                 frame = frame.rename(columns=actual_to_requested)
                 frame = frame.reindex(columns=requested_columns)
@@ -2918,9 +2683,7 @@ class ICUDataSource:
         except Exception:
             # 回退到简单方式
             try:
-                parquet_files = sorted(directory.glob("*.parquet"))
-                if not parquet_files:
-                    parquet_files = sorted(directory.glob("*.pq"))
+                parquet_files = resolved_files
                 
                 if not parquet_files:
                     return pd.DataFrame(columns=list(columns) if columns else [])
@@ -2939,7 +2702,10 @@ class ICUDataSource:
                 chunks = []
                 for file_path in parquet_files:
                     if columns:
-                        df_chunk = pd.read_parquet(file_path, columns=list(columns))
+                        wanted = list(columns)
+                        if storage_layout.ORDINAL in storage_layout.parquet_columns(file_path):
+                            wanted.append(storage_layout.ORDINAL)
+                        df_chunk = pd.read_parquet(file_path, columns=wanted)
                     else:
                         df_chunk = pd.read_parquet(file_path)
                     
@@ -2947,13 +2713,15 @@ class ICUDataSource:
                     if filter_ids and id_column and id_column in df_chunk.columns:
                         df_chunk = df_chunk[df_chunk[id_column].isin(filter_ids)]
                     
+                    if itemid_filter_config:
+                        df_chunk = df_chunk[df_chunk[filter_col].isin(filter_values)]
                     # 只保留有数据的chunk
                     if len(df_chunk) > 0:
                         chunks.append(df_chunk)
                 
                 # 合并所有chunks
                 if chunks:
-                    return pd.concat(chunks, ignore_index=True)
+                    return storage_layout.restore_frame_order(pd.concat(chunks, ignore_index=True))
                 else:
                     # 返回空DataFrame，保持列结构
                     if columns:
@@ -3276,18 +3044,10 @@ def load_bucketed_table_aggregated(
         return pd.DataFrame()
     db_name = data_source.config.name if hasattr(data_source.config, 'name') else 'unknown'
     
-    # 🔧 直接查找分桶目录（不依赖_resolve_loader_from_disk）
     base_path = data_source.base_path
-    bucket_dir = data_source.resolve_bucket_directory(table_name)
-    
-    # 🚀 FIX 2026-03-13: 如果没有 bucket 目录，回退到扁平 parquet 目录
-    flat_parquet_dir = None
-    if bucket_dir is None:
-        flat_parquet_dir = data_source.resolve_flat_parquet_directory(table_name)
-    
-    if bucket_dir is None and flat_parquet_dir is None:
-        raise ValueError(f"Cannot find bucketed or flat parquet directory for {table_name}")
-    
+    if not data_source.resolve_target_files(table_name):
+        raise ValueError(f"Cannot find parquet source for {table_name}")
+
     table_cfg = None
     try:
         table_cfg = data_source.config.get_table(table_name)
@@ -3382,25 +3142,11 @@ def load_bucketed_table_aggregated(
     # 计算目标桶
     conn = _get_duckdb_connection()
     
-    # 根据目录类型构建文件列表
-    if bucket_dir is not None:
-        # 分桶目录：通过 hash(itemid) 选择目标桶
-        itemid_list = list(itemids)
-        _, _, target_files = data_source.get_bucket_files_for_ids(
-            bucket_dir,
-            itemid_list,
-            duckdb,
-        )
-        
-        if not target_files:
-            return pd.DataFrame()
-
-        file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
-        glob_pattern = f"[{file_list_str}]"
-    else:
-        # 扁平 parquet 目录：扫描所有文件，依赖 WHERE 过滤
-        target_files = tuple(sorted(flat_parquet_dir.glob("*.parquet")))
-        glob_pattern = f"'{_duckdb_path(flat_parquet_dir)}/*.parquet'"
+    target_files = data_source.resolve_target_files(table_name, itemid_col, itemids)
+    if not target_files:
+        return pd.DataFrame()
+    glob_pattern = "[" + ", ".join(_duckdb_sql_literal(_duckdb_path(f)) for f in target_files) + "]"
+    target_relation = storage_layout.parquet_relation(target_files)
 
     raw_columns = data_source._get_parquet_columns_for_files(target_files)
     if not raw_columns:
@@ -3408,7 +3154,7 @@ def load_bucketed_table_aggregated(
             raw_columns = {
                 col[0]
                 for col in conn.execute(
-                    f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+                    f"SELECT * FROM {target_relation} LIMIT 0"
                 ).description
             }
         except Exception as exc:
@@ -3427,7 +3173,7 @@ def load_bucketed_table_aggregated(
     _value_col_is_string = False
     try:
         _types = conn.execute(
-            f"DESCRIBE SELECT {value_column} FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+            f"DESCRIBE SELECT {value_column} FROM {target_relation} LIMIT 0"
         ).fetchall()
         if _types:
             _t = str(_types[0][1]).upper()
@@ -3662,7 +3408,7 @@ def load_bucketed_table_aggregated(
             o.{id_col} AS {id_col},
             {output_time_expr}{_select_itemid},
             {_agg_value_expr}{unit_select}{receipt_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
         {aumc_where_clause}
         GROUP BY o.{id_col}, {time_round_expr}{_group_itemid}
@@ -3746,7 +3492,7 @@ def load_bucketed_table_aggregated(
             o.{id_col},
             {output_time_expr}{_hirid_select_itemid},
             {_hirid_agg_expr}{hirid_unit_select}{receipt_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN adm a ON o.{id_col} = a.patientid
         {hirid_where_clause}
         GROUP BY o.{id_col}, {time_round_expr}{_hirid_group_itemid}
@@ -3918,7 +3664,7 @@ def load_bucketed_table_aggregated(
                                    CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
-                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    FROM {target_relation} o
                     JOIN all_stays a ON o.hadm_id = a.hadm_id
                     {_rolling_event_where}
                     AND o.{value_column} IS NOT NULL
@@ -3948,7 +3694,7 @@ def load_bucketed_table_aggregated(
                                    CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
-                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    FROM {target_relation} o
                     JOIN all_stays a ON o.hadm_id = a.hadm_id
                     {_rolling_event_where}
                     AND o.{value_column} IS NOT NULL
@@ -3974,7 +3720,7 @@ def load_bucketed_table_aggregated(
                 a.{output_id_col} as {output_id_col},
                 {output_time_expr},
                 {_mimic_agg_expr}{_mimic_unit_select}{receipt_select}
-            FROM read_parquet({glob_pattern}, union_by_name=true) o
+            FROM {target_relation} o
             JOIN adm a ON {join_predicate}
             {_mimic_where}
             GROUP BY a.{output_id_col}, {time_round_expr}
@@ -4043,7 +3789,7 @@ def load_bucketed_table_aggregated(
             o.{id_col} AS {id_col},
             {time_round_expr} AS charttime,
             {_community_agg_expr}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN read_parquet('{_duckdb_path(stays_path)}') a
           ON o.{id_col} = a.{id_col}
         {community_where}
@@ -4103,7 +3849,7 @@ def load_bucketed_table_aggregated(
             o.{id_col} AS {id_col},
             {output_time_expr},
             {_sic_agg_expr}{receipt_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN {cases_relation} c ON o.{id_col} = c.CaseID
         {sic_where_clause}
           AND c.ICUOffset IS NOT NULL
@@ -4120,7 +3866,7 @@ def load_bucketed_table_aggregated(
         default_unit_select = (
             ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
         )
-        eicu_read = f"read_parquet({glob_pattern}, union_by_name=true)"
+        eicu_read = f"{target_relation}"
         io_audit = ""
         if table_name == "intakeoutput":
             from .concept.eicu_io import io_audit_select, io_relation_sql
@@ -4149,7 +3895,7 @@ def load_bucketed_table_aggregated(
             {id_col},
             {output_time_expr}{_select_itemid},
             {_agg_value_expr}{default_unit_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true)
+        FROM {target_relation}
         {where_clause}
         GROUP BY {id_col}, {time_round_expr}{_group_itemid}
         ORDER BY {id_col}, 2{_order_itemid}
@@ -4299,30 +4045,16 @@ def load_bucketed_table_multi_aggregated(
     else:
         all_itemids = sorted({int(x) for ids in concept_itemids.values() for x in ids})
 
-    # ── Find parquet files ─────────────────────────────────────
-    bucket_dir = data_source.resolve_bucket_directory(table_name)
-    flat_parquet_dir = None
-    if bucket_dir is None:
-        flat_parquet_dir = data_source.resolve_flat_parquet_directory(table_name)
-    if bucket_dir is None and flat_parquet_dir is None:
-        raise ValueError(f"Cannot find bucketed directory for {table_name}")
+    if not data_source.resolve_target_files(table_name):
+        raise ValueError(f"Cannot find parquet source for {table_name}")
 
     conn = _get_duckdb_connection()
 
-    # ── Build glob pattern from bucket or flat dir ─────────
-    if bucket_dir is not None:
-        _, _, target_files = data_source.get_bucket_files_for_ids(
-            bucket_dir,
-            all_itemids,
-            duckdb,
-        )
-        if not target_files:
-            return pd.DataFrame()
-        file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
-        glob_pattern = f"[{file_list_str}]"
-    else:
-        target_files = tuple(sorted(flat_parquet_dir.glob("*.parquet")))
-        glob_pattern = f"'{_duckdb_path(flat_parquet_dir)}/*.parquet'"
+    target_files = data_source.resolve_target_files(table_name, itemid_col, all_itemids)
+    if not target_files:
+        return pd.DataFrame()
+    glob_pattern = "[" + ", ".join(_duckdb_sql_literal(_duckdb_path(f)) for f in target_files) + "]"
+    target_relation = storage_layout.parquet_relation(target_files)
 
     # ── Aggregation ────────────────────────────────────────
     agg_map = {'median': 'MEDIAN', 'mean': 'AVG', 'max': 'MAX', 'min': 'MIN', 'first': 'FIRST', 'sum': 'SUM'}
@@ -4379,7 +4111,7 @@ def load_bucketed_table_multi_aggregated(
         if not raw_columns:
             try:
                 raw_columns = {col[0] for col in conn.execute(
-                    f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+                    f"SELECT * FROM {target_relation} LIMIT 0"
                 ).description}
             except Exception as exc:
                 raise RuntimeError(
@@ -4470,7 +4202,7 @@ def load_bucketed_table_multi_aggregated(
                                    CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
-                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    FROM {target_relation} o
                     JOIN all_stays a ON o.hadm_id = a.hadm_id
                     WHERE o.{itemid_col} IN ({all_ids_sql})
                     AND o.{value_column} IS NOT NULL
@@ -4500,7 +4232,7 @@ def load_bucketed_table_multi_aggregated(
                                    CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
-                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    FROM {target_relation} o
                     JOIN all_stays a ON o.hadm_id = a.hadm_id
                     WHERE o.{itemid_col} IN ({all_ids_sql})
                     AND o.{value_column} IS NOT NULL
@@ -4523,7 +4255,7 @@ def load_bucketed_table_multi_aggregated(
             )
             SELECT a.{output_id_col} AS {output_id_col}, {time_round_expr} AS charttime,
                 {select_sql}
-            FROM read_parquet({glob_pattern}, union_by_name=true) o
+            FROM {target_relation} o
             JOIN adm a ON {join_pred}
             WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
             GROUP BY a.{output_id_col}, {time_round_expr}
@@ -4551,7 +4283,7 @@ def load_bucketed_table_multi_aggregated(
         )
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN adm a ON o.{id_col} = a.patientid
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
         GROUP BY o.{id_col}, {time_round_expr}
@@ -4574,7 +4306,7 @@ def load_bucketed_table_multi_aggregated(
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS measuredat_minutes,
             {select_sql}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN {admissions_relation} a ON o.{id_col} = a.admissionid
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
             AND a.admittedat IS NOT NULL
@@ -4592,7 +4324,7 @@ def load_bucketed_table_multi_aggregated(
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        FROM {target_relation} o
         JOIN {cases_relation} c ON o.{id_col} = c.CaseID
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
             AND c.ICUOffset IS NOT NULL
@@ -4605,7 +4337,7 @@ def load_bucketed_table_multi_aggregated(
         # Output hours (not minutes) — consistent with load_wide_table_aggregated
         # Batch results bypass _align_time_to_admission, so must output hours directly
         time_round_expr = f"FLOOR(o.{time_col} / {interval_minutes})"
-        eicu_read = f"read_parquet({glob_pattern}, union_by_name=true)"
+        eicu_read = f"{target_relation}"
         io_audit = ""
         if table_name == "intakeoutput":
             from .concept.eicu_io import io_audit_select, io_relation_sql
@@ -4626,6 +4358,7 @@ def load_bucketed_table_multi_aggregated(
     else:
         raise ValueError(f"Unsupported database for multi-concept batch: {db_name}")
 
+    query = query.replace(f"read_parquet({glob_pattern}, union_by_name=true)", target_relation)
     lab_admissions = (
         _miiv_lab_admissions(data_source, conn, patient_ids)
         if _base_db == "miiv" and table_name == "labevents" else nullcontext()

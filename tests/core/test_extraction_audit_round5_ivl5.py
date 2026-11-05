@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from tests.support.bucket_storage import move_fixture_parquet
+
+from tests.support.bucket_storage import write_fixture_parquet
+
+from tests.support.bucket_storage import synthetic_data_source
+
 import pandas as pd
 import pytest
 
@@ -44,10 +50,10 @@ def _stays(db="miiv"):
 
 
 def _source(tmp_path, db, table, rows):
-    _stays(db).to_parquet(tmp_path / "icustays.parquet", index=False)
+    write_fixture_parquet(_stays(db), tmp_path / "icustays.parquet", index=False)
     directory = tmp_path / f"{table}_bucket" / "bucket_id=0"
     directory.mkdir(parents=True)
-    rows.to_parquet(directory / "part.parquet", index=False)
+    write_fixture_parquet(rows, directory / "part.parquet", index=False)
     return ICUDataSource(load_src_cfg(db), base_path=tmp_path, enable_cache=False)
 
 
@@ -235,7 +241,7 @@ def test_r5c_iii_008_projection_never_discards_the_error_filter(tmp_path, storag
         config.tables["chartevents"].dataset = DatasetOptions(path="chartevents.parquet")
     source = ICUDataSource(config, base_path=tmp_path, enable_cache=False)
     if storage in {"parquet", "dataset"}:
-        rows.to_parquet(tmp_path / "chartevents.parquet", index=False)
+        write_fixture_parquet(rows, tmp_path / "chartevents.parquet", index=False)
     elif storage == "csv":
         rows.rename(columns=str.upper).to_csv(tmp_path / "CHARTEVENTS.csv.gz", index=False)
     elif storage == "callable":
@@ -252,7 +258,7 @@ def test_r5c_iv_010_source_projection_keeps_rate_units_and_dosing_weight(tmp_pat
                          "itemid": [222168], "amount": [60.], "amountuom": ["mg"],
                          "rate": [600.], "rateuom": ["mg/hour"], "patientweight": [50.], "linkorderid": [1],
                          "statusdescription": "FinishedRunning"})
-    rows.to_parquet(tmp_path / "inputevents.parquet", index=False)
+    write_fixture_parquet(rows, tmp_path / "inputevents.parquet", index=False)
     source = ICUDataSource(load_src_cfg("miiv"), base_path=tmp_path, enable_cache=False)
     result = ConceptResolver(load_dictionary("miiv")).load_concepts(
         ["propofol_rate"], source, patient_ids=[101], r_compatible=False, concept_workers=1, merge=False,
@@ -262,14 +268,14 @@ def test_r5c_iv_010_source_projection_keeps_rate_units_and_dosing_weight(tmp_pat
 
 
 def test_r5c_iv_012_public_insulin_load_preserves_hourly_total(tmp_path):
-    _stays().to_parquet(tmp_path / "icustays.parquet", index=False)
+    write_fixture_parquet(_stays(), tmp_path / "icustays.parquet", index=False)
     rows = pd.DataFrame({"stay_id": [101] * 3, "hadm_id": [11] * 3, "itemid": [223258, 223258, 223260],
                          "starttime": [.5, 1.2, 1.7], "endtime": [2.5, 1.2, 1.7],
                          "amount": [12., 3., 5.], "amountuom": "units", "rate": [6., None, None],
                          "linkorderid": [1, 2, 3], "statusdescription": "FinishedRunning"})
     for column in ("starttime", "endtime"):
         rows[column] = pd.Timestamp("2140-01-02") + pd.to_timedelta(rows[column], unit="h")
-    rows.to_parquet(tmp_path / "inputevents.parquet", index=False)
+    write_fixture_parquet(rows, tmp_path / "inputevents.parquet", index=False)
     source = ICUDataSource(load_src_cfg("miiv"), base_path=tmp_path, enable_cache=False)
     result = ConceptResolver(load_dictionary("miiv")).load_concepts(
         ["ins"], source, patient_ids=[101], r_compatible=False, concept_workers=1, merge=False,
@@ -311,9 +317,9 @@ def test_r5c_iii_008_channel_priorities_and_cvp_derivations_use_valid_rows_only(
                          "valueuom": ["mmHg"] * 6 + ["mg/dL"] * 2,
                          "error": [0., 1., None, 1., 0., 0., 1., 1.]})
     source = _source(tmp_path, "mimic", "chartevents", rows)
-    pd.DataFrame({"subject_id": [1], "hadm_id": [11], "itemid": [50912],
+    write_fixture_parquet(pd.DataFrame({"subject_id": [1], "hadm_id": [11], "itemid": [50912],
                   "charttime": pd.to_datetime(["2140-01-02 01:00"]),
-                  "valuenum": [1.2], "valueuom": ["mg/dL"]}).to_parquet(tmp_path / "labevents.parquet", index=False)
+                  "valuenum": [1.2], "valueuom": ["mg/dL"]}), tmp_path / "labevents.parquet", index=False)
     result = ConceptResolver(load_dictionary("mimic")).load_concepts(
         ["map", "cvp", "cvp_raw", "crea"], source, patient_ids=[101], merge=False, r_compatible=False,
         concept_workers=1,
@@ -346,7 +352,7 @@ def test_r5c_iv_008_subject_pushdown_preserves_requested_stays(tmp_path, path, m
     stays = _stays().iloc[[0]].copy()
     later = stays.assign(hadm_id=12, stay_id=102, intime=pd.Timestamp("2140-02-02"),
                          outtime=pd.Timestamp("2140-02-04"))
-    pd.concat([stays, later]).to_parquet(tmp_path / "icustays.parquet", index=False)
+    write_fixture_parquet(pd.concat([stays, later]), tmp_path / "icustays.parquet", index=False)
     rows = _labs().iloc[[0]].copy()
     later_lab = rows.assign(hadm_id=12, charttime=pd.Timestamp("2140-02-02 01:00"), valuenum=3.)
     rows = pd.concat([rows, later_lab], ignore_index=True)
@@ -385,7 +391,7 @@ def test_r5c_iii_008_uppercase_projection_keeps_valid_measurements(tmp_path, sto
                          "VALUE": ["60", "80", "900"], "VALUEUOM": "bpm", "ERROR": [None, 0., 1.]})
     config = load_src_cfg("mimic").model_copy(deep=True)
     if storage == "dataset":
-        rows.to_parquet(tmp_path / "chartevents.parquet", index=False)
+        write_fixture_parquet(rows, tmp_path / "chartevents.parquet", index=False)
         config.tables["chartevents"].dataset = DatasetOptions(path="chartevents.parquet")
     source = ICUDataSource(config, base_path=tmp_path, enable_cache=False)
     if storage == "preloaded":
@@ -405,8 +411,8 @@ def test_r5c_iv_012_rewritten_insulin_is_not_an_additional_dose(tmp_path, storag
     for column in ("starttime", "endtime"):
         rows[column] = pd.Timestamp("2140-01-02") + pd.to_timedelta(rows[column], unit="h")
     if storage == "parquet":
-        _stays().to_parquet(tmp_path / "icustays.parquet", index=False)
-        rows.to_parquet(tmp_path / "inputevents.parquet", index=False)
+        write_fixture_parquet(_stays(), tmp_path / "icustays.parquet", index=False)
+        write_fixture_parquet(rows, tmp_path / "inputevents.parquet", index=False)
         source = ICUDataSource(load_src_cfg("miiv"), base_path=tmp_path, enable_cache=False)
     else:
         source = _source(tmp_path, "miiv", "inputevents", rows)
@@ -471,8 +477,8 @@ def test_r5c_iv_011_public_rate_loads_use_converted_values_and_exclusive_stops(t
                          "amount": 1., "amountuom": "unused", "patientweight": 50.,
                          "linkorderid": range(len(cases)), "statusdescription": "FinishedRunning"})
     if storage == "parquet":
-        _stays(database).to_parquet(tmp_path / "icustays.parquet", index=False)
-        rows.to_parquet(tmp_path / f"{table}.parquet", index=False)
+        write_fixture_parquet(_stays(database), tmp_path / "icustays.parquet", index=False)
+        write_fixture_parquet(rows, tmp_path / f"{table}.parquet", index=False)
         source = ICUDataSource(load_src_cfg(database), base_path=tmp_path, enable_cache=False)
     else:
         source = _source(tmp_path, database, table, rows)
@@ -534,7 +540,7 @@ def test_r5c_iv_008_iii_008_iv_012_native_modules_use_the_fixed_sources(
         )
         manifest = json.loads((output / "_manifest.json").read_text())
         assert manifest["errors"] == []
-        (output / "_manifest.json").rename(output / f"{module}.manifest.json")
+        move_fixture_parquet(output / "_manifest.json", output / f"{module}.manifest.json")
         api._publish_native_export_v2(
             database=database, data_path=str(raw), output_dir=str(output), modules=[module],
             max_patients=None, result={"modules": {module: manifest}},

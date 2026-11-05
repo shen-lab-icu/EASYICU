@@ -13,7 +13,6 @@ from pathlib import Path
 import re
 from typing import Sequence
 
-import duckdb
 from easyicu.runtime import duckdb_spill
 import numpy as np
 import pandas as pd
@@ -44,24 +43,7 @@ def _parse_clock(value):
 
 
 def _procedure_files(source):
-    # procedureevents is an ICU table, unlike the old chart/lab helper's default.
-    bucket = source.resolve_bucket_directory("procedureevents")
-    if bucket is not None:
-        paths = source.get_bucket_files_for_ids(bucket, list(ITEMS), duckdb)[2]
-    else:
-        flat = source.resolve_flat_parquet_directory("procedureevents")
-        paths = (
-            sorted(flat.glob("*.parquet"))
-            if flat is not None
-            else [
-                p
-                for p in (
-                    source.base_path / "procedureevents.parquet",
-                    source.base_path / "icu/procedureevents.parquet",
-                )
-                if p.is_file()
-            ]
-        )
+    paths = source.resolve_target_files("procedureevents", "itemid", list(ITEMS))
     paths = sorted({Path(p).resolve() for p in paths})
     if not paths:
         raise scoped.SourceEventContractError("missing_parquet_source:procedureevents")

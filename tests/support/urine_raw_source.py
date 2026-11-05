@@ -8,6 +8,7 @@ import pandas as pd
 
 from easyicu.concept import ConceptResolver
 from easyicu.config import load_src_cfg
+from tests.support.bucket_storage import write_fixture_parquet
 from easyicu.datasource import ICUDataSource
 from easyicu.resources import load_dictionary
 
@@ -30,7 +31,7 @@ def _source(root, database, *, layout="flat", **frames):
         if layout == "bucket" and table not in {"patient", "icustays", "general", "cases"}:
             path = root / f"{table}_bucket/bucket_id=0/part.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
-        frame.to_parquet(path, index=False)
+        write_fixture_parquet(frame, path, index=False)
     return ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False)
 
 

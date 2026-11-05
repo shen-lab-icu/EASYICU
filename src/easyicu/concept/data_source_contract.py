@@ -22,9 +22,15 @@ class ConceptDataSourceStorage(Protocol):
         self, table_name: str
     ) -> Optional[Callable[[], pd.DataFrame] | Path]: ...
 
+    def resolve_target_files(
+        self, table_name: str, selector_column: Optional[str] = None,
+        selector_values: Optional[Iterable[object]] = None,
+    ) -> Tuple[Path, ...]: ...
+
     def get_bucket_files_for_ids(
         self,
         bucket_dir: Path,
         itemids: Iterable[object],
         duckdb_module: Any,
+        *, selector_column: Optional[str] = None,
     ) -> Tuple[set[Any], int, Tuple[Path, ...]]: ...

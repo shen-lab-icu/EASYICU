@@ -50,7 +50,7 @@ def test_build_bucket_cache_preserves_rows_and_installs_atomically(
 
     actual = duckdb.sql(
         f"""
-        SELECT * EXCLUDE(bucket_id)
+        SELECT * EXCLUDE(bucket_id, _easyicu_source_ordinal)
         FROM read_parquet(
           '{target.as_posix()}/bucket_id=*/*.parquet',
           hive_partitioning=true,

@@ -1,5 +1,7 @@
 """Round-6 extraction regressions; all source records are invented."""
 
+from tests.support.bucket_storage import declare_single_bucket_fixtures
+
 import json
 import os
 from pathlib import Path
@@ -35,6 +37,7 @@ AUMC_ITEMS = {
 
 
 def _load(source, names, id_column):
+    declare_single_bucket_fixtures(source.base_path)
     return ConceptResolver(ConceptDictionary.from_json(DICTIONARY)).load_concepts(
         names, source, merge=False, r_compatible=False,
         interval=pd.Timedelta(hours=1), patient_ids={id_column: [1]},

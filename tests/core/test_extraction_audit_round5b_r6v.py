@@ -5,6 +5,8 @@ close a discrepancy in an unavailable clinical cohort. See the lane receipt
 for the exact outstanding source-level comparisons.
 """
 
+from tests.support.bucket_storage import write_fixture_parquet
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -716,11 +718,11 @@ def test_r6_f030_public_parent_request_uses_twenty_four_cell_worst(tmp_path):
             "statusdescription": ["FinishedRunning"]}))
     # Supply the parent's other-vasopressor owner with a real, scoped order;
     # an absent table is not an observed negative cardiovascular component.
-    pd.DataFrame({"icustay_id": [1], "subject_id": [1], "hadm_id": [1], "itemid": [222315],
+    write_fixture_parquet(pd.DataFrame({"icustay_id": [1], "subject_id": [1], "hadm_id": [1], "itemid": [222315],
         "starttime": [origin], "endtime": [origin + pd.Timedelta(hours=27)],
         "rate": [.03], "rateuom": ["units/min"], "amount": [48.6], "amountuom": ["units"],
         "linkorderid": [1], "orderid": [1], "patientweight": [70.],
-        "statusdescription": ["FinishedRunning"], "cancelreason": [0]}).to_parquet(tmp_path / "inputevents_mv.parquet", index=False)
+        "statusdescription": ["FinishedRunning"], "cancelreason": [0]}), tmp_path / "inputevents_mv.parquet", index=False)
     for score, component, peak in [("sofa", "sofa_resp", 4), ("sofa2", "sofa2_resp", 3)]:
         point = _load(source, [component])[component].data
         assert point.loc[point.charttime.between(0, 26), component].tolist() == [peak] + [0] * 26
@@ -799,7 +801,7 @@ def test_r6_f040_native_respiratory_retains_explicit_sic_airway(tmp_path, monkey
     table = (source.base_path / "data_float_h.parquet" if layout == "flat"
              else source.base_path / "data_float_h_bucket/bucket_id=0/part.parquet")
     if settings == "empty":
-        pd.read_parquet(table).iloc[:0].to_parquet(table, index=False)
+        write_fixture_parquet(pd.read_parquet(table).iloc[:0], table, index=False)
     elif settings == "missing":
         if layout == "flat":
             table.unlink()

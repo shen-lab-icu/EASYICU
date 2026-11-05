@@ -75,7 +75,6 @@ from .expr_parser import (
     _split_arguments,
     _strip_quotes,
 )
-from ..datasource import _duckdb_path, enumerate_bucket_parquet_files
 from ..hospital_mortality import EICU_HOSPITAL_STATUS_BINDING, hospital_mortality_status_from_discharge
 
 if TYPE_CHECKING:
@@ -176,22 +175,16 @@ def hirid_observation_read_exprs(
     the public archive's native numbered shards (``observations/N.parquet``).
     Both contain the same observation schema and can time deaths.
     """
-    for directory_name in ("observations_bucket", "observations"):
-        directory = base_path / directory_name
-        files = enumerate_bucket_parquet_files(directory)
-        if not files:
-            continue
-        files_sql = (
-            "["
-            + ", ".join(_duckdb_sql_path_literal(path) for path in files)
-            + "]"
-        )
-        return (
-            f"read_parquet({files_sql})",
-            f"read_parquet({files_sql}, union_by_name=true)",
-            directory_name,
-        )
-    return None
+    from ..config import load_src_cfg
+    from ..datasource import ICUDataSource
+    from ..storage_layout import parquet_relation
+
+    source = ICUDataSource(load_src_cfg("hirid"), base_path=base_path, enable_cache=False)
+    files = source.resolve_target_files("observations")
+    if not files:
+        return None
+    relation = parquet_relation(files)
+    return relation, relation, "observations"
 
 
 def cohort_patient_ids(patient_ids) -> Optional[set]:
@@ -3370,38 +3363,8 @@ def _apply_callback(
                     unique_ids = frame[id_col].unique().tolist()
                     weight_per_patient = None
                     
-                    # 🔧 FIX 2026-03-12: For HiRID, load raw weight from parquet
-                    # and compute direct per-patient median (bypassing DuckDB hourly aggregation).
-                    # R ricu: load_concepts("weight", aggregate=NULL) → median(all_raw_values)
-                    # Previous easyicu: DuckDB GROUP BY (patient,hour) MEDIAN → groupby(patient).median() = "median of medians" ≠ direct median
-                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                    if db_name == 'hirid':
-                        try:
-                            bucket_dir = data_source.base_path / 'observations_bucket'
-                            if bucket_dir.exists():
-                                conn = duckdb_spill.connect()
-                                conn.execute("SET memory_limit = '2GB'")
-                                # 显式文件列表，过滤 AppleDouble
-                                _wh_files = enumerate_bucket_parquet_files(bucket_dir)
-                                if _wh_files:
-                                    _wh_files_sql = "[" + ", ".join(f"'{f}'" for f in _wh_files) + "]"
-                                    _wh_read_expr = f"read_parquet({_wh_files_sql}, hive_partitioning=true, union_by_name=true)"
-                                else:
-                                    _wh_read_expr = f"read_parquet('{_duckdb_path(bucket_dir)}/**/*.parquet', hive_partitioning=true)"
-                                # weight variableid = 10000400
-                                pid_list = ','.join(str(int(p)) for p in unique_ids)
-                                sql = f"""
-                                    SELECT patientid, MEDIAN(value) as weight
-                                    FROM {_wh_read_expr}
-                                    WHERE variableid = 10000400 AND patientid IN ({pid_list})
-                                      AND value IS NOT NULL AND value >= 1 AND value <= 500
-                                    GROUP BY patientid
-                                """
-                                weight_per_patient = conn.execute(sql).fetchdf()
-                                conn.close()
-                        except Exception:
-                            weight_per_patient = None
-                    
+                    # Physical layouts share the existing weight concept owner,
+                    # including its bounds, tie handling and per-patient median.
                     if weight_per_patient is None or weight_per_patient.empty:
                         # Fallback: use standard loading path
                         weight_table = resolver._load_single_concept(

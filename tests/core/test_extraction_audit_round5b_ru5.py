@@ -1,5 +1,7 @@
 """Round-5b residues: synthetic urine collection and ventilation evidence."""
 
+from tests.support.bucket_storage import write_fixture_parquet
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -207,7 +209,7 @@ def test_ru_06_hirid_niv_mode_blocks_invasive_bridging(code, tmp_path):
     frame["value"] = [1., float(code), 2., 8., 35.]
     origin = pd.read_parquet(root / "general.parquet").set_index("patientid").loc[1, "admissiontime"]
     frame["datetime"] = pd.Timestamp(origin) + pd.to_timedelta([0., 2.5, 6., 5., 5.], unit="h")
-    frame.to_parquet(path, index=False)
+    write_fixture_parquet(frame, path, index=False)
     try:
         loaded = api.load_concepts(
             ["vent_ind", "vent_mode"], database="hirid", data_path=root,
@@ -284,7 +286,7 @@ def _availability_source(root, database, layout, *, gaps=False):
     if layout != "raw":
         target = root / f"{table}_bucket/bucket_id=0/part.parquet"
         target.parent.mkdir(parents=True, exist_ok=True)
-    combined.to_parquet(target, index=False)
+    write_fixture_parquet(combined, target, index=False)
     return 44.25 if availability else 24.25
 
 
@@ -385,7 +387,7 @@ def test_ru_09_aumc_sofa2_renal_matches_shared_collection_windows(layout, tmp_pa
         for path in [*root.glob(f"{source.table}*/**/*.parquet"), *root.glob(f"{source.table}.parquet")]:
             data = pd.read_parquet(path)
             ids = source.ids if isinstance(source.ids, list) else [source.ids]
-            data.loc[~data[source.sub_var].isin(ids)].to_parquet(path, index=False)
+            write_fixture_parquet(data.loc[~data[source.sub_var].isin(ids)], path, index=False)
     options = dict(database="aumc", data_path=root, verbose=False,
                    concept_workers=1, parallel_workers=1, r_compatible=False)
     try:
@@ -541,7 +543,7 @@ def test_ru_08_optional_partition_clock_never_forces_unfiltered_fallback(databas
     if not missing:
         frame = pd.read_parquet(path)
         frame["storetime"] = np.nan
-        frame.to_parquet(path, index=False)
+        write_fixture_parquet(frame, path, index=False)
     monkeypatch.setattr(source, "resolve_bucket_directory", lambda table: None)
     monkeypatch.setattr(source, "resolve_flat_parquet_directory", lambda table: None)
 

@@ -1,5 +1,7 @@
 """Round-5 urine audit: synthetic collection intervals only, all six sources."""
 
+from tests.support.bucket_storage import move_fixture_parquet, write_fixture_parquet
+
 from types import SimpleNamespace
 
 import numpy as np
@@ -219,13 +221,13 @@ def test_hourly_pooling_does_not_invent_a_gap_between_valid_records(database, tm
             placed = True
         else:
             frame = frame.loc[~mask]
-        frame.to_parquet(path, index=False)
+        write_fixture_parquet(frame, path, index=False)
     assert placed
     path = root / f"{table}.parquet"
     if path.exists():
         bucket = root / f"{table}_bucket" / "bucket_id=0"
         bucket.mkdir(parents=True)
-        path.rename(bucket / "part.parquet")
+        move_fixture_parquet(path, bucket / "part.parquet")
     try:
         result = load_concepts(["urine24", "uo_6h", "uo_rt_6hr"], database=database, data_path=root,
                                verbose=False, keep_components=True, r_compatible=False,
@@ -450,7 +452,7 @@ def test_source_record_availability_survives_hourly_loading(database, path_kind,
         if path.exists():
             bucket = root / f"{table}_bucket" / "bucket_id=0"
             bucket.mkdir(parents=True)
-            path.rename(bucket / "part.parquet")
+            move_fixture_parquet(path, bucket / "part.parquet")
     options = dict(database=database, data_path=root, verbose=False, keep_components=True,
                    concept_workers=1, parallel_workers=1, r_compatible=False)
     try:
@@ -514,7 +516,7 @@ def test_sic_batch_pooled_urine_keeps_availability_for_downstream_callbacks(tmp_
     if path.exists():
         bucket = root / "data_float_h_bucket" / "bucket_id=0"
         bucket.mkdir(parents=True)
-        path.rename(bucket / "part.parquet")
+        move_fixture_parquet(path, bucket / "part.parquet")
     try:
         tables = load_concepts(
             ["urine", "spo2"], database="sic", data_path=root, merge=False,

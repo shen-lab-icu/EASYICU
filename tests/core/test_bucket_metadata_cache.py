@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+from tests.support.bucket_storage import write_contract
 import pandas as pd
 import pytest
 
@@ -137,17 +138,19 @@ def test_bucket_file_resolution_uses_duckdb_hash_and_skips_unrelated_buckets(tmp
     expected_files = []
     for bucket_id in target_buckets:
         file_path = bucket_dir / f"bucket_id={bucket_id}" / f"data_{bucket_id}.parquet"
-        file_path.touch()
+        pd.DataFrame({"itemid": pd.Series([], dtype="int64")}).to_parquet(file_path, index=False)
         expected_files.append(file_path)
 
     unrelated_bucket = next(bucket_id for bucket_id in range(10) if bucket_id not in target_buckets)
-    (bucket_dir / f"bucket_id={unrelated_bucket}" / "unrelated.parquet").touch()
+    pd.DataFrame({"itemid": [999]}).to_parquet(bucket_dir / f"bucket_id={unrelated_bucket}" / "unrelated.parquet", index=False)
     (bucket_dir / "_COMPLETE").write_text("ready", encoding="utf-8")
 
+    write_contract(bucket_dir, key="itemid", modulus=10)
     resolved_buckets, num_buckets, resolved_files = data_source._get_bucket_files_for_ids(
         bucket_dir,
         itemids,
         duckdb,
+        selector_column="itemid",
     )
 
     assert num_buckets == 10
@@ -179,6 +182,7 @@ def test_multi_aggregated_skips_null_value_rows_before_grouping(tmp_path: Path) 
         }
     ).to_parquet(tmp_path / "icustays.parquet")
 
+    write_contract(bucket_dir, key="itemid", modulus=8)
     result = load_bucketed_table_multi_aggregated(
         data_source,
         "chartevents",
@@ -217,6 +221,7 @@ def test_single_aggregated_skips_null_value_rows_before_grouping(tmp_path: Path)
         }
     ).to_parquet(tmp_path / "icustays.parquet")
 
+    write_contract(bucket_dir, key="itemid", modulus=8)
     result = load_bucketed_table_aggregated(
         data_source,
         "chartevents",
@@ -316,17 +321,19 @@ def test_bucket_layout_cache_invalidates_when_complete_marker_changes(tmp_path: 
     target_bucket = next(iter(target_buckets))
     first_file = bucket_dir / f"bucket_id={target_bucket}" / "first.parquet"
     second_file = bucket_dir / f"bucket_id={target_bucket}" / "second.parquet"
-    first_file.touch()
+    pd.DataFrame({"itemid": [50813]}).to_parquet(first_file, index=False)
     marker = bucket_dir / "_COMPLETE"
     marker.write_text("v1", encoding="utf-8")
 
-    _, _, first_files = data_source._get_bucket_files_for_ids(bucket_dir, {50813}, duckdb)
+    write_contract(bucket_dir, key="itemid", modulus=4)
+    _, _, first_files = data_source._get_bucket_files_for_ids(bucket_dir, {50813}, duckdb, selector_column="itemid")
     assert set(first_files) == {first_file}
 
-    second_file.touch()
+    pd.DataFrame({"itemid": [50813]}).to_parquet(second_file, index=False)
     marker.write_text("version-two", encoding="utf-8")
 
-    _, _, second_files = data_source._get_bucket_files_for_ids(bucket_dir, {50813}, duckdb)
+    write_contract(bucket_dir, key="itemid", modulus=4)
+    _, _, second_files = data_source._get_bucket_files_for_ids(bucket_dir, {50813}, duckdb, selector_column="itemid")
     assert set(second_files) == {first_file, second_file}
 
 
@@ -356,14 +363,16 @@ def test_bucket_file_resolution_supports_string_bucket_keys(tmp_path: Path) -> N
     expected_files = []
     for bucket_id in target_buckets:
         file_path = bucket_dir / f"bucket_id={bucket_id}" / f"data_{bucket_id}.parquet"
-        file_path.touch()
+        pd.DataFrame({"itemid": ["heart rate"]}).to_parquet(file_path, index=False)
         expected_files.append(file_path)
     (bucket_dir / "_COMPLETE").write_text("ready", encoding="utf-8")
 
+    write_contract(bucket_dir, key="itemid", modulus=8)
     resolved_buckets, num_buckets, resolved_files = data_source._get_bucket_files_for_ids(
         bucket_dir,
         itemids,
         duckdb,
+        selector_column="itemid",
     )
 
     assert num_buckets == 8
@@ -379,6 +388,8 @@ def test_bucket_directory_cache_only_stores_positive_results(tmp_path: Path) -> 
 
     bucket_dir = tmp_path / "chartevents_bucket" / "bucket_id=0"
     bucket_dir.mkdir(parents=True)
+    pd.DataFrame({"itemid": [220045]}).to_parquet(bucket_dir / "part.parquet", index=False)
+    write_contract(bucket_dir.parent, key="itemid")
 
     resolved = data_source._resolve_bucket_directory("chartevents")
     assert resolved == tmp_path / "chartevents_bucket"

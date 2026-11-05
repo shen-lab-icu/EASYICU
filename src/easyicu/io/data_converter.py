@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
+from easyicu.io import conversion_provenance
 import os
 import re
 import tarfile
@@ -1805,6 +1806,7 @@ class DataConverter:
         import pyarrow as pa
         import pyarrow.parquet as pq
         
+        conversion_provenance.record_branch(self, result, "source-shard" if self._hirid_csv_shard_info(csv_path) else "single-file")
         parquet_path = self._get_parquet_path(csv_path)
         parquet_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2004,6 +2006,7 @@ class DataConverter:
         # downstream pruning.
         use_id_partitioning = os.environ.get('EASYICU_USE_ID_PARTITIONING', '1') == '1'
         
+        conversion_provenance.record_branch(self, result, "range" if partition_config and use_id_partitioning else "row-slice")
         if partition_config and use_id_partitioning:
             # Use ID-based partitioning (ricu style) - opens many writers, uses more memory
             if self.verbose:
@@ -3324,6 +3327,7 @@ class DataConverter:
             cluster_by_patient = os.environ.get(
                 "EASYICU_CLUSTER_BY_PATIENT", ""
             ).strip().lower() in ("1", "true", "yes", "on")
+        self._effective_cluster_by_patient = bool(cluster_by_patient)
         extracted_community_archives: List[str] = []
         if self.database in COMMUNITY_DATABASES:
             extracted_community_archives = prepare_community_archives(
@@ -3638,6 +3642,8 @@ class DataConverter:
             "database": self.database,
             "data_path": str(self.data_path),
             "converter": {
+                **conversion_provenance.software(),
+                "effective_environment": conversion_provenance.environment(self),
                 "chunk_size": self.chunk_size,
                 "parallel_workers": self.parallel_workers,
                 "status_file": self.STATUS_FILE,
@@ -3732,6 +3738,7 @@ class DataConverter:
             "shards": result.get("shards"),
             "partition_col": result.get("partition_col"),
             "partition_breaks": result.get("partition_breaks"),
+            "storage_provenance": conversion_provenance.manifest_provenance(self, file_name, result, outputs),
             "input": (
                 self._file_manifest_record(csv_path, hash_files=hash_files)
                 if csv_path
@@ -3758,6 +3765,10 @@ class DataConverter:
         csv_path: Optional[Path],
         result: Dict[str, Any],
     ) -> List[Path]:
+        if csv_path is not None:
+            selected = self._sharded_parquet_paths(csv_path)
+            if selected:
+                return selected
         shard_dir = result.get("shard_dir")
         if shard_dir:
             path = Path(str(shard_dir))

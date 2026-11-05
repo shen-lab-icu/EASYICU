@@ -1,12 +1,13 @@
 """Synthetic events through real selection, callbacks, and hourly aggregation."""
 from pathlib import Path
 
+from easyicu.datasource import ICUDataSource
+
 import pandas as pd
 import pytest
 
 from easyicu.concept import ConceptDictionary, ConceptResolver
 from easyicu.config import load_src_cfg
-from easyicu.datasource import ICUDataSource
 from easyicu.resources import load_dictionary
 
 
@@ -72,11 +73,15 @@ def test_actual_loader_keeps_alarms_and_respiratory_channels_separate(
     original_multi = datasource_module.load_bucketed_table_multi_aggregated
 
     def capture(*args, **kwargs):
+        if not use_duckdb:
+            raise ValueError("exercise the raw source fallback")
         result = original(*args, **kwargs)
         calls.append((args[1], tuple(args[3])))
         return result
 
     def capture_multi(*args, **kwargs):
+        if not use_duckdb:
+            raise ValueError("exercise the raw source fallback")
         result = original_multi(*args, **kwargs)
         for ids in args[2].values():
             calls.append((args[1], tuple(ids)))

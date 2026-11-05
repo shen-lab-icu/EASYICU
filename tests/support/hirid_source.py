@@ -1,5 +1,9 @@
 """Synthetic HiRID schemas whose clinical rows are replaced by test literals."""
 
+
+from tests.support.bucket_storage import write_fixture_parquet
+from tests.support.bucket_storage import declare_single_bucket_fixtures
+
 import pandas as pd
 
 
@@ -26,7 +30,8 @@ def hirid_source_root(tmp_path, table, rows, layout="flat", preserve_other=False
         path.unlink()
         path = root / f"{table}_bucket/bucket_id=0/1.parquet"
         path.parent.mkdir(parents=True)
-    frame.to_parquet(path, index=False)
+    write_fixture_parquet(frame, path, index=False)
+    declare_single_bucket_fixtures(root)
     return root
 
 

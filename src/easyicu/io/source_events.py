@@ -13,7 +13,7 @@ import numbers
 from pathlib import Path
 from typing import Sequence
 
-import duckdb
+import duckdb as duckdb  # Public patch seam used by the SQL-scope audit.
 from easyicu.runtime import duckdb_spill
 import numpy as np
 import pandas as pd
@@ -78,17 +78,7 @@ def _relation(paths: Sequence[Path], *, events: bool = False) -> str:
 
 
 def _files(source: ICUDataSource, table: str, itemids: list[int]) -> list[Path]:
-    bucket = source.resolve_bucket_directory(table)
-    if bucket is not None:
-        paths = source.get_bucket_files_for_ids(bucket, itemids, duckdb)[2]
-    else:
-        flat = source.resolve_flat_parquet_directory(table)
-        if flat is not None:
-            paths = sorted(flat.glob("*.parquet"))
-        else:
-            candidates = [source.base_path / f"{table}.parquet",
-                          source.base_path / ("icu" if table == "chartevents" else "hosp") / f"{table}.parquet"]
-            paths = [p for p in candidates if p.is_file()]
+    paths = source.resolve_target_files(table, "itemid", itemids)
     paths = sorted({Path(p).resolve() for p in paths})
     if not paths:
         raise SourceEventContractError(f"missing_parquet_source:{table}")

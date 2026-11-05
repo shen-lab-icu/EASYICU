@@ -8,7 +8,11 @@ hourly values unambiguous.
 
 from __future__ import annotations
 
+from tests.support.bucket_storage import write_fixture_parquet
+
 from pathlib import Path
+
+from tests.support.bucket_storage import synthetic_data_source, declare_single_bucket_fixtures
 
 import pandas as pd
 
@@ -26,7 +30,9 @@ def _source(tmp_path: Path, database: str) -> ICUDataSource:
 
 def _write(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(path, index=False)
+    write_fixture_parquet(frame, path, index=False)
+    if path.parent.name == "bucket_id=0":
+        declare_single_bucket_fixtures(path.parent.parent.parent)
 
 
 def _mimic_family(tmp_path: Path, database: str, lab_rows, chart_rows, specimen_column):

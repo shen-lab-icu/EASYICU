@@ -1,5 +1,7 @@
 """HiRID round-5 regressions; every source row here is synthetic."""
 
+from tests.support.bucket_storage import write_fixture_parquet
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -344,7 +346,7 @@ def test_r5c_hirid_023_dex_iv_filter_retains_grouped_infusion_callback(tmp_path,
     assert out.dex.notna().any()
     path = root / ("pharma/1.parquet" if layout == "flat" else "pharma_bucket/bucket_id=0/1.parquet")
     raw = pd.read_parquet(path)
-    raw.loc[raw.route.ne("po")].to_parquet(path, index=False)
+    write_fixture_parquet(raw.loc[raw.route.ne("po")], path, index=False)
     iv_only = _load(root, ["dex"])["dex"]
     pd.testing.assert_frame_equal(out, iv_only)
     source = _dictionary()["dex"]["sources"]["hirid"][0]
@@ -379,7 +381,7 @@ def test_r5c_hirid_023_native_medications_ignore_only_non_iv_dex(tmp_path):
     mixed = medications("mixed")
     path = root / "pharma_bucket/bucket_id=0/1.parquet"
     raw = pd.read_parquet(path)
-    raw.loc[~(raw.pharmaid.eq(1000690) & raw.route.eq("po"))].to_parquet(path, index=False)
+    write_fixture_parquet(raw.loc[~(raw.pharmaid.eq(1000690) & raw.route.eq("po"))], path, index=False)
     iv_only = medications("iv-only")
     assert mixed.dex.notna().any()
     assert {"abx", "insulin", "enoxaparin"}.issubset(mixed.columns)

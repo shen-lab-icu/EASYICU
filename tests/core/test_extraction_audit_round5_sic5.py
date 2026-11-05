@@ -1,5 +1,7 @@
 """Round-5 SICdb regressions; all records below are invented."""
 
+from tests.support.bucket_storage import synthetic_data_source
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -254,7 +256,7 @@ def test_r5_sic_003_public_resolver_preserves_boundary_hours_raw_qc_and_attribut
     events = pd.DataFrame(rows, columns=["CaseID", "DataID", "Offset", "Val"])
     events.Offset = 1800 + events.Offset*H
     events.to_parquet(tmp_path / "data_float_h.parquet")
-    source = ICUDataSource(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
+    source = synthetic_data_source(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
     names = ["mech_vent", "vent_ind", "ett_gcs", "adv_resp", "cvp", "cvp_raw", "minute_vol", *sorted(companions)]
     out = ConceptResolver(load_dictionary(include_sofa2=True, source_name="sic")).load_concepts(
         names, source, merge=False, r_compatible=False, interval=pd.Timedelta(hours=1),
@@ -317,7 +319,7 @@ def test_r5_sic_016_public_pressure_bounds_follow_conversion_and_protein_is_medi
     pd.DataFrame({"CaseID": [1], "PatientID": [11], "ICUOffset": [21600], "TimeOfStay": [21600+20*H]}).to_parquet(tmp_path / "cases.parquet")
     pd.DataFrame({"CaseID": 1, "DataID": [2278, 2278, 2279, 2279, 3120, 3120], "Offset": [21600, 25200]*3, "Val": [39.5, 30., 59., 50., 203., 50.]}).to_parquet(tmp_path / "data_float_h.parquet")
     pd.DataFrame({"CaseID": [1, 1], "LaboratoryID": [293, 294], "Offset": [21600, 21600], "LaboratoryValue": [6., 8.], "LaboratoryType": [2296, 2296]}).to_parquet(tmp_path / "laboratory.parquet")
-    ds = ICUDataSource(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
+    ds = synthetic_data_source(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
     names = ["peep", "peep_set", "mean_airway_pres", "compliance", "total_protein"]
     out = ConceptResolver(load_dictionary(source_name="sic")).load_concepts(names, ds, merge=False, r_compatible=False, interval=pd.Timedelta(hours=1), concept_workers=1, verbose=False)
     for name in ["peep", "peep_set", "mean_airway_pres"]:
@@ -354,7 +356,7 @@ def test_r5_sic_018_corrected_rates_feed_equivalents_sixty_minute_rates_and_scor
     raw = np.asarray([.01, .15])*80/1e6
     pd.DataFrame({"CaseID": 1, "DrugID": 1562, "Offset": [1800, 1800+H], "OffsetDrugEnd": [1800+H, 1800+2*H+60], "AmountPerMinute": raw, "Amount": raw*60, "IsSingleDose": 0}).to_parquet(tmp_path / "medication.parquet")
     pd.DataFrame({"CaseID": [1], "DataID": [703], "Offset": [1800], "Val": [80.]}).to_parquet(tmp_path / "data_float_h.parquet")
-    ds = ICUDataSource(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
+    ds = synthetic_data_source(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
     names = ["norepi_rate", "norepi_equiv", "norepi60", "sofa_cardio"]
     out = ConceptResolver(load_dictionary(include_sofa2=True, source_name="sic")).load_concepts(names, ds, merge=False, r_compatible=False, interval=pd.Timedelta(hours=1), concept_workers=1, verbose=False)
     for name in names:
@@ -376,7 +378,7 @@ def _review_source(tmp_path, events, *, bucketed=False):
     events = pd.DataFrame(events, columns=["CaseID", "DataID", "Offset", "Val"])
     events.Offset = 1800 + events.Offset*H
     events.to_parquet(path)
-    return ICUDataSource(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
+    return synthetic_data_source(load_src_cfg("sic"), base_path=tmp_path, enable_cache=False)
 
 
 @pytest.mark.parametrize("selected_dictionary", [False, True])

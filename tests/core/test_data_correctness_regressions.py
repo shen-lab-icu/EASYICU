@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from easyicu.datasource import ICUDataSource
+
 import json
 import os
 from pathlib import Path
@@ -17,7 +19,6 @@ from easyicu.content_identity import file_content_receipt
 from easyicu.datasource import (
     FilterOp,
     FilterSpec,
-    ICUDataSource,
     _resolve_wide_column_batch_size,
     load_bucketed_table_aggregated,
     load_wide_table_aggregated,
@@ -467,6 +468,7 @@ def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
         base_path=tmp_path,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(tmp_path.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -523,6 +525,7 @@ def test_bucket_loader_honours_source_sub_var_over_table_default(tmp_path):
         base_path=tmp_path,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(tmp_path.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: set(
             pd.read_parquet(files[0]).columns
         ),
@@ -568,6 +571,7 @@ def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
         base_path=tmp_path,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(tmp_path.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -831,6 +835,7 @@ def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
         load_table=load_table,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: labevents_dir,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(labevents_dir.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: set(
             pd.read_parquet(files[0]).columns
         ),
@@ -873,6 +878,7 @@ def test_transformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(tmp
         base_path=tmp_path,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(tmp_path.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -925,6 +931,7 @@ def test_untransformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(
         base_path=tmp_path,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(tmp_path.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
@@ -974,6 +981,7 @@ def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):
         base_path=tmp_path,
         resolve_bucket_directory=lambda name: None,
         resolve_flat_parquet_directory=lambda name: tmp_path,
+        resolve_target_files=lambda name, *_selector: tuple(sorted(tmp_path.glob("*.parquet"))),
         _get_parquet_columns_for_files=lambda files: {
             "patientunitstayid",
             "labresultoffset",
