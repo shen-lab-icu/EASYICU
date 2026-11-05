@@ -2242,26 +2242,26 @@ class ConceptResolver:
 
             if wide_table_merged_df is not None:
                 _materialize_covered_wide_tables_for_fallback()
-                # Interval concepts keep exact starts off the hourly grid; only
-                # the window materialiser can place them beside the batch.
-                # Grid-only requests keep the plain merge and every column.
-                if any(
-                    isinstance(tables.get(name), WinTbl)
-                    or name in compat.WINDOW_CONCEPTS
-                    or name in compat.WIN_TBL_CONCEPTS
-                    or name in compat.DURATION_CONCEPTS
-                    or name.endswith(("_rate", "_dur"))
-                    for name in names
-                ):
-                    return self._to_r_format_merged_enhanced(
-                        tables, names, interval, data_source=data_source,
-                        materialize_missing_concepts=not defer_empty_columns_to_arrow,
-                        consume_sources=True,
-                    )
                 for name in wide_table_covered_names:
                     declare_resolved_time_index(
                         tables[name], align_to_admission=align_to_admission, interval=interval,
                     )
+            # Exact interval starts need the window materialiser even when a
+            # file layout or a cache hit leaves no numeric batch to merge.
+            # Keep a single concept's native event table unchanged.
+            if len(names) > 1 and any(
+                isinstance(tables.get(name), WinTbl)
+                or name in compat.WINDOW_CONCEPTS
+                or name in compat.WIN_TBL_CONCEPTS
+                or name in compat.DURATION_CONCEPTS
+                or name.endswith(("_rate", "_dur"))
+                for name in names
+            ):
+                return self._to_r_format_merged_enhanced(
+                    tables, names, interval, data_source=data_source,
+                    materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                    consume_sources=True,
+                )
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(tables),
                 names,
@@ -3711,22 +3711,15 @@ class ConceptResolver:
                     # - aumc_rate_kg: 先median再/kg ≠ 先/kg再median
                     # 🔧 FIX 2026-02: 对所有有callback的源都跳过预降采样
                     has_callback = getattr(source, 'callback', None) is not None
-                    # AUMC tidal_vol, fio2 and po2 obey pooled/bounds contracts.
-                    # Otherwise crossing 1,000
-                    # source rows changes results: [0, 2849] becomes 1424.5
-                    # before the 2,000-mL upper bound can reject the outlier.
-                    # Per-source medians also cannot be pooled into a median.
-                    # FiO2 additionally requires admission-relative binning;
-                    # absolute-hour preaggregation shifts non-hour admissions.
-                    # PO2 can already arrive on an ICU-relative DuckDB grid.
-                    # Rounding that grid again on the absolute clock shifts it
-                    # backwards for non-hour admissions and corrupts P/F pairs.
-                    # Keep this repair scoped to the independently reproduced
-                    # source contract; do not silently reprofile other modules
-                    # by changing every high-frequency fallback here.
+                    # AUMC still carries absolute source minutes here, including
+                    # SQL buckets anchored to each admission. Pool only after
+                    # admission alignment and bounds in the shared owner below.
+                    # Re-bucketing on the absolute clock above 1,000 rows moved
+                    # potassium into the preceding creatinine hour, so formal
+                    # SOFA-2 modules disagreed with small single-stay replays.
                     skip_resample = (
                         has_callback
-                        or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2", "po2", "fio2_chart", "cai", "cai_ph74"})
+                        or db_name == "aumc"
                         # Ranked channels (MAP) are selected per ICU-relative
                         # hour and then aggregated with the requested
                         # function; a median pre-sample on the absolute clock
