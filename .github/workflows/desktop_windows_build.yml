@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: '3.11'
           architecture: x64
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.19.0'
           architecture: x64
@@ -101,7 +101,7 @@ jobs:
           python-version: '3.11'
           architecture: arm64
       # The official Node build links only macOS system libraries, so the app can bundle it.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.19.0'
           architecture: arm64
