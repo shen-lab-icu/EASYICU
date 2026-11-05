@@ -77,6 +77,73 @@ def _metadata(name, database):
     )
 
 
+def _assert_native_values(source, names, id_column, expected, output):
+    from easyicu.api import extraction
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(extraction.EXTRACT_MODULES, "respiratory", names)
+        patch.setitem(extraction.EXTRACT_MODULES, "outcome", ["los_icu"])
+        result = extraction.extract_database(
+            source.config.name, data_path=str(source.base_path), output_dir=str(output),
+            modules=["respiratory", "outcome"], patient_ids={id_column: [1]},
+            native_export_v2=True, verbose=False,
+        )
+    assert not result["modules"]["respiratory"].get("errors")
+    published = pd.read_parquet(output / "respiratory.parquet")
+    for name, values in expected.items():
+        observed = published.dropna(subset=[name])
+        actual = dict(zip(observed.charttime, observed[name]))
+        assert actual.keys() == values.keys()
+        np.testing.assert_allclose([actual[hour] for hour in values], list(values.values()), rtol=1e-6)
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+@pytest.mark.parametrize("layout", ["flat", "bucket"])
+@pytest.mark.parametrize("r_compatible", [False, True])
+def test_R6_F018_F023_partial_batch_keeps_nonbatched_measurements(
+    tmp_path, database, layout, r_compatible,
+):
+    if database == "hirid":
+        root = _source_root(tmp_path, "observations", [
+            {"patientid": 1, "datetime": t, "variableid": item, "value": value}
+            for t, item, value in [(2., 2010, .4), (3., 2010, .6),
+                                   (2., 200, 80.), (2., 20000400, 140.),
+                                   (2., 20000500, 4.)]
+        ], layout=layout)
+        names, target, id_column = ["hr", "na", "k", "fio2_chart"], "fio2_chart", "patientid"
+        expected = {2.: 40., 3.: 60.}
+    else:
+        root = tmp_path
+        lab = pd.DataFrame({
+            "id": range(7), "CaseID": 1,
+            "Offset": [7200, 7200, 9000, 10800, 7200, 7200, 7200],
+            "LaboratoryID": [367, 368, 368, 368, 469, 463, 333],
+            "LaboratoryValue": [1., 1., 3., 4., 140., 4., 1.],
+        })
+        _write(lab, root / "laboratory/part.parquet")
+        _write(pd.DataFrame({"CaseID": [1], "PatientID": [11], "ICUOffset": [0],
+                             "TimeOfStay": [48 * 3600]}), root / "cases.parquet")
+        if layout == "bucket":
+            _bucket_tables(root, ["laboratory"])
+        names, target, id_column = ["na", "k", "bili", "crea"], "crea", "CaseID"
+        expected = {2.: 2., 3.: 4.}
+    source = _source(root, database)
+    single = _load(source, [target], id_column)[target]
+    assert _values(single, target) == expected
+    merged = ConceptResolver(_dictionary()).load_concepts(
+        names, source, merge=True, r_compatible=r_compatible,
+        interval=pd.Timedelta(hours=1), patient_ids={id_column: [1]},
+        concept_workers=1, verbose=False,
+    )
+    measured = merged.dropna(subset=[target])
+    time_column = single.index_column if single.index_column in merged else "charttime"
+    assert dict(zip(measured[time_column].astype(float), measured[target])) == expected
+    assert merged["na"].dropna().tolist() == [140.]
+    assert merged["k"].dropna().tolist() == [4.]
+    if r_compatible:
+        _assert_native_values(source, names, id_column, {target: expected}, tmp_path / "out")
+
+
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
 def test_R6_F018_hirid_chart_matches_parent_percent_and_missing(tmp_path, layout):
     root = _source_root(tmp_path, "observations", [
@@ -101,7 +168,8 @@ def test_R6_F019_aumc_item_columns_trace_the_unchanged_pool(tmp_path, layout, mo
     rows += [(65 + i, item, 70. - 5 * i, "Geen") for i, item in enumerate(AUMC_FIO2_ITEMS)]
     rows += [(125, 6699, None, "Geen"), (185, 6699, 101., "Geen"),
              (245, 20656, 90., "Geen"), (305, 13076, 1., "Geen"),
-             (5, 9560, 1.1, "mmol/L"), (5, 9561, 1.2, "mmol/L")]
+             (5, 9560, 1.1, "mmol/L"), (5, 9561, 1.2, "mmol/L"),
+             (5, 6640, 80., "bpm")]
     source = _db(tmp_path, numeric=rows, layout=layout)
     names = [f"fio2_chart_aumc_{item}" for item in AUMC_FIO2_ITEMS]
     from easyicu.api.extraction import _native_export_physical_value_columns
@@ -138,13 +206,15 @@ def test_R6_F019_aumc_item_columns_trace_the_unchanged_pool(tmp_path, layout, mo
         )
         for name in ["fio2_chart", *names]:
             np.testing.assert_allclose(projected[name].dropna(), table.data[name].dropna())
-    merged = ConceptResolver(_dictionary()).load_concepts(
-        ["cai", "cai_ph74", "fio2_chart"], source, merge=True, r_compatible=True,
-        interval=pd.Timedelta(hours=1), patient_ids={"admissionid": [1]},
-        concept_workers=1, verbose=False,
-    )
-    for name in ["fio2_chart", *names]:
-        np.testing.assert_allclose(merged[name].dropna(), table.data[name].dropna())
+    for r_compatible in [False, True]:
+        merged = ConceptResolver(_dictionary()).load_concepts(
+            ["cai", "cai_ph74", "hr", "fio2_chart"], source,
+            merge=True, r_compatible=r_compatible,
+            interval=pd.Timedelta(hours=1), patient_ids={"admissionid": [1]},
+            concept_workers=1, verbose=False,
+        )
+        for name in ["fio2_chart", *names]:
+            np.testing.assert_allclose(merged[name].dropna(), table.data[name].dropna())
     from easyicu.api import extraction
 
     monkeypatch.setitem(extraction.EXTRACT_MODULES, "respiratory", ["fio2", "fio2_chart"])
@@ -158,6 +228,49 @@ def test_R6_F019_aumc_item_columns_trace_the_unchanged_pool(tmp_path, layout, mo
     published = pd.read_parquet(tmp_path / "out/respiratory.parquet")
     for name in ["fio2_chart", *names]:
         np.testing.assert_allclose(published[name].dropna(), table.data[name].dropna())
+
+
+@pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+@pytest.mark.parametrize("layout", ["flat", "bucket"])
+@pytest.mark.parametrize("r_compatible", [False, True])
+def test_R6_F021_F035_partial_batch_retains_pressure_sources(tmp_path, database, layout, r_compatible):
+    lab = pd.DataFrame({"labresultoffset": [5, 5, 5, 5],
+                        "labname": ["sodium", "potassium", "total bilirubin", "chloride"],
+                        "labresult": [140., 4., 1., 100.]})
+    respiratory = pd.DataFrame({"respchartoffset": [65],
+                                "respchartvaluelabel": ["Peak Pressure"],
+                                "respchartvalue": ["25"]})
+    nurse = pd.DataFrame({
+        "nursingchartoffset": [65, 65, 65, 65],
+        "nursingchartcelltypevalname": ["Invasive BP Systolic", "Non-Invasive BP Systolic",
+                                        "Invasive BP Diastolic", "Non-Invasive BP Diastolic"],
+        "nursingchartcelltypevallabel": ["", "", "", ""],
+        "nursingchartvalue": ["110", "145", "60", "85"],
+    })
+    source = _eicu_source(tmp_path, database, lab=lab, respiratorycharting=respiratory,
+                          nursecharting=nurse)
+    # Long-table batching uses a flat parquet directory or a bucket directory.
+    (tmp_path / "lab").mkdir()
+    (tmp_path / "lab.parquet").replace(tmp_path / "lab/part.parquet")
+    if layout == "bucket":
+        _bucket_tables(tmp_path, ["lab", "respiratorycharting", "nursecharting"])
+        source = _source(tmp_path, database)
+    names = ["na", "k", "bili", "cl", "pip", "sbp", "dbp"]
+    expected = {"na": {0.: 140.}, "k": {0.: 4.}, "bili": {0.: 1.},
+                "cl": {0.: 100.},
+                "pip": {1.: 25.}, "sbp": {1.: 110.}, "dbp": {1.: 60.}}
+    selected = _load(source, names, "patientunitstayid")
+    merged = ConceptResolver(_dictionary()).load_concepts(
+        names, source, merge=True, r_compatible=r_compatible,
+        interval=pd.Timedelta(hours=1), patient_ids={"patientunitstayid": [1]},
+        concept_workers=1, verbose=False,
+    )
+    for name, values in expected.items():
+        assert _values(selected[name], name) == values
+        measured = merged.dropna(subset=[name])
+        assert dict(zip(measured.charttime, measured[name])) == values
+    if r_compatible:
+        _assert_native_values(source, names, "patientunitstayid", expected, tmp_path / "out")
 
 
 @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
@@ -196,12 +309,18 @@ def test_R6_F022_nephrostomy_volume_nets_irrigation_without_drain_or_rate(tmp_pa
     frame["charttime"] = ADMISSION + pd.to_timedelta(frame.pop("minute"), unit="m")
     frame["icustay_id"], frame["subject_id"], frame["hadm_id"] = 1, 11, 21
     frame["valueuom"] = "mL"
+    frame["storetime"] = frame["charttime"] + pd.Timedelta(hours=2)
     _write(frame, tmp_path / "outputevents/part.parquet")
     _write(pd.DataFrame({"icustay_id": [1], "subject_id": [11], "hadm_id": [21],
                          "intime": [ADMISSION], "outtime": [ADMISSION + pd.Timedelta(days=2)]}),
            tmp_path / "icustays.parquet")
+    _write(pd.DataFrame({
+        "subject_id": 11, "hadm_id": 21, "charttime": ADMISSION + pd.Timedelta(minutes=5),
+        "itemid": [50983, 50971, 50885, 50902], "valuenum": [140., 4., 1., 100.],
+        "valueuom": None,
+    }), tmp_path / "labevents/part.parquet")
     if layout == "bucket":
-        _bucket_tables(tmp_path, ["outputevents"])
+        _bucket_tables(tmp_path, ["outputevents", "labevents"])
     source = _source(tmp_path, database)
     loaded = _load(source, ["urine"], "icustay_id")
     expected = {0.: 170., 1.: 90., **{float(hour): 0. for hour in range(2, 25)}}
@@ -217,6 +336,33 @@ def test_R6_F022_nephrostomy_volume_nets_irrigation_without_drain_or_rate(tmp_pa
     assert last.uo_rt_24hr_covered_h == pytest.approx(24.)
     assert last.uo_rt_24hr == pytest.approx(90. / 24. / 70.)
     assert last.aki_stage_uo == 3
+    names = ["na", "k", "bili", "cl", "urine"]
+    for r_compatible in [False, True]:
+        merged = ConceptResolver(_dictionary()).load_concepts(
+            names, source, merge=True, r_compatible=r_compatible,
+            interval=pd.Timedelta(hours=1), patient_ids={"icustay_id": [1]},
+            concept_workers=1, verbose=False,
+        )
+        observed = merged.dropna(subset=["urine"])
+        assert dict(zip(observed.charttime, observed.urine)) == expected
+    daily = _load(source, ["urine24"], "icustay_id")["urine24"].data
+    daily = daily.dropna(subset=["urine24"])
+    assert not daily.empty
+    assert daily.urine24_available_at.max() == pytest.approx(26. + 5. / 60.)
+    names.append("urine24")
+    for r_compatible in [False, True]:
+        merged = ConceptResolver(_dictionary()).load_concepts(
+            names, source, merge=True, r_compatible=r_compatible,
+            interval=pd.Timedelta(hours=1), patient_ids={"icustay_id": [1]},
+            concept_workers=1, verbose=False,
+        )
+        observed = merged.dropna(subset=["urine24"])
+        assert "urine24_available_at" in observed
+        np.testing.assert_allclose(observed.urine24_available_at, daily.urine24_available_at)
+    _assert_native_values(source, names, "icustay_id", {
+        "urine": expected,
+        "urine24_available_at": dict(zip(daily.charttime, daily.urine24_available_at)),
+    }, tmp_path / "out")
 
 
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
@@ -285,6 +431,8 @@ def test_R6_F046_legacy_gcs_ages_each_original_component_independently(clock, se
             time = pd.to_timedelta(time, unit="h")
         if clock == "datetime":
             time = ADMISSION + time
+        if clock != "hours" and name in {"egcs", "mgcs", "tgcs"}:
+            time = time.dt.as_unit("s")
         return pd.DataFrame({"stay_id": stay, "time": time, name: values})
 
     eye = pd.concat([component("egcs", [0.], [1.]), component("egcs", [8.], [4.], 2)])
@@ -320,3 +468,15 @@ def test_R6_F047_hirid_insulin_is_conserved_hour_bin_amount_with_honest_metadata
     assert params["time_basis"] == "one_hour_bin_total"
     assert params["quantity_kind"] == "administered_amount"
     assert params["continuous_iv_rate"] is False
+    names = ["hr", "na", "k", "cl", "ins"]
+    for r_compatible in [False, True]:
+        merged = ConceptResolver(_dictionary()).load_concepts(
+            names, _source(root, "hirid"), merge=True, r_compatible=r_compatible,
+            interval=pd.Timedelta(hours=1), patient_ids={"patientid": [1]},
+            concept_workers=1, verbose=False,
+        )
+        observed = merged.dropna(subset=["ins"])
+        clock = "givenat" if "givenat" in observed else "charttime"
+        assert dict(zip(observed[clock], observed.ins)) == {0.: 9., 1.: 5.}
+    _assert_native_values(_source(root, "hirid"), names, "patientid",
+                          {"ins": {0.: 9., 1.: 5.}}, tmp_path / "out")
