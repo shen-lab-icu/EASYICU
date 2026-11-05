@@ -296,4 +296,5 @@ def filter_cvp(tables, ctx):
         arterial = pd.Series(pd.MultiIndex.from_arrays([data.CaseID, np.floor(pd.to_numeric(data[time], errors="coerce"))]).map(lookup).to_numpy(), index=data.index, dtype=float)
     except (KeyError, ValueError, TypeError, AttributeError, OSError):
         pass  # Missing evidence is reported as QC; R2 still retains 30--50.
-    return _cvp_quality_result(data, ids, time, ctx, arterial)
+    dbp = pd.to_numeric(data.get("dbp", pd.Series(np.nan, index=data.index)), errors="coerce")
+    return _cvp_quality_result(data, ids, time, ctx, arterial, arterial.isna() & dbp.notna())

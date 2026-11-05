@@ -158,7 +158,9 @@ def test_r6_f008_cvp_keeps_30_to_50_with_flags_and_bounds(database, clock):
     table = ICUTable(data, id_columns=["stay_id"], index_column="charttime", value_column="cvp_raw")
     dbp = ICUTable(data[["stay_id", "charttime", "dbp"]], id_columns=["stay_id"],
                    index_column="charttime", value_column="dbp")
-    tables = {"cvp_raw": table, "dbp": dbp}
+    # This direct callback fixture supplies arterial measurements explicitly;
+    # the public DBP concept may also contain a cuff fallback.
+    tables = {"cvp_raw": table, "dbp_invasive": dbp}
     ds = SimpleNamespace(config=SimpleNamespace(name=database))
     ctx = ConceptCallbackContext(concept_name="cvp", target="ts_tbl", interval=pd.Timedelta(hours=1),
                                  resolver=None, data_source=ds, patient_ids=None)
@@ -250,6 +252,7 @@ def test_r6_f006_batch_and_native_vitals_match_each_pressure_channel(tmp_path, d
         actual = published[name].dropna()
         assert actual.tolist() == (value + published.loc[actual.index, "stay_id"] % 5).tolist()
         assert len(actual) == len(frame) == (60 if name == "map_invasive" else 80)
+    # In-range CVP needs no arterial check, so a cuff-only hour stays "kept".
     assert set(published.cvp_qc.dropna()) == {"kept"}
 
 

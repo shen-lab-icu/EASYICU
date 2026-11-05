@@ -2531,6 +2531,48 @@ def _callback_bounds_qc(
     )
 
 
+def _cvp_dbp_tables(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> tuple[Dict[str, ICUTable], bool]:
+    """Load only declared invasive DBP channels without changing public DBP.
+
+    The private ``dbp_invasive`` component is never a dictionary concept or
+    output column. Direct callers can supply that explicitly sourced table;
+    an unlabelled DBP table alone cannot establish arterial evidence.
+    """
+    from dataclasses import replace
+
+    from . import ConceptDictionary, ConceptResolver
+    from .source_channel import source_channel
+
+    dictionary = getattr(ctx.resolver, "dictionary", None)
+    definition = dictionary.get("dbp") if dictionary is not None else None
+    if definition is None:
+        return tables, False
+    sources = definition.for_data_source(ctx.data_source.config)
+    invasive = [s for s in sources if (source_channel(s) or "").startswith("invasive")]
+    has_cuff = any(source_channel(s) == "nibp" for s in sources)
+    if "dbp_invasive" in tables or not invasive:
+        return tables, has_cuff
+    result = dict(tables)
+    if len(invasive) == len(sources):
+        if "dbp" in tables:
+            result["dbp_invasive"] = tables["dbp"]
+        return result, has_cuff
+    subset = replace(definition, sources={ctx.data_source.config.name: invasive})
+    resolver = ConceptResolver(ConceptDictionary({"dbp": subset}))
+    options = dict(ctx.kwargs or {})
+    dbp = tables.get("dbp")
+    if dbp is not None and dbp.index_column:
+        options["align_to_admission"] = pd.api.types.is_numeric_dtype(dbp.data[dbp.index_column])
+    result["dbp_invasive"] = resolver._load_single_concept(
+        "dbp", ctx.data_source, aggregator="auto", patient_ids=ctx.patient_ids,
+        interval=ctx.interval, verbose=False, **options,
+    )
+    return result, has_cuff
+
+
 def _callback_cvp_artefact_filter(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -2540,9 +2582,14 @@ def _callback_cvp_artefact_filter(
         from .sicdb_sources import filter_cvp
 
         return filter_cvp(tables, ctx)
+    # Non-SIC CVP values carry no QC sidecar: keep their existing inputs and
+    # avoid making R2 retention depend on an additional evidence read.
+    tables, has_cuff = _cvp_dbp_tables(tables, ctx) if ctx.concept_name == "cvp_qc" else (tables, False)
     merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
-    arterial = pd.to_numeric(merged.get("dbp", pd.Series(np.nan, index=merged.index)), errors="coerce")
-    return _cvp_quality_result(merged, id_columns, index_column, ctx, arterial)
+    missing = pd.Series(np.nan, index=merged.index)
+    arterial = pd.to_numeric(merged.get("dbp_invasive", missing), errors="coerce")
+    cuff_only = has_cuff & arterial.isna() & pd.to_numeric(merged.get("dbp", missing), errors="coerce").notna()
+    return _cvp_quality_result(merged, id_columns, index_column, ctx, arterial, cuff_only)
 
 
 def _cvp_quality_result(
@@ -2551,12 +2598,14 @@ def _cvp_quality_result(
     index_column: Optional[str],
     ctx: ConceptCallbackContext,
     arterial: pd.Series,
+    cuff_only: Optional[pd.Series] = None,
 ) -> ICUTable:
     """One hourly R2 rule for CVP and its QC companion across all databases.
 
     The 30--50 range, arterial proximity and isolated peaks are flags. Only
     values outside [-5, 50] are removed from the main value. SIC supplies its
-    invasive diastolic item explicitly; a missing arterial value is a flag.
+    invasive diastolic item explicitly. Cuff-only DBP is identified separately
+    from absent DBP and never enters the arterial-proximity comparison.
     """
     keep = id_columns + ([index_column] if index_column else [])
     if "cvp_raw" not in data:
@@ -2566,6 +2615,10 @@ def _cvp_quality_result(
         data = data.sort_values(keep)
     cvp = pd.to_numeric(data["cvp_raw"], errors="coerce")
     arterial = arterial.reindex(data.index)
+    cuff_only = (
+        pd.Series(False, index=data.index) if cuff_only is None
+        else cuff_only.reindex(data.index, fill_value=False)
+    )
     high = cvp.between(30, 50)
     if index_column and not data.empty:
         time = data[index_column]
@@ -2596,7 +2649,10 @@ def _cvp_quality_result(
     # simultaneous reasons instead of hiding one artefact behind another.
     for mask, label in [
         (high, "high_30_to_50"),
-        (high & arterial.isna(), "arterial_evidence_unavailable"),
+        # Like a missing arterial value, a cuff-only DBP matters only where
+        # the arterial check applies; an unflagged in-range hour stays "kept".
+        (high & cuff_only, "cuff_dbp_only"),
+        (high & arterial.isna() & ~cuff_only, "arterial_evidence_unavailable"),
         (high & (cvp - arterial).abs().lt(10), "arterial_diastolic_match"),
         (spike, "isolated_spike"),
     ]:
