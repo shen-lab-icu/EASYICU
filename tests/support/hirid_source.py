@@ -41,3 +41,22 @@ def hirid_load(root, names, **kwargs):
                 for name, table in result.items()}
     finally:
         api.clear_global_loader()
+
+
+def hirid_native(root, names, output, monkeypatch, module):
+    """Publish only the requested synthetic concepts through native-v2."""
+    from easyicu.api import extraction
+    from easyicu.api.concepts import clear_global_loader
+
+    monkeypatch.setitem(extraction.EXTRACT_MODULES, module, names)
+    monkeypatch.setitem(extraction.EXTRACT_MODULES, "outcome", ["los_icu"])
+    try:
+        result = extraction.extract_database(
+            "hirid", data_path=str(root), output_dir=str(output),
+            modules=[module, "outcome"], patient_ids={"patientid": [1, 2, 3]},
+            native_export_v2=True, verbose=False, resource_budget_mb=1024,
+        )
+        assert not {key: state["errors"] for key, state in result["modules"].items() if state.get("errors")}
+        return pd.read_parquet(output / f"{module}.parquet")
+    finally:
+        clear_global_loader()

@@ -236,7 +236,10 @@ def _absolute_times(
     raw = frame[time_col]
     if pd.api.types.is_numeric_dtype(raw):
         origin = pd.to_datetime(frame[id_col].map(origins), errors="coerce")
-        return origin + pd.to_timedelta(pd.to_numeric(raw, errors="coerce"), unit="h")
+        # HiRID's raw clock is whole seconds. Float-hour reconstruction can
+        # land nanoseconds before noon and assign a reading to yesterday.
+        absolute = origin + pd.to_timedelta(pd.to_numeric(raw, errors="coerce"), unit="h")
+        return absolute.dt.round("s")
     return pd.to_datetime(raw, errors="coerce")
 
 

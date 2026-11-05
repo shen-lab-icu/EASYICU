@@ -5344,7 +5344,7 @@ def hirid_vent(
     1. Calculate time differences between consecutive records per patient
     2. Pad the last difference with padding (in data's time unit)
     3. Cap differences > max_gap to padding
-    4. Store as dur_var for window table processing (in MINUTES per R ricu)
+    4. Store dur_var in hours on the same clock as the exact start
     5. Keep exact window starts; floor only for hourly expansion
     
     Args:
@@ -5358,7 +5358,7 @@ def hirid_vent(
         expand_to_hourly: If True, expand windows to hourly time series
         
     Returns:
-        DataFrame with window table format (dur_var in minutes, datetime as integer hours)
+        DataFrame with exact starts and dur_var in hours (or occupied hourly cells)
     """
     if frame.empty:
         return frame
@@ -5399,54 +5399,17 @@ def hirid_vent(
     # Sort by patient and time
     df = df.sort_values([id_col, actual_index_col])
     
-    # R ricu uses the data's time unit (which is hours for HiRID after conversion)
-    # padding and max_gap are in hours, dur_var output is in MINUTES
-    padding_minutes = padding_hours * 60  # 4 hours = 240 minutes
-    max_gap_minutes = max_gap_hours * 60  # 12 hours = 720 minutes
-    
-    # Calculate padded_capped_diff per patient
-    # R: padded_diff <- function(x, final) c(diff(x), final)
-    # R: padded_capped_diff <- function(x, final, max) { res <- padded_diff(x, final); res[res > max] <- final; res }
-    def padded_capped_diff_minutes(time_series: pd.Series) -> pd.Series:
-        """
-        Calculate time diffs in MINUTES, pad last with padding_minutes, cap at max_gap_minutes.
-        """
-        if len(time_series) == 0:
-            return pd.Series(dtype=float)
-        
-        if len(time_series) == 1:
-            return pd.Series([padding_minutes], index=time_series.index)
-        
-        # Get values - should already be float hours (after HiRID time conversion)
-        time_vals = time_series.values
-        
-        # Handle datetime/timedelta types (shouldn't happen after conversion, but just in case)
-        if np.issubdtype(time_vals.dtype, np.datetime64):
-            time_vals = (time_vals - time_vals[0]).astype('timedelta64[m]').astype(float)
-        elif np.issubdtype(time_vals.dtype, np.timedelta64):
-            time_vals = time_vals.astype('timedelta64[m]').astype(float)
-        else:
-            # Already numeric (hours) - convert to minutes
-            time_vals = np.asarray(time_vals, dtype=float) * 60
-        
-        # Calculate diff (in minutes)
-        diff_vals = np.diff(time_vals)
-        
-        # Pad with final value (in minutes)
-        padded = np.append(diff_vals, padding_minutes)
-        
-        # Cap values > max_gap_minutes
-        padded[padded > max_gap_minutes] = padding_minutes
-        
-        return pd.Series(padded, index=time_series.index)
-    
-    # Apply per patient
-    df[dur_var] = df.groupby(id_col)[actual_index_col].transform(padded_capped_diff_minutes)
-    
-    # Convert dur_var from minutes to hours to match index unit
-    # The index is already in hours; dur_var must be in the same unit for
-    # correct endtime computation (start_hours + dur_hours) in _load_single_concept
-    df[dur_var] = df[dur_var] / 60.0
+    # Remove nanosecond float-hour noise before differencing, retaining
+    # subsecond records. Computing hours * 60 first can push a stop at an
+    # exact hour into the next cell. Native time inputs keep their precision.
+    times = df[actual_index_col]
+    if pd.api.types.is_numeric_dtype(times):
+        times = pd.to_timedelta(times, unit="h").dt.round("us")
+    following = times.groupby(df[id_col], sort=False).shift(-1)
+    duration = following - times
+    padding = pd.Timedelta(hours=padding_hours)
+    duration = duration.where(duration <= pd.Timedelta(hours=max_gap_hours), padding).fillna(padding)
+    df[dur_var] = duration / pd.Timedelta(hours=1)
     from ..table.duration import UNIT_HOURS, set_dur_var_unit
 
     set_dur_var_unit(df, UNIT_HOURS)
@@ -5576,7 +5539,8 @@ def _merge_infusion_episodes(spans: pd.DataFrame, id_col: str, gap_hours: float)
     spans = spans.sort_values([id_col, "_min_time"], kind="mergesort").reset_index(drop=True)
     running_end = spans.groupby(id_col)["_max_time"].cummax()
     previous_end = running_end.groupby(spans[id_col]).shift()
-    new_episode = previous_end.isna() | (spans["_min_time"] > previous_end + gap_hours)
+    gap = pd.Timedelta(seconds=gap_hours * 3600)
+    new_episode = previous_end.isna() | (spans["_min_time"] > previous_end + gap)
     spans["_episode"] = new_episode.astype("int64").groupby(spans[id_col]).cumsum()
     return spans.groupby([id_col, "_episode"], as_index=False).agg(
         _min_time=("_min_time", "min"), _max_time=("_max_time", "max")
@@ -5653,16 +5617,15 @@ def hirid_duration(
             empty_cols.append(grp_var)
         return pd.DataFrame(columns=empty_cols)
     
-    # Convert time to numeric if needed
+    # Compare episode boundaries on the source clock, before converting to hours.
     time_series = df[actual_index_col]
     if pd.api.types.is_datetime64_any_dtype(time_series):
-        # Convert to hours (assuming times are in same units)
-        df['_time_numeric'] = (time_series - time_series.min()).dt.total_seconds() / 3600.0
+        df['_time_numeric'] = time_series - time_series.min()
     elif hasattr(time_series.dtype, 'kind') and time_series.dtype.kind == 'm':
-        # timedelta type
-        df['_time_numeric'] = time_series.dt.total_seconds() / 3600.0
+        df['_time_numeric'] = time_series
     else:
-        df['_time_numeric'] = pd.to_numeric(time_series, errors='coerce')
+        # Remove float-hour round-trip noise without discarding subsecond records.
+        df['_time_numeric'] = pd.to_timedelta(pd.to_numeric(time_series, errors='coerce'), unit="h").dt.round("us")
     
     # Group by (patient_id, grp_var)
     group_cols = [id_col]
@@ -5698,8 +5661,8 @@ def hirid_duration(
 
     # R5C-HIRID-003: an hour grid is never an episode clock. Every length
     # stays exact, and consumers expand the original [start, end) interval.
-    result[concept_name] = result['_max_time'] - result['_min_time']
-    result[actual_index_col] = result['_min_time']
+    result[concept_name] = (result['_max_time'] - result['_min_time']).dt.total_seconds() / 3600.0
+    result[actual_index_col] = result['_min_time'].dt.total_seconds() / 3600.0
 
     # Drop temp columns
     result = result.drop(columns=['_min_time', '_max_time'])
