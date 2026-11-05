@@ -178,7 +178,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # R5 urine-chain audit: daily estimate, coverage, availability and partial-window
     # fields (+16); R5-SIC-001/011/015: charted CVP plus five raw/QC/attribution
     # companions (+6). 339 -> 361.
-    assert len(CONCEPT_DICTIONARY) == 361
+    # 2026-11-05 audit round 7: AUMC pH 7.4 corrected ionized calcium is its
+    # own blood_gas column, cai_ph74. 361 -> 362.
+    assert len(CONCEPT_DICTIONARY) == 362
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

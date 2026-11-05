@@ -48,6 +48,8 @@ CONCEPT_DICTIONARY = {
     # 血气分析
     'be': ('Base Excess', '碱剩余', 'mEq/L'),
     'cai': ('Ionized Calcium', '离子钙', 'mmol/L'),
+    # R7 (2026-11-05): own column; never pooled with or filled from cai.
+    'cai_ph74': ('Ionized Calcium (pH 7.4 corrected)', '离子钙（pH 7.4 校正）', 'mmol/L'),
     'hbco': ('Carboxyhemoglobin', '碳氧血红蛋白', '%'),
     'lact': ('Lactate', '乳酸', 'mmol/L'),
     'methb': ('Methemoglobin', '高铁血红蛋白', '%'),
@@ -604,7 +606,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'vitals': ['hr', 'map', 'map_invasive', 'map_nibp', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'cvp_raw', 'cvp_qc', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
     'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'o2_flow', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'mech_vent_rule', 'mech_vent_opioid_sensitivity', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
     'ventilator': ['peep', 'peep_set', 'peep_total', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'minute_vol_raw', 'minute_vol_qc', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
-    'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
+    'blood_gas': ['be', 'cai', 'cai_ph74', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
@@ -665,7 +667,6 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.
     'ckmb_hirid_raw',
-    'cai_ph74',  # R5C-AUMC-009: explicit corrected assay, never an implicit cai fallback.
     'acute_rrt_input',
     'bicarb',
     'kdigo_aki',

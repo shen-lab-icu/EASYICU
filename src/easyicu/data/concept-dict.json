@@ -5002,6 +5002,7 @@
   "min": 0,
   "unit": "ml/hr",
   "description": "dextrose (as D10)",
+  "_comment": "2026-11-05 audit round 7: eICU D50 pushes have no execution record in infusiondrug, so an ordered D50 dose is never corroborated and eICU dex comes almost only from charted D10 infusions. Dose text ranges, bare numbers and numeric unit codes are unknown, not doses.",
   "omopid": 4197597,
   "category": "medications",
   "target": "win_tbl",
@@ -37651,6 +37652,7 @@
   "min": 0.5,
   "max": 2,
   "description": "ionized calcium standardized to pH 7.4",
+  "_comment": "2026-11-05 audit round 7: pH 7.4 corrected ionized calcium, not directly comparable with cai measured at the actual pH. Published as its own blood_gas column only where a database records the corrected assay (AmsterdamUMCdb 10267, 9561, 8915); never filled from cai.",
   "category": "blood gas",
   "sources": {
    "aumc": [
