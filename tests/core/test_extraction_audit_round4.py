@@ -618,7 +618,9 @@ def test_r4_038_eicu_meropenem_is_an_antibiotic():
         hicl = _src(d, "abx", db, sub_var="drughiclseqno")
         assert 11254 in hicl["ids"]
         named = pd.DataFrame({"drugname": ["MEROPENEM 1 G IV SOLR", None, "warfarin"], "routeadmin": "IV"})
-        assert _filtered(hicl, named)["drugname"].isna().tolist() == [True, False]
+        # Round 12b: the HICL branch admits only orders without a drugname; a
+        # named order (meropenem or not) is never admitted through the code.
+        assert _filtered(hicl, named)["drugname"].isna().tolist() == [True]
 
 
 def test_r4_041_eicu_delirium_scale_score_yes_no_is_cam_icu():
