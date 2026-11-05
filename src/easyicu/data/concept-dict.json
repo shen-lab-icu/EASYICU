@@ -13700,6 +13700,7 @@
    "invasive|noninvasive"
   ],
   "description": "mechanical ventilation windows",
+  "_comment": "2026-11-05 audit round 7: ventilation intervals keep each source's recorded clock: whole minutes in MIMIC-III (relative to ICU intime, as ricu) and eICU (minute offsets); MIMIC-IV stamps are whole minutes taken relative to ICU intime; HiRID and SICdb record seconds and AmsterdamUMCdb milliseconds. MIMIC-III interval ends follow MIT-LCP ventilation_durations.sql. Every database spreads intervals to hours by half-open [start, stop) overlap (R5); an hour with invasive and non-invasive evidence carries invasive|noninvasive.",
   "omopid": 4230167,
   "category": "respiratory",
   "sources": {
@@ -29032,6 +29033,7 @@
    "mech_vent"
   ],
   "description": "ventilation durations",
+  "_comment": "2026-11-05 audit round 7: ventilation intervals keep each source's recorded clock: whole minutes in MIMIC-III (relative to ICU intime, as ricu) and eICU (minute offsets); MIMIC-IV stamps are whole minutes taken relative to ICU intime; HiRID and SICdb record seconds and AmsterdamUMCdb milliseconds. MIMIC-III interval ends follow MIT-LCP ventilation_durations.sql. Every database spreads intervals to hours by half-open [start, stop) overlap (R5); an hour with invasive and non-invasive evidence carries invasive|noninvasive.",
   "omopid": 4230167,
   "category": "respiratory",
   "interval": "00:01:00",
