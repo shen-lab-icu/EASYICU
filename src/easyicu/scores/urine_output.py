@@ -29,6 +29,9 @@ KDIGO_EVIDENCE_COLUMNS = [
     "aki_stage_uo_available_at",
 ]
 
+#: Float tolerance for the 12 h record-gap rule (about 3.6 ms; sources are whole seconds).
+GAP_TOLERANCE_H = 1e-6
+
 
 def urine_availability_columns(name: str) -> list[str]:
     """Closed export contract for availability and scoring-window receipts."""
@@ -193,9 +196,13 @@ def collection_intervals(
     source_gaps = np.r_[0., np.diff(ends)]
     if record_gaps is not None:
         source_gaps = np.nan_to_num(record_gaps, nan=0.)
-    valid = np.isfinite(amounts) & (amounts >= 0) & (lengths > 0) & (lengths <= max_gap)
-    valid &= source_gaps <= max_gap
-    breaks = (lengths > max_gap) | (source_gaps > max_gap) | ~np.isfinite(amounts) | (amounts < 0)
+    # Gaps are differences of float hours on different clocks (minute clock,
+    # sub-minute lags), so an exact 12 h gap can land 1e-15 h either side.
+    # Source clocks are whole seconds: any real excess is >= 1 s (2.8e-4 h).
+    limit = max_gap + GAP_TOLERANCE_H
+    valid = np.isfinite(amounts) & (amounts >= 0) & (lengths > 0) & (lengths <= limit)
+    valid &= source_gaps <= limit
+    breaks = (lengths > limit) | (source_gaps > limit) | ~np.isfinite(amounts) | (amounts < 0)
     segment = np.maximum.accumulate(np.where(breaks, np.arange(len(ends)), 0))
     starts = ends - lengths
     rates = amounts.copy() if source_is_rate else np.divide(
