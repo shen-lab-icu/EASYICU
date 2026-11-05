@@ -469,6 +469,7 @@
     mech_vent_rule: 1,
     mech_vent_opioid_sensitivity: 1,
     dex: 6,
+    cai_ph74: 1,
     o2_flow: 5,
     mech_vent: 3,
     vent_ind: 3,

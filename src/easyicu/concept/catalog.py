@@ -841,7 +841,7 @@ CONCEPT_DB_COVERAGE = {
     'peep_set': 2, 'peep_total': 2, 'fio2_chart': 3, 'fio2_lab': 3,  # R5-SIC-013.
     'cvp_raw': 6, 'cvp_qc': 6, 'minute_vol_raw': 1, 'minute_vol_qc': 1,
     'mech_vent_rule': 1, 'mech_vent_opioid_sensitivity': 1,  # SIC audit companions.
-    'dex': 6,
+    'dex': 6, 'cai_ph74': 1,  # AUMC pH 7.4 corrected items only (2026-11-05 audit round 7).
     'o2_flow': 5,  # supp_o2 input: miiv/mimic/eicu/aumc/hirid (2026-11-03 audit round 2, G6/G7)
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 5, 'rrt': 4,
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)

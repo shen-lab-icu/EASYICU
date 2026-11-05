@@ -519,7 +519,7 @@ def test_r5_sic_015_static_catalog_publishes_exact_audit_companions():
     result = run_node("node", code, str(script), check=True)
     catalog = json.loads(result.stdout)["EU_CATALOG"]
     expected = {
-        "cvp_raw": ("vitals", "mmHg", 6), "cvp_qc": ("vitals", "category", 1),
+        "cvp_raw": ("vitals", "mmHg", 6), "cvp_qc": ("vitals", "category", 6),
         "minute_vol_raw": ("ventilator", "L/min", 1), "minute_vol_qc": ("ventilator", "category", 1),
         "mech_vent_rule": ("respiratory", "category", 1),
         "mech_vent_opioid_sensitivity": ("respiratory", "boolean", 1),
