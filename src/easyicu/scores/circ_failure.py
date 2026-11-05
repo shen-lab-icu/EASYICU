@@ -400,7 +400,13 @@ def load_circ_failure(
     # cross-database availability owner.
     support = COMPOSITE_LOADER_SUPPORT['circ_failure_loader']
     core_concepts = list(support.required_concepts)
-    optional_concepts = list(support.optional_concepts)
+    # An optional drug the dictionary does not define (levo_rate, theo_rate)
+    # is absent by declaration.  Requesting it failed every batch load and
+    # sent the loader to one-by-one loads that swallowed that KeyError.
+    from ..concept.loader import load_concept_dict_cached
+
+    _defined = load_concept_dict_cached()
+    optional_concepts = [c for c in support.optional_concepts if c in _defined]
     all_needed = core_concepts + optional_concepts
     
     if verbose:

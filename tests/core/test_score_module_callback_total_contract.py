@@ -213,6 +213,17 @@ def synthetic_loader(monkeypatch, tmp_path):
     monkeypatch.setattr(
         comorbidity, "_table_df", lambda _source, name: diagnosis_tables[name].copy(),
     )
+    # The synthetic source has no icustays/microbiologyevents.  Its culture
+    # producer used to fail silently; it now fails the request, so give it an
+    # empty, well-formed result (culture flags are not a score total).
+    from easyicu.scores import microbiology
+
+    monkeypatch.setattr(
+        microbiology, "load_microbiology",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            columns=["stay_id", "culture_positive", "bld_culture_positive"]
+        ),
+    )
     monkeypatch.setattr(api, "_requires_isolated_stream_batch", lambda *_args: False)
     return concept_api.load_concepts
 

@@ -3,6 +3,8 @@
 import pandas as pd
 import pytest
 
+from tests.support.bucket_storage import write_fixture_parquet
+
 from easyicu.config import load_src_cfg
 from easyicu.datasource import (
     FilterOp,
@@ -49,7 +51,7 @@ def _source(tmp_path, stays, labs, path, admissions=None):
         admissions.to_parquet(tmp_path / "admissions.parquet", index=False)
     directory = tmp_path / "labevents_bucket" / "bucket_id=0"
     directory.mkdir(parents=True)
-    labs.to_parquet(directory / "part.parquet", index=False)
+    write_fixture_parquet(labs, directory / "part.parquet", index=False)
     source = ICUDataSource(load_src_cfg("miiv"), base_path=tmp_path, enable_cache=False)
     if path == "preloaded":
         source._preloaded_tables["labevents"] = labs

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pandas as pd
 
 import easyicu
+from tests.support.bucket_storage import write_fixture_parquet
 
 
 def test_weight_from_upper_case_chartevents_keeps_the_configured_id(tmp_path):
@@ -26,7 +27,7 @@ def test_weight_from_upper_case_chartevents_keeps_the_configured_id(tmp_path):
     ).to_parquet(tmp_path / "icustays.parquet")
     bucket = tmp_path / "chartevents_bucket" / "bucket_id=0"
     bucket.mkdir(parents=True)
-    pd.DataFrame(
+    _chart = pd.DataFrame(
         {
             "ROW_ID": [1, 2, 3], "SUBJECT_ID": [10, 10, 20], "HADM_ID": [100, 100, 200],
             "ICUSTAY_ID": [1000, 1000, 2000], "ITEMID": [226512, 226512, 762],
@@ -35,7 +36,8 @@ def test_weight_from_upper_case_chartevents_keeps_the_configured_id(tmp_path):
             "VALUEUOM": ["kg", "kg", "kg"], "WARNING": [0, 0, 0], "ERROR": [0, 0, 0],
             "RESULTSTATUS": [None] * 3, "STOPPED": [None] * 3,
         }
-    ).to_parquet(bucket / "part.parquet")
+    )
+    write_fixture_parquet(_chart, bucket / "part.parquet")
 
     out = easyicu.load_concepts(
         ["weight"], database="mimic", data_path=str(tmp_path),
