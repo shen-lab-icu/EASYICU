@@ -123,6 +123,7 @@
     "src/easyicu/concept/hirid_fluid_counters.py",
     "src/easyicu/concept/hirid_ventilation.py",
     "src/easyicu/concept/hospital_mortality.py",
+    "src/easyicu/concept/immutable_receipts.py",
     "src/easyicu/concept/loader.py",
     "src/easyicu/concept/merge_time_index.py",
     "src/easyicu/concept/metadata_projection.py",
@@ -1539,7 +1540,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "d66060d15b7e5454ee88e228764b3d170ae059d8f01b17b8b4810949f55fd225",
+  "scorer_tree_sha256": "805b05cce1a9d358761bc80b228481734ac4a70a390bbf21838b1ed613709916",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
