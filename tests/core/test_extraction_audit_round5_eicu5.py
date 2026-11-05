@@ -67,6 +67,18 @@ def test_r5_eicu_005_dex_hicl_requires_parsed_dose_and_execution():
     assert _apply("dex", fallback, f, _fake()).empty
 
 
+
+@pytest.mark.parametrize("dosage, parsed", [("25 Gm", True), ("25 Gram", True), ("25 GM", True), ("25 grams", True),
+                                            ("25-50 mL", False), ("25", False), ("25 3", False)])
+def test_r7_eicu_dex_reads_gram_spellings_and_keeps_ranges_unknown(dosage, parsed):
+    # 2026-11-05 round-7 evidence: "Gm"/"Gram"/"GM" grams were unparsed D50 doses.
+    fallback = next(s for s in _sources("dex", "medication") if s.sub_var == "drughiclseqno")
+    f = pd.DataFrame({"patientunitstayid": [1], "drugstartoffset": [0], "drugstopoffset": [120], "dosage": [dosage],
+                      "drugname": [""], "drugordercancelled": ["No"], "routeadmin": ["IV"], "drughiclseqno": [926]})
+    infusion = pd.DataFrame({"patientunitstayid": [1, 1], "infusionoffset": [0, 120], "drugname": ["Dextrose 50% (ml/hr)"] * 2, "drugrate": [25, 0]})
+    out = _apply("dex", fallback, f, _fake(infusiondrug=infusion))
+    assert out.dex.tolist() == ([125.0, 125.0] if parsed else [])
+
 def test_r5_eicu_006_raw_io_dedup_preserves_channels_and_entry_times(tmp_path):
     f = pd.DataFrame({"intakeoutputid": [1, 2, 3, 4], "intakeoutputoffset": [10] * 4, "intakeoutputentryoffset": [11, 11, 12, 11], "celllabel": ["Urine", "Urine", "Urine", "Voided Amount"], "cellvaluenumeric": [100.0] * 4, "cellvaluetext": [""] * 4})
     f["cellpath"] = "flowsheet|Flowsheet Cell Labels|I&O|Output (ml)|" + f.celllabel
