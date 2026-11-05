@@ -2107,11 +2107,37 @@ def mimic_rate_cv(
     Returns:
         Expanded DataFrame with time series data
     """
+    data = data.copy()
+    # A charted rate is a number whatever dtype the reader delivered. An
+    # object column made the hourly pooling in expand_intervals take the
+    # first row of an hour instead of the median (2026-11-05 audit round 7,
+    # R7-F014).
+    if val_col in data.columns:
+        data[val_col] = pd.to_numeric(data[val_col], errors='coerce')
+    # The table scan neither returns rows in clock order nor in the same
+    # order on every run. Order on the raw clock before the hour floor so the
+    # latest chart of an hour is the one carried forward; an exact-time tie
+    # (CareVue writes an amount-only row beside the rate row) keeps the
+    # source row order, as ricu reads the table.
+    time_col = next(
+        (c for c in data.columns if c != 'endtime' and any(
+            p in c.lower() for p in ('time', 'offset', 'charttime', 'starttime', 'givenat', 'datetime'))),
+        None,
+    )
+    if time_col is not None and len(data) > 1:
+        keys = [c for c in (id_cols or []) if c in data.columns]
+        if grp_var and grp_var in data.columns and grp_var not in keys:
+            keys.append(grp_var)
+        keys.append(time_col)
+        if 'row_id' in data.columns:
+            keys.append('row_id')
+        data = data.sort_values(keys, kind='mergesort')
+
     # Build keep_vars
     keep_vars = [val_col]
     if unit_col and unit_col in data.columns:
         keep_vars.append(unit_col)
-    
+
     # Call expand_intervals — pass id_cols and admission_times to avoid false-positive detection
     return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var, id_cols=id_cols,
                             admission_times=admission_times)
