@@ -67,6 +67,7 @@ NON_SCORE_MODULES = {
     "medications": "Medication exposure/rates; no score total.",
     "demographics": "Stay-level demographics/BMI, not a longitudinal score.",
     "outcome": "Endpoint/follow-up definitions, not severity score totals.",
+    "renal_urine_chem": "Measured urine chemistry and a SICdb pre-ICU flag, not scores.",
 }
 
 
