@@ -1,8 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/data/sofa2-dict.json"
+      "src/easyicu/data/concept-dict.json"
     ],
     "summary_changes": {}
   },
@@ -267,9 +266,16 @@
         "src/easyicu/data/sofa2-dict.json"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Tenth dictionary reseal (landed-code reviews of round 5 lanes and round-7 disclosures): dictionary identity changed",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Ninth dictionary reseal (extraction audit round 5 residue and round 6): dictionary identity changed",
+  "baseline_reason": "Tenth dictionary reseal (landed-code reviews of round 5 lanes and round-7 disclosures): dictionary identity changed",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -280,7 +286,7 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "bc8af88cf574415c208707d10f0d1aec85b6ef6cff3cd668a74c8c80bbb79c4b",
+    "src/easyicu/data/concept-dict.json": "af77530b216dc53e600c400bb3711b941bb3ed346b09235a80d186ad7d37d220",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
     "src/easyicu/data/sofa2-dict.json": "c8e6d329482f09fee0142a63bb2036e9b19c3012b4b8f3a3465674be43eb77c9",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",

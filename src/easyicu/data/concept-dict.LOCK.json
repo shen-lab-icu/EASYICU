@@ -2,7 +2,7 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "bc8af88cf574415c208707d10f0d1aec85b6ef6cff3cd668a74c8c80bbb79c4b",
+  "concept_dict_sha256": "af77530b216dc53e600c400bb3711b941bb3ed346b09235a80d186ad7d37d220",
   "sofa2_dict_sha256": "c8e6d329482f09fee0142a63bb2036e9b19c3012b4b8f3a3465674be43eb77c9",
   "total_concepts": 308,
   "new_this_round": [],
@@ -160,6 +160,10 @@
     {
       "git_commit": "b1cad65023722f8a52bb4a8a2b1614995838279a",
       "change": "User-requested 2026-11-04 ninth reseal of concept-dict.json and sofa2-dict.json (extraction audit round 5 residue batch and round 6, RB/RV/RI/RR/RU and R6-F001..F047): positive-value evidence for boolean exposures and Rewritten/ERROR/cancelled rows removed on every path; half-open interval-to-hour expansion; eICU medication route and dose text; AUMC Niet iv and HiRID IV route whitelist; MIIV eMAR/inputevents dedup on real columns; refined R6 arterial specimen order with a published specimen_status (eICU paO2/paCO2 by name, same-panel pH/BE/O2 Sat, Total CO2 removed from tco2); AUMC mbar pressures and 6694 PEEP fallback; eICU vent modes; HiRID bedside FiO2, eICU peak pressure and nursing arterial BP, MIMIC-III nephrostomy, SICdb enzymatic creatinine; CVP 30-50 flags; AKI smoothing only from surviving evidence."
+    },
+    {
+      "git_commit": "1e4ee57a9e891fabf87524a089c2a4cda5f5b7c9",
+      "change": "User-requested 2026-11-04 tenth reseal of concept-dict.json under the round-5 consent: landed-code reviews of the ri5/r6m/r6v/rr5 lanes (AUMC furosemide iscontinuous distinguishes infusions from boluses) and auditor round-7 disclosures in _comment (eICU has no arterial tCO2 source; vasopressor composition differs by database; eICU paO2 comment follows the refined R6). sofa2-dict.json unchanged."
     }
   ]
 }

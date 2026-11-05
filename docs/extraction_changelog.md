@@ -4,6 +4,32 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-04 — landed-code reviews of round-5 lanes (tenth dictionary reseal)
+
+Commits `930ca2d28` through the tenth reseal commit on dev9.
+
+- **[RI-01..03, R6-F005/F012/F013/F015/F018/F021..F023/F035, RR-01..03]**
+  A partial wide batch (four or more concepts on one long table) now merges
+  the remaining concepts in every database, not only AmsterdamUMCdb.
+  Previously mapped measurements, arterial gases, urine values and their
+  receipts, and interval concepts such as `dex` could be published empty
+  beside the batch. Requests holding windows, durations or rates take the
+  window materialiser, so duration starts are no longer floored to the hour
+  in merged output.
+- **[RI-04]** Furosemide equivalents: MetaVision item IDs and AmsterdamUMCdb
+  `iscontinuous` separate infusions from boluses; a malformed continuous
+  window contributes no dose instead of a bolus at its start.
+- **[R6-F022]** Missing signed urine terms are dropped before summing rather
+  than counted as a measured zero.
+- **[RR-01..03]** An eICU paO2/paCO2 result outside its concept bounds no
+  longer anchors co-measured pH, BE or saturation.
+- **[RR-07]** MIMIC-IV eMAR copies of inputevents doses are matched one to
+  one within 60 minutes; bucketed `emar_detail` is read as well.
+- **Disclosures (auditor round 7):** eICU has no arterial tCO2 source;
+  `vaso_ind` and `norepi_equiv` combine different vasopressors by database
+  (AmsterdamUMCdb records no vasopressin, HiRID no dopamine or
+  phenylephrine); terlipressin is not mapped as vasopressin.
+
 ## 2026-11-04 — extraction audit round 5 residue batch and round 6 (ninth dictionary reseal)
 
 Commits `1823ea413` through the ninth reseal commit on dev9.
