@@ -150,8 +150,8 @@ def test_batch7_hirid_scope_matches_audit(cdict):
 
 def test_diltiazem_is_iv_only_in_every_database(cdict):
     # Round-11 ruling: diltiazem is IV exposure everywhere. AUMC 7174 'Diltiazem
-    # (Tildiem)' is ordered under 'Niet iv Circulatie/Diurese', and SICdb 1817
-    # has only single doses of 45-120 mg (tablet strengths); neither is IV.
+    # (Tildiem)' is ordered under 'Niet iv Circulatie/Diurese'. SICdb 1817 has no
+    # route column; its single doses of 45-120 mg (tablet strengths) infer oral.
     sources = cdict["diltiazem"]["sources"]
     assert not {"hirid", "aumc", "sic"} & set(sources)
     assert [s["ids"] for s in sources["miiv"]] == [[221468]]

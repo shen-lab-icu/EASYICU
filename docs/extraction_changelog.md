@@ -15,8 +15,11 @@ answers is in brackets.
   the concept is unavailable for HiRID. No separate oral concept is created
   while nothing consumes it.
 - AUMC 7174 'Diltiazem (Tildiem)' is ordered under 'Niet iv
-  Circulatie/Diurese' (not IV), and SICdb 1817 has only single doses of
-  45-120 mg (tablet strengths), so both are unmapped too. Diltiazem remains
+  Circulatie/Diurese' (not IV), so it is unmapped too.
+- SICdb 1817 is inferred to be oral from its dose strengths, because the
+  medication table has no route column: 121 rows in 35 cases, all single
+  doses, Amount p10/p50/p90 = 45/90/120 mg. These match 60/90/120 mg tablets
+  rather than an IV bolus of about 20 mg, so it is unmapped too. Diltiazem remains
   for MIMIC-IV/MetaVision 221468, CareVue 30115 (mg/hr infusions) and eICU
   IV exposure (catalog coverage 6 -> 3).
 
