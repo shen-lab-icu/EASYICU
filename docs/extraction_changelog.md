@@ -4,6 +4,17 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — diltiazem is IV only [R5C-HIRID-012 partly withdrawn] (pending lead reseal)
+
+- Round-11 ruling: `diltiazem` is intravenous exposure in every database,
+  as S8 (`fb09aea7a`) and eICU `eicu_iv_exposure` already assume. Oral
+  diltiazem is mostly chronic rate control, not an acute haemodynamic
+  exposure, and mixing routes makes the column incomparable across databases.
+- HiRID 1001071/1000331 (tablets), which R5C-HIRID-012 added under an
+  any-route reading, are unmapped again. HiRID has no IV diltiazem item, so
+  the concept is unavailable for HiRID (catalog coverage 6 -> 5). No
+  separate oral concept is created while nothing consumes it.
+
 ## 2026-11-05 — MIMIC-IV ED lab attribution [ED1, ED2-1]
 
 - NULL-`hadm_id` labevents use `subject_id` and the existing inclusive window

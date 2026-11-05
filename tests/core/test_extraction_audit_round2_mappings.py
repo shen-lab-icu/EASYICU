@@ -367,8 +367,8 @@ def test_s8_hirid_items_reach_their_concepts():
     # Segmented + band forms of one differential (summed), and 24000550, an
     # absolute count read against WBC (2026-11-04 audit round 3, F-18/S8).
     assert _ids("neut", "hirid") == {24000550, 24000556, 24000557}
-    # R5C-HIRID-012: its current any-route definition accepts enteral HiRID rows.
-    assert DICTIONARY["diltiazem"]["sources"]["hirid"][0]["ids"] == [1001071, 1000331]
+    # Round-11 ruling: diltiazem is IV only; HiRID's tablets stay unmapped.
+    assert "hirid" not in DICTIONARY["diltiazem"]["sources"]
     assert {1000793} <= set(sofa2["other_vaso"]["sources"]["hirid"][0]["ids"])
     for concept in ("epi_rate", "epi_dur"):
         assert _ids(concept, "hirid") == {1000649, 1000650}  # perfusors; no bolus or inhaled rows

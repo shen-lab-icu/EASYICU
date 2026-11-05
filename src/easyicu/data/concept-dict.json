@@ -5958,22 +5958,8 @@
   "description": "diltiazem (Cardizem) — calcium channel blocker",
   "aggregate": "max",
   "category": "medications",
+  "_comment": "Round-11 ruling (2026-11-05): diltiazem is IV exposure in every database. HiRID 1001071/1000331 are oral tablets and stay unmapped; R5C-HIRID-012 is withdrawn for them (as in S8/fb09aea7a).",
   "sources": {
-   "hirid": [
-    {
-     "ids": [
-      1001071,
-      1000331
-     ],
-     "table": "pharma",
-     "sub_var": "pharmaid",
-     "callback": "transform_fun(comp_na(`>`, 0.000001))",
-     "extra_vars": [
-      "route"
-     ],
-     "_comment": "R5C-HIRID-012: enteral diltiazem administrations under the existing any-route definition; these rows are not IV exposure. Native route is retained during source interpretation."
-    }
-   ],
    "aumc": [
     {
      "ids": 7174,

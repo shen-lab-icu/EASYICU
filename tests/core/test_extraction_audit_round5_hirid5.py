@@ -264,8 +264,14 @@ def test_r5c_hirid_011_other_vaso_recall_requires_positive_doses(tmp_path):
     _drug_recall(tmp_path, 'other_vaso', 'sofa2-dict.json', [1000441, 1001061], 'cv-inf')
 
 
-def test_r5c_hirid_012_diltiazem_recall_requires_positive_doses(tmp_path):
-    _drug_recall(tmp_path, 'diltiazem', 'concept-dict.json', [1001071, 1000331], 'po')
+def test_r5c_hirid_012_enteral_diltiazem_stays_out_of_the_iv_concept(tmp_path):
+    # Round-11 ruling: diltiazem is IV exposure in every database, and HiRID
+    # 1001071/1000331 are tablets, so R5C-HIRID-012 is withdrawn for them.
+    assert "hirid" not in _dictionary()["diltiazem"]["sources"]
+    rows = [{"patientid": 1, "givenat": 1., "pharmaid": item, "givendose": 60., "doseunit": "mg",
+             "route": "po", "infusionid": item, "recordstatus": 0} for item in (1001071, 1000331)]
+    out = _load(_source_root(tmp_path, "pharma", rows), ["diltiazem"])["diltiazem"]
+    assert "diltiazem" not in out or not out["diltiazem"].eq(True).any()
 
 
 def test_r5c_hirid_013_ckmb_raw_is_separate_from_mass_pool(tmp_path):

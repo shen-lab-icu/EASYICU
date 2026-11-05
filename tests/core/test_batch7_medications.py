@@ -36,9 +36,9 @@ BATCH7 = [
     ("phenytoin",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("labetalol",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("esmolol",     {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
-    # R5C-HIRID-012: the current description accepts any route. HiRID's
-    # enteral preparations are eligible, and must not be labelled IV exposure.
-    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    # Round-11 ruling: diltiazem is IV exposure; HiRID has only tablets
+    # (1001071/1000331), so R5C-HIRID-012 is withdrawn for them.
+    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "sic"},          5),
     ("nicardipine", {"miiv", "mimic", "eicu", "aumc"},         4),
 ]
 
@@ -142,7 +142,7 @@ def test_phenytoin_uses_eicu_in_icu_medication_and_aumc_drugitems(cdict):
 
 def test_batch7_hirid_scope_matches_audit(cdict):
     assert "hirid" not in cdict["nicardipine"]["sources"]
-    # R5C-HIRID-012: restore the audited enteral preparations under any-route use.
-    assert cdict["diltiazem"]["sources"]["hirid"][0]["ids"] == [1001071, 1000331]
+    # Round-11 ruling: the IV-only concept leaves HiRID's tablets unmapped.
+    assert "hirid" not in cdict["diltiazem"]["sources"]
     for c in ["phenytoin", "labetalol", "esmolol"]:
         assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"
