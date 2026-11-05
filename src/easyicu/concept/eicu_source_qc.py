@@ -61,8 +61,9 @@ def _sample_types(data_source, stays, like):
 
 
 def _arterial_anchor_keys(data_source, stays, like):
-    """Stay/offset keys holding a non-missing paO2 or paCO2 result."""
+    """Stay/offset keys holding an admissible paO2 or paCO2 result."""
     from ..datasource import FilterOp, FilterSpec
+    from .loader import _get_concept_bounds
 
     keys = [STAY, "labresultoffset"]
     if data_source is None or not len(stays):
@@ -77,8 +78,20 @@ def _arterial_anchor_keys(data_source, stays, like):
     except (FileNotFoundError, KeyError):
         return pd.DataFrame(columns=keys)
     lab = result.data if hasattr(result, "data") else result
-    lab = lab.loc[lab.labname.astype("string").str.strip().str.casefold().isin(LABEL_DEFINED_ARTERIAL)
-                  & pd.to_numeric(lab.labresult, errors="coerce").notna(), keys].copy()
+    names = lab.labname.astype("string").str.strip().str.casefold()
+    values = pd.to_numeric(lab.labresult, errors="coerce")
+    admitted = pd.Series(False, index=lab.index)
+    # A pressure rejected by its own concept cannot establish the specimen
+    # of another analyte. Apply the same canonical bounds before pairing.
+    for label, concept in (("pao2", "po2"), ("paco2", "pco2")):
+        valid = names.eq(label) & np.isfinite(values)
+        minimum, maximum = (_get_concept_bounds(concept, bound) for bound in ("min", "max"))
+        if minimum is not None:
+            valid &= values.ge(minimum)
+        if maximum is not None:
+            valid &= values.le(maximum)
+        admitted |= valid.fillna(False)
+    lab = lab.loc[admitted, keys].copy()
     lab["labresultoffset"] = _offset_like(lab.labresultoffset, like)
     return lab.dropna().drop_duplicates()
 
