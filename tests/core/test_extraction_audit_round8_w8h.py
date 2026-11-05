@@ -113,7 +113,7 @@ def test_r8_h3_noon_reset_survives_float_hours_and_matches_the_raw_ledger(tmp_pa
                                           (OUTPUT_COUNTER_ID, [0., 200., 20., 50., 100.]))], ignore_index=True)
     relative = raw.assign(datetime=(raw.datetime - origin).dt.total_seconds() / 3600)
     pd.testing.assert_series_equal(_absolute_times(relative, "patientid", "datetime", origins),
-                                   raw.datetime, check_names=False)
+                                   raw.datetime.astype("datetime64[ns]"), check_names=False)
 
     expected = {}
     for name, net in (("total_input_ml", False), ("fluid_balance", True)):
