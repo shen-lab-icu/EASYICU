@@ -2883,13 +2883,15 @@ class ConceptResolver:
                     _convert_unit_op = None
                     _convert_unit_filter = None
                     
-                    # 通用检查：表是否有分桶目录或扁平parquet目录 + 源是否有 sub_var + ids + 无复杂 callback
+                    # 通用检查：表是否由 parquet 承载 + 源是否有 sub_var + ids + 无复杂 callback
+                    # The DuckDB loaders read any parquet source through
+                    # resolve_target_files, so a single file, a flat directory
+                    # and a bucket cache take the same path.  Choosing the
+                    # path by layout made float32/float64 results, and so the
+                    # exported bytes, depend on storage (lead-r13, class a).
                     _has_bucket_dir = False
                     try:
-                        _bucket_dir_check = storage.resolve_bucket_directory(source.table)
-                        if _bucket_dir_check is None:
-                            _bucket_dir_check = storage.resolve_flat_parquet_directory(source.table)
-                        _has_bucket_dir = _bucket_dir_check is not None
+                        _has_bucket_dir = bool(storage.resolve_target_files(source.table))
                     except Exception:
                         pass
                     
@@ -3801,12 +3803,13 @@ class ConceptResolver:
                     # 例如 AUMC numericitems 5000 patients → ~2.7GB 仅为缓存
                     # 分桶/扁平parquet的单概念加载已经很快（DuckDB），每个概念独立读取
                     # 比缓存整张表更高效且内存友好
+                    # A single parquet file is skipped too: a cached raw table
+                    # would otherwise serve later concepts on that table past
+                    # the DuckDB path, so results depended on the layout
+                    # (lead-r13, class a).
                     skip_cache_for_bucket_table = False
                     try:
-                        _cache_skip_dir = storage.resolve_bucket_directory(source.table)
-                        if _cache_skip_dir is None:
-                            _cache_skip_dir = storage.resolve_flat_parquet_directory(source.table)
-                        if _cache_skip_dir is not None:
+                        if storage.resolve_target_files(source.table):
                             skip_cache_for_bucket_table = True
                             if DEBUG_MODE and verbose:
                                 print(f"   ⏭️  跳过分桶/扁平parquet表缓存: {source.table}")

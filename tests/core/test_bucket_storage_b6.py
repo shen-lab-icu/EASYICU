@@ -30,6 +30,7 @@ from easyicu.storage_layout import (
 )
 from scripts import build_itemid_bucket_cache as builder
 from tests.support.bucket_storage import (
+    with_value_column_rows,
     b6_dictionary,
     b6_source,
     install_layout,
@@ -618,3 +619,238 @@ def test_dictionary_encoded_string_keys_use_their_logical_duckdb_type(tmp_path):
     pd.testing.assert_frame_equal(
         source.load_table("nursecharting").data, expected, check_exact=True
     )
+
+
+_ID_TBL_ITEMS = {
+    # database: (concept, item) for every id_tbl source on the bucketed table
+    "miiv": [("weight", 226512), ("height", 226707)],
+    "mimic": [("weight", 580), ("height", 920)],
+    "hirid": [("weight", 10000400), ("height", 10000450)],
+    "aumc": [("weight", 6638)],
+}
+
+
+def _layout_frames(root, database, concepts, interval=None):
+    """Load each concept on its own; an error is part of the output."""
+    from easyicu.config import load_src_cfg
+    from easyicu.resources import load_dictionary
+
+    source = ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False)
+    resolver = ConceptResolver(load_dictionary())
+    frames = {}
+    for concept in concepts:
+        try:
+            loaded = resolver.load_concepts(
+                [concept], source, merge=False, concept_workers=1, verbose=False,
+                interval=interval,
+            )
+        except Exception as exc:  # compared across layouts, never swallowed
+            frames[concept] = f"{type(exc).__name__}: {str(exc)[:200]}"
+            continue
+        if isinstance(loaded, dict):
+            loaded = loaded[concept]
+        frames[concept] = getattr(loaded, "data", loaded).reset_index(drop=True)
+    return frames
+
+
+def _fixture_table(root, database):
+    """The fixture's bucketed table as one frame, plus its first and last stay."""
+    b6_source(root, database)
+    table, _key, stay, _clock = builder.TABLE_CONFIGS[database]
+    parts = sorted((root / table).glob("*.parquet"))
+    frame = pd.concat([pd.read_parquet(part) for part in parts], ignore_index=True)
+    for part in parts:
+        part.unlink()  # one file, so the single-file layout holds every row
+    stays = sorted(frame[stay].dropna().unique().tolist())
+    return frame, stays
+
+
+def _each_layout(root, database, layouts=("directory", "single", "hash")):
+    """Yield each layout name with ``root`` rearranged into it, in order."""
+    from easyicu.config import load_src_cfg
+
+    table = builder.TABLE_CONFIGS[database][0]
+    path = root / table / "1.parquet"
+    for layout in layouts:
+        if layout == "single":
+            shutil.move(path, root / f"{table}.parquet")
+            (root / table).rmdir()
+        elif (root / f"{table}.parquet").exists():
+            (root / table).mkdir()
+            shutil.move(root / f"{table}.parquet", path)
+        if layout == "hash":
+            install_layout(
+                ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False),
+                "hash",
+            )
+        yield layout
+
+
+def _assert_same(name, actual, expected):
+    if isinstance(expected, str) or isinstance(actual, str):
+        assert actual == expected, name
+    else:
+        pd.testing.assert_frame_equal(actual, expected, check_exact=True, obj=name)
+
+
+@pytest.mark.parametrize("database", sorted(_ID_TBL_ITEMS))
+def test_id_tbl_concepts_are_identical_in_file_directory_and_bucket_layouts(tmp_path, database):
+    """lead-r13 class a: id_tbl values depended on the storage layout.
+
+    The former DuckDB fast path (directory/bucketed tables) read the string
+    ``value`` column instead of ``valuenum``.  The first stay's only weight or
+    height row carries just ``valuenum``; every layout must keep it.
+    """
+    from easyicu.resources import load_dictionary
+
+    dictionary = load_dictionary()
+    frame, stays = _fixture_table(tmp_path, database)
+    table, key, stay, _clock = builder.TABLE_CONFIGS[database]
+    concepts = [concept for concept, _ in _ID_TBL_ITEMS[database]]
+    own_items = {
+        item
+        for concept in concepts
+        for source in dictionary[concept].sources.get(database, [])
+        if source.table == table
+        for item in (source.ids if isinstance(source.ids, list) else [source.ids])
+    }
+    frame = frame[~frame[key].isin(own_items)]
+    rows = []
+    for concept, item in _ID_TBL_ITEMS[database]:
+        normal, outlier = (61.0, 900.0) if concept == "weight" else (171.0, 900.0)
+        for stay_id, value in ((stays[0], normal), (stays[-1], normal - 10), (stays[-1], outlier)):
+            row = frame.iloc[[0]].copy()
+            row[stay] = stay_id
+            row[key] = item
+            if "valuenum" in row:
+                row["valuenum"] = value
+                row["value"] = None if stay_id == stays[0] else str(value)
+            else:
+                row["value"] = value
+            rows.append(row)
+    pd.concat([frame, *rows], ignore_index=True).to_parquet(
+        tmp_path / table / "1.parquet", index=False
+    )
+    loaded = {
+        layout: _layout_frames(tmp_path, database, concepts)
+        for layout in _each_layout(tmp_path, database)
+    }
+    reference = loaded["single"]
+    for (concept, _item), normal in zip(_ID_TBL_ITEMS[database], (61.0, 171.0)):
+        if "valuenum" in frame:  # the first stay's only row has no ``value``
+            frame_ = reference[concept]
+            first = frame_[frame_[frame_.columns[0]] == stays[0]][concept]
+            assert first.tolist() and set(first) == {normal}, concept
+        for layout in ("directory", "hash"):
+            _assert_same(concept, loaded[layout][concept], reference[concept])
+
+
+@pytest.mark.parametrize("database", sorted(builder.TABLE_CONFIGS))
+def test_every_concept_on_the_bucketed_table_is_layout_independent(tmp_path, database):
+    """lead-r13 class a: each source's own value column, in every layout.
+
+    Every dictionary source on the bucketed table gets rows whose value sits
+    only in that source's value column; the directory, single-file and
+    bucketed layouts must return the same rows, or the same error.
+    """
+    from easyicu.resources import load_dictionary
+
+    frame, stays = _fixture_table(tmp_path, database)
+    frame, concepts = with_value_column_rows(frame, database, load_dictionary(), stays)
+    assert concepts, database
+    table = builder.TABLE_CONFIGS[database][0]
+    frame.to_parquet(tmp_path / table / "1.parquet", index=False)
+    loaded = {
+        layout: _layout_frames(tmp_path, database, concepts, pd.Timedelta(hours=1))
+        for layout in _each_layout(tmp_path, database)
+    }
+    single = loaded["single"]
+    produced = [c for c in concepts if not isinstance(single[c], str) and not single[c].empty]
+    assert len(produced) >= len(concepts) // 2, (database, len(produced), len(concepts))
+    mismatched = []
+    for concept in concepts:
+        for layout in ("directory", "hash"):
+            try:
+                _assert_same(concept, loaded[layout][concept], single[concept])
+            except AssertionError:
+                mismatched.append(f"{concept}:{layout}")
+    assert not mismatched, mismatched
+
+
+def _module_exports(root, out, database, concepts, stays):
+    """Every module that uses ``concepts``: published bytes, or its errors."""
+    from easyicu.api import extraction
+    from easyicu.api.concepts import clear_global_loader
+
+    stay = builder.TABLE_CONFIGS[database][2]
+    exports = {}
+    modules = [
+        name for name, members in extraction.EXTRACT_MODULES.items()
+        if set(members) & set(concepts)
+    ]
+    for module in modules:
+        target = out / module
+        target.mkdir(parents=True)
+        clear_global_loader()
+        try:
+            extraction._run_module_extraction(
+                module_name=module,
+                concepts=list(extraction.EXTRACT_MODULES[module]),
+                database=database,
+                data_path=str(root),
+                patient_ids_filter={stay: stays},
+                batch_size=1,
+                output_dir=str(target),
+                stream_output_batches=True,
+            )
+        except Exception as exc:  # compared across layouts, never swallowed
+            exports[module] = f"{type(exc).__name__}: {str(exc)[:200]}"
+            continue
+        manifest = json.loads((target / "_manifest.json").read_text())
+        if manifest["errors"]:
+            exports[module] = [str(error)[:200] for error in manifest["errors"]]
+            continue
+        (target / "_manifest.json").rename(target / f"{module}.manifest.json")
+        extraction._publish_native_export_v2(
+            database=database,
+            data_path=str(root),
+            output_dir=str(target),
+            modules=[module],
+            max_patients=None,
+            result={"modules": {module: manifest}},
+        )
+        exports[module] = (target / f"{module}.parquet").read_bytes()
+    clear_global_loader()
+    return exports
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("database", sorted(builder.TABLE_CONFIGS))
+def test_every_module_export_is_byte_identical_across_layouts(tmp_path, database):
+    """lead-r13 class a: storage layout must not reach the exported bytes.
+
+    A single parquet file used to take the raw pandas path (float64 and a
+    per-patient table cache) while directories and buckets took DuckDB
+    (float32), so derived columns such as shock indices and white-cell
+    ratios differed between layouts.  Batches of one stay with several
+    concepts on one table exercise both the path choice and the cache.
+    HiRID observations have no single-file layout (detection refuses it).
+    """
+    from easyicu.resources import load_dictionary
+
+    root = tmp_path / "source"
+    frame, stays = _fixture_table(root, database)
+    frame, concepts = with_value_column_rows(frame, database, load_dictionary(), stays)
+    table = builder.TABLE_CONFIGS[database][0]
+    frame.to_parquet(root / table / "1.parquet", index=False)
+    layouts = ("directory", "hash") if database == "hirid" else ("directory", "single", "hash")
+    exports = {
+        layout: _module_exports(root, tmp_path / layout, database, concepts, stays)
+        for layout in _each_layout(root, database, layouts)
+    }
+    published = [m for m, value in exports["directory"].items() if isinstance(value, bytes)]
+    assert published, exports["directory"]
+    for layout in layouts[1:]:
+        assert exports[layout].keys() == exports["directory"].keys()
+        different = [m for m in exports[layout] if exports[layout][m] != exports["directory"][m]]
+        assert not different, (layout, different)

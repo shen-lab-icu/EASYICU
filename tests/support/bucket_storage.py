@@ -217,3 +217,60 @@ def move_fixture_parquet(path, target):
     if destination.parent.name == "bucket_id=0":
         declare_single_bucket_fixtures(destination.parent.parent.parent)
     return result
+
+
+def _source_value_column(database, source):
+    from easyicu.config import load_src_cfg
+
+    if source.value_var:
+        return source.value_var
+    return load_src_cfg(database).get_table(source.table).defaults.val_var
+
+
+def with_value_column_rows(frame, database, dictionary, stays):
+    """Add rows for every dictionary source on the bucketed table.
+
+    Each row carries its value only in that source's own value column
+    (explicit ``val_var`` or the table default); the other value column is
+    empty.  Returns the frame, cast back to the fixture dtypes, and the
+    concepts those sources feed.
+    """
+    table, key, stay, _clock = TABLE_CONFIGS[database]
+    rows, concepts = [], set()
+    for name in sorted(dictionary.keys()):
+        definition = dictionary[name]
+        for source in definition.sources.get(database, []):
+            if source.table != table or source.ids is None:
+                continue
+            column = _source_value_column(database, source)
+            if column not in frame.columns:
+                continue
+            item = source.ids[0] if isinstance(source.ids, list) else source.ids
+            low, high = definition.minimum, definition.maximum
+            if low is not None and high is not None:
+                value = (low + high) / 2
+            elif low is not None:
+                value = low + 1
+            else:
+                value = high - 1 if high is not None else 1.0
+            # A tenth is not exact in float32, so float32/float64 paths differ.
+            value = round(value, 3) + 0.1
+            for stay_id, offset in ((stays[0], 0.0), (stays[-1], 0.0), (stays[-1], 1.0)):
+                row = frame.iloc[[0]].copy()
+                row[stay] = stay_id
+                row[source.sub_var or key] = item
+                for other in ("value", "valuenum"):
+                    if other in row and other != column:
+                        row[other] = None
+                row[column] = value + offset
+                rows.append(row)
+            concepts.add(name)
+    result = pd.concat([frame, *rows], ignore_index=True)
+    for column, dtype in frame.dtypes.items():
+        if pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype):
+            result[column] = result[column].map(
+                lambda x: None if x is None or (isinstance(x, float) and pd.isna(x)) else str(x)
+            )
+        elif pd.api.types.is_float_dtype(dtype):
+            result[column] = pd.to_numeric(result[column]).astype(dtype)
+    return result, sorted(concepts)
