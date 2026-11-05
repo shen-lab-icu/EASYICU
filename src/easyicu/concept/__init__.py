@@ -6007,6 +6007,7 @@ class ConceptResolver:
                     self._pre_admission_hours_from_kwargs(kwargs)
                 ),
                 keep_post_discharge=concept_name in POST_DISCHARGE_OUTCOME_CONCEPTS,
+                clip_icu_episode=not is_id_tbl_target,
             )
             if is_win_tbl_target and interval is not None and not (
                 _WINDOW_DURATION_COLUMNS | {f"{concept_name}_dur"}
@@ -6170,6 +6171,7 @@ class ConceptResolver:
         time_columns: Optional[List[str]] = None,
         pre_admission_hours: Optional[float] = None,
         keep_post_discharge: bool = False,
+        clip_icu_episode: bool = True,
     ) -> pd.DataFrame:
         """Align time column to ICU admission time as anchor (R ricu as_dt_min).
 
@@ -6178,6 +6180,11 @@ class ConceptResolver:
         after ICU discharge by definition (audit round 2, R2-03: SICdb deaths
         more than 24 h after ICU discharge, and AUMC deaths 24-72 h after it,
         were dropped, lowering mortality).
+
+        ``clip_icu_episode=False`` keeps every row of the stay.  id_tbl
+        concepts (weight, height) aggregate one value per stay over all of
+        its rows, as ricu does; a height charted at hospital admission days
+        before the ICU stay is still that patient's height (lead-r13).
         
         Converts absolute time to relative time (hours or minutes since ICU admission).
         This replicates R ricu's behavior where time is relative to admission.
@@ -6402,7 +6409,7 @@ class ConceptResolver:
                             float(ICU_TIME_FALLBACK_LIMIT_HOURS)
                         )
                         upper_hours.index = data.index
-                        data = _quarantine_rows_outside_icu_episode(
+                        data = data if not clip_icu_episode else _quarantine_rows_outside_icu_episode(
                             data,
                             event_hours=event_hours,
                             upper_hours=upper_hours,
@@ -6560,7 +6567,7 @@ class ConceptResolver:
                     raise ValueError(
                         "pre_admission_hours must be a finite non-negative number"
                     )
-                invalid_time = event_hours.notna() & (
+                invalid_time = clip_icu_episode & event_hours.notna() & (
                     (event_hours < -allowed_pre_hours)
                     | ((event_hours > upper_hours) & (not keep_post_discharge))
                 )
@@ -6741,7 +6748,7 @@ class ConceptResolver:
                     raise ValueError(
                         "pre_admission_hours must be a finite non-negative number"
                     )
-                invalid_time = event_hours.notna() & (
+                invalid_time = clip_icu_episode & event_hours.notna() & (
                     (event_hours < -allowed_pre_hours)
                     | ((event_hours > upper_hours) & (not keep_post_discharge))
                 )
@@ -6783,7 +6790,7 @@ class ConceptResolver:
                     raise ValueError(
                         "pre_admission_hours must be a finite non-negative number"
                     )
-                invalid_time = event_hours.notna() & (
+                invalid_time = clip_icu_episode & event_hours.notna() & (
                     (event_hours < -allowed_pre_hours)
                     | (event_hours > ICU_TIME_FALLBACK_LIMIT_HOURS)
                 )
@@ -7147,7 +7154,7 @@ class ConceptResolver:
                         float(ICU_TIME_FALLBACK_LIMIT_HOURS)
                     )
                     upper_hours.index = data.index
-                    data = _quarantine_rows_outside_icu_episode(
+                    data = data if not clip_icu_episode else _quarantine_rows_outside_icu_episode(
                         data,
                         event_hours=event_hours,
                         upper_hours=upper_hours,
@@ -7349,7 +7356,7 @@ class ConceptResolver:
                         data[index_column], errors="coerce"
                     )
                     event_hours.index = data.index
-                    data = _quarantine_rows_outside_icu_episode(
+                    data = data if not clip_icu_episode else _quarantine_rows_outside_icu_episode(
                         data,
                         event_hours=event_hours,
                         upper_hours=upper_row,
