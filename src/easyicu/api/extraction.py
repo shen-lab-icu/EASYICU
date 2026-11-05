@@ -312,6 +312,9 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "vitals": {"cohort_stays": 200_859, "peak_rss_mb": 5_362.4, "seconds": 158.082},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
+        # lead-r13 (2026-11-05): full-cohort one-module measurement of the
+        # 20th module, local profile (MemoryMax 14G, 4 cores).
+        "renal_urine_chem": {"cohort_stays": 200_859, "peak_rss_mb": 1_150.8, "seconds": 3.6},
         # ``sofa2_score`` and ``sepsis3_sofa2`` remain excluded from the
         # one-shot registry after the 2026-09-04 eICU IMV ascertainment update.
         # Their replacement 25k streamed measurements live below.
@@ -397,6 +400,13 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 7_286.7,
             "seconds": 428.684,
         },
+        # lead-r13 (2026-11-05): full-cohort one-module measurement of the
+        # 20th module, local profile (MemoryMax 14G, 4 cores).
+        "renal_urine_chem": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 1_249.5,
+            "seconds": 7.6,
+        },
     },
     "mimic": {
         "demographics": {"cohort_stays": 61_532, "peak_rss_mb": 1_008.5, "seconds": 12.177},
@@ -411,6 +421,9 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "neurological": {"cohort_stays": 61_532, "peak_rss_mb": 6_044.1, "seconds": 39.021},
         "circulatory": {"cohort_stays": 61_532, "peak_rss_mb": 6_159.8, "seconds": 447.094},
         "sepsis_shared": {"cohort_stays": 61_532, "peak_rss_mb": 5_659.3, "seconds": 11.110},
+        # lead-r13 (2026-11-05): full-cohort one-module measurement of the
+        # 20th module, local profile (MemoryMax 14G, 4 cores).
+        "renal_urine_chem": {"cohort_stays": 61_532, "peak_rss_mb": 1_278.9, "seconds": 4.0},
     }
 }
 
