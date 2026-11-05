@@ -401,12 +401,15 @@ def load_circ_failure(
     support = COMPOSITE_LOADER_SUPPORT['circ_failure_loader']
     core_concepts = list(support.required_concepts)
     # An optional drug the dictionary does not define (levo_rate, theo_rate)
-    # is absent by declaration.  Requesting it failed every batch load and
-    # sent the loader to one-by-one loads that swallowed that KeyError.
+    # is absent by declaration unless the caller supplies it preloaded.
+    # Requesting it failed every batch load and sent the loader to
+    # one-by-one loads that swallowed that KeyError.
     from ..concept.loader import load_concept_dict_cached
 
     _defined = load_concept_dict_cached()
-    optional_concepts = [c for c in support.optional_concepts if c in _defined]
+    optional_concepts = [
+        c for c in support.optional_concepts if c in _defined or c in _pre
+    ]
     all_needed = core_concepts + optional_concepts
     
     if verbose:
@@ -431,7 +434,12 @@ def load_circ_failure(
                 for c, cdf in batch_result.items():
                     if hasattr(cdf, 'data'):
                         cdf = cdf.data
-                    if isinstance(cdf, pd.DataFrame) and not cdf.empty:
+                    if isinstance(cdf, pd.DataFrame) and (
+                        not cdf.empty or c in core_concepts
+                    ):
+                        # A core concept that loaded with no rows is absent
+                        # data (empty result), not a load failure. An empty
+                        # optional stream stays outside the evidence.
                         loaded_dfs[c] = cdf
         except Exception:
             # Fallback: load one by one
@@ -439,7 +447,9 @@ def load_circ_failure(
                 try:
                     r = load_concepts(concepts=[c], database=database, data_path=data_path,
                                       max_patients=max_patients, patient_ids=patient_ids, verbose=False)
-                    if isinstance(r, pd.DataFrame) and not r.empty:
+                    if isinstance(r, pd.DataFrame) and (
+                        not r.empty or c in core_concepts
+                    ):
                         loaded_dfs[c] = r
                 except Exception as exc:
                     # Grading without a drug's evidence would silently lower

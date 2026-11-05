@@ -274,7 +274,8 @@ def test_r5_sic_003_public_resolver_preserves_boundary_hours_raw_qc_and_attribut
     assert out["cvp_raw"].data.cvp_raw.tolist() == [40., 42., 60.]
     assert out["cvp"].data.cvp.tolist() == [40., 42.]
     assert "above_50" in out["cvp_qc"].data.cvp_qc.tolist()
-    assert out["minute_vol_raw"].data.minute_vol_raw.tolist() == [.01, 7.]
+    # Every layout reads through DuckDB at float32 precision (lead-r13).
+    assert out["minute_vol_raw"].data.minute_vol_raw.tolist() == pytest.approx([.01, 7.], rel=1e-6)
     assert "below_analysis_min_1" in out["minute_vol_qc"].data.minute_vol_qc.tolist()
     assert set(out["mech_vent_rule"].data.mech_vent_rule) == {"explicit_ett"}
     sensitivity = out["mech_vent_opioid_sensitivity"].data
@@ -564,7 +565,8 @@ def test_r5_sic_011_hourly_qc_retains_flags_from_both_minute_volume_sources(tmp_
         ["minute_vol", "minute_vol_raw", "minute_vol_qc"], ds, merge=False, r_compatible=False,
         interval=pd.Timedelta(hours=1), concept_workers=1, verbose=False)
     assert out["minute_vol"].data.minute_vol.tolist() == [7., 11.]
-    assert out["minute_vol_raw"].data.minute_vol_raw.tolist() == [3.505, 11.]
+    # Every layout reads through DuckDB at float32 precision (lead-r13).
+    assert out["minute_vol_raw"].data.minute_vol_raw.tolist() == pytest.approx([3.505, 11.], rel=1e-6)
     assert out["minute_vol_qc"].data.minute_vol_qc.tolist() == ["below_analysis_min_1|kept", "kept"]
 
 

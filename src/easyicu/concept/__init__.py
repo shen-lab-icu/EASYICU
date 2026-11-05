@@ -2477,6 +2477,9 @@ class ConceptResolver:
         id_columns: List[str] = []
         index_column: Optional[str] = None
         unit_column: Optional[str] = None
+        # Time axis of the first empty source, used only when every source is
+        # empty (an empty time series must stay a time series).
+        empty_source_index_column: Optional[str] = None
         time_columns: List[str] = []
         _duckdb_source_count = 0  # 🚀 跟踪 DuckDB 预聚合源数量
         
@@ -4404,6 +4407,15 @@ class ConceptResolver:
             # 解决：只有当源返回非空数据时，才更新全局index_column
             if not index_column and len(frame) > 0:
                 index_column = source_index_column
+            elif empty_source_index_column is None and len(frame) == 0:
+                empty_source_index_column = next(
+                    (
+                        column
+                        for column in (table.index_column, source_index_column)
+                        if column and column in frame.columns
+                    ),
+                    None,
+                )
             if not unit_column and len(frame) > 0:
                 unit_column = source_unit_column
 
@@ -5476,6 +5488,12 @@ class ConceptResolver:
         # 对于 id_tbl 类型的概念（如 los_icu），可能从表配置继承了 index_column，但数据中不包含该列
         if index_column and index_column not in combined.columns:
             index_column = None
+        if (
+            not index_column
+            and combined.empty
+            and empty_source_index_column in combined.columns
+        ):
+            index_column = empty_source_index_column
         
         # 如果数据为空，返回空 ICUTable
         if combined.empty:
@@ -6914,6 +6932,10 @@ class ConceptResolver:
         # admission).  There is no timestamp to align or bound on this path.
         if index_column in id_columns:
             return data
+
+        # ``intime`` joined below is an alignment helper, not concept output;
+        # every return path drops it unless the caller supplied it.
+        intime_is_helper = 'intime' not in data.columns
         
         # Resolve the stay key and origin table from the profile. Legacy
         # MIMIC defaults remain as fallbacks, while community databases can
@@ -7168,6 +7190,8 @@ class ConceptResolver:
             # index already emits hours, and blindly dividing both by 60 made
             # the second case 60x too short.
             _normalize_duration_to_hours(data)
+            if intime_is_helper and 'intime' in data.columns:
+                data = data.drop(columns=['intime'])
             return data
         
         # 检查时间列是否是有效的datetime类型

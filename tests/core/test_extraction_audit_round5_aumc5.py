@@ -94,8 +94,9 @@ def test_r5c_aumc_008_windows_keep_longer_same_hour_and_true_endpoints(tmp_path,
 def test_r5c_aumc_009_calcium_actual_ph_does_not_pool_corrected_measurements(tmp_path):
     db = _db(tmp_path, numeric=[(5, 9560, 1.1, "mmol/L"), (5, 9561, 1.4, "mmol/L"),
                                (65, 8915, 1.3, "mmol/L")])
-    assert _load(db, "cai") == {0: 1.1}
-    assert _load(db, "cai_ph74") == {0: 1.4, 1: 1.3}
+    # Every layout reads through DuckDB at float32 precision (lead-r13).
+    assert _load(db, "cai") == pytest.approx({0: 1.1}, rel=1e-6)
+    assert _load(db, "cai_ph74") == pytest.approx({0: 1.4, 1: 1.3}, rel=1e-6)
 
 
 @pytest.mark.parametrize("layout", ["file", "bucket"])

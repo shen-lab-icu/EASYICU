@@ -204,15 +204,20 @@ def test_r6_f008_sic_qc_and_map_minus_cvp_share_retained_values(tmp_path):
         ["map", "cvp", "cvp_raw", "cvp_qc"], source, merge=False, r_compatible=False,
         interval=pd.Timedelta(hours=1), patient_ids={"CaseID": [1]}, concept_workers=1, verbose=False,
     )
-    main = results["cvp"].data.set_index("Offset").cvp
+    # Index by the declared time column: every layout now reads through
+    # DuckDB, which names it ``charttime`` (lead-r13).
+    def hourly(name):
+        return results[name].data.set_index(results[name].index_column)[name]
+
+    main = hourly("cvp")
     assert main.to_dict() == {0.: 20., 1.: 45., 2.: 20., 3.: 40., 4.: 50., 6.: 30.}
-    qc = results["cvp_qc"].data.set_index("Offset").cvp_qc
+    qc = hourly("cvp_qc")
     assert "isolated_spike" in qc.loc[1.]
     assert "arterial_diastolic_match" in qc.loc[3.]
     assert "arterial_evidence_unavailable" in qc.loc[4.]
     assert "high_30_to_50" in qc.loc[6.]
     assert qc.loc[5.] == "above_50"
-    perfusion = results["map"].data.set_index("Offset")["map"] - main
+    perfusion = hourly("map") - main
     assert perfusion.loc[[1., 3., 4., 6.]].tolist() == [35., 40., 30., 50.]
     assert pd.isna(perfusion.loc[5.])
 

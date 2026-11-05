@@ -17,6 +17,14 @@ import numpy as np
 import pandas as pd
 
 
+class MissingTableSourceError(KeyError):
+    """The source has no file or registration for this table (absence).
+
+    A ``KeyError`` subclass, so existing callers keep their behaviour; an
+    optional-channel reader can tell absence from a column or schema fault.
+    """
+
+
 def _duckdb_path(p) -> str:
     """Convert a Path or string to a DuckDB-safe path string.
 
@@ -1534,7 +1542,7 @@ class ICUDataSource:
                     # 返回空DataFrame，避免抛出错误
                     return pd.DataFrame(columns=expected_cols if expected_cols else ['index'])
                 
-                raise KeyError(
+                raise MissingTableSourceError(
                     f"No table source registered for '{table_name}' "
                     f"in data source '{self.config.name}'"
                 )
@@ -3664,12 +3672,12 @@ def load_bucketed_table_aggregated(
                     WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
                 ),
                 events_joined AS (
-                    SELECT o.{value_column}, o.{time_col}, o.hadm_id{_cte_extra_cols},
+                    SELECT o.{value_column}, TRY_CAST(o.{time_col} AS TIMESTAMP) AS {time_col}, o.hadm_id{_cte_extra_cols},
                            a.{stay_col}, a.intime,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.hadm_id, o.{time_col}, o.{value_column}
                                ORDER BY
-                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   CASE WHEN a.outtime >= TRY_CAST(o.{time_col} AS TIMESTAMP) THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
                     FROM {target_relation} o
@@ -3694,12 +3702,12 @@ def load_bucketed_table_aggregated(
                     FROM {_read_func}('{_duckdb_path(icustays_path)}')
                 ),
                 events_joined AS (
-                    SELECT o.{value_column}, o.{time_col}, o.hadm_id{_cte_extra_cols},
+                    SELECT o.{value_column}, TRY_CAST(o.{time_col} AS TIMESTAMP) AS {time_col}, o.hadm_id{_cte_extra_cols},
                            a.{stay_col}, a.intime,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.hadm_id, o.{time_col}, o.{value_column}
                                ORDER BY
-                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   CASE WHEN a.outtime >= TRY_CAST(o.{time_col} AS TIMESTAMP) THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
                     FROM {target_relation} o
@@ -4202,12 +4210,12 @@ def load_bucketed_table_multi_aggregated(
                     WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
                 ),
                 events_joined AS (
-                    SELECT o.{value_column}, o.{time_col}, o.hadm_id, o.{itemid_col},
+                    SELECT o.{value_column}, TRY_CAST(o.{time_col} AS TIMESTAMP) AS {time_col}, o.hadm_id, o.{itemid_col},
                            a.{stay_col}, a.intime,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.hadm_id, o.{time_col}, o.{itemid_col}, o.{value_column}
                                ORDER BY
-                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   CASE WHEN a.outtime >= TRY_CAST(o.{time_col} AS TIMESTAMP) THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
                     FROM {target_relation} o
@@ -4232,12 +4240,12 @@ def load_bucketed_table_multi_aggregated(
                     FROM {_read_func}('{_duckdb_path(icustays_path)}')
                 ),
                 events_joined AS (
-                    SELECT o.{value_column}, o.{time_col}, o.hadm_id, o.{itemid_col},
+                    SELECT o.{value_column}, TRY_CAST(o.{time_col} AS TIMESTAMP) AS {time_col}, o.hadm_id, o.{itemid_col},
                            a.{stay_col}, a.intime,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.hadm_id, o.{time_col}, o.{itemid_col}, o.{value_column}
                                ORDER BY
-                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   CASE WHEN a.outtime >= TRY_CAST(o.{time_col} AS TIMESTAMP) THEN a.outtime END ASC NULLS LAST,
                                    a.outtime DESC
                            ) as _rn
                     FROM {target_relation} o

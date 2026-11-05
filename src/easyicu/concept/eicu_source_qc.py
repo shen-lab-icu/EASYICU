@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def load_optional(data_source, table, stays, columns=None, *, selectors=()):
     """Read a stay-scoped optional channel; absent tables carry no evidence."""
-    from ..datasource import FilterOp, FilterSpec
+    from ..datasource import FilterOp, FilterSpec, MissingTableSourceError
 
     if data_source is None or not len(stays):
         return pd.DataFrame(columns=columns)
@@ -30,9 +30,10 @@ def load_optional(data_source, table, stays, columns=None, *, selectors=()):
             table, columns=columns,
             filters=[*filters, *selectors], verbose=False,
         )
-    except FileNotFoundError:
-        # An absent optional table carries no evidence.  A KeyError is a
-        # schema or code fault, not absence, and must not empty the channel.
+    except (FileNotFoundError, MissingTableSourceError):
+        # An absent optional table carries no evidence.  Any other KeyError
+        # is a schema or code fault, not absence, and must not empty the
+        # channel.
         return pd.DataFrame(columns=columns)
     except KeyError as exc:
         raise RuntimeError(

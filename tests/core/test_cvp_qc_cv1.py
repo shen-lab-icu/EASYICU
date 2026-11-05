@@ -113,7 +113,7 @@ def test_cvp_quality_distinguishes_invasive_cuff_both_and_missing(tmp_path, data
         result = _load(source, dictionary, identifier, names)
     main, qc = result["cvp"], result["cvp_qc"]
     pd.testing.assert_frame_equal(result["dbp"].data, before)
-    pd.testing.assert_frame_equal(main.data.rename(columns={"cvp": "cvp_raw"}), result["cvp_raw"].data)
+    pd.testing.assert_frame_equal(main.data.rename(columns={"cvp": "cvp_raw"}), result["cvp_raw"].data, check_like=True)
     assert list(qc.data.columns) == [identifier, qc.index_column, "cvp_qc"]
     pd.testing.assert_frame_equal(main.data[[identifier, main.index_column]], qc.data[[identifier, qc.index_column]])
     assert main.data.loc[main.data[identifier].eq(1), "cvp"].tolist() == CVP
@@ -146,7 +146,13 @@ def test_without_cuff_sources_quality_and_values_are_identical(tmp_path, databas
     narrowed.update(ConceptDictionary({"dbp": replace(definition, sources={database: sources})}))
     without_fallback = _load(source, narrowed, identifier, names)
     for name in names:
-        pd.testing.assert_frame_equal(with_fallback[name].data, without_fallback[name].data)
+        # Row labels and column order follow the combine path (one source vs
+        # several); the contract is the rows and values, compared by name.
+        pd.testing.assert_frame_equal(
+            with_fallback[name].data.reset_index(drop=True),
+            without_fallback[name].data.reset_index(drop=True),
+            check_like=True,
+        )
     flags = without_fallback["cvp_qc"].data.cvp_qc.tolist()
     assert flags[0] == "high_30_to_50|arterial_diastolic_match"
     assert "cuff_dbp_only" not in "|".join(flags)

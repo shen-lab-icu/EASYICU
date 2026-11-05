@@ -38,6 +38,17 @@ def test_mimic_services_prefers_csv_over_parquet(tmp_path: Path) -> None:
             "CURR_SERVICE": ["MED", "SURG"],
         }
     ).to_csv(tmp_path / "SERVICES.csv.gz", index=False)
+    # Hospital tables are mapped to ICU stays; a MIMIC-III source always has
+    # icustays, and a failed mapping now raises (lead-r13 sweep).
+    pd.DataFrame(
+        {
+            "subject_id": [10, 11],
+            "hadm_id": [100, 101],
+            "icustay_id": [1000, 1001],
+            "intime": pd.to_datetime(["2100-01-01 00:00:00", "2100-01-02 00:00:00"]),
+            "outtime": pd.to_datetime(["2100-01-03 00:00:00", "2100-01-04 00:00:00"]),
+        }
+    ).to_parquet(tmp_path / "icustays.parquet", index=False)
 
     config = _repo_config("mimic")
     source = ICUDataSource(config=config, base_path=tmp_path)

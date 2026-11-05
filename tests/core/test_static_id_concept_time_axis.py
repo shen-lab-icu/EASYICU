@@ -10,6 +10,7 @@ from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, Concept
 from easyicu.datasource import ICUDataSource
 from easyicu.resources import load_data_sources
 from easyicu.table import has_time_cols
+from tests.support.bucket_storage import write_contract
 
 
 @pytest.mark.parametrize("layout", ["flat", "bucket"])
@@ -29,6 +30,12 @@ def test_static_duckdb_median_retains_high_patient_ids(tmp_path, layout, selecte
     )
     directory.mkdir(parents=True)
     rows.to_parquet(directory / "part.parquet", index=False)
+    if layout == "bucket":  # an incomplete bucket directory is refused
+        write_contract(directory.parent, key="variableid")
+    # Every load path anchors HiRID event time to the declared origin table.
+    pd.DataFrame(
+        {"patientid": ids, "admissiontime": pd.Timestamp("2025-12-31")}
+    ).to_parquet(tmp_path / "general_table.parquet", index=False)
     source = ICUDataSource(load_data_sources().get("hirid"), base_path=tmp_path)
     dictionary = ConceptDictionary(
         {

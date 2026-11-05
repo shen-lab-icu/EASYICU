@@ -18,7 +18,9 @@ DICTIONARY = Path(__file__).parents[2] / "src/easyicu/data/concept-dict.json"
 
 @pytest.mark.parametrize("database", ["miiv", "mimic"])
 @pytest.mark.parametrize("grid", [None, pd.Timedelta(hours=1), pd.Timedelta(minutes=30)])
-@pytest.mark.parametrize("use_duckdb", [False, True])
+# lead-r13: every Parquet table takes the one DuckDB path; the former raw
+# Parquet fallback (reached by hiding the directory resolvers) is gone.
+@pytest.mark.parametrize("use_duckdb", [True])
 @pytest.mark.parametrize("string_timestamps", [False, True])
 def test_signed_net_full_loader_matches_independent_total(
     tmp_path, monkeypatch, database, grid, use_duckdb, string_timestamps,
@@ -35,9 +37,6 @@ def test_signed_net_full_loader_matches_independent_total(
         return result
 
     monkeypatch.setattr(datasource_module, "load_bucketed_table_aggregated", capture)
-    if not use_duckdb:
-        monkeypatch.setattr(source, "resolve_bucket_directory", lambda _table: None)
-        monkeypatch.setattr(source, "resolve_flat_parquet_directory", lambda _table: None)
     resolver = ConceptResolver(ConceptDictionary.from_json(DICTIONARY))
     result = resolver.load_concepts(
         ["urine"], source, merge=False, r_compatible=False, interval=grid,

@@ -61,7 +61,9 @@ def synthetic_source(tmp_path, database):
 
 
 @pytest.mark.parametrize("database", ["miiv", "mimic", "mimic_demo"])
-@pytest.mark.parametrize("use_duckdb", [False, True])
+# lead-r13: every Parquet table takes the one DuckDB path; the former raw
+# Parquet fallback (reached by hiding the directory resolvers) is gone.
+@pytest.mark.parametrize("use_duckdb", [True])
 def test_actual_loader_keeps_alarms_and_respiratory_channels_separate(
     tmp_path, monkeypatch, database, use_duckdb,
 ):
@@ -89,9 +91,6 @@ def test_actual_loader_keeps_alarms_and_respiratory_channels_separate(
 
     monkeypatch.setattr(datasource_module, "load_bucketed_table_aggregated", capture)
     monkeypatch.setattr(datasource_module, "load_bucketed_table_multi_aggregated", capture_multi)
-    if not use_duckdb:
-        monkeypatch.setattr(source, "resolve_bucket_directory", lambda _table: None)
-        monkeypatch.setattr(source, "resolve_flat_parquet_directory", lambda _table: None)
     loaded = ConceptResolver(ConceptDictionary.from_json(DICTIONARY)).load_concepts(
         CHANNELS, source, merge=False, r_compatible=False,
         interval=pd.Timedelta(hours=1), patient_ids={id_column: [1, 2, 3, 4, 5]},
@@ -156,7 +155,9 @@ def test_generic_peep_and_fio2_keep_their_mixed_source_contracts():
 
 
 @pytest.mark.parametrize("database", ["miiv", "mimic", "mimic_demo"])
-@pytest.mark.parametrize("use_duckdb", [False, True])
+# lead-r13: every Parquet table takes the one DuckDB path; the former raw
+# Parquet fallback (reached by hiding the directory resolvers) is gone.
+@pytest.mark.parametrize("use_duckdb", [True])
 @pytest.mark.parametrize("selected", [[10, 20], [20]])
 def test_laboratory_channels_preserve_repeated_stay_identity(
     tmp_path, monkeypatch, database, use_duckdb, selected,
@@ -186,9 +187,6 @@ def test_laboratory_channels_preserve_repeated_stay_identity(
     (tmp_path / "labevents").mkdir()
     lab.to_parquet(tmp_path / "labevents/part.parquet", index=False)
     source = ICUDataSource(load_src_cfg(database), base_path=tmp_path, enable_cache=False)
-    if not use_duckdb:
-        monkeypatch.setattr(source, "resolve_bucket_directory", lambda _table: None)
-        monkeypatch.setattr(source, "resolve_flat_parquet_directory", lambda _table: None)
     outputs = ConceptResolver(load_dictionary()).load_concepts(
         ["fio2_lab", "po2"], source, merge=False, r_compatible=False,
         interval=pd.Timedelta(hours=1), patient_ids={id_column: selected},

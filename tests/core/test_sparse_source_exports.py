@@ -115,7 +115,10 @@ def _converted_source(tmp_path, database, *, populated=False, medication="vancom
         for table, rows in {
             "medication": [
                 {"medicationid": index, "patientunitstayid": 101, "drugname": medication,
-                 "drugstartoffset": offset, "drugstopoffset": offset + 60, "drugorderoffset": offset}
+                 "drugstartoffset": offset, "drugstopoffset": offset + 60, "drugorderoffset": offset,
+                 # A positive dose establishes exposure (eicu_positive_value);
+                 # since round 12b only exposed rows time suspected infection.
+                 "dosage": "1000 mg"}
                 for index, offset in enumerate((60, 180), 1)
             ],
             "diagnosis": [

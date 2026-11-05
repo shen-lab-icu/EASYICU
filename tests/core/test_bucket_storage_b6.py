@@ -698,8 +698,11 @@ def test_id_tbl_concepts_are_identical_in_file_directory_and_bucket_layouts(tmp_
     """lead-r13 class a: id_tbl values depended on the storage layout.
 
     The former DuckDB fast path (directory/bucketed tables) read the string
-    ``value`` column instead of ``valuenum``.  The first stay's only weight or
-    height row carries just ``valuenum``; every layout must keep it.
+    ``value`` column instead of ``valuenum``, and the raw path (single files)
+    clipped rows to the ICU episode window.  The first stay's only row carries
+    just ``valuenum``; the last stay has one row inside the window and one
+    200 h before admission.  Every layout must keep all of them and aggregate
+    one median per stay, as ricu does.
     """
     from easyicu.resources import load_dictionary
 
@@ -716,12 +719,21 @@ def test_id_tbl_concepts_are_identical_in_file_directory_and_bucket_layouts(tmp_
     }
     frame = frame[~frame[key].isin(own_items)]
     rows = []
+    clock = builder.TABLE_CONFIGS[database][3]
+    before_admission = (
+        pd.Timedelta(hours=200) if pd.api.types.is_datetime64_any_dtype(frame[clock])
+        else 200 * 3600 * 1000  # AUMC measuredat: ms from admission
+    )
     for concept, item in _ID_TBL_ITEMS[database]:
-        normal, outlier = (61.0, 900.0) if concept == "weight" else (171.0, 900.0)
-        for stay_id, value in ((stays[0], normal), (stays[-1], normal - 10), (stays[-1], outlier)):
+        normal = 61.0 if concept == "weight" else 171.0
+        for stay_id, value, early in (
+            (stays[0], normal, False), (stays[-1], normal - 10, False), (stays[-1], normal - 5, True),
+        ):
             row = frame.iloc[[0]].copy()
             row[stay] = stay_id
             row[key] = item
+            if early:
+                row[clock] = row[clock] - before_admission
             if "valuenum" in row:
                 row["valuenum"] = value
                 row["value"] = None if stay_id == stays[0] else str(value)
@@ -737,10 +749,10 @@ def test_id_tbl_concepts_are_identical_in_file_directory_and_bucket_layouts(tmp_
     }
     reference = loaded["single"]
     for (concept, _item), normal in zip(_ID_TBL_ITEMS[database], (61.0, 171.0)):
-        if "valuenum" in frame:  # the first stay's only row has no ``value``
-            frame_ = reference[concept]
-            first = frame_[frame_[frame_.columns[0]] == stays[0]][concept]
-            assert first.tolist() and set(first) == {normal}, concept
+        if "valuenum" in frame:  # MIMIC: only these sources feed the stays
+            frame_ = reference[concept].set_index(reference[concept].columns[0])[concept]
+            assert frame_.get(stays[0]) == normal, concept  # ``valuenum`` only
+            assert frame_.get(stays[-1]) == normal - 7.5, concept  # early row kept
         for layout in ("directory", "hash"):
             _assert_same(concept, loaded[layout][concept], reference[concept])
 
