@@ -1436,13 +1436,15 @@
      "sub_var": "drug",
      "regex": "[Hh]aloperidol|[Qq]uetiapine|[Ss]eroquel|[Oo]lanzapine|[Zz]yprexa|[Rr]isperidone|[Rr]isperdal|[Zz]iprasidone|[Gg]eodon|[Aa]ripiprazole|[Aa]bilify",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_exposure",
      "_comment": "Per PADIS Guidelines: Haloperidol=16219, Quetiapine=14883, Olanzapine=13571, Risperidone=3847, Ziprasidone=672, Aripiprazole=2849 patients | 2026-11-04 audit round 3 (full-dictionary M): ophthalmic, otic, topical, vaginal, irrigation, inhaled, catheter-lock and desensitisation products are not systemic exposure (abx: 4,005 rows, 1,960 stays). Prescriptions stay the source: eMAR covers 28-31% of 2008-2013 ICU stays.",
      "exclude_regex": {
       "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b|butalbital"
      },
      "extra_vars": [
-      "drug"
+      "drug",
+      "dose_val_rx",
+      "stoptime"
      ]
     }
    ],
@@ -1890,7 +1892,7 @@
      "sub_var": "itemid",
      "value_var": "value",
      "regex": "^(Hemodialysis st|Hemodialysis end|CVVHD Start|CVVHD D/C|CAVH Start|CAVH D/C)$",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_rrt_procedures",
      "_comment": "2026-11-03 audit round 2 (K1): CareVue 582 'Procedures' records intermittent haemodialysis, CVVHD and CAVH start/stop events, as mimic-code rrt.sql reads them (Hemodialysis st/end, CVVHD Start/D/C, CAVH Start/D/C; 363 stays without other RRT evidence). Other 582 procedures (EKG, line placement, ...) are not RRT and are dropped."
     }
    ],
@@ -2062,7 +2064,7 @@
      "sub_var": "itemid",
      "value_var": "value",
      "regex": "^(Hemodialysis st|Hemodialysis end|CVVHD Start|CVVHD D/C|CAVH Start|CAVH D/C)$",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_rrt_procedures",
      "_comment": "2026-11-03 audit round 2 (K1): CareVue 582 'Procedures' records intermittent haemodialysis, CVVHD and CAVH start/stop events, as mimic-code rrt.sql reads them (Hemodialysis st/end, CVVHD Start/D/C, CAVH Start/D/C; 363 stays without other RRT evidence). Other 582 procedures (EKG, line placement, ...) are not RRT and are dropped."
     }
    ]

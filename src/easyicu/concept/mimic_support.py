@@ -1,7 +1,7 @@
 """MIMIC chart support and medication evidence with explicit positive semantics.
 
 These source callbacks do not infer exposure from the existence of a row.
-CareVue vasoactive intervals reuse the observed-span contract of mimic_dur_incv;
+CareVue vasoactive support reuses the bounded LOCF contract of mimic_rate_cv;
 amount-only administrations remain points. Zero ECMO flow is unknown support,
 not a decannulation event.
 """
@@ -103,13 +103,14 @@ def antibacterial_inputs(
 def other_vaso_points(
     frame: pd.DataFrame, source: ConceptSource, concept: str, *, icu_stays: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Return active observed spans on the ICU hour grid, plus amount-only points.
+    """Return positive rate hours on the rate callback's grid, plus bolus points.
 
-    Stopped/zero rates terminate a CV span. Missing evidence produces no row;
-    explicit no-treatment rows may produce False. No singleton is extrapolated.
+    CareVue shares mimic_rate_cv's per-linkorderid LOCF (six-hour maximum,
+    one-hour final observation). Stops/zeros close support. This differs from
+    the observed-span duration concept, whose singleton duration is unknown.
     """
     from ..io.ts_utils import expand
-    from ..utils.callback_utils import mimic_dur_incv
+    from ..utils.callback_utils import mimic_rate_cv
 
     id_col = next(c for c in ["icustay_id", "stay_id"] if c in frame)
     time_col = source.index_var or ("charttime" if "charttime" in frame else "starttime")
@@ -125,30 +126,16 @@ def other_vaso_points(
         # observed span but cannot start a course or count as a new bolus.
         frame.loc[terminal, "rate"] = 0.
         rate = rate.mask(terminal, 0.)
-        # The duration helper groups by stay and drug, so keep drugs separate.
+        # Match each rate source's drug and linkorderid grouping. Missing-rate
+        # rows remain time references, exactly as in the numeric rate callback.
         for _, drug in frame.groupby(source.sub_var or "itemid", sort=False):
-            durations = mimic_dur_incv(drug, val_col=concept, id_cols=[id_col], icu_stays=icu_stays)
-            durations["__end"] = durations[time_col] + (
-                durations[concept] if pd.api.types.is_numeric_dtype(durations[time_col])
-                else pd.to_timedelta(durations[concept], unit="h")
-            )
-            durations[concept] = True
-            known = durations["__end"].gt(durations[time_col])
-            if known.any():
-                # A terminal stop is exclusive. The last positive observation
-                # of an open episode still supports its own hour.
-                epsilon = 1e-9 if pd.api.types.is_numeric_dtype(durations[time_col]) else pd.Timedelta(nanoseconds=1)
-                spans = durations.loc[known].copy()
-                ends = pd.MultiIndex.from_arrays([spans[id_col], spans["__end"]])
-                active = pd.MultiIndex.from_frame(drug.loc[drug["rate"].gt(0), [id_col, time_col]])
-                stopped = pd.MultiIndex.from_frame(drug.loc[drug["rate"].eq(0), [id_col, time_col]])
-                exclusive = ~ends.isin(active) | ends.isin(stopped)
-                spans.loc[exclusive, "__end"] -= epsilon
-                parts.append(expand(spans, start_var=time_col, end_var="__end", id_cols=[id_col],
-                                    step_size=pd.Timedelta(hours=1), keep_vars=[concept],
-                                    admission_times=icu_stays))
-            if (~known).any():
-                parts.append(durations.loc[~known, [id_col, time_col, concept]])
+            drug = drug.assign(**{concept: drug["rate"]})
+            hours = mimic_rate_cv(drug, val_col=concept, id_cols=[id_col],
+                                  grp_var="linkorderid" if "linkorderid" in drug else None,
+                                  admission_times=icu_stays)
+            hours = hours.loc[hours[concept].notna()].copy()
+            hours[concept] = _numeric(hours[concept]).gt(0)
+            parts.append(hours)
     else:
         end_col = source.params.get("stop_var", "endtime")
         valid = rate.gt(0) & frame[end_col].gt(frame[time_col])
@@ -166,7 +153,53 @@ def other_vaso_points(
     negative = rate.eq(0) & ~amount.gt(0)
     if negative.any():
         parts.append(frame.loc[negative, [id_col, time_col]].assign(**{concept: False}))
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=[id_col, time_col, concept])
+    return (pd.concat(parts, ignore_index=True).drop_duplicates([id_col, time_col, concept])
+            if parts else pd.DataFrame(columns=[id_col, time_col, concept]))
+
+
+def rrt_procedure_hours(
+    frame: pd.DataFrame, source: ConceptSource, concept: str, *, icu_stays: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Replay CareVue 582 starts/stops independently per stay and modality.
+
+    Repeated starts keep the existing course open. Only an explicit start can
+    open it, and a stop is exclusive. An unclosed start is point evidence for
+    its own hour, with no invented treatment duration.
+    """
+    from ..io.ts_utils import expand
+
+    if frame.empty:
+        return frame.assign(**{concept: pd.Series(dtype=bool)})
+    id_col = next(c for c in ("icustay_id", "stay_id") if c in frame)
+    time_col = source.index_var or "charttime"
+    text = source_values(frame, source, "value", concept).astype("string").str.strip().str.casefold()
+    states = text.map({"hemodialysis st": "hd:start", "hemodialysis end": "hd:stop",
+                       "cvvhd start": "cvvhd:start", "cvvhd d/c": "cvvhd:stop",
+                       "cavh start": "cavh:start", "cavh d/c": "cavh:stop"})
+    work = frame.loc[states.notna(), [id_col, time_col]].copy()
+    work["__modality"] = states.str.split(":").str[0]
+    work["__start"] = states.str.endswith(":start").fillna(False)
+    work["__stop"] = states.str.endswith(":stop").fillna(False)
+    keys = [id_col, "__modality"]
+    work = work.dropna(subset=[id_col, time_col]).groupby([*keys, time_col], as_index=False).agg(
+        __start=("__start", "max"), __stop=("__stop", "max"),
+    ).sort_values([*keys, time_col], kind="stable")
+    work["__course"] = work.groupby(keys)["__stop"].cumsum() - work["__stop"].astype(int)
+    work["__begin"] = work[time_col].where(work["__start"])
+    work["__end"] = work[time_col].where(work["__stop"])
+    spans = work.groupby([*keys, "__course"], as_index=False).agg(
+        **{time_col: ("__begin", "min"), "__end": ("__end", "min")},
+    ).dropna(subset=[time_col])
+    spans[concept] = True
+    closed = spans["__end"].notna()
+    parts = [expand(spans.loc[closed], start_var=time_col, end_var="__end", id_cols=[id_col],
+                    step_size=pd.Timedelta(hours=1), keep_vars=[concept], admission_times=icu_stays,
+                    end_inclusive=False)]
+    points = spans.loc[~closed].copy()
+    points["__end"] = points[time_col]
+    parts.append(expand(points, start_var=time_col, end_var="__end", id_cols=[id_col],
+                        step_size=pd.Timedelta(hours=1), keep_vars=[concept], admission_times=icu_stays))
+    return pd.concat(parts, ignore_index=True).drop_duplicates([id_col, time_col])
 
 
 def fentanyl_cv_mass_rate(

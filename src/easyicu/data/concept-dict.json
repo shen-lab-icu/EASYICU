@@ -314,7 +314,7 @@
      "table": "prescriptions",
      "sub_var": "drug",
      "val_var": "drug",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_exposure",
      "class_name": "rgx_itm",
      "exclude_regex": {
       "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b|butalbital",
@@ -323,7 +323,9 @@
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): ophthalmic, otic, topical, vaginal, irrigation, inhaled, catheter-lock and desensitisation products are not systemic exposure (abx: 4,005 rows, 1,960 stays). Prescriptions stay the source: eMAR covers 28-31% of 2008-2013 ICU stays. | 2026-11-04 audit round 4 (R4-107/R4-117): eye, ear, topical, lock, irrigation, vaginal and nasal routes are not systemic antibiotic exposure.",
      "extra_vars": [
       "drug",
-      "route"
+      "route",
+      "dose_val_rx",
+      "stoptime"
      ]
     },
     {
@@ -696,7 +698,10 @@
      "sub_var": "itemid",
      "grp_var": "linkorderid",
      "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               transform_fun(divide_above(0.2, 60)),\n               mimic_rate_cv\n             )",
-     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60."
+     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60.",
+     "extra_vars": [
+      "stopped"
+     ]
     },
     {
      "ids": 222315,
@@ -720,7 +725,10 @@
      "sub_var": "itemid",
      "grp_var": "linkorderid",
      "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               transform_fun(divide_above(0.2, 60)),\n               mimic_rate_cv\n             )",
-     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60."
+     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60.",
+     "extra_vars": [
+      "stopped"
+     ]
     },
     {
      "ids": 222315,
@@ -1950,13 +1958,15 @@
      "sub_var": "drug",
      "regex": "(?i)aspirin|acetylsalicyl",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_exposure",
      "_comment": "2026-05-27 Round 3. MIIV/MIIIv aspirin via prescriptions table (not in inputevents). | 2026-11-04 audit round 3 (full-dictionary M): ophthalmic, otic, topical, vaginal, irrigation, inhaled, catheter-lock and desensitisation products are not systemic exposure (abx: 4,005 rows, 1,960 stays). Prescriptions stay the source: eMAR covers 28-31% of 2008-2013 ICU stays.",
      "exclude_regex": {
       "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b"
      },
      "extra_vars": [
-      "drug"
+      "drug",
+      "dose_val_rx",
+      "stoptime"
      ]
     }
    ],
@@ -5440,7 +5450,7 @@
      "sub_var": "drug",
      "regex": "[Dd]examethasone(?!.*[Oo]phth)(?!.*[Tt]opic)(?!.*[Cc]ream)(?!.*[Oo]int)",
      "class_name": "rgx_itm",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_prescription_exposure",
      "_comment": "2026-05-27. MIIV/MIIIv have no IV dexamethasone in inputevents; use prescriptions and exclude ophthalmic/topical preparations. | 2026-11-04 audit round 3 (full-dictionary M): ophthalmic, otic, topical, vaginal, irrigation, inhaled, catheter-lock and desensitisation products are not systemic exposure (abx: 4,005 rows, 1,960 stays). Prescriptions stay the source: eMAR covers 28-31% of 2008-2013 ICU stays. | 2026-11-04 audit round 4 (R4-107): eye, ear, topical, lock, irrigation, vaginal and nasal routes are not systemic dexamethasone.",
      "exclude_regex": {
       "drug": "(?i)ophth|\\botic\\b|topical|cream|\\boint|gel\\b|lotion|\\beye\\b|\\bear\\b|drops?\\b|vaginal|irrigat|\\block\\b|desensit|inhal|neb\\b|butalbital",
@@ -5448,7 +5458,9 @@
      },
      "extra_vars": [
       "drug",
-      "route"
+      "route",
+      "dose_val_rx",
+      "stoptime"
      ]
     }
    ],
@@ -18442,14 +18454,20 @@
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "combine_callbacks(\n               mimic_kg_rate, mimic_rate_cv)\n             "
+     "callback": "combine_callbacks(\n               mimic_kg_rate, mimic_rate_cv)\n             ",
+     "extra_vars": [
+      "stopped"
+     ]
     },
     {
      "ids": 30128,
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "mimic_rate_cv"
+     "callback": "mimic_rate_cv",
+     "extra_vars": [
+      "stopped"
+     ]
     },
     {
      "ids": 221749,
@@ -18472,14 +18490,20 @@
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "combine_callbacks(\n               mimic_kg_rate, mimic_rate_cv)\n             "
+     "callback": "combine_callbacks(\n               mimic_kg_rate, mimic_rate_cv)\n             ",
+     "extra_vars": [
+      "stopped"
+     ]
     },
     {
      "ids": 30128,
      "table": "inputevents_cv",
      "sub_var": "itemid",
      "grp_var": "linkorderid",
-     "callback": "mimic_rate_cv"
+     "callback": "mimic_rate_cv",
+     "extra_vars": [
+      "stopped"
+     ]
     },
     {
      "ids": 221749,
@@ -21094,7 +21118,7 @@
      "sub_var": "itemid",
      "value_var": "value",
      "regex": "^(Hemodialysis st|Hemodialysis end|CVVHD Start|CVVHD D/C|CAVH Start|CAVH D/C)$",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_rrt_procedures",
      "_comment": "2026-11-03 audit round 2 (K1): CareVue 582 'Procedures' records intermittent haemodialysis, CVVHD and CAVH start/stop events, as mimic-code rrt.sql reads them (Hemodialysis st/end, CVVHD Start/D/C, CAVH Start/D/C; 363 stays without other RRT evidence). Other 582 procedures (EKG, line placement, ...) are not RRT and are dropped."
     }
    ],
@@ -21255,7 +21279,7 @@
      "sub_var": "itemid",
      "value_var": "value",
      "regex": "^(Hemodialysis st|Hemodialysis end|CVVHD Start|CVVHD D/C|CAVH Start|CAVH D/C)$",
-     "callback": "transform_fun(set_val(TRUE))",
+     "callback": "mimic_rrt_procedures",
      "_comment": "2026-11-03 audit round 2 (K1): CareVue 582 'Procedures' records intermittent haemodialysis, CVVHD and CAVH start/stop events, as mimic-code rrt.sql reads them (Hemodialysis st/end, CVVHD Start/D/C, CAVH Start/D/C; 363 stays without other RRT evidence). Other 582 procedures (EKG, line placement, ...) are not RRT and are dropped."
     }
    ]

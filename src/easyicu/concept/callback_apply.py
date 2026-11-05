@@ -970,8 +970,13 @@ def _apply_callback(
 
     if expr in eicu_qc_callbacks:
         return apply_eicu_qc(frame, source, concept_name, data_source)
-    if expr in {"mimic_ecmo_evidence", "mimic_antibacterial_inputs", "mimic_other_vaso", "mimic_fentanyl_cv_mass", "mimic_positive_dose", "mimic_support_evidence"}:
-        from .mimic_support import antibacterial_inputs, ecmo_evidence, fentanyl_cv_mass_rate, other_vaso_points, source_values, support_evidence
+    if expr == "mimic_prescription_exposure":
+        from .mimic_prescription_time import prescription_exposure
+
+        bounds = None if frame.empty else _load_mimic_icu_outtimes(data_source, frame, [_patient_id_column(frame, data_source)])
+        return prescription_exposure(frame, source, concept_name, icu_stays=bounds)
+    if expr in {"mimic_ecmo_evidence", "mimic_antibacterial_inputs", "mimic_other_vaso", "mimic_rrt_procedures", "mimic_fentanyl_cv_mass", "mimic_positive_dose", "mimic_support_evidence"}:
+        from .mimic_support import antibacterial_inputs, ecmo_evidence, fentanyl_cv_mass_rate, other_vaso_points, rrt_procedure_hours, source_values, support_evidence
 
         if expr == "mimic_ecmo_evidence":
             return ecmo_evidence(frame, source, concept_name)
@@ -983,10 +988,11 @@ def _apply_callback(
             return frame.loc[amount.gt(0) | rate.gt(0)].assign(**{concept_name: True})
         if expr == "mimic_antibacterial_inputs":
             return antibacterial_inputs(frame, source, concept_name, data_source)
-        if expr == "mimic_other_vaso":
+        if expr in {"mimic_other_vaso", "mimic_rrt_procedures"}:
             id_col = _patient_id_column(frame, data_source)
             bounds = _load_mimic_icu_outtimes(data_source, frame, [id_col])
-            return other_vaso_points(frame, source, concept_name, icu_stays=bounds)
+            owner = rrt_procedure_hours if expr == "mimic_rrt_procedures" else other_vaso_points
+            return owner(frame, source, concept_name, icu_stays=bounds)
         normalized = fentanyl_cv_mass_rate(frame, source, concept_name, resolver=resolver, data_source=data_source)
         audit = normalized.attrs["mimic_mass_rate_audit"]
         result = _apply_callback(normalized, replace(source, callback="mimic_rate_cv"), concept_name,
