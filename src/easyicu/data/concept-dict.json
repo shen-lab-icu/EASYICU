@@ -28481,7 +28481,8 @@
     {
      "ids": 725,
      "table": "data_float_h",
-     "sub_var": "DataID"
+     "sub_var": "DataID",
+     "_comment": "R5-SIC-022 (refuted, round 11): data_float_h holds the hourly sum of the volume charted in that hour; nurses chart when emptying the bag, so one record can cover several hours (full-DB: values after a k-hour gap grow about k-fold). Records are back-spread over gaps up to 12 h and break beyond 12 h (R1). This differs from the SICdb maintainer's kdigo.py, which reads DataID 725 directly as hourly output. Evidence: extraction audit receipt, round-11 section."
     }
    ]
   },
