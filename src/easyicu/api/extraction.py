@@ -29,8 +29,10 @@ from ..utils.death_time_semantics import (
     native_export_death_time_semantics,
 )
 from ..scores.sofa2_aggregate import (
+    SOFA2_ALL_COMPONENTS_MISSING,
     SOFA2_COMPONENT_NAMES,
     sofa2_total_structurally_supported,
+    with_sofa2_missingness_flag,
 )
 from .cohort import get_all_patient_ids_impl
 from .derivation_context import (
@@ -2282,6 +2284,8 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
             raise ValueError(f"{label} aggregate callback omitted rolled components: {sorted(missing)}")
         if score == "sofa":
             result.attrs[_SOFA1_TIME_BASIS_KEY.decode()] = _SOFA1_TIME_BASIS.decode()
+        else:
+            result = with_sofa2_missingness_flag(result)
     return result
 
 
@@ -4238,6 +4242,8 @@ def _native_export_physical_value_columns(
             columns.extend(
                 f"{concept}{suffix}" for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
             )
+    if {"sofa2", *SOFA2_COMPONENT_NAMES}.issubset(requested_concepts):
+        columns.append(SOFA2_ALL_COMPONENTS_MISSING)
     return list(dict.fromkeys(columns))
 
 
@@ -4248,7 +4254,7 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
 
     if any(concept_id in columns for columns in SPECIMEN_STATUS_OUTPUT_COLUMNS.values()):
         return "string"
-    if any(
+    if concept_id == SOFA2_ALL_COMPONENTS_MISSING or any(
         str(concept_id).endswith(suffix)
         for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
     ):
@@ -4515,7 +4521,7 @@ def _recompute_native_sofa2_aggregate_frame(
         complete = pd.Series(False, index=frame.index)
     frame["sofa2_available"] = complete.astype("boolean")
     frame["sofa2_observed"] = (complete & all_observed).astype("boolean")
-    return frame
+    return with_sofa2_missingness_flag(frame)
 
 
 def _recompute_native_sofa2_aggregate_arrow(
@@ -4571,7 +4577,7 @@ def _recompute_native_sofa2_aggregate_arrow(
     for name, values in replacements.items():
         index = table.column_names.index(name)
         table = table.set_column(index, table.schema.field(name), values)
-    return table
+    return with_sofa2_missingness_flag(table)
 
 
 def _recompute_native_sofa1_aggregate_arrow(

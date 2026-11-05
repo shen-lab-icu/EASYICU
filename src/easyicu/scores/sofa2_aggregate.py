@@ -17,6 +17,12 @@ SOFA2_COMPONENT_NAMES = (
     "sofa2_cns",
     "sofa2_renal",
 )
+SOFA2_ALL_COMPONENTS_MISSING = "sofa2_all_components_missing"
+SOFA2_ALL_COMPONENTS_MISSING_DESCRIPTION = (
+    "True when all six SOFA-2 component values are missing in this hour; "
+    "a structurally supported primary total is then entirely normal-value imputation. "
+    "False when any component value is present, including zero."
+)
 SOFA2_TRUSTED_ID_COLUMNS = (
     "stay_id",
     "icustay_id",
@@ -46,6 +52,30 @@ def sofa2_total_structurally_supported(database: object) -> bool:
     if normalized == "sicdb":
         normalized = "sic"
     return not SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE.get(normalized)
+
+
+def with_sofa2_missingness_flag(frame):
+    """Append a non-null receipt from the six published values, independently of the total.
+
+    Recompute after consolidation: combining an empty row with component
+    evidence must clear the flag. Structural support does not change its meaning.
+    """
+    if isinstance(frame, pd.DataFrame):
+        frame[SOFA2_ALL_COMPONENTS_MISSING] = (
+            frame[list(SOFA2_COMPONENT_NAMES)].isna().all(axis=1).astype("boolean")
+        )
+        return frame
+
+    import pyarrow.compute as pc
+
+    first, *remaining = SOFA2_COMPONENT_NAMES
+    missing = pc.is_null(frame[first], nan_is_null=True)
+    for component in remaining:
+        missing = pc.and_(missing, pc.is_null(frame[component], nan_is_null=True))
+    if SOFA2_ALL_COMPONENTS_MISSING in frame.column_names:
+        index = frame.column_names.index(SOFA2_ALL_COMPONENTS_MISSING)
+        return frame.set_column(index, SOFA2_ALL_COMPONENTS_MISSING, missing)
+    return frame.append_column(SOFA2_ALL_COMPONENTS_MISSING, missing)
 
 
 def _key_names(
@@ -324,8 +354,11 @@ def sofa2_score(
 
 
 __all__ = [
+    "SOFA2_ALL_COMPONENTS_MISSING",
+    "SOFA2_ALL_COMPONENTS_MISSING_DESCRIPTION",
     "SOFA2_COMPONENT_NAMES",
     "SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE",
     "sofa2_score",
     "sofa2_total_structurally_supported",
+    "with_sofa2_missingness_flag",
 ]

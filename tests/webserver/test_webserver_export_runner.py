@@ -401,7 +401,7 @@ def test_export_runner_writes_digest_bound_column_metadata_sidecar(
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
 
-    def exact_age_export(_concepts, **kwargs):
+    def exact_age_export(concepts, **kwargs):
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
         return pd.DataFrame({"stay_id": ids, "age": [65] * len(ids)})
 
@@ -518,7 +518,7 @@ def test_export_runner_does_not_publish_v2_without_selected_primary_bindings(
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
 
-    def unrelated_output(_concepts, **kwargs):
+    def unrelated_output(concepts, **kwargs):
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
         return pd.DataFrame({"stay_id": ids, "height": [180.0] * len(ids)})
 

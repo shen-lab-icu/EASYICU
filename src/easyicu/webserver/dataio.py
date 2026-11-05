@@ -2827,15 +2827,21 @@ def make_export_runner(
                             modules=sel, stay_time_upper_bounds=stay_time_upper_bounds,
                             required=True,
                         )
-                    df = api.load_concepts(
-                        list(load_plan.source_concepts),
-                        patient_ids=patient_ids,
-                        database=database,
-                        data_path=str(data_path),
-                        use_sofa2=use_sofa2,
-                        merge=True,
-                        verbose=False,
-                        **module_kwargs,
+                    # Share the grouped export's score owner so point organs
+                    # cannot replace rolling companions or change its row set.
+                    df = extraction._load_module_concepts(
+                        api.load_concepts,
+                        module_name=mod,
+                        load_kwargs=dict(
+                            concepts=list(load_plan.source_concepts),
+                            patient_ids=patient_ids,
+                            database=database,
+                            data_path=str(data_path),
+                            use_sofa2=use_sofa2,
+                            merge=True,
+                            verbose=False,
+                            **module_kwargs,
+                        ),
                     )
                 except DuckDBQueryInterrupted:
                     if getattr(job, "cancel_requested", False):
@@ -2850,6 +2856,15 @@ def make_export_runner(
                     }
                 else:
                     df = _materialize_concept_load_plan(df, load_plan)
+                    if mod == "sofa2_score" and "sofa2" in df:
+                        # Use native publication's R8 total while preserving
+                        # the web frame's existing receipt columns and dtypes.
+                        rebuilt = extraction._recompute_native_sofa2_aggregate_frame(
+                            df.copy(deep=False), module=mod,
+                            requested_concepts=module_concepts, database=database,
+                        )
+                        df["sofa2"] = rebuilt["sofa2"].astype(df["sofa2"].dtype)
+                        del rebuilt
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
                     for key, sub in df.items():

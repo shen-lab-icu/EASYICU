@@ -311,19 +311,37 @@ def test_populated_source_keeps_antibiotic_owned_infection_times(tmp_path, monke
                 assert isinstance(scores[concept].dtype, pd.StringDtype), (module, concept)
             else:
                 assert pd.api.types.is_numeric_dtype(scores[concept]), (module, concept)
-    # Match the populated loader output without availability collection. Compare
-    # physical order as well as values/dtypes; sorting columns hides regressions.
+    # Match the populated loader output without availability collection. SOFA
+    # modules publish the aggregate callback's rolling companions, so request
+    # them from the total rather than replacing them with point organ loads.
+    # Compare physical order too; sorting columns hides regressions.
     with api.keep_cache(database="eicu", data_path=str(paths.raw)):
         for module, entry in entries.items():
             plan = dataio.compile_concept_load_plan(CONCEPT_GROUPS_INTERNAL[module])
+            source_concepts = list(plan.source_concepts)
+            score_kwargs = {}
+            if module in {"sofa1_score", "sofa2_score"}:
+                score = "sofa" if module == "sofa1_score" else "sofa2"
+                components = load_dictionary(include_sofa2=True)[score].sub_concepts
+                source_concepts = [name for name in source_concepts if name not in components]
+                score_kwargs = {"keep_components": True, "r_compatible": False}
             expected = api.load_concepts(
-                list(plan.source_concepts), database="eicu", data_path=str(paths.raw),
+                source_concepts, database="eicu", data_path=str(paths.raw),
                 patient_ids={"patientunitstayid": [101, 102]}, batch_size=2,
                 use_sofa2=module in {"sofa2_score", "sepsis3_sofa2"},
                 merge=True, verbose=False,
+                **score_kwargs,
             )
             expected = dataio._materialize_concept_load_plan(expected, plan)
             actual = pd.read_parquet(paths.export / entry["file"])
+            if module == "sofa2_score":
+                flag = "sofa2_all_components_missing"
+                assert list(actual) == [*expected, flag]
+                pd.testing.assert_series_equal(
+                    actual[flag], expected[components].isna().all(axis=1),
+                    check_names=False, check_dtype=False,
+                )
+                actual = actual.drop(columns=flag)
             pd.testing.assert_frame_equal(actual, expected, obj=module)
 
 
