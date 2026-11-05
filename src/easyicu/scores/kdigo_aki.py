@@ -656,12 +656,11 @@ def _calculate_uo_rates_simple(
     )
     negative_output = urine[urine_col].notna() & (urine[urine_col] < 0)
     if negative_output.any():
-        # As for creatinine, retain all valid urine observations.  A negative
-        # volume is physiologically impossible but does not invalidate a
-        # correctly structured source table or the remaining time series.
+        # Ignore impossible volumes but retain their collection endpoints.
+        # Removing the row would bridge a hole with a false valid interval.
         logger.warning(
-            "Dropping %d negative urine-output observation(s) before KDIGO "
-            "staging",
+            "Ignoring %d negative urine-output volume(s); retaining their "
+            "collection breakpoints for KDIGO staging",
             int(negative_output.sum()),
         )
         urine.loc[negative_output, urine_col] = np.nan
@@ -670,7 +669,7 @@ def _calculate_uo_rates_simple(
         component="urine_output",
         reason_code="kdigo_urine_output_time_encoding_invalid",
     )
-    urine = urine.dropna(subset=[id_col, time_col, urine_col])
+    urine = urine.dropna(subset=[id_col, time_col])
     if urine.empty:
         return pd.DataFrame()
 
@@ -680,7 +679,12 @@ def _calculate_uo_rates_simple(
         aggregation['_urine_available_at'] = 'max'
     if '_urine_gap_h' in urine:
         aggregation['_urine_gap_h'] = 'max'
-    urine = urine.groupby([id_col, time_col], as_index=False, sort=True).agg(aggregation)
+    groups = urine.groupby([id_col, time_col], sort=True)
+    values = groups.agg(aggregation)
+    # A valid zero contributes coverage. An invalid same-time channel makes
+    # the collection incomplete, matching the shared assessment owner.
+    values[urine_col] = values[urine_col].where(groups[urine_col].count() == groups.size())
+    urine = values.reset_index()
 
     if weight_col not in weight.columns:
         weight_col = next(
@@ -1067,7 +1071,7 @@ def kdigo_stages(
         component="combined_aki",
         reason_code="kdigo_combined_time_encoding_invalid",
     )
-    anchor_keys = anchor_keys.dropna(subset=[id_col, time_col])
+    anchor_keys = anchor_keys.dropna(subset=[id_col, time_col]).drop_duplicates()
 
     crea_staging = pd.DataFrame()
     if isinstance(crea_df, pd.DataFrame) and not crea_df.empty:

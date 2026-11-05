@@ -31,7 +31,7 @@ KDIGO_EVIDENCE_COLUMNS = [
 
 
 def urine_availability_columns(name: str) -> list[str]:
-    """Closed export contract for window receipts, in ICU-relative hours."""
+    """Closed export contract for availability and scoring-window receipts."""
     if name in {"urine24", "urine24_est"}:
         return [f"{name}_available_at"]
     if name in {"kdigo_uo", "aki_stage_uo"}:
@@ -40,7 +40,8 @@ def urine_availability_columns(name: str) -> list[str]:
         return ["aki_stage_uo_reference_available_at"]
     if name not in {"uo_6h", "uo_12h", "uo_24h"}:
         return []
-    columns = [f"{name}_available_at", f"{name}_assessment_available_at"]
+    columns = [f"{name}_available_at", f"{name}_assessment_available_at",
+               f"{name}_assessment_rate", f"{name}_assessment_covered_h"]
     if name == "uo_6h":
         columns.append("uo_6h_oliguria_available_at")
     return columns

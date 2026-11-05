@@ -4,6 +4,34 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — extraction audit round 7 urine receipts
+
+- **[R7-F005]** MIMIC-III mixed numeric/datetime source batches now retain
+  seconds when aligning chart times to admission, matching the ordinary
+  datetime path already fixed by `09dffb5341`. Hourly pooling retains the
+  latest contributing chart/store time; availability comparisons use an
+  absolute one-second tolerance, independent of length of stay.
+- **[R7-F006]** Native renal packages in all six databases retain
+  `uo_6h/12h/24h_assessment_rate`, `_assessment_covered_h` and
+  `_assessment_available_at` from the scoring owner. Typed metadata records
+  each assessment window, rate units, covered hours and ICU-relative
+  availability. Descriptive partial windows keep their existing meaning.
+- **[R7-F007]** KDIGO retains null and negative urine records as collection
+  breakpoints. A same-time invalid channel also breaks coverage, matching
+  shared scoring assessments; valid zero volumes still count as observation.
+- **[R7-F024, REFUTED]** Retrospective urine values remain paired with their
+  actual availability; prediction analyses must enforce `available_at <= t`
+  at their declared evaluation time. No second real-time value is required.
+- **[R7-F025, REFUTED]** The eICU subsecond clock warning can result from
+  float32 storage quantization. Compare source clocks using absolute seconds
+  and check float32 representability before attributing a discrepancy to
+  lost source timestamps. Strict subsecond gates can use higher precision or
+  a conservative margin accounting for storage quantization.
+- **[R7-F026, REFUTED]** A rejected collection interval over 12 h contributes
+  no volume or coverage. Historical accepted intervals can still support
+  the separately flagged 18–23 h `urine24_est` early in a record gap;
+  clearing these valid partial estimates would change the agreed R1 rule.
+
 ## 2026-11-04 — landed-code reviews of round-5 lanes (tenth dictionary reseal)
 
 Commits `930ca2d28` through the tenth reseal commit on dev9.

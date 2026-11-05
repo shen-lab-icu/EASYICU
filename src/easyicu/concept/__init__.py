@@ -7164,8 +7164,7 @@ class ConceptResolver:
                         intime = intime.dt.tz_localize(None)
                     if hasattr(dt_vals.dt, 'tz') and dt_vals.dt.tz is not None:
                         dt_vals = dt_vals.dt.tz_localize(None)
-                    rel_minutes = np.floor((dt_vals - intime).dt.total_seconds() / 60.0)
-                    numeric_vals.loc[datetime_mask] = rel_minutes / 60.0
+                    numeric_vals.loc[datetime_mask] = (dt_vals - intime).dt.total_seconds() / 3600.0
             
             data[index_column] = numeric_vals
         
