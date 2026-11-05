@@ -31,6 +31,15 @@ answers is in brackets.
 - **[R8-WIDE-MERGE]** Multi-concept requests that include exact-start
   duration, interval or rate concepts use the window materializer even when
   no numeric wide batch was produced (`13adc5539`).
+- **[R7-F030, ruling R8]** MIMIC hospital-level rows (for example MIIV
+  `prescriptions`) in an admission with several ICU stays follow the ricu
+  rolling join on `starttime` (roll = -Inf): each row belongs to exactly one
+  stay, the first stay of the admission whose `outtime` is not before the
+  row's `starttime`; a row between two stays goes to the next stay, a row after
+  the last discharge to the last stay. That stay's episode window (24 h before
+  admission, 24 h after discharge) then applies. A prescription is not split
+  across the stays its interval overlaps. Verified with a synthetic
+  two-stay admission through the real loader; no code change.
 
 ## 2026-11-05 — extraction audit round 7 (eleventh dictionary reseal)
 
