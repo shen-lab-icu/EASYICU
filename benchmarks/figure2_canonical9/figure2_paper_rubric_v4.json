@@ -210,6 +210,7 @@
     "src/easyicu/io/arterial_blood_gas.py",
     "src/easyicu/io/attach.py",
     "src/easyicu/io/community_databases.py",
+    "src/easyicu/io/conversion_provenance.py",
     "src/easyicu/io/data_converter.py",
     "src/easyicu/io/data_env.py",
     "src/easyicu/io/data_load.py",
@@ -1177,6 +1178,7 @@
     "src/easyicu/scripts/extract_features.py",
     "src/easyicu/source_death_times.py",
     "src/easyicu/state_paths.py",
+    "src/easyicu/storage_layout.py",
     "src/easyicu/synthetic_exports.py",
     "src/easyicu/synthetic_source_provenance.py",
     "src/easyicu/synthetic_source_tables.py",
@@ -1540,7 +1542,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "e5f62d8f9792a2f65cd18fb4f26258bfff236d3ff0432bee88fa34eb80a2f927",
+  "scorer_tree_sha256": "8575fdb5be0a422e9f99ae41c00b33fa04b23a5305e25e6d41b5cb4d6dec9cad",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
