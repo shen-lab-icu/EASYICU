@@ -203,7 +203,7 @@ def test_feature_coverage_separates_observed_all_null_and_unsupported(
     assert payload["summary"]["definitions"] == len(
         concept_catalog.CONCEPT_DICTIONARY
     )
-    assert payload["summary"]["modules"] == 19
+    assert payload["summary"]["modules"] == 20
     assert rows["hr"]["status"] == "observed"
     assert rows["hr"]["non_null_count"] == 4
     assert rows["hr"]["trajectory_candidate"] is True
@@ -257,7 +257,7 @@ def test_drilldown_summary_uses_export_wide_catalog_coverage(
 
     loaded = payload["data_tables"]["loaded_summary"]
     assert loaded["review_features"] == len(concept_catalog.CONCEPT_DICTIONARY)
-    assert loaded["module_count"] == 19
+    assert loaded["module_count"] == 20
     assert loaded["observed_features"] == 5
     modules = {row["module"]: row for row in payload["data_tables"]["modules"]}
     assert modules["vitals"]["review_features"] == 16  # + map_invasive, map_nibp (2026-11-03 audit); cvp_raw, cvp_qc (round 5)
