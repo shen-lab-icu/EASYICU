@@ -100,7 +100,7 @@
     ['Sepsis shared', 'Sepsis 共享概念', 5, false, false],
     ['Respiratory', '呼吸系统', 20, false, false],
     ['Ventilator', '呼吸机参数', 19, false, false],
-    ['Blood gas', '血气分析', 9, false, false],
+    ['Blood gas', '血气分析', 10, false, false],
     ['Lab — Hematology', '实验室-血液学', 25, false, false],
     ['Vasopressors', '血管活性药物', 17, false, false],
     ['Other medications', '其他药物', 54, false, false],
