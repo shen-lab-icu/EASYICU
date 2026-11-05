@@ -511,8 +511,14 @@ def load_circ_failure(
                         df, opt_df, on=mcols, how='left',
                         indicator='_drug_record',
                     )
+                    # "Not infused" is 0 for a rate and False for a
+                    # boolean exposure stream (HiRID milrinone).
+                    off = (
+                        False if pd.api.types.is_bool_dtype(df[concept].dtype)
+                        else 0.0
+                    )
                     df[concept] = df[concept].mask(
-                        df['_drug_record'].eq('left_only'), 0.0
+                        df['_drug_record'].eq('left_only'), off
                     )
                     df = df.drop(columns=['_drug_record'])
                     loaded_optional.append(concept)
