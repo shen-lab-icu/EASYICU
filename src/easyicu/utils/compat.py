@@ -943,9 +943,14 @@ def merge_concepts_r_style(
         # Missing values must not contribute a physical event key.  The outer
         # merge will still place NA at keys supplied by other concepts, but a
         # value-less source row can no longer create an otherwise empty module
-        # row on its own. Dense statuses instead retain the source identity,
-        # including unknown values and an unrecorded clock.
-        prepared = prepared.dropna(subset=["id"] if name in dense_status_columns else ["id", "time", name])
+        # row on its own. Urine scoring receipts still report incomplete
+        # coverage when the descriptive rate is unavailable. Dense statuses
+        # retain the source identity, including an unrecorded clock.
+        required = ["id"] if name in dense_status_columns else ["id", "time"]
+        has_urine_assessment = name in {"uo_6h", "uo_12h", "uo_24h"} and f"{name}_assessment_covered_h" in prepared
+        if name not in dense_status_columns and not has_urine_assessment:
+            required.append(name)
+        prepared = prepared.dropna(subset=required)
         if prepared.empty:
             continue
         

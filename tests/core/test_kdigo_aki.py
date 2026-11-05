@@ -543,12 +543,12 @@ def test_out_of_range_creatinine_is_dropped_without_losing_valid_kdigo_series():
     assert result.loc[result["charttime"] == 120, "aki_stage_creat"].item() == 1
 
 
-def test_negative_urine_observation_is_dropped_without_invalidating_valid_window():
+def test_negative_urine_observation_keeps_a_breakpoint_until_window_recovers():
     urine = pd.DataFrame(
         {
-            "stay_id": [1] * 7,
-            "charttime": [0, 60, 120, 180, 240, 300, 360],
-            "urine": [10.0, 10.0, -1.0, 10.0, 10.0, 10.0, 10.0],
+            "stay_id": [1] * 11,
+            "charttime": list(range(0, 601, 60)),
+            "urine": [10.0, 10.0, -1.0, *[10.0] * 8],
         }
     )
     weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
@@ -557,8 +557,14 @@ def test_negative_urine_observation_is_dropped_without_invalidating_valid_window
         urine, weight, "stay_id", "charttime", time_unit="minutes"
     )
 
-    assert 120 not in result["charttime"].tolist()
-    assert result["uo_rt_6hr"].notna().any()
+    # R7-F007: an invalid volume is a hole, not an interval to bridge.
+    assert result["charttime"].tolist() == urine["charttime"].tolist()
+    result = result.set_index("charttime")
+    assert result.loc[120, "uo_rt_6hr_covered_h"] == 0
+    assert result.loc[360, "uo_rt_6hr_covered_h"] == 4
+    assert pd.isna(result.loc[360, "uo_rt_6hr"])
+    assert result.loc[480, "uo_rt_6hr_covered_h"] == 6
+    assert result.loc[480, "uo_rt_6hr"] == pytest.approx(0.1)
 
 
 def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():

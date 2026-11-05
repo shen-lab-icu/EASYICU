@@ -9,7 +9,7 @@ only verifies this contract; it never infers concept identities from names.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence
 
 
@@ -203,6 +203,15 @@ def _companion_projection(
         return ConceptColumnRole.VALUE, None, "source_item"
     if column in SPECIMEN_STATUS_OUTPUT_COLUMNS.get(concept, ()):
         return ConceptColumnRole.VALUE, None, "specimen_status"
+
+    if concept in {"uo_6h", "uo_12h", "uo_24h"}:
+        for kind in ("rate", "covered_h", "available_at"):
+            if column == f"{concept}_assessment_{kind}":
+                window = DerivationWindow(
+                    origin=time_origin, start_hours=-float(concept[3:-1]), end_hours=0.0,
+                )
+                role = ConceptColumnRole.LAST_OBSERVATION_TIME if kind == "available_at" else ConceptColumnRole.VALUE
+                return role, window, f"urine_assessment:{kind}"
 
     escaped = re.escape(concept)
     match = re.fullmatch(
@@ -470,6 +479,16 @@ def build_export_file_metadata_binding(
             from .source_channel import specimen_status_definition
 
             definition = specimen_status_definition(definition, column)
+        elif transform == "urine_assessment:covered_h":
+            definition = replace(
+                definition, units=["h"], minimum=0.0, maximum=-window.start_hours,
+                description="Accepted collection-interval coverage of the scoring assessment window",
+            )
+        elif transform == "urine_assessment:rate":
+            definition = replace(
+                definition, minimum=0.0, maximum=None,
+                description="Weight-normalized urine rate for a completely covered scoring assessment window",
+            )
         _validate_metadata_series_domain(
             column=column, series=frame[column], role=role, file_name=relative_path
         )
