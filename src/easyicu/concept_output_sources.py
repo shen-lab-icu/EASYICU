@@ -99,8 +99,8 @@ SOURCE_ITEM_OUTPUT_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
 
 #: R6 specimen evidence of arterial blood-gas concepts, weakest first. An hour
 #: publishes the weakest status among its admitted rows; excluded rows
-#: (``excluded_venous``/``excluded_unknown``) are counted in the source audit,
-#: never published.
+#: (``excluded_venous``/``excluded_recorded_unknown``/``excluded_unknown``) are
+#: counted in the source audit, never published.
 SPECIMEN_STATUS_LEVELS: tuple[str, ...] = (
     "co_measured_arterial", "label_defined_arterial", "explicit_arterial",
 )
