@@ -474,3 +474,20 @@ def test_every_ordinal_sofa2_input_declares_its_aggregate() -> None:
         "ordinal SOFA-2 inputs without an explicit aggregate fall back to "
         f"median, which is off-domain for a score: {missing}"
     )
+
+
+@pytest.mark.parametrize("windowed", [True, False])
+def test_renal_metabolic_routes_stand_alone_when_an_optional_input_is_absent(windowed):
+    crea = pd.Series([1.5, 1.5, 1.0])
+    urine = (
+        {"uo_6h": pd.Series([1.0] * 3), "uo_6h_covered_h": pd.Series([6.0] * 3)}
+        if windowed
+        else {}
+    )
+    # Potassium absent: the pH/HCO3 route still meets the RRT criterion.
+    acid = sofa2_renal(crea, ph=pd.Series([7.10, 7.30, 7.10]), bicarb=pd.Series([10.0, 20.0, 10.0]), **urine)
+    # pH/HCO3 absent: the potassium route still meets it.
+    kalemia = sofa2_renal(crea, potassium=pd.Series([6.5, 4.0, 6.5]), **urine)
+    # The third row has no kidney injury, so neither route applies.
+    assert acid.tolist() == [4, 1, 0]
+    assert kalemia.tolist() == [4, 1, 0]

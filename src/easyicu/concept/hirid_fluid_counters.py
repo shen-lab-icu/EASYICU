@@ -48,15 +48,35 @@ MAX_DAILY_COUNTER_ML = 100_000.0
 RESTART_FRACTION = 0.5
 #: ...unless the next reading of the same day returns to this share of it.
 REBOUND_FRACTION = 0.8
+#: Output-counter rise faster than this (mL/h) that the next reading undoes is
+#: a charting spike: 2026-11-05 audit R7-F029 found all 14 rises >5 L that
+#: returned to their trajectory charted at 7,700-260,000 mL/h, while sustained
+#: rises and restarts are untouched by the rule.
+MAX_OUTPUT_RATE_ML_PER_H = 5000.0
+#: The next reading undoes the rise when it lies within this share of the rise
+#: above the preceding level (and is not itself a restart).
+REVERT_SHARE = 0.1
 
 
-def _isolated_counter_spikes(ids: np.ndarray, days: np.ndarray, values: np.ndarray) -> np.ndarray:
+def _isolated_counter_spikes(
+    ids: np.ndarray,
+    days: np.ndarray,
+    values: np.ndarray,
+    times: np.ndarray | None = None,
+    max_rate_ml_per_h: float | None = None,
+) -> np.ndarray:
     """Flag an isolated jump followed by a return to the prior trajectory.
 
     R5C-HIRID-006: the jump must exceed twice both neighboring levels, and
     the next level must continue the preceding trajectory within a factor
     of two. A sustained rise or a drop below the prior level is retained:
     the latter can be a genuine restart after a real large increment.
+
+    R7-F029: with ``max_rate_ml_per_h``, a rise charted faster than that rate
+    is also a spike when the next reading undoes it (returns to within
+    ``REVERT_SHARE`` of the rise above the preceding level) without being a
+    restart. This covers a zero preceding level after the 12:00 restart and a
+    high baseline that a factor of two cannot exceed.
     """
     spike = np.zeros(len(values), dtype=bool)
     previous, current, following = values[:-2], values[1:-1], values[2:]
@@ -67,6 +87,16 @@ def _isolated_counter_spikes(ids: np.ndarray, days: np.ndarray, values: np.ndarr
         & (following <= previous / RESTART_FRACTION)
         & (current * RESTART_FRACTION > np.maximum(previous, following))
     )
+    if max_rate_ml_per_h is not None and times is not None and len(values) > 2:
+        jump = current - previous
+        hours = (times[1:-1] - times[:-2]) / np.timedelta64(1, "h")
+        rate = jump / np.maximum(hours, 1.0 / 60.0)
+        spike[1:-1] |= (
+            same_day & (jump > 0)
+            & (following >= RESTART_FRACTION * previous)
+            & (following <= previous + REVERT_SHARE * jump)
+            & (rate > max_rate_ml_per_h)
+        )
     return spike
 
 
@@ -112,6 +142,7 @@ def counter_increments(
     time_col: str,
     value_col: str,
     reset_hour: int = COUNTER_RESET_HOUR,
+    max_rate_ml_per_h: float | None = None,
 ) -> pd.DataFrame:
     """Return one ``(id, start, end, volume)`` row per counter reading.
 
@@ -147,7 +178,8 @@ def counter_increments(
     # Remove the spike's timestamp as well as its value: the next real
     # increment spans from the preceding valid reading, conserving timing.
     spikes = _isolated_counter_spikes(
-        data[id_col].to_numpy(), data["day_start"].to_numpy(), data["value"].to_numpy(dtype=float)
+        data[id_col].to_numpy(), data["day_start"].to_numpy(), data["value"].to_numpy(dtype=float),
+        data["end"].to_numpy(), max_rate_ml_per_h,
     )
     data = data.loc[~spikes].copy()
     data["volume"] = _restart_aware_increments(
@@ -165,6 +197,7 @@ def hourly_counter_volume(
     time_col: str,
     value_col: str,
     origins: pd.Series,
+    max_rate_ml_per_h: float | None = None,
 ) -> pd.DataFrame:
     """Allocate counter increments to ICU-relative hours ``[h, h + 1)``.
 
@@ -173,7 +206,8 @@ def hourly_counter_volume(
     """
 
     increments = counter_increments(
-        frame, id_col=id_col, time_col=time_col, value_col=value_col
+        frame, id_col=id_col, time_col=time_col, value_col=value_col,
+        max_rate_ml_per_h=max_rate_ml_per_h,
     )
     if increments.empty:
         return pd.DataFrame(columns=[id_col, "hour", "volume"])
@@ -259,6 +293,8 @@ def hirid_counter_frame(
             time_col="_abs_time",
             value_col=value_col,
             origins=origins,
+            # Inputs can be fast boluses; only output has a physiological rate bound.
+            max_rate_ml_per_h=MAX_OUTPUT_RATE_ML_PER_H if counter_id == OUTPUT_COUNTER_ID else None,
         )
 
     if net_balance:
