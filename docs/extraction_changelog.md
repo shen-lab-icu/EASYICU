@@ -4,6 +4,34 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — extraction audit round 8 (last batch; no dictionary change)
+
+- **[R7-F005 follow-up]** MIMIC-III source alignment floors minutes from whole
+  seconds again (`floor(seconds / 60)`); `floor(seconds / 3600 * 60)` put an
+  8h10m offset at 8h09m when the record seconds equalled the intime seconds.
+  Exact hours for the availability remainder are computed separately
+  (`ecdc3840d`). Sweep of every minute-flooring path in `src/`: no other hit
+  (the others divide whole seconds directly or floor at hour level, where
+  whole hours convert exactly).
+- **[R7-F018]** eICU: a recorded Sample Type that names neither specimen
+  (Unknown, Unspecified, blank) is `excluded_recorded_unknown` before the
+  label-defined and same-panel fallbacks, which now apply only where no sample
+  was recorded (`9eb5b084f`).
+- **[R7-F009]** HiRID vasopressor episodes (NE, DOBU, EPI) merge gaps of at
+  most five minutes on the source clock, not on float hours (`c7b166e92`).
+- **[R7-F010]** HiRID ventilation intervals are differenced on the source
+  clock before conversion to hours (`c7b166e92`).
+- **[R7-F029]** HiRID fluid-counter readings are restored to whole source
+  seconds before the noon reset day is assigned (`c7b166e92`).
+- **[R7-F003]** AUMC: the high-frequency pre-sampling no longer re-buckets on
+  the absolute clock (it moved potassium into the preceding hour above 1,000
+  rows), so the formal SOFA-2 module and the single and batch owners agree
+  (`13adc5539`). AUMC high-frequency concepts are aggregated once, after
+  admission alignment and bounds.
+- **[R8-WIDE-MERGE]** Multi-concept requests that include exact-start
+  duration, interval or rate concepts use the window materializer even when
+  no numeric wide batch was produced (`13adc5539`).
+
 ## 2026-11-05 — extraction audit round 7 (eleventh dictionary reseal)
 
 - **[R7-F001]** MIMIC-III hours whose urine rows all lack a value stay missing
