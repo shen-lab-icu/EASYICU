@@ -111,8 +111,12 @@ def _intervals(infusions):
 def dex_dose(frame, column, data_source):
     """D50 as D10 mL/h, corroborated by explicit D50 infusion volume."""
     out = frame.copy()
-    tokens = out[column].astype("string").str.extract(r"^\s*(\d+(?:\.\d+)?)\s*(mg|g|ml)\s*$", flags=re.I)
-    volume = pd.to_numeric(tokens[0], errors="coerce") * tokens[1].str.lower().map({"g": 2.0, "mg": .002, "ml": 1.0})
+    # eICU writes grams as "g", "Gm", "GM" or "Gram" (2026-11-05: 549 of 856
+    # unparsed IV D50 orders in the 3,000-stay audit sample); ranges and bare
+    # numbers or unit codes stay unknown.
+    tokens = out[column].astype("string").str.extract(r"^\s*(\d+(?:\.\d+)?)\s*(mg|g|gm|grams?|ml)\s*$", flags=re.I)
+    unit = tokens[1].str.lower().replace({"gm": "g", "gram": "g", "grams": "g"})
+    volume = pd.to_numeric(tokens[0], errors="coerce") * unit.map({"g": 2.0, "mg": .002, "ml": 1.0})
     start = pd.to_numeric(out.drugstartoffset, errors="coerce")
     stop = pd.to_numeric(out.drugstopoffset, errors="coerce")
     duration = stop - start
