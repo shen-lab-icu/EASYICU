@@ -5535,6 +5535,111 @@ def _native_export_duckdb_consolidate_row_grain(
     return after_audit, concept_non_null
 
 
+_NATIVE_EXPORT_CANONICAL_ROW_GROUP = 262_144
+
+
+def _canonicalise_native_export_row_order(path: Path, *, module: str) -> None:
+    """Rewrite a module file in an order that no execution profile can change.
+
+    Streamed extraction interleaves patients across batches and appends each
+    batch, so the row order followed the batch size and with it the memory
+    budget: a 14 GB laptop and a server wrote different bytes for equal
+    values. Rows are sorted by ``stay_id``, ``charttime`` and then every other
+    column, nulls last, so only fully identical rows can tie. A
+    computation-order -0.0 is written as +0.0. The schema, its metadata and
+    the row-group size are fixed; DuckDB sorts out of core within the
+    publication memory ceiling.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    target_schema = pq.read_schema(path)
+    names = list(target_schema.names)
+    keys = [name for name in ("stay_id", "charttime") if name in names]
+    order = [
+        name
+        for name in [*keys, *(name for name in names if name not in keys)]
+        if not pa.types.is_nested(target_schema.field(name).type)
+    ]
+    duckdb_output = path.with_name(f".{module}.native-v2-order.duckdb.tmp.parquet")
+    arrow_output = path.with_name(f".{module}.native-v2-order.arrow.tmp.parquet")
+    for candidate in (duckdb_output, arrow_output):
+        if candidate.exists() or candidate.is_symlink():
+            raise ValueError(
+                f"native_export_v2 refuses stale row-order file: {candidate}"
+            )
+
+    def quote_identifier(value: str) -> str:
+        return '"' + str(value).replace('"', '""') + '"'
+
+    order_sql = ", ".join(f"{quote_identifier(name)} ASC NULLS LAST" for name in order)
+    try:
+        threads = max(1, min(4, int(os.environ.get("EASYICU_DUCKDB_THREADS", "1"))))
+    except ValueError:
+        threads = 1
+    float_columns = [
+        index
+        for index, field in enumerate(target_schema)
+        if pa.types.is_floating(field.type)
+    ]
+
+    def canonical(table):
+        table = table.select(names).cast(target_schema)
+        for index in float_columns:
+            field = target_schema.field(index)
+            table = table.set_column(
+                index, field, pc.add(table.column(index), pa.scalar(0.0, field.type))
+            )
+        return table
+
+    try:
+        with duckdb_spill.connection(
+            database=":memory:",
+            config={
+                "memory_limit": f"{_native_export_duckdb_memory_mb()}MB",
+                "threads": str(threads),
+            },
+        ) as connection:
+            connection.execute(
+                f"""
+                COPY (
+                    SELECT * FROM read_parquet(?)
+                    {"ORDER BY " + order_sql if order_sql else ""}
+                ) TO ? (FORMAT PARQUET, COMPRESSION SNAPPY)
+                """,
+                # DuckDB binds COPY's destination before the query input.
+                [str(duckdb_output), str(path)],
+            )
+        writer = pq.ParquetWriter(arrow_output, target_schema, compression="snappy")
+        try:
+            pending = []
+            pending_rows = 0
+            for batch in pq.ParquetFile(duckdb_output).iter_batches(batch_size=65_536):
+                pending.append(canonical(pa.Table.from_batches([batch])))
+                pending_rows += batch.num_rows
+                while pending_rows >= _NATIVE_EXPORT_CANONICAL_ROW_GROUP:
+                    table = pa.concat_tables(pending)
+                    writer.write_table(
+                        table.slice(0, _NATIVE_EXPORT_CANONICAL_ROW_GROUP),
+                        row_group_size=_NATIVE_EXPORT_CANONICAL_ROW_GROUP,
+                    )
+                    rest = table.slice(_NATIVE_EXPORT_CANONICAL_ROW_GROUP)
+                    pending, pending_rows = [rest], rest.num_rows
+            if pending_rows:
+                writer.write_table(
+                    pa.concat_tables(pending),
+                    row_group_size=_NATIVE_EXPORT_CANONICAL_ROW_GROUP,
+                )
+        finally:
+            writer.close()
+        os.replace(arrow_output, path)
+    finally:
+        duckdb_output.unlink(missing_ok=True)
+        arrow_output.unlink(missing_ok=True)
+
+
 def _enforce_native_export_supp_o2_support(
     path: Path,
     *,
@@ -6707,6 +6812,7 @@ def _publish_native_export_v2(
                 row_grain_audit["null_charttime_rows_after"] = (
                     null_charttime_rows_after - removed_null_time_rows
                 )
+            _canonicalise_native_export_row_order(temporary_parquet, module=module)
             binding = build_export_file_metadata_binding(
                 relative_path=relative_path,
                 module=module,
