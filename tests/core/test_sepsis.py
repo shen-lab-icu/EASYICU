@@ -139,6 +139,16 @@ def test_eicu_icd_abx_uses_antibiotic_time_axis_without_sampling() -> None:
     assert result.data["susp_inf"].tolist() == [True] * len(abx_times)
 
 
+def test_eicu_icd_abx_times_only_true_or_positive_antibiotic_rows() -> None:
+    """R3: a False, zero or unknown ABX row does not time a suspected infection."""
+    tables = _eicu_icd_abx_tables([1.0, 2.0, 3.0, 4.0, 5.0])
+    tables["abx"].data["abx"] = pd.Series([True, False, None, 0.0, 2.0], dtype="object")
+
+    result = _callback_susp_inf(tables, _eicu_context())
+
+    assert result.data["charttime"].tolist() == [1.0, 5.0]
+    assert result.data["susp_inf"].tolist() == [True, True]
+
 def test_eicu_icd_abx_is_not_relocated_to_sampling_times_when_merged() -> None:
     """A sepsis_shared merge must retain ABX times, not broadcast onto samp."""
     abx_times = [340.0, 352.0, 401.0]

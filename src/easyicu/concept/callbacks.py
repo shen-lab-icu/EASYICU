@@ -6845,7 +6845,17 @@ def _callback_susp_inf(
         id_col_list = list(id_columns)
         infection_patients = infection_data[id_col_list].drop_duplicates()
         
-        # 抗生素"定时" - 获取使用抗生素的时间点
+        # 抗生素"定时" - 获取使用抗生素的时间点。R3: as in the abx/samp
+        # path (_process_abx keeps abx >= 1), only a true or positive ABX row
+        # times a suspected infection; False, zero and unknown rows do not.
+        abx_value = converted_tables["abx"].value_column or "abx"
+        if abx_value in abx_data.columns:
+            values = abx_data[abx_value]
+            numeric = pd.to_numeric(
+                values.map(lambda v: float(v) if isinstance(v, (bool, np.bool_)) else v),
+                errors="coerce",
+            )
+            abx_data = abx_data.loc[numeric.gt(0).fillna(False).to_numpy(dtype=bool)]
         abx_events = abx_data[id_col_list + [abx_idx]].drop_duplicates()
         
         # 合并: 有感染诊断的患者 + 使用抗生素的时间点
