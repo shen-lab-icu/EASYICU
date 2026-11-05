@@ -31144,13 +31144,11 @@
       226623,
       226624,
       226625,
-      227701,
-      229413,
-      229414
+      227701
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "MetaVision outputevents items other than urine: drains, chest tubes, CSF drains, gastric/enteral, stool, ostomy, emesis, wound vac, taps."
+     "_comment": "MetaVision outputevents items other than urine: drains, chest tubes, CSF drains, gastric/enteral, stool, ostomy, emesis, wound vac, taps. lead-r13: 229413/229414 (Chest Tube #3/#4) exist only in MIMIC-IV (MIMIC-III v1.4 ends at 228647) and are not listed here."
     },
     {
      "ids": [
@@ -32029,13 +32027,11 @@
       226623,
       226624,
       226625,
-      227701,
-      229413,
-      229414
+      227701
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "MetaVision outputevents items other than urine: drains, chest tubes, CSF drains, gastric/enteral, stool, ostomy, emesis, wound vac, taps."
+     "_comment": "MetaVision outputevents items other than urine: drains, chest tubes, CSF drains, gastric/enteral, stool, ostomy, emesis, wound vac, taps. lead-r13: 229413/229414 (Chest Tube #3/#4) exist only in MIMIC-IV (MIMIC-III v1.4 ends at 228647) and are not listed here."
     },
     {
      "ids": [
