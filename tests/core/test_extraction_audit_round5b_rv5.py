@@ -222,9 +222,9 @@ def test_RV_03_procedure_sources_exclude_rewritten_and_cancelled(tmp_path, filen
 
 @pytest.mark.parametrize("db", ["mimic", "mimic_demo"])
 @pytest.mark.parametrize("uppercase", [False, True])
-def test_RV_04_weight_id_tbl_duckdb_filters_error_before_median(tmp_path, monkeypatch, db, uppercase):
-    from easyicu import datasource
-
+def test_RV_04_weight_id_tbl_filters_error_before_median(tmp_path, db, uppercase):
+    # The id_tbl DuckDB fast path is gone (lead-r13, class a); the raw path
+    # must still drop MIMIC error rows before the per-stay median.
     rows = pd.DataFrame({
         "icustay_id": [101] * 3 + [102] * 2, "itemid": [762] * 3 + [763] * 2,
         "valuenum": [60., 80., 300., 70., 310.], "value": ["60", "80", "300", "70", "310"],
@@ -233,22 +233,9 @@ def test_RV_04_weight_id_tbl_duckdb_filters_error_before_median(tmp_path, monkey
     if uppercase:
         rows.columns = rows.columns.str.upper()
     source = _source(tmp_path, db, "chartevents", rows, "bucket")
-    executed = []
-    connection = datasource._get_duckdb_connection()
-
-    class RecordingConnection:
-        def __getattr__(self, name):
-            return getattr(connection, name)
-
-        def execute(self, sql, *args, **kwargs):
-            executed.append(sql)
-            return connection.execute(sql, *args, **kwargs)
-
-    monkeypatch.setattr(datasource, "_get_duckdb_connection", RecordingConnection)
     definition = _dictionary()["weight"]
     definition["sources"] = {db: [s for s in definition["sources"][db] if s["table"] == "chartevents"]}
     frame = _load(source, {"weight": definition}, ["weight"])["weight"].data
-    assert any("MEDIAN(" in sql and "GROUP BY icustay_id" in sql for sql in executed)
     assert frame.set_index("icustay_id").weight.to_dict() == {101: 70., 102: 70.}
 
 

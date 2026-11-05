@@ -2512,7 +2512,6 @@ class ConceptResolver:
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
             use_duckdb_aggregation = False  # 每个 source 重置
-            _idtbl_done = False  # 每个 source 重置
             if source.class_name == "fun_itm":
                 return self._load_fun_item(
                     concept_name,
@@ -2879,7 +2878,6 @@ class ConceptResolver:
                     # 性能提升：MIIV 6 vitals 50 patients 从 545s → ~10s
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     use_duckdb_aggregation = False
-                    _idtbl_done = False
                     _convert_unit_callback_for_duckdb = False
                     _convert_unit_factor = None
                     _convert_unit_op = None
@@ -2991,137 +2989,10 @@ class ConceptResolver:
                         if signed_sum_bounds and interval is None:
                             # Preserve native timestamps when no grid is requested.
                             _can_inline_callback = False
-                        # 🚀 id_tbl DuckDB 快速路径：per-patient 聚合（MEDIAN）代替全表加载
-                        # 例如 height/weight 从 chartevents(5.7GB) 只需 ≤500 行
-                        if has_sub_var and _can_inline_callback and _effective_ids and _target == 'id_tbl' and not _skip_db_duckdb:
-                            _idtbl_ids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
-                            if _idtbl_ids:
-                                try:
-                                    from ..datasource import _get_duckdb_connection, mimic_chart_quality_sql
-                                    _idtbl_conn = _get_duckdb_connection()
-                                    _idtbl_sub_var = source.sub_var
-                                    # The source's value column, else the table's
-                                    # configured one (MIMIC chartevents: valuenum),
-                                    # as the raw path reads it.  Reading the string
-                                    # ``value`` dropped rows that only carry
-                                    # ``valuenum`` (CareVue weight, lead-r13).
-                                    _idtbl_val_var = getattr(source, 'value_var', None)
-                                    if not _idtbl_val_var:
-                                        try:
-                                            _idtbl_val_var = getattr(
-                                                data_source.config.get_table(source.table).defaults,
-                                                'val_var', None,
-                                            )
-                                        except KeyError:
-                                            _idtbl_val_var = None
-                                    _idtbl_val_var = _idtbl_val_var or 'value'
-                                    from ..storage_layout import parquet_relation
-                                    _idtbl_files = storage.resolve_target_files(source.table, _idtbl_sub_var, _idtbl_ids)
-                                    if _idtbl_files:
-                                        _idtbl_read_expr = parquet_relation(_idtbl_files)
-                                        # Determine ID column
-                                        _idtbl_id_cfg = data_source.config.id_configs.get('icustay') or data_source.config.id_configs.get('patient')
-                                        _idtbl_id_col = _idtbl_id_cfg.id if hasattr(_idtbl_id_cfg, 'id') else _idtbl_id_cfg
-                                        if not _idtbl_id_col:
-                                            _idtbl_id_col = {'aumc': 'admissionid', 'hirid': 'patientid',
-                                                            'mimic': 'icustay_id', 'mimic_demo': 'icustay_id',
-                                                            'sic': 'CaseID', 'eicu': 'patientunitstayid',
-                                                            'miiv': 'stay_id'}.get(db_name, 'stay_id')
-                                        # Build WHERE
-                                        # 🚀 perf B2: register itemid / patient_id filters as
-                                        # DuckDB views rather than embedding thousands of
-                                        # literals in the SQL IN list. Inline lists were the
-                                        # main reason cohort-wide id_tbl loads on hirid /
-                                        # eicu / chartevents had slow query plans.
-                                        _idtbl_views: List[str] = []
-                                        _is_str = any(isinstance(x, str) for x in _idtbl_ids)
-                                        if len(_idtbl_ids) > 32:
-                                            _idtbl_id_view = "_easyicu_idtbl_ids"
-                                            _idtbl_conn.register(
-                                                _idtbl_id_view,
-                                                pd.DataFrame({_idtbl_sub_var: list(_idtbl_ids)}),
-                                            )
-                                            _idtbl_views.append(_idtbl_id_view)
-                                            _idtbl_where = f"{_idtbl_sub_var} IN (SELECT {_idtbl_sub_var} FROM {_idtbl_id_view})"
-                                        else:
-                                            _ids_str = ", ".join(f"'{x}'" if _is_str else str(x) for x in _idtbl_ids)
-                                            _idtbl_where = f"{_idtbl_sub_var} IN ({_ids_str})"
-                                        # Patient filter
-                                        _idtbl_pid_filter = ""
-                                        if patient_ids:
-                                            _pids = list(next(iter(patient_ids.values()))) if isinstance(patient_ids, dict) else list(patient_ids)
-                                            if len(_pids) > 32:
-                                                _idtbl_pid_view = "_easyicu_idtbl_pids"
-                                                _idtbl_conn.register(
-                                                    _idtbl_pid_view,
-                                                    pd.DataFrame({_idtbl_id_col: list(_pids)}),
-                                                )
-                                                _idtbl_views.append(_idtbl_pid_view)
-                                                _idtbl_pid_filter = f"AND {_idtbl_id_col} IN (SELECT {_idtbl_id_col} FROM {_idtbl_pid_view})"
-                                            else:
-                                                _pid_str = ",".join(str(p) for p in _pids)
-                                                _idtbl_pid_filter = f"AND {_idtbl_id_col} IN ({_pid_str})"
-                                        # DuckDB convert_unit inline — CASE WHEN unit filter → convert, ELSE → raw
-                                        _idtbl_val_expr = f'TRY_CAST("{_idtbl_val_var}" AS DOUBLE)'
-                                        if is_convert_unit and source.callback:
-                                            _cu_unit_col = None
-                                            try:
-                                                _cu_tcfg = data_source.config.get_table(source.table)
-                                                _cu_unit_col = getattr(_cu_tcfg.defaults, 'unit_var', None)
-                                            except Exception:
-                                                pass
-                                            if not _cu_unit_col:
-                                                # Fallback: known unit column names per DB
-                                                _cu_unit_col = {'aumc': 'unitname', 'sic': 'Unit'}.get(db_name, 'valueuom')
-                                            from .duckdb_convert_unit import convert_unit_value_sql
-                                            _cu_expr = convert_unit_value_sql(source.callback, _idtbl_val_var, _cu_unit_col)
-                                            if _cu_expr is None:
-                                                # An unexpressed callback must not be published as applied.
-                                                raise ValueError(f'convert_unit not expressible in SQL: {source.callback}')
-                                            _idtbl_val_expr = _cu_expr
-                                            _convert_unit_callback_for_duckdb = True
-                                        # Query: GROUP BY patient, MEDIAN(value). The alias keeps
-                                        # the configured id spelling: DuckDB returns a column as
-                                        # the file spells it (MIMIC-III exports ICUSTAY_ID).
-                                        if db_name in {"mimic", "mimic_demo"}:
-                                            _idtbl_where += mimic_chart_quality_sql(
-                                                db_name, source.table,
-                                                data_source._get_parquet_columns_for_files(_idtbl_files), alias="",
-                                            )
-                                        _idtbl_sql = f"""
-                                            SELECT {_idtbl_id_col} AS "{_idtbl_id_col}",
-                                                   MEDIAN({_idtbl_val_expr}) AS {concept_name}
-                                            FROM {_idtbl_read_expr}
-                                            WHERE {_idtbl_where} {_idtbl_pid_filter}
-                                              AND {_idtbl_val_var} IS NOT NULL
-                                            GROUP BY {_idtbl_id_col}
-                                        """
-                                        try:
-                                            frame = _idtbl_conn.execute(_idtbl_sql).fetchdf()
-                                        finally:
-                                            for _v in _idtbl_views:
-                                                try:
-                                                    _idtbl_conn.unregister(_v)
-                                                except Exception:
-                                                    pass
-                                        if len(frame) > 0:
-                                            table = ICUTable(
-                                                data=frame,
-                                                id_columns=[_idtbl_id_col],
-                                                # Static aggregates have no event-time axis.
-                                                index_column=None,
-                                                value_column=concept_name,
-                                            )
-                                            table._pre_aggregated = True
-                                            use_duckdb_aggregation = True
-                                            _idtbl_done = True
-                                            _duckdb_source_count += 1
-                                            if verbose:
-                                                print(f"   ✅ id_tbl DuckDB聚合: {concept_name} → {len(frame):,} 行")
-                                except Exception as _idtbl_err:
-                                    _convert_unit_callback_for_duckdb = False
-                                    if verbose:
-                                        print(f"   ⚠️ id_tbl DuckDB失败({_idtbl_err}), 回退到原始路径")
+                        # id_tbl concepts always take the raw path. The former DuckDB fast path
+                        # (directory/bucketed tables only) read the string ``value`` column instead
+                        # of the table's val_var and took MEDIAN before the concept bounds, so a
+                        # stay's weight/height depended on the storage layout (lead-r13, class a).
                         # Raw audit observations must reach QC before SQL aggregation.
                         if aggregator is not False and has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
                             itemids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
@@ -3177,10 +3048,7 @@ class ConceptResolver:
                             ) and use_duckdb_aggregation:
                                 _convert_unit_callback_for_duckdb = True
                     
-                    if _idtbl_done:
-                        # id_tbl DuckDB 快速路径已完成 — table 已设置，只需提取 frame
-                        frame = table.data.copy()
-                    elif use_duckdb_aggregation and not _idtbl_done:
+                    if use_duckdb_aggregation:
                         # 使用DuckDB层聚合
                         from ..datasource import load_bucketed_table_aggregated
                         
@@ -4659,11 +4527,6 @@ class ConceptResolver:
             # 标记回调是否已被应用，避免重复调用
             # 🚀 如果 convert_unit 已在 DuckDB 后置处理中应用，标记为已完成
             callback_applied = _convert_unit_callback_for_duckdb
-            
-            # 🚀 id_tbl DuckDB 路径：value_column 已经是 concept_name（DuckDB SELECT AS）
-            if _idtbl_done and concept_name in frame.columns:
-                value_column = concept_name
-                callback_applied = True
             
             if value_column not in frame.columns:
                 # 对于某些概念（如lgl_cncpt），value_column可能通过callback创建
