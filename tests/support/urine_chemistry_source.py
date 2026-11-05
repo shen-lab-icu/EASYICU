@@ -6,6 +6,7 @@ import pandas as pd
 
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
+from tests.support.bucket_storage import write_fixture_parquet
 
 
 def urine_chemistry_source(root: Path, database: str, *, bucketed: bool):
@@ -61,7 +62,7 @@ def urine_chemistry_source(root: Path, database: str, *, bucketed: bool):
     if bucketed:
         path = root / f"{table}_bucket" / "bucket_id=0" / "part.parquet"
         path.parent.mkdir(parents=True)
-    frame.to_parquet(path, index=False)
+    write_fixture_parquet(frame, path, index=False)
     return ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False), expected
 
 
