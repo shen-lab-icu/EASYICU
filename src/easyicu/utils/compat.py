@@ -444,22 +444,36 @@ def expand_interval_rows(
         agg_func = 'median'
     else:
         if concept_lower == 'mech_vent':
-            # Pool category membership with vectorized reductions: a Python
-            # callback for every patient-hour is costly on full source tables.
-            expanded['__imv'] = expanded[value_col].isin(['invasive', 'invasive|noninvasive'])
-            expanded['__niv'] = expanded[value_col].isin(['noninvasive', 'invasive|noninvasive'])
-            pooled = expanded.groupby([id_col, time_col], as_index=False).agg(
-                {value_col: 'first', '__imv': 'max', '__niv': 'max'}
-            )
-            labels = pooled[value_col].astype('object')
-            labels = labels.mask(pooled.__imv, 'invasive').mask(pooled.__niv, 'noninvasive')
-            pooled[value_col] = labels.mask(pooled.__imv & pooled.__niv, 'invasive|noninvasive')
-            return pooled[[id_col, time_col, value_col]]
+            return pool_mech_vent_levels(expanded, [id_col, time_col], value_col)
         agg_func = 'first'
     
     expanded = expanded.groupby([id_col, time_col], as_index=False).agg({value_col: agg_func})
     
     return expanded
+
+
+MECH_VENT_MIXED_LEVEL = 'invasive|noninvasive'
+
+
+def pool_mech_vent_levels(frame: pd.DataFrame, keys: List[str], value_col: str) -> pd.DataFrame:
+    """Return one mech_vent level per key, pooled by category membership.
+
+    Rule R5 allows invasive and non-invasive ventilation in the same cell; the
+    cell then carries the declared mixed level.  Pooling is order-free: which
+    source row came first or last cannot decide the category (audit R7-F013).
+    Missing levels contribute no membership.  Vectorized reductions keep this
+    affordable on full source tables.
+    """
+    work = frame[[*keys, value_col]].copy()
+    work['__imv'] = work[value_col].isin(['invasive', MECH_VENT_MIXED_LEVEL])
+    work['__niv'] = work[value_col].isin(['noninvasive', MECH_VENT_MIXED_LEVEL])
+    pooled = work.groupby(keys, as_index=False).agg(
+        {value_col: 'first', '__imv': 'max', '__niv': 'max'}
+    )
+    labels = pooled[value_col].astype('object')
+    labels = labels.mask(pooled.__imv, 'invasive').mask(pooled.__niv, 'noninvasive')
+    pooled[value_col] = labels.mask(pooled.__imv & pooled.__niv, MECH_VENT_MIXED_LEVEL)
+    return pooled[[*keys, value_col]]
 
 
 # ============================================================================
@@ -939,6 +953,15 @@ def merge_concepts_r_style(
             boolean_concepts.append(name)
         else:
             prepared = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
+            if name == "mech_vent" and name in keep_cols:
+                # Point evidence keeps every level of an hour (eICU, R6-F039);
+                # publication pools them instead of keeping the last row.
+                observed = df.loc[df[name].notna(), ["id", "time", name]]
+                if observed.duplicated(["id", "time"]).any():
+                    pooled = pool_mech_vent_levels(observed, ["id", "time"], name)
+                    prepared = prepared.drop(columns=[name]).merge(
+                        pooled, on=["id", "time"], how="left", validate="one_to_one"
+                    )[keep_cols]
 
         # Missing values must not contribute a physical event key.  The outer
         # merge will still place NA at keys supplied by other concepts, but a
