@@ -151,6 +151,12 @@ _STREAM_BATCH_MAX_RETRIES = 3
 # 12/16/32/64-GiB hosts progressively faster without turning the 8-GiB
 # release boundary into an unmeasured extrapolation.
 _MEASURED_BATCH_BASELINE_AVAILABLE_MB = 8 * 1024
+# lead-r13 local profile (14-GiB cgroup, 4 cores, product-default 2 workers
+# and 2 engine threads): batches scaled linearly from the 8-GiB profiles
+# peaked 1.0-1.7x+ above the profile's per-stay cost (eICU circulatory 90k
+# 12.4 GiB; eICU sofa2_score 60k and MIMIC-III renal 40k OOM-killed at
+# 14 GiB).  Charge every stay twice the profiled cost when scaling.
+_SCALED_BATCH_PEAK_FACTOR = 2.0
 
 # ``resource_budget_mb`` is an execution contract, not only a batch-planning
 # hint.  Without a worker envelope, an 8-GiB release launched on a large shared
@@ -968,10 +974,10 @@ def _scale_measured_batch_above_baseline(
 ) -> int:
     """Spend memory above the 8-GiB measured envelope on larger batches.
 
-    The recorded batch remains authoritative at the formal baseline.  Above
-    it, every additional stay is charged the full observed peak-per-stay with
-    the existing 10% headroom already included.  Fixed process overhead is
-    therefore charged repeatedly, making this deliberately conservative.
+    The recorded batch remains authoritative at the formal baseline and is the
+    floor above it.  A larger batch must fit the memory left after the stream
+    reserve with every stay charged ``_SCALED_BATCH_PEAK_FACTOR`` times its
+    profiled peak-per-stay (10% headroom already included).
     """
 
     recorded = min(max(1, int(recorded_batch_size)), int(total_patients))
@@ -984,11 +990,18 @@ def _scale_measured_batch_above_baseline(
     ):
         return int(total_patients)
 
-    mib_per_stay = max(1.0, float(required_available_mb)) / recorded
-    extra_stays = int(
-        (available - _MEASURED_BATCH_BASELINE_AVAILABLE_MB) / mib_per_stay
+    # Above the baseline, keep the stream reserve and charge every stay
+    # _SCALED_BATCH_PEAK_FACTOR times its profiled cost: profiles are 8-GiB
+    # measurements, while larger hosts run more workers and engine threads.
+    # The recorded batch stays the floor it was verified at.
+    usable = available - max(
+        float(_STREAM_BATCH_MIN_RESERVE_MB),
+        available * _STREAM_BATCH_RESERVE_FRACTION,
     )
-    capacity = recorded + max(0, extra_stays)
+    mib_per_stay = (
+        max(1.0, float(required_available_mb)) / recorded * _SCALED_BATCH_PEAK_FACTOR
+    )
+    capacity = max(recorded, int(max(0.0, usable) / mib_per_stay))
     if capacity >= int(total_patients) and full_cohort_required_mb is None:
         return int(total_patients)
     quantized = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM

@@ -742,11 +742,14 @@ def test_miiv_renal_uses_current_isolated_five_batch_profile():
 @pytest.mark.parametrize(
     ("available_gib", "expected_batch", "expected_mode", "expected_reason"),
     [
+        # Above 8 GiB a larger batch must fit the post-reserve memory with
+        # every stay charged twice its profiled cost (lead-r13 local profile:
+        # linear scaling OOM-killed renal/sofa2 at a 14-GiB cgroup).
         (8, 20_000, "patient_batches", "measured_profile_fastest_safe_batch"),
-        (12, 35_000, "patient_batches", "measured_profile_scaled_batch"),
-        (16, 50_000, "patient_batches", "measured_profile_scaled_batch"),
-        (32, 94_458, "one_shot", "measured_profile_scaled_one_shot"),
-        (64, 94_458, "one_shot", "measured_profile_scaled_one_shot"),
+        (12, 20_000, "patient_batches", "measured_profile_fastest_safe_batch"),
+        (16, 20_000, "patient_batches", "measured_profile_fastest_safe_batch"),
+        (32, 45_000, "patient_batches", "measured_profile_scaled_batch"),
+        (64, 90_000, "patient_batches", "measured_profile_scaled_batch"),
     ],
 )
 def test_miiv_renal_scales_continuously_above_8gib_baseline(
@@ -773,7 +776,7 @@ def test_miiv_renal_scales_continuously_above_8gib_baseline(
         ("eicu", "medications", 200_859, 32, 200_859, "one_shot"),
         ("eicu", "medications", 200_859, 64, 200_859, "one_shot"),
         ("miiv", "sofa2_score", 94_458, 8, 30_000, "patient_batches"),
-        ("miiv", "sofa2_score", 94_458, 12, 47_229, "patient_batches"),
+        ("miiv", "sofa2_score", 94_458, 12, 30_000, "patient_batches"),
         ("miiv", "sofa2_score", 94_458, 16, 94_458, "one_shot"),
         ("miiv", "sofa2_score", 94_458, 32, 94_458, "one_shot"),
         ("miiv", "sofa2_score", 94_458, 64, 94_458, "one_shot"),
@@ -791,9 +794,12 @@ def test_known_one_shot_cliffs_scale_safely_with_available_memory(
 
     assert plan.batch_size == expected_batch
     assert plan.mode == expected_mode
+    baseline = plan_extraction_resources(
+        database, [module], num_patients, available_memory_mb=8 * 1024,
+    )
     assert plan.reason_code == (
         "measured_profile_fastest_safe_batch"
-        if available_gib == 8
+        if expected_batch == baseline.batch_size
         else (
             "measured_profile_scaled_one_shot"
             if expected_mode == "one_shot"
@@ -1059,3 +1065,21 @@ def test_eicu_stream_partition_retains_density_balancing_interleave():
     assert strategy == "source_order_interleaved_v1"
     assert ordered != patient_ids
     assert set(ordered) == set(patient_ids)
+
+
+@pytest.mark.parametrize(
+    ("database", "module", "total", "max_batch"),
+    [
+        # lead-r13 local profile (14-GiB cgroup): linear scaling chose these
+        # batches and the module peaked above 12 GiB or was OOM-killed.
+        ("eicu", "circulatory", 200_859, 89_999),   # 90k peaked 12.4 GiB
+        ("eicu", "sofa2_score", 200_859, 59_999),   # 60k OOM-killed
+        ("mimic", "renal", 61_532, 39_999),         # 40k OOM-killed
+        ("miiv", "sofa2_score", 94_458, 47_228),    # 47,229 peaked 11.8 GiB
+    ],
+)
+def test_14gib_local_profile_does_not_rescale_into_measured_oom(database, module, total, max_batch):
+    plan = plan_extraction_resources(
+        database, [module], total, available_memory_mb=13.8 * 1024,
+    )
+    assert plan.batch_size <= max_batch
