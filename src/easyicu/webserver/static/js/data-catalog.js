@@ -5,7 +5,7 @@
    Used by the Data Dictionary + Coverage Audit screens so the UI reflects
    the actual feature set rather than invented placeholders. */
 (function () {
-  // 19 groups, in catalog order. [key, en, zh]  (emoji dropped to match the prototype's type system)
+  // 20 groups, in catalog order. [key, en, zh]  (emoji dropped to match the prototype's type system)
   const groups = [
     ['sofa2_score', 'SOFA-2 Scores', 'SOFA-2 评分'],
     ['sofa1_score', 'SOFA-1 Scores', 'SOFA-1 评分'],
@@ -21,6 +21,7 @@
     ['vasopressors', 'Vasopressors', '血管活性药物'],
     ['medications', 'Other Medications', '其他药物'],
     ['renal', 'Renal & Urine Output', '肾脏与尿量'],
+    ['renal_urine_chem', 'Urine Chemistry & Renal History', '尿液生化与肾病史'],
     ['neurological', 'Neurological', '神经系统'],
     ['circulatory', 'Circulatory System', '循环系统'],
     ['demographics', 'Demographics', '人口统计'],
@@ -43,6 +44,7 @@
     vasopressors: ["norepi_rate", "norepi_dur", "norepi_equiv", "norepi60", "epi_rate", "epi_dur", "epi60", "dopa_rate", "dopa_dur", "dopa60", "dobu_rate", "dobu_dur", "dobu60", "adh_rate", "phn_rate", "vaso_ind", "other_vaso"],
     medications: ["abx", "albumin_iv", "bicarbonate", "calcium_iv", "cort", "dex", "dexamethasone", "dextrose50", "ffp", "ins", "amiodarone", "cisatracurium", "dexmedetomidine", "fentanyl", "fentanyl_rate", "furosemide", "loop_diuretic", "loop_diuretic_furosemide_eq", "thiazide_diuretic", "potassium_sparing_diuretic", "acetazolamide", "heparin", "ketamine", "levetiracetam", "lorazepam", "magnesium_iv", "mannitol", "meropenem", "midazolam", "midazolam_rate", "milrinone", "morphine", "neostigmine", "nitroglycerin", "octreotide", "packed_rbc", "pantoprazole", "platelets", "potassium_iv", "propofol", "propofol_rate", "rocuronium", "vancomycin", "vecuronium", "apixaban", "aspirin", "diltiazem", "enoxaparin", "esmolol", "insulin", "labetalol", "nicardipine", "phenytoin", "warfarin"],
     renal: ["urine", "urine24", "urine24_est", "urine24_observed_ml", "urine24_covered_h", "urine24_available_at", "urine24_est_available_at", "urine24_uses_future", "aki_stage_uo_reference_available_at", "uo_rt_6hr_covered_h", "uo_6h_partial_window", "uo_6h_covered_h", "uo_rt_12hr_covered_h", "uo_12h_partial_window", "uo_12h_covered_h", "uo_rt_24hr_covered_h", "uo_24h_partial_window", "uo_24h_covered_h", "uo_6h", "uo_12h", "uo_24h", "rrt", "rrt_criteria", "aki_reference", "aki_stage_reference", "aki_severe_reference", "aki_stage_creat_reference", "aki_stage_uo_reference", "aki_stage_rrt_reference", "aki_stage_reference_smoothed_6h", "aki_reference_profile", "aki_reference_status", "aki_reference_authority", "aki_reference_reliability_grade", "aki_reference_fidelity", "aki_reference_rrt_scope", "aki_reference_uses_future", "aki_source_native", "aki_stage_source_native", "aki_severe_source_native", "aki_stage_creat_source_native", "aki_stage_uo_source_native", "aki_stage_crrt_source_native", "aki_stage_source_native_smoothed", "aki_source_native_profile", "aki_source_native_status", "aki_source_native_authority", "aki_source_native_reliability_grade", "aki_source_native_fidelity", "aki_source_native_ascertainment", "aki_source_native_reason", "aki_source_native_time_scale", "aki_source_native_uses_future", "kidney_observation_window_coverage", "creatinine_evidence_status", "creatinine_evidence_reason", "urine_evidence_status", "rrt_evidence_status", "rrt_evidence_reason", "creat_low_past_48hr", "creat_low_past_7day", "creat_baseline_n_48h", "creat_baseline_n_7d", "creat_baseline_source", "creat_pre_icu_history_observed", "uo_rt_6hr", "uo_rt_12hr", "uo_rt_24hr", "fluid_balance", "fluid_balance_cumulative", "total_input_ml", "bun_creatinine_ratio", "egfr"],
+    renal_urine_chem: ["urine_na", "urine_crea", "urine_osm", "urine_urea", "sic_precondition_renal_dysfunction"],
     neurological: ["avpu", "egcs", "gcs", "mgcs", "rass", "tgcs", "vgcs", "sedated_gcs", "motor_response", "delirium_positive", "delirium_tx_proxy", "delirium_tx_evidence", "delirium_tx", "icp"],
     circulatory: ["mech_circ_support", "circ_failure", "circ_event", "pap_sys", "pap_dia", "pap_mean", "co", "svo2", "scvo2", "pawp"],
     demographics: ["age", "bmi", "height", "sex", "weight", "adm", "icu_unit_type", "icu_stay_is_readmission"],
@@ -294,6 +296,11 @@
     norepi60: ["Norepinephrine Rate (>60min)", "去甲肾上腺素速率（持续>60分钟）", "mcg/kg/min"],
     epi60: ["Epinephrine Rate (>60min)", "肾上腺素速率（持续>60分钟）", "mcg/kg/min"],
     phn_rate: ["Phenylephrine Rate", "去氧肾上腺素速率", "mcg/kg/min"],
+    urine_na: ["Urine Sodium", "尿钠", "mmol/L"],
+    urine_crea: ["Urine Creatinine", "尿肌酐", "mg/dL"],
+    urine_osm: ["Urine Osmolality", "尿渗透压", "mOsm/kg"],
+    urine_urea: ["Urine Urea Nitrogen", "尿尿素氮", "mg/dL"],
+    sic_precondition_renal_dysfunction: ["SICdb Pre-existing Renal Dysfunction", "SICdb既往肾功能障碍", "boolean"],
     rrt: ["Renal Replacement Therapy", "肾脏替代治疗", "boolean"],
     rrt_criteria: ["RRT Criteria Met", "满足RRT标准", "boolean"],
     uo_6h: ["Average Urine Output Rate (past 6h)", "过去6小时平均尿量率", "mL/kg/h"],
@@ -418,6 +425,11 @@
 
   // database coverage (how many of the 6 ICU databases harmonize this concept)
   const cov = {
+    urine_na: 3,
+    urine_crea: 3,
+    urine_osm: 2,
+    urine_urea: 2,
+    sic_precondition_renal_dysfunction: 1,
     hr: 6,
     map: 6,
     sbp: 6,
@@ -589,6 +601,11 @@
     ph: ["Blood acidity/alkalinity (normal 7.35-7.45)", "血液酸碱度（正常7.35-7.45）"],
     pco2: ["Partial pressure of CO2 in arterial blood", "动脉血中二氧化碳分压"],
     po2: ["Partial pressure of O2 in arterial blood", "动脉血中氧分压"],
+    urine_na: ["Urine sodium concentration; mEq/L is equivalent to mmol/L for sodium", "尿钠浓度；钠的 mEq/L 与 mmol/L 等价"],
+    urine_crea: ["Urine creatinine concentration, separate from serum creatinine", "尿肌酐浓度，与血清肌酐分开"],
+    urine_osm: ["Urine osmolality in mOsm/kg; eICU mOsm/L is not pooled", "尿渗透压（mOsm/kg）；不混合eICU的mOsm/L记录"],
+    urine_urea: ["Urine urea nitrogen concentration in mg/dL of nitrogen, not whole urea", "尿尿素氮浓度（mg/dL氮），不按全尿素质量计算"],
+    sic_precondition_renal_dysfunction: ["SICdb Yes/No renal precondition; unknown stays missing; distinct from hospital ICD comorbidity flags", "SICdb既往肾功能障碍Yes/No标志；未知保留缺失，与住院ICD合并症标志分开"],
     crea: ["Serum creatinine - kidney function marker, key for SOFA renal scoring", "血清肌酐 - 肾功能标志物，SOFA肾脏评分关键指标"],
     bili: ["Total bilirubin - liver function marker, key for SOFA liver scoring", "总胆红素 - 肝功能标志物，SOFA肝脏评分关键指标"],
     plt: ["Platelet count - coagulation marker, key for SOFA coagulation scoring", "血小板计数 - 凝血功能标志物，SOFA凝血评分关键指标"],

@@ -91,7 +91,7 @@
   const CLARIFY = Object.freeze({
     predict: { q: bi('Quick check before I build the plan — which mortality endpoint do you mean?', '建计划前先确认一下：你说的死亡结局是哪一种？'), opts: [['In-hospital mortality', 'in-hospital'], ['28-day mortality', '28-day'], ['ICU mortality', 'ICU']] },
     crossdb: { q: bi('How many databases should we compare?', '这次要比较多少个数据库？'), opts: [['All six', 'all 6 databases'], ['A focused three', '3 databases'], ['Let me pick', 'a custom set']] },
-    quality: { q: bi('Should I audit everything, or focus on the modelling features?', '要审计全部模块，还是只关注建模特征？'), opts: [['Everything (19 modules)', 'all 19 modules'], ['Modelling features only', 'the modelling features']] },
+    quality: { q: bi('Should I audit everything, or focus on the modelling features?', '要审计全部模块，还是只关注建模特征？'), opts: [['Everything (20 modules)', 'all 20 modules'], ['Modelling features only', 'the modelling features']] },
   });
 
   const BRANCH = Object.freeze({
@@ -138,7 +138,7 @@
     quality: {
       chip: 'Audit data quality',
       frame: '“Before any modelling, where is this cohort sparse or out-of-range, and which concepts are trustworthy?”',
-      plan: [['Goal', 'Coverage + range audit'], ['Scope', '19 feature modules'], ['Output', 'Trust map + flags'], ['Design', 'Pre-analysis QC · demo']],
+      plan: [['Goal', 'Coverage + range audit'], ['Scope', '20 feature modules'], ['Output', 'Trust map + flags'], ['Design', 'Pre-analysis QC · demo']],
       cohortKind: 'cohort',
       runTasks: [['Per-concept coverage', '0:07'], ['Range / outlier scan', '0:12'], ['Missingness pattern', '0:10'], ['Density by hour', '0:09'], ['Trust scoring', '0:08']],
       reviewTitle: 'Quick review · Coverage audit',

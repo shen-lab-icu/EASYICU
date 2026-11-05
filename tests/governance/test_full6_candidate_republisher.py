@@ -141,15 +141,15 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
     )
     for database in module.DATABASES:
         source_record = run_manifest["sources"][database]
-        assert source_record["total_rows"] == 190
-        assert source_record["total_parquet_bytes"] == 209
+        assert source_record["total_rows"] == 210
+        assert source_record["total_parquet_bytes"] == 230
         for name in module.MODULES:
             assert source_record["module_metrics"][name]["peak_rss_mb"] == 2.0
             assert source_record["module_metrics"][name][
                 "peak_working_set_mb"
             ] == 3.0
     timing = (destination / "database_extraction_timing.csv").read_text()
-    assert ",190,209\n" in timing
+    assert ",210,230\n" in timing
 
 
 def test_republisher_refuses_incomplete_source(tmp_path: Path) -> None:

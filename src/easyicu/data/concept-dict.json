@@ -37953,5 +37953,245 @@
     }
    ]
   }
+ },
+ "urine_na": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 400,
+  "description": "urine sodium",
+  "category": "renal",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Sodium is monovalent: mEq/L equals mmol/L (explicit identity conversion); no mass-to-molar conversion is inferred.",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 51100,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 51100,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 51100,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "urinary sodium",
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "urinary sodium",
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ]
+  }
+ },
+ "urine_crea": {
+  "unit": "mg/dL",
+  "min": 0,
+  "max": 1000,
+  "description": "urine creatinine",
+  "category": "renal",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Native mg/dL values are unchanged; molar units require an explicit conversion and are excluded here.",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 51082,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 51082,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 51082,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ],
+   "eicu": [
+    {
+     "ids": "urinary creatinine",
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ],
+   "eicu_demo": [
+    {
+     "ids": "urinary creatinine",
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "urine_osm": {
+  "unit": "mOsm/kg",
+  "min": 0,
+  "max": 2000,
+  "description": "urine osmolality",
+  "category": "renal",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. eICU urinary osmolality is reported in mOsm/L; the repository has no policy equating osmolarity with mOsm/kg, so eICU and its demo are deliberately unmapped. mOsm/L rows in MIMIC are also excluded.",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 51093,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mosm\\s*/\\s*kg(?:\\s*h2o)?\\s*$"
+     }
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 51093,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mosm\\s*/\\s*kg(?:\\s*h2o)?\\s*$"
+     }
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 51093,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mosm\\s*/\\s*kg(?:\\s*h2o)?\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "urine_urea": {
+  "unit": "mg/dL",
+  "min": 0,
+  "max": 5000,
+  "description": "urine urea nitrogen",
+  "category": "renal",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. MIMIC item 51104 reports urea nitrogen mass, not whole urea mass; mg/dL is nitrogen-equivalent and is never multiplied by a whole-urea factor.",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 51104,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 51104,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 51104,
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "sic_precondition_renal_dysfunction": {
+  "unit": "boolean",
+  "description": "SICdb pre-existing renal dysfunction",
+  "category": "renal",
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "_comment": "2026-11-05 UC1-K6: SICdb data_ref FieldID 3104 PreconditionRenalDysfunction is a case-level precondition, decoded through RefID -> d_references.ReferenceGlobalID/ReferenceValue (Yes/No). Missing, unrecognised or ambiguous references and contradictory Yes/No values remain unknown, never default No. Kept SICdb-specific: scores/comorbidity.py Charlson renal and Elixhauser renal_fail use hospital ICD codes including unspecified failure, transplant and dialysis status; those flags do not establish pre-ICU onset and are not the same estimand. No other database history is inferred.",
+  "sources": {
+   "sic": [
+    {
+     "ids": 3104,
+     "table": "data_ref",
+     "sub_var": "FieldID",
+     "val_var": "RefID",
+     "callback": "sicdb_precondition"
+    }
+   ]
+  }
  }
 }

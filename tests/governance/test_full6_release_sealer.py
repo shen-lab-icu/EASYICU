@@ -319,7 +319,7 @@ def _build_synthetic_release(run_root: Path) -> None:
     )
 
 
-def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
+def test_sealer_validates_6_by_20_and_atomically_writes_metadata(
     tmp_path: Path,
 ) -> None:
     run_root = tmp_path / "full6_test"
@@ -341,8 +341,8 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
     assert metadata["run_id"] == "full6_test"
     assert metadata["status"] == "verified"
     assert metadata["database_count"] == 6
-    assert metadata["module_count"] == 19
-    assert metadata["expected_parquet_count"] == 114
+    assert metadata["module_count"] == 20
+    assert metadata["expected_parquet_count"] == 120
     assert metadata["contract_revision"] == sealer.CONTRACT_REVISION
     assert (
         "partial_wide_exact_floating_charttime_key_alignment" in metadata["corrections"]
@@ -374,14 +374,14 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         sealer.DATABASES
     )
     module_timing = metadata["extraction_execution"]["module_timing"]
-    assert module_timing["record_count"] == 114
+    assert module_timing["record_count"] == 120
     assert module_timing["database_count"] == 6
-    assert module_timing["module_count"] == 19
+    assert module_timing["module_count"] == 20
     module_timing_path = run_root / module_timing["file"]
     assert _sha256(module_timing_path) == module_timing["sha256"]
     with module_timing_path.open(newline="", encoding="utf-8") as handle:
         module_timing_rows = list(csv.DictReader(handle))
-    assert len(module_timing_rows) == 114
+    assert len(module_timing_rows) == 120
     assert {(row["database"], row["module"]) for row in module_timing_rows} == {
         (database, module) for database in sealer.DATABASES for module in sealer.MODULES
     }
@@ -409,16 +409,16 @@ def test_sealer_validates_6_by_19_and_atomically_writes_metadata(
         "sha256": _sha256(run_root / "run_manifest.json"),
     }
     assert metadata["validation"] == {
-        "audited_parquet_count": 114,
-        "valid_footer_count": 114,
-        "primary_key_contract_verified_count": 114,
-        "primary_key_uniqueness_verified_count": 114,
-        "row_grain_contract_verified_count": 114,
-        "null_time_semantics_verified_count": 114,
-        "parquet_sha256_verified_count": 114,
-        "parquet_bytes_verified_count": 114,
-        "exact_schema_module_count": 19,
-        "total_rows": 228,
+        "audited_parquet_count": 120,
+        "valid_footer_count": 120,
+        "primary_key_contract_verified_count": 120,
+        "primary_key_uniqueness_verified_count": 120,
+        "row_grain_contract_verified_count": 120,
+        "null_time_semantics_verified_count": 120,
+        "parquet_sha256_verified_count": 120,
+        "parquet_bytes_verified_count": 120,
+        "exact_schema_module_count": 20,
+        "total_rows": 240,
         "total_parquet_bytes": sum(
             path.stat().st_size for path in (run_root / "exports").glob("*/*.parquet")
         ),

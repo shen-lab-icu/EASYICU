@@ -1,5 +1,5 @@
 {
-  "concept_count": 327,
+  "concept_count": 332,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -7499,6 +7499,28 @@
       },
       "description": "shock index = heart rate / systolic blood pressure"
     },
+    "sic_precondition_renal_dysfunction": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "SICdb pre-existing renal dysfunction"
+    },
     "sirs": {
       "category": "outcome",
       "databases": {
@@ -10033,6 +10055,94 @@
       },
       "description": "Daily urine value depends on a record charted after the evaluation hour"
     },
+    "urine_crea": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "urine creatinine"
+    },
+    "urine_na": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "urine sodium"
+    },
+    "urine_osm": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "urine osmolality"
+    },
+    "urine_urea": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "urine urea nitrogen"
+    },
     "vancomycin": {
       "category": "medications",
       "databases": {
@@ -10491,25 +10601,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 32,
-      "unavailable": 141
+      "unavailable": 146
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 35,
-      "unavailable": 136
+      "unavailable": 141
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 23,
-      "unavailable": 137
+      "unavailable": 142
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 39,
-      "unavailable": 136
+      "unavailable": 141
     }
   },
   "databases": [

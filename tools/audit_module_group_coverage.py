@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit EasyICU's 19 module groups against the merged concept dictionary.
+"""Audit EasyICU's 20 module groups against the merged concept dictionary.
 
 This is a top-level consistency audit. It does not validate raw item semantics;
 it answers whether the public module catalog, full-export scope, and extraction

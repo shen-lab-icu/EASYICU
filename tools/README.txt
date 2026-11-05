@@ -23,7 +23,7 @@ The output contract is:
 
 ```text
 full6_run/
-  exports/{database}/{19 modules}.parquet
+  exports/{database}/{20 modules}.parquet
   run_manifest.json
   database_extraction_timing.csv
   .orchestration/attempts/...       # logs/specs; no runnable code clone

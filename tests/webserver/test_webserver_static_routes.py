@@ -1103,7 +1103,7 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
     module_block = extraction_js.split("const MODS = [", 1)[1].split("];", 1)[0]
     assert module_block.count(", true, true]") == 0
     assert module_block.count(", false, true]") == 6
-    assert module_block.count(", false, false]") == 13
+    assert module_block.count(", false, false]") == 14
     assert ", true, false]" not in module_block
     assert "function recommendedSelectionActive()" in extraction_js
     assert "Data modules" in extraction_js
@@ -1340,7 +1340,7 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     )
     keys = dict(re.findall(r"'([^']+)':\s*'([^']+)'", key_block))
 
-    assert len(entries) == len(cc.CONCEPT_GROUPS_INTERNAL) == 19
+    assert len(entries) == len(cc.CONCEPT_GROUPS_INTERNAL) == 20
     assert "function moduleConceptCount(m)" in extraction_js
     assert "window.EU_CATALOG && window.EU_CATALOG.groupConcepts" in extraction_js
 

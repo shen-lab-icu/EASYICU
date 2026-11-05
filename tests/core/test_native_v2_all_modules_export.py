@@ -45,6 +45,11 @@ def _assert_published(database: str, output: Path, result: dict) -> None:
     assert not (output / ".easyicu-unpublished").exists()
     manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
     assert manifest  # sealed by the producer
+    assert "renal_urine_chem" in EXTRACT_MODULE_ORDER
+    urine = next(row for row in manifest["files"] if row["module"] == "renal_urine_chem")
+    assert urine["physical_concept_ids"] == [
+        "urine_na", "urine_crea", "urine_osm", "urine_urea", "sic_precondition_renal_dysfunction",
+    ]
     for module in EXTRACT_MODULE_ORDER:
         path = output / f"{module}.parquet"
         assert path.exists(), f"{database}: {module} not published"

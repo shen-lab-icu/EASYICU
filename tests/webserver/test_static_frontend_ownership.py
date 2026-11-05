@@ -572,7 +572,7 @@ def test_the_guided_module_table_carries_no_hand_written_concept_counts() -> Non
     table = table[: table.index("];")]
 
     rows = re.findall(r"\['([^']+)', '[^']*', '[^']*', (\w+)\]", table)
-    assert len(rows) == 19, f"expected 19 modules, parsed {len(rows)}"
+    assert len(rows) == 20, f"expected 20 modules, parsed {len(rows)}"
     for module, flag in rows:
         assert flag in ("true", "false"), (
             f"{module}: the fourth column is the is-core flag, not a count"

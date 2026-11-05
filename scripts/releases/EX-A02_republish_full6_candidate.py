@@ -106,7 +106,7 @@ def _rebind_extraction_timing_receipts(
         files = native_manifests[database].get("files")
         if not isinstance(files, list) or len(files) != len(MODULES):
             raise RepublicationError(
-                f"{database}: republished manifest lacks 19 file receipts"
+                f"{database}: republished manifest lacks 20 file receipts"
             )
         by_database[database]["total_rows"] = str(
             sum(int(entry["rows"]) for entry in files)

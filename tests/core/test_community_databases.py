@@ -62,7 +62,8 @@ def test_community_coverage_audits_every_standard_concept() -> None:
     # Round 5 then adds cai_ph74, 18 bounds-audit raw/QC channels, 12 urine
     # coverage companions and the SICdb cvp_qc, minute-volume and ventilation
     # rule/sensitivity columns.
-    assert coverage["concept_count"] == 327 == len(list(dictionary.keys()))
+    # UC1-K5/K6 adds five concepts, unavailable without community mappings.
+    assert coverage["concept_count"] == 332 == len(list(dictionary.keys()))
     assert set(coverage["concepts"]) == set(dictionary.keys())
     assert set(coverage["databases"]) == COMMUNITY_DATABASES
     valid = {"direct", "derived", "partial", "unavailable"}

@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **327 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **332 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **327 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 35 | 136 |
-| zhejiang_eicu | 128 | 39 | 23 | 137 |
-| jinhua | 135 | 19 | 32 | 141 |
-| zigong | 125 | 27 | 39 | 136 |
+| nwicu | 137 | 19 | 35 | 141 |
+| zhejiang_eicu | 128 | 39 | 23 | 142 |
+| jinhua | 135 | 19 | 32 | 146 |
+| zigong | 125 | 27 | 39 | 141 |
 
 ## Complete matrix
 
@@ -275,6 +275,7 @@ concept (base dictionary plus SOFA-2 overlay): **327 concepts × 4 databases**.
 | `sep3_sofa2` | outcome | partial | partial | partial | partial |
 | `sex` | demographics | direct | direct | direct | direct |
 | `shock_index` | cardiovascular | derived | derived | derived | derived |
+| `sic_precondition_renal_dysfunction` | renal | unavailable | unavailable | unavailable | unavailable |
 | `sirs` | outcome | partial | partial | partial | partial |
 | `sofa` | outcome | partial | partial | partial | partial |
 | `sofa2` | outcome | partial | partial | partial | partial |
@@ -332,6 +333,10 @@ concept (base dictionary plus SOFA-2 overlay): **327 concepts × 4 databases**.
 | `urine24_est_available_at` | output | unavailable | derived | unavailable | derived |
 | `urine24_observed_ml` | output | unavailable | derived | unavailable | derived |
 | `urine24_uses_future` | output | unavailable | derived | unavailable | derived |
+| `urine_crea` | renal | unavailable | unavailable | unavailable | unavailable |
+| `urine_na` | renal | unavailable | unavailable | unavailable | unavailable |
+| `urine_osm` | renal | unavailable | unavailable | unavailable | unavailable |
+| `urine_urea` | renal | unavailable | unavailable | unavailable | unavailable |
 | `vancomycin` | medications | direct | direct | direct | direct |
 | `vaso_ind` | medications | unavailable | unavailable | unavailable | unavailable |
 | `vecuronium` | medications | direct | direct | direct | direct |

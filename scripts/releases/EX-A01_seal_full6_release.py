@@ -33,6 +33,7 @@ MODULES = (
     "blood_gas",
     "chemistry",
     "hematology",
+    "renal_urine_chem",
     "ventilator",
     "respiratory",
     "vasopressors",
@@ -850,7 +851,7 @@ def validate_release(run_root: Path) -> dict[str, Any]:
                     )
                 if set(entry_modules) != set(MODULES):
                     raise ReleaseValidationError(
-                        f"{database}: manifest module set does not match the 19-module contract"
+                        f"{database}: manifest module set does not match the 20-module contract"
                     )
                 actual_parquets = _public_parquet_paths(database_root)
                 expected_parquets = {f"{module}.parquet" for module in MODULES}
@@ -1238,7 +1239,7 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 def write_module_extraction_timing(
     *, run_root: Path, validation: dict[str, Any]
 ) -> dict[str, Any]:
-    """Write the canonical 6 x 19 module timing table after validation."""
+    """Write the canonical 6 x 20 module timing table after validation."""
 
     records = validation["module_timing_records"]
     if len(records) != EXPECTED_PARQUET_COUNT:

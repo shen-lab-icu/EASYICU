@@ -10937,6 +10937,7 @@
       "data_ref": {
         "files": "data_ref.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "OffsetAfterFirstAdmission"
         },
         "num_rows": 354157,
@@ -10951,6 +10952,10 @@
           },
           "refid": {
             "name": "RefID",
+            "spec": "col_integer"
+          },
+          "fieldid": {
+            "name": "FieldID",
             "spec": "col_integer"
           },
           "customfieldid": {

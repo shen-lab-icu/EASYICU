@@ -46,6 +46,55 @@ answers is in brackets.
   meanings for the final assignment.
   Validation uses synthetic records only; real-data coverage awaits lead checks.
 
+## 2026-11-05 — UC2 separate urine chemistry module (pending lead reseal)
+
+The 20-module catalog publishes the five UC1 concepts only in
+`renal_urine_chem.parquet`: `urine_na`, `urine_crea`, `urine_osm`, `urine_urea`
+and `sic_precondition_renal_dysfunction`. The original `renal` roster and its
+73 concepts remain unchanged from the pre-UC1 catalog. Urine-only observations
+must not extend its hour grid. Other module Parquet bytes also remain unchanged.
+
+The additional module is available through the ordinary lab extraction group,
+native-v2 manifests, release controller and sealer, static catalog and both
+extraction screens. It is not a core module and starts unselected. Unsupported
+sources publish an empty typed file; observed rows require at least one value.
+The SICdb case-level flag retains the ordinary `id_tbl` publication semantics.
+UC1 definitions, mappings, units, bounds and the complete Planner allowlist are
+unchanged. Dictionary category `renal` describes the concepts; the publication
+module is owned by the shared catalog, independently of that category.
+
+## 2026-11-05 — UC1 urine chemistry and renal precondition (pending lead reseal)
+
+- **[UC1-K5]** The urine chemistry module adds `urine_na` (mmol/L, 0–400),
+  `urine_crea` (mg/dL, 0–1,000), `urine_osm` (mOsm/kg, 0–2,000) and
+  `urine_urea` (urea nitrogen mg/dL, 0–5,000). MIMIC-IV (including its demo
+  loaded as `miiv`) and MIMIC-III/demo read labevents 51100, 51082, 51093
+  and 51104 respectively. eICU/demo read the exact `urinary sodium` and
+  `urinary creatinine` labels. These are concentration assays; serum assays
+  and daily excretion totals cannot enter these columns. Existing declared
+  row filters require compatible unit labels before bounds and aggregation.
+  Sodium mEq/L is explicitly relabelled by the identity conversion to mmol/L;
+  creatinine, osmolality and urea nitrogen remain on their native scales.
+- eICU `urinary osmolality` uses mOsm/L. The repository has no policy treating
+  osmolarity as mOsm/kg, so it remains unmapped. AUMC, HiRID, SICdb and community
+  sources remain unmapped where no checked-in dictionary verifies the name,
+  urine specimen and unit together. No source identifiers are guessed.
+  FENa/FEUrea are deferred: existing arithmetic callbacks do not pair each urine
+  specimen with a nearest plasma sodium/creatinine sample within 24 hours.
+- **[UC1-K6]** `sic_precondition_renal_dysfunction` reads data_ref FieldID
+  3104 as a case-level precondition. The existing SICdb source callback owner
+  decodes RefID using d_references Yes/No labels. Missing, unrecognised and
+  ambiguous references, or conflicting Yes/No records, stay unknown. The
+  source schema now retains FieldID and explicitly identifies CaseID.
+  Older converted tables lacking FieldID report the concept unavailable.
+  This concept is SICdb-specific: Charlson renal and Elixhauser renal-failure
+  flags in `scores/comorbidity.py` include hospital ICD codes for unspecified
+  failure, transplant and dialysis status without proving pre-ICU onset.
+- Catalog membership, audited coverage, static catalog and community coverage
+  are updated. The Planner's concept allowlist uses a comma-separated roster
+  to retain every key within the existing resource ceiling. Source, dictionary,
+  resource-context and Figure 2 digest pins are left for the lead's approved reseal.
+
 ## 2026-11-05 — extraction audit round 8 (last batch; no dictionary change)
 
 - **[R7-F005 follow-up]** MIMIC-III source alignment floors minutes from whole

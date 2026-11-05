@@ -167,7 +167,7 @@ def _format_concept_id_allowlist(columns: Sequence[str] = ()) -> str:
         'concept_id="<one from the list below>" + time_window + aggregation.',
         "",
     ]
-    lines.extend(f"- `{concept_id}`" for concept_id in concept_ids)
+    lines.append("- " + ", ".join(f"`{concept_id}`" for concept_id in concept_ids))
     return "\n".join(lines)
 
 

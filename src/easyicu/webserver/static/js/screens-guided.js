@@ -126,6 +126,7 @@
     ['vasopressors', 'Vasopressors', '血管活性药物', false],
     ['medications', 'Other medications', '其他药物', false],
     ['renal', 'Renal & urine output', '肾脏与尿量', false],
+    ['renal_urine_chem', 'Urine chemistry & renal history', '尿液生化与肾病史', false],
     ['neurological', 'Neurological', '神经系统', false],
     ['circulatory', 'Circulatory', '循环系统', false],
     ['other_scores', 'Other scores', '其他评分', false],
@@ -229,7 +230,7 @@
     }
     PIPELINE.resetState();
     guidedSlotSaveWarned = false;
-    studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
+    studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 20 modules', caught: null };
     userQuestion = ''; acceptedFrame = false; studyContract = null;
     studyStatus = {}; studyVal = {};
     gen++;
@@ -422,7 +423,7 @@
       if (/3|three/.test(d)) { _dbCount = 3; return 'three databases'; }
       return 'a custom set';
     }
-    studyParams.scope = /19|every/.test(d) ? 'all 19 modules' : 'modelling features only';
+    studyParams.scope = /20|every/.test(d) ? 'all 20 modules' : 'modelling features only';
     return studyParams.scope;
   }
   /* pull entities out of a free-text research question */

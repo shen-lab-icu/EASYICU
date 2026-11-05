@@ -327,7 +327,7 @@ def test_resume_rejects_batch_override_drift(
         )
 
 
-def test_native_package_validation_binds_19_module_time_peak_rows_and_bytes(
+def test_native_package_validation_binds_20_module_time_peak_rows_and_bytes(
     tmp_path: Path,
 ) -> None:
     export = tmp_path / "export"
@@ -338,9 +338,9 @@ def test_native_package_validation_binds_19_module_time_peak_rows_and_bytes(
 
     receipt = launcher._validate_export_package(export, COMMIT, "miiv")
 
-    assert receipt["module_count"] == 19
-    assert receipt["valid_parquet_count"] == 19
-    assert receipt["total_rows"] == sum(range(1, 20))
+    assert receipt["module_count"] == 20
+    assert receipt["valid_parquet_count"] == 20
+    assert receipt["total_rows"] == sum(range(1, 21))
     assert set(receipt["module_metrics"]) == set(launcher.MODULE_ORDER)
     assert receipt["module_metrics"]["respiratory"]["peak_rss_mb"] > 0
 
@@ -370,8 +370,8 @@ def test_timing_csv_is_sealer_compatible_and_replaced_atomically(tmp_path: Path)
     source = {
         "status": "complete",
         "elapsed_seconds": 61.5,
-        "module_count": 19,
-        "valid_parquet_count": 19,
+        "module_count": 20,
+        "valid_parquet_count": 20,
         "total_rows": 123,
         "total_parquet_bytes": 456,
         "batch_strategy": "one_shot:10_stays",
@@ -396,7 +396,7 @@ def test_timing_csv_is_sealer_compatible_and_replaced_atomically(tmp_path: Path)
     with path.open(newline="", encoding="utf-8") as handle:
         persisted = list(csv.DictReader(handle))
     assert persisted[0]["status"] == "complete"
-    assert persisted[0]["module_count"] == "19"
+    assert persisted[0]["module_count"] == "20"
     assert persisted[0]["peak_process_tree_pss_mb"] == "900.0"
     assert not list(tmp_path.glob(".database_extraction_timing.csv.*.tmp"))
 
@@ -483,7 +483,7 @@ def test_worker_preserves_module_plans_and_enforces_assigned_budget(
     monkeypatch.setattr(
         launcher,
         "_validate_export_package",
-        lambda *_args, **_kwargs: {"module_count": 19},
+        lambda *_args, **_kwargs: {"module_count": 20},
     )
     monkeypatch.setenv("PYTHONPATH", str(launcher.SOURCE_ROOT))
     spec_path = attempt_root / "worker_spec.json"
@@ -693,7 +693,7 @@ def test_successful_database_is_atomically_promoted_and_never_overwritten(
     )
 
     assert source["status"] == "complete"
-    assert source["module_count"] == 19
+    assert source["module_count"] == 20
     assert (run_root / "exports" / "miiv" / "vitals.parquet").is_file()
     assert not (
         run_root / ".orchestration" / "attempts" / "miiv" / "attempt-01" / "export"

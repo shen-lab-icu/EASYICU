@@ -75,6 +75,11 @@ def _events(database, config, concepts, p):
             if key in seen:
                 continue
             seen.add(key)
+            if database == "sic" and table == "data_ref":
+                # Invented identifiers: the callback must decode reference labels.
+                rows[table].append(pd.DataFrame({"CaseID": p["stay"], "FieldID": item,
+                                                "RefID": np.where(p["stay"] % 2, 90001, 90002)}))
+                continue
             hours = np.arange(49) if name in {"map", "urine"} else np.array([0, 6, 12, 24, 48])
             if name not in CORE:
                 hours = np.array([0, 6])
@@ -165,6 +170,9 @@ def _events(database, config, concepts, p):
                     record[value_col] = np.where((index == 0) & (hour == 0), 60., value)
             rows[table].append(pd.DataFrame(record, index=np.arange(count)))
     if database == "sic":
+        rows["d_references"].append(pd.DataFrame({
+            "ReferenceGlobalID": [90001, 90002], "ReferenceValue": ["Yes", "No"],
+        }))
         # R5-SIC-012: invented reference units make glucose rates auditable.
         rows["d_references"].append(pd.DataFrame({
             "ReferenceGlobalID": [2043, 2044, 2045, 2148],

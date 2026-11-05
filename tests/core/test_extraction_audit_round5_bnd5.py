@@ -149,8 +149,8 @@ def test_audit_channels_require_explicit_selection_in_research_catalog():
     # R5C-HIRID-014: etco2_raw's stripped variant must not steal etco2's alias.
     assert lookup["etco"] == "etco2"
     menu = _format_concept_id_allowlist([])
-    assert all(f"- `{name}`" not in menu for name in names)
-    assert all(f"- `{name}`" not in _format_concept_id_allowlist(["hgb", *names]) for name in names)
+    assert all(f"`{name}`" not in menu for name in names)
+    assert all(f"`{name}`" not in _format_concept_id_allowlist(["hgb", *names]) for name in names)
 
 
 def test_eicu_public_filter_and_raw_quality_receipt_are_independent(tmp_path):

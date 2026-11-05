@@ -152,7 +152,7 @@ def _concept_source_ids(concept: str, dataset: str, table: str, sub_var: str) ->
 def test_web_catalog_groups_are_unique_and_complete() -> None:
     grouped = [concept for concepts in CONCEPT_GROUPS_INTERNAL.values() for concept in concepts]
 
-    assert len(CONCEPT_GROUPS_INTERNAL) == 19
+    assert len(CONCEPT_GROUPS_INTERNAL) == 20
     # 2026-07-17: +vent_mode, +vent_breath_seq (harmonised ventilator-mode concepts,
     # grouped under 'ventilator'). 277 -> 279.
     # 2026-07-17: +cvp into the 'vitals' group (was only in concept-dict.json /
@@ -180,7 +180,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # companions (+6). 339 -> 361.
     # 2026-11-05 audit round 7: AUMC pH 7.4 corrected ionized calcium is its
     # own blood_gas column, cai_ph74. 361 -> 362.
-    assert len(CONCEPT_DICTIONARY) == 362
+    # UC1-K5/K6: four urine chemistry concepts and one SICdb precondition.
+    assert len(CONCEPT_DICTIONARY) == 367
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -259,7 +260,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)
-    assert len(EXTRACT_MODULE_ORDER) == len(CONCEPT_GROUPS_INTERNAL) == 19
+    assert len(EXTRACT_MODULE_ORDER) == len(CONCEPT_GROUPS_INTERNAL) == 20
     assert "sic_case_landmark" not in EXTRACT_MODULE_ORDER
     # R5C-AUMC-010 et al.: raw/QC receipts require explicit audit-module selection.
     assert "bounds_audit" not in EXTRACT_MODULE_ORDER

@@ -83,7 +83,7 @@
   const ADULT_AGE_FLOOR_YEARS = 18;
 
   // Feature modules — aligned to the real concept catalog (concept_catalog.py:
-  // CONCEPT_GROUP_NAMES, 19 groups). Counts are a fallback; render-time values
+  // CONCEPT_GROUP_NAMES, 20 groups). Counts are a fallback; render-time values
   // come from window.EU_CATALOG.groupConcepts so the UI follows the backend.
   // [name_en, name_zh, fallbackConceptCount, selected, isCore]
   const MODS = [
@@ -105,6 +105,7 @@
     ['Vasopressors', '血管活性药物', 17, false, false],
     ['Other medications', '其他药物', 54, false, false],
     ['Renal & urine output', '肾脏与尿量', 73, false, false],
+    ['Urine chemistry & renal history', '尿液生化与肾病史', 5, false, false],
     ['Neurological', '神经系统', 14, false, false],
     ['Circulatory', '循环系统', 10, false, false],
     ['Other scores', '其他评分', 9, false, false],
@@ -117,6 +118,7 @@
     'Respiratory': 'respiratory', 'Ventilator': 'ventilator', 'Blood gas': 'blood_gas',
     'Lab — Hematology': 'hematology', 'Vasopressors': 'vasopressors', 'Other medications': 'medications',
     'Renal & urine output': 'renal', 'Neurological': 'neurological', 'Circulatory': 'circulatory',
+    'Urine chemistry & renal history': 'renal_urine_chem',
     'Other scores': 'other_scores',
   };
   const EX_EXT = { csv: 'csv', excel: 'xlsx', parquet: 'parquet' };
@@ -137,6 +139,7 @@
     vasopressors: ['Vasoactive exposure, timing and dose', '血管活性药物暴露、时间与剂量'],
     medications: ['Other medication exposures and administrations', '其他药物暴露与给药记录'],
     renal: ['Urine output, renal support and kidney markers', '尿量、肾脏支持与肾功能指标'],
+    renal_urine_chem: ['Urine laboratory measurements and SICdb pre-existing renal dysfunction', '尿液检验与 SICdb 既往肾功能障碍'],
     neurological: ['Neurological observations and scores', '神经系统观察与评分'],
     circulatory: ['Circulatory support and hemodynamic measures', '循环支持与血流动力学指标'],
     other_scores: ['Additional severity and risk scores', '其他严重度与风险评分'],

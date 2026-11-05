@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # Module definitions are derived from the shared web/export catalog so the
-# public extract_database() API cannot drift from the 19-module full export.
+# public extract_database() API cannot drift from the 20-module full export.
 EXTRACT_MODULES: Dict[str, List[str]] = {
     module: list(concepts) for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
 }
@@ -85,6 +85,7 @@ _PREFERRED_EXTRACT_MODULE_ORDER: List[str] = [
     "blood_gas",
     "chemistry",
     "hematology",
+    "renal_urine_chem",
     "ventilator",
     "respiratory",
     "vasopressors",
@@ -2256,7 +2257,7 @@ def _attach_stream_derived_columns(base, addition, value_columns):
 
 
 def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Dict):
-    """Keep SOFA's total and rolled organs from one registered callback call.
+    """Load native observations and coherent SOFA callback components.
 
     Requesting the six component concepts separately returns point states.
     They must not overwrite the aggregate callback's trailing-window states
@@ -2264,6 +2265,17 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     """
     kwargs = dict(load_kwargs)
     concepts = list(kwargs["concepts"])
+    if module_name == "renal_urine_chem":
+        # Native lab rows are observations, never a display grid. In SICdb
+        # only the id_tbl flag is mapped; the display merge would fill an
+        # unknown case with False. Exclude unmapped lab tables before merging
+        # so the id-level flag retains its own grain and nullable meaning.
+        dictionary = load_dictionary(source_name=kwargs["database"])
+        mapped = [name for name in concepts if kwargs["database"] in dictionary[name].sources]
+        if not mapped:
+            return pd.DataFrame()
+        result = load_concepts_fn(**{**kwargs, "concepts": mapped, "r_compatible": False})
+        return result.dropna(subset=mapped, how="all")
     score, components = {
         "sofa1_score": ("sofa", _SOFA1_COMPONENT_NAMES),
         "sofa2_score": ("sofa2", SOFA2_COMPONENT_NAMES),
@@ -4066,7 +4078,7 @@ _EXTRACT_MODULE_GROUP_AFFINITY: List[List[str]] = [
     # 入科级小表（icustays/admissions/patients）
     ["demographics", "outcome"],
     # labevents 家族
-    ["blood_gas", "chemistry", "hematology", "renal"],
+    ["blood_gas", "chemistry", "hematology", "renal_urine_chem", "renal"],
     # inputevents / prescriptions 家族
     ["vasopressors", "medications", "circulatory"],
     # 评分闭包：SOFA 组件被 sofa1/sofa2 共享，sep3_* 复用 susp_inf+sofa/sofa2
@@ -6975,14 +6987,14 @@ def extract_database(
     resource_budget_mb: Optional[float] = None,
     module_batch_sizes: Optional[Mapping[str, int]] = None,
 ) -> Dict:
-    """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
+    """按 20 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
     ★ 这是全量特征提取的推荐入口。 不要为了提取全量特征自己写
     `load_concepts` 循环——尤其不要按单概念或小批 patient_ids 循环，那会让
     共享源表(chartevents/labevents…)被反复重读，慢上数倍。
 
     工作原理与性能：
-      * 概念按 19 个模块分组(EXTRACT_MODULE_ORDER)，每个模块一次性
+      * 概念按 20 个模块分组(EXTRACT_MODULE_ORDER)，每个模块一次性
         load_concepts(模块全部概念)，共享源表只扫一次。
       * 共享同族源表的模块进一步合并为分组(_EXTRACT_MODULE_GROUP_AFFINITY)，
         每组一个子进程、组内用 keep_cache 复用 raw/table 缓存：
@@ -7003,7 +7015,7 @@ def extract_database(
         database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic')
         data_path: 数据路径（None 则按数据库名自动解析）
         output_dir: 输出目录（None 则不写文件，仅返回 dict）
-        modules: 要提取的模块列表（None = 全部 19 个模块）
+        modules: 要提取的模块列表（None = 全部 20 个模块）
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
         batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
@@ -7073,7 +7085,7 @@ def extract_database(
 
     # Resolve the requested module scope before memory planning.  The old
     # database-only guard could not distinguish a 1.66-GiB blood_gas request
-    # from an unmeasured 19-module request, which caused needless batching.
+    # from an unmeasured 20-module request, which caused needless batching.
     if modules is None:
         modules = list(EXTRACT_MODULE_ORDER)
     else:

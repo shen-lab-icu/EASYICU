@@ -74,14 +74,14 @@ def test_sofa2_module_merges_source_named_cns_receipts(aumc_source, tmp_path, st
     assert str(schema.field("charttime").type) == "double"
 
 
-def test_all_nineteen_modules_publish_from_synthetic_aumc(aumc_source, tmp_path):
+def test_all_twenty_modules_publish_from_synthetic_aumc(aumc_source, tmp_path):
     output = tmp_path / "full-export"
     result = api.extract_database(
         database="aumc", data_path=aumc_source, output_dir=output,
         patient_ids={"admissionid": [1, 2, 3]}, batch_size=3,
         native_export_v2=True, resource_budget_mb=2048, verbose=False,
     )
-    assert len(result["modules"]) == 19
+    assert len(result["modules"]) == 20
     assert all(not module["errors"] for module in result["modules"].values())
     manifest = json.loads((output / "_manifest.json").read_text())
     assert manifest["schema_version"] == "easyicu_native_export_v2"

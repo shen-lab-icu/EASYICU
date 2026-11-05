@@ -285,6 +285,11 @@ CONCEPT_DICTIONARY = {
     'phn_rate': ('Phenylephrine Rate', '去氧肾上腺素速率', 'mcg/kg/min'),
 
     # 肾脏与尿量率
+    'urine_na': ('Urine Sodium', '尿钠', 'mmol/L'),
+    'urine_crea': ('Urine Creatinine', '尿肌酐', 'mg/dL'),
+    'urine_osm': ('Urine Osmolality', '尿渗透压', 'mOsm/kg'),
+    'urine_urea': ('Urine Urea Nitrogen', '尿尿素氮', 'mg/dL'),
+    'sic_precondition_renal_dysfunction': ('SICdb Pre-existing Renal Dysfunction', 'SICdb既往肾功能障碍', 'boolean'),
     'rrt': ('Renal Replacement Therapy', '肾脏替代治疗', 'boolean'),
     'rrt_criteria': ('RRT Criteria Met', '满足RRT标准', 'boolean'),
     'uo_6h': ('Average Urine Output Rate (past 6h)', '过去6小时平均尿量率', 'mL/kg/h'),
@@ -492,6 +497,11 @@ CONCEPT_DESCRIPTIONS = {
     'po2': ('Partial pressure of O2 in arterial blood', '动脉血中氧分压'),
 
     # Labs
+    'urine_na': ('Urine sodium concentration; mEq/L is equivalent to mmol/L for sodium', '尿钠浓度；钠的 mEq/L 与 mmol/L 等价'),
+    'urine_crea': ('Urine creatinine concentration, separate from serum creatinine', '尿肌酐浓度，与血清肌酐分开'),
+    'urine_osm': ('Urine osmolality in mOsm/kg; eICU mOsm/L is not pooled', '尿渗透压（mOsm/kg）；不混合eICU的mOsm/L记录'),
+    'urine_urea': ('Urine urea nitrogen concentration in mg/dL of nitrogen, not whole urea', '尿尿素氮浓度（mg/dL氮），不按全尿素质量计算'),
+    'sic_precondition_renal_dysfunction': ('SICdb Yes/No renal precondition; unknown stays missing; distinct from hospital ICD comorbidity flags', 'SICdb既往肾功能障碍Yes/No标志；未知保留缺失，与住院ICD合并症标志分开'),
     'crea': ('Serum creatinine - kidney function marker, key for SOFA renal scoring', '血清肌酐 - 肾功能标志物，SOFA肾脏评分关键指标'),
     'bili': ('Total bilirubin - liver function marker, key for SOFA liver scoring', '总胆红素 - 肝功能标志物，SOFA肝脏评分关键指标'),
     'plt': ('Platelet count - coagulation marker, key for SOFA coagulation scoring', '血小板计数 - 凝血功能标志物，SOFA凝血评分关键指标'),
@@ -648,6 +658,8 @@ CONCEPT_GROUPS_INTERNAL = {
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
+    'renal_urine_chem': ['urine_na', 'urine_crea', 'urine_osm', 'urine_urea',
+                         'sic_precondition_renal_dysfunction'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm', 'icu_unit_type', 'icu_stay_is_readmission'],
@@ -720,6 +732,7 @@ CONCEPT_GROUP_NAMES = {
     'vasopressors': ('💉 Vasopressors', '💉 血管活性药物'),
     'medications': ('💊 Other Medications', '💊 其他药物'),
     'renal': ('🚰 Renal & Urine Output', '🚰 肾脏与尿量'),
+    'renal_urine_chem': ('🧪 Urine Chemistry & Renal History', '🧪 尿液生化与肾病史'),
     'neurological': ('🧠 Neurological', '🧠 神经系统'),
     'circulatory': ('❤️‍🩹 Circulatory System', '❤️‍🩹 循环系统'),
     'demographics': ('👤 Demographics', '👤 人口统计'),
@@ -743,6 +756,7 @@ CONCEPT_GROUPS_DISPLAY = {
     'vasopressors': '💉 Vasopressors',
     'medications': '💊 Medications',
     'renal': '🚰 Renal',
+    'renal_urine_chem': '🧪 Urine Chemistry & Renal History',
     'neurological': '🧠 Neurological',
     'circulatory': '❤️‍🩹 Circulatory',
     'demographics': '👤 Demographics',
@@ -830,6 +844,8 @@ CLINICAL_LANES = {
 
 # 跨库概念可用性（用于 harmonization badge）
 CONCEPT_DB_COVERAGE = {
+    'urine_na': 3, 'urine_crea': 3, 'urine_osm': 2, 'urine_urea': 2,
+    'sic_precondition_renal_dysfunction': 1,
     'hr': 6, 'map': 6, 'sbp': 6, 'dbp': 6, 'resp': 6, 'spo2': 6, 'temp': 6,
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
     'anion_gap': 6, 'pulse_pressure': 6,
@@ -941,6 +957,7 @@ TIME_SERIES_COMPATIBLE_MODULES = {
     'vasopressors',     # 血管活性药物
     'medications',      # 药物
     'renal',            # 肾脏与尿量
+    'renal_urine_chem',  # 尿液生化；既往肾病标志按 id_tbl 规则发布
     'neurological',     # 神经系统（GCS等）
     'circulatory',      # 循环系统
     'other_scores',     # 其他评分

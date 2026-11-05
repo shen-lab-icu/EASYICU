@@ -48,6 +48,7 @@ MODULE_ORDER = (
     "blood_gas",
     "chemistry",
     "hematology",
+    "renal_urine_chem",
     "ventilator",
     "respiratory",
     "vasopressors",
@@ -771,24 +772,24 @@ def _validate_export_package(
     module_rss = manifest.get("module_peak_rss_mb")
     module_working_set = manifest.get("module_peak_working_set_mb")
     if not isinstance(timings, dict) or set(timings) != set(MODULE_ORDER):
-        raise ExtractionRunError("native manifest must time exactly the 19 modules")
+        raise ExtractionRunError("native manifest must time exactly the 20 modules")
     if not isinstance(module_rss, dict) or set(module_rss) != set(MODULE_ORDER):
-        raise ExtractionRunError("native manifest must bind RSS for all 19 modules")
+        raise ExtractionRunError("native manifest must bind RSS for all 20 modules")
     if not isinstance(module_working_set, dict) or set(module_working_set) != set(
         MODULE_ORDER
     ):
         raise ExtractionRunError(
-            "native manifest must bind working-set peaks for all 19 modules"
+            "native manifest must bind working-set peaks for all 20 modules"
         )
 
     entries = manifest.get("files")
     if not isinstance(entries, list) or len(entries) != len(MODULE_ORDER):
-        raise ExtractionRunError("native manifest must contain 19 file receipts")
+        raise ExtractionRunError("native manifest must contain 20 file receipts")
     if not all(isinstance(entry, dict) for entry in entries):
         raise ExtractionRunError("native manifest file receipts must be objects")
     by_module = {entry.get("module"): entry for entry in entries}
     if len(by_module) != len(entries) or set(by_module) != set(MODULE_ORDER):
-        raise ExtractionRunError("native manifest module set is not the 19-module contract")
+        raise ExtractionRunError("native manifest module set is not the 20-module contract")
     actual_parquets = _public_parquet_paths(export_root)
     expected_parquets = {f"{module}.parquet" for module in MODULE_ORDER}
     if actual_parquets != expected_parquets:
@@ -1001,7 +1002,7 @@ def _worker_main(spec_path: Path) -> int:
                 f"worker imported EasyICU from {imported_package}, expected {expected_package}"
             )
         if tuple(EXTRACT_MODULE_ORDER) != MODULE_ORDER:
-            raise ExtractionRunError("worker 19-module catalog differs from launcher contract")
+            raise ExtractionRunError("worker 20-module catalog differs from launcher contract")
 
         database = str(spec["database"])
         data_path = str(spec["data_path"])
@@ -1540,7 +1541,7 @@ def _load_resume_manifest(
     if manifest.get("database_order") != list(databases):
         raise ExtractionRunError("resume database list/order differs from the original run")
     if manifest.get("module_order") != list(MODULE_ORDER):
-        raise ExtractionRunError("resume run uses a different 19-module contract")
+        raise ExtractionRunError("resume run uses a different 20-module contract")
     checkout = manifest.get("source_checkout") or {}
     if (
         checkout.get("easyicu_git_commit") != identity["commit"]

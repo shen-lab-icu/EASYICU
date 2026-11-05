@@ -1544,7 +1544,7 @@ def _reconstruct_database_runtime_metrics(
     database: str,
     cumulative_refresh_runtime: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, float]]:
-    """Rebuild 19 module timings from original and cumulative refresh evidence."""
+    """Rebuild 20 module timings from original and cumulative refresh evidence."""
 
     sources = source_run_manifest.get("sources")
     source_record = sources.get(database) if isinstance(sources, Mapping) else None

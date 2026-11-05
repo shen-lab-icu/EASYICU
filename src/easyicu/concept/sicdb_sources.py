@@ -187,10 +187,49 @@ def _glucose_factors(frame, data_source):
         raise ConceptExtractionUnavailable(concept_id="dex", database="sic", stage="glucose_reference_unit", detail="SICdb glucose needs an unambiguous reference amount unit and known concentration") from exc
 
 
+def precondition(frame, *, value, concept_name, data_source):
+    """Decode a case precondition from reference labels, retaining unknowns.
+
+    Reference identifiers are release-specific. Conflicting reference labels
+    or conflicting Yes/No records for a case cannot establish its history.
+    """
+    from ..datasource import FilterOp, FilterSpec
+    from .errors import ConceptExtractionUnavailable
+
+    out = frame[["CaseID"]].copy()
+    out[concept_name] = pd.Series(pd.NA, index=out.index, dtype="boolean")
+    if frame.empty:
+        return out
+    if "FieldID" not in frame:
+        raise ConceptExtractionUnavailable(
+            concept_id=concept_name, database="sic", stage="precondition_field",
+            detail="SICdb preconditions require data_ref.FieldID",
+        )
+    ids = pd.to_numeric(frame[value], errors="coerce")
+    try:
+        refs = _table(data_source, "d_references", ["ReferenceGlobalID", "ReferenceValue"],
+                      [FilterSpec("ReferenceGlobalID", FilterOp.IN, ids.dropna().unique().tolist())])
+        flags = refs.ReferenceValue.astype("string").str.strip().str.casefold().map({"yes": True, "no": False})
+        lookup = pd.DataFrame({"reference": pd.to_numeric(refs.ReferenceGlobalID, errors="coerce"),
+                               "flag": flags.astype("boolean")}).drop_duplicates()
+        lookup = lookup.loc[~lookup.reference.duplicated(keep=False)].set_index("reference").flag
+        out[concept_name] = ids.map(lookup).astype("boolean")
+    except (KeyError, ValueError, TypeError, AttributeError, OSError) as exc:
+        raise ConceptExtractionUnavailable(
+            concept_id=concept_name, database="sic", stage="precondition_reference",
+            detail="SICdb preconditions require d_references Yes/No labels",
+        ) from exc
+    contradictory = out.groupby("CaseID")[concept_name].transform("nunique").gt(1)
+    out[concept_name] = out[concept_name].mask(contradictory)
+    return out.groupby("CaseID", as_index=False)[concept_name].first()
+
+
 def apply_source(frame, *, source, concept_name, data_source):
     """Dispatch only explicitly declared SICdb source callbacks."""
     value = concept_name if concept_name in frame else source.value_var
     callback = source.callback
+    if callback == "sicdb_precondition":
+        return precondition(frame, value=value, concept_name=concept_name, data_source=data_source)
     if callback == "sicdb_cvp_raw":
         return frame
     if callback in {"sicdb_exposure", "sicdb_interval_exposure"}:

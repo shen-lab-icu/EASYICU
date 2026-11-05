@@ -7,6 +7,8 @@ contract that prevents that failure mode from coming back.
 
 from __future__ import annotations
 
+import re
+
 from easyicu.research_agent import schema
 from easyicu.research_agent.agents.core import (
     PLANNER_MAX_RETRIES,
@@ -57,9 +59,10 @@ def test_planner_prompt_contains_concept_allowlist() -> None:
 
 def _listed_ids(prompt: str) -> list[str]:
     return [
-        line.strip()[3:-1]
+        concept
         for line in prompt.splitlines()
         if line.strip().startswith("- `") and line.strip().endswith("`")
+        for concept in re.findall(r"`([^`]+)`", line)
     ]
 
 

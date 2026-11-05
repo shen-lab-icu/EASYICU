@@ -34,6 +34,16 @@ It is an administrator tool; it is not selected by the Planner.
 
 ## Status vocabulary
 
+The extraction projection reads the shared module catalog. Its UC2
+`renal_urine_chem` data module contains the four urine assays and the SICdb
+renal precondition, separate from `renal`. This uses the existing extraction
+owner and adds no Python module, scientific capability or `primary_runner`.
+The capability matrix and import graph therefore retain their existing rows
+and edges. `test_urine_module_has_one_owner_and_uses_the_lab_group` and the
+six-source synthetic publication regression cover the module boundary;
+`test_extraction_prefill_projects_all_six_owners_without_executing` covers the
+metadata projection. Resource ceilings remain unchanged.
+
 | status | meaning |
 | --- | --- |
 | `production_reachable` | A public API reaches the real runtime owner, and the row binds an exact integration test proving that route. |
