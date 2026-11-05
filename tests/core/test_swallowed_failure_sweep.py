@@ -157,3 +157,57 @@ def test_sicdb_cvp_reference_read_failure_raises(monkeypatch):
     monkeypatch.setattr(sicdb_sources, "_table", boom)
     with pytest.raises(RuntimeError, match="sicdb_cvp_arterial_reference_read_failed"):
         sicdb_sources.filter_cvp({"cvp_raw": cvp}, SimpleNamespace(data_source=None, interval=None))
+
+
+def _ctx(name, resolver, **kwargs):
+    from easyicu.concept.callbacks import ConceptCallbackContext
+
+    return ConceptCallbackContext(
+        concept_name=name, target=None, interval=pd.Timedelta(hours=1),
+        resolver=resolver, data_source=_db("eicu"), patient_ids=None, kwargs=kwargs,
+    )
+
+
+def test_vaso60_weight_load_failure_raises():
+    from easyicu.concept.callbacks import _callback_vaso60
+    from easyicu.table import ICUTable
+
+    rate = ICUTable(
+        pd.DataFrame({"stay_id": [1], "charttime": [0.0], "norepi_rate": [8.0],
+                      "rateuom": ["mcg/min"]}),
+        id_columns=["stay_id"], index_column="charttime",
+        value_column="norepi_rate", unit_column="rateuom",
+    )
+    dur = ICUTable(
+        pd.DataFrame({"stay_id": [1], "charttime": [0.0], "norepi_dur": [pd.Timedelta(hours=2)]}),
+        id_columns=["stay_id"], index_column="charttime", value_column="norepi_dur",
+    )
+    with pytest.raises(RuntimeError, match="vasopressor_weight_load_failed: weight"):
+        _callback_vaso60({"norepi_rate": rate, "norepi_dur": dur},
+                         _ctx("norepi60", _FailingKeyResolver()))
+
+
+class _FailingKeyResolver:
+    def load_concepts(self, *_args, **_kwargs):
+        raise KeyError("weight")
+
+
+def test_rrt_criteria_dependency_load_failure_raises():
+    from easyicu.concept.callbacks import _callback_rrt_criteria
+
+    with pytest.raises(RuntimeError, match="rrt_dependency_load_failed"):
+        _callback_rrt_criteria({}, _ctx("rrt_criteria", _FailingKeyResolver()))
+
+
+def test_raw_concept_load_failure_raises_instead_of_returning_none(monkeypatch):
+    from easyicu.concept import ConceptResolver
+    from easyicu.resources import load_dictionary
+
+    resolver = ConceptResolver(load_dictionary())
+
+    def fail(*_args, **_kwargs):
+        raise OSError("read failed")
+
+    monkeypatch.setattr(resolver, "load_concepts", fail)
+    with pytest.raises(RuntimeError, match="raw_concept_load_failed: urine"):
+        resolver.get_raw_concept("urine", _db("miiv"), None)

@@ -624,10 +624,10 @@ def test_registry_blood_cell_ratio_also_fails_closed_when_wbc_load_fails(monkeyp
         patient_ids=None,
     )
 
-    result = _callback_blood_cell_ratio({"lymph": table}, context).data
-
-    assert result["lymph"].isna().all()
-    assert result["lymph_assessment_reason"].tolist() == ["wbc_load_failed"]
+    # lead-r13 sweep: a failed WBC load fails the module; it is not recorded
+    # as an NA ratio with a reason, which a rerun would not reproduce.
+    with pytest.raises(RuntimeError, match="wbc_ratio_calculation_failed"):
+        _callback_blood_cell_ratio({"lymph": table}, context)
 
 
 # ---------------------------------------------------------------------------

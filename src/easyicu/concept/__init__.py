@@ -1005,8 +1005,12 @@ class ConceptResolver:
                         store_legacy=True,
                     )
                 return result.copy() if hasattr(result, 'copy') else result
-        except Exception:
-            pass
+        except Exception as exc:
+            # Callers would otherwise fall back to aggregated data, a
+            # different reading of the concept (lead-r13 sweep).
+            raise RuntimeError(
+                f"raw_concept_load_failed: {concept_name} ({type(exc).__name__}: {exc})"
+            ) from exc
         return None
 
     @staticmethod

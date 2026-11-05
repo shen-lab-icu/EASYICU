@@ -6549,11 +6549,13 @@ def _callback_vaso60(
                             weight_table = loaded.get(weight_concept)
                         else:
                             weight_table = loaded
-                    except Exception as exc:  # pragma: no cover - defensive guard
-                        print(
-                            f"⚠️  Warning: failed to load '{weight_concept}' concept for vasopressor conversion: {exc}"
-                        )
-                        weight_table = None
+                    except Exception as exc:
+                        # A failed weight load is not a stay without weight:
+                        # every per-minute rate in the batch would become NA.
+                        raise RuntimeError(
+                            f"vasopressor_weight_load_failed: {weight_concept} "
+                            f"({type(exc).__name__}: {exc})"
+                        ) from exc
 
                 if isinstance(weight_table, ICUTable):
                     weight_df = weight_table.data.copy()
@@ -7285,8 +7287,11 @@ def _callback_rrt_criteria(
             elif isinstance(loaded, ICUTable) and len(missing_direct) == 1:
                 tables[missing_direct[0]] = loaded
         except (KeyError, ValueError) as e:
-            if os.environ.get('DEBUG'):
-                logger.warning(f"无法加载部分RRT依赖概念: {e}")
+            # Without urine/weight the urine-output criteria would silently
+            # drop out of the RRT definition.
+            raise RuntimeError(
+                f"rrt_dependency_load_failed: {missing_direct} ({type(e).__name__}: {e})"
+            ) from e
     
     # 手动计算缺失的 UO 概念，避免递归调用 load_concepts
     if missing_uo and "urine" in tables and "weight" in tables:
