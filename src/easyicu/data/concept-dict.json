@@ -7624,6 +7624,7 @@
   }
  },
  "epi_rate": {
+  "_comment": "Round-12 bound basis (v6 max 1.5 -> max 5): doses above 1.5 mcg/kg/min occur in refractory shock and resuscitation, so 1.5 discarded real infusions; above 5 is treated as a unit or concentration error (mg vs mcg) (round 3, 5a5eac84b).",
   "unit": [
    "mcg/kg/min",
    "mcgkgmin"
@@ -9844,6 +9845,7 @@
   }
  },
  "hbco": {
+  "_comment": "Round-12 bound basis (v6 no bounds -> 0-100): carboxyhaemoglobin is a percentage of total haemoglobin, so values outside 0-100 are impossible (R4-135/R4-174, b21030f26).",
   "description": "carboxyhemoglobin",
   "omopid": 4056787,
   "min": 0,
@@ -10708,6 +10710,7 @@
   }
  },
  "ins": {
+  "_comment": "Round-12 bound basis (v6 no max -> max 50): IV insulin infusions rarely exceed 20-30 U/h even in severe insulin resistance; above 50 U/h is a bolus, a total amount or a unit error charted as a rate (round 3, 5a5eac84b).",
   "unit": "units/hr",
   "min": 0,
   "max": 50,
@@ -16590,6 +16593,7 @@
   "class_name": "rec_cncpt"
  },
  "norepi_rate": {
+  "_comment": "Round-12 bound basis (v6 max 3 -> max 5): refractory septic shock can exceed 3 mcg/kg/min; above 5 is treated as a unit or concentration error (round 3, 5a5eac84b).",
   "unit": [
    "mcg/kg/min",
    "mcgkgmin"
@@ -17255,7 +17259,7 @@
    "min",
    "median"
   ],
-  "_comment": "2026-11-03 extraction audit round 2 (G5): FiO2 is the hourly median, not the hourly maximum. HiRID charts FiO2 about every 2 minutes, and the hour's highest FiO2 paired with its lowest PaO2 put 37% of P/F rows more than 5% below the median-FiO2 value (HiRID 800 patients: P/F median 184 -> 221 mmHg; AUMC 215 -> 220; MIIV and eICU change <2%). PaO2 stays the hourly minimum.",
+  "_comment": "2026-11-03 extraction audit round 2 (G5): FiO2 is the hourly median, not the hourly maximum. HiRID charts FiO2 about every 2 minutes, and the hour's highest FiO2 paired with its lowest PaO2 put 37% of P/F rows more than 5% below the median-FiO2 value (HiRID 800 patients: P/F median 184 -> 221 mmHg; AUMC 215 -> 220; MIIV and eICU change <2%). PaO2 stays the hourly minimum. | Round-12: this deliberately deviates from ricu, whose pafi pairs the hourly [min PaO2, max FiO2]. The median FiO2 is closer to the FiO2 at gas sampling and resists transient peaks such as pre-oxygenation before suctioning. Direction against ricu: P/F is equal or higher, so the SOFA respiratory component is equal or lower.",
   "callback": "pafi",
   "class_name": "rec_cncpt"
  },
@@ -18725,6 +18729,7 @@
   "_comment": "2026-11-04 audit round 3 (full-dictionary M): the lower bound is 1 cmH2O; a plateau <= 0 is not a measurement (AUMC 1,039 rows in 231 stays). | 2026-11-04 audit round 3 (R3-18): a charted plateau above the same hour's PIP + 1 cmH2O or below its PEEP is not a plateau (HiRID 7.1%, eICU 3.2%, AUMC 2.9% above PIP; eICU 2.9% below PEEP) and is dropped; a plateau without a PIP or PEEP that hour is kept. The charted values are plateau_pres_raw."
  },
  "plateau_pres_raw": {
+  "_comment": "Round-12 bound basis (v6 new concept -> min 1): as plateau_pres: a plateau <= 0 cmH2O during an inspiratory hold under positive pressure is not a measurement (round 3, 3a296c1f9).",
   "unit": [
    "cmH2O",
    "mbar"
@@ -18955,6 +18960,7 @@
   }
  },
  "plt": {
+  "_comment": "Round-12 bound basis (v6 min 5 -> min 1): platelet counts of 1-4 x10^9/L are real in severe thrombocytopenia (ITP, TTP, aplasia after chemotherapy); 0 is not a count (R4-158, ade4802d7).",
   "source_channel_priority": [
    "lab",
    "chart"
@@ -22494,6 +22500,7 @@
   }
  },
  "tidal_vol": {
+  "_comment": "Round-12 bound basis (v6 min 0 -> min 1): a tidal volume of 0 mL is no breath or a disconnected sensor, not a measured volume (round 3, 5a5eac84b).",
   "unit": [
    "ml",
    "mL"
@@ -33583,7 +33590,7 @@
   "max": 100,
   "description": "intracranial pressure",
   "category": "neurological",
-  "_comment": "2026-07-17: corrected. MIMIC-IV has 220765/227989 (official mimic-code icp.sql uses both) - now wired. AUMC also has 8835/13940 (mmHg) and 19358 (cmH2O, would need x0.7355) per the official get_neurology_flowsheet_itemids.sql - NOT wired yet, pending a unit-aware source.",
+  "_comment": "2026-07-17: corrected. MIMIC-IV has 220765/227989 (official mimic-code icp.sql uses both) - now wired. AUMC also has 8835/13940 (mmHg) and 19358 (cmH2O, would need x0.7355) per the official get_neurology_flowsheet_itemids.sql - NOT wired yet, pending a unit-aware source. | Round-12 bound basis (v6 min 0 -> min -10): intracranial pressure is negative in the upright position and with CSF over-drainage, reaching about -10 mmHg; lower values are zeroing errors (R4-112, ade4802d7).",
   "sources": {
    "mimic": [
     {

@@ -4,6 +4,45 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — round-12 basis records: bounds vs v6 and P/F (no value change)
+
+### Bounds that differ from v6 (97f508c6c)
+
+R2 freezes the bounds of the round-5 baseline (`cd2bae05d`). Every change
+below is an ancestor of that baseline and came from an audit correction, so
+none breaks R2. Each concept's `_comment` states the physiological basis.
+
+| Concept | v6 min/max | Now min/max | Commit (audit) | Basis |
+|---|---|---|---|---|
+| `dbp` | 0/200 | 1/200 | `3a296c1f9` (round 3 M) | <= 0 mmHg is a disconnected or zeroing transducer or cuff |
+| `map` | 0/250 | 1/250 | `3a296c1f9` (round 3 M) | as `dbp` |
+| `sbp` | 0/300 | 1/300 | `3a296c1f9` (round 3 M) | as `dbp` |
+| `plateau_pres` | 0/100 | 1/100 | `3a296c1f9` (round 3 M) | <= 0 cmH2O during an inspiratory hold is not a measurement |
+| `tidal_vol` | 0/2000 | 1/2000 | `5a5eac84b` (round 3) | 0 mL is no breath or a disconnected sensor |
+| `epi_rate` | 0/1.5 | 0/5 | `5a5eac84b` (round 3) | refractory shock exceeds 1.5 mcg/kg/min; > 5 is a unit error |
+| `norepi_rate` | 0/3 | 0/5 | `5a5eac84b` (round 3) | refractory shock exceeds 3 mcg/kg/min; > 5 is a unit error |
+| `ins` | 0/none | 0/50 | `5a5eac84b` (round 3) | IV insulin rarely exceeds 20-30 U/h; > 50 is a bolus or unit error |
+| `icp` | 0/100 | -10/100 | `ade4802d7` (R4-112) | ICP is negative upright or with CSF over-drainage |
+| `plt` | 5/1200 | 1/1200 | `ade4802d7` (R4-158) | counts of 1-4 x10^9/L are real in severe thrombocytopenia |
+| `hbco` | none | 0/100 | `b21030f26` (R4-135/R4-174) | a percentage of total haemoglobin |
+
+New split/raw concepts that have no v6 counterpart carry the same thresholds
+as their parent: `map_invasive`, `map_nibp` (min 1) and `plateau_pres_raw`
+(min 1). The AUMC blood-pressure sources keep `na_below(1)` (6641/6642/6643,
+6678/6679/6680, 8841/8842/8843); it equals the concept minimum and is not a
+separate cut.
+
+### P/F FiO2 aggregation deviates from ricu [G5, `474f34ddb`]
+
+- ricu's `pafi` pairs the hourly minimum PaO2 with the hourly **maximum**
+  FiO2. EasyICU uses the hourly **median** FiO2 (PaO2 stays the minimum).
+- Reason: the median is closer to the FiO2 at gas sampling, and it resists
+  transient peaks such as pre-oxygenation before suctioning.
+- Direction against ricu: in any hour, P/F is equal or higher, so the SOFA-1
+  and SOFA-2 respiratory components are equal or lower. The effect is largest
+  where FiO2 is charted often (HiRID P/F median 184 -> 221 mmHg; AUMC
+  215 -> 220; MIIV and eICU < 2%).
+
 ## 2026-11-05 — diltiazem is IV only [R5C-HIRID-012 partly withdrawn] (pending lead reseal)
 
 - Round-11 ruling: `diltiazem` is intravenous exposure in every database,
