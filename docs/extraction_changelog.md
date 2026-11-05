@@ -4,6 +4,19 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — MIMIC-III per-kg rates: a weight-load failure is an error [lead-r13]
+
+- `mimic_kg_rate` loads each stay's weight before dividing a rate by it. When
+  that load raised, the callback logged a warning and published every per-kg
+  rate of the batch as NA. It now fails the module with
+  `mimic_kg_rate_weight_load_failed`. Stays that truly have no weight keep the
+  round-3 NA rule (R3-20).
+- The failure seen was in the CareVue view: its MetaVision `inputevents_mv`
+  has no `icustay_id`, so that weight source returns an empty table without
+  the value column, and `convert_unit` raised `KeyError: 'weight'`. An empty
+  source now passes through `convert_unit`; rows without the value column
+  still raise.
+
 ## 2026-11-05 — round-12b tightenings: eICU antibiotic HICL and icd_abx timing [`98b58496d`, `1a94804e0`]
 
 - **eICU antibiotic HICL branch** (eICU and eICU-demo). It now admits only

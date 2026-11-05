@@ -2552,6 +2552,10 @@ def _apply_callback(
         else:
             mask = pd.Series(True, index=frame.index)
 
+        if concept_name not in frame.columns and frame.empty:
+            # An empty source (e.g. the CareVue view's MetaVision table) has
+            # nothing to convert; rows without the value column still fail.
+            return frame
         numeric = pd.to_numeric(frame.loc[mask, concept_name], errors="coerce")
         transformed = _apply_binary_op(symbol, numeric, value)
         
@@ -3791,8 +3795,14 @@ def _apply_callback(
                                     .rename('weight').reset_index()
                                 )
                                 frame = frame.merge(per_stay, on=id_col, how='left')
-            except Exception:
-                logger.warning("mimic_kg_rate: admission weight could not be loaded", exc_info=True)
+            except Exception as exc:
+                # A load failure is not "no weight": NA-ing every rate of the
+                # batch would silently drop data.  Stays genuinely without a
+                # weight are handled below.
+                raise RuntimeError(
+                    f"mimic_kg_rate_weight_load_failed: weight for {concept_name} "
+                    f"could not be loaded ({type(exc).__name__}: {exc})"
+                ) from exc
 
         # Divide rate by weight.  A rate charted per minute without a weight is
         # not a per-kg rate and is NA (2026-11-04 audit round 3, R3-20: 22
