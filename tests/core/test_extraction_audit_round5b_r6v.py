@@ -493,20 +493,21 @@ def test_r6_f043_sic_hpm_369_cannot_enter_creatinine_selector_or_reference_stage
     # R6-F023 adds enzymatic creatinine 368; HPM 369 stays out.
     assert [s.ids for s in definition.sources["sic"]] == [[367, 368]]
     source = _source(tmp_path, "sic", laboratory=pd.DataFrame({
-        "CaseID": [1, 1, 1, 1], "LaboratoryID": [367, 369, 367, 369],
+        "CaseID": [1] * 6, "LaboratoryID": [367, 369, 368, 369, 367, 369],
         # Both candidate values are inside the main concept's numeric bounds:
         # source selection, rather than value clipping, must exclude them.
-        "Offset": [0., 0., 3600., 3600.], "LaboratoryValue": [1., 3., 1., 12.],
+        "Offset": [0., 0., 3600., 3600., 7200., 7200.],
+        "LaboratoryValue": [1., 3., 1.4, 12., 1., 4.],
     }), cases=pd.DataFrame({"CaseID": [1], "PatientID": [1], "ICUOffset": [0.],
                            "TimeOfStay": [86400.], "OffsetOfDeath": [np.nan]}))
     loaded = ConceptResolver(ConceptDictionary({"crea": definition})).load_concepts(
         ["crea"], source, merge=False, r_compatible=False, verbose=False,
         interval=pd.Timedelta(hours=1), concept_workers=1, patient_ids={"CaseID": [1]},
     )["crea"].data
-    assert loaded.crea.tolist() == [1., 1.]
+    assert loaded.crea.tolist() == [1., 1.4, 1.]
     result = apply_reference_aki(crea_df=loaded, id_col="CaseID", time_col="Offset",
                                  time_unit="hours")
-    assert result.aki_stage_reference.tolist() == [0, 0]
+    assert result.aki_stage_reference.tolist() == [0, 1, 0]
 
 
 @pytest.mark.parametrize("values,total", [
@@ -611,6 +612,71 @@ def test_r6_f005_public_selector_rejected_collection_is_inert(tmp_path, database
         results.append({name: table.data for name, table in batch.items()})
     for name in names:
         pd.testing.assert_frame_equal(results[0][name], results[1][name])
+
+
+@pytest.mark.parametrize("database", ["miiv", "mimic", "eicu", "sic"])
+@pytest.mark.parametrize("layout", ["flat", "bucket"])
+@pytest.mark.parametrize("name", ["urine24", "uo_6h"])
+@pytest.mark.parametrize("compatible", [False, True])
+def test_r6_f005_partial_wide_request_keeps_urine_availability(tmp_path, monkeypatch, database, layout, name, compatible):
+    from easyicu.scores.urine_output import urine_availability_columns
+
+    times = np.r_[np.arange(25) + .25, 38.25, 44.25]
+    source = _urine_source(tmp_path, database, times, [10.] * 25 + [900., 60.], layout=layout)
+    names = ["k", "na", "cl", {"eicu": "phos", "sic": "bili"}.get(database, "mg")]
+    dictionary = load_dictionary()
+    definitions = [dictionary.get(n).sources[database][0] for n in names]
+    assert len({d.table for d in definitions}) == 1
+    assert all(d.callback is None for d in definitions)
+    ids = [d.ids[0] for d in definitions]
+    values = [4., 140., 100., 2.]
+    if database in {"miiv", "mimic"}:
+        # Real lab rows have admission identifiers, not ICU stay identifiers.
+        labs = pd.DataFrame({"subject_id": 1, "hadm_id": 1,
+            "charttime": pd.Timestamp("2180-01-01 00:17"), "itemid": ids,
+            "valuenum": values, "valueuom": ["mEq/L"] * 3 + ["mg/dL"]})
+    elif database == "eicu":
+        labs = pd.DataFrame({"patientunitstayid": 1, "labresultoffset": 0.,
+                             "labname": ids, "labresult": values,
+                             "labmeasurenameinterface": ["mEq/L"] * 3 + ["mg/dL"]})
+    else:
+        labs = pd.DataFrame({"CaseID": 1, "Offset": 0., "LaboratoryID": ids,
+                             "LaboratoryValue": values})
+    source = _source(tmp_path, database, layout=layout, **{definitions[0].table: labs})
+
+    calls = []
+    original = ConceptResolver._merge_partial_wide_result
+
+    def record_partial(resolver, merged, tables, requested, covered, **kwargs):
+        calls.append(set(covered))
+        return original(resolver, merged, tables, requested, covered, **kwargs)
+
+    monkeypatch.setattr(ConceptResolver, "_merge_partial_wide_result", record_partial)
+
+    def publish(requested):
+        frame = ConceptResolver(dictionary).load_concepts(
+            requested, source, merge=True, r_compatible=compatible,
+            interval=pd.Timedelta(hours=1), verbose=False, concept_workers=1,
+        )
+        from easyicu.scores.kdigo_aki import detect_time_col
+
+        return frame.rename(columns={detect_time_col(frame): "charttime"}).set_index(
+            [source.config.id_configs["icustay"].id, "charttime"],
+        )
+
+    single = publish([name])
+    batch = publish([*names, name])
+    if layout == "bucket" and compatible:
+        assert set(names) in calls  # prove that the optimized branch was reached
+    assert batch.loc[(1, 0.), names].tolist() == pytest.approx(values)
+    receipts = urine_availability_columns(name)
+    assert single[receipts].notna().any().all()
+    assert set(receipts) <= set(batch.columns)
+    columns = [name, *receipts] if compatible else list(single.columns)
+    pd.testing.assert_frame_equal(
+        batch.reindex(single.index)[columns], single[columns],
+        check_dtype=False,
+    )
 
 
 @pytest.mark.parametrize("database", ["miiv", "mimic"])
@@ -755,7 +821,8 @@ def _sofa2_source(tmp_path, database, layout):
     return source
 
 
-@pytest.mark.parametrize("database,layout", [("eicu", "flat"), ("sic", "flat"), ("sic", "bucket")])
+@pytest.mark.parametrize("database", ["eicu", "sic"])
+@pytest.mark.parametrize("layout", ["flat", "bucket"])
 def test_r6_f040_public_owners_resolve_support_and_metabolic_inputs(tmp_path, database, layout):
     source = _sofa2_source(tmp_path, database, layout)
     times = [0., 1., 3.]
@@ -773,14 +840,26 @@ def test_r6_f040_public_owners_resolve_support_and_metabolic_inputs(tmp_path, da
         assert combined["sofa2_resp"].data.set_index("charttime").loc[1., "sofa2_resp"] == 4
 
 
-def test_r6_f040_native_respiratory_retains_explicit_sic_airway(tmp_path, monkeypatch):
+@pytest.mark.parametrize("layout", ["flat", "bucket"])
+@pytest.mark.parametrize("settings", ["unrelated", "empty", "missing"])
+def test_r6_f040_native_respiratory_retains_explicit_sic_airway(tmp_path, monkeypatch, layout, settings):
+    import shutil
     import tempfile
     from easyicu.api.extraction import extract_database
 
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("EASYICU_DUCKDB_TEMP_DIR", str(tmp_path / "duckdb"))
-    source = _sofa2_source(tmp_path / "source", "sic", "bucket")
+    source = _sofa2_source(tmp_path / "source", "sic", layout)
+    table = (source.base_path / "data_float_h.parquet" if layout == "flat"
+             else source.base_path / "data_float_h_bucket/bucket_id=0/part.parquet")
+    if settings == "empty":
+        pd.read_parquet(table).iloc[:0].to_parquet(table, index=False)
+    elif settings == "missing":
+        if layout == "flat":
+            table.unlink()
+        else:
+            shutil.rmtree(source.base_path / "data_float_h_bucket")
     result = extract_database("sic", data_path=str(source.base_path), output_dir=str(tmp_path / "out"),
         modules=["outcome", "respiratory"], patient_ids={"CaseID": [1]}, native_export_v2=True, verbose=False)
     assert not result["modules"]["respiratory"].get("errors")

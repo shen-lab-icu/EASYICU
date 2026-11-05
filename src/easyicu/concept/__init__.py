@@ -2235,14 +2235,26 @@ class ConceptResolver:
 
             if wide_table_merged_df is not None:
                 _materialize_covered_wide_tables_for_fallback()
-                # These are already admission-aligned producers. Use the same
-                # window materialisation as the native/R-format path, retaining
-                # exact duration starts beside the regular measurement grid.
-                return self._to_r_format_merged_enhanced(
-                    tables, names, interval, data_source=data_source,
-                    materialize_missing_concepts=not defer_empty_columns_to_arrow,
-                    consume_sources=True,
-                )
+                # Interval concepts keep exact starts off the hourly grid; only
+                # the window materialiser can place them beside the batch.
+                # Grid-only requests keep the plain merge and every column.
+                if any(
+                    isinstance(tables.get(name), WinTbl)
+                    or name in compat.WINDOW_CONCEPTS
+                    or name in compat.WIN_TBL_CONCEPTS
+                    or name in compat.DURATION_CONCEPTS
+                    or name.endswith(("_rate", "_dur"))
+                    for name in names
+                ):
+                    return self._to_r_format_merged_enhanced(
+                        tables, names, interval, data_source=data_source,
+                        materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                        consume_sources=True,
+                    )
+                for name in wide_table_covered_names:
+                    declare_resolved_time_index(
+                        tables[name], align_to_admission=align_to_admission, interval=interval,
+                    )
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(tables),
                 names,
@@ -4959,7 +4971,8 @@ class ConceptResolver:
                 # 检查是否在merge模式（通过kwargs传递）
                 keep_na_rows = (kwargs.get('_keep_na_rows', False) or _is_nullable_status_source(concept_name, source)
                                 or (data_source.config.name == 'hirid' and concept_name == 'mech_vent'))
-                if not keep_na_rows:
+                # Missing signed terms must not become a measured zero when summed.
+                if not keep_na_rows or signed_sum_bounds:
                     _before_dropna = len(frame)
                     # 只在非merge模式下删除NaN（单独加载概念时）
                     frame = frame.dropna(subset=[concept_name])
@@ -8096,10 +8109,12 @@ class ConceptResolver:
             # value; projecting here dropped them whenever four or more
             # concepts shared a long table (2026-11-04 audit round 6).
             from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS, SPECIMEN_STATUS_OUTPUT_COLUMNS
+            from ..scores.urine_output import urine_availability_columns
 
             companions = (
                 *SOURCE_ITEM_OUTPUT_COLUMNS.get(name, ()),
                 *SPECIMEN_STATUS_OUTPUT_COLUMNS.get(name, ()),
+                *urine_availability_columns(name),
                 f"{name}_observed",
                 f"{name}_available",
                 f"{name}_time",
