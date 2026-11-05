@@ -364,7 +364,9 @@ def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
     df["followup_days"] = np.where(dod.isna(), 365.0, np.nan)
     # The source documents dateofdeath only "if applicable (non-null)" and
     # states no follow-up horizon (AmsterdamUMCdb wiki, admissions table), so
-    # that year is an assumption (round-12 ruling): survivors are flagged.
+    # that year is an assumption (round-12 ruling): survivors with no valid
+    # dateofdeath after the death-date checks above are flagged, including a
+    # raw date that fails those checks.
     df["followup_assumed"] = dod.isna().to_numpy()
     df["hadm_id"] = np.nan
     return df

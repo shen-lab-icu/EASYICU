@@ -4,6 +4,19 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — round-12b tightenings: eICU antibiotic HICL and icd_abx timing [`98b58496d`, `1a94804e0`]
+
+- **eICU antibiotic HICL branch** (eICU and eICU-demo). It now admits only
+  orders without a `drugname` (`require_empty_var`); named orders are counted
+  only by the explicit name source. Before, a named order whose name failed the
+  antibiotic pattern also entered through its HICL code: under 10093, <10 rows
+  labelled as a 0.9% saline bag. All 21 codes are antibacterial (round-12
+  composition check), so S6 (`63ee291db`) stays a deliberate change.
+- **icd_abx suspected infection (R3).** The ICD-plus-antibiotic branch took the
+  time of every antibiotic row. It now takes only rows whose antibiotic value
+  is true or > 0, as the antibiotic/sampling path already did; a False, zero or
+  unknown row no longer times a suspected infection.
+
 ## 2026-11-05 — round-12 basis records: bounds vs v6 and P/F (no value change)
 
 ### Bounds that differ from v6 (97f508c6c)
@@ -57,8 +70,9 @@ flagged cells of these databases only in sensitivity analyses.
   table documents `dateofdeath` as "the date on which the patient died ... if
   applicable (non-null)" (AmsterdamUMCdb wiki, admissions). The descriptor
   paper (Thoral et al., Crit Care Med 2021) reports deaths < 1 year after
-  discharge but no follow-up method. Every AUMC survivor without a death date
-  is flagged.
+  discharge but no follow-up method. Every AUMC survivor with no valid
+  `dateofdeath` after the existing death-date checks is flagged; this includes
+  <10 stays whose raw date is present but fails those checks.
 - **SICdb.** The categories are documented, so they keep the values unflagged:
   - `d_references` labels 3076 "6 Months" and 3077 "1 Year" for
     `EstimatedSurvivalObservationTime`.
@@ -109,7 +123,10 @@ No recorded death is flagged in either database.
 - Only the mass unit changes. The FEU/DDU reporting basis stays unverified and
   unconverted, so AUMC and MIMIC assay scales are still not harmonized.
 - Values above 50 mg/l now exceed the concept's 50,000 ng/mL bound, as in every
-  source (full source: 25 of 929 rows, maximum 239 mg/l).
+  source, and are dropped (bound kept, round-12 ruling). Two denominators
+  (round-12b recount):
+  - full source, items 10393/12163: 25 of 932 rows, 20 stays, maximum 239 mg/l;
+  - within 24 h before ICU admission to 24 h after discharge: 24 of 782 rows.
 
 ## 2026-11-05 — eICU order-derived norepinephrine is marked [V1, `fa80e951e`] (new column only)
 
