@@ -36152,11 +36152,13 @@
      "fe_drug": "furosemide",
      "fe_spread_index_var": "start",
      "fe_spread_end_var": "stop",
+     "fe_spread_continuous_var": "iscontinuous",
      "val_var": "administered",
      "unit_var": "administeredunit",
      "extra_vars": [
       "ordercategory",
-      "stop"
+      "stop",
+      "iscontinuous"
      ],
      "fe_route_var": "ordercategory",
      "fe_oral_values": [

@@ -732,13 +732,12 @@ def merge_concepts_r_style(
         # 取整将在 expand_interval_rows 内部进行
         # 🔧 FIX 2025-02-13: 同时跳过 WIN_TBL_CONCEPTS，它们保留原始事件时间不取整
         is_window_concept = name in WINDOW_CONCEPTS or name.endswith("_rate")
-        is_win_tbl_concept = name in WIN_TBL_CONCEPTS
+        is_win_tbl_concept = name in WIN_TBL_CONCEPTS or name in DURATION_CONCEPTS or name.endswith("_dur")
         if "time" in df_copy.columns and not is_window_concept and not is_win_tbl_concept:
             df_copy["time"] = round_to_interval(df_copy["time"], interval_hours)
         
-        # 🔧 NOTE: Duration 概念的值（如 dobu_dur）已经在 calc_dur 中使用 floor(end_h) - floor(start_h) 计算
-        # 不需要再对 duration 值做额外处理
-        # R ricu 的 calc_dur 在时间已经被 floor 到小时后计算 max(end) - min(start)
+        # Durations are exact elapsed hours. Flooring their start would shift
+        # the reconstructed stop and disagree with per-concept loads.
         
         # 确保有值列
         if name not in df_copy.columns:

@@ -2111,10 +2111,10 @@ class ConceptResolver:
                 return tables
 
             # 🚀 如果有宽表批量加载的合并结果，直接使用（避免重复合并）
-            # R5 AUMC: a partial numeric batch must still merge the callback
-            # concepts (rates, windows, specimen-dependent measurements).
+            # A partial numeric batch must still merge callback concepts in
+            # every database (rates, windows, specimen-dependent measurements).
             if wide_table_merged_df is not None and not r_compatible and (
-                db_name != "aumc" or wide_table_covered_names >= set(names)
+                wide_table_covered_names >= set(names)
             ):
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
@@ -2233,12 +2233,16 @@ class ConceptResolver:
                     consume_sources=True,
                 )
 
-            if db_name == "aumc" and wide_table_merged_df is not None:
+            if wide_table_merged_df is not None:
                 _materialize_covered_wide_tables_for_fallback()
-                for name in wide_table_covered_names:
-                    declare_resolved_time_index(
-                        tables[name], align_to_admission=align_to_admission, interval=interval,
-                    )
+                # These are already admission-aligned producers. Use the same
+                # window materialisation as the native/R-format path, retaining
+                # exact duration starts beside the regular measurement grid.
+                return self._to_r_format_merged_enhanced(
+                    tables, names, interval, data_source=data_source,
+                    materialize_missing_concepts=not defer_empty_columns_to_arrow,
+                    consume_sources=True,
+                )
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(tables),
                 names,

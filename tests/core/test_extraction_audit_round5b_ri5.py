@@ -71,6 +71,8 @@ def _mv_source(tmp_path, database, rows, *, amount="amount"):
         frame[column] = origin + pd.to_timedelta(frame[column], unit="h")
     frame["rateuom"], frame["amountuom"] = "mL/hour", "mL" if amount == "dex" else "mg"
     frame["statusdescription"] = "FinishedRunning"
+    if database == "mimic":
+        frame["cancelreason"] = 0
     frame["linkorderid"] = range(1, len(frame) + 1)
     frame["orderid"] = frame["linkorderid"]
     _write(frame, tmp_path / ("inputevents.parquet" if database == "miiv" else "inputevents_mv.parquet"))
@@ -234,6 +236,71 @@ def test_ri_04_amount_allocation_preserves_dose_records_across_chunks():
     assert out.amount.sum() == pytest.approx(frame.amount.sum())
 
 
+@pytest.mark.parametrize("database", ["miiv", "mimic", "aumc"])
+def test_ri_04_invalid_continuous_windows_are_not_boluses_and_boluses_keep_their_start(tmp_path, monkeypatch, database):
+    starts = [.8, 5., 7., 9., 11.]
+    stops = [3.2, 5., np.nan, 8., 13.]
+    amounts = [48., 7., 11., 13., 20.]
+    if database == "aumc":
+        origin = 17.25
+        starts.append(15.)
+        stops.append(17.)
+        amounts.append(23.)
+        _write(pd.DataFrame({"admissionid": [1], "admittedat": [origin * 60_000],
+                             "dischargedat": [(origin + 48 * 60) * 60_000]}), tmp_path / "admissions.parquet")
+        _write(pd.DataFrame({
+            "admissionid": 1, "itemid": 7244,
+            "start": (origin + np.asarray(starts) * 60) * 60_000,
+            "stop": (origin + np.asarray(stops) * 60) * 60_000,
+            "administered": amounts, "administeredunit": "mg",
+            "ordercategory": ["Spuitpompen"] * 4 + ["Injecties", "Spuitpompen"],
+            "iscontinuous": [True] * 4 + [False, None],
+        }), tmp_path / "drugitems.parquet")
+        source = _source(tmp_path, database)
+    else:
+        source = _mv_source(tmp_path, database, {
+            "starttime": starts, "endtime": stops, "amount": amounts,
+            "itemid": [228340] * 4 + [221794], "rate": [20.] * 4 + [np.nan],
+        })
+    load_table = source.load_table
+
+    def projected(table_name, *args, **kwargs):
+        table = load_table(table_name, *args, **kwargs)
+        columns = kwargs.get("columns")
+        if table_name == "drugitems" and columns is not None:
+            # Flat readers may retain extra columns. Bucket readers may
+            # project exactly the source's declared columns instead.
+            keep = set(columns) | set(table.id_columns) | {
+                table.index_column, source.config.id_configs["icustay"].id,
+            }
+            table.data = table.data.loc[:, table.data.columns.isin(keep)]
+        return table
+
+    monkeypatch.setattr(source, "load_table", projected)
+    out = _load_one(source, "loop_diuretic_furosemide_eq")
+    clock = next(c for c in ("start", "starttime", "charttime") if c in out)
+    expected_times = [0., 1., 2., 3., 11.] + ([15., 16.] if database == "aumc" else [])
+    expected_amounts = [4., 20., 20., 4., 20.] + ([11.5, 11.5] if database == "aumc" else [])
+    assert out[clock].tolist() == expected_times
+    assert out.loop_diuretic_furosemide_eq.tolist() == pytest.approx(expected_amounts)
+
+
+def test_ri_04_source_allocation_preserves_reused_row_labels():
+    from easyicu.concept.diuretics import furosemide_equivalent
+
+    frame = pd.DataFrame({
+        "stay_id": [1, 1], "starttime": [.5, 2.5], "endtime": [1., 3.],
+        "itemid": [228340, 228340], "amount": [10., 20.], "amountuom": ["mg"] * 2,
+        "statusdescription": ["FinishedRunning"] * 2,
+    }, index=[0, 0])
+    out = furosemide_equivalent(
+        frame, concept_name="dose", value_var="amount", unit_var="amountuom",
+        params=load_dictionary()["loop_diuretic_furosemide_eq"].sources["miiv"][0].params,
+    )
+    assert out.starttime.tolist() == [0., 2.]
+    assert out.dose.tolist() == [10., 20.]
+
+
 @pytest.mark.parametrize("window", [6, 24])
 @pytest.mark.parametrize("datetime_clock", [False, True])
 def test_ri_05_sofa2_component_and_availability_expire_with_the_score_window(window, datetime_clock):
@@ -285,6 +352,9 @@ def test_ri_07_eicu_care_stop_does_not_create_an_extra_hour():
         "start_h": [.5, 1.5, 3., 4., np.nan], "end_h": [2., 2.25, 3., 3., 5.],
     })
     points = pd.DataFrame({"patientunitstayid": [6], "hour": [4.]})
+    # Assert the endpoint itself before exercising malformed windows.
+    out = bridge_hours(points, intervals.iloc[:2])
+    assert out.groupby("patientunitstayid").hour.apply(list).to_dict() == {1: [0, 1], 2: [1, 2], 6: [4]}
     out = bridge_hours(points, intervals)
     assert out.groupby("patientunitstayid").hour.apply(list).to_dict() == {1: [0, 1], 2: [1, 2], 6: [4]}
 
@@ -567,3 +637,132 @@ def test_ri_01_merged_window_declared_duration_wins_over_absolute_source_end(con
     out = ConceptResolver(load_dictionary())._to_r_format_merged_enhanced(
         {concept: table}, [concept], pd.Timedelta(hours=1), data_source=None)
     assert out.loc[out[concept].notna(), "charttime"].tolist() == [0.]
+
+
+def _partial_batch_source(tmp_path, database, layout):
+    """Four batchable measurements beside independently resolved intervals."""
+    from easyicu.synthetic_sources import generate_source
+    from tests.support.eicu_source import _eicu_source
+
+    if database == "aumc":
+        from tests.support.aumc_source import aumc_db, aumc_drug
+
+        source = aumc_db(tmp_path, drugs=[aumc_drug(30., 120., 7229)], numeric=[
+            (15., item, value, "U/L")
+            for item, value in [(6803, 10.), (6800, 20.), (6806, 30.), (6822, 40.)]
+        ])
+        root = tmp_path
+    elif database in ("hirid", "sic"):
+        generate_source(tmp_path / "source", database, stays=3)
+        root = tmp_path / "source"
+        source = _source(root, database)
+    elif database == "eicu":
+        dictionary = load_dictionary()
+        labs = pd.DataFrame({
+            "labname": [dictionary[n].sources[database][0].ids[0] for n in ("alp", "alt", "ast", "ck")],
+            "labresultoffset": [15.] * 4, "labresult": [10., 20., 30., 40.],
+        })
+        infusion = pd.DataFrame({
+            "infusionoffset": [30., 90., 120.], "drugrate": [.1, .1, 0.],
+            "drugname": ["Norepinephrine (mcg/kg/min)"] * 3,
+        })
+        source = _eicu_source(tmp_path, database, lab=labs, infusiondrug=infusion)
+        root = tmp_path
+    else:
+        source = _mv_source(tmp_path, database, {
+            "starttime": [.5, .8, .8], "endtime": [2., 3.2, 3.2],
+            "itemid": [221906, 220950, 228340], "rate": [.1, 20., 20.], "amount": [1., 48., 48.],
+        })
+        root = tmp_path
+        path = root / ("inputevents.parquet" if database == "miiv" else "inputevents_mv.parquet")
+        frame = pd.read_parquet(path).assign(patientweight=80.)
+        frame["rateuom"] = ["mcg/kg/min", "mL/hour", "mg/hour"]
+        frame["amountuom"] = ["mg", "mL", "mg"]
+        _write(frame, path)
+        origin = pd.Timestamp("2180-01-01 00:17:15")
+        _write(pd.DataFrame({
+            "subject_id": [101] * 4, "hadm_id": [201] * 4,
+            "charttime": [origin + pd.Timedelta(minutes=15)] * 4,
+            "storetime": [origin + pd.Timedelta(minutes=15)] * 4,
+            "itemid": [50863, 50861, 50878, 50910],
+            "valuenum": [10., 20., 30., 40.], "valueuom": ["IU/L"] * 4,
+        }), root / "labevents.parquet")
+        identifier = "stay_id" if database == "miiv" else "icustay_id"
+        _write(pd.DataFrame({
+            identifier: [1, 1], "subject_id": [101, 101], "hadm_id": [201, 201],
+            "itemid": [225792, 225794], "value": [1., 1.],
+            "starttime": origin + pd.to_timedelta([.999, 1.001], unit="h"),
+            "endtime": origin + pd.to_timedelta([1.001, 2.], unit="h"),
+            "statusdescription": ["FinishedRunning"] * 2, "cancelreason": [0, 0],
+        }), root / ("procedureevents.parquet" if database == "miiv" else "procedureevents_mv.parquet"))
+    table = load_dictionary()["alp"].sources[database][0].table
+    path = root / f"{table}.parquet"
+    if path.exists():
+        frame = pd.read_parquet(path)
+        path.unlink()
+    else:
+        frame = pd.read_parquet(root / table)
+        for path in (root / table).glob("*.parquet"):
+            path.unlink()
+    path = root / (f"{table}_bucket/bucket_id=0/1.parquet" if layout == "bucket" else f"{table}/1.parquet")
+    _write(frame, path)
+    return _source(root, database)
+
+
+@pytest.mark.parametrize("database", ["miiv", "mimic", "eicu", "aumc", "hirid", "sic"])
+@pytest.mark.parametrize("layout", ["flat", "bucket"])
+@pytest.mark.parametrize("r_compatible", [False, True])
+def test_ri_03_partial_measurement_batch_keeps_independently_loaded_intervals(tmp_path, monkeypatch, database, layout, r_compatible):
+    import easyicu.datasource as datasource
+    from easyicu.api.extraction import _canonicalise_native_export_frame
+
+    source = _partial_batch_source(tmp_path, database, layout)
+    dictionary = load_dictionary()
+    # The interval adapter is independent of the separate eMAR/CareVue doses.
+    dictionary["loop_diuretic_furosemide_eq"].sources[database] = dictionary["loop_diuretic_furosemide_eq"].sources[database][:1]
+    measured = ["alp", "alt", "ast", "ck"]
+    intervals = ["norepi_dur", "norepi60", "vaso_ind"]
+    if database in ("miiv", "mimic"):
+        intervals += ["dex", "loop_diuretic_furosemide_eq", "mech_vent", "vent_ind"]
+    names = measured + intervals
+    calls = []
+    original = datasource.load_bucketed_table_multi_aggregated
+
+    def observed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        calls.append(set(args[2]))
+        return result
+
+    monkeypatch.setattr(datasource, "load_bucketed_table_multi_aggregated", observed)
+    options = dict(interval=pd.Timedelta(hours=1), verbose=False, concept_workers=1)
+
+    def native(frame, requested):
+        if "charttime" not in frame:
+            time = next(c for c in ("givenat", "infusionoffset", "Offset", "start", "starttime", "datetime", "measuredat_minutes", "measuredat") if c in frame)
+            frame = frame.rename(columns={time: "charttime"})
+        return _canonicalise_native_export_frame(
+            frame, module="medications", requested_concepts=requested,
+            dictionary=dictionary, database=database,
+        )
+
+    merged = ConceptResolver(dictionary).load_concepts(
+        names, source, merge=True, r_compatible=r_compatible, **options,
+    )
+    assert any(set(measured) <= call for call in calls), "the actual batch path must run"
+    merged = native(merged, names)
+    for name in names:
+        resolver = ConceptResolver(dictionary)
+        if name in ("mech_vent", "vent_ind"):
+            # A standalone window intentionally stays a WinTbl. Materialise
+            # its precise interval before comparing with an hourly module.
+            tables = resolver.load_concepts([name], source, merge=False, r_compatible=False, **options)
+            single = resolver._to_r_format_merged_enhanced(tables, [name], options["interval"], data_source=source)
+        else:
+            single = resolver.load_concepts(
+                [name], source, merge=True, r_compatible=r_compatible, **options,
+            )
+        single = native(single, [name])
+        expected = single.loc[single[name].notna(), ["stay_id", "charttime", name]].sort_values(["stay_id", "charttime"]).reset_index(drop=True)
+        actual = merged.loc[merged[name].notna(), ["stay_id", "charttime", name]].sort_values(["stay_id", "charttime"]).reset_index(drop=True)
+        assert not expected.empty, name
+        pd.testing.assert_frame_equal(actual, expected, check_dtype=False, obj=name)

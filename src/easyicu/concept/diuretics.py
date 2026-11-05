@@ -138,13 +138,28 @@ def _spread_continuous_amounts(frame: pd.DataFrame, concept_name: str, params: M
         )
     from ..utils.callback_utils import distribute_volume_hourly
 
-    work = frame.copy()
+    work = frame.reset_index(drop=True)
+    continuous = pd.Series(True, index=work.index)
+    bolus = pd.Series(False, index=work.index)
     item_ids = params.get("fe_spread_item_ids")
     if item_ids:
         item_var = str(params.get("fe_spread_item_var") or "itemid")
         if item_var not in work:
             raise DiureticSourceContractError("diuretic_spread_column_missing", item_var)
-        work[str(end_var)] = work[str(end_var)].where(work[item_var].isin(item_ids))
+        continuous = work[item_var].isin(item_ids)
+        bolus = ~continuous
+    continuous_var = params.get("fe_spread_continuous_var")
+    if continuous_var:
+        if continuous_var not in work:
+            raise DiureticSourceContractError("diuretic_spread_column_missing", str(continuous_var))
+        bolus = work[continuous_var].eq(False).fillna(False)  # noqa: E712
+        continuous = ~bolus
+    # Only explicit boluses may use the allocator's point-event fallback.
+    # Missing, empty or reversed continuous windows establish no overlap. An
+    # unknown flag retains a valid declared window rather than losing its dose.
+    valid_window = work[str(end_var)].gt(work[index_var]).fillna(False)
+    work = work.loc[bolus | (continuous & valid_window)].copy()
+    work[str(end_var)] = work[str(end_var)].where(continuous.loc[work.index])
     id_col = next((c for c in ("stay_id", "icustay_id", "admissionid") if c in work), None)
     if id_col is None:
         raise DiureticSourceContractError("diuretic_spread_identifier_missing")
