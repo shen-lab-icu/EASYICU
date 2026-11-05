@@ -29,7 +29,7 @@ def test_high_frequency_presampling_keeps_the_requested_minimum(tmp_path):
 @pytest.mark.parametrize("names", [["urine"], ["urine", "urine24", "uo_6h", "sbp", "dbp", "hr"]])
 def test_all_null_urine_hour_stays_missing_and_true_zero_stays_zero(tmp_path, database, names):
     # R7-F001: an hour whose urine rows all lack a value was published as 0 mL.
-    from tests.core.test_extraction_audit_round5b_r6v import _load, _urine_source
+    from tests.support.urine_raw_source import _load, _urine_source
 
     source = _urine_source(tmp_path, database, [1.25, 1.5, 2.25, 3.25], [np.nan, np.nan, 0., 100.])
     table = _load(source, names)["urine"]
@@ -71,3 +71,19 @@ def test_r7_f029_output_counter_reverted_fast_rises_are_spikes(hours, values, to
 ])
 def test_r7_f029_output_counter_keeps_sustained_rises_restarts_and_slow_corrections(hours, values, total):
     assert _counter_total(hours, values) == pytest.approx(total)
+
+
+@pytest.mark.parametrize("names", [["urine24"], ["urine24", "uo_6h", "sbp", "dbp", "hr"]])
+def test_r7_f005_mimic_availability_keeps_the_sub_minute_intime_remainder(tmp_path, names):
+    # R7-F005: MIMIC-III aligns chart times on a minute clock relative to an ICU
+    # intime that carries seconds; availability must not precede the record.
+    from tests.support.urine_raw_source import _load, _urine_source
+
+    intime = pd.Timestamp("2180-01-01 00:17:37")
+    source = _urine_source(tmp_path, "mimic", np.arange(30) + .25, [50.] * 30, intime=intime)
+    table = _load(source, names)["urine24"]
+    daily = table.data.set_index(table.index_column)
+    record = pd.Timestamp("2180-01-01 00:17") + pd.Timedelta(hours=23.25)
+    exact = (record - intime) / pd.Timedelta(hours=1)
+    assert daily.loc[23., "urine24_available_at"] >= exact - 1 / 3600
+    assert daily.loc[23., "urine24_available_at"] == pytest.approx(exact, abs=1 / 3600)
