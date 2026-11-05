@@ -782,34 +782,38 @@ def _calculate_uo_rates_simple(
     from .urine_output import collection_windows, KDIGO_EVIDENCE_COLUMNS
 
     output = [f"uo_rt_{w}hr" for w in (6, 12, 24)]
-    for name in [*output, *KDIGO_EVIDENCE_COLUMNS]:
-        urine[name] = np.nan
+    arrays = {name: np.full(len(urine), np.nan) for name in [*output, *KDIGO_EVIDENCE_COLUMNS]}
     width = pd.Timedelta(interval or pd.Timedelta(hours=1)).total_seconds() / 3600
+    minutes = urine['_min'].to_numpy()
+    all_amounts = urine[urine_col].to_numpy()
+    weights = urine['_wt'].to_numpy()
+    source_times = urine['_urine_available_at'].to_numpy() if '_urine_available_at' in urine else None
+    record_gaps = urine['_urine_gap_h'].to_numpy() if '_urine_gap_h' in urine else None
     for positions in urine.groupby(id_col, sort=False).indices.values():
-        ends = urine['_min'].to_numpy()[positions] / 60.0
-        amounts = urine[urine_col].to_numpy()[positions]
+        ends = minutes[positions] / 60.0
+        amounts = all_amounts[positions]
         if source_is_rate:
             amounts = amounts / width
         integrated = collection_windows(
             ends, amounts, (6, 12, 24), source_is_rate=source_is_rate,
             max_gap=_UO_MAX_GAP_HOURS,
-            source_times=urine['_urine_available_at'].to_numpy()[positions]
-            if '_urine_available_at' in urine else None,
-            record_gaps=urine['_urine_gap_h'].to_numpy()[positions]
-            if '_urine_gap_h' in urine else None,
+            source_times=source_times[positions] if source_times is not None else None,
+            record_gaps=record_gaps[positions] if record_gaps is not None else None,
         )
         stage_available = np.full(len(ends), np.nan)
+        wt = weights[positions]
         for window in (6, 12, 24):
             volume, covered, available = integrated[window]
-            wt = urine['_wt'].to_numpy()[positions]
             valid = (covered >= window - 1e-9) & np.isfinite(wt) & (wt > 0)
             name = f"uo_rt_{window}hr"
-            urine.loc[positions, name] = np.divide(
+            arrays[name][positions] = np.divide(
                 volume, wt * covered, out=np.full(len(ends), np.nan), where=valid,
             )
-            urine.loc[positions, f"{name}_covered_h"] = covered
+            arrays[f"{name}_covered_h"][positions] = covered
             stage_available = np.fmax(stage_available, np.where(valid, available, np.nan))
-        urine.loc[positions, "aki_stage_uo_available_at"] = stage_available
+        arrays["aki_stage_uo_available_at"][positions] = stage_available
+    for name, values in arrays.items():
+        urine[name] = values
     return urine[[id_col, time_col, *output, *KDIGO_EVIDENCE_COLUMNS]]
 
 

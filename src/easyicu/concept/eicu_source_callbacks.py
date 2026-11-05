@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from pickle import dumps, PicklingError
+
 import numpy as np
 import pandas as pd
 
@@ -18,6 +21,106 @@ CALLBACKS = frozenset({
     "eicu_ionized_calcium",
     "eicu_insulin_units",
 })
+
+
+def _request_token(value):
+    """Typed, exact request identity; unsupported objects bypass reuse."""
+    if isinstance(value, dict):
+        return (dict, tuple((_request_token(k), _request_token(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return (type(value), tuple(_request_token(v) for v in value))
+    if isinstance(value, (set, frozenset)):
+        return (type(value), frozenset(_request_token(v) for v in value))
+    if value is None or isinstance(value, (str, bool, int, float, np.generic, pd.Timedelta)):
+        return (type(value), value)
+    raise TypeError("unsupported auxiliary request identity")
+
+
+class _AuxiliarySource:
+    """Share exact callback reads in the resolver's existing bounded cache.
+
+    Main concept loading keeps its normal source paths. Table-wide auxiliary
+    reads (FiO2, specimen and ventilation evidence) are shared before their
+    existing in-memory selectors; filtered reads keep independent entries.
+    The resolver owns eviction and every batch/call cache-clear boundary.
+    """
+
+    def __init__(self, data_source, resolver, interval):
+        self._source = data_source
+        self._resolver = resolver
+        config = data_source.config
+        # Bytes keep large exact ID lists compact. Nothing is deserialized;
+        # typed request bytes are compared directly, without hash collisions.
+        self._identity = dumps((
+            "eicu_auxiliary_request", id(data_source), id(resolver.dictionary),
+            resolver.dictionary_signature, _request_token(interval),
+            config.model_dump_json() if hasattr(config, "model_dump_json") else id(config),
+        ), protocol=5)
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+    def load_table(self, table_name, *, columns=None, filters=None, verbose=False):
+        columns = None if columns is None else tuple(columns)
+        filters = None if filters is None else tuple(filters)
+        try:
+            request = (table_name, columns, tuple(
+                (spec.column, spec.op, _request_token(spec.value), _request_token(spec.metadata),
+                 type(spec), _request_token(getattr(spec, "_value_set", None)))
+                for spec in filters or ()
+            ))
+            key = (self._identity, dumps(request, protocol=5))
+        except (TypeError, PicklingError):
+            return self._source.load_table(table_name, columns=columns, filters=filters, verbose=verbose)
+        resolver = self._resolver
+        # Hold the same reentrant lock through a miss so concurrent callbacks
+        # cannot launch duplicate reads or see an entry before it is complete.
+        with resolver._cache_lock:
+            cached = resolver._table_cache.get(key)
+            if cached is not None:
+                resolver._cache_touch("table", key)
+                return deepcopy(cached)
+            result = self._source.load_table(table_name, columns=columns, filters=filters, verbose=verbose)
+            # Callbacks may edit their result and its attrs. Cache an isolated
+            # snapshot, preserving ICUTable metadata as well as frame bytes.
+            from . import _estimate_cached_bytes
+
+            size = _estimate_cached_bytes(result) + len(key[0]) + len(key[1]) + 256
+            budget = resolver._cache_budget_bytes
+            if budget is None or size <= budget:
+                resolver._bounded_cache_store("table", key, deepcopy(result), charge_bytes=size)
+            return result
+
+    def load_auxiliary_union(self, table, *, columns, filters, selectors=()):
+        """Share a table-wide QC read, then apply each evidence selector.
+
+        Only the QC owner opts into this path for lab/respiratory evidence
+        joins. Ordinary table requests retain their exact filters/projection.
+        A zero cache budget keeps the previous individual read as an oracle.
+        """
+        if self._resolver._cache_budget_bytes == 0:
+            result = self.load_table(table, columns=columns, filters=[*filters, *selectors])
+            return result.data if hasattr(result, "data") else result
+        result = self.load_table(table, columns=None, filters=filters)
+        frame = result.data if hasattr(result, "data") else result
+        for selector in selectors:
+            frame = selector.apply(frame)
+        if columns is not None:
+            frame = frame[list(columns)]
+        return frame
+
+
+def cached_auxiliary_source(data_source, resolver, interval):
+    """Use the batch owner when present; direct/unsupported callers stay raw."""
+    if isinstance(data_source, _AuxiliarySource):
+        data_source = data_source._source
+    if (getattr(getattr(data_source, "config", None), "name", "") not in {"eicu", "eicu_demo"}
+            or resolver is None or not hasattr(resolver, "_bounded_cache_store")):
+        return data_source
+    try:
+        return _AuxiliarySource(data_source, resolver, interval)
+    except (TypeError, PicklingError):
+        return data_source
 
 
 def _circulatory_support(frame, column):

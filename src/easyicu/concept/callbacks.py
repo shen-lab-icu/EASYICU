@@ -7585,14 +7585,36 @@ def _callback_uo_window(
         )
         == "hirid"
     )
-    result_df = _urine_window_avg(
-        urine=urine_tbl.data,
-        weight=weight_tbl.data if weight_tbl else pd.DataFrame(),
-        window_hours=window_hours,
-        min_hours=min_hours,
-        interval=ctx.interval or pd.Timedelta(hours=1),
-        source_is_rate=source_is_rate,
-    )
+    shared_windows = (6, 12, 24)
+    if hasattr(ctx.resolver, "_bounded_cache_store") and window_hours in shared_windows:
+        from ..scores.urine_output import shared_descriptive_windows
+
+        requested = getattr(ctx.resolver._thread_local, "requested_names", None)
+        if requested is not None:
+            required = set(ctx.resolver._expand_dependencies(requested))
+            shared_windows = tuple(w for w in shared_windows if f"uo_{w}h" in required)
+        # A single requested window retains its single-window work/memory.
+        # Multi-window requests integrate the shared source once per stay.
+        if len(shared_windows) > 1 and window_hours in shared_windows:
+            result_df = shared_descriptive_windows(
+                urine_tbl.data, weight_tbl.data if weight_tbl else pd.DataFrame(),
+                [(w, max(1, w // 2)) for w in shared_windows], resolver=ctx.resolver,
+                requested_window=window_hours,
+                interval=ctx.interval or pd.Timedelta(hours=1), source_is_rate=source_is_rate,
+            )[output_col].copy()
+        else:
+            shared_windows = ()
+    else:
+        shared_windows = ()
+    if not shared_windows:
+        result_df = _urine_window_avg(
+            urine=urine_tbl.data,
+            weight=weight_tbl.data if weight_tbl else pd.DataFrame(),
+            window_hours=window_hours,
+            min_hours=min_hours,
+            interval=ctx.interval or pd.Timedelta(hours=1),
+            source_is_rate=source_is_rate,
+        )
     
     if not result_df.empty and window_hours in (6, 12, 24):
         assessment = _shared_urine_assessment(urine_tbl, weight_tbl, ctx, source_is_rate)

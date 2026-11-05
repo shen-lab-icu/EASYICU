@@ -9,6 +9,8 @@ a new segment. Every window is open on the left and closed on the right.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -307,37 +309,87 @@ def descriptive_windows(
         data = data.loc[weight_ok].reset_index(drop=True)
     width = pd.Timedelta(interval or pd.Timedelta(hours=1)).total_seconds() / 3600
     times = time_hours(data[time_col])
-    result = {}
-    for window, minimum in windows:
-        name = f"uo_{window}h"
-        frame = data[ids + [time_col]].copy()
-        frame[name] = np.nan
-        frame[f"{name}_covered_h"] = 0.
-        frame[f"{name}_partial_window"] = True
-        frame[f"{name}_available_at"] = np.nan
-        result[name] = frame
+    # Fill positional arrays per stay, then publish each column once. Keep
+    # the kernel, arithmetic order, output dtypes and column order unchanged.
+    arrays = {
+        window: (np.full(len(data), np.nan), np.zeros(len(data)),
+                 np.ones(len(data), dtype=bool), np.full(len(data), np.nan))
+        for window, _ in windows
+    }
+    all_amounts = data.urine.to_numpy(dtype=float)
+    all_weights = pd.to_numeric(data.weight, errors="coerce").to_numpy(dtype=float)
+    source_times = data['_urine_available_at'].to_numpy() if '_urine_available_at' in data else None
+    record_gaps = data['_urine_gap_h'].to_numpy() if '_urine_gap_h' in data else None
     for positions in data.groupby(ids, sort=False).indices.values():
-        amounts = data.urine.to_numpy(dtype=float)[positions]
+        amounts = all_amounts[positions]
         # HiRID source callbacks express a rate as volume per extraction bin.
         if source_is_rate:
             amounts = amounts / width
         integrated = collection_windows(times[positions], amounts, [w for w, _ in windows],
                                         source_is_rate=source_is_rate, first_hours=width,
-                                        source_times=data['_urine_available_at'].to_numpy()[positions]
-                                        if '_urine_available_at' in data else None,
-                                        record_gaps=data['_urine_gap_h'].to_numpy()[positions]
-                                        if '_urine_gap_h' in data else None)
-        weights = pd.to_numeric(data.weight.iloc[positions], errors="coerce").to_numpy(dtype=float)
+                                        source_times=source_times[positions] if source_times is not None else None,
+                                        record_gaps=record_gaps[positions] if record_gaps is not None else None)
+        weights = all_weights[positions]
         for window, minimum in windows:
             volume, covered, available = integrated[window]
             valid = (covered >= minimum - 1e-9) & np.isfinite(weights) & (weights > 0)
             values = np.divide(volume, covered * weights, out=np.full(len(volume), np.nan), where=valid)
-            name = f"uo_{window}h"
-            result[name].loc[positions, name] = values
-            result[name].loc[positions, f"{name}_covered_h"] = covered
-            result[name].loc[positions, f"{name}_partial_window"] = covered < window - 1e-9
-            result[name].loc[positions, f"{name}_available_at"] = available
+            rates, coverage, partial, availability = arrays[window]
+            rates[positions] = values
+            coverage[positions] = covered
+            partial[positions] = covered < window - 1e-9
+            availability[positions] = available
+    result = {}
+    for window, _ in windows:
+        name = f"uo_{window}h"
+        frame = data[ids + [time_col]].copy()
+        for column, values in zip(
+            (name, f"{name}_covered_h", f"{name}_partial_window", f"{name}_available_at"),
+            arrays[window],
+        ):
+            frame[column] = values
+        result[name] = frame
     return result
+
+
+@dataclass
+class _DescriptiveWindowCacheEntry:
+    urine: weakref.ReferenceType
+    weight: weakref.ReferenceType
+    data: dict[str, pd.DataFrame]
+
+
+def shared_descriptive_windows(
+    urine, weight, windows, *, requested_window, resolver, interval, source_is_rate,
+):
+    """Reuse identical source integration across windows in one bounded request."""
+    budget = resolver._cache_budget_bytes
+    # Conservatively include the source keys, float/bool outputs and index.
+    # If the bundle is unlikely to fit, keep the old single-window work rather
+    # than repeatedly computing three windows that cannot be retained.
+    estimated = len(windows) * (int(urine.memory_usage(index=True, deep=False).sum()) + 33 * len(urine))
+    if budget is not None and estimated > budget:
+        return descriptive_windows(
+            urine, weight, [spec for spec in windows if spec[0] == requested_window],
+            interval=interval, source_is_rate=source_is_rate,
+        )
+    key = ("urine_descriptive_windows", id(urine), id(weight), tuple(windows),
+           pd.Timedelta(interval), source_is_rate)
+    with resolver._cache_lock:
+        entry = resolver._concept_data_cache.get(key)
+        if (isinstance(entry, _DescriptiveWindowCacheEntry)
+                and entry.urine() is urine and entry.weight() is weight):
+            resolver._cache_touch("data", key)
+            return entry.data
+        data = descriptive_windows(urine, weight, windows, interval=interval, source_is_rate=source_is_rate)
+        # A bundle contains three frames, so charge their complete size rather
+        # than the generic cache estimator's small non-frame fallback.
+        size = sum(int(frame.memory_usage(index=True, deep=True).sum()) for frame in data.values())
+        resolver._bounded_cache_store(
+            "data", key, _DescriptiveWindowCacheEntry(weakref.ref(urine), weakref.ref(weight), data),
+            charge_bytes=size,
+        )
+        return data
 
 
 def assign_daily(

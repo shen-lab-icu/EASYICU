@@ -959,7 +959,12 @@ def _apply_callback(
 
     expr = callback.strip()
 
-    from .eicu_source_callbacks import CALLBACKS as eicu_qc_callbacks, apply as apply_eicu_qc
+    from .eicu_source_callbacks import (
+        CALLBACKS as eicu_qc_callbacks, apply as apply_eicu_qc,
+        cached_auxiliary_source,
+    )
+
+    data_source = cached_auxiliary_source(data_source, resolver, interval)
 
     if expr in eicu_qc_callbacks:
         return apply_eicu_qc(frame, source, concept_name, data_source)

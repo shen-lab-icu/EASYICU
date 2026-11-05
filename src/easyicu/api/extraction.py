@@ -165,8 +165,32 @@ _RESOURCE_BUDGET_MAX_ENGINE_THREADS = 8
 _RESOURCE_BUDGET_SINGLE_WORKER_TOTAL_GB = 12
 
 
-def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, object]:
-    """Return deterministic lower-layer limits for an available-memory budget."""
+def _cpu_execution_limits(worker_cap: int, *, max_workers: Optional[int] = None) -> Dict[str, int]:
+    """Clamp a memory tier by explicit worker and per-engine CPU ceilings."""
+    def cpu_cap(name: str, default: int) -> int:
+        try:
+            return min(default, max(1, int(os.environ.get(name, default))))
+        except (TypeError, ValueError):
+            return default
+
+    # An argument takes precedence over the environment, matching the runtime
+    # planner. Neither may raise the memory tier's worker ceiling.
+    workers = (min(worker_cap, max(1, int(max_workers))) if max_workers is not None
+               else cpu_cap("EASYICU_PARALLEL_MAX_WORKERS", worker_cap))
+    threads = max(1, min(_RESOURCE_BUDGET_MAX_ENGINE_THREADS, workers))
+    return {
+        "parallel_max_workers": workers,
+        "arrow_threads": cpu_cap("EASYICU_ARROW_THREADS", threads),
+        "duckdb_threads": cpu_cap("EASYICU_DUCKDB_THREADS", threads),
+    }
+
+
+def _resource_budget_execution_limits(
+    resource_budget_mb: float,
+    *,
+    max_workers: Optional[int] = None,
+) -> Dict[str, object]:
+    """Return memory ceilings clamped by explicit worker/engine CPU limits."""
 
     budget_mb = float(resource_budget_mb)
     if budget_mb <= 0:
@@ -195,10 +219,7 @@ def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, ob
         worker_cap = 8
     else:
         worker_cap = 2
-    engine_threads = max(
-        1,
-        min(_RESOURCE_BUDGET_MAX_ENGINE_THREADS, worker_cap),
-    )
+
     duckdb_memory_mb = max(
         1024,
         min(
@@ -217,9 +238,7 @@ def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, ob
     return {
         "resource_budget_mb": round(budget_mb, 1),
         "modeled_total_memory_gb": round(modeled_total_gb, 6),
-        "parallel_max_workers": worker_cap,
-        "arrow_threads": engine_threads,
-        "duckdb_threads": engine_threads,
+        **_cpu_execution_limits(worker_cap, max_workers=max_workers),
         "duckdb_memory_limit_mb": duckdb_memory_mb,
         "resolver_cache_budget_mb": cache_budget_mb,
     }
@@ -1664,6 +1683,8 @@ _SPECIAL_OUTPUT_DIRNAME = "_special"
 def _extract_worker_env_setup(
     data_path: str,
     resource_budget_mb: Optional[float] = None,
+    *,
+    max_workers: Optional[int] = None,
 ) -> None:
     """提取子进程入口的共享环境准备。
 
@@ -1678,7 +1699,7 @@ def _extract_worker_env_setup(
     os.environ.setdefault("EASYICU_DATA_PATH", data_path)
     os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
     if resource_budget_mb is not None:
-        limits = _resource_budget_execution_limits(resource_budget_mb)
+        limits = _resource_budget_execution_limits(resource_budget_mb, max_workers=max_workers)
         os.environ["EASYICU_RESOURCE_BUDGET_MB"] = str(
             limits["resource_budget_mb"]
         )
@@ -1705,6 +1726,17 @@ def _extract_worker_env_setup(
             reset_global_config()
         except Exception:
             pass
+    elif max_workers is not None:
+        limits = _cpu_execution_limits(max(1, int(max_workers)), max_workers=max_workers)
+        for name, field in (
+            ("EASYICU_PARALLEL_MAX_WORKERS", "parallel_max_workers"),
+            ("EASYICU_ARROW_THREADS", "arrow_threads"),
+            ("EASYICU_DUCKDB_THREADS", "duckdb_threads"),
+        ):
+            os.environ[name] = str(limits[field])
+        from ..runtime.parallel_config import reset_global_config
+
+        reset_global_config()
     _src_dir = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -3969,6 +4001,7 @@ def _extract_module_group_worker(
     published_output_dir: Optional[str] = None,
     adaptive_stream_batches: bool = False,
     resource_budget_mb: Optional[float] = None,
+    max_workers: Optional[int] = None,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
 
@@ -3983,7 +4016,10 @@ def _extract_module_group_worker(
     import os
     import traceback
 
-    _extract_worker_env_setup(data_path, resource_budget_mb)
+    if max_workers is None:
+        _extract_worker_env_setup(data_path, resource_budget_mb)
+    else:
+        _extract_worker_env_setup(data_path, resource_budget_mb, max_workers=max_workers)
     from easyicu.api import keep_cache as _keep_cache
 
     with _keep_cache(
@@ -6986,6 +7022,7 @@ def extract_database(
     adaptive_stream_batches: Optional[bool] = None,
     resource_budget_mb: Optional[float] = None,
     module_batch_sizes: Optional[Mapping[str, int]] = None,
+    max_workers: Optional[int] = None,
 ) -> Dict:
     """按 20 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -7024,6 +7061,8 @@ def extract_database(
         module_batch_sizes: 可选的逐模块批量覆盖。键必须是本次选择的模块，值为
             正整数；它比 ``batch_size`` 更具体，未列出的模块继续使用全局值或
             自动计划。适用于同一数据库中少数高膨胀模块的已测内存边界。
+        max_workers: 显式 CPU worker 上限；优先于 EASYICU_PARALLEL_MAX_WORKERS，
+            固定内存预算只可进一步降低此上限，不能提高它。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -7147,11 +7186,11 @@ def extract_database(
         if resource_budget_mb is None
         else float(resource_budget_mb)
     )
-    resource_execution_limits = (
-        None
-        if resource_budget_mb is None
-        else _resource_budget_execution_limits(resource_budget_mb)
-    )
+    resource_execution_limits = None
+    if resource_budget_mb is not None:
+        resource_execution_limits = _resource_budget_execution_limits(resource_budget_mb, max_workers=max_workers)
+    elif max_workers is not None:
+        resource_execution_limits = _cpu_execution_limits(max(1, int(max_workers)), max_workers=max_workers)
     resource_plan = plan_extraction_resources(
         database,
         modules,
@@ -7622,6 +7661,7 @@ def extract_database(
                 output_dir,
                 group_adaptive_stream_batches,
                 resource_budget_mb,
+                max_workers,
             ),
             # A memory-heavy streamed module may create one fresh process per
             # patient batch so the OS, not allocator heuristics, owns teardown.

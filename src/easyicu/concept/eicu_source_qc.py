@@ -12,16 +12,23 @@ STAY = "patientunitstayid"
 logger = logging.getLogger(__name__)
 
 
-def load_optional(data_source, table, stays, columns=None):
+def load_optional(data_source, table, stays, columns=None, *, selectors=()):
     """Read a stay-scoped optional channel; absent tables carry no evidence."""
     from ..datasource import FilterOp, FilterSpec
 
     if data_source is None or not len(stays):
         return pd.DataFrame(columns=columns)
+    filters = [FilterSpec(STAY, FilterOp.IN, list(stays))]
     try:
+        # These auxiliary channels already use table-wide reads for FiO2.
+        # Share their union projection before the unchanged specimen/device
+        # selectors, scoped to exactly the same stays and raw-minute clock.
+        union = getattr(data_source, "load_auxiliary_union", None)
+        if union is not None and table in {"lab", "respiratorycharting"}:
+            return union(table, columns=columns, filters=filters, selectors=selectors)
         result = data_source.load_table(
             table, columns=columns,
-            filters=[FilterSpec(STAY, FilterOp.IN, list(stays))], verbose=False,
+            filters=[*filters, *selectors], verbose=False,
         )
     except (FileNotFoundError, KeyError):
         return pd.DataFrame(columns=columns)
@@ -75,16 +82,10 @@ def _arterial_anchor_keys(data_source, stays, like):
     keys = [STAY, "labresultoffset"]
     if data_source is None or not len(stays):
         return pd.DataFrame(columns=keys)
-    try:
-        result = data_source.load_table(
-            "lab", columns=[*keys, "labname", "labresult"],
-            filters=[FilterSpec(STAY, FilterOp.IN, list(stays)),
-                     FilterSpec("labname", FilterOp.IN, ["paO2", "paCO2"])],
-            verbose=False,
-        )
-    except (FileNotFoundError, KeyError):
-        return pd.DataFrame(columns=keys)
-    lab = result.data if hasattr(result, "data") else result
+    lab = load_optional(
+        data_source, "lab", stays, [*keys, "labname", "labresult"],
+        selectors=[FilterSpec("labname", FilterOp.IN, ["paO2", "paCO2"])],
+    )
     names = lab.labname.astype("string").str.strip().str.casefold()
     values = pd.to_numeric(lab.labresult, errors="coerce")
     admitted = pd.Series(False, index=lab.index)
