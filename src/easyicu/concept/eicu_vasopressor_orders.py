@@ -20,6 +20,11 @@ clipped to ``patient.unitdischargeoffset`` and an order starting after
 discharge is dropped.  Unclipped spans reached 8,784 h (2026-11-04 audit
 round 3, R3-04).
 
+So that an analysis can keep charted infusions only, ``norepi_order_dur``
+reads the same order sources with this callback and repeats the order-derived
+spans alone (round-12 ruling): a ``norepi_dur`` row whose ``norepi_order_dur``
+is missing comes from a charted infusion.
+
 Dictionary use::
 
     "table": "medication", "sub_var": "drugname", "regex": "...",

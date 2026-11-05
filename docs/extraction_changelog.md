@@ -43,6 +43,20 @@ separate cut.
   where FiO2 is charted often (HiRID P/F median 184 -> 221 mmHg; AUMC
   215 -> 220; MIIV and eICU < 2%).
 
+## 2026-11-05 — eICU order-derived norepinephrine is marked [V1, `fa80e951e`] (new column only)
+
+- `norepi_dur` in eICU takes the order window of a norepinephrine order for
+  stays whose hospital charts no norepinephrine infusion (V1). That span is
+  when the order was active, not when the pump ran, and `vaso_ind` and the
+  SOFA cardiovascular components inherit it.
+- New `norepi_order_dur` (vasopressors module, eICU only) reads the same order
+  sources with the same callback and repeats only those order-derived spans,
+  on the same rows and clock as `norepi_dur`. A `norepi_dur` row with a
+  missing `norepi_order_dur` comes from a charted infusion, so an analysis can
+  keep charted infusions only as a sensitivity analysis.
+- Existing columns do not change. Other databases have no order-derived spans
+  and no values in the new column.
+
 ## 2026-11-05 — diltiazem is IV only [R5C-HIRID-012 partly withdrawn] (pending lead reseal)
 
 - Round-11 ruling: `diltiazem` is intravenous exposure in every database,

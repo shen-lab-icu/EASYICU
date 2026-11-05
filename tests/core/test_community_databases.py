@@ -63,7 +63,8 @@ def test_community_coverage_audits_every_standard_concept() -> None:
     # coverage companions and the SICdb cvp_qc, minute-volume and ventilation
     # rule/sensitivity columns.
     # UC1-K5/K6 adds five concepts, unavailable without community mappings.
-    assert coverage["concept_count"] == 332 == len(list(dictionary.keys()))
+    # Round 12 adds norepi_order_dur (eICU orders only).
+    assert coverage["concept_count"] == 333 == len(list(dictionary.keys()))
     assert set(coverage["concepts"]) == set(dictionary.keys())
     assert set(coverage["databases"]) == COMMUNITY_DATABASES
     valid = {"direct", "derived", "partial", "unavailable"}

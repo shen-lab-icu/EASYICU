@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **332 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **333 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **332 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 35 | 141 |
-| zhejiang_eicu | 128 | 39 | 23 | 142 |
-| jinhua | 135 | 19 | 32 | 146 |
-| zigong | 125 | 27 | 39 | 141 |
+| nwicu | 137 | 19 | 35 | 142 |
+| zhejiang_eicu | 128 | 39 | 23 | 143 |
+| jinhua | 135 | 19 | 32 | 147 |
+| zigong | 125 | 27 | 39 | 142 |
 
 ## Complete matrix
 
@@ -210,6 +210,7 @@ concept (base dictionary plus SOFA-2 overlay): **332 concepts × 4 databases**.
 | `norepi60` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_equiv` | medications | unavailable | unavailable | unavailable | unavailable |
+| `norepi_order_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ntprobnp` | chemistry | direct | unavailable | direct | unavailable |
 | `o2_flow` | respiratory | unavailable | unavailable | unavailable | unavailable |

@@ -181,7 +181,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-11-05 audit round 7: AUMC pH 7.4 corrected ionized calcium is its
     # own blood_gas column, cai_ph74. 361 -> 362.
     # UC1-K5/K6: four urine chemistry concepts and one SICdb precondition.
-    assert len(CONCEPT_DICTIONARY) == 367
+    # Round 12: norepi_order_dur, the order-derived companion of norepi_dur.
+    assert len(CONCEPT_DICTIONARY) == 368
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

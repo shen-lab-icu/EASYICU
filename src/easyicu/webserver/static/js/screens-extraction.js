@@ -102,7 +102,7 @@
     ['Ventilator', '呼吸机参数', 19, false, false],
     ['Blood gas', '血气分析', 10, false, false],
     ['Lab — Hematology', '实验室-血液学', 25, false, false],
-    ['Vasopressors', '血管活性药物', 17, false, false],
+    ['Vasopressors', '血管活性药物', 18, false, false],
     ['Other medications', '其他药物', 54, false, false],
     ['Renal & urine output', '肾脏与尿量', 73, false, false],
     ['Urine chemistry & renal history', '尿液生化与肾病史', 5, false, false],

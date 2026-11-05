@@ -1,5 +1,5 @@
 {
-  "concept_count": 332,
+  "concept_count": 333,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -5607,6 +5607,28 @@
       },
       "description": "norepinephrine equivalents"
     },
+    "norepi_order_dur": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "norepinephrine exposure duration in hours taken from an eICU medication order (no infusion charted)"
+    },
     "norepi_rate": {
       "category": "medications",
       "databases": {
@@ -10601,25 +10623,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 32,
-      "unavailable": 146
+      "unavailable": 147
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 35,
-      "unavailable": 141
+      "unavailable": 142
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 23,
-      "unavailable": 142
+      "unavailable": 143
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 39,
-      "unavailable": 141
+      "unavailable": 142
     }
   },
   "databases": [
