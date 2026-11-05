@@ -1108,10 +1108,8 @@ def flag_comorbidities(
     else:
         raise ValueError("system must be 'charlson' or 'elixhauser'")
 
-    if diagnoses.empty:
-        cols = [id_col] + cond_order
-        return pd.DataFrame(columns=cols)
-
+    # An empty input takes the same path, so it keeps the index columns and
+    # dtypes of a non-empty result (an empty sample is not a schema change).
     df = diagnoses[[id_col, code_col]].copy()
     if version_col in diagnoses.columns:
         ver = (
@@ -1332,7 +1330,14 @@ def load_comorbidity(
         out = stays.merge(flags, on="hadm_id", how="inner").drop(columns="hadm_id")
 
     elif db in ("eicu", "eicu_demo"):
-        dx = _lower_cols(_table_df(ds, "diagnosis"))
+        # Flags are patient-local: read only the requested stays' diagnoses
+        # before ICD token expansion (whole-table expansion dominated runtime).
+        filters = None
+        if patient_ids:
+            from ..datasource import FilterOp, FilterSpec
+
+            filters = [FilterSpec("patientunitstayid", FilterOp.IN, list(patient_ids))]
+        dx = _lower_cols(_table_df(ds, "diagnosis", filters=filters))
         long = _explode_eicu_codes(dx["icd9code"])
         long = long.merge(
             dx[["patientunitstayid"]].reset_index().rename(columns={"index": "_row"}),

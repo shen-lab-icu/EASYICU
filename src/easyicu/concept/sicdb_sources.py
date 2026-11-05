@@ -12,6 +12,8 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 
+from .immutable_receipts import freeze_sic_attrs
+
 HOUR = 3600.
 COVERAGE_ATTR = "sicdb_interval_coverage"
 
@@ -50,7 +52,7 @@ def restore_source_receipts(combined, frames):
             receipts.append(receipt)
     if receipts:
         combined.attrs[COVERAGE_ATTR] = {key: sum((r[key] for r in receipts), []) for key in receipts[0]}
-    return combined
+    return freeze_sic_attrs(combined)
 
 
 def _table(data_source, name, columns, filters=None):
@@ -105,7 +107,7 @@ def materialize_intervals(frame, *, start="Offset", stop="OffsetDrugEnd", data_s
         "overlap_start_seconds": overlap_start.tolist(),
         "overlap_stop_seconds": overlap_stop.tolist(),
     }
-    return out
+    return freeze_sic_attrs(out)
 
 
 def allocate_amounts(frame, *, concept_name, start, stop, single, data_source):

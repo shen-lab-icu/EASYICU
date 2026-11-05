@@ -44,6 +44,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from .immutable_receipts import freeze_sic_attrs
+
 AIRWAY_ITEMS = (720, 3041)
 SETTING_ITEMS = (2278, 2282, 2284, 3040, 2285, 3121)
 #: Settings that, under propofol in an ICU unit, mean controlled ventilation.
@@ -141,7 +143,7 @@ def attributed_ventilation_windows(
         candidates = candidates.loc[~pd.MultiIndex.from_frame(candidates[[id_col, "_h"]]).isin(covered)].to_dict("records")
     out.attrs["sicdb_opioid_only_hours"] = candidates
     out.attrs["sicdb_ventilation_coverage_delta"] = {"main_setting_hours": len(attributed), "additional_opioid_only_sensitivity_hours": len(candidates)}
-    return set_dur_var_unit(out, UNIT_SECONDS)
+    return freeze_sic_attrs(set_dur_var_unit(out, UNIT_SECONDS))
 
 
 def apply_sicdb_attributed_ventilation(
@@ -193,7 +195,7 @@ def apply_sicdb_attributed_ventilation(
     windows["OffsetEnd"] = windows[time_col] + windows.dur_var
     out = materialize_intervals(windows, start=time_col, stop="OffsetEnd", relative=True)
     out.attrs.update({k: v for k, v in receipt.items() if k != "easyicu_duration_units"})
-    return out
+    return freeze_sic_attrs(out)
 
 
 def _sedated_controlled_hours(
@@ -254,7 +256,7 @@ def _sedated_controlled_hours(
     keys = pd.MultiIndex.from_frame(primary[[id_col, "_h"]])
     opioid = labelled.loc[labelled.sicdb_ventilation_rule.eq("opioid_only_sensitivity")]
     primary.attrs["sicdb_opioid_only_hours"] = opioid.loc[~pd.MultiIndex.from_frame(opioid[[id_col, "_h"]]).isin(keys)].to_dict("records")
-    return primary
+    return freeze_sic_attrs(primary)
 
 
 def _hour_index(frame: pd.DataFrame, id_col: str, time_col: str) -> pd.DataFrame:
