@@ -908,7 +908,7 @@ CONCEPT_DB_COVERAGE = {
     'phenytoin': 6,  # + AUMC 7222 (2026-11-03 audit 2)
     'labetalol': 6,
     'esmolol': 6,
-    'diltiazem': 5,  # IV only; HiRID tablets stay unmapped (round-11 ruling).
+    'diltiazem': 3,  # IV only; HiRID/AUMC/SICdb items are oral (round-11 ruling).
     'nicardipine': 4,
     # Batch 8 (2026-05-14; prescriptions/HiRID additions audited 2026-05-27)
     'warfarin': 6,

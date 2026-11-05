@@ -5958,17 +5958,8 @@
   "description": "diltiazem (Cardizem) — calcium channel blocker",
   "aggregate": "max",
   "category": "medications",
-  "_comment": "Round-11 ruling (2026-11-05): diltiazem is IV exposure in every database. HiRID 1001071/1000331 are oral tablets and stay unmapped; R5C-HIRID-012 is withdrawn for them (as in S8/fb09aea7a).",
+  "_comment": "Round-11 ruling (2026-11-05): diltiazem is IV exposure in every database. HiRID 1001071/1000331 are oral tablets and stay unmapped; R5C-HIRID-012 is withdrawn for them (as in S8/fb09aea7a). AUMC 7174 (ordercategory 'Niet iv Circulatie/Diurese') and SICdb 1817 (single doses of 45-120 mg, tablet strengths) are not IV either and stay unmapped.",
   "sources": {
-   "aumc": [
-    {
-     "ids": 7174,
-     "table": "drugitems",
-     "sub_var": "itemid",
-     "callback": "aumc_positive_dose",
-     "val_var": "dose"
-    }
-   ],
    "eicu": [
     {
      "regex": "(?i)diltiazem|cardizem",
@@ -6172,17 +6163,6 @@
      "extra_vars": [
       "amount"
      ]
-    }
-   ],
-   "sic": [
-    {
-     "ids": [
-      1817
-     ],
-     "table": "medication",
-     "sub_var": "DrugID",
-     "callback": "sicdb_exposure",
-     "val_var": "Amount"
     }
    ]
   }

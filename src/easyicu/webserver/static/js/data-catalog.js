@@ -536,7 +536,7 @@
     phenytoin: 6,
     labetalol: 6,
     esmolol: 6,
-    diltiazem: 5,
+    diltiazem: 3,
     nicardipine: 4,
     warfarin: 6,
     apixaban: 2,

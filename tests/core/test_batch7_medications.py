@@ -36,9 +36,9 @@ BATCH7 = [
     ("phenytoin",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("labetalol",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("esmolol",     {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
-    # Round-11 ruling: diltiazem is IV exposure; HiRID has only tablets
-    # (1001071/1000331), so R5C-HIRID-012 is withdrawn for them.
-    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "sic"},          5),
+    # Round-11 ruling: diltiazem is IV exposure; the HiRID, AUMC and SICdb
+    # items are oral, so only the MIMIC and eICU IV sources remain.
+    ("diltiazem",   {"miiv", "mimic", "eicu"},                         3),
     ("nicardipine", {"miiv", "mimic", "eicu", "aumc"},         4),
 ]
 
@@ -146,3 +146,18 @@ def test_batch7_hirid_scope_matches_audit(cdict):
     assert "hirid" not in cdict["diltiazem"]["sources"]
     for c in ["phenytoin", "labetalol", "esmolol"]:
         assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(comp_na(`>`, 0.000001))"
+
+
+def test_diltiazem_is_iv_only_in_every_database(cdict):
+    # Round-11 ruling: diltiazem is IV exposure everywhere. AUMC 7174 'Diltiazem
+    # (Tildiem)' is ordered under 'Niet iv Circulatie/Diurese', and SICdb 1817
+    # has only single doses of 45-120 mg (tablet strengths); neither is IV.
+    sources = cdict["diltiazem"]["sources"]
+    assert not {"hirid", "aumc", "sic"} & set(sources)
+    assert [s["ids"] for s in sources["miiv"]] == [[221468]]
+    for db in ("mimic", "mimic_demo"):  # MetaVision 221468 and CareVue 30115 (mg/hr)
+        assert [(s["table"], s["ids"]) for s in sources[db]] == [
+            ("inputevents_mv", [221468]), ("inputevents_cv", [30115])]
+    for db in ("eicu", "eicu_demo"):  # infusions, or orders with an IV route
+        assert all(s["table"] == "infusiondrug" or s["callback"] == "eicu_iv_exposure"
+                   for s in sources[db])

@@ -12,8 +12,13 @@ answers is in brackets.
   exposure, and mixing routes makes the column incomparable across databases.
 - HiRID 1001071/1000331 (tablets), which R5C-HIRID-012 added under an
   any-route reading, are unmapped again. HiRID has no IV diltiazem item, so
-  the concept is unavailable for HiRID (catalog coverage 6 -> 5). No
-  separate oral concept is created while nothing consumes it.
+  the concept is unavailable for HiRID. No separate oral concept is created
+  while nothing consumes it.
+- AUMC 7174 'Diltiazem (Tildiem)' is ordered under 'Niet iv
+  Circulatie/Diurese' (not IV), and SICdb 1817 has only single doses of
+  45-120 mg (tablet strengths), so both are unmapped too. Diltiazem remains
+  for MIMIC-IV/MetaVision 221468, CareVue 30115 (mg/hr infusions) and eICU
+  IV exposure (catalog coverage 6 -> 3).
 
 ## 2026-11-05 — MIMIC-IV ED lab attribution [ED1, ED2-1]
 
