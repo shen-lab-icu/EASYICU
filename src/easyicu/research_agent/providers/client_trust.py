@@ -1474,7 +1474,7 @@ def _register_provider_wrapper(
         )
     return wrapper
 
-ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261104-audit9"
+ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261104-audit10"
 TEST_PROFILE_REF = "public_demo_replay_test/1"
 
 

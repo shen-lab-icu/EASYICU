@@ -16597,6 +16597,7 @@
   "min": 0,
   "max": 5,
   "description": "norepinephrine equivalents",
+  "_comment": "2026-11-04 auditor round 7: the vasopressors it combines differ by database. AmsterdamUMCdb records no vasopressin (terlipressin is not mapped); HiRID records no dopamine or phenylephrine.",
   "category": "medications",
   "concepts": [
    "epi_rate",
@@ -19118,7 +19119,7 @@
      "ids": "paO2",
      "table": "lab",
      "sub_var": "labname",
-     "_comment": "R6 RR-01: only a confirmed arterial Sample Type at the exact stay and original offset admits a lab gas; unknown, unpaired, venous and conflicting samples are excluded and counted by eicu_source_qc.",
+     "_comment": "R6 refined (auditor 2026-11-04): paO2 is arterial by name (label_defined_arterial); a recorded venous/capillary/mixed/central Sample Type at the same offset excludes it, an arterial one makes it explicit_arterial. Counts per status are logged by eicu_source_qc.",
      "callback": "eicu_arterial_gas",
      "extra_vars": [
       "labresultoffset"
@@ -19130,7 +19131,7 @@
      "ids": "paO2",
      "table": "lab",
      "sub_var": "labname",
-     "_comment": "R6 RR-01: only a confirmed arterial Sample Type at the exact stay and original offset admits a lab gas; unknown, unpaired, venous and conflicting samples are excluded and counted by eicu_source_qc.",
+     "_comment": "R6 refined (auditor 2026-11-04): paO2 is arterial by name (label_defined_arterial); a recorded venous/capillary/mixed/central Sample Type at the same offset excludes it, an arterial one makes it explicit_arterial. Counts per status are logged by eicu_source_qc.",
      "callback": "eicu_arterial_gas",
      "extra_vars": [
       "labresultoffset"
@@ -22219,6 +22220,7 @@
   "min": 5,
   "max": 60,
   "description": "arterial total CO2",
+  "_comment": "2026-11-04 auditor round 7: eICU has no arterial tCO2 source; its Total CO2 is the chemistry panel (R6 rule 4).",
   "omopid": 4193415,
   "category": "blood gas",
   "sources": {
@@ -28702,7 +28704,7 @@
   "callback": "vaso_ind",
   "class_name": "rec_cncpt",
   "interval": "00:01:00",
-  "_comment": "2026-11-04 R5/R6: exact duration intervals and positive main/adjunct rate hours are unioned across databases. The minute dependency grid retains partial support; max aggregation preserves positive evidence among zero-rate rows. Boolean adjuncts are points, never durations."
+  "_comment": "2026-11-04 R5/R6: exact duration intervals and positive main/adjunct rate hours are unioned across databases. The minute dependency grid retains partial support; max aggregation preserves positive evidence among zero-rate rows. Boolean adjuncts are points, never durations. The vasopressors combined differ by database. AmsterdamUMCdb records no vasopressin (terlipressin is not mapped); HiRID records no dopamine or phenylephrine."
  },
  "vecuronium": {
   "class_name": "lgl_cncpt",
