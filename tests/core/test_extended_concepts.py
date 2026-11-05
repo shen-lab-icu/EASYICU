@@ -52,11 +52,11 @@ def test_extra_labs_cover_five_databases():
     for lab in EXTRA_LABS:
         srcs = set(d[lab].sources)
         assert {"miiv", "mimic"} <= srcs
-    # R5C-AUMC-011 review: AUMC and SIC assay bases remain unresolved.
+    # R5C-AUMC-011: AUMC keeps native mg/l with its assay basis unverified.
     assert "sic" in d["ferritin"].sources
     assert "aumc" in d["ldh"].sources
     assert "sic" not in d["d_dimer"].sources
-    assert "aumc" not in d["d_dimer"].sources
+    assert "aumc" in d["d_dimer"].sources
 
 
 def test_eicu_lab_casing_matches_source_strings():

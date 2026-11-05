@@ -40,12 +40,14 @@ web/module selection. They are never pooled into, or silently substituted for,
 `cai`. This additional dictionary key requires the lead to regenerate the
 protected community registry and catalog summary after merging the lanes.
 
-D-dimer items 10393/12163 remain unmapped (R5C-AUMC-011). The repository and audit
-packet identify blood D-dimer and an mg/L conversion, but establish neither the
-historical FEU/DDU basis nor an assay-specific conversion to the concept's FEU
-scale. The review removed the worker's speculative mapping and synthetic FEU
-labels. MIMIC's documented reference-range evidence for its own assays cannot
-establish the AUMC assay basis. This is an explicit non-fix, not a lane blocker.
+D-dimer items 10393 `D-dimeren (bloed)` and 12163 `D-DIMEER (bloed)` are mapped
+after the 2026-11-05 round-11 review (R5C-AUMC-011). Only `numericitems.unit`
+equal to `mg/l` (case insensitive) is accepted; values remain unchanged in native
+mg/l. The AUMC assay reporting basis (FEU/DDU) is unverified. No conversion or
+assay classification is inferred from value ranges or from MIMIC's separate
+reference-range evidence. No D-dimer unit/assay companion exists; the dictionary
+source comment and catalog record this boundary. AUMC values must not be pooled
+with MIMIC's ng/mL FEU values as if their units and assay bases were harmonized.
 
 ScvO2 requires unanimous nonempty `Centrale lijn` sites on item 7432, with no
 nonempty simultaneous 11646 auxiliary specimen description. Item 12311 is

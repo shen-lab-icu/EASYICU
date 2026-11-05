@@ -117,11 +117,18 @@ def test_incompatible_unit_mix_has_a_conversion(concept_dict):
     )
 
 
-def test_ambiguous_cross_database_mappings_are_not_exported(concept_dict):
-    """Semantic uncertainty must become explicit unavailability, not plausible data."""
+def test_cross_database_semantic_uncertainty_is_explicit(concept_dict):
+    """Unconfirmed semantics require exclusion or an explicit native-unit boundary."""
     assert "aumc" not in concept_dict["adh_rate"]["sources"]
-    # R5C-AUMC-011 review: the historical AUMC assay basis is unconfirmed.
-    assert "aumc" not in concept_dict["d_dimer"]["sources"]
+    # R5C-AUMC-011: native AUMC mg/l is available without an FEU/DDU conversion.
+    d_dimer = concept_dict["d_dimer"]
+    source = d_dimer["sources"]["aumc"][0]
+    assert source["ids"] == [10393, 12163]
+    assert source["unit_var"] == "unit"
+    assert "callback" not in source
+    assert "mg/l" in d_dimer["unit"]
+    assert "unverified" in source["_comment"]
+    assert "FEU/DDU" in source["_comment"]
     # 2026-11-03 audit round 2 (S8): HiRID neut reads 24000556, segmented
     # neutrophils per 100 leukocytes (median about 63%).  Audit round 3 (F-18)
     # adds band forms 24000557 to it and reads 24000550, an absolute count,

@@ -30415,12 +30415,15 @@
   }
  },
  "d_dimer": {
-  "unit": "ng/mL",
+  "unit": [
+   "ng/mL",
+   "mg/l"
+  ],
   "min": 0,
   "max": 50000,
   "description": "D-dimer (blood)",
   "category": "chemistry",
-  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. Output is ng/mL on the FEU (fibrinogen-equivalent unit) scale as charted, with no conversion, in MIMIC-IV and MIMIC-III: both label variants of 50915/51196 share the reference range 0-500 and one distribution (2026-11-04 audit rounds 3 and 4, F-21, R4-032). AUMC/SIC are unavailable until their FEU/DDU assay semantics can be represented explicitly.",
+  "_provenance": "MIMIC itemids verified against real MIMIC-III/IV d_labitems. Output is ng/mL on the FEU (fibrinogen-equivalent unit) scale as charted, with no conversion, in MIMIC-IV and MIMIC-III: both label variants of 50915/51196 share the reference range 0-500 and one distribution (2026-11-04 audit rounds 3 and 4, F-21, R4-032). AUMC reports native mg/l without conversion; its FEU/DDU assay reporting basis is unverified and must not be assumed equivalent to the MIMIC FEU scale. SIC remains unavailable.",
   "sources": {
    "miiv": [
     {
@@ -30453,6 +30456,25 @@
      "table": "labevents",
      "sub_var": "itemid",
      "_comment": "2026-11-03 extraction audit 3: rows whose valueuom contains FEU (fibrinogen-equivalent units) are divided by 2 and reported as ng/mL DDU (D-dimer units). One D-dimer unit corresponds to about two fibrinogen-equivalent units because the FEU calibrator is expressed as the mass of the fibrinogen molecule (~340 kDa) and DDU as the D-dimer fragment (~195 kDa); the factor 2 is the conventional assay-independent approximation of that ratio, not an assay-specific calibration, so converted values carry that approximation. MIMIC-IV charts both units under both itemids; MIMIC-III records no FEU rows. | 2026-11-04 audit round 4 (R4-032): no unit conversion, as MIIV: the same itemids carry the same reference range (0-500) and MIMIC-III records no FEU-labelled rows, so its values are on the FEU scale already; the halving rule is removed so MIMIC-IV and MIMIC-III share one scale."
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      10393,
+      12163
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "unit_var": "unit",
+     "extra_vars": [
+      "unit"
+     ],
+     "require_regex": {
+      "unit": "(?i)^mg/l$"
+     },
+     "_comment": "2026-11-05 round-11 review (R5C-AUMC-011): 10393 D-dimeren (bloed) and 12163 D-DIMEER (bloed) are blood D-dimer reported in mg/l. Require mg/l and retain native values unchanged. The AUMC assay reporting basis (FEU/DDU) is unverified; do not infer it from value ranges or convert to the MIMIC FEU scale."
     }
    ]
   }
@@ -31736,7 +31758,6 @@
       45898,
       45899,
       45910,
-      45911,
       45918,
       45920,
       45968,
@@ -31749,7 +31770,6 @@
       46071,
       46072,
       46079,
-      46082,
       46091,
       46092,
       46118,
@@ -31873,7 +31893,7 @@
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "CareVue outputevents items other than urine whose d_items label is not a count, total, RRT/ultrafiltrate, irrigant, residual, cardiac output, lab draw or OR/PACU/pre-admission/cath-lab entry."
+     "_comment": "CareVue outputevents items other than urine whose d_items label is not a count, total, RRT/ultrafiltrate, irrigant, residual, cardiac output, lab draw or OR/PACU/pre-admission/cath-lab entry. | 2026-11-05 round-11 review (R5C-III-027): exclude 45911 BM20PO+thick&easy and 46082 BM28 4Enf Powd 4 MCT: CareVue Free Form Intake enteral feeding entries misfiled under outputevents, with no unit. They are not non-urine output and are not reassigned to intake."
     }
    ],
    "sic": [
@@ -32623,7 +32643,6 @@
       45898,
       45899,
       45910,
-      45911,
       45918,
       45920,
       45968,
@@ -32636,7 +32655,6 @@
       46071,
       46072,
       46079,
-      46082,
       46091,
       46092,
       46118,
@@ -32760,7 +32778,7 @@
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "CareVue outputevents items other than urine whose d_items label is not a count, total, RRT/ultrafiltrate, irrigant, residual, cardiac output, lab draw or OR/PACU/pre-admission/cath-lab entry."
+     "_comment": "CareVue outputevents items other than urine whose d_items label is not a count, total, RRT/ultrafiltrate, irrigant, residual, cardiac output, lab draw or OR/PACU/pre-admission/cath-lab entry. | 2026-11-05 round-11 review (R5C-III-027): exclude 45911 BM20PO+thick&easy and 46082 BM28 4Enf Powd 4 MCT: CareVue Free Form Intake enteral feeding entries misfiled under outputevents, with no unit. They are not non-urine output and are not reassigned to intake."
     }
    ]
   }

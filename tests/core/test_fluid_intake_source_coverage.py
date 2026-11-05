@@ -12,6 +12,10 @@ import pytest
 from easyicu.concept import ConceptSource, _apply_callback
 from easyicu.concept.callbacks import _callback_fluid_balance_hourly
 from easyicu.table import ICUTable
+from tests.support.mimic_synthetic_source import (
+    mimic_synthetic_load,
+    mimic_synthetic_source,
+)
 
 DICTIONARY = Path(__file__).resolve().parents[2] / "src/easyicu/data/concept-dict.json"
 
@@ -119,3 +123,42 @@ def test_aumc_intake_is_every_intravenous_order_category():
     enteral_oral_or_not_iv = {114, 63, 42, 31, 119, 21, 71, 70, 32, 69, 29}
     assert ids == intravenous
     assert not ids & enteral_oral_or_not_iv
+
+
+@pytest.mark.parametrize("database", ["mimic", "mimic_demo"])
+@pytest.mark.parametrize("bucketed", [False, True])
+def test_carevue_feeding_in_outputevents_does_not_change_fluid_balance(
+    tmp_path, database, bucketed,
+):
+    start = pd.Timestamp("2150-01-01")
+    times = [start + pd.Timedelta(minutes=m) for m in (15, 75)]
+    source = mimic_synthetic_source(
+        tmp_path, database, bucketed=bucketed,
+        inputevents_cv=pd.DataFrame({
+            "icustay_id": [1, 1], "itemid": [30018, 30018],
+            "charttime": times, "amount": [300., 300.], "amountuom": ["mL", "mL"],
+        }),
+        outputevents=pd.DataFrame({
+            "icustay_id": [1] * 5,
+            "itemid": [40055, 40055, 45911, 46082, 40048],
+            "charttime": [*times, *times, times[1]],
+            "value": [50., 50., 120., 80., 25.],
+            "valueuom": ["mL", "mL", None, None, "mL"],
+        }),
+    )
+    names = ["total_input_ml", "urine", "other_output_ml", "fluid_balance", "fluid_balance_cumulative"]
+    result = mimic_synthetic_load(source, names)
+    expected = {
+        "total_input_ml": {0.: 300., 1.: 300.},
+        "other_output_ml": {1.: 25.},
+        "fluid_balance": {0.: 250., 1.: 225.},
+        "fluid_balance_cumulative": {0.: 250., 1.: 475.},
+    }
+    for name, values in expected.items():
+        table = result[name]
+        actual = table.data.set_index(table.index_column)[name].dropna().to_dict()
+        assert actual == pytest.approx(values), name
+
+    # Misfiled feed observations are excluded, not reclassified as intake.
+    for intake in _sources("total_input_ml", database):
+        assert not {45911, 46082} & set(intake["ids"])

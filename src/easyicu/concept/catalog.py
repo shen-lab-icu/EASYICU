@@ -391,7 +391,7 @@ CONCEPT_DICTIONARY = {
     # 实验室检查 (扩展)
     'ammonia': ('Ammonia', '氨', 'umol/L'),
     'amylase': ('Amylase', '淀粉酶', 'U/L'),
-    'd_dimer': ('D-dimer', 'D-二聚体', 'ng/mL'),
+    'd_dimer': ('D-dimer', 'D-二聚体', 'ng/mL (MIMIC); mg/l (AUMC)'),
     'ferritin': ('Ferritin', '铁蛋白', 'ng/mL'),
     'ldh': ('Lactate Dehydrogenase', '乳酸脱氢酶', 'U/L'),
     'lipase': ('Lipase', '脂肪酶', 'U/L'),
@@ -433,6 +433,7 @@ CONCEPT_DICTIONARY = {
 
 # 特征详细描述（英文和中文）
 CONCEPT_DESCRIPTIONS = {
+    'd_dimer': ('Blood D-dimer: MIMIC uses ng/mL FEU; AUMC keeps native mg/l with FEU/DDU reporting basis unverified. Values are not harmonized across these sources.', '血液D-二聚体：MIMIC为ng/mL FEU；AUMC保留原始mg/l，FEU/DDU报告依据未核实。两类来源数值未统一换算。'),
     # SOFA-2
     'sofa2': ('Database operationalization of SOFA-2 with conservative handling of unconfirmed delirium-treatment proxies', 'SOFA-2数据库操作化实现；对未确认的谵妄治疗代理采取保守处理'),
     'sofa2_resp': ('Respiratory: PaO2/FiO2 (or SpO2/FiO2 if unavailable), scores 3-4 require advanced respiratory support (IMV/NIV/HFNC) or ECMO', '呼吸系统：基于氧合指数，3-4分需要高级呼吸支持（IMV/NIV/HFNC）或ECMO'),
@@ -842,6 +843,7 @@ CONCEPT_DB_COVERAGE = {
     'cvp_raw': 6, 'cvp_qc': 6, 'minute_vol_raw': 1, 'minute_vol_qc': 1,
     'mech_vent_rule': 1, 'mech_vent_opioid_sensitivity': 1,  # SIC audit companions.
     'dex': 6, 'cai_ph74': 1,  # AUMC pH 7.4 corrected items only (2026-11-05 audit round 7).
+    'd_dimer': 3,  # MIMIC-III/IV + native-unit AUMC; assay bases are not harmonized.
     'o2_flow': 5,  # supp_o2 input: miiv/mimic/eicu/aumc/hirid (2026-11-03 audit round 2, G6/G7)
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 5, 'rrt': 4,
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)

@@ -10,6 +10,29 @@ import pyarrow.parquet as pq
 import pytest
 
 
+@pytest.mark.parametrize("units", ["mg/l", ["ng/mL", "mg/l"], "ng/mL"])
+def test_aumc_synthetic_labs_satisfy_their_source_unit_filter(units):
+    from easyicu import synthetic_source_tables as tables
+
+    config, _ = tables.definitions("aumc")
+    concepts = {"fictional_lab": {
+        "unit": units, "min": 0, "max": 100,
+        "sources": {"aumc": [{
+            "table": "numericitems", "sub_var": "itemid", "ids": [990001],
+            "val_var": "value", "unit_var": "unit",
+            "require_regex": {"unit": "(?i)^mg/l$"},
+        }]},
+    }}
+    if units == "ng/mL":
+        with pytest.raises(ValueError, match="required unit"):
+            tables._events("aumc", config, concepts, tables.population(12))
+    else:
+        rows = tables._events("aumc", config, concepts, tables.population(12))
+        numeric = pd.concat(rows["numericitems"], ignore_index=True)
+        assert not numeric.empty
+        assert set(numeric.unit) == {"mg/l"}
+
+
 @pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
 def test_sources_are_deterministic_and_have_native_identifiers(tmp_path, database):
     from easyicu.synthetic_sources import generate_source, verify_source

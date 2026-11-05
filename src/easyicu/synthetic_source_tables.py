@@ -138,7 +138,7 @@ def _events(database, config, concepts, p):
                     record[value_col] = value
                 record.update(admissionid=p["stay"][index], **{time_col: time})
                 record.update(registeredat=time, updatedat=time, stop=time + 3_600_000,
-                              duration=60, tag="+", unit=_aumc_unit(name, source), registeredby="synthetic",
+                              duration=60, tag="+", unit=_aumc_unit(name, source, definition), registeredby="synthetic",
                               # A source that declares its volume unit (dextrose
                               # rates) is exported in that unit, not as a dose.
                               dose=.1, doseunit=source.get("required_volume_unit") or "mg",
@@ -237,13 +237,22 @@ def source_tables(database: str, stays: int):
             yield f"{converted}.parquet", table
 
 
-def _aumc_unit(name, source):
+def _aumc_unit(name, source, definition):
     """The unit label of an AUMC synthetic row.
 
     A source converting labelled kPa rows (``convert_unit(..., '^kpa$')``)
     gets kPa: its values are already divided into kPa, and unlabelled they
-    would be read as mmHg.
+    would be read as mmHg. A required unit filter selects a matching declared
+    concept unit; incompatible declarations stop generation.
     """
+    required_unit = (source.get("require_regex") or {}).get("unit")
+    if required_unit:
+        units = definition.get("unit") or []
+        units = [units] if isinstance(units, str) else units
+        for unit in units:
+            if re.search(required_unit, unit):
+                return unit
+        raise ValueError(f"AUMC synthetic source {name!r} has no declared unit matching its required unit filter")
     if "'^kpa$'" in (source.get("callback") or ""):
         return "kPa"
     return {"map": "mmHg", "lact": "mmol/l", "hgb": "mmol/l", "crea": "umol/l",

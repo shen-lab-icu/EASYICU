@@ -256,8 +256,9 @@ HiRID lanes keep their detailed sections below. The other lanes:
 - **AUMC.** Source timestamps are kept until half-open hourly expansion,
   and bag amounts are conserved. Actual-pH calcium is separate from
   `cai_ph74`. Tidal-volume units, ScvO2, FiO2, ECMO, PEEP and RRT evidence
-  are corrected. D-dimer stays unmapped because no FEU/DDU basis is
-  documented.
+  are corrected. Round-11 review maps blood D-dimer items 10393/12163 only
+  when reported in mg/l, keeping native values unchanged. Its FEU/DDU basis
+  remains unverified; AUMC and MIMIC D-dimer values are not harmonized.
 - **SICdb.** Intervals, rates and diuretic amounts are aligned to
   right-open hours. Pressure units are corrected before bounds.
   `cvp_raw`/`cvp_qc` and `minute_vol_raw`/`minute_vol_qc` are published,
@@ -268,6 +269,8 @@ HiRID lanes keep their detailed sections below. The other lanes:
   vasoactive support is expanded and BiPAP/CPAP devices are added. SOFA-2
   `vaso_ind` takes `other_vaso` as boolean support, for MIMIC-III only.
   Fentanyl weight indexing fails closed. HbCO units are corrected.
+  Round-11 review removes CareVue feeding items 45911/46082 from non-urine
+  output in full and demo mappings; they are not reassigned to intake.
 - **Bounds.** Nine concepts publish `*_raw`/`*_qc` siblings through the
   opt-in `bounds_audit` module. Public bounds, units, specimens and source
   priorities are unchanged.
