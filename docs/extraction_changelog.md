@@ -4,6 +4,65 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — results no longer depend on the storage layout [lead-r13, class a; `245e22dbc`, `c6fa1e4be`, `089701e34`]
+
+The same source could give different values as a single parquet file, a flat
+directory or a bucket cache. Every database with directory or bucketed tables
+was affected; the counts below are from the CareVue 3,000-stay sample, and
+full-cohort counts per database follow in this entry once the lead-r13 full
+runs finish.
+
+- **id_tbl weight and height.** A DuckDB fast path, used only for directory
+  and bucketed tables, read the string `value` column instead of the table's
+  `val_var` (`valuenum` on MIMIC chartevents), so rows carrying only
+  `valuenum` were dropped. It also took the per-stay median before the concept
+  bounds. Affected: MIMIC-IV weight; MIMIC-III weight and height read from a
+  directory layout. eICU weight was not affected (the missing `value` column
+  failed the fast path, which then fell back to the raw path). HiRID
+  weight/height, AUMC weight and MIMIC-IV height read the right column; they
+  differ only where a stay has an out-of-bounds value. `245e22dbc` fixed the
+  column and `c6fa1e4be` removes the fast path: id_tbl concepts always take the
+  raw path. CareVue sample, bucketed vs single-file: 12 stays had lost their
+  weight, <10 their height, and <10 stays lost per-kg norepinephrine rows.
+  The v6 CareVue export (`97f508c6`) read a single file and was not affected
+  by the column error.
+- **Path and cache by layout.** A single parquet file took the raw pandas path
+  (float64) and a per-patient table cache, while directories and buckets took
+  DuckDB (float32). Derived columns (shock indices, white-cell ratios, P/F,
+  driving pressure, fluid balance, eGFR) differed in the last float32 digit,
+  and with the cache a later concept on the same table bypassed DuckDB (AUMC
+  differential counts). `089701e34` chooses the path and the cache by whether
+  the table is parquet-backed, whatever its layout. The cache also no longer
+  holds whole patient batches of a single-file chartevents, which ran the
+  CareVue single-file view out of memory at 14 GiB.
+- Tests: every dictionary source on a bucketed table, with values only in its
+  own value column, gives the same concept output and byte-identical module
+  exports in the single-file, directory and bucket layouts.
+
+## 2026-11-05 — swallowed failures now fail loudly [lead-r13, `55dc5b853`]
+
+Callbacks and loaders that caught an exception and published a whole batch as
+NA (or an empty frame) now raise with a reason code; a stay that truly has no
+data keeps its documented NA rule. No value changes where nothing failed.
+Codes: `hirid_rate_kg_weight_load_failed`, `sic_rate_kg_weight_load_failed`,
+`wbc_ratio_calculation_failed`, `vent_mode_map_unavailable`,
+`callback_concept_load_failed`, `urine24_urine_load_failed`,
+`concept_component_merge_failed`, `sub_concept_load_failed`,
+`eicu_optional_channel_read_failed`, `sicdb_cvp_arterial_reference_read_failed`,
+`circ_failure_dependency_load_failed`, `aumc_rate_units_expand_failed`,
+`renal_aki_bundle_load_failed`, `circ_failure_load_failed`,
+`comorbidity_load_failed`, `outcomes_load_failed`, `microbiology_load_failed`,
+`special_concept_merge_failed`, `sepsis_dependency_load_failed`,
+`hospital_table_hadm_mapping_failed`, `hospital_table_stay_id_fill_failed`,
+`mimic3_chartevents_csv_read_failed`, `partitioned_read_failed`. The sepsis
+dependency load no longer retries SOFA-2 after a failure.
+
+- `circ_failure` asked for `levo_rate` and `theo_rate`, which are not in the
+  dictionary; the old per-concept fallback hid that. Optional drugs absent
+  from the dictionary are now skipped (`710538306`), and a stay without a
+  boolean drug record (HiRID milrinone) is filled with False, not 0.0
+  (`7a0ed4ba1`).
+
 ## 2026-11-05 — MIMIC-III per-kg rates: a weight-load failure is an error [lead-r13]
 
 - `mimic_kg_rate` loads each stay's weight before dividing a rate by it. When
