@@ -211,3 +211,19 @@ def test_raw_concept_load_failure_raises_instead_of_returning_none(monkeypatch):
     monkeypatch.setattr(resolver, "load_concepts", fail)
     with pytest.raises(RuntimeError, match="raw_concept_load_failed: urine"):
         resolver.get_raw_concept("urine", _db("miiv"), None)
+
+
+class _FailingTableSource:
+    config = SimpleNamespace(name="mimic")
+
+    def load_table(self, *_args, **_kwargs):
+        raise OSError("icustays read failed")
+
+
+def test_mimic_age_intime_load_failure_raises():
+    # The shipped source-level path used to coerce date-of-birth strings to
+    # numbers on failure, making every MIMIC-III age missing without an error.
+    frame = pd.DataFrame({"icustay_id": [1], "age": ["2100-01-01 00:00:00"]})
+    with pytest.raises(RuntimeError, match="mimic_age_intime_load_failed"):
+        _apply_callback(frame, ConceptSource(callback="mimic_age", value_var="dob"),
+                        concept_name="age", data_source=_FailingTableSource())

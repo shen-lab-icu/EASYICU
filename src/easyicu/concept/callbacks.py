@@ -2255,18 +2255,13 @@ def _callback_mimic_age(
             if stay_id_col in data.columns:
                 id_columns = [stay_id_col]
             
-        except Exception:
-            # If loading icustays fails, try with admittime if available
-            if 'admittime' in data.columns:
-                dob = pd.to_datetime(data['dob'], errors='coerce')
-                admittime = pd.to_datetime(data['admittime'], errors='coerce')
-                age_days = (admittime - dob).dt.days
-                age_years = age_days / 365.0
-                age_years = np.where(age_years > 90, 90, age_years)
-                data['age'] = age_years
-            else:
-                # Cannot calculate age
-                return _empty_icutbl(ctx)
+        except Exception as exc:
+            # Age is anchored to ICU admission. An admittime-based age would
+            # be another estimand and an empty table would read as "no age";
+            # fail with the cause instead.
+            raise RuntimeError(
+                f"mimic_age_intime_load_failed: ({type(exc).__name__}: {exc})"
+            ) from exc
     else:
         # Cannot calculate age
         return _empty_icutbl(ctx)

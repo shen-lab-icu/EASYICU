@@ -3663,6 +3663,10 @@ def _apply_callback(
                         merge_col = 'icustay_id'
                     else:
                         merge_col = None
+                    if merge_col is None or merge_col not in icustays.columns:
+                        raise KeyError(
+                            "no ICU stay key to join date of birth to ICU admission"
+                        )
                     
                     if merge_col is not None and merge_col in icustays.columns:
                         # Merge to get intime
@@ -3713,13 +3717,11 @@ def _apply_callback(
                                 frame = frame.drop(columns=[col])
                     
                 except Exception as e:
-                    # If loading fails, try simpler approach
-                    import traceback
-                    logger.warning(f"mimic_age callback failed: {e}")
-                    traceback.print_exc()
-                    if concept_name in frame.columns:
-                        frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-                        frame.loc[frame[concept_name] > 90, concept_name] = 90
+                    # The fallback coerced date-of-birth strings to numbers,
+                    # which made every age missing without an error.
+                    raise RuntimeError(
+                        f"mimic_age_intime_load_failed: ({type(e).__name__}: {e})"
+                    ) from e
             else:
                 # No data_source - just cap at 90 if age already exists
                 if concept_name in frame.columns:
@@ -3767,7 +3769,7 @@ def _apply_callback(
         unit_var = source.unit_var or unit_column
         
         # Try to add weight and divide
-        if 'weight' not in frame.columns and resolver is not None and data_source is not None:
+        if not frame.empty and 'weight' not in frame.columns and resolver is not None and data_source is not None:
             try:
                 id_col = _patient_id_column(frame, data_source)
                 if id_col:
@@ -3923,7 +3925,10 @@ def _apply_callback(
                 frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
                 frame = frame.drop(columns=['weight'], errors='ignore')
         # Try to add weight
-        elif 'weight' not in frame.columns and resolver is not None and data_source is not None:
+        elif (
+            'weight' not in frame.columns and not frame.empty
+            and resolver is not None and data_source is not None
+        ):  # no drug rows: no rate needs a weight
             try:
                 _PATIENT_ID_COLS_W = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
                 id_cols = [c for c in _PATIENT_ID_COLS_W if c in frame.columns]
