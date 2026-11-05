@@ -106,7 +106,10 @@ def test_unified_ratio_concepts_still_resolve_as_raw(lookup, term, expected):
 
 @pytest.mark.parametrize(
     "term,expected",
-    [("creatinine", "crea"), ("urea", "bun"), ("peep", "peep"), ("lactate", "lact")],
+    [
+        ("creatinine", "crea"), ("urea", "bun"), ("peep", "peep"), ("lactate", "lact"),
+        ("urine urea", "urine_urea"), ("urine creatinine", "urine_crea"),
+    ],
 )
 def test_plain_concepts_unaffected(lookup, term, expected):
     assert _resolve_concept(term, lookup) == expected

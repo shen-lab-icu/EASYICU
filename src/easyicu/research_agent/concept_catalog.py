@@ -103,6 +103,9 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
     # --- Tier-1 derived indices (2026-06-22): clean clinical synonyms the
     # dict descriptions do not spell out. Conservative — no ambiguous acronyms
     # (e.g. no bare "SI"/"OI"/"MSI") that could mis-resolve. ---
+    # A bare "urea" means the blood analyte; since urine_urea joined the
+    # dictionary (round 11) the token tied it on specificity alone.
+    "bun": (["urea"], False),
     "bun_creatinine_ratio": (
         [
             "urea-to-creatinine ratio",
