@@ -20,7 +20,7 @@ The same ICU dose can be charted in both eMAR and inputevents. An eMAR dose
 is dropped only for an explicit IV route, the same admission and drug,
 matching positive mass dose and a start within ``DEDUP_WINDOW``. The real
 channels have no shared administration identifier. Each input row can remove
-at most one nearest eMAR copy; oral and unknown-route doses never deduplicate.
+at most one eMAR copy; oral and unknown-route doses never deduplicate.
 
 Dictionary use::
 
@@ -84,11 +84,13 @@ def event_doses(details: pd.DataFrame) -> pd.DataFrame:
 def drop_inputevent_duplicates(
     doses: pd.DataFrame, inputs: pd.DataFrame, *, key: str, time_col: str, drug: str
 ) -> pd.DataFrame:
-    """Match IV copies by admission, drug, mass and nearest time, without IDs.
+    """Match IV copies by admission, drug, mass and time tolerance, without IDs.
 
-    A sorted asof join bounds memory to the two channels' row counts instead
-    of constructing all dose pairs in an admission. A nearest input can remove
-    only one eMAR row, so repeated same-dose administrations are preserved.
+    Sorted asof joins bound memory to the two channels' row counts instead
+    of constructing all dose pairs in an admission. Keep the nearest-copy
+    choices unless chronological one-to-one matching removes more compatible
+    copies in that window. This preserves surviving doses' hours where the
+    nearest matching already accounts for every available copy.
     Mass is compared in mg rounded to six decimals after unit conversion.
     """
     if doses.empty or inputs.empty:
@@ -112,16 +114,74 @@ def drop_inputevent_duplicates(
     right = right.loc[right["_mg"].gt(0) & np.isfinite(right["_mg"])].dropna(subset=[key, "_input_time"])
     if left.empty or right.empty:
         return doses
-    right["_input_row"] = np.arange(len(right))
-    pairs = pd.merge_asof(
-        left.sort_values("_time"),
-        right[[key, "_mg", "_input_time", "_input_row"]].sort_values("_input_time"),
-        left_on="_time", right_on="_input_time", by=[key, "_mg"],
-        direction="nearest", tolerance=DEDUP_WINDOW,
-    ).dropna(subset=["_input_row"])
-    pairs["_gap"] = (pairs["_time"] - pairs["_input_time"]).abs()
-    matched = pairs.sort_values(["_gap", "_row"]).drop_duplicates("_input_row")["_row"]
+    matched = _chronological_matches(left, right, key)
     return doses.iloc[~np.isin(np.arange(len(doses)), matched)]
+
+
+def _chronological_matches(left: pd.DataFrame, right: pd.DataFrame, key: str) -> np.ndarray:
+    """Resolve compatible input copies in vectorized time-window blocks.
+
+    Two asof joins give each dose's inclusive interval of candidate input
+    positions. Prefix maxima assign distinct positions to a whole block at
+    once. Only the first exhausted interval breaks a block: discard that
+    unmatched dose and retry its suffix. Disjoint candidate windows advance
+    independently, so separated administrations do not serialize the scan.
+    This avoids per-row Python loops and a quadratic candidate-pair table.
+    Retain the nearest-copy mapping wherever it already matches as many
+    doses, preserving the original choice of surviving administration times.
+    """
+    groups = [key, "_mg"]
+    right = right.sort_values("_input_time", kind="stable").copy()
+    right["_position"] = right.groupby(groups, sort=False).cumcount()
+    candidates = right[[*groups, "_input_time", "_position"]]
+    work = left.sort_values("_time", kind="stable").copy()
+    for column, delta, direction in (("_low", -DEDUP_WINDOW, "forward"), ("_high", DEDUP_WINDOW, "backward")):
+        work["_edge"] = work["_time"] + delta
+        joined = pd.merge_asof(work, candidates, left_on="_edge", right_on="_input_time", by=groups, direction=direction)
+        work[column] = joined["_position"].to_numpy()
+    work = work.dropna(subset=["_low", "_high"])
+    work = work.loc[work._low.le(work._high)].copy()
+    work[["_low", "_high"]] = work[["_low", "_high"]].astype("int64")
+    if work.empty:
+        return np.array([], dtype=np.int64)
+    previous_high = work.groupby(groups, sort=False)._high.shift()
+    separate = previous_high.isna() | work._low.gt(previous_high)
+    work["_component"] = separate.groupby([work[column] for column in groups], sort=False).cumsum()
+    groups = [*groups, "_component"]
+    nearest = pd.merge_asof(
+        work, candidates, left_on="_time", right_on="_input_time", by=groups[:2],
+        direction="nearest", tolerance=DEDUP_WINDOW,
+    ).dropna(subset=["_position"])
+    nearest["_gap"] = (nearest._time - nearest._input_time).abs()
+    nearest = nearest.sort_values(["_gap", "_row"]).drop_duplicates([key, "_mg", "_position"])
+    policy = work[[*groups, "_row"]].copy()
+    policy["_nearest"] = policy._row.isin(nearest._row)
+    work["_used_until"] = 0
+    matched = []
+    while not work.empty:
+        work = work.loc[work._high.ge(work._used_until)].copy()
+        if work.empty:
+            break
+        grouped = work.groupby(groups, sort=False)
+        ordinal = grouped.cumcount()
+        work["_candidate"] = np.maximum(work._low, work._used_until) - ordinal
+        work["_candidate"] = work.groupby(groups, sort=False)._candidate.cummax() + ordinal
+        failed = work._candidate.gt(work._high)
+        work["_failed"] = failed
+        suffix = work.groupby(groups, sort=False)._failed.cummax()
+        accepted = ~suffix
+        matched.append(work.loc[accepted, "_row"].to_numpy())
+        work["_used_until"] = work._candidate.where(accepted, work._used_until - 1) + 1
+        work["_used_until"] = work.groupby(groups, sort=False)._used_until.transform("max")
+        # Subsequent exhausted intervals are discarded together on the next
+        # pass; later intervals may still have unused compatible inputs.
+        work = work.loc[suffix]
+    matched = np.concatenate(matched) if matched else np.array([], dtype=np.int64)
+    policy["_chronological"] = policy._row.isin(matched)
+    counts = policy.groupby(groups, sort=False)[["_nearest", "_chronological"]].transform("sum")
+    improves = counts._chronological.gt(counts._nearest)
+    selected = policy._chronological.where(improves, policy._nearest)
+    return policy.loc[selected, "_row"].to_numpy()
 
 
 def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd.Series) -> pd.DataFrame:
@@ -141,7 +201,7 @@ def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd
     keys = pd.DataFrame({"key": pd.unique(values.astype(str))})
     if keys.empty:
         return pd.DataFrame(columns=columns)
-    directory = data_source.resolve_flat_parquet_directory(table)
+    directory = data_source.resolve_bucket_directory(table) or data_source.resolve_flat_parquet_directory(table)
     files = enumerate_bucket_parquet_files(directory) if directory is not None else []
     if not files:
         # The MIMIC-IV demo converts each table to one parquet file.
