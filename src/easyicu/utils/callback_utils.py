@@ -2132,7 +2132,11 @@ def mimic_rate_cv(
         if 'row_id' in data.columns:
             keys.append('row_id')
         data = data.sort_values(keys, kind='mergesort')
-
+    # A stop can retain the old pump setting; it closes, never renews, support.
+    if 'stopped' in data.columns:
+        stopped = data['stopped'].astype('string').str.strip().str.casefold()
+        terminal = stopped.isin(['stopped', 'discontinued', 'discontinue']) | stopped.str.startswith('d/c', na=False)
+        data.loc[terminal, val_col] = 0.
     # Build keep_vars
     keep_vars = [val_col]
     if unit_col and unit_col in data.columns:
@@ -5447,11 +5451,6 @@ def hirid_vent(
 
     set_dur_var_unit(df, UNIT_HOURS)
     
-    # Round datetime to integer hours (R ricu behavior)
-    if expand_to_hourly and actual_index_col in df.columns and not np.issubdtype(df[actual_index_col].dtype, np.datetime64):
-        # If float hours, floor to integer
-        df[actual_index_col] = np.floor(df[actual_index_col]).astype(int)
-    
     # Expand to hourly time series (like R ricu's expand())
     if expand_to_hourly:
         df = _expand_hirid_vent_to_hourly(
@@ -5559,8 +5558,9 @@ def _expand_hirid_vent_to_hourly(
         concept_name: expanded_values,
     })
 
-    # Remove duplicates (same patient, same hour) and sort
-    result = result.drop_duplicates(subset=[id_col, index_col], keep='first')
+    # Distinct states can each overlap the same hour. Keep those observations
+    # for the caller's aggregation; an earlier unknown must not erase support.
+    result = result.drop_duplicates(subset=[id_col, index_col, concept_name], keep='first')
     result = result.sort_values([id_col, index_col]).reset_index(drop=True)
 
     return result

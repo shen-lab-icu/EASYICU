@@ -337,6 +337,13 @@ def _quarantine_rows_outside_icu_episode(
 
     event_hours = pd.to_numeric(event_hours, errors="coerce")
     upper_hours = pd.to_numeric(upper_hours, errors="coerce")
+    if db_label == "MIMIC":
+        from .window_expansion import clip_episode_windows
+
+        windows = clip_episode_windows(frame, start=event_hours, upper=upper_hours,
+                                       lower=-allowed_pre_hours, keep_post_discharge=keep_post_discharge)
+        if windows is not None:
+            return windows
     invalid = event_hours.notna() & (
         (event_hours < -allowed_pre_hours)
         | ((event_hours > upper_hours) & (not keep_post_discharge))
@@ -2741,7 +2748,10 @@ class ConceptResolver:
                         self._cache_touch('table', cache_key)
             # A table's default projection can omit a wide-table value column
             # (e.g. CVP). Reload with this source's projection in that case.
-            if cached_table is not None and source.value_var and source.value_var not in cached_table.data:
+            cached_required = source.params.get("extra_vars", [])
+            cached_required = [cached_required] if isinstance(cached_required, str) else list(cached_required)
+            cached_required = {column for column in [source.value_var, source.dur_var, *cached_required] if column}
+            if cached_table is not None and not cached_required.issubset(cached_table.data.columns):
                 cached_table = None
             if cached_table is not None:
                 if verbose or DEBUG_MODE:
@@ -7188,6 +7198,7 @@ class ConceptResolver:
         # path only for the case where outtime hadn't been materialised
         # yet (we still want the cache populated for the next caller).
         if pd.api.types.is_numeric_dtype(data[index_column]):
+            _normalize_duration_to_hours(data)
             cache = self._icustays_cache
             need_warm_cache = (
                 cache is None
@@ -7390,6 +7401,7 @@ class ConceptResolver:
                 minutes_col = time_diff_col.dt.total_seconds() / 60.0
                 data[time_col] = minutes_col / 60.0
             
+            _normalize_duration_to_hours(data)
             # 2026-09-18 v6: the absolute-timestamp path gets the same
             # producer-layer episode bound as the numeric fast path above.
             # R ricu keeps out-of-window points, but native-v2 staging must
@@ -10072,7 +10084,7 @@ class ConceptResolver:
                         break
                 
                 # 查找持续时间列
-                for candidate in ['duration', 'dur', 'durationhours']:
+                for candidate in ['dur_var', 'duration', 'dur', 'durationhours']:
                     if candidate in frame.columns:
                         duration_col = candidate
                         break

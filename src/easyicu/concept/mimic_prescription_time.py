@@ -52,6 +52,44 @@ def shift_index_minutes(values: pd.Series, minutes: int = PRESCRIPTION_DAY_OFFSE
     return parsed + offset
 
 
+def prescription_exposure(frame, source, concept_name, *, icu_stays=None):
+    """MIIV positive-dose exposure on a valid, half-open prescription interval.
+
+    Prescriptions have no execution-status column. If a caller supplies an
+    execution status, explicit non-administration wins; an explicit given
+    status can establish exposure when the dose is missing, never when it is
+    zero/negative. Drug strength text is not dosage evidence.
+    """
+    from ..io.ts_utils import expand
+    from .eicu_medication_evidence import _positive_dose
+    from .mimic_support import source_values
+
+    if frame.empty:
+        return frame.assign(**{concept_name: pd.Series(dtype=bool)})
+    time_col = source.index_var or "starttime"
+    end_col = source.params.get("stop_var", "stoptime")
+    id_col = next(c for c in ("stay_id", "icustay_id") if c in frame)
+    dose = source_values(frame, source, "dose_val_rx", concept_name)
+    if "dose_val_rx" not in frame and source.value_var in (None, "dose_val_rx") and concept_name in frame:
+        dose = frame[concept_name]
+    positive = _positive_dose(dose).fillna(False)
+    status = frame.get("statusdescription", pd.Series(pd.NA, index=frame.index, dtype="string"))
+    status = status.astype("string").str.strip().str.casefold()
+    given = status.isin(["given", "administered", "complete", "completed"])
+    denied = status.isin(["not given", "not administered", "held", "refused", "cancelled", "canceled", "rewritten", "discontinued"])
+    # Only genuinely missing dose can use the given-status exception. An
+    # unparseable or zero/negative dose cannot be laundered through a status.
+    missing = dose.isna() | dose.astype("string").str.strip().eq("").fillna(False)
+    valid = (positive | (given & missing)) & ~denied
+    valid &= frame[end_col].notna() & frame[time_col].notna() & frame[end_col].gt(frame[time_col])
+    spans = frame.loc[valid, [id_col, time_col, end_col]].assign(**{concept_name: True})
+    result = expand(spans, start_var=time_col, end_var=end_col, id_cols=[id_col],
+                    step_size=pd.Timedelta(hours=1), keep_vars=[concept_name],
+                    admission_times=icu_stays, end_inclusive=False)
+    result.attrs["medication_exposure"] = {"kind": "positive_dose_prescription", "interval": "[starttime,stoptime)"}
+    return result
+
+
 def ordered_iv_proxy(frame, *, source, concept_name, data_source=None):
     """Day-level IV order evidence, suppressed by same-day administered evidence.
 

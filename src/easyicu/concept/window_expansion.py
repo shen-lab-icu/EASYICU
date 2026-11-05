@@ -12,6 +12,49 @@ WinTblEndMode = Literal["raw", "floored_clamped"]
 __all__ = ["WinTblEndMode", "expand_wintbl_vectorized"]
 
 
+def clip_episode_windows(
+    frame: pd.DataFrame, *, start: pd.Series, upper: pd.Series, lower: float,
+    keep_post_discharge: bool = False,
+) -> pd.DataFrame | None:
+    """Select true windows by overlap, then clip endpoints before expansion.
+
+    ``None`` delegates point-only frames to the ordinary point quarantine.
+    Source duration declarations are respected and re-emitted in hours.
+    """
+    from ..table.duration import UNIT_HOURS, resolve_dur_var_hours, set_dur_var_unit
+
+    # Raw point tables can carry an endtime too (for example vent_start).
+    # Only a source-declared/constructed duration establishes window semantics.
+    if "dur_var" not in frame:
+        return None
+    # The normalized duration is authoritative. Some callbacks have already
+    # normalized the start while retaining an absolute datetime endtime.
+    end = start + resolve_dur_var_hours(frame)
+    window = end.notna()
+    valid = np.isfinite(start) & np.isfinite(end) & end.gt(start) & end.gt(lower)
+    if not keep_post_discharge:
+        valid &= start.lt(upper)
+    # Empty neighbouring sources can contribute an all-null endpoint column
+    # during concat. Actual point rows retain the ordinary quarantine rule.
+    points = ~window & np.isfinite(start) & start.ge(lower)
+    if not keep_post_discharge:
+        points &= start.le(upper)
+    valid |= points
+    out = frame.loc[valid].copy()
+    clipped_start = start.loc[valid].clip(lower=lower)
+    clipped_end = end.loc[valid]
+    if not keep_post_discharge:
+        clipped_end = clipped_end.clip(upper=upper.loc[valid])
+    # The caller's start Series is the actual index column, including aliases.
+    out[start.name] = clipped_start
+    if "endtime" in out:
+        out["endtime"] = clipped_end
+    if "dur_var" in out:
+        out["dur_var"] = clipped_end - clipped_start
+        set_dur_var_unit(out, UNIT_HOURS)
+    return out
+
+
 def expand_wintbl_vectorized(
     data: pd.DataFrame,
     *,

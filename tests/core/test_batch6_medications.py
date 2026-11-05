@@ -79,6 +79,11 @@ def test_sources_use_explicit_boolean_evidence(cdict, name, _dbs, _cov):
                 assert src.get("callback") == "sicdb_exposure"
                 assert src.get("val_var") == "Amount"
                 continue
+            if db == "miiv" and name == "dexamethasone":
+                assert table == "prescriptions"
+                assert src.get("callback") == "mimic_prescription_exposure"
+                assert {"dose_val_rx", "stoptime"} <= set(src["extra_vars"])
+                continue
             # MIMIC-III prescriptions without a time sit at noon of their day
             # (extraction audit round 2, D5); the value is still TRUE.  A HiRID
             # zero givendose is not an administration (audit round 3).

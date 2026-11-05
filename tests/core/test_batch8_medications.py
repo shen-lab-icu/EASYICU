@@ -83,6 +83,9 @@ def test_sources_use_explicit_boolean_evidence(cdict, name, _dbs, _cov):
                 expected = "emar_administered"
             elif src.get("table") == "prescriptions" and db in ("mimic", "mimic_demo"):
                 expected = "mimic_prescription_noon"
+            elif src.get("table") == "prescriptions" and db == "miiv" and name == "aspirin":
+                expected = "mimic_prescription_exposure"
+                assert {"dose_val_rx", "stoptime"} <= set(src["extra_vars"])
             elif db == "hirid":
                 # A zero givendose is a pump marker (audit round 3).
                 expected = "transform_fun(comp_na(`>`, 0.000001))"

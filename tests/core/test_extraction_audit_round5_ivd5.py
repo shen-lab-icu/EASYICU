@@ -133,7 +133,9 @@ def test_r5c_iv_009_lab_priority_keeps_independent_lab_samples(tmp_path):
 def test_r5c_iv_015_aspirin_combination_retains_aspirin_ingredient():
     spec = _spec("aspirin", "miiv", "prescriptions")
     frame = pd.DataFrame({"drug": ["Aspirin", "Butalbital-Aspirin-Caffeine", "Butalbital-Aspirin-Codeine"],
-                          "aspirin": ["Aspirin", "Butalbital-Aspirin-Caffeine", "Butalbital-Aspirin-Codeine"]})
+                          "aspirin": ["Aspirin", "Butalbital-Aspirin-Caffeine", "Butalbital-Aspirin-Codeine"],
+                          "stay_id": 1, "starttime": [0., 2., 4.], "stoptime": [1., 3., 5.],
+                          "dose_val_rx": "81"})
     assert _apply(spec, frame, "aspirin").aspirin.tolist() == [True] * 3
 
 
