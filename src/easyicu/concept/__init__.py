@@ -3000,7 +3000,21 @@ class ConceptResolver:
                                     from ..datasource import _get_duckdb_connection, mimic_chart_quality_sql
                                     _idtbl_conn = _get_duckdb_connection()
                                     _idtbl_sub_var = source.sub_var
-                                    _idtbl_val_var = getattr(source, 'value_var', None) or 'value'
+                                    # The source's value column, else the table's
+                                    # configured one (MIMIC chartevents: valuenum),
+                                    # as the raw path reads it.  Reading the string
+                                    # ``value`` dropped rows that only carry
+                                    # ``valuenum`` (CareVue weight, lead-r13).
+                                    _idtbl_val_var = getattr(source, 'value_var', None)
+                                    if not _idtbl_val_var:
+                                        try:
+                                            _idtbl_val_var = getattr(
+                                                data_source.config.get_table(source.table).defaults,
+                                                'val_var', None,
+                                            )
+                                        except KeyError:
+                                            _idtbl_val_var = None
+                                    _idtbl_val_var = _idtbl_val_var or 'value'
                                     from ..storage_layout import parquet_relation
                                     _idtbl_files = storage.resolve_target_files(source.table, _idtbl_sub_var, _idtbl_ids)
                                     if _idtbl_files:
