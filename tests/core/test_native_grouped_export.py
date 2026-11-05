@@ -1824,7 +1824,8 @@ def test_large_duplicate_duckdb_path_is_streamed_and_preserves_schema_order(
     path = tmp_path / "neurological.parquet"
     pd.DataFrame(
         {
-            # Deliberately not key-sorted: keep the first source-row order.
+            # Deliberately not key-sorted: publication sorts by row key so the
+            # bytes cannot depend on batch order (profile-independent order).
             "stay_id": [20, 20, 10, 10],
             "charttime": [1.0, 1.0, 0.0, 0.0],
             "gcs": [10.0, 14.0, None, None],
@@ -1848,13 +1849,13 @@ def test_large_duplicate_duckdb_path_is_streamed_and_preserves_schema_order(
     )
 
     exported = real_read_parquet(path)
-    assert exported["stay_id"].tolist() == [20, 10]
-    assert exported["gcs"].iloc[0] == 12.0
-    assert pd.isna(exported["gcs"].iloc[1])
-    assert pd.isna(exported["delirium_positive"].iloc[0])
-    assert bool(exported["delirium_positive"].iloc[1]) is True
-    assert exported["avpu"].iloc[0] == "A"
-    assert pd.isna(exported["avpu"].iloc[1])
+    assert exported["stay_id"].tolist() == [10, 20]
+    assert exported["gcs"].iloc[1] == 12.0
+    assert pd.isna(exported["gcs"].iloc[0])
+    assert pd.isna(exported["delirium_positive"].iloc[1])
+    assert bool(exported["delirium_positive"].iloc[0]) is True
+    assert exported["avpu"].iloc[1] == "A"
+    assert pd.isna(exported["avpu"].iloc[0])
 
     import pyarrow.parquet as pq
 
