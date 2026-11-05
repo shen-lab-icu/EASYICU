@@ -99,6 +99,29 @@ def test_r8_h2_categories_publish_only_positive_half_open_overlap(tmp_path, monk
     assert hours(native, "noninvasive", native=True) == expected["noninvasive"]
 
 
+def test_r9_sub_second_readings_keep_their_reset_day():
+    from easyicu.concept.hirid_fluid_counters import INPUT_COUNTER_ID, _absolute_times, hirid_counter_frame
+
+    origin = pd.Timestamp("2150-01-01 09:30:01.250")
+    origins = pd.Series([origin], index=[1])
+    # 11:59:59.700 still belongs to the day that resets at 12:00; rounding to
+    # whole seconds would move it across the reset.
+    clocks = pd.to_datetime(["2150-01-02 10:00:00.120", "2150-01-02 11:59:59.700",
+                             "2150-01-02 12:00:00.300", "2150-01-02 13:00:00.999"])
+    raw = pd.DataFrame({"patientid": 1, "variableid": INPUT_COUNTER_ID, "datetime": clocks,
+                        "value": [100., 400., 30., 80.]})
+    relative = raw.assign(datetime=(raw.datetime - origin).dt.total_seconds() / 3600)
+    pd.testing.assert_series_equal(_absolute_times(relative, "patientid", "datetime", origins),
+                                   raw.datetime.astype("datetime64[ns]"), check_names=False)
+    exact = hirid_counter_frame(raw, concept_name="total_input_ml", origins=origins,
+                                value_col="value", time_col="datetime", net_balance=False)
+    numeric = hirid_counter_frame(relative, concept_name="total_input_ml", origins=origins,
+                                  value_col="value", time_col="datetime", net_balance=False)
+    exact["datetime"] = (exact.datetime - origin).dt.total_seconds() / 3600
+    pd.testing.assert_frame_equal(numeric, exact, check_dtype=False, atol=1e-9, rtol=0)
+    assert numeric["total_input_ml"].sum() == pytest.approx(480.)
+
+
 def test_r8_h3_noon_reset_survives_float_hours_and_matches_the_raw_ledger(tmp_path, monkeypatch):
     from easyicu.concept.hirid_fluid_counters import (
         INPUT_COUNTER_ID, OUTPUT_COUNTER_ID, _absolute_times, hirid_counter_frame,
