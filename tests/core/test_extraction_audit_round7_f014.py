@@ -60,3 +60,16 @@ def test_zero_rate_and_six_hour_cap_are_unchanged():
     rows = [(1, 1, 10, 7, 0.0), (2, 1, 10 + 9 * 60, 7, 1.5)]
     out = _run(rows)
     assert out == {0.0: 0.0, 1.0: 0.0, 2.0: 0.0, 3.0: 0.0, 4.0: 0.0, 5.0: 0.0, 9.0: 1.5}
+
+
+def test_two_runs_over_the_same_rows_are_bitwise_identical():
+    # The reader may return the same rows in a different order on each run
+    # (parallel DuckDB scan); the published rates must not change by a bit.
+    rows = [(i, 1, m, 7 + (i % 2), float(r)) for i, (m, r) in enumerate(
+        [(5, 1.0), (5, np.nan), (40, 3.0), (95, 2.5), (130, 0.0), (190, 2.0), (190, np.nan), (400, 4.25)], start=1)]
+    runs = []
+    for seed in (1, 2):
+        order = np.random.default_rng(seed).permutation(len(rows))
+        runs.append(_run([rows[i] for i in order]))
+    assert list(runs[0]) == list(runs[1])
+    assert np.array_equal(np.array(list(runs[0].values())), np.array(list(runs[1].values())), equal_nan=True)
