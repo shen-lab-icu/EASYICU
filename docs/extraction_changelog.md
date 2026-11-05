@@ -4,6 +4,38 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
+## 2026-11-05 — extraction audit round 7 (eleventh dictionary reseal)
+
+- **[R7-F001]** MIMIC-III hours whose urine rows all lack a value stay missing
+  instead of summing to 0 (`951987380`, landed with the round-5 reviews).
+- **[R7-F002]** The AUMC/HiRID high-frequency pre-sampling keeps the concept's
+  requested aggregator; HiRID PaO2 reaches P/F as the hourly minimum, not a
+  median (`b64dfb4d0`). P/F can fall where an hour has several PaO2 values.
+- **[R7-F003]** SOFA-2 renal: hyperkalaemia and acidosis are independent RRT
+  criteria routes; an absent optional input no longer disables the other
+  (`b64dfb4d0`). Scores of 4 can appear where one route was blocked.
+- **[R7-F005]** MIMIC-III values stay on the ricu minute clock relative to ICU
+  intime, but urine availability keeps the sub-minute intime remainder, so
+  `*_available_at` never precedes the source record (`e8684f304`).
+- **[R7-F008, F010, F011, F012, F030]** CareVue 582 RRT starts/stops replayed
+  as courses; HiRID ventilation keeps exact starts; MIMIC-IV windows selected
+  by overlap; CareVue vasopressin/phenylephrine support shares the rate
+  callback's timing and stops; MIIV prescriptions need a positive dose or a
+  given status on a valid interval (`f4e4a848a`).
+- **[R7-F009]** HiRID norepinephrine durations keep exact starts, so an hour
+  with several infusion starts publishes each (`930ca2d28`).
+- **[R7-F013]** eICU hours with invasive and non-invasive ventilation evidence
+  publish `invasive|noninvasive` instead of the last row (`5ce8c9ea5`).
+- **[R7-F014]** MIMIC-III CareVue rates are numeric and ordered on the raw clock
+  before hourly pooling; results no longer depend on the table scan order
+  (`3dfd00a2b`).
+- **[R7-F029]** HiRID output-counter rises faster than 5,000 mL/h that the next
+  reading undoes are spikes (`b64dfb4d0`).
+- **[R7 rulings]** `cai_ph74` (AUMC pH 7.4 corrected ionized calcium) is its own
+  blood_gas column (`110380205`); eICU D50 dose text reads gram spellings
+  (`7b49661c9`); `dex`, `mech_vent` and `vent_ind` record the eICU D50 and
+  ventilation-clock rulings in `_comment`.
+
 ## 2026-11-05 — extraction audit round 7 urine receipts
 
 - **[R7-F005]** MIMIC-III mixed numeric/datetime source batches now retain
