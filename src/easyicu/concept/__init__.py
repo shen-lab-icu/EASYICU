@@ -4909,8 +4909,9 @@ class ConceptResolver:
                         time_values = pd.to_datetime(frame[source_index_column], errors='coerce')
                         if hasattr(time_values.dt, 'tz') and time_values.dt.tz is not None:
                             time_values = time_values.dt.tz_localize(None)
-                        exact_hours = (time_values - frame['intime']).dt.total_seconds() / 3600.0
-                        rel_minutes = np.floor(exact_hours * 60.0)
+                        rel_seconds = (time_values - frame['intime']).dt.total_seconds()
+                        exact_hours = rel_seconds / 3600.0
+                        rel_minutes = np.floor(rel_seconds / 60.0)
                         frame[source_index_column] = rel_minutes / 60.0
                         if '_urine_availability_lag_h' in frame:
                             # Minute clock for values (ricu; the source stamps are whole

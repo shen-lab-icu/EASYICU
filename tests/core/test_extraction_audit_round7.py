@@ -87,3 +87,28 @@ def test_r7_f005_mimic_availability_keeps_the_sub_minute_intime_remainder(tmp_pa
     exact = (record - intime) / pd.Timedelta(hours=1)
     assert daily.loc[23., "urine24_available_at"] >= exact - 1 / 3600
     assert daily.loc[23., "urine24_available_at"] == pytest.approx(exact, abs=1 / 3600)
+
+
+@pytest.mark.parametrize("grid", [None, pd.Timedelta(hours=1)])
+def test_r7_f005_whole_minute_offsets_stay_on_their_minute(tmp_path, grid):
+    # Round-8 regression of the F005 fix: floor(seconds / 3600 * 60) put
+    # 8h10m (29,400 s) at 489.999... minutes and floored it to 8h09m. The
+    # record seconds equal the intime seconds, so every offset is whole minutes.
+    from tests.support.urine_raw_source import _source, _stays
+
+    intime = pd.Timestamp("2180-01-01 00:17:37")
+    offsets = pd.to_timedelta(["8h10min", "9h", "10h", "11h59min"])
+    source = _source(tmp_path, "mimic", icustays=_stays("mimic", intime),
+                     outputevents=pd.DataFrame({"icustay_id": 1, "subject_id": 1, "hadm_id": 1,
+                         "charttime": intime + offsets, "itemid": 40055,
+                         "value": [10., 20., 30., 40.], "valueuom": "mL"}))
+    table = ConceptResolver(load_dictionary(include_sofa2=True)).load_concepts(
+        ["urine"], source, merge=False, interval=grid, r_compatible=False,
+        verbose=False, concept_workers=1,
+    )["urine"]
+    hours = table.data[table.index_column]
+    if pd.api.types.is_timedelta64_dtype(hours):
+        hours = hours / pd.Timedelta(hours=1)
+    got = dict(zip(np.round(hours.to_numpy(float) * 60).astype(int), table.data["urine"]))
+    want = [490, 540, 600, 719] if grid is None else [480, 540, 600, 660]
+    assert got == dict(zip(want, [10., 20., 30., 40.]))
