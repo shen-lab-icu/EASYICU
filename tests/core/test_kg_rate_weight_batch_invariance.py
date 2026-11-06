@@ -203,6 +203,7 @@ def _legacy_loader():
 
     loader = ConceptLoader.__new__(ConceptLoader)
     loader._src_name = "aumc"
+    loader.src = SimpleNamespace(tables={"numericitems": object()})
     loader._columns_for_source = lambda *_args, **_kwargs: None
     loader._preload_tables = lambda *_args, **_kwargs: None
     return loader
@@ -222,20 +223,31 @@ def test_legacy_source_read_failure_raises():
         )
 
 
-def test_legacy_missing_table_source_is_empty():
-    from easyicu.datasource import MissingTableSourceError
-
+def test_legacy_undeclared_table_is_empty_without_a_read():
     loader = _legacy_loader()
+    loader.src = SimpleNamespace(tables={})
 
-    def _absent(*_args, **_kwargs):
-        raise MissingTableSourceError("no table source registered")
+    def _no_read(*_args, **_kwargs):
+        raise AssertionError("an undeclared table is never read")
 
-    loader._safe_load_table = _absent
+    loader._safe_load_table = _no_read
     out = loader._load_concept_source(
-        source=ConceptSource(table="numericitems", sub_var="itemid", ids=[1]),
+        source=ConceptSource(table="no_such_table", sub_var="itemid", ids=[1]),
         concept_name="weight", patient_ids=None, id_type="icustay", interval=None,
     )
     assert out.empty
+
+
+def test_legacy_declared_table_without_a_file_fails_typed(tmp_path):
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    # AUMC declares admissions; the installation root has no file and no
+    # conversion manifest.
+    loader = ConceptLoader("aumc", data_path=str(tmp_path), low_memory=False)
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing") as info:
+        loader._read_declared_table("admissions", None)
+    assert info.value.reason == "declared_table_source_missing"
 
 
 @pytest.mark.parametrize("workers", [1, 2])
@@ -262,3 +274,38 @@ def test_legacy_weightless_stay_gives_no_weight_without_raising():
     frame = pd.DataFrame({"admissionid": [1], "dose": [1.0]})
 
     assert loader._get_patient_weights(frame, "admissionid", "icustay") is None
+
+
+def _cvp_loader(fail_with):
+    from easyicu.load_concepts import ConceptLoader
+
+    loader = ConceptLoader("miiv", low_memory=False)
+    loader._preload_tables = lambda *_args, **_kwargs: None
+    healthy = loader._load_concept_source
+
+    def _source(*, source, concept_name, **kwargs):
+        if concept_name == "cvp_raw":
+            raise fail_with
+        if concept_name in ("hr", "dbp"):
+            return pd.DataFrame({"stay_id": [1], "charttime": [pd.Timestamp("2100-01-01")], "value": [60.0]})
+        return healthy(source=source, concept_name=concept_name, **kwargs)
+
+    loader._load_concept_source = _source
+    loader._convert_time_to_hours = lambda frame, _id_type: frame
+    return loader
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize(
+    "error, pattern",
+    [
+        (OSError("child read failed"), "child read failed"),
+        (RuntimeError("kg_rate_weight_load_failed: weight"), "kg_rate_weight_load_failed"),
+    ],
+)
+def test_legacy_recursive_concept_with_a_failing_child_is_refused(workers, error, pattern):
+    loader = _cvp_loader(error)
+
+    with pytest.raises(type(error), match=pattern):
+        loader.load_concepts(["hr", "cvp_qc"], verbose=False, concept_workers=workers)
+    assert not any(key[0] == "cvp_qc" for key in getattr(loader, "_concept_cache", {}))

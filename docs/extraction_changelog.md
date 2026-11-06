@@ -26,7 +26,7 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
-## 2026-11-06 — AUMC per-kg rates do not depend on the batch; weight-load failures raise [lead-r13, `6aec07c8a` and its legacy-loader follow-up]
+## 2026-11-06 — AUMC per-kg rates do not depend on the batch; weight-load failures raise [lead-r13, `6aec07c8a`, `9c585941d` and the fail-closed legacy-loader pass]
 
 - Rule: an AUMC row with no `admittedat` of its own takes its admission origin
   from the admissions table. AUMC `weight` is the only concept that
@@ -39,20 +39,29 @@ deferred to it are compared against `2786ea872` there.
   per-kg rate frame. The weight load then raised, `aumc_rate_kg` swallowed the
   error, and every absolute-dose rate of that stay was NA. This happened only
   when a stream batch's only stay with a given drug was such a stay.
-- Failure handling: a failed weight load for `aumc_rate_kg` now raises
-  `aumc_rate_kg_weight_load_failed` with its cause, as `hirid_rate_kg`,
-  `mimic_kg_rate` and `sic_rate_kg` already did. The deprecated
-  `ConceptLoader` follows the same rule:
-  - a table read failure raises instead of returning an empty table;
-  - only a table the source does not declare (`MissingTableSourceError`) is
-    empty;
-  - its per-kg weight load raises `kg_rate_weight_load_failed`;
-  - its parallel collector refuses the whole result on a failed concept, as
-    serial loading does, instead of returning the healthy concepts.
-- Affected: AUMC only.
+- Failure handling (AUMC): a failed weight load for `aumc_rate_kg` now
+  raises `aumc_rate_kg_weight_load_failed` with its cause, as
+  `hirid_rate_kg`, `mimic_kg_rate` and `sic_rate_kg` already did.
+- Failure handling (deprecated `ConceptLoader`, every database): the loader
+  fails closed.
+  - An empty read comes only from a table the database does not declare. That
+    is decided before the read, from the configuration or an attached
+    source's registration.
+  - A declared table without a file raises `declared_table_source_missing`, a
+    `StorageIntegrityError`.
+  - Any other read, ID-lookup, time-conversion, unit-conversion, preload or
+    sub-concept failure propagates. A recursive concept is never built or
+    cached from a healthy subset of its sub-concepts.
+  - Its per-kg weight load raises `kg_rate_weight_load_failed`.
+  - The parallel collector raises the earliest requested failure, as serial
+    loading does.
+  - `tests/governance/test_legacy_loader_fail_closed.py` keeps every
+    `except` in the module raising.
+- Affected: values change for AUMC only (the origin rule). The failure
+  handling of the deprecated `ConceptLoader` applies to every database.
 - Impact:
   - At batch 50 on the AUMC sample, `epi_rate` and `epi60` regain 115 hourly
-    cells in 1 stay and `dobu_rate` and `dobu60` regain 14. That restores the
+    cells in <10 stays and `dobu_rate` and `dobu60` regain 14. That restores the
     knock-on `norepi_equiv` and SOFA cardiovascular cells (sofa1 63, sofa2 133).
     These modules at batch 50 now equal the default byte for byte.
   - Default output is unchanged: 20/20 module files are byte-identical with
