@@ -1111,7 +1111,7 @@
      "table": "laboratory",
      "sub_var": "LaboratoryID",
      "callback": "transform_fun(na_above(6))",
-     "_comment": "2026-11-04 audit round 3 (F-30): 287 'Serum-Albumin' has 3 rows; the serum albumin is 171 'Albumin (ZL)' (7,508 rows, 4,347 cases, median 3.3 g/dL) whose dictionary unit '%' belongs to the protein-electrophoresis fraction charted under the same ID: values split into 0-6 g/dL and 21-71 %, so values above 6 are not g/dL and are removed."
+     "_comment": "2026-11-04 audit round 3 (F-30): 287 'Serum-Albumin' has 3 rows; the serum albumin is 171 'Albumin (ZL)' (7,508 rows, 4,347 cases, median 3.3 g/dL) whose dictionary unit '%' belongs to the protein-electrophoresis fraction charted under the same ID: values split into 0-6 g/dL and 21-71 %, so values above 6 are not g/dL and are removed. Counts are SICdb 1.0.6; 1.0.8 moved g/dL serum albumin from 171 to 287 and 171 keeps the electrophoresis percentages, which the same na_above(6) removes (REPORT_1.0.8 section 3)."
     }
    ]
   }
@@ -20390,6 +20390,14 @@
      "table": "chartevents",
      "sub_var": "itemid"
     }
+   ],
+   "sic": [
+    {
+     "ids": 3123,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "_comment": "2026-11-06 SICdb 1.0.8 (lead-r13): d_references 3123 'RASS - Richmond Agitation-Sedation Scale' (Scores), added in 1.0.7; data_float_h, 539,375 hourly rows in 27,244 cases, every value an integer in -5..+4. Absent from 1.0.6."
+    }
    ]
   }
  },
@@ -36692,6 +36700,14 @@
      "table": "lab",
      "sub_var": "labname",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): lab 'LPM O2' (28,171 rows, p50 4 L/min) added."
+    }
+   ],
+   "sic": [
+    {
+     "ids": 3144,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "_comment": "2026-11-06 SICdb 1.0.8 (lead-r13): d_references 3144 'O2 Flow' (SignalFloat), added in 1.0.7; data_float_h, 3,501 hourly rows in 200 cases, median 3.5 L/min (q95 9); 32 values above 80 are removed by the concept bounds. Optiflow 3142/3143 and Oxyflow 3140/3141 are high-flow devices (median flow 49 L/min on Optiflow) and are not pooled. Absent from 1.0.6."
     }
    ]
   }
