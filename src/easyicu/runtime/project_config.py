@@ -92,14 +92,15 @@ def ensure_project_dirs() -> None:
 # Default Patient IDs  
 # ============================================================================
 
-# Default patient IDs extracted from production data
+# Default patient IDs are public demo-database identifiers (MIMIC-IV demo
 # v2.2, eICU-CRD demo v2.0.1), which also exist in the full releases.
 # MIMIC-IV: stay_ids
+DEFAULT_PATIENTS_MIIV = [30057454, 30101877, 30425410]
 
-# eICU: patientunitstayid with RRT and vasopressor data
+# eICU: patientunitstayid
 DEFAULT_PATIENTS_EICU = [141764, 141765, 143870, 144815, 145427]
 
-# AUMC: admissionid with RRT, ECMO and vasopressor data
+# AUMC: admissionid (loaded from the selected data on first use)
 DEFAULT_PATIENTS_AUMC: Optional[List[int]] = None
 
 # HiRID: patientid (to be extracted from production data)

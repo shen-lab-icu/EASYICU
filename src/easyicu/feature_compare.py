@@ -98,7 +98,7 @@ DEFAULT_DATA_PATHS: Dict[str, Path] = {
 DEFAULT_PATIENTS: Dict[str, List[int]] = {
     "miiv": DEFAULT_PATIENTS_MIIV,
     "eicu": DEFAULT_PATIENTS_EICU,
-    "aumc": DEFAULT_PATIENTS_AUMC,
+    "aumc": DEFAULT_PATIENTS_AUMC or [],
     "hirid": DEFAULT_PATIENTS_HIRID or [],
 }
 
