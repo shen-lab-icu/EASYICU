@@ -217,6 +217,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional path to a custom data-sources JSON.",
     )
+    extract_parser.add_argument(
+        "--input-snapshot",
+        action="store_true",
+        help=(
+            "Hash every input file before and after the run (INPUT_SNAPSHOT.json and "
+            "INPUT_SNAPSHOT_POST.json in --output) and exit 3 if any input changed. "
+            "Inputs must not change during a run; runtime source binding is best-effort."
+        ),
+    )
 
     # Download command
     if HAS_DOWNLOAD:
@@ -448,6 +457,20 @@ def handle_extract(args) -> int:
     resolver = ConceptResolver(dictionary)
     groups = load_groups(args.groups_json) if hasattr(args, 'groups_json') else load_groups(None)
 
+    snapshot = None
+    if getattr(args, "input_snapshot", False):
+        from ..formal_inputs import InputSnapshotError, take_snapshot, write_snapshot
+
+        args.output.mkdir(parents=True, exist_ok=True)
+        try:
+            snapshot = take_snapshot(
+                f"{name}:{directory}" for name, directory in zip(args.sources, args.data_dirs)
+            )
+            write_snapshot(args.output / "INPUT_SNAPSHOT.json", snapshot)
+        except InputSnapshotError as error:
+            LOGGER.error("Input snapshot refused: %s", error)
+            return 3
+
     for source_name, dir_name in zip(args.sources, args.data_dirs):
         data_dir = Path(dir_name)
         if not data_dir.exists():
@@ -465,6 +488,14 @@ def handle_extract(args) -> int:
         if frames:
             export_groups(frames, args.output, prefix=source_name)
 
+    if snapshot is not None:
+        from ..formal_inputs import InputSnapshotError, verify_snapshot, write_snapshot
+
+        try:
+            write_snapshot(args.output / "INPUT_SNAPSHOT_POST.json", verify_snapshot(snapshot))
+        except InputSnapshotError as error:
+            LOGGER.error("Inputs changed during the run; the outputs are not valid: %s", error)
+            return 3
     return 0
 
 
