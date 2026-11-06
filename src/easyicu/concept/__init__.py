@@ -4407,7 +4407,13 @@ class ConceptResolver:
             # 解决：只有当源返回非空数据时，才更新全局index_column
             if not index_column and len(frame) > 0:
                 index_column = source_index_column
-            elif empty_source_index_column is None and len(frame) == 0:
+            elif (
+                empty_source_index_column is None
+                and len(frame) == 0
+                and getattr(table, '_pre_aggregated', False)
+            ):
+                # Only a DuckDB-aggregated frame already names the canonical
+                # time axis; a raw frame's native column is renamed later.
                 empty_source_index_column = next(
                     (
                         column
