@@ -140,14 +140,27 @@ def source_time_select_sql(raw_hours, bucket_hours, valid, database, time, colum
             f", MAX(CASE WHEN {valid} THEN {availability} END) AS _urine_availability_lag_h")
 
 
+#: Receipt clocks are whole seconds (AUMC: milliseconds). The SQL and pandas
+#: lag paths add the same clocks in a different order and land 1e-14 h apart,
+#: so receipt hours are snapped to the millisecond grid: lossless for every
+#: source clock, and identical bytes on every load path (lead-r13 perf twin).
+RECEIPT_GRID_PER_H = 3_600_000.0
+
+
+def on_receipt_grid(hours):
+    """Round receipt hours to the nearest millisecond."""
+    return np.round(np.asarray(hours, dtype=float) * RECEIPT_GRID_PER_H) / RECEIPT_GRID_PER_H
+
+
 def source_availability(frame, ids, time, interval):
     """Keep the latest contributing record time across hourly source pooling."""
     frame = frame.loc[frame.urine.notna()]
     receipts = frame[ids + [time]].copy()
     hours = time_hours(frame[time])
-    receipts['_urine_chart_at'] = hours + frame.get('_urine_source_lag_h', 0.)
-    receipts['_urine_available_at'] = hours + frame.get('_urine_availability_lag_h', frame.get('_urine_source_lag_h', 0.))
-    receipts['_urine_first_at'] = hours + frame.get('_urine_first_lag_h', frame.get('_urine_source_lag_h', 0.))
+    receipts['_urine_chart_at'] = on_receipt_grid(hours + frame.get('_urine_source_lag_h', 0.))
+    receipts['_urine_available_at'] = on_receipt_grid(
+        hours + frame.get('_urine_availability_lag_h', frame.get('_urine_source_lag_h', 0.)))
+    receipts['_urine_first_at'] = on_receipt_grid(hours + frame.get('_urine_first_lag_h', frame.get('_urine_source_lag_h', 0.)))
     if interval is not None:
         width = pd.Timedelta(interval).total_seconds() / 3600
         receipts[time] = np.floor(hours / width) * width
