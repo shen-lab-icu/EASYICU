@@ -28,6 +28,20 @@ except ImportError:
 from ..table import ICUTable
 
 
+class TimeAxisUnitError(ValueError):
+    """A numeric time axis whose clock is not declared, or declared in no known unit.
+
+    Reason codes ``time_axis_unit_undeclared`` and ``time_axis_unit_unknown``.
+    Window expansion and sliding windows need the axis unit; it is declared by
+    the producer and never inferred from the values, and an expansion without
+    it has no value to publish (lead-r13, Codex delta4 D4-AXIS-CATCH).
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        super().__init__(f"{reason}: {message}")
+
+
 class IntervalAggregationError(RuntimeError):
     """The hourly aggregation of a concept failed; there is no value to publish.
 
@@ -1786,7 +1800,10 @@ def _declared_numeric_time_unit(
     declared = (getattr(data, "attrs", None) or {}).get("easyicu_time_columns", {}).get(index_col)
     if declared is not None:
         if declared not in _DECLARED_TIME_UNITS:
-            raise ValueError(f"unknown declared time unit {declared!r} for column {index_col!r}")
+            raise TimeAxisUnitError(
+                "time_axis_unit_unknown",
+                f"unknown declared time unit {declared!r} for column {index_col!r}",
+            )
         return _DECLARED_TIME_UNITS[declared]
     return "h"
 
