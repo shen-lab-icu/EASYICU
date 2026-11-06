@@ -34,7 +34,9 @@ def test_three_requested_windows_assess_the_shared_source_once(monkeypatch):
         "urine": ICUTable(urine, id_columns=["stay_id"], index_column="charttime", value_column="urine"),
         "weight": ICUTable(weight, id_columns=["stay_id"], value_column="weight"),
     }
-    monkeypatch.setattr(resolver, "get_raw_concept", lambda name, *_: tables[name])
+    monkeypatch.setattr(
+        resolver, "load_callback_inputs", lambda parent, names, *_: {name: tables[name] for name in names},
+    )
     calls = []
     original = callbacks.assess_urine_windows
 

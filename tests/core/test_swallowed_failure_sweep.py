@@ -136,7 +136,7 @@ def test_urine24_urine_load_failure_raises():
     from easyicu.concept.callbacks import _callback_urine24
 
     class _Resolver:
-        def load_concepts(self, *_args, **_kwargs):
+        def load_callback_inputs(self, *_args, **_kwargs):
             raise KeyError("urine")
 
     ctx = SimpleNamespace(resolver=_Resolver(), data_source=None, patient_ids=None, interval=None)

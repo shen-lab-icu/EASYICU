@@ -17,6 +17,7 @@ import hashlib
 from dataclasses import dataclass, field, replace, asdict
 from pathlib import Path
 from threading import RLock, local as thread_local
+import weakref
 from typing import Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Optional, Union
 
 import numpy as np
@@ -739,6 +740,19 @@ def _batch_stay_scope(patient_ids) -> Optional[tuple[str, frozenset]]:
     return None
 
 
+class RawConceptLoadError(RuntimeError):
+    """``get_raw_concept`` could not return the concept's raw table.
+
+    Reasons ``raw_concept_load_failed`` (the load raised) and
+    ``raw_concept_not_a_table`` (the load returned no table). A caller never
+    receives None in place of the raw rows (delta12t N-RAW-NONE).
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        super().__init__(f"{reason}: {message}")
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -766,6 +780,8 @@ class ConceptResolver:
         # Key: (concept_name, patient_ids_hash, agg_token)
         # Legacy key: (concept_name, patient_ids_hash)
         self._raw_concept_cache: Dict[tuple, ICUTable] = {}
+        # Grid of each raw entry: key -> (weakref to the stored table, grid).
+        self._raw_concept_grid: Dict[tuple, tuple] = {}
         # 🚀 预聚合缓存：存储 change_interval 之前的原始数据
         # Key: (concept_name, patient_ids_hash)
         # Value: dict with temp_table, interval, fill_missing, fill_method, skip_ci
@@ -1026,12 +1042,53 @@ class ConceptResolver:
             out[name] = values
         return out
 
+    def load_callback_inputs(
+        self,
+        parent: str,
+        names: Iterable[str],
+        data_source: 'ICUDataSource',
+        patient_ids: Optional[Union[FrozenSet, Dict, List]],
+        interval: Optional[pd.Timedelta],
+    ) -> Dict[str, ICUTable]:
+        """Load inputs a concept callback did not receive, as the recursive loader would.
+
+        Same aggregation (``_build_sub_aggregate`` of the parent's aggregate),
+        same grid (the parent's own interval, else the requested one) and the
+        same raw-cache rules as ``_load_recursive_concept`` gives its
+        sub-concepts, so the callback sees one input whether or not the cache
+        is warm (B-CACHE-WARMTH; ricu's ``collect_dots(concepts, interval, ...)``).
+        """
+        names = list(names)
+        definition = self.dictionary.get(parent)
+        aggregate = self._build_sub_aggregate(
+            definition.aggregate if definition is not None else None, names,
+        )
+        grid = (
+            definition.interval
+            if definition is not None and definition.interval is not None
+            else interval
+        )
+        loaded = self.load_concepts(
+            names,
+            data_source,
+            merge=False,
+            aggregate=aggregate,
+            patient_ids=patient_ids,
+            interval=grid,
+            r_compatible=False,
+            concept_workers=1,
+            verbose=False,
+        )
+        if isinstance(loaded, dict):
+            return loaded
+        return {names[0]: loaded}
+
     def get_raw_concept(
         self,
         concept_name: str,
         data_source: 'ICUDataSource',
         patient_ids: Optional[Union[FrozenSet, Dict, List]] = None,
-    ) -> Optional[ICUTable]:
+    ) -> ICUTable:
         """获取概念的原始数据（不带时间对齐），使用缓存避免重复加载。
         
         这个方法用于回调函数中需要获取原始时间的场景。
@@ -1040,50 +1097,56 @@ class ConceptResolver:
         patient_ids_hash = _compute_patient_ids_hash(patient_ids)
 
         with self._cache_lock:
-            cached = self._get_raw_concept_from_cache(
+            cached, grid = self._raw_cache_lookup(
                 concept_name,
                 patient_ids_hash,
                 aggregator=None,
                 allow_aggregated=False,
             )
             # Raw rows only: an entry a gridded load or the recursive
-            # pre-cache stored on a grid is a miss (B-CACHE-REVERSE).
-            if self._raw_entry_serves(cached, None):
+            # pre-cache stored on a grid, or one of unknown grid, is a miss
+            # (B-CACHE-REVERSE, delta12t N-MARKER-COPY).
+            if self._raw_entry_serves(cached, grid, None):
                 return cached.copy() if hasattr(cached, 'copy') else cached
-        
-        # 加载原始数据（interval=None）
+
+        # Cold: the same ungridded, unaggregated table a hit returns, as an
+        # ICUTable (r_compatible=False), never None (delta12t N-RAW-NONE).
         try:
             loaded = self.load_concepts(
                 [concept_name],
                 data_source,
                 merge=False,
-                aggregate=None,
+                aggregate=False,
                 interval=None,
                 patient_ids=patient_ids,
                 align_to_admission=True,
+                r_compatible=False,
+                concept_workers=1,
+                verbose=False,
             )
-            result = loaded.get(concept_name) if isinstance(loaded, dict) else loaded
-            
-            # 缓存原始数据
-            # 🔧 FIX 2026-03-10: Also cache WinTbl/IdTbl/TsTbl (they have .data but aren't ICUTable)
-            if isinstance(result, ICUTable) or hasattr(result, 'data'):
-                with self._cache_lock:
-                    self._store_raw_concept_cache(
-                        concept_name,
-                        patient_ids_hash,
-                        result,
-                        aggregator=None,
-                        store_legacy=True,
-                        grid=None,
-                    )
-                return result.copy() if hasattr(result, 'copy') else result
         except Exception as exc:
             # Callers would otherwise fall back to aggregated data, a
             # different reading of the concept (lead-r13 sweep).
-            raise RuntimeError(
-                f"raw_concept_load_failed: {concept_name} ({type(exc).__name__}: {exc})"
+            raise RawConceptLoadError(
+                "raw_concept_load_failed",
+                f"{concept_name} ({type(exc).__name__}: {exc})",
             ) from exc
-        return None
+        result = loaded.get(concept_name) if isinstance(loaded, dict) else loaded
+        if not isinstance(getattr(result, "data", None), pd.DataFrame):
+            raise RawConceptLoadError(
+                "raw_concept_not_a_table",
+                f"{concept_name}: the raw load returned {type(result).__name__}",
+            )
+        with self._cache_lock:
+            self._store_raw_concept_cache(
+                concept_name,
+                patient_ids_hash,
+                result,
+                aggregator=None,
+                store_legacy=True,
+                grid=None,
+            )
+        return result.copy() if hasattr(result, 'copy') else result
 
     @staticmethod
     def _normalize_raw_cache_aggregator(aggregator: object) -> str:
@@ -1127,41 +1190,46 @@ class ConceptResolver:
         hours = cls._pre_admission_hours_from_kwargs(kwargs)
         return None if hours is None else ("pre_admission_hours", hours)
 
-    # The grid a raw-cache entry was loaded on, set on the stored table by
-    # ``_store_raw_concept_cache``: None means an ungridded load, a Timedelta
-    # the load (or recursive pre-cache) grid. An entry without the marker
-    # falls back to the table's own declared ``interval``.
-    _RAW_GRID_ATTR = "_easyicu_raw_cache_grid"
+    # The grid each raw-cache entry was loaded on is a field of the entry,
+    # kept beside the cache in ``_raw_concept_grid``: key -> (weak reference to
+    # the stored table, grid). None is an ungridded load, a Timedelta the load
+    # (or recursive pre-cache) grid. A record for another object than the one
+    # now under the key, or no record, is unknown; a table copy never carries
+    # a grid it was not stored with (delta12t N-MARKER-COPY).
     _RAW_GRID_UNKNOWN = object()
 
+    def _raw_entry_grid(self, key: tuple, table: object) -> object:
+        record = getattr(self, "_raw_concept_grid", {}).get(key)
+        if record is None or record[0]() is not table:
+            return self._RAW_GRID_UNKNOWN
+        return record[1]
+
     @classmethod
-    def _raw_entry_serves(cls, entry: object, interval: object) -> bool:
-        """Whether a raw-cache entry answers a request on ``interval`` exactly.
+    def _raw_entry_serves(cls, entry: object, grid: object, interval: object) -> bool:
+        """Whether a raw-cache entry stored on ``grid`` answers a request on ``interval``.
 
         Both directions are refused (Codex delta4 D4-NATIVE-CACHE and
         B-CACHE-REVERSE): an ungridded entry never answers a gridded request,
         and a gridded entry never answers an ungridded one (``get_raw_concept``
-        or ``interval=None``), whose cold path returns the raw rows. A table
-        without a time index carries no grid and answers any request. A miss
-        loads cold; the cache only ever saves work.
+        or ``interval=None``), whose cold path returns the raw rows. An entry
+        of unknown grid is a miss. A table without a time index carries no grid
+        and answers any request. A miss loads cold; the cache only saves work.
         """
         if entry is None:
             return False
         if not (getattr(entry, "index_column", None) or getattr(entry, "index_var", None)):
             return True
+        if grid is cls._RAW_GRID_UNKNOWN:
+            return False
         declared = getattr(entry, "interval", None)
         declared = None if declared is None or pd.isna(declared) else pd.Timedelta(declared)
-        grid = getattr(entry, cls._RAW_GRID_ATTR, cls._RAW_GRID_UNKNOWN)
-        if grid is cls._RAW_GRID_UNKNOWN:
-            grid = declared
-        elif grid is not None:
-            grid = pd.Timedelta(grid)
+        grid = None if grid is None else pd.Timedelta(grid)
         if interval is None:
             return grid is None and declared is None
         # A gridded request needs the declared grid and the load grid to agree.
         return declared is not None and declared == pd.Timedelta(interval) and grid == declared
 
-    def _get_raw_concept_from_cache(
+    def _raw_cache_lookup(
         self,
         concept_name: str,
         patient_ids_hash: object,
@@ -1169,8 +1237,8 @@ class ConceptResolver:
         *,
         allow_aggregated: bool,
         cache_scope: object = None,
-    ):
-        """Lookup raw cache entries with backward-compatible fallback order."""
+    ) -> tuple:
+        """(table, grid) of the first raw entry in fallback order, else (None, unknown)."""
         keys = [
             self._raw_cache_key(
                 concept_name, patient_ids_hash, aggregator, cache_scope
@@ -1200,8 +1268,38 @@ class ConceptResolver:
             cached = self._raw_concept_cache.get(key)
             if cached is not None:
                 self._cache_touch('raw', key)
-                return cached
-        return None
+                return cached, self._raw_entry_grid(key, cached)
+        return None, self._RAW_GRID_UNKNOWN
+
+    def _raw_cache_entry_serves(self, interval: object, *args, **kwargs) -> tuple:
+        """(table, serves) for a lookup: ``serves`` applies ``_raw_entry_serves``."""
+        table, grid = self._raw_cache_lookup(*args, **kwargs)
+        return table, self._raw_entry_serves(table, grid, interval)
+
+    def _get_raw_concept_from_cache(
+        self,
+        concept_name: str,
+        patient_ids_hash: object,
+        aggregator: object,
+        *,
+        allow_aggregated: bool,
+        cache_scope: object = None,
+    ):
+        """Lookup raw cache entries with backward-compatible fallback order."""
+        return self._raw_cache_lookup(
+            concept_name, patient_ids_hash, aggregator,
+            allow_aggregated=allow_aggregated, cache_scope=cache_scope,
+        )[0]
+
+    def _record_raw_grid(self, key: tuple, table: object, grid: object) -> None:
+        grids = self.__dict__.setdefault("_raw_concept_grid", {})
+        if grid is self._RAW_GRID_UNKNOWN:
+            grids.pop(key, None)
+            return
+        try:
+            grids[key] = (weakref.ref(table), grid)
+        except TypeError:  # not weak-referenceable: stays unknown, a miss
+            grids.pop(key, None)
 
     def _store_raw_concept_cache(
         self,
@@ -1216,23 +1314,15 @@ class ConceptResolver:
     ) -> None:
         """Store raw cache entries without duplicating table objects.
 
-        ``grid`` is the interval the table was loaded on (None: ungridded).
-        It is recorded on the table so every reader can refuse an entry from
-        the other grid (``_raw_entry_serves``).
+        ``grid`` is the interval the table was loaded on (None: ungridded). It
+        is recorded for each key the table is stored under, so every reader
+        can refuse an entry from the other grid (``_raw_entry_serves``).
         """
-        if grid is not self._RAW_GRID_UNKNOWN:
-            try:
-                setattr(table, self._RAW_GRID_ATTR, grid)
-            except AttributeError:
-                pass  # unmarked: readers fall back to the declared interval
-        stored = self._bounded_cache_store(
-            'raw',
-            self._raw_cache_key(
-                concept_name, patient_ids_hash, aggregator, cache_scope
-            ),
-            table,
-        )
+        key = self._raw_cache_key(concept_name, patient_ids_hash, aggregator, cache_scope)
+        self._record_raw_grid(key, table, grid)
+        stored = self._bounded_cache_store('raw', key, table)
         if store_legacy and cache_scope is None and stored:
+            self._record_raw_grid((concept_name, patient_ids_hash), table, grid)
             # Alias key to the same object — charge 0 bytes so the table is
             # not double-counted against the cache budget.
             self._bounded_cache_store(
@@ -1695,12 +1785,12 @@ class ConceptResolver:
                 concepts_info_filtered = [
                     (name, val_var) for name, val_var in concepts_info_filtered
                     # Skip only when the entry will be reused on this grid.
-                    if not self._raw_entry_serves(self._get_raw_concept_from_cache(
-                        name, _pid_hash,
+                    if not self._raw_cache_entry_serves(
+                        interval, name, _pid_hash,
                         aggregator=aggregators.get(name, "auto"),
                         allow_aggregated=True,
                         cache_scope=raw_cache_scope,
-                    ), interval)
+                    )[1]
                 ]
             if (
                 shared_table in WIDE_TABLES
@@ -1881,12 +1971,12 @@ class ConceptResolver:
                         _pid_hash = _compute_patient_ids_hash(patient_ids)
                         _concepts_for_batch = [
                             (name, val_var) for name, val_var in _concepts_for_batch
-                            if not self._raw_entry_serves(self._get_raw_concept_from_cache(
-                                name, _pid_hash,
+                            if not self._raw_cache_entry_serves(
+                                interval, name, _pid_hash,
                                 aggregator=aggregators.get(name, "auto"),
                                 allow_aggregated=True,
                                 cache_scope=raw_cache_scope,
-                            ), interval)
+                            )[1]
                         ]
 
                     batch_itemids = {}
@@ -9723,9 +9813,9 @@ class ConceptResolver:
                 # 🔧 FIX: 特定聚合器 (min/max/sum 等) 不应退回到 None/auto 缓存
                 # 否则 pafi 请求 po2(min) 会命中批量加载缓存的 po2(median)
                 _is_specific_agg = isinstance(agg_value, str) and agg_value not in (None, "auto")
-                raw_cached = None
+                raw_cached, raw_grid = None, self._RAW_GRID_UNKNOWN
                 if is_simple_aggregator:
-                    raw_cached = self._get_raw_concept_from_cache(
+                    raw_cached, raw_grid = self._raw_cache_lookup(
                         concept_name,
                         patient_ids_hash,
                         aggregator=agg_value,
@@ -9743,7 +9833,7 @@ class ConceptResolver:
                 # ungridded request is not answered by a gridded entry
                 # (B-CACHE-REVERSE). Tables without a time index (id tables)
                 # carry no grid and are reused.
-                if not self._raw_entry_serves(raw_cached, interval):
+                if not self._raw_entry_serves(raw_cached, raw_grid, interval):
                     raw_cached = None
                 if raw_cached is not None:
                     if hasattr(raw_cached, 'copy'):

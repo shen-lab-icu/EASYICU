@@ -23,6 +23,7 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import ConceptDictionary, ConceptResolver
+from easyicu.table import ICUTable
 from tests.support.aumc_source import DATA, aumc_db
 from tests.support.eicu_source import DICTIONARY, _eicu_source
 
@@ -94,15 +95,15 @@ def test_eicu_raw_requests_after_an_hourly_load_return_the_raw_rows(tmp_path):
     ungridded = _load(resolver, ["rass"], source, EICU_IDS, interval=None, aggregate=None)["rass"]
     pd.testing.assert_frame_equal(_frame(ungridded), _frame(cold_raw), check_exact=True)
 
-    # get_raw_concept never hands back the hourly entry. (Its own cold load
-    # returns None: load_concepts defaults to r_compatible=True; the callers
-    # then use their own tables. That predates this guard.)
+    # get_raw_concept never hands back the hourly entry: it returns the raw
+    # rows as a table, warm or cold.
     raw = resolver.get_raw_concept("rass", source, EICU_IDS)
-    if raw is not None:
-        pd.testing.assert_frame_equal(_frame(raw), _frame(cold_raw), check_exact=True)
-    for table in resolver._raw_concept_cache.values():
-        if ConceptResolver._raw_entry_serves(table, None):
-            assert getattr(table, ConceptResolver._RAW_GRID_ATTR, None) is None
+    assert isinstance(raw, ICUTable)
+    pd.testing.assert_frame_equal(_frame(raw), _frame(cold_raw), check_exact=True)
+    for key, table in resolver._raw_concept_cache.items():
+        grid = resolver._raw_entry_grid(key, table)
+        if ConceptResolver._raw_entry_serves(table, grid, None):
+            assert grid is None
 
 
 def _aumc(tmp_path):
@@ -130,9 +131,24 @@ def test_a_precached_sub_table_is_marked_with_its_grid(tmp_path):
     resolver._keep_cache_between_calls = True
     _load(resolver, ["gcs"], source, EICU_IDS)
     grids = {
-        key[0]: getattr(table, ConceptResolver._RAW_GRID_ATTR, "unmarked")
+        key: resolver._raw_entry_grid(key, table)
         for key, table in resolver._raw_concept_cache.items()
     }
     assert grids, "gcs must leave raw entries"
-    assert "unmarked" not in grids.values()
-    assert grids["gcs"] == HOUR
+    assert ConceptResolver._RAW_GRID_UNKNOWN not in grids.values()
+    assert [grid for key, grid in grids.items() if key[0] == "gcs"] == [HOUR]
+
+
+def test_a_copied_table_carries_no_grid(tmp_path):
+    """The grid belongs to the cache entry: a copy put under the key is unknown, a miss."""
+    source, dictionary = _eicu(tmp_path)
+    resolver = ConceptResolver(dictionary)
+    resolver._keep_cache_between_calls = True
+    raw = _load(resolver, ["rass"], source, EICU_IDS, interval=None, aggregate=None)["rass"]
+    key = next(k for k, v in resolver._raw_concept_cache.items() if k[0] == "rass")
+    assert resolver._raw_entry_grid(key, resolver._raw_concept_cache[key]) is None
+    resolver._raw_concept_cache[key] = raw.copy()
+    unknown = resolver._raw_entry_grid(key, resolver._raw_concept_cache[key])
+    assert unknown is ConceptResolver._RAW_GRID_UNKNOWN
+    assert not ConceptResolver._raw_entry_serves(resolver._raw_concept_cache[key], unknown, None)
+    assert not ConceptResolver._raw_entry_serves(resolver._raw_concept_cache[key], unknown, HOUR)
