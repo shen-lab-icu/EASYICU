@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pathlib
+import sys
 
 import duckdb
 import pandas as pd
@@ -276,8 +278,9 @@ def test_an_oom_killed_isolated_batch_halves_from_the_same_offset(tmp_path, monk
 
 
 def test_an_isolated_kill_without_evidence_is_not_retried(tmp_path, monkeypatch):
-    with pytest.raises(RuntimeError, match="worker_killed_unknown"):
-        _isolated(monkeypatch, tmp_path, 1, lambda: None)
+    # A host with a cgroup counter (Linux) that recorded no OOM kill.
+    with pytest.raises(api.StreamBatchWorkerKilled, match="worker_killed_unknown"):
+        _isolated(monkeypatch, tmp_path, 1, lambda: 0)
 
 
 def _isolated_run(monkeypatch, tmp_path, batch_size, *, replay=None, fail_after=None):
@@ -344,3 +347,190 @@ def test_an_isolated_module_resumes_after_the_last_committed_batch(tmp_path, mon
     replayed, _ = _isolated_run(monkeypatch, replay, 4, replay=[4, 2, 2, 2])
     assert _sha(replayed["path"]) == _sha(info["path"])
     assert sorted(pd.read_parquet(info["path"])["stay_id"]) == STAYS
+
+
+# ── hosts without an OOM counter (macOS, Windows; #13 ruling C) ─────────
+
+
+def _no_counter(monkeypatch):
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: None)
+    monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: False)
+
+
+def test_the_host_reports_oom_kills_from_its_counter_or_linux(monkeypatch):
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: 0)
+    assert api._host_reports_oom_kills() is True
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: None)
+    # Linux stays evidence-only even without a readable counter.
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert api._host_reports_oom_kills() is True
+    for platform in ("darwin", "win32"):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert api._host_reports_oom_kills() is False
+
+
+@pytest.mark.parametrize("exit_code", [-9, 137, 0xC0000017])
+def test_a_bare_kill_is_eligible_only_without_a_counter(monkeypatch, exit_code):
+    _no_counter(monkeypatch)
+    assert api._unverified_kill_retry_eligible(exit_code, [])
+    # A worker that recorded its own exception is not a bare kill.
+    assert not api._unverified_kill_retry_eligible(exit_code, [{"exception_type": "ValueError"}])
+    # A plain failure exit is not a kill.
+    assert not api._unverified_kill_retry_eligible(1, [])
+    # Unexplained kills stay typed.
+    assert api._worker_failure_class(exit_code, []) == "worker_killed_unknown"
+    monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: True)
+    assert not api._unverified_kill_retry_eligible(exit_code, [])
+
+
+@pytest.mark.parametrize(
+    "exit_code",
+    [
+        0xC0000409,  # Windows fail-fast crash, not a kill
+        -15,  # multiprocessing terminate() (TerminateProcess maps to -SIGTERM)
+        1,  # an external TerminateProcess / taskkill /F exit code
+    ],
+)
+def test_crashes_and_terminations_are_not_bare_kills(monkeypatch, exit_code):
+    _no_counter(monkeypatch)
+    assert not api._unverified_kill_retry_eligible(exit_code, [])
+
+
+def _isolated_kills(monkeypatch, tmp_path, kill_at, *, replay=None, batch_size=8):
+    """Isolated export whose children numbered in ``kill_at`` are bare-killed."""
+    started = []
+
+    class Context:
+        @staticmethod
+        def Process(*, target, args, daemon):
+            started.append(len(args[3]["stay_id"]))
+            cls = _Kill if len(started) in kill_at else _Run
+            return cls(target=target, args=args, daemon=daemon)
+
+    monkeypatch.setattr(easyicu, "load_concepts", lambda **kw: _frame(list(kw["patient_ids"]["stay_id"])))
+    monkeypatch.setattr(api, "_extract_worker_env_setup", lambda _path: None)
+    monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: Context())
+    monkeypatch.setattr(api, "_ISOLATED_STREAM_BATCH_TARGETS", frozenset({("eicu", "test_module")}))
+    info = api._stream_module_batches_to_parquet(
+        "test_module", ["test_signal"], {"database": "eicu", "concepts": ["test_signal"]},
+        {"stay_id": STAYS}, batch_size, str(tmp_path), replay_boundaries=replay,
+    )
+    return info, started
+
+
+def test_a_bare_kill_without_a_counter_gets_one_half_size_retry(tmp_path, monkeypatch):
+    _no_counter(monkeypatch)
+    out = tmp_path / "retried"
+    out.mkdir()
+    info, started = _isolated_kills(monkeypatch, out, {1})
+    assert started == [8, 4, 4, 2]
+    [event] = info["stream_resume_events"]
+    assert event["kind"] == "unverified_kill_retry"
+    assert (event["start_offset"], event["previous_batch_size"], event["batch_size"]) == (0, 8, 4)
+    assert event["worker_exit_code"] == -9
+    assert event["oom_kill_counter"] == "unavailable"
+    assert "process_tree_peak_rss_mb" in event and "host_total_memory_mb" in event
+    assert [b["stays"] for b in info["stream_batches"]] == [4, 4, 2]
+
+    # Byte-identical to a run with the same boundaries and no kill.
+    replay = tmp_path / "replay"
+    replay.mkdir()
+    replayed, _ = _isolated_kills(monkeypatch, replay, set(), replay=[4, 4, 2])
+    assert _sha(replayed["path"]) == _sha(info["path"])
+    assert sorted(p.name for p in out.iterdir()) == ["test_module.parquet"]
+
+
+def test_a_second_bare_kill_in_the_module_fails_typed(tmp_path, monkeypatch):
+    _no_counter(monkeypatch)
+    with pytest.raises(api.StreamBatchWorkerKilled) as caught:
+        _isolated_kills(monkeypatch, tmp_path, {1, 3})
+    assert caught.value.failure_class == "worker_killed_unknown"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_bare_kill_with_a_counter_is_not_retried(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: 0)
+    monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: True)
+    with pytest.raises(api.StreamBatchWorkerKilled, match="worker_killed_unknown"):
+        _isolated_kills(monkeypatch, tmp_path, {1})
+
+
+def test_a_module_worker_kill_resumes_once_from_committed_batches(tmp_path, monkeypatch):
+    """The module-worker level: held ledger carries the retry; resume is exact."""
+    out = tmp_path / "resumed"
+    out.mkdir()
+    with pytest.raises(MemoryError):
+        _run(out, monkeypatch, 4, fail_on_call=2)
+    # A SIGKILL leaves committed parts and a ledger with no pending reason.
+    ledger_path = out / ".test_module.stream_ledger.json"
+    ledger = json.loads(ledger_path.read_text())
+    ledger["pending_reason"] = None
+    ledger_path.write_text(json.dumps(ledger))
+    group_root = tmp_path / "group"
+    group_root.mkdir()
+    (out).rename(group_root / "test_module")
+    assert not api._ledgers_record_unverified_kill(str(group_root), ["test_module"])
+    held = api._hold_resumable_module_dirs(str(group_root), ["test_module"])
+    api._record_unverified_kill_in_ledgers(held, {
+        "kind": "unverified_kill_retry", "level": "module_worker",
+        "previous_batch_size": 4, "batch_size": 2, "worker_exit_code": -9,
+        "oom_kill_counter": "unavailable",
+        "process_tree_peak_rss_mb": 1.0, "host_total_memory_mb": 2.0,
+    })
+    folder = held["test_module"]
+    assert api._ledgers_record_unverified_kill(str(pathlib.Path(folder).parent), ["test_module"])
+
+    info = _run(pathlib.Path(folder), monkeypatch, 2)
+    kinds = [e["kind"] for e in info["stream_resume_events"]]
+    assert kinds == ["unverified_kill_retry", "resume_after_worker_retry"]
+    assert info["stream_resume_events"][0]["start_offset"] == 4
+    assert info["stream_resume_events"][1]["reason"] == "unverified_kill"
+    replay = tmp_path / "replay"
+    replay.mkdir()
+    replayed = _run(replay, monkeypatch, 4, replay=[4, 2, 2, 2])
+    assert _sha(replayed["path"]) == _sha(info["path"])
+
+
+class _BareKilled:
+    calls: list = []
+
+    def __init__(self, *, target, args, daemon):
+        import inspect
+
+        _BareKilled.calls.append(inspect.signature(target).bind(*args).arguments)
+        self.exitcode = None
+
+    def start(self):
+        self.exitcode = -9
+
+    def join(self):
+        return None
+
+
+def _extract_killed(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    _BareKilled.calls = []
+    monkeypatch.setattr(
+        api, "_get_extraction_mp_context", lambda _: SimpleNamespace(Process=_BareKilled)
+    )
+    with pytest.raises(api.NativeExportPublicationError):
+        api.extract_database(
+            "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
+            modules=["demographics"], patient_ids={"admissionid": list(range(23106))},
+            resource_budget_mb=8192, stream_output_batches=True, verbose=False,
+        )
+    return [call["batch_size"] for call in _BareKilled.calls]
+
+
+def test_a_module_worker_bare_kill_without_a_counter_retries_once(monkeypatch, tmp_path):
+    _no_counter(monkeypatch)
+    sizes = _extract_killed(monkeypatch, tmp_path)
+    # One retry at half the batch; the second bare kill is final.
+    assert len(sizes) == 2 and sizes[1] == max(1, sizes[0] // 2)
+
+
+def test_a_module_worker_bare_kill_with_a_counter_is_not_retried(monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: 0)
+    sizes = _extract_killed(monkeypatch, tmp_path)
+    assert len(sizes) == 1
