@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass
+import contextlib
 import hashlib
 import json
 import logging
@@ -1487,6 +1488,86 @@ def record_bucket_consumed(source, table: str, layout: BucketLayout, files) -> N
         getattr(source, "base_path", source), table, "bucket", layout.root,
         lambda: _bucket_record(layout),
     )
+
+
+UNAVAILABLE_EVENT = "table_unavailable"
+STORAGE_MODULE_ENV = "EASYICU_STORAGE_MODULE"
+_UNAVAILABLE: list[dict] = []
+# Where each open storage_module context's records start in _UNAVAILABLE,
+# so a run without a run log never reports an earlier run's records.
+_MODULE_STARTS: list[int] = []
+
+
+@contextlib.contextmanager
+def storage_module(module: str):
+    """Tag this process's (and its children's) availability records with ``module``.
+
+    Set and restored around each module's load; a child process started
+    inside inherits the tag. A record made without a tag says module=None.
+    """
+    previous = os.environ.get(STORAGE_MODULE_ENV)
+    os.environ[STORAGE_MODULE_ENV] = str(module)
+    _MODULE_STARTS.append(len(_UNAVAILABLE))
+    try:
+        yield
+    finally:
+        _MODULE_STARTS.pop()
+        if previous is None:
+            os.environ.pop(STORAGE_MODULE_ENV, None)
+        else:
+            os.environ[STORAGE_MODULE_ENV] = previous
+
+
+def record_table_unavailable(source, table: str) -> dict:
+    """Record that a declared table has no physical source here (delta17w).
+
+    Called only after :func:`verify_flat_scan` has refused a table the
+    conversion manifest lists (``table_scan_files_missing``): what remains is
+    a table the manifest does not list, or an installation without a
+    manifest. Its read may give empty, but never silently: the record
+    (``availability`` source_unavailable, ``missing_tables``) goes to the
+    run log, the module receipt and the run manifest. It is written before
+    the caller returns empty or raises.
+    """
+    base = getattr(source, "base_path", None)
+    index = None if base is None else _conversion_index(Path(base))
+    record = {
+        "event": UNAVAILABLE_EVENT,
+        "root": str(base),
+        "table": str(table),
+        "availability": "source_unavailable",
+        "reason_code": "declared_table_not_installed",
+        "manifest": "absent" if index is None else "unlisted",
+        "missing_tables": [str(table)],
+        "module": os.environ.get(STORAGE_MODULE_ENV) or None,
+    }
+    if record not in _UNAVAILABLE[_MODULE_STARTS[-1] if _MODULE_STARTS else 0:]:
+        _UNAVAILABLE.append(record)
+    _log_fallback(record)
+    logging.getLogger(__name__).warning(
+        "declared table %s has no physical source under %s (manifest %s): recorded "
+        "source_unavailable", table, base, record["manifest"],
+    )
+    return record
+
+
+def read_unavailable_log(path) -> tuple[dict, ...]:
+    """The ``table_unavailable`` records of a run log (every worker's)."""
+    return tuple(e for e in _read_run_log(path) if e.get("event") == UNAVAILABLE_EVENT)
+
+
+def module_unavailability(module: str) -> list[dict]:
+    """The availability records tagged with ``module``.
+
+    From the run log when one is set (every worker's records); otherwise this
+    process's records since the innermost open :func:`storage_module` began.
+    """
+    target = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+    if target:
+        records = read_unavailable_log(target)
+    else:
+        records = tuple(_UNAVAILABLE[_MODULE_STARTS[-1] if _MODULE_STARTS else 0:])
+    return [dict(r) for r in records if r.get("module") == module]
 
 
 def read_consumed_log(path) -> tuple[dict[str, str], ...]:

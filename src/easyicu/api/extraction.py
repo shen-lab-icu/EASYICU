@@ -3594,6 +3594,28 @@ def batch_telemetry_first_part(batch_telemetry) -> Optional[str]:
     return None
 
 
+def _tags_storage_module(module_name_of):
+    """Run a module load with its storage module tag set, and restored after.
+
+    Availability records made while the module loads (in this process, or
+    in an isolated child started meanwhile) name the module (delta17w).
+    """
+    import functools
+
+    def decorate(function):
+        @functools.wraps(function)
+        def wrapper(*args, **kwargs):
+            from ..storage_layout import storage_module
+
+            with storage_module(module_name_of(args, kwargs)):
+                return function(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
+
+
+@_tags_storage_module(lambda args, kwargs: kwargs.get("module_name", args[0] if args else None))
 def _run_module_extraction(
     module_name: str,
     concepts: List[str],
@@ -3783,6 +3805,8 @@ def _run_module_extraction(
 
     elapsed = time.time() - t0
     memory_stats = module_memory_sampler.stop()
+    from ..storage_layout import module_unavailability
+
     manifest = {
         "module": module_name,
         "saved": saved,
@@ -3790,6 +3814,8 @@ def _run_module_extraction(
         "warnings": warnings,
         "memory_exhausted": bool(memory_exhausted),
         "elapsed_sec": round(elapsed, 1),
+        # Declared tables with no physical source, read as empty (delta17w).
+        "storage_unavailable": module_unavailability(module_name),
         **memory_stats,
     }
     if stream_info is not None:
@@ -3965,6 +3991,7 @@ def _consolidate_special_score_dependency(
     return grouped[[id_col, time_col, score_name]]
 
 
+@_tags_storage_module(lambda args, kwargs: "special_concepts")
 def _stream_special_extraction_batches(
     special_modules: List[str],
     database: str,
@@ -4334,8 +4361,11 @@ def _stream_special_extraction_batches(
         raise
 
     _mark_failure_stage("special_stream_write_manifest")
+    from ..storage_layout import module_unavailability
+
     manifest = {
         "module": "special_concepts",
+        "storage_unavailable": module_unavailability("special_concepts"),
         "saved": saved,
         "derivation_contexts": ({"sep3_sofa1": context.finish(expected_ids=all_ids)}
                                 if context is not None and not errors else {}),
@@ -8013,6 +8043,8 @@ def _publish_native_export_v2(
         manifest["storage_binding"] = dict(result["storage_binding"])
     if "storage_consumed" in result:
         manifest["storage_consumed"] = list(result["storage_consumed"])
+    if "storage_unavailable" in result:
+        manifest["storage_unavailable"] = list(result["storage_unavailable"])
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -8588,6 +8620,7 @@ def extract_database(
         # module result, its published manifest and the release receipt; the
         # batch-level retries join the run's retry history (D3-LEDGER).
         mod_result["stream_resume_events"] = list(manifest.get("stream_resume_events") or [])
+        mod_result["storage_unavailable"] = list(manifest.get("storage_unavailable") or [])
         if manifest.get("stream_failure") is not None:
             mod_result["stream_failure"] = dict(manifest["stream_failure"])
         result["stream_retry_history"].extend(
@@ -8598,6 +8631,7 @@ def extract_database(
             "saved": {},
             "errors": mod_result["errors"],
             "warnings": mod_result["warnings"],
+            "storage_unavailable": mod_result["storage_unavailable"],
             "bounds": mod_result["bounds"],
             "elapsed_sec": mod_result["elapsed"],
             "start_rss_mb": manifest.get("start_rss_mb", 0.0),
@@ -8728,12 +8762,15 @@ def extract_database(
                         "peak_working_set_mb",
                         0.0,
                     ),
+                    # The special stream reads for every special module at once.
+                    "storage_unavailable": list(manifest.get("storage_unavailable") or []),
                 }
                 output_manifest = {
                     "module": mod_name,
                     "saved": {},
                     "errors": mod_result["errors"],
                     "warnings": mod_result["warnings"],
+                    "storage_unavailable": mod_result["storage_unavailable"],
                     "bounds": mod_result["bounds"],
                     "elapsed_sec": sp_elapsed,
                     "start_rss_mb": manifest.get("start_rss_mb", 0.0),
@@ -9159,6 +9196,11 @@ def extract_database(
     result["storage_binding"]["tables"] = consumed_table_layouts(
         result["storage_consumed"], read_layout_log(scan_fallback_log)
     )
+    # Declared tables with no physical source that were read as empty, from
+    # every worker (delta17w); each module's own are in its receipt.
+    from ..storage_layout import read_unavailable_log
+
+    result["storage_unavailable"] = [dict(e) for e in read_unavailable_log(scan_fallback_log)]
     if previous_fallback_log is None:
         os.environ.pop(SCAN_FALLBACK_LOG_ENV, None)
     else:

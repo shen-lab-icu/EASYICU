@@ -12,6 +12,7 @@ import easyicu
 from easyicu.concept import ConceptDictionary, ConceptResolver
 from easyicu.concept.callback_apply import _apply_callback
 from easyicu.concept.schema import ConceptSource
+from easyicu.datasource import MissingTableSourceError
 from tests.support.eicu_source import _eicu_source
 
 
@@ -129,7 +130,7 @@ def test_rr_04_medication_exposure_requires_positive_dose_and_declared_route(
 def _fake_source(database, **tables):
     def load_table(name, **kwargs):
         if name not in tables:
-            raise FileNotFoundError(name)
+            raise MissingTableSourceError(name)  # the source's absence signal
         return SimpleNamespace(data=tables[name].copy())
     return SimpleNamespace(config=SimpleNamespace(name=database), load_table=load_table)
 

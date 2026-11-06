@@ -1648,8 +1648,13 @@ class ICUDataSource:
             
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
-                # A table the conversion manifest lists is not "absent".
+                # A table the conversion manifest lists is not "absent": it
+                # raises table_scan_files_missing here (delta17w case 1).
                 storage_layout.verify_flat_scan(self, table_name, ())
+                # Unlisted, or no manifest: absent may give empty, never
+                # silently. The record is written before the empty return or
+                # the MissingTableSourceError below (delta17w case 2).
+                storage_layout.record_table_unavailable(self, table_name)
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:

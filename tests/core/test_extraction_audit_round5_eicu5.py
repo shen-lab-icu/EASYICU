@@ -14,6 +14,7 @@ import pytest
 
 from easyicu.concept.callback_apply import _apply_callback
 from easyicu.concept.schema import ConceptSource
+from easyicu.datasource import MissingTableSourceError
 from tests.support.eicu_source import _eicu_source, _hourly
 
 DATA = Path(__file__).parents[2] / "src/easyicu/data"
@@ -37,7 +38,7 @@ def _sources(name, table=None):
 def _fake(**tables):
     def load_table(name, **kwargs):
         if name not in tables:
-            raise FileNotFoundError(name)
+            raise MissingTableSourceError(name)  # the source's absence signal
         return SimpleNamespace(data=tables[name].copy())
     return SimpleNamespace(config=SimpleNamespace(name="eicu"), load_table=load_table)
 
