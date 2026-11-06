@@ -2770,7 +2770,12 @@ def _stream_batch_bounds_sidecar(part: Path) -> Path:
 
 
 def _stream_batch_fill_sidecar(part: Path) -> Path:
-    """Where an isolated batch process leaves its merge-fill concepts for the parent."""
+    """Where an isolated batch process leaves its batch receipt for the parent.
+
+    ``{"merge_empty_index_filled": [...], "loader_concepts": [...]}``: the
+    concepts whose empty slice took the batch index, and the concepts the
+    loader itself returned (before Arrow adds structural nulls).
+    """
     return Path(part).with_name(f".{Path(part).name}.merge_fill.json")
 
 
@@ -2871,7 +2876,10 @@ def _write_isolated_stream_batch(
             reorder=False,
         )
         if frame is None:
-            _write_json_atomic(fill_sidecar, sorted(set(batch_fills)))
+            _write_json_atomic(fill_sidecar, {
+                "merge_empty_index_filled": sorted(set(batch_fills)),
+                "loader_concepts": [],
+            })
             with source_bounds_accounting("isolated_batch_hand_off"):
                 _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
             return
@@ -2893,7 +2901,10 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
-        _write_json_atomic(fill_sidecar, sorted(set(batch_fills)))
+        _write_json_atomic(fill_sidecar, {
+            "merge_empty_index_filled": sorted(set(batch_fills)),
+            "loader_concepts": [c for c in concepts if c in frame.columns],
+        })
         with source_bounds_accounting("isolated_batch_hand_off"):
             _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
     except BaseException as exc:
@@ -3338,7 +3349,14 @@ def _stream_module_batches_to_parquet(
             entry = parts_now[position]
             part_file = destination.with_name(entry["part"])
             part_schema = pq.read_schema(part_file)
-            produced_concepts.update(c for c in concepts if c in part_schema.names)
+            # Produced = returned by the loader in some batch, as for a
+            # whole-module load; Arrow's structural nulls in a part schema
+            # are not production (a ledger from before the receipt falls
+            # back to the part schema).
+            if "loader_concepts" in entry:
+                produced_concepts.update(entry["loader_concepts"])
+            else:
+                produced_concepts.update(c for c in concepts if c in part_schema.names)
             if writer is None:
                 writer = pq.ParquetWriter(partial, schema, compression="snappy")
             if entry["batch_process_isolation"]:
@@ -3490,10 +3508,12 @@ def _stream_module_batches_to_parquet(
                     fill_sidecar = _stream_batch_fill_sidecar(batch_part)
                     if not fill_sidecar.is_file():
                         raise FileNotFoundError(
-                            f"isolated batch {index} left no merge-fill record"
+                            f"isolated batch {index} left no batch receipt"
                         )
-                    batch_fills = json.loads(fill_sidecar.read_text(encoding="utf-8"))
+                    batch_receipt = json.loads(fill_sidecar.read_text(encoding="utf-8"))
                     fill_sidecar.unlink()
+                    batch_fills = list(batch_receipt["merge_empty_index_filled"])
+                    batch_loader_concepts = list(batch_receipt["loader_concepts"])
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
@@ -3516,6 +3536,9 @@ def _stream_module_batches_to_parquet(
                         batch,
                         concepts,
                         reorder=False,
+                    )
+                    batch_loader_concepts = (
+                        [c for c in concepts if c in frame.columns] if frame is not None else []
                     )
                     if frame is not None:
                         if id_col in frame.columns:
@@ -3561,6 +3584,9 @@ def _stream_module_batches_to_parquet(
                     "source_bounds": batch_bounds,
                     # Concepts whose empty slice took this batch's time index.
                     "merge_empty_index_filled": sorted(set(batch_fills)),
+                    # Concepts the loader returned for this batch; Arrow's
+                    # structural nulls do not make a concept produced.
+                    "loader_concepts": batch_loader_concepts,
                     **batch_memory,
                 }
             )
