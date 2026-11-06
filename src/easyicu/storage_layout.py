@@ -25,6 +25,14 @@ SCHEMA = "easyicu.bucket_storage/1"
 BUILDER_VERSION = "easyicu.bucket_builder/2"
 ORDINAL = "_easyicu_source_ordinal"
 MANIFEST = "_BUCKET_MANIFEST.json"
+# Two-level layout: one partition per value of a variable key (label/itemid),
+# then stay ranges inside each partition. The layout has M stay ranges (M a
+# power of two, M - 1 shared breakpoints, ``v <= b`` belongs to the earlier
+# range); a partition with modulus m merges M/m consecutive ranges, so a
+# stay's bucket is ``bisect_left(breakpoints, stay) // (M // m)``. Files are
+# sorted by stay, so contiguous stay batches also prune row groups.
+VARIABLE_SCHEME = "variable_stay_range"
+PARTITION_PREFIX = "var_id="
 INTEGER_TYPES = frozenset(
     {
         "TINYINT",
@@ -63,6 +71,16 @@ class BucketLayoutError(StorageIntegrityError):
 
 
 @dataclass(frozen=True)
+class VariablePartition:
+    """One variable-key value (``None`` for rows whose key is null)."""
+
+    pid: int
+    value: Any
+    modulus: int
+    secondary: dict  # selector column -> frozenset of values in this partition
+
+
+@dataclass(frozen=True)
 class BucketLayout:
     root: Path
     scheme: str
@@ -72,6 +90,10 @@ class BucketLayout:
     breakpoints: tuple
     files_by_bucket: dict[int, tuple[Path, ...]]
     source_order: str | None
+    stay_column: str | None = None
+    stay_key_type: str | None = None
+    partitions: tuple = ()
+    files_by_partition: dict | None = None  # (pid, bucket) -> files
 
     @property
     def files(self) -> tuple[Path, ...]:
@@ -80,9 +102,22 @@ class BucketLayout:
         )
 
     def select(
-        self, source, column: str | None, values: Iterable | None
+        self,
+        source,
+        column: str | None,
+        values: Iterable | None,
+        *,
+        stay_column: str | None = None,
+        stay_values: Iterable | None = None,
     ) -> tuple[set, tuple[Path, ...]]:
+        """Files a reader must scan; callers still apply the same predicates.
+
+        ``stay_column``/``stay_values`` narrow only a variable layout whose
+        stay key is that column; single-key layouts select exactly as before.
+        """
         values = None if values is None else tuple(values)
+        if self.scheme == VARIABLE_SCHEME:
+            return self._select_variable(source, column, values, stay_column, stay_values)
         if (
             column is None
             or column.casefold() != self.key_column.casefold()
@@ -99,6 +134,51 @@ class BucketLayout:
         return targets, tuple(
             p for i in sorted(targets) for p in self.files_by_bucket.get(i, ())
         )
+
+    def _select_variable(self, source, column, values, stay_column, stay_values):
+        partitions = self.partitions
+        if column is not None and values is not None:
+            wanted = set(values)
+            if column.casefold() == self.key_column.casefold():
+                if matching_values(wanted, self.key_type):
+                    partitions = tuple(
+                        p for p in partitions if p.value is not None and p.value in wanted
+                    )
+            else:
+                for name in partitions[0].secondary if partitions else ():
+                    if name.casefold() == column.casefold():
+                        partitions = tuple(
+                            p for p in partitions if p.secondary[name] & wanted
+                        )
+                        break
+        ranges = None
+        if (
+            stay_column is not None
+            and stay_values is not None
+            and stay_column.casefold() == (self.stay_column or "").casefold()
+        ):
+            stays = {v for v in stay_values if v is not None}
+            if stays and matching_values(stays, self.stay_key_type):
+                ranges = {bisect_left(self.breakpoints, v) for v in stays}
+        targets, files = set(), []
+        for part in partitions:
+            span = self.modulus // part.modulus
+            buckets = (
+                range(part.modulus)
+                if ranges is None
+                else sorted({r // span for r in ranges})
+            )
+            for bucket in buckets:
+                found = self.files_by_partition.get((part.pid, bucket), ())
+                if found:
+                    targets.add((part.pid, bucket))
+                    files.extend(found)
+        if not files and self.files:
+            # An empty selection still has the installation's schema: hand the
+            # reader one file, which the caller's own predicates empty, so the
+            # answer has the same columns and dtypes as on a flat source.
+            files = [self.files[0]]
+        return targets, tuple(sorted(files))
 
 
 def matching_values(values: Iterable, key_type: str) -> bool:
@@ -218,6 +298,9 @@ def read_bucket_contract(
             manifest = _legacy_manifest(
                 root, manifest, (root / "_COMPLETE").stat(), allow_legacy
             )
+        _check_bucket_derived_from(root, manifest)
+        if manifest.get("scheme") == VARIABLE_SCHEME:
+            return _read_variable_contract(root, manifest, cache)
         scheme, key, kind = (manifest[k] for k in ("scheme", "key_column", "key_type"))
         if (
             scheme not in {"hash", "range"}
@@ -325,6 +408,217 @@ def read_bucket_contract(
         raise
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise BucketLayoutError("bucket_manifest_invalid", root) from exc
+
+
+def _is_power_of_two(value: Any) -> bool:
+    return _positive_int(value) and value & (value - 1) == 0
+
+
+def _json_key(value: Any, kind: str) -> Any:
+    """A manifest key value, checked against the declared key type."""
+    if value is None:
+        return None
+    if not matching_values((value,), kind):
+        raise ValueError("partition value does not match the key type")
+    return value
+
+
+def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
+    """A bucket manifest's optional ``derived_from`` must be well formed.
+
+    Present means bound to exact source files (relative path, size, mtime and
+    sha256 of each); any other shape is an unverifiable binding.
+    """
+    if "derived_from" not in manifest:
+        return
+    derived = manifest["derived_from"]
+    files = derived.get("files") if isinstance(derived, dict) else None
+    if not isinstance(derived, dict) or not isinstance(derived.get("table"), str):
+        raise BucketLayoutError("bucket_derived_from_invalid", root)
+    if not isinstance(files, list) or not files:
+        raise BucketLayoutError("bucket_derived_from_invalid", root)
+    for entry in files:
+        digest = entry.get("sha256") if isinstance(entry, dict) else None
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("path"), str)
+            or not isinstance(entry.get("size"), int)
+            or isinstance(entry.get("size"), bool)
+            or entry["size"] < 0
+            or not isinstance(entry.get("mtime_ns"), int)
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or not set(digest) <= _SHA256_HEX
+        ):
+            raise BucketLayoutError("bucket_derived_from_invalid", root)
+
+
+def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> BucketLayout:
+    """Validate a variable × stay installation exactly as hash/range ones.
+
+    The partition list, each partition's bucket directories and the file
+    inventory must all agree with the disk; a missing or extra partition is
+    its own stable reason.
+    """
+    key, kind = manifest["key_column"], manifest["key_type"]
+    stay, stay_kind = manifest["stay_column"], manifest["stay_key_type"]
+    count = manifest["modulus"]
+    if (
+        not isinstance(key, str) or not key or kind not in KEY_TYPES
+        or not isinstance(stay, str) or not stay or stay_kind not in KEY_TYPES
+        or stay.casefold() == key.casefold()
+    ):
+        raise ValueError("unsupported key or stay column")
+    if not _is_power_of_two(count):
+        raise BucketLayoutError("bucket_modulus_mismatch", root)
+    breaks = manifest["stay_breakpoints"]
+    if (
+        not isinstance(breaks, list)
+        or len(breaks) != count - 1
+        or not matching_values(breaks, stay_kind)
+        or any(a > b for a, b in zip(breaks, breaks[1:]))
+    ):
+        raise BucketLayoutError("bucket_modulus_mismatch", root)
+    sort, order = manifest["sort_keys"], manifest["source_order"]
+    if (
+        not isinstance(sort, list)
+        or any(not isinstance(k, str) for k in sort)
+        or order != ORDINAL
+        or not sort
+        or sort[-1] != order
+        or not _positive_int(manifest["row_group_target"])
+        or not isinstance(manifest["builder_version"], str)
+        or not manifest["builder_version"]
+    ):
+        raise ValueError("invalid builder contract")
+    secondary_columns = manifest.get("secondary_keys", [])
+    if not isinstance(secondary_columns, list) or any(
+        not isinstance(c, str) or not c for c in secondary_columns
+    ):
+        raise ValueError("invalid secondary keys")
+    raw_partitions = manifest["partitions"]
+    if not isinstance(raw_partitions, list) or not raw_partitions:
+        raise ValueError("missing partitions")
+    partitions, seen_values = [], set()
+    for index, entry in enumerate(raw_partitions):
+        if entry["id"] != index or not _is_power_of_two(entry["modulus"]):
+            raise BucketLayoutError("bucket_partition_invalid", root)
+        if count % entry["modulus"]:
+            raise BucketLayoutError("bucket_modulus_mismatch", root)
+        value = _json_key(entry["value"], kind)
+        marker = ("null",) if value is None else ("value", value)
+        if marker in seen_values:
+            raise BucketLayoutError("bucket_partition_invalid", root)
+        seen_values.add(marker)
+        secondary = entry.get("secondary", {})
+        if set(secondary) != set(secondary_columns) or any(
+            not isinstance(v, list) for v in secondary.values()
+        ):
+            raise BucketLayoutError("bucket_partition_invalid", root)
+        partitions.append(
+            VariablePartition(
+                index, value, entry["modulus"],
+                {c: frozenset(secondary[c]) for c in secondary_columns},
+            )
+        )
+    expected_dirs = {f"{PARTITION_PREFIX}{p.pid}" for p in partitions}
+    actual_dirs = {d.name for d in root.glob(f"{PARTITION_PREFIX}*") if d.is_dir()}
+    if expected_dirs - actual_dirs:
+        raise BucketLayoutError("bucket_partition_missing", root)
+    if actual_dirs - expected_dirs:
+        raise BucketLayoutError("bucket_partition_extra", root)
+    if any(d.is_dir() for d in root.glob("bucket_id=*")):
+        raise BucketLayoutError("bucket_partition_extra", root)
+    for part in partitions:
+        directory = root / f"{PARTITION_PREFIX}{part.pid}"
+        if directory.is_symlink():
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
+        buckets = {d.name for d in directory.iterdir() if d.is_dir()}
+        if buckets != {f"bucket_id={b}" for b in range(part.modulus)}:
+            raise BucketLayoutError("bucket_modulus_mismatch", root)
+    inventory = manifest["inventory"]
+    if not isinstance(inventory, list) or not inventory:
+        raise ValueError("missing inventory")
+    by_partition: dict[tuple[int, int], list[Path]] = {}
+    seen: set[Path] = set()
+    for entry in inventory:
+        relative = entry["relative_path"]
+        parts = PurePosixPath(relative).parts if isinstance(relative, str) else ()
+        if (
+            len(parts) != 3
+            or not parts[0].startswith(PARTITION_PREFIX)
+            or not parts[1].startswith("bucket_id=")
+            or not parts[2].endswith(".parquet")
+            or parts[2].startswith(".")
+        ):
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
+        try:
+            pid = int(parts[0][len(PARTITION_PREFIX):])
+            bucket = int(parts[1].split("=", 1)[1])
+        except ValueError as exc:
+            raise BucketLayoutError("bucket_inventory_mismatch", root) from exc
+        if (
+            parts[0] != f"{PARTITION_PREFIX}{pid}"
+            or parts[1] != f"bucket_id={bucket}"
+            or not 0 <= pid < len(partitions)
+        ):
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
+        if not 0 <= bucket < partitions[pid].modulus:
+            raise BucketLayoutError("bucket_modulus_mismatch", root)
+        path = root.joinpath(*parts)
+        if path.is_symlink() or path.parent.is_symlink():
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
+        if any(
+            not isinstance(entry[k], int) or isinstance(entry[k], bool) or entry[k] < 0
+            for k in ("size", "row_count")
+        ):
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
+        if path in seen or not path.is_file() or path.stat().st_size != entry["size"]:
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
+        seen.add(path)
+        stat = path.stat()
+        signature = (
+            str(path), stat.st_size, stat.st_mtime_ns, kind, key, stay, stay_kind,
+            tuple(sort), order, entry["row_count"],
+        )
+        if cache is None or signature not in cache:
+            parquet = pq.ParquetFile(path)
+            if parquet.metadata.num_rows != entry["row_count"]:
+                raise BucketLayoutError("bucket_inventory_mismatch", root)
+            schema = parquet.schema_arrow
+            for column, column_kind in ((key, kind), (stay, stay_kind)):
+                if (
+                    column not in schema.names
+                    or arrow_key_type(schema.field(column).type) != column_kind
+                ):
+                    raise BucketLayoutError("bucket_key_type_mismatch", root)
+            if any(k not in schema.names for k in sort) or schema.field(order).type != pa.int64():
+                raise BucketLayoutError("bucket_manifest_invalid", root)
+            if cache is not None:
+                cache[signature] = True
+        by_partition.setdefault((pid, bucket), []).append(path)
+    actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
+    if actual != seen:
+        raise BucketLayoutError("bucket_inventory_mismatch", root)
+    files_by_partition = {k: tuple(sorted(v)) for k, v in by_partition.items()}
+    flat_index = {
+        index: files
+        for index, (_, files) in enumerate(sorted(files_by_partition.items()))
+    }
+    return BucketLayout(
+        root,
+        VARIABLE_SCHEME,
+        key,
+        kind,
+        count,
+        tuple(breaks),
+        flat_index,
+        order,
+        stay_column=stay,
+        stay_key_type=stay_kind,
+        partitions=tuple(partitions),
+        files_by_partition=files_by_partition,
+    )
 
 
 def arrow_key_type(kind: pa.DataType) -> str:
@@ -790,11 +1084,15 @@ def resolve_table_files(
     selector_values: Iterable | None = None,
     *,
     loader: Path | None = None,
+    stay_column: str | None = None,
+    stay_values: Iterable | None = None,
 ) -> tuple[Path, ...]:
     """The sole table + selector → files policy, shared by all read paths.
 
     ``loader`` is the path a disk reader resolved for the table; the returned
-    set is what it must read (see :func:`_loader_scan`).
+    set is what it must read (see :func:`_loader_scan`). ``stay_column`` and
+    ``stay_values`` are the reader's own direct stay predicate
+    (``column IN values``); a variable layout narrows its stay buckets with it.
     """
     root = source.resolve_bucket_directory(table)
     if root is None:
@@ -813,7 +1111,10 @@ def resolve_table_files(
         allow_legacy=source.config.name == "aumc",
         cache=source._bucket_layout_cache,
     )
-    return layout.select(source, selector_column, selector_values)[1]
+    return layout.select(
+        source, selector_column, selector_values,
+        stay_column=stay_column, stay_values=stay_values,
+    )[1]
 
 
 def validate_concept_layouts(source, dictionary, names: Iterable[str]) -> None:
@@ -845,6 +1146,7 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
         root.name.endswith("_bucket")
         or (root / MANIFEST).exists()
         or any(root.glob("bucket_id=*"))
+        or any(root.glob(f"{PARTITION_PREFIX}*"))
     ):
         try:
             paths = read_bucket_contract(
@@ -861,20 +1163,23 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
 
 
 def files_for_directory(
-    source, directory, column=None, values=None
+    source, directory, column=None, values=None, *, stay_column=None, stay_values=None
 ) -> tuple[Path, ...]:
     root = Path(directory)
     if (
         root.name.endswith("_bucket")
         or (root / MANIFEST).exists()
         or any(root.glob("bucket_id=*"))
+        or any(root.glob(f"{PARTITION_PREFIX}*"))
     ):
         layout = read_bucket_contract(
             root,
             allow_legacy=source.config.name == "aumc",
             cache=source._bucket_layout_cache,
         )
-        return layout.select(source, column, values)[1]
+        return layout.select(
+            source, column, values, stay_column=stay_column, stay_values=stay_values
+        )[1]
     return tuple(Path(p) for p in enumerate_parquet_files(root))
 
 

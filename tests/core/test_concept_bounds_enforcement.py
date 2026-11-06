@@ -275,13 +275,13 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
     assert manifest["errors"] == []
-    assert calls == [[1, 4], [2, 5], [3]]
+    assert calls == [[1, 2], [3, 4], [5]]
     assert manifest["patient_partition_strategy"] == (
-        "source_order_interleaved_v1"
+        "stay_order_contiguous_prunable_v1"
     )
     assert manifest["initial_planned_partition_count"] == 3
     exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
-    assert exported["stay_id"].tolist() == [1, 4, 2, 5, 3]
+    assert exported["stay_id"].tolist() == [1, 2, 3, 4, 5]
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
@@ -544,19 +544,13 @@ def test_isolated_stream_batches_preserve_output_and_remove_parts(
         ["extract", "extract", "append", "append"] if database == "aumc"
         else ["extract", "append", "extract", "append"]
     )
-    expected_ids = (
-        [[1, 2], [3, 4]] if database == "aumc" else [[1, 3], [2, 4]]
-    )
+    expected_ids = [[1, 2], [3, 4]]
     assert calls == expected_ids
     assert daemon_flags == [False, False]
     expected_flat = [value for batch in expected_ids for value in batch]
     assert exported["stay_id"].tolist() == expected_flat
     assert exported["test_signal"].tolist() == [float(value) for value in expected_flat]
-    assert manifest["patient_partition_strategy"] == (
-        "source_order_contiguous_prunable_v1"
-        if database == "aumc"
-        else "source_order_interleaved_v1"
-    )
+    assert manifest["patient_partition_strategy"] == "stay_order_contiguous_prunable_v1"
     assert not list(tmp_path.glob(".test_module.batch-*.parquet"))
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 

@@ -1106,11 +1106,11 @@ def test_aumc_stream_partition_preserves_prunable_source_order():
 
     assert ordered == patient_ids
     assert planned_batches == 5
-    assert strategy == "source_order_contiguous_prunable_v1"
+    assert strategy == "stay_order_contiguous_prunable_v1"
 
 
-def test_eicu_stream_partition_retains_density_balancing_interleave():
-    patient_ids = list(range(200_859))
+def test_eicu_stream_partition_uses_contiguous_stay_order_batches():
+    patient_ids = list(range(200_859))[::-1]
     ordered, planned_batches, strategy = _order_stream_patient_ids(
         patient_ids,
         67_000,
@@ -1118,9 +1118,8 @@ def test_eicu_stream_partition_retains_density_balancing_interleave():
     )
 
     assert planned_batches == 3
-    assert strategy == "source_order_interleaved_v1"
-    assert ordered != patient_ids
-    assert set(ordered) == set(patient_ids)
+    assert strategy == "stay_order_contiguous_prunable_v1"
+    assert ordered == sorted(patient_ids)
 
 
 @pytest.mark.parametrize(

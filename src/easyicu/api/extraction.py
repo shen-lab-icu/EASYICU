@@ -1707,29 +1707,27 @@ def _order_stream_patient_ids(
     batch_size: int,
     database: str,
 ) -> tuple[List, int, str]:
-    """Choose a database-aware patient order for streamed extraction.
+    """Contiguous stay batches in stay order, for every database.
 
-    AUMC's large parquet tables are clustered by ``admissionid`` inside each
-    row group.  Contiguous admission batches therefore let DuckDB prune most
-    row groups and make all batches together approximate one source scan.
-    Interleaving those IDs defeats every row-group min/max statistic and makes
-    each small batch rescan the complete 4.3-GiB ``numericitems`` dataset.
-
-    Other databases retain the density-balancing interleave until their
-    physical layouts have independent pruning evidence.  In particular eICU
-    needs it because its source-ordered tail has a much larger working set.
+    Physical layouts are sorted by the stay key (AUMC's admission-clustered
+    row groups, the variable × stay-range layout and the single-key buckets'
+    ``key, stay, time`` order), so a batch of consecutive stays lets DuckDB
+    prune files and row groups; an interleaved batch spans the whole stay
+    range and rescans every selected file. Published module files are sorted
+    canonically, so the batch composition does not change published bytes.
+    Ids that do not sort together (mixed types) keep their given order.
     """
 
-    normalized = _normalise_stream_database(database)
     ids = list(patient_ids)
     size = int(batch_size)
     if size < 1:
         raise ValueError("stream batch_size must be positive")
     planned_batches = (len(ids) + size - 1) // size if ids else 0
-    if normalized == "aumc":
-        return ids, planned_batches, "source_order_contiguous_prunable_v1"
-    ordered, planned_batches = _interleave_stream_patient_ids(ids, size)
-    return ordered, planned_batches, "source_order_interleaved_v1"
+    try:
+        ordered = sorted(ids)
+    except TypeError:
+        ordered = ids
+    return ordered, planned_batches, "stay_order_contiguous_prunable_v1"
 
 
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):

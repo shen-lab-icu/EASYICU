@@ -428,7 +428,7 @@ def test_adoption_fails_on_wrong_row_multiset_and_does_not_install(tmp_path):
     assert before == (cache / MANIFEST).read_bytes()
 
 
-@pytest.mark.parametrize("scheme", ["hash", "range"])
+@pytest.mark.parametrize("scheme", ["hash", "range", "variable"])
 @pytest.mark.parametrize("database", ["miiv", "eicu", "hirid", "aumc"])
 def test_streamed_native_module_parquet_bytes_and_metadata_match(
     tmp_path, database, scheme
@@ -678,10 +678,13 @@ def _each_layout(root, database, layouts=("directory", "single", "hash")):
         elif (root / f"{table}.parquet").exists():
             (root / table).mkdir()
             shutil.move(root / f"{table}.parquet", path)
-        if layout == "hash":
+        if layout in ("hash", "variable"):
+            bucket = root / f"{table}_bucket"
+            if bucket.exists():
+                shutil.rmtree(bucket)
             install_layout(
                 ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False),
-                "hash",
+                layout,
             )
         yield layout
 
@@ -774,14 +777,16 @@ def test_every_concept_on_the_bucketed_table_is_layout_independent(tmp_path, dat
     frame.to_parquet(tmp_path / table / "1.parquet", index=False)
     loaded = {
         layout: _layout_frames(tmp_path, database, concepts, pd.Timedelta(hours=1))
-        for layout in _each_layout(tmp_path, database)
+        for layout in _each_layout(
+            tmp_path, database, ("directory", "single", "hash", "variable")
+        )
     }
     single = loaded["single"]
     produced = [c for c in concepts if not isinstance(single[c], str) and not single[c].empty]
     assert len(produced) >= len(concepts) // 2, (database, len(produced), len(concepts))
     mismatched = []
     for concept in concepts:
-        for layout in ("directory", "hash"):
+        for layout in ("directory", "hash", "variable"):
             try:
                 _assert_same(concept, loaded[layout][concept], single[concept])
             except AssertionError:
@@ -855,7 +860,11 @@ def test_every_module_export_is_byte_identical_across_layouts(tmp_path, database
     frame, concepts = with_value_column_rows(frame, database, load_dictionary(), stays)
     table = builder.TABLE_CONFIGS[database][0]
     frame.to_parquet(root / table / "1.parquet", index=False)
-    layouts = ("directory", "hash") if database == "hirid" else ("directory", "single", "hash")
+    layouts = (
+        ("directory", "hash", "variable")
+        if database == "hirid"
+        else ("directory", "single", "hash", "variable")
+    )
     exports = {
         layout: _module_exports(root, tmp_path / layout, database, concepts, stays)
         for layout in _each_layout(root, database, layouts)
