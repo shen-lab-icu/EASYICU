@@ -236,3 +236,22 @@ def test_sic_case_boundaries_are_candidates_not_exact_icu_stay_authority():
     # The same underlying columns remain reviewable but are not exact ICU LOS.
     assert (profile.care_unit_admission_proxy.column, profile.case_close_proxy.column) == (
         "ICUOffset", "TimeOfStay")
+
+
+def test_sic_mortality_status_needs_the_discharge_labels(monkeypatch):
+    from easyicu.databases import research_capabilities as owner
+
+    original = owner._field
+
+    def without_references(config, table, column, **kwargs):
+        return None if table == "d_references" else original(config, table, column, **kwargs)
+
+    assert research_capability_profile("sic").mortality is not None
+    monkeypatch.setattr(owner, "_field", without_references)
+    research_capability_profile.cache_clear()
+    # Discharge codes are read by label from d_references (1.0.6 and 1.0.8
+    # number them differently): without the labels there is no status.
+    try:
+        assert research_capability_profile("sic").mortality is None
+    finally:
+        research_capability_profile.cache_clear()

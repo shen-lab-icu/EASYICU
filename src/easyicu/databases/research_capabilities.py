@@ -296,6 +296,11 @@ def _mortality(config) -> MortalityCapability | None:
         meaning, kind = "death_within_72h_after_icu_discharge", "date"
     elif item.callback == "sic_death":
         status = _field(config, item.table, "HospitalDischargeType", source=origin, interpretation=interpretation)
+        # The discharge codes are read by label from d_references (1.0.6 and
+        # 1.0.8 number them differently); without those labels no status.
+        labels = all(_field(config, "d_references", column) for column in
+                     ("ReferenceGlobalID", "ReferenceValue", "ReferenceName"))
+        status = status if labels else None
         timing = _field(config, item.table, item.index_var, source=origin, interpretation=interpretation)
         meaning, kind = "hospital_death", "recorded"
     else:
