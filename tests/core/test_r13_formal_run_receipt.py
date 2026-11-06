@@ -128,6 +128,7 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
             "easyicu_version": version, "easyicu_installed_dist_version": "9.9.9",
         },
         "storage_reads": reads if reads is not None else [_flat(prepared, "cases", prepared)],
+        "storage_binding": {"digest": "b" * 64, "files": 3, "scope": "parent_run_binding"},
     }))
     return run
 
@@ -151,6 +152,9 @@ def test_the_sic_section_of_the_receipt_carries_the_binding_and_the_reads(tmp_pa
     assert sic["data_root_realpath"] == os.path.realpath(prepared)
     assert sic["native_manifest"]["easyicu_git_commit"] == CODE["commit"]
     assert saved["easyicu_version"] == CODE["version"]
+    assert sic["storage_binding"]["digest"] == "b" * 64
+    assert sic["storage_binding"]["scope"] == "parent_run_binding"
+    assert "parent extraction" in sic["storage_binding"]["note"]
     assert sic["native_manifest"]["easyicu_version"] == CODE["version"]
     assert sic["native_manifest"]["easyicu_installed_dist_version"] == "9.9.9"
     with pytest.raises(receipt.ReceiptError) as error:
@@ -370,3 +374,19 @@ def test_a_malformed_prepared_manifest_is_a_typed_stop(tmp_path):
     with pytest.raises(receipt.ReceiptError) as error:
         receipt.sic_cases_binding(prepared, tmp_path / "scratch", CODE)
     assert error.value.code == "receipt_input_malformed"
+
+
+def test_a_native_manifest_without_the_run_binding_digest_stops_the_receipt(
+        tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"])
+    path = run / "sic" / "export" / "_manifest.json"
+    manifest = json.loads(path.read_text())
+    del manifest["storage_binding"]
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == "storage_binding_missing"

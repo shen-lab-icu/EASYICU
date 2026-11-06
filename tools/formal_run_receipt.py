@@ -18,6 +18,8 @@ exited. It binds the run to the sealed code and to its inputs:
   read and every bucket source must resolve under the input's data root (the
   real directory of its ``conversion_manifest.json``, else the input's real
   path), and every bucket installation under the input's real path;
+* the parent run binding's digest from the native manifest
+  (``storage_binding``, see its ``note``);
 * for SICdb, ``cases_binding``: the prepared conversion manifest records
   ``cases.parquet`` from ``cases.csv.gz`` without content digests and without
   a converter commit, so the receipt carries both sha256s, the manifest record
@@ -390,6 +392,16 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                            f"{db} native manifest lists no per-table storage reads", database=db)
     section["storage_reads"] = _storage_reads(db, list(manifest["storage_reads"]),
                                               input_real, data_root)
+    binding = manifest.get("storage_binding")
+    if not isinstance(binding, dict) or not isinstance(binding.get("digest"), str):
+        raise ReceiptError("storage_binding_missing",
+                           f"{db} native manifest records no run binding digest", database=db)
+    section["storage_binding"] = {
+        **binding,
+        "note": "digest of the parent extraction's run binding, recorded at publication; "
+                "workers and isolated children verify against it and extend it in their "
+                "own processes (not merged into this digest)",
+    }
     section["storage_fallbacks"] = manifest.get("storage_fallbacks") or []
     return section
 

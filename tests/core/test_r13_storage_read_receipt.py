@@ -163,6 +163,11 @@ def test_a_published_run_lists_every_table_read_with_the_fallback_reason(tmp_pat
 
     published = json.loads((output / "_manifest.json").read_text())
     assert published["storage_reads"] == result["storage_reads"]
+    # The parent run binding's digest is published for the run receipt.
+    binding = published["storage_binding"]
+    assert binding == result["storage_binding"]
+    assert len(binding["digest"]) == 64 and binding["scope"] == "parent_run_binding"
+    assert binding["files"] >= 1
     by_table = {(e["table"], e["layout"]): e for e in result["storage_reads"]}
     observations = by_table[("observations", "flat")]
     assert {k: v for k, v in observations.items() if not k.startswith("layout_")} == {
