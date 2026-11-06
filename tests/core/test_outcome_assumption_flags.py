@@ -19,6 +19,7 @@ from easyicu.outcome_availability import (
     OUTCOME_CONCEPT_SUPPORTED_DATABASES,
 )
 from easyicu.scores import outcomes
+from tests.support.sic_references import sic_raw_tables
 
 FLAGS = ("mort_28d_assumption_based", "mort_90d_assumption_based", "mort_365d_assumption_based")
 DAY_MS = 86_400_000
@@ -32,7 +33,7 @@ def test_sic_flags_only_horizons_reached_through_the_grace_day(monkeypatch) -> N
         "OffsetOfDeath": [None, None, 3_600 + 5 * 86_400, None],
         "EstimatedSurvivalObservationTime": [3077, 3077, 3077, None],
     })
-    monkeypatch.setattr(outcomes, "_raw_table", lambda *_: cases)
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases))
     result = outcomes.load_outcomes("sic").set_index("CaseID")
 
     # Case 1 is followed the full documented year from its ICU origin.
@@ -41,9 +42,13 @@ def test_sic_flags_only_horizons_reached_through_the_grace_day(monkeypatch) -> N
     # so only the one-day grace makes it a one-year survivor.
     assert bool(result.loc[2, "mort_365d"]) is False
     assert result.loc[2, list(FLAGS)].tolist() == [False, False, True]
-    # A recorded death is documented; an unknown endpoint has no flag.
+    # A recorded death is documented.
     assert not result.loc[3, list(FLAGS)].any()
-    assert result.loc[4, list(FLAGS)].isna().all()
+    # An empty category (SICdb 1.0.8 survivors) without an admission year
+    # keeps the six-month minimum: 28 and 90 days rest on that assumption,
+    # one year is unknown and carries no flag.
+    assert result.loc[4, list(FLAGS[:2])].tolist() == [True, True]
+    assert pd.isna(result.loc[4, FLAGS[2]])
 
 
 def test_aumc_survivors_known_only_by_the_assumed_year_are_flagged(monkeypatch) -> None:
