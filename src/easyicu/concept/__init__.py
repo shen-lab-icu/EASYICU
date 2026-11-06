@@ -2896,11 +2896,12 @@ class ConceptResolver:
                     # and a bucket cache take the same path.  Choosing the
                     # path by layout made float32/float64 results, and so the
                     # exported bytes, depend on storage (lead-r13, class a).
-                    _has_bucket_dir = False
-                    try:
-                        _has_bucket_dir = bool(storage.resolve_target_files(source.table))
-                    except Exception:
-                        pass
+                    # Absence is an empty tuple; a layout error (for example
+                    # an incomplete bucket) must fail, never switch the path.
+                    _resolve_files = getattr(storage, 'resolve_target_files', None)
+                    _has_bucket_dir = bool(
+                        _resolve_files(source.table) if _resolve_files else ()
+                    )
                     
                     # 🚀 DuckDB 可内联回调检测
                     _is_percent_as_numeric = False
@@ -3814,14 +3815,12 @@ class ConceptResolver:
                     # would otherwise serve later concepts on that table past
                     # the DuckDB path, so results depended on the layout
                     # (lead-r13, class a).
-                    skip_cache_for_bucket_table = False
-                    try:
-                        if storage.resolve_target_files(source.table):
-                            skip_cache_for_bucket_table = True
-                            if DEBUG_MODE and verbose:
-                                print(f"   ⏭️  跳过分桶/扁平parquet表缓存: {source.table}")
-                    except Exception:
-                        pass
+                    _resolve_files = getattr(storage, 'resolve_target_files', None)
+                    skip_cache_for_bucket_table = bool(
+                        _resolve_files(source.table) if _resolve_files else ()
+                    )
+                    if skip_cache_for_bucket_table and DEBUG_MODE and verbose:
+                        print(f"   ⏭️  跳过分桶/扁平parquet表缓存: {source.table}")
                     
                     if patient_filter_in_filters and not skip_cache_for_special_tables and not use_duckdb_aggregation and not skip_cache_for_mimic3_chartevents and not skip_cache_for_bucket_table:
                         # 🔧 FIX: 缓存只应用了患者过滤器的表（不包含 sub_var/itemid 过滤）
