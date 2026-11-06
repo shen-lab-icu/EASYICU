@@ -5510,8 +5510,16 @@ class ConceptResolver:
         # but ONLY if most values are actually numeric strings (not legitimate strings like 'invasive').
         if concept_name in combined.columns and not combined.empty:
             if not pd.api.types.is_numeric_dtype(combined[concept_name]):
+                # A concept with numeric bounds is numeric by definition. Its
+                # text cells (an unmapped list answer such as AUMC 6735
+                # 'Geïntubeerd' in vgcs) are missing values, whatever other
+                # stays share the batch. Sampling the first rows let the batch
+                # decide between median and first-row aggregation.
+                declared_numeric = definition.minimum is not None or definition.maximum is not None
                 sample = combined[concept_name].dropna().head(100)
-                if len(sample) > 0:
+                if declared_numeric:
+                    combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
+                elif len(sample) > 0:
                     numeric_converted = pd.to_numeric(sample, errors='coerce')
                     pct_convertible = float(numeric_converted.notna().sum()) / len(sample)
                     if pct_convertible > 0.5:
