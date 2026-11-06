@@ -1486,14 +1486,26 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     return "cohort_flow_publication_bundle_from_parent_outputs_v1"
 
 
+_CLUSTER_RATE_COLUMNS = (
+    "mortality_rate", "outcome_rate", "event_rate", "rate",
+    "mortality_rate_pct", "outcome_rate_pct", "event_rate_pct", "rate_pct",
+    "mortality_pct", "outcome_pct", "event_pct",
+    "mortality_percent", "outcome_percent", "event_percent",
+)
+
+
+def _is_percent_name(column: str) -> bool:
+    name = str(column).lower()
+    return "pct" in name or "percent" in name
+
+
 def _declared_rate_scale(column: str, values, *, site: str) -> float:
     """Percent display scale from the column's declared unit (its name)."""
     import numpy as np
 
     from ...utils.declared_units import UndeclaredUnitError
 
-    name = str(column).lower()
-    if "pct" in name or "percent" in name:
+    if _is_percent_name(column):
         return 1.0
     finite = np.asarray(values, dtype="float64")
     finite = finite[np.isfinite(finite)]
@@ -1584,9 +1596,9 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     plot_df = frame.reset_index(drop=True)
     plot_df.insert(0, "source_row_index", plot_df.index.astype(int))
     n_col = _first_col(plot_df, ("n", "n_stays", "cluster_size", "size", "count"))
-    rate_col = _first_col(
-        plot_df, ("mortality_rate", "outcome_rate", "event_rate", "rate")
-    )
+    # Proportion names (0-1) first, then percent names; the name declares the
+    # unit (_declared_rate_scale), never the values.
+    rate_col = _first_col(plot_df, _CLUSTER_RATE_COLUMNS)
     ci_low_col = _first_col(plot_df, ("ci_low", "ci_lower", "lower"))
     ci_high_col = _first_col(plot_df, ("ci_high", "ci_upper", "upper"))
 
@@ -1603,9 +1615,11 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     if n_col is not None:
         source_payload["n"] = pd.to_numeric(plot_df[n_col], errors="coerce")
     if rate_col is not None:
-        source_payload["mortality_rate"] = pd.to_numeric(
-            plot_df[rate_col], errors="coerce"
-        )
+        # A proportion keeps the panel's historical name; a percent column keeps
+        # its own declared name, so the source data never relabels percent
+        # values as a proportion and stays value-traceable to its parent.
+        rate_key = rate_col if _is_percent_name(rate_col) else "mortality_rate"
+        source_payload[rate_key] = pd.to_numeric(plot_df[rate_col], errors="coerce")
     if ci_low_col is not None:
         source_payload["ci_low"] = pd.to_numeric(plot_df[ci_low_col], errors="coerce")
     if ci_high_col is not None:
