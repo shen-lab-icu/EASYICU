@@ -9,7 +9,14 @@ value-based guess without one, the owner raises this error instead of guessing.
 
 from __future__ import annotations
 
-__all__ = ["UndeclaredUnitError", "FIO2_UNITS", "declared_fio2_unit"]
+__all__ = [
+    "UndeclaredUnitError",
+    "FIO2_UNITS",
+    "declared_fio2_unit",
+    "BOUNDS_UNIT_SUSPECT_MIN_VALUES",
+    "bounds_unit_suspect",
+    "refuse_bounds_unit_suspect",
+]
 
 #: Accepted spellings of a declared FiO2 unit, normalised to one name.
 FIO2_UNITS = {
@@ -36,6 +43,50 @@ class UndeclaredUnitError(RuntimeError):
         super().__init__(
             f"{reason}: {quantity} at {site}: {detail}. Declare the unit; "
             "it is not inferred from the values"
+        )
+
+
+#: Evidence floor of the bounds-unit-suspect refusal: below it, out-of-bounds
+#: values are dropped as ordinary implausible values.
+BOUNDS_UNIT_SUSPECT_MIN_VALUES = 100
+
+
+def bounds_unit_suspect(
+    raw_non_null: int, bounded_non_null: int, bounded_aggregate_non_null: int = 0,
+) -> bool:
+    """At least 100 values in one read and none within the declared bounds.
+
+    The values then contradict the declared bounds as a whole (another unit),
+    and dropping them would publish the concept as absent. Every bounded read
+    path decides with this one rule (lead-r13 sweep #14; Codex delta4 V6).
+    """
+    return bool(
+        raw_non_null >= BOUNDS_UNIT_SUSPECT_MIN_VALUES
+        and bounded_non_null == 0
+        and bounded_aggregate_non_null == 0
+    )
+
+
+def refuse_bounds_unit_suspect(
+    *,
+    quantity: str,
+    site: str,
+    raw_non_null: int,
+    bounded_non_null: int,
+    bounded_aggregate_non_null: int = 0,
+    value_min=None,
+    value_max=None,
+) -> None:
+    """Raise ``UndeclaredUnitError(bounds_unit_suspect)`` when the rule holds."""
+    if bounds_unit_suspect(raw_non_null, bounded_non_null, bounded_aggregate_non_null):
+        raise UndeclaredUnitError(
+            reason="bounds_unit_suspect",
+            quantity=str(quantity),
+            site=site,
+            detail=(
+                f"{int(raw_non_null)} values in this batch and none within the declared "
+                f"bounds [{value_min}, {value_max}]"
+            ),
         )
 
 

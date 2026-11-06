@@ -2227,26 +2227,25 @@ def _enforce_concept_bounds(df, concept_name):
     mn, mx = bnd
     v = _pd.to_numeric(df[concept_name], errors="coerce")
     numeric = v.notna()
-    # A median outside [min, max] used to skip enforcement as "probably another
-    # unit" (sentinel -1). Whether it skipped depended on the rows in the frame,
-    # so the frame's values now contradict the declared bounds and it refuses
-    # (lead-r13 magnitude/format sweep #14). The SQL loader refuses the same
-    # case instead of retrying without bounds.
-    if mn is not None and mx is not None and int(numeric.sum()) >= 100:
-        med = float(v[numeric].median())
-        if med < mn or med > mx:
-            from ..utils.declared_units import UndeclaredUnitError
-
-            raise UndeclaredUnitError(
-                reason="bounds_unit_suspect", quantity=str(concept_name),
-                site="api.extraction._enforce_concept_bounds",
-                detail=f"median {med:g} of {int(numeric.sum())} values lies outside [{mn}, {mx}]",
-            )
     in_range = _pd.Series(True, index=df.index)
     if mn is not None:
         in_range &= v >= mn
     if mx is not None:
         in_range &= v <= mx
+    # A median outside [min, max] used to skip enforcement as "probably another
+    # unit" (sentinel -1); whether it skipped depended on the rows in the frame
+    # (lead-r13 magnitude/format sweep #14). Every bounded path now decides
+    # with the one rule the SQL owners use (Codex delta4 V6).
+    from ..utils.declared_units import refuse_bounds_unit_suspect
+
+    refuse_bounds_unit_suspect(
+        quantity=str(concept_name),
+        site="api.extraction._enforce_concept_bounds",
+        raw_non_null=int(numeric.sum()),
+        bounded_non_null=int((numeric & in_range).sum()),
+        value_min=mn,
+        value_max=mx,
+    )
     # keep non-numeric/missing rows (NaN is "missing", not "out of range") and
     # numeric rows that are within [min, max]; drop only genuine out-of-range values.
     keep = (~numeric) | in_range
@@ -6968,6 +6967,20 @@ def _enforce_native_export_concept_bounds(
                 )
                 out_of_bounds |= above_maximum
             excluded = int(out_of_bounds.sum())
+            # Values that all contradict the declared bounds are refused, as
+            # on every read path, rather than published as an absent concept
+            # (Codex delta4 V6).
+            from ..utils.declared_units import refuse_bounds_unit_suspect
+
+            present = int(frame[concept].notna().sum())
+            refuse_bounds_unit_suspect(
+                quantity=str(concept),
+                site="api.extraction._enforce_native_export_concept_bounds",
+                raw_non_null=present,
+                bounded_non_null=present - excluded,
+                value_min=minimum,
+                value_max=maximum,
+            )
             if excluded:
                 frame.loc[out_of_bounds, concept] = np.nan
 

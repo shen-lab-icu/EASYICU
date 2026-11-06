@@ -4143,32 +4143,32 @@ def load_bucketed_table_aggregated(
             bounded_aggregate_non_null = int(
                 pd.to_numeric(df[value_column], errors="coerce").notna().sum()
             )
-            unit_suspect = bool(
-                raw_non_null >= 100
-                and bounded_non_null == 0
-                and bounded_aggregate_non_null == 0
+            from .utils.declared_units import (
+                bounds_unit_suspect,
+                refuse_bounds_unit_suspect,
+            )
+
+            unit_suspect = bounds_unit_suspect(
+                raw_non_null, bounded_non_null, bounded_aggregate_non_null
             )
             unbounded_retry = False
-            if unit_suspect:
-                # At least 100 values in this batch and none within the
-                # declared bounds. This used to retry without bounds and keep
-                # them as "probably another unit", a decision that depended on
-                # the batch: 99 values, or a single in-range one, dropped them
-                # all. The bounds are declared, and the values contradict them
-                # in this batch; refuse rather than guess (lead-r13
-                # magnitude/format sweep #14; it never fired on the
-                # six-database sample at batch 50 or one-shot).
-                from .utils.declared_units import UndeclaredUnitError
-
-                raise UndeclaredUnitError(
-                    reason="bounds_unit_suspect",
-                    quantity=str(value_column),
-                    site=f"datasource.load_bucketed_table_aggregated[{db_name}.{table_name}]",
-                    detail=(
-                        f"{raw_non_null} values in this batch and none within the declared "
-                        f"bounds [{value_min}, {value_max}]"
-                    ),
-                )
+            # At least 100 values in this batch and none within the declared
+            # bounds. This used to retry without bounds and keep them as
+            # "probably another unit", a decision that depended on the batch:
+            # 99 values, or a single in-range one, dropped them all. The bounds
+            # are declared, and the values contradict them in this batch;
+            # refuse rather than guess (lead-r13 magnitude/format sweep #14).
+            # The multi-concept and wide owners and the raw path apply the
+            # same rule (Codex delta4 V6).
+            refuse_bounds_unit_suspect(
+                quantity=str(value_column),
+                site=f"datasource.load_bucketed_table_aggregated[{db_name}.{table_name}]",
+                raw_non_null=raw_non_null,
+                bounded_non_null=bounded_non_null,
+                bounded_aggregate_non_null=bounded_aggregate_non_null,
+                value_min=value_min,
+                value_max=value_max,
+            )
             df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
             bounds_diagnostics = {
                 "bounds_raw_transformed_non_null": raw_non_null,
@@ -4295,22 +4295,49 @@ def load_bucketed_table_multi_aggregated(
     _interval_seconds = interval_minutes * 60.0
 
     # ── Build CASE WHEN select expressions ─────────────────
-    select_exprs = []
-    for concept_name, ids in concept_itemids.items():
-        if ids_are_strings:
-            ids_sql = ", ".join(f"'{x}'" for x in ids)
-        else:
-            ids_sql = ", ".join(str(int(x)) for x in ids)
-        bounds = (concept_bounds or {}).get(concept_name, {})
-        value_conditions = [f"o.{itemid_col} IN ({ids_sql})"]
-        if bounds.get("min") is not None:
-            value_conditions.append(f"o.{value_column} >= {bounds['min']}")
-        if bounds.get("max") is not None:
-            value_conditions.append(f"o.{value_column} <= {bounds['max']}")
-        case_when = " AND ".join(value_conditions)
-        select_exprs.append(
-            f"{_multi_agg(f'CASE WHEN {case_when} THEN o.{value_column} END')} AS {concept_name}"
-        )
+    # A bounded concept also counts its values before and after the bounds, so
+    # the same bounds-unit-suspect rule as the single-concept owner decides it
+    # here (Codex delta4 V6): sharing a table with a valid concept must not
+    # turn a refused read into an absent result.
+    _multi_raw_prefix = "__easyicu_multi_raw_non_null_"
+    _multi_bounded_prefix = "__easyicu_multi_bounded_non_null_"
+    _multi_bounded = []  # (concept, diagnostic suffix, bounds)
+
+    def _concept_select_exprs(prefix: str) -> List[str]:
+        exprs = []
+        for position, (concept_name, ids) in enumerate(concept_itemids.items()):
+            if ids_are_strings:
+                ids_sql = ", ".join(f"'{x}'" for x in ids)
+            else:
+                ids_sql = ", ".join(str(int(x)) for x in ids)
+            bounds = (concept_bounds or {}).get(concept_name, {})
+            item_match = f"{prefix}{itemid_col} IN ({ids_sql})"
+            value_conditions = [item_match]
+            if bounds.get("min") is not None:
+                value_conditions.append(f"{prefix}{value_column} >= {bounds['min']}")
+            if bounds.get("max") is not None:
+                value_conditions.append(f"{prefix}{value_column} <= {bounds['max']}")
+            case_when = " AND ".join(value_conditions)
+            exprs.append(
+                f"{_multi_agg(f'CASE WHEN {case_when} THEN {prefix}{value_column} END')} AS {concept_name}"
+            )
+            if bounds.get("min") is not None or bounds.get("max") is not None:
+                exprs.append(
+                    f"COUNT(CASE WHEN {item_match} THEN {prefix}{value_column} END) "
+                    f"AS {_multi_raw_prefix}{position}"
+                )
+                exprs.append(
+                    f"COUNT(CASE WHEN {case_when} THEN {prefix}{value_column} END) "
+                    f"AS {_multi_bounded_prefix}{position}"
+                )
+        return exprs
+
+    for _position, _concept in enumerate(concept_itemids):
+        _bounds = (concept_bounds or {}).get(_concept, {})
+        if _bounds.get("min") is not None or _bounds.get("max") is not None:
+            _multi_bounded.append((_concept, _position, _bounds))
+
+    select_exprs = _concept_select_exprs("o.")
     select_sql = ",\n            ".join(select_exprs)
 
     if ids_are_strings:
@@ -4412,22 +4439,7 @@ def load_bucketed_table_multi_aggregated(
                 f"EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 60.0 / 60.0", stay_col,
             )
             # Outer select expressions without table alias
-            _outer_select_exprs = []
-            for concept_name, ids in concept_itemids.items():
-                if ids_are_strings:
-                    ids_sql = ", ".join(f"'{x}'" for x in ids)
-                else:
-                    ids_sql = ", ".join(str(int(x)) for x in ids)
-                bounds = (concept_bounds or {}).get(concept_name, {})
-                value_conditions = [f"{itemid_col} IN ({ids_sql})"]
-                if bounds.get("min") is not None:
-                    value_conditions.append(f"{value_column} >= {bounds['min']}")
-                if bounds.get("max") is not None:
-                    value_conditions.append(f"{value_column} <= {bounds['max']}")
-                case_when = " AND ".join(value_conditions)
-                _outer_select_exprs.append(
-                    f"{_multi_agg(f'CASE WHEN {case_when} THEN {value_column} END')} AS {concept_name}"
-                )
+            _outer_select_exprs = _concept_select_exprs("")
             _outer_select_sql = ",\n                ".join(_outer_select_exprs)
 
             if patient_ids:
@@ -4645,6 +4657,30 @@ def load_bucketed_table_multi_aggregated(
                 df[_concept] = exact_terms_to_values(
                     df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
                 )
+    if _multi_bounded:
+        from .utils.declared_units import refuse_bounds_unit_suspect
+
+        _diagnostic_columns = []
+        for _concept, _position, _bounds in _multi_bounded:
+            _raw_col = f"{_multi_raw_prefix}{_position}"
+            _bounded_col = f"{_multi_bounded_prefix}{_position}"
+            _diagnostic_columns += [_raw_col, _bounded_col]
+            if _raw_col not in df.columns:
+                continue
+            refuse_bounds_unit_suspect(
+                quantity=_concept,
+                site=f"datasource.load_bucketed_table_multi_aggregated[{db_name}.{table_name}]",
+                raw_non_null=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
+                bounded_non_null=int(
+                    pd.to_numeric(df[_bounded_col], errors="coerce").fillna(0).sum()
+                ),
+                bounded_aggregate_non_null=(
+                    int(df[_concept].notna().sum()) if _concept in df.columns else 0
+                ),
+                value_min=_bounds.get("min"),
+                value_max=_bounds.get("max"),
+            )
+        df = df.drop(columns=_diagnostic_columns, errors="ignore")
     df = finish_miiv_lab_frame(df)
     if _base_db == "sic":
         _mark_icu_relative_charttime(df)
@@ -4863,9 +4899,19 @@ def load_wide_table_aggregated(
     # 单次扫描，单次 GROUP BY，无 FULL OUTER JOIN 中间结果膨胀
     # 🔧 FIX: 使用 CASE WHEN 实现 per-column filter_bounds（R ricu pre-aggregation filtering）
     # 将超出 [min, max] 范围的值替换为 NULL，这样 MEDIAN 会忽略它们
+    # A bounded column also counts its values before and after the bounds; the
+    # same bounds-unit-suspect rule as the single-concept owner decides it
+    # (Codex delta4 V6).
+    _wide_raw_prefix = "__easyicu_wide_raw_non_null_"
+    _wide_bounded_prefix = "__easyicu_wide_bounded_non_null_"
+    _wide_bounded = []  # (column, position, (min, max))
+    for _position, _column in enumerate(value_columns):
+        _bounds = (column_bounds or {}).get(_column)
+        if _bounds and (_bounds[0] is not None or _bounds[1] is not None):
+            _wide_bounded.append((_column, _position, _bounds))
     if column_bounds:
         agg_parts = []
-        for col in value_columns:
+        for position, col in enumerate(value_columns):
             bounds = column_bounds.get(col)
             if bounds:
                 vmin, vmax = bounds
@@ -4876,6 +4922,12 @@ def load_wide_table_aggregated(
                     conditions.append(f"{col} <= {vmax}")
                 filter_expr = " AND ".join(conditions)
                 agg_parts.append(f"{_wide_agg(f'CASE WHEN {filter_expr} THEN {col} END')} as {col}")
+                if conditions:
+                    agg_parts.append(f"COUNT({col}) as {_wide_raw_prefix}{position}")
+                    agg_parts.append(
+                        f"COUNT(CASE WHEN {filter_expr} THEN {col} END) "
+                        f"as {_wide_bounded_prefix}{position}"
+                    )
             else:
                 agg_parts.append(f"{_wide_agg(col)} as {col}")
         agg_exprs = ", ".join(agg_parts)
@@ -4905,7 +4957,7 @@ def load_wide_table_aggregated(
             f"WHERE {id_col}", f"WHERE o.{id_col}"
         )
         community_agg_parts = []
-        for column in value_columns:
+        for position, column in enumerate(value_columns):
             quoted_column = _duckdb_identifier(column)
             numeric_column = f"TRY_CAST(o.{quoted_column} AS DOUBLE)"
             bounds = (column_bounds or {}).get(column)
@@ -4921,6 +4973,14 @@ def load_wide_table_aggregated(
                     f"{_wide_agg(f'CASE WHEN {condition} THEN {numeric_column} END')} "
                     f"AS {quoted_column}"
                 )
+                if conditions:
+                    community_agg_parts.append(
+                        f"COUNT({numeric_column}) AS {_wide_raw_prefix}{position}"
+                    )
+                    community_agg_parts.append(
+                        f"COUNT(CASE WHEN {condition} THEN {numeric_column} END) "
+                        f"AS {_wide_bounded_prefix}{position}"
+                    )
             else:
                 community_agg_parts.append(
                     f"{_wide_agg(numeric_column)} AS {quoted_column}"
@@ -4986,6 +5046,30 @@ def load_wide_table_aggregated(
                 df[_column] = exact_terms_to_values(
                     df[_column], "mean" if duckdb_agg == "AVG" else "sum"
                 )
+    if _wide_bounded:
+        from .utils.declared_units import refuse_bounds_unit_suspect
+
+        _diagnostic_columns = []
+        for _column, _position, (_vmin, _vmax) in _wide_bounded:
+            _raw_col = f"{_wide_raw_prefix}{_position}"
+            _bounded_col = f"{_wide_bounded_prefix}{_position}"
+            _diagnostic_columns += [_raw_col, _bounded_col]
+            if _raw_col not in df.columns:
+                continue
+            refuse_bounds_unit_suspect(
+                quantity=_column,
+                site=f"datasource.load_wide_table_aggregated[{db_name}.{table_name}]",
+                raw_non_null=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
+                bounded_non_null=int(
+                    pd.to_numeric(df[_bounded_col], errors="coerce").fillna(0).sum()
+                ),
+                bounded_aggregate_non_null=(
+                    int(df[_column].notna().sum()) if _column in df.columns else 0
+                ),
+                value_min=_vmin,
+                value_max=_vmax,
+            )
+        df = df.drop(columns=_diagnostic_columns, errors="ignore")
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
 
