@@ -1045,11 +1045,15 @@ def test_grouped_export_records_missing_concept_inside_physical_module(
         "availability": "available",
         "non_null": 1,
         "excluded_out_of_bounds": 0,
+        "stays_all_out_of_bounds": 0,
+        "source_bounds": {},
     }
     assert status["vent_free_days_28"] == {
         "availability": "structurally_unavailable_placeholder",
         "non_null": 0,
         "excluded_out_of_bounds": 0,
+        "stays_all_out_of_bounds": 0,
+        "source_bounds": {},
     }
     with open_export_package(output) as package:
         assert set(package.concept_index) == {"mort_28d"}
@@ -1342,6 +1346,8 @@ def test_grouped_export_nulls_declared_bound_violations_and_audits_them(
         "availability": "available",
         "non_null": 1,
         "excluded_out_of_bounds": 2,
+        "stays_all_out_of_bounds": 2,
+        "source_bounds": {},
         "declared_bounds": {"minimum": 10.0, "maximum": 230.0},
     }
     assert status["weight"]["excluded_out_of_bounds"] == 2
@@ -1543,6 +1549,7 @@ def test_native_bounds_survive_sofa2_overlay_redefinition(
     assert frame["uo_6h"].iloc[3:].isna().all()
     assert audit["uo_6h"] == {
         "excluded_out_of_bounds": 2,
+        "stays_all_out_of_bounds": 0,
         "declared_bounds": {"minimum": 0.0, "maximum": 20.0},
     }
 
@@ -1714,6 +1721,7 @@ def test_arrow_publication_matches_legacy_canonical_values_order_and_schema(
     assert {
         concept: {
             "excluded_out_of_bounds": status["excluded_out_of_bounds"],
+            "stays_all_out_of_bounds": status["stays_all_out_of_bounds"],
             **(
                 {"declared_bounds": status["declared_bounds"]}
                 if "declared_bounds" in status

@@ -518,32 +518,43 @@ SOURCE_BOUNDS_WARN_MIN_STAYS = 10
 SOURCE_BOUNDS_WARN_MIN_FRACTION = 0.005
 
 
-def source_bounds_warnings(drops: Dict[str, Dict[str, Dict[str, int]]]) -> List[Dict[str, Any]]:
+def source_bounds_warnings(
+    drops_by_module: Dict[str, Dict[str, Dict[str, Dict[str, int]]]],
+) -> List[Dict[str, Any]]:
     """Release-QC table of sources whose bounds rejected every value of many stays.
 
-    ``drops`` is ``{concept: {source_table: counts}}`` from
-    ``easyicu.bounds_audit``. A row is a warning only: the values were
-    dropped as ricu drops them, and extraction is never blocked. Rows are
-    sorted by concept and table.
+    ``drops_by_module`` is ``{module: {concept: {source_table: counts}}}`` as
+    the release receipt records it (``easyicu.source_bounds``). A row is a
+    warning only: the values were dropped as ricu drops them, and extraction
+    is never blocked. A concept read by several modules is reported once per
+    source table, from the module that read the most stays. Rows are sorted
+    by concept and table.
     """
+    best: Dict[tuple, tuple] = {}
+    for module in sorted(drops_by_module or {}):
+        for concept, tables in (drops_by_module[module] or {}).items():
+            for table, counts in (tables or {}).items():
+                key = (concept, table)
+                if key not in best or int(counts.get("stays_read", 0)) > int(best[key][1].get("stays_read", 0)):
+                    best[key] = (module, counts)
     rows: List[Dict[str, Any]] = []
-    for concept in sorted(drops or {}):
-        for table in sorted(drops[concept] or {}):
-            counts = drops[concept][table]
-            stays_out = int(counts.get("stays_all_out_of_bounds", 0))
-            stays_read = int(counts.get("stays_read", 0))
-            if stays_out < SOURCE_BOUNDS_WARN_MIN_STAYS or stays_read <= 0:
-                continue
-            fraction = stays_out / stays_read
-            if fraction < SOURCE_BOUNDS_WARN_MIN_FRACTION:
-                continue
-            rows.append({
-                "concept": concept,
-                "source_table": table,
-                "stays_all_out_of_bounds": stays_out,
-                "stays_read": stays_read,
-                "fraction_of_stays": round(fraction, 4),
-                "dropped_values": int(counts.get("dropped_values", 0)),
-                "reason": "declared_bounds_reject_all_values_of_many_stays",
-            })
+    for (concept, table) in sorted(best):
+        module, counts = best[(concept, table)]
+        stays_out = int(counts.get("stays_all_out_of_bounds", 0))
+        stays_read = int(counts.get("stays_read", 0))
+        if stays_out < SOURCE_BOUNDS_WARN_MIN_STAYS or stays_read <= 0:
+            continue
+        fraction = stays_out / stays_read
+        if fraction < SOURCE_BOUNDS_WARN_MIN_FRACTION:
+            continue
+        rows.append({
+            "concept": concept,
+            "source_table": table,
+            "module": module,
+            "stays_all_out_of_bounds": stays_out,
+            "stays_read": stays_read,
+            "fraction_of_stays": round(fraction, 4),
+            "dropped_values": int(counts.get("dropped_values", 0)),
+            "reason": "declared_bounds_reject_all_values_of_many_stays",
+        })
     return rows

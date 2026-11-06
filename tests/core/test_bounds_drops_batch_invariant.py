@@ -10,7 +10,7 @@ dropped when read with ordinary stays (eICU cvp_raw, etco2 on full data).
 
 Every bounded path is checked with one synthetic all-out-of-bounds stay (120
 values) and ordinary stays that each carry one out-of-bounds value: the
-published values and the recorded counts (``easyicu.bounds_audit``) are the
+published values and the recorded counts (``easyicu.source_bounds``) are the
 same read one stay at a time as read all at once. Synthetic rows only.
 """
 
@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.bounds_audit import collect_bounds_drops
+from easyicu.source_bounds import collect_bounds_drops
 from easyicu.concept.aggregation_route import force_raw_aggregation, record_duckdb_routes
 from easyicu.resources import load_dictionary
 from tests.support.urine_raw_source import _load, _source
@@ -102,7 +102,7 @@ def _read(source, names, id_column, stays, *, raw=False, **kwargs):
 def _batch_one_vs_all(source, names, id_column, **kwargs):
     whole, whole_drops, routes = _read(source, names, id_column, range(1, _STAYS + 1), **kwargs)
     parts, part_drops = {name: [] for name in names}, {}
-    from easyicu.bounds_audit import merge_bounds_drops
+    from easyicu.source_bounds import merge_bounds_drops
 
     for stay in range(1, _STAYS + 1):
         values, drops, _ = _read(source, names, id_column, [stay], **kwargs)
@@ -203,13 +203,18 @@ def test_qc_warns_on_a_source_with_many_all_out_of_bounds_stays():
         source_bounds_warnings,
     )
 
+    # Full-eICU counts of 2026-11-06 (cvp_raw, hgb) and this file's synthetic temp.
+    cvp = {"dropped_values": 18299, "stays_all_out_of_bounds": 262, "stays_read": 28698}
     drops = {
-        "cvp_raw": {"vitalperiodic": {"dropped_values": 18299, "stays_all_out_of_bounds": 262, "stays_read": 28698}},
-        "hgb": {"lab": {"dropped_values": 215, "stays_all_out_of_bounds": 126, "stays_read": 189012}},
-        "temp": {"data_float_h": _EXPECTED},
+        "circulatory": {"cvp_raw": {"vitalperiodic": cvp}},
+        "vitals": {"cvp_raw": {"vitalperiodic": {**cvp, "stays_read": 100}}},
+        "blood_gas": {"hgb": {"lab": {"dropped_values": 215, "stays_all_out_of_bounds": 126, "stays_read": 189012}}},
+        "labs": {"temp": {"data_float_h": _EXPECTED}},
     }
     rows = source_bounds_warnings(drops)
-    assert [(r["concept"], r["source_table"]) for r in rows] == [("cvp_raw", "vitalperiodic")]
+    assert [(r["concept"], r["source_table"], r["module"]) for r in rows] == [
+        ("cvp_raw", "vitalperiodic", "circulatory"),
+    ]
     assert rows[0]["stays_all_out_of_bounds"] >= SOURCE_BOUNDS_WARN_MIN_STAYS
 
 
@@ -267,5 +272,69 @@ def test_export_bytes_and_manifest_counts_do_not_depend_on_batch_size(tmp_path):
     assert published[1] == published[_STAYS]
     _sha, temp_status, receipt, qc = published[1]
     assert temp_status["source_bounds"] == {"data_float_h": _EXPECTED}
-    assert receipt["temp"] == {"data_float_h": _EXPECTED}
+    assert receipt["vitals"]["temp"] == {"data_float_h": _EXPECTED}
     assert qc == {"source_bounds_suspect": []}  # one stay is below the warning floor
+
+
+def test_a_failed_batch_and_its_resume_count_each_stay_once(tmp_path, monkeypatch):
+    """A batch that fails mid-load commits no counts; the resumed run sums the ledger."""
+    from easyicu.api import extraction
+    from easyicu.api.concepts import clear_global_loader
+
+    source = _sic(tmp_path / "sic")
+    kwargs = dict(
+        data_path=str(source.base_path), database="sic", concepts=["temp", "spo2"],
+        verbose=False, merge=True, concept_workers=1, _defer_empty_columns_to_arrow=True,
+    )
+    cohort = {"CaseID": list(range(1, _STAYS + 1))}
+
+    def stream(output_dir):
+        clear_global_loader()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return extraction._stream_module_batches_to_parquet(
+            "vitals", ["temp", "spo2"], dict(kwargs), cohort, 2, str(output_dir),
+        )
+
+    clean = stream(tmp_path / "clean")["source_bounds"]
+    assert clean["temp"] == {"data_float_h": _EXPECTED}
+
+    real = extraction._load_stream_module_batch
+    calls = {"n": 0}
+
+    def fail_second_batch_once(*args, **kw):
+        calls["n"] += 1
+        result = real(*args, **kw)  # the reads are made (and counted) ...
+        if calls["n"] == 2:
+            raise MemoryError("synthetic")  # ... then the batch fails
+        return result
+
+    monkeypatch.setattr(extraction, "_load_stream_module_batch", fail_second_batch_once)
+    with pytest.raises(MemoryError):
+        stream(tmp_path / "resumed")
+    resumed = stream(tmp_path / "resumed")
+    assert calls["n"] == 4  # batch 2 ran twice, batch 1 was not redone
+    assert resumed["source_bounds"] == clean
+    clear_global_loader()
+
+
+def test_isolated_batch_processes_hand_their_counts_back(tmp_path, monkeypatch):
+    from easyicu.api import extraction
+    from easyicu.api.concepts import clear_global_loader
+
+    source = _sic(tmp_path / "sic")
+    kwargs = dict(
+        data_path=str(source.base_path), database="sic", concepts=["temp", "spo2"],
+        verbose=False, merge=True, concept_workers=1, _defer_empty_columns_to_arrow=True,
+    )
+    cohort = {"CaseID": list(range(1, _STAYS + 1))}
+    monkeypatch.setattr(extraction, "_requires_isolated_stream_batch", lambda *args: True)
+    out = tmp_path / "isolated"
+    out.mkdir()
+    clear_global_loader()
+    info = extraction._stream_module_batches_to_parquet(
+        "vitals", ["temp", "spo2"], kwargs, cohort, 2, str(out),
+    )
+    clear_global_loader()
+    assert info["batch_process_isolation"] is True
+    assert info["source_bounds"]["temp"] == {"data_float_h": _EXPECTED}
+    assert not list(out.glob(".*.bounds.json"))

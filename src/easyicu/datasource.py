@@ -3171,7 +3171,7 @@ def load_bucketed_table_aggregated(
     itemid_col: Optional[str] = None,
     retain_source_time: bool = False,
     icu_window: Optional["IcuEpisodeWindow"] = None,
-    bounds_audit_concept: Optional[str] = None,
+    source_bounds_concept: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -3425,7 +3425,7 @@ def load_bucketed_table_aggregated(
     # - value_transform (fahr_to_cels/percent_as_numeric): raw column 可能是 VARCHAR 或不同单位
     # - _has_inline_convert (binary_op(*, factor)): raw 值单位与 min/max 不同（如 µmol/L vs mg/dL）
     # 对这些路径不能在 WHERE 中按 raw column 过滤；下方会先转换每个原始值，
-    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 bounds_audit 记录。
+    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 source_bounds 记录。
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     
@@ -4147,11 +4147,11 @@ def load_bucketed_table_aggregated(
             # Values outside the declared bounds are dropped per row, as in
             # ricu, whatever shares this read; the counts are recorded per
             # stay (lead-r13 bounds ruling: no refusal, no unit guess).
-            from .bounds_audit import record_read_counts
+            from .source_bounds import record_read_counts
 
             record_read_counts(
                 database=db_name,
-                concept=bounds_audit_concept or str(value_column),
+                concept=source_bounds_concept or str(value_column),
                 table=table_name,
                 stays=patient_ids,
                 frame=df,
@@ -4283,7 +4283,7 @@ def load_bucketed_table_multi_aggregated(
 
     # ── Build CASE WHEN select expressions ─────────────────
     # A bounded concept also counts its values before and after the bounds;
-    # the per-stay counts are recorded (bounds_audit), never used to decide.
+    # the per-stay counts are recorded (source_bounds), never used to decide.
     _multi_raw_prefix = "__easyicu_multi_raw_non_null_"
     _multi_bounded_prefix = "__easyicu_multi_bounded_non_null_"
     _multi_bounded = []  # (concept, diagnostic suffix, bounds)
@@ -4643,7 +4643,7 @@ def load_bucketed_table_multi_aggregated(
                     df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
                 )
     if _multi_bounded:
-        from .bounds_audit import record_read_counts
+        from .source_bounds import record_read_counts
 
         _diagnostic_columns = []
         _audit_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
@@ -4879,7 +4879,7 @@ def load_wide_table_aggregated(
     # 🔧 FIX: 使用 CASE WHEN 实现 per-column filter_bounds（R ricu pre-aggregation filtering）
     # 将超出 [min, max] 范围的值替换为 NULL，这样 MEDIAN 会忽略它们
     # A bounded column also counts its values before and after the bounds; the
-    # per-stay counts are recorded (bounds_audit), never used to decide.
+    # per-stay counts are recorded (source_bounds), never used to decide.
     _wide_raw_prefix = "__easyicu_wide_raw_non_null_"
     _wide_bounded_prefix = "__easyicu_wide_bounded_non_null_"
     _wide_bounded = []  # (column, position, (min, max))
@@ -5027,7 +5027,7 @@ def load_wide_table_aggregated(
                     df[_column], "mean" if duckdb_agg == "AVG" else "sum"
                 )
     if _wide_bounded:
-        from .bounds_audit import record_read_counts
+        from .source_bounds import record_read_counts
 
         _diagnostic_columns = []
         _audit_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)

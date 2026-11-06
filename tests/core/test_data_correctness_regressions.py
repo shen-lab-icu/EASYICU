@@ -891,7 +891,7 @@ def test_transformed_bounds_drop_and_count_when_all_values_are_out_of_bounds(tmp
         },
     )
 
-    from easyicu.bounds_audit import collect_bounds_drops
+    from easyicu.source_bounds import collect_bounds_drops
 
     with collect_bounds_drops(tmp_path) as drops:
         result = load_bucketed_table_aggregated(
@@ -942,7 +942,7 @@ def test_untransformed_bounds_drop_and_count_when_all_values_are_out_of_bounds(
         },
     )
 
-    from easyicu.bounds_audit import collect_bounds_drops
+    from easyicu.source_bounds import collect_bounds_drops
 
     with collect_bounds_drops(tmp_path) as drops:
         result = load_bucketed_table_aggregated(
@@ -953,7 +953,7 @@ def test_untransformed_bounds_drop_and_count_when_all_values_are_out_of_bounds(
             patient_ids=[1],
             value_min=32,
             value_max=42,
-            bounds_audit_concept="temp",
+            source_bounds_concept="temp",
         )
     assert result.empty
     assert drops == {"temp": {"labs": {

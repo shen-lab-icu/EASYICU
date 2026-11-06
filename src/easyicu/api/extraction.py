@@ -19,6 +19,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 import pandas as pd
 
 from ..base import BaseICULoader, detect_database_type, get_default_data_path
+from ..source_bounds import bounds_scope, bounds_totals, merge_bounds_drops
 from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
@@ -2722,6 +2723,11 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     return result
 
 
+def _stream_batch_bounds_sidecar(part: Path) -> Path:
+    """Where an isolated batch process leaves its bounds counts for the parent."""
+    return Path(part).with_name(f".{Path(part).name}.bounds.json")
+
+
 def _load_stream_module_batch(
     load_concepts_fn,
     *,
@@ -2796,22 +2802,28 @@ def _write_isolated_stream_batch(
     batch = None
     frame = None
     table = None
+    # This batch's bounds counts go back to the parent beside its part, and
+    # only when the batch succeeded (a killed child leaves none).
+    bounds_sidecar = _stream_batch_bounds_sidecar(target)
+    bounds_sidecar.unlink(missing_ok=True)
     try:
-        batch = _load_stream_module_batch(
-            _lc,
-            module_name=module_name,
-            concepts=concepts,
-            load_kwargs=load_kwargs,
-            patient_ids=patient_ids,
-            loader=None,
-            pyarrow_module=pa,
-        )
+        with bounds_scope() as bounds_records:
+            batch = _load_stream_module_batch(
+                _lc,
+                module_name=module_name,
+                concepts=concepts,
+                load_kwargs=load_kwargs,
+                patient_ids=patient_ids,
+                loader=None,
+                pyarrow_module=pa,
+            )
         frame = _normalise_module_frame_for_parquet(
             batch,
             concepts,
             reorder=False,
         )
         if frame is None:
+            _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
             return
         id_col, requested_ids = next(iter(patient_ids.items()))
         if id_col in frame.columns:
@@ -2831,6 +2843,7 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
+        _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
     except BaseException as exc:
         # The parent classifies the exit from evidence, not from text: say
         # whether a memory exception (by type) stopped this child.
@@ -3315,6 +3328,7 @@ def _stream_module_batches_to_parquet(
             frame = None
             output_rows = 0
             part_name = None
+            batch_bounds: Dict = {}
             batch_part = destination.with_name(f".{module_name}.batch-{index:05d}.parquet")
             if batch_part.exists() or batch_part.is_symlink():
                 # An uncommitted part of a killed attempt (the ledger did not
@@ -3413,21 +3427,30 @@ def _stream_module_batches_to_parquet(
                         if evidence:
                             raise StreamBatchMemoryExhausted(message, **failure)
                         raise StreamBatchWorkerKilled(message, failure_class, **failure)
+                    bounds_sidecar = _stream_batch_bounds_sidecar(batch_part)
+                    if not bounds_sidecar.is_file():
+                        raise RuntimeError(
+                            f"{module_name}: isolated batch {index} left no bounds counts"
+                        )
+                    batch_bounds = json.loads(bounds_sidecar.read_text(encoding="utf-8"))
+                    bounds_sidecar.unlink()
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
                         if schema is None:
                             schema = pq.read_schema(batch_part)
                 else:
-                    batch = _load_stream_module_batch(
-                        _lc,
-                        module_name=module_name,
-                        concepts=concepts,
-                        load_kwargs=batch_load_kwargs,
-                        patient_ids={id_col: batch_ids},
-                        loader=loader,
-                        pyarrow_module=pa,
-                    )
+                    with bounds_scope() as bounds_records:
+                        batch = _load_stream_module_batch(
+                            _lc,
+                            module_name=module_name,
+                            concepts=concepts,
+                            load_kwargs=batch_load_kwargs,
+                            patient_ids={id_col: batch_ids},
+                            loader=loader,
+                            pyarrow_module=pa,
+                        )
+                    batch_bounds = bounds_totals(bounds_records)
                     frame = _normalise_module_frame_for_parquet(
                         batch,
                         concepts,
@@ -3473,6 +3496,8 @@ def _stream_module_batches_to_parquet(
                     "output_rows": output_rows,
                     "batch_process_isolation": isolate_batch_process,
                     "part": part_name,
+                    # Committed with the batch: a resumed run sums these.
+                    "source_bounds": batch_bounds,
                     **batch_memory,
                 }
             )
@@ -3541,8 +3566,12 @@ def _stream_module_batches_to_parquet(
         "rows": rows,
         "concepts": [name for name in concepts if name in produced_concepts],
         "stream_batches": [
-            {k: v for k, v in b.items() if k != "part"} for b in batch_telemetry
+            {k: v for k, v in b.items() if k not in ("part", "source_bounds")}
+            for b in batch_telemetry
         ],
+        "source_bounds": merge_bounds_drops(
+            *(b.get("source_bounds") for b in batch_telemetry)
+        ),
         "stream_resume_events": resume_events,
         "initial_batch_size": int(initial_batch_size),
         "final_planned_batch_size": current_batch_size,
@@ -3625,6 +3654,10 @@ def _run_module_extraction(
     result = None
     memory_exhausted = False
     stream_failure = None
+    # Bounds counts of a whole-module load (a streamed module commits its
+    # own per batch); a retried load starts its counts afresh.
+    module_bounds_scope = bounds_scope()
+    module_bounds_records = module_bounds_scope.__enter__()
     try:
         if stream_output_batches:
             if not patient_ids_filter or not batch_size:
@@ -3677,6 +3710,7 @@ def _run_module_extraction(
                 f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
             )
             kwargs["batch_size"] = fallback_bs
+            module_bounds_records.clear()
             try:
                 result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
@@ -3703,6 +3737,8 @@ def _run_module_extraction(
         # is retried like a memory-killed worker; message text is not read.
         memory_exhausted = _is_memory_exception(e)
         result = {}
+    finally:
+        module_bounds_scope.__exit__(None, None, None)
 
     # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
     # 与 web 端(dataio.py)完全一致的成熟路径。**不再自造合并**——避免 endtime 列冲突、
@@ -3755,6 +3791,11 @@ def _run_module_extraction(
         "elapsed_sec": round(elapsed, 1),
         **memory_stats,
     }
+    manifest["source_bounds"] = (
+        dict(stream_info.get("source_bounds") or {})
+        if stream_info is not None
+        else ({} if errors else bounds_totals(module_bounds_records))
+    )
     if stream_info is not None:
         manifest["stream_batches"] = stream_info.get("stream_batches", [])
         manifest["initial_batch_size"] = stream_info.get("initial_batch_size")
@@ -7814,9 +7855,10 @@ def _publish_native_export_v2(
                     bounds_audit[concept].get("stays_all_out_of_bounds", 0)
                 ),
                 # Source values the loaders dropped by the declared bounds,
-                # per source table (bounds_audit); counts only.
+                # per source table (source_bounds); counts only.
                 "source_bounds": dict(
-                    (result.get("source_bounds_drops") or {}).get(concept) or {}
+                    ((result["modules"].get(module) or {}).get("source_bounds") or {}).get(concept)
+                    or {}
                 ),
             }
             if concept in semantic_audit:
@@ -7997,7 +8039,10 @@ def _publish_native_export_v2(
     # carries the totals and the release QC warns on suspect sources.
     from ..io.data_quality import source_bounds_warnings
 
-    manifest["source_bounds_drops"] = dict(result.get("source_bounds_drops") or {})
+    manifest["source_bounds_drops"] = {
+        module: dict((result["modules"].get(module) or {}).get("source_bounds") or {})
+        for module in modules
+    }
     manifest["qc_warnings"] = {
         "source_bounds_suspect": source_bounds_warnings(manifest["source_bounds_drops"]),
     }
@@ -8212,17 +8257,6 @@ def extract_database(
     os.close(_fallback_handle)
     previous_fallback_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
     os.environ[SCAN_FALLBACK_LOG_ENV] = scan_fallback_log
-    # Source values dropped by declared concept bounds, recorded per read by
-    # every bounded loader here and in workers, become receipt facts:
-    # result["source_bounds_drops"], the module manifests and the release QC.
-    from ..bounds_audit import BOUNDS_DROP_LOG_ENV, read_bounds_drop_log
-
-    _bounds_handle, bounds_drop_log = tempfile.mkstemp(
-        prefix="easyicu_bounds_drops_", suffix=".jsonl"
-    )
-    os.close(_bounds_handle)
-    previous_bounds_log = os.environ.get(BOUNDS_DROP_LOG_ENV)
-    os.environ[BOUNDS_DROP_LOG_ENV] = bounds_drop_log
 
     # 确定数据路径
     if data_path is None:
@@ -8515,6 +8549,7 @@ def extract_database(
             0.0,
         )
         mod_result["stream_batches"] = manifest.get("stream_batches", [])
+        mod_result["source_bounds"] = dict(manifest.get("source_bounds") or {})
         mod_result["batch_process_isolation"] = manifest.get(
             "batch_process_isolation",
             False,
@@ -8535,6 +8570,7 @@ def extract_database(
             "errors": mod_result["errors"],
             "warnings": mod_result["warnings"],
             "bounds": mod_result["bounds"],
+            "source_bounds": mod_result["source_bounds"],
             "elapsed_sec": mod_result["elapsed"],
             "start_rss_mb": manifest.get("start_rss_mb", 0.0),
             "peak_rss_mb": mod_result["peak_rss_mb"],
@@ -9075,12 +9111,6 @@ def extract_database(
     else:
         os.environ[SCAN_FALLBACK_LOG_ENV] = previous_fallback_log
     os.unlink(scan_fallback_log)
-    result["source_bounds_drops"] = read_bounds_drop_log(bounds_drop_log)
-    if previous_bounds_log is None:
-        os.environ.pop(BOUNDS_DROP_LOG_ENV, None)
-    else:
-        os.environ[BOUNDS_DROP_LOG_ENV] = previous_bounds_log
-    os.unlink(bounds_drop_log)
 
     if native_export_v2:
         assert output_dir is not None

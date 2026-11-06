@@ -3346,7 +3346,7 @@ class ConceptResolver:
                             # Clip on the raw event hour before the floor,
                             # with the same window the pandas path applies.
                             icu_window=_duckdb_icu_window(),
-                            bounds_audit_concept=concept_name,
+                            source_bounds_concept=concept_name,
                         )
                         note_duckdb_route("bucketed_single")
                         
@@ -3681,11 +3681,11 @@ class ConceptResolver:
                                 # The bounds sit in WHERE, so out-of-bounds values
                                 # never reach the result: count this read's values
                                 # and in-bounds values per stay, and record them
-                                # like every other bounded path (bounds_audit).
+                                # like every other bounded path (source_bounds).
                                 _wt_count_query = None
-                                from ..bounds_audit import BOUNDS_DROP_LOG_ENV as _bounds_log_env
+                                from ..source_bounds import scope_active as _bounds_scope_active
 
-                                if _wt_bounds and os.environ.get(_bounds_log_env):
+                                if _wt_bounds and _bounds_scope_active():
                                     _wt_in_bounds = _wt_bounds.removeprefix(' AND ')
                                     _wt_count_query = f"""
                                         SELECT {_wt_id_col}, COUNT(*) AS raw,
@@ -3714,7 +3714,7 @@ class ConceptResolver:
                                     _wt_window_sql.close()
                                 note_duckdb_route("wide_single_column")
                                 if _wt_counts is not None:
-                                    from ..bounds_audit import record_read_counts
+                                    from ..source_bounds import record_read_counts
 
                                     record_read_counts(
                                         database=db_name, concept=concept_name,
@@ -6032,12 +6032,12 @@ class ConceptResolver:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
                     # Out-of-bounds values are dropped per row below, as in
                     # ricu; this read's per-stay counts are recorded first
-                    # (bounds_audit). Rows the SQL already bounded are in range
+                    # (source_bounds). Rows the SQL already bounded are in range
                     # by construction and were counted by their SQL owner.
-                    from ..bounds_audit import BOUNDS_DROP_LOG_ENV as _bounds_log_env
+                    from ..source_bounds import scope_active as _bounds_scope_active
 
-                    if os.environ.get(_bounds_log_env) and id_columns and id_columns[0] in combined.columns:
-                        from ..bounds_audit import record_read_counts
+                    if _bounds_scope_active() and id_columns and id_columns[0] in combined.columns:
+                        from ..source_bounds import record_read_counts
 
                         _unbounded = ~_sql_bounded_rows.reindex(combined.index, fill_value=False).astype(bool)
                         _candidates = combined.loc[_unbounded, [id_columns[0], concept_name]]
