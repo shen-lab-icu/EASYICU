@@ -52,16 +52,19 @@ BOUNDS_UNIT_SUSPECT_MIN_VALUES = 100
 
 
 def bounds_unit_suspect(
-    raw_non_null: int, bounded_non_null: int, bounded_aggregate_non_null: int = 0,
+    nonzero_values: int, bounded_non_null: int, bounded_aggregate_non_null: int = 0,
 ) -> bool:
-    """At least 100 values in one read and none within the declared bounds.
+    """At least 100 non-zero values in one read and none within the declared bounds.
 
     The values then contradict the declared bounds as a whole (another unit),
-    and dropping them would publish the concept as absent. Every bounded read
-    path decides with this one rule (lead-r13 sweep #14; Codex delta4 V6).
+    and dropping them would publish the concept as absent. Zeros are not
+    counted: every unit conversion maps 0 to 0, so a zero carries no unit
+    evidence (eICU monitors record 0 mmHg end-tidal CO2 for no signal, and a
+    50-stay read can hold only those). Every bounded read path decides with
+    this one rule (lead-r13 sweep #14; Codex delta4 V6).
     """
     return bool(
-        raw_non_null >= BOUNDS_UNIT_SUSPECT_MIN_VALUES
+        nonzero_values >= BOUNDS_UNIT_SUSPECT_MIN_VALUES
         and bounded_non_null == 0
         and bounded_aggregate_non_null == 0
     )
@@ -71,21 +74,21 @@ def refuse_bounds_unit_suspect(
     *,
     quantity: str,
     site: str,
-    raw_non_null: int,
+    nonzero_values: int,
     bounded_non_null: int,
     bounded_aggregate_non_null: int = 0,
     value_min=None,
     value_max=None,
 ) -> None:
     """Raise ``UndeclaredUnitError(bounds_unit_suspect)`` when the rule holds."""
-    if bounds_unit_suspect(raw_non_null, bounded_non_null, bounded_aggregate_non_null):
+    if bounds_unit_suspect(nonzero_values, bounded_non_null, bounded_aggregate_non_null):
         raise UndeclaredUnitError(
             reason="bounds_unit_suspect",
             quantity=str(quantity),
             site=site,
             detail=(
-                f"{int(raw_non_null)} values in this batch and none within the declared "
-                f"bounds [{value_min}, {value_max}]"
+                f"{int(nonzero_values)} values in this batch (zeros not counted) and "
+                f"none within the declared bounds [{value_min}, {value_max}]"
             ),
         )
 

@@ -2241,7 +2241,7 @@ def _enforce_concept_bounds(df, concept_name):
     refuse_bounds_unit_suspect(
         quantity=str(concept_name),
         site="api.extraction._enforce_concept_bounds",
-        raw_non_null=int(numeric.sum()),
+        nonzero_values=int((numeric & (v != 0)).sum()),
         bounded_non_null=int((numeric & in_range).sum()),
         value_min=mn,
         value_max=mx,
@@ -6976,7 +6976,7 @@ def _enforce_native_export_concept_bounds(
             refuse_bounds_unit_suspect(
                 quantity=str(concept),
                 site="api.extraction._enforce_native_export_concept_bounds",
-                raw_non_null=present,
+                nonzero_values=int((frame[concept].notna() & (frame[concept] != 0)).sum()),
                 bounded_non_null=present - excluded,
                 value_min=minimum,
                 value_max=maximum,

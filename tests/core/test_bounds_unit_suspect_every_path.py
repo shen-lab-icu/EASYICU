@@ -5,7 +5,10 @@ values carry another unit. The single-concept SQL owner refused such a read
 with ``UndeclaredUnitError(bounds_unit_suspect)``; the multi-concept and wide
 SQL owners, the raw pandas path and the native export contract dropped the same
 values and published the concept as absent. The rule now lives in
-``utils.declared_units`` and every path calls it. Synthetic rows only.
+``utils.declared_units`` and every path calls it. Zeros carry no unit (every
+conversion maps 0 to 0) and are not counted: eICU monitors record 0 mmHg
+end-tidal CO2 for no signal, and the eICU demo at batch 50 holds a read of
+only those. Synthetic rows only.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ _SIC_SPO2 = 710  # spo2, bounds [50, 100] %
 _SIC_ETCO2 = 716  # etco2, bounds [10, 60] mmHg
 
 
-def _sic(root, *, temp=98.6):
+def _sic(root, *, temp=98.6, etco2=38.0):
     ids = np.arange(1, _N + 1)
     cases = pd.DataFrame({
         "CaseID": ids, "PatientID": ids, "ICUOffset": 0.0,
@@ -43,7 +46,7 @@ def _sic(root, *, temp=98.6):
     rows = pd.concat([
         pd.DataFrame({"CaseID": ids, "DataID": _SIC_TEMP, "Offset": 2.5 * 3600, "Val": temp}),
         pd.DataFrame({"CaseID": ids, "DataID": _SIC_SPO2, "Offset": 2.5 * 3600, "Val": 96.0}),
-        pd.DataFrame({"CaseID": ids, "DataID": _SIC_ETCO2, "Offset": 2.5 * 3600, "Val": 38.0}),
+        pd.DataFrame({"CaseID": ids, "DataID": _SIC_ETCO2, "Offset": 2.5 * 3600, "Val": etco2}),
     ], ignore_index=True)
     return _source(root, "sic", cases=cases, data_float_h=rows)
 
@@ -59,7 +62,7 @@ def _eicu(root):
         # pap_sys bounds [0, 120] mmHg: 500 is another unit; pap_mean/pap_dia are valid.
         vitalperiodic=pd.DataFrame({
             "vitalperiodicid": ids, "patientunitstayid": ids, "observationoffset": 150,
-            "pasystolic": 500.0, "padiastolic": 15.0, "pamean": 30.0,
+            "pasystolic": 500.0, "padiastolic": 15.0, "pamean": 30.0, "etco2": 0.0,
         }),
     )
 
@@ -90,17 +93,17 @@ def _values(source, names):
     (BOUNDS_UNIT_SUSPECT_MIN_VALUES, 1, False),
     (0, 0, False),
 ])
-def test_the_rule_needs_100_values_and_none_in_bounds(raw, bounded, refused):
+def test_the_rule_needs_100_nonzero_values_and_none_in_bounds(raw, bounded, refused):
     assert bounds_unit_suspect(raw, bounded) is refused
     assert bounds_unit_suspect(raw, 0, 1) is False  # an in-bounds aggregate survived
     if refused:
         with pytest.raises(UndeclaredUnitError) as caught:
-            refuse_bounds_unit_suspect(quantity="temp", site="t", raw_non_null=raw,
+            refuse_bounds_unit_suspect(quantity="temp", site="t", nonzero_values=raw,
                                        bounded_non_null=bounded, value_min=32, value_max=42)
         assert caught.value.reason == "bounds_unit_suspect"
         assert caught.value.quantity == "temp"
     else:
-        refuse_bounds_unit_suspect(quantity="temp", site="t", raw_non_null=raw,
+        refuse_bounds_unit_suspect(quantity="temp", site="t", nonzero_values=raw,
                                    bounded_non_null=bounded)
 
 
@@ -176,3 +179,32 @@ def test_native_export_contract_refuses_instead_of_nulling_every_value():
     )
     assert int(mixed["temp"].notna().sum()) == _N - 3
     assert audit["temp"]["excluded_out_of_bounds"] == 3
+
+
+def test_zeros_alone_are_not_unit_evidence_on_any_path(tmp_path):
+    # 150 zeros of etco2 (bounds [10, 60] mmHg) and nothing else: dropped as
+    # implausible on every path, exactly as before the shared rule.
+    source = _sic(tmp_path / "sic", etco2=0.0)
+    single, _ = _outcome(source, ["etco2"])
+    multi, multi_routes = _outcome(source, ["etco2", "spo2"])
+    raw, _ = _outcome(source, ["etco2"], raw=True)
+    assert single == ("published", {"etco2": 0})
+    assert multi == ("published", {"etco2": 0, "spo2": _N})
+    assert multi_routes == {"long_table_batch": 1}
+    assert raw == ("published", {"etco2": 0})
+
+    eicu = _eicu(tmp_path / "eicu")
+    wide, wide_routes = _outcome(eicu, ["etco2", "pap_mean"])
+    eicu_raw, _ = _outcome(eicu, ["etco2"], raw=True)
+    assert wide == ("published", {"etco2": 0, "pap_mean": _N})
+    assert wide_routes == {"wide_table_batch": 1}
+    assert eicu_raw == ("published", {"etco2": 0})
+
+    from easyicu.api.extraction import _enforce_native_export_concept_bounds
+
+    zeros = pd.DataFrame({"etco2": np.zeros(_N)})
+    audit = _enforce_native_export_concept_bounds(
+        zeros, requested_concepts=["etco2"], dictionary=load_dictionary(include_sofa2=True),
+    )
+    assert int(zeros["etco2"].notna().sum()) == 0
+    assert audit["etco2"]["excluded_out_of_bounds"] == _N

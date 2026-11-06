@@ -3446,6 +3446,7 @@ def load_bucketed_table_aggregated(
     # 并且不按 itemid 分组（R ricu 行为：跨 itemid 取 median）
     _raw_count_col = "__easyicu_raw_transformed_non_null"
     _bounded_count_col = "__easyicu_bounded_transformed_non_null"
+    _nonzero_count_col = "__easyicu_raw_transformed_nonzero"
     _needs_bounds_diagnostics = bool(
         value_min is not None or value_max is not None
     )
@@ -3481,6 +3482,7 @@ def load_bucketed_table_aggregated(
             select += (
                 f", COUNT({expr}) as {_raw_count_col}"
                 f", COUNT({bounded_expr}) as {_bounded_count_col}"
+                f", COUNT(CASE WHEN ({expr}) <> 0 THEN 1 END) as {_nonzero_count_col}"
             )
         return select, bounded_agg, unbounded_agg
     
@@ -4143,13 +4145,16 @@ def load_bucketed_table_aggregated(
             bounded_aggregate_non_null = int(
                 pd.to_numeric(df[value_column], errors="coerce").notna().sum()
             )
+            nonzero_values = int(
+                pd.to_numeric(df[_nonzero_count_col], errors="coerce").fillna(0).sum()
+            )
             from .utils.declared_units import (
                 bounds_unit_suspect,
                 refuse_bounds_unit_suspect,
             )
 
             unit_suspect = bounds_unit_suspect(
-                raw_non_null, bounded_non_null, bounded_aggregate_non_null
+                nonzero_values, bounded_non_null, bounded_aggregate_non_null
             )
             unbounded_retry = False
             # At least 100 values in this batch and none within the declared
@@ -4163,13 +4168,16 @@ def load_bucketed_table_aggregated(
             refuse_bounds_unit_suspect(
                 quantity=str(value_column),
                 site=f"datasource.load_bucketed_table_aggregated[{db_name}.{table_name}]",
-                raw_non_null=raw_non_null,
+                nonzero_values=nonzero_values,
                 bounded_non_null=bounded_non_null,
                 bounded_aggregate_non_null=bounded_aggregate_non_null,
                 value_min=value_min,
                 value_max=value_max,
             )
-            df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
+            df = df.drop(
+                columns=[_raw_count_col, _bounded_count_col, _nonzero_count_col],
+                errors="ignore",
+            )
             bounds_diagnostics = {
                 "bounds_raw_transformed_non_null": raw_non_null,
                 "bounds_bounded_transformed_non_null": bounded_non_null,
@@ -4299,7 +4307,7 @@ def load_bucketed_table_multi_aggregated(
     # the same bounds-unit-suspect rule as the single-concept owner decides it
     # here (Codex delta4 V6): sharing a table with a valid concept must not
     # turn a refused read into an absent result.
-    _multi_raw_prefix = "__easyicu_multi_raw_non_null_"
+    _multi_raw_prefix = "__easyicu_multi_raw_nonzero_"
     _multi_bounded_prefix = "__easyicu_multi_bounded_non_null_"
     _multi_bounded = []  # (concept, diagnostic suffix, bounds)
 
@@ -4323,8 +4331,8 @@ def load_bucketed_table_multi_aggregated(
             )
             if bounds.get("min") is not None or bounds.get("max") is not None:
                 exprs.append(
-                    f"COUNT(CASE WHEN {item_match} THEN {prefix}{value_column} END) "
-                    f"AS {_multi_raw_prefix}{position}"
+                    f"COUNT(CASE WHEN {item_match} AND {prefix}{value_column} <> 0 "
+                    f"THEN {prefix}{value_column} END) AS {_multi_raw_prefix}{position}"
                 )
                 exprs.append(
                     f"COUNT(CASE WHEN {case_when} THEN {prefix}{value_column} END) "
@@ -4670,7 +4678,7 @@ def load_bucketed_table_multi_aggregated(
             refuse_bounds_unit_suspect(
                 quantity=_concept,
                 site=f"datasource.load_bucketed_table_multi_aggregated[{db_name}.{table_name}]",
-                raw_non_null=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
+                nonzero_values=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
                 bounded_non_null=int(
                     pd.to_numeric(df[_bounded_col], errors="coerce").fillna(0).sum()
                 ),
@@ -4902,7 +4910,7 @@ def load_wide_table_aggregated(
     # A bounded column also counts its values before and after the bounds; the
     # same bounds-unit-suspect rule as the single-concept owner decides it
     # (Codex delta4 V6).
-    _wide_raw_prefix = "__easyicu_wide_raw_non_null_"
+    _wide_raw_prefix = "__easyicu_wide_raw_nonzero_"
     _wide_bounded_prefix = "__easyicu_wide_bounded_non_null_"
     _wide_bounded = []  # (column, position, (min, max))
     for _position, _column in enumerate(value_columns):
@@ -4923,7 +4931,9 @@ def load_wide_table_aggregated(
                 filter_expr = " AND ".join(conditions)
                 agg_parts.append(f"{_wide_agg(f'CASE WHEN {filter_expr} THEN {col} END')} as {col}")
                 if conditions:
-                    agg_parts.append(f"COUNT({col}) as {_wide_raw_prefix}{position}")
+                    agg_parts.append(
+                        f"COUNT(CASE WHEN {col} <> 0 THEN {col} END) as {_wide_raw_prefix}{position}"
+                    )
                     agg_parts.append(
                         f"COUNT(CASE WHEN {filter_expr} THEN {col} END) "
                         f"as {_wide_bounded_prefix}{position}"
@@ -4975,7 +4985,8 @@ def load_wide_table_aggregated(
                 )
                 if conditions:
                     community_agg_parts.append(
-                        f"COUNT({numeric_column}) AS {_wide_raw_prefix}{position}"
+                        f"COUNT(CASE WHEN {numeric_column} <> 0 THEN {numeric_column} END) "
+                        f"AS {_wide_raw_prefix}{position}"
                     )
                     community_agg_parts.append(
                         f"COUNT(CASE WHEN {condition} THEN {numeric_column} END) "
@@ -5059,7 +5070,7 @@ def load_wide_table_aggregated(
             refuse_bounds_unit_suspect(
                 quantity=_column,
                 site=f"datasource.load_wide_table_aggregated[{db_name}.{table_name}]",
-                raw_non_null=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
+                nonzero_values=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
                 bounded_non_null=int(
                     pd.to_numeric(df[_bounded_col], errors="coerce").fillna(0).sum()
                 ),

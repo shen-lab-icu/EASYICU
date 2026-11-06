@@ -5998,7 +5998,7 @@ class ConceptResolver:
                     refuse_bounds_unit_suspect(
                         quantity=concept_name,
                         site="concept.ConceptResolver._load_single_concept[filter_bounds]",
-                        raw_non_null=int(_bound_candidates.notna().sum()),
+                        nonzero_values=int((_bound_candidates.notna() & (_bound_candidates != 0)).sum()),
                         bounded_non_null=int(_within.sum()),
                         value_min=definition.minimum,
                         value_max=definition.maximum,
