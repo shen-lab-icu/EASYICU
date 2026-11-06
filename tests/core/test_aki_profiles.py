@@ -926,3 +926,71 @@ def test_source_native_profile_never_overwrites_canonical_column_name():
     assert "aki_stage_source_native" in result
     assert "aki_stage_canonical" not in result
     assert "aki_stage" not in result
+
+
+def test_eicu_profile_without_urine_rows_is_not_evaluable_unless_strict():
+    """A batch without urine output rows has no eICU component to publish."""
+
+    creatinine = pd.DataFrame(
+        {"patientunitstayid": [1], "labresultoffset": [60], "crea": [1.0]}
+    )
+    no_urine = pd.DataFrame(
+        columns=["patientunitstayid", "labresultoffset", "cellvaluenumeric"]
+    )
+
+    result = apply_aki_profile(
+        EICU,
+        crea_df=creatinine,
+        urine_df=no_urine,
+        id_col="patientunitstayid",
+        time_col="labresultoffset",
+        urine_col="cellvaluenumeric",
+    )
+
+    assert result["aki_stage_source_native"].isna().all()
+    assert (
+        result["aki_source_native_status"]
+        .eq("not_evaluable_required_source_missing")
+        .all()
+    )
+    # The declared eICU mode publishes no reason column; the status carries it.
+    assert "aki_source_native_reason" not in result
+    assert set(result).issubset(
+        {"patientunitstayid", "labresultoffset"}
+        | published_source_native_outputs(EICU)
+    )
+    with pytest.raises(AKIProfilePrerequisiteError):
+        apply_aki_profile(
+            EICU,
+            crea_df=creatinine,
+            urine_df=no_urine,
+            id_col="patientunitstayid",
+            time_col="labresultoffset",
+            urine_col="cellvaluenumeric",
+            strict_prerequisites=True,
+        )
+
+
+def test_a_batch_without_any_component_row_bundles_zero_rows():
+    """Stays with no creatinine, urine or RRT rows carry no AKI evidence.
+
+    The components' schema still keys the bundle; only a call without any
+    component frame lacks the prerequisite.
+    """
+
+    keys = ["patientunitstayid", "labresultoffset"]
+    bundle = build_renal_aki_bundle(
+        "eicu",
+        crea_df=pd.DataFrame(columns=[*keys, "crea"]),
+        urine_df=pd.DataFrame(columns=[*keys, "urine"]),
+        rrt_df=pd.DataFrame(columns=[*keys, "rrt"]),
+        id_col="patientunitstayid",
+        time_col="labresultoffset",
+        time_unit="minutes",
+        rrt_source_complete=True,
+    )
+
+    assert bundle.empty
+    assert set(keys) <= set(bundle.columns)
+    with pytest.raises(AKIProfilePrerequisiteError):
+        aki_profiles._component_keys((None, None), "patientunitstayid", "labresultoffset")
