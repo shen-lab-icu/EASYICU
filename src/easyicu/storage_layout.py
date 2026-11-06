@@ -531,6 +531,60 @@ def _derived_source(root: Path, derived: dict, entry: dict) -> Path:
     return _derived_from_base(root, derived).joinpath(*relative.parts)
 
 
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def bucket_source_receipt(root) -> dict[str, Any]:
+    """Formal receipt for one bucket installation the run read (F5).
+
+    Names the installation by the path the storage policy resolved and by its
+    real path, carries the sha256 of ``_BUCKET_MANIFEST.json`` and of the
+    build receipt (when present), and lists each ``derived_from`` source with
+    the builder's recorded size, mtime and sha256 and the source's real path
+    (a symlinked source is followed to the file it names). The sources are
+    checked exactly as an open checks them; a layout without ``derived_from``
+    cannot show what it was built from and is ``bucket_derived_from_missing``.
+    """
+    root = Path(root)
+    manifest_path = root / MANIFEST
+    try:
+        raw = manifest_path.read_bytes()
+    except OSError as exc:
+        raise BucketLayoutError("bucket_manifest_missing", root) from exc
+    try:
+        manifest = json.loads(raw)
+    except ValueError as exc:
+        raise BucketLayoutError("bucket_manifest_invalid", root) from exc
+    if not isinstance(manifest, dict) or "derived_from" not in manifest:
+        raise BucketLayoutError("bucket_derived_from_missing", root)
+    _check_bucket_derived_from(root, manifest)
+    _verify_bucket_sources(root, manifest)
+    receipt: dict[str, Any] = {
+        "layout_path": str(root),
+        "layout_realpath": os.path.realpath(root),
+        "manifest": {"path": str(manifest_path), "sha256": _sha256_bytes(raw)},
+    }
+    build = root / BUILD_RECEIPT
+    if build.is_file():
+        receipt["build_receipt"] = {"path": str(build), "sha256": _sha256_bytes(build.read_bytes())}
+    derived = manifest["derived_from"]
+    receipt["derived_from"] = {
+        "table": derived["table"],
+        "files": [
+            {
+                "path": entry["path"],
+                "realpath": os.path.realpath(_derived_source(root, derived, entry)),
+                "size": entry["size"],
+                "mtime_ns": entry["mtime_ns"],
+                "sha256": entry["sha256"],
+            }
+            for entry in derived["files"]
+        ],
+    }
+    return receipt
+
+
 def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     """The flat source ``derived_from`` binds is still exactly what it recorded.
 
@@ -2045,22 +2099,47 @@ def read_table_read_log(path) -> tuple[dict[str, str], ...]:
     return tuple(e for e in _read_run_log(path) if e.get("event") == TABLE_READ_EVENT)
 
 
-def record_table_read(source, table: str, layout: str) -> None:
+def _layout_paths(base, layout: str, paths: Iterable[Path]) -> tuple[str, str]:
+    """The directory a read was served from, as resolved and by real path.
+
+    A bucket read is its installation directory; a flat read is the common
+    directory of the files it scanned (followed through symlinks for the real
+    path, so a linked data root names the files it really reads).
+    """
+    paths = [Path(p) for p in paths]
+    if layout != LAYOUT_FLAT:
+        (root,) = paths
+        return str(root), os.path.realpath(root)
+    if not paths:
+        return str(base), os.path.realpath(str(base))
+    return (
+        os.path.commonpath([str(p.parent) for p in paths]),
+        os.path.commonpath([os.path.dirname(os.path.realpath(p)) for p in paths]),
+    )
+
+
+def record_table_read(source, table: str, layout: str, paths: Iterable[Path] = ()) -> None:
     """Record which physical layout the storage policy resolved for ``table``.
 
     ``layout`` is ``flat`` or ``bucket_<scheme>`` (``bucket_hash``,
-    ``bucket_range``, ``bucket_variable_stay_range``). It goes to the same run
-    log as the fallbacks, so worker processes report into one receipt.
+    ``bucket_range``, ``bucket_variable_stay_range``); ``paths`` is the bucket
+    installation, or the flat files read. The entry names the directory the
+    read was served from (``layout_path``) and its real path
+    (``layout_realpath``). It goes to the same run log as the fallbacks, so
+    worker processes report into one receipt.
     """
     base = None if source.base_path is None else Path(source.base_path)
+    layout_path, layout_realpath = _layout_paths(base, layout, paths)
     _log_fallback({"event": TABLE_READ_EVENT, "root": str(base), "table": table,
-                   "layout": layout})
+                   "layout": layout, "layout_path": layout_path,
+                   "layout_realpath": layout_realpath})
 
 
 def table_layout_receipt(reads, fallbacks) -> list[dict[str, str]]:
     """Per table actually read: the layout used, and any fallback reason.
 
-    One entry per (root, table, layout), sorted. A flat read of a table whose
+    One entry per (root, table, layout, layout path), sorted, with the
+    directory the read was served from and its real path. A flat read of a table whose
     bucket cache was bypassed carries that fallback's ``reason`` and
     ``bucket_reason``; any other fallback for the table (an unmanifested or CSV
     read) carries its ``reason``.
@@ -2073,12 +2152,15 @@ def table_layout_receipt(reads, fallbacks) -> list[dict[str, str]]:
     for entry in reads:
         root, table, layout = str(entry["root"]), str(entry["table"]), str(entry["layout"])
         item = {"root": root, "table": table, "layout": layout}
+        for key in ("layout_path", "layout_realpath"):
+            if entry.get(key) is not None:
+                item[key] = str(entry[key])
         fallback = fallback_by_table.get((root, table))
         if fallback is not None and layout == LAYOUT_FLAT:
             item["fallback_reason"] = str(fallback["reason"])
             if fallback.get("bucket_reason"):
                 item["bucket_reason"] = str(fallback["bucket_reason"])
-        receipt[(root, table, layout)] = item
+        receipt[(root, table, layout, item.get("layout_path", ""))] = item
     return [receipt[key] for key in sorted(receipt)]
 
 
@@ -2316,7 +2398,7 @@ def resolve_table_files(
         if consume and files:
             record_consumed(source, table, files, FORMAT_PARQUET, key=key)
             bind_layout(key, table, "flat", None)
-            record_table_read(source, table, LAYOUT_FLAT)
+            record_table_read(source, table, LAYOUT_FLAT, files)
         elif not files and chosen is not None:
             # Read non-empty earlier in this run, gone now (D9B-EMPTY-RESOLVE).
             held = bound_set(key)
@@ -2337,7 +2419,7 @@ def resolve_table_files(
     )[1]
     if consume:
         record_bucket_consumed(source, table, layout, selected)
-        record_table_read(source, table, f"bucket_{layout.scheme}")
+        record_table_read(source, table, f"bucket_{layout.scheme}", (root,))
     return selected
 
 

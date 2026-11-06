@@ -11,6 +11,13 @@ exited. It binds the run to the sealed code and to its inputs:
   exit status, wall time, cgroup and process-tree peaks, the native manifest
   sha256 and its commit, and per table actually read the layout used with
   any fallback reason (``storage_reads``, from the storage owner's run log);
+* per table read, the directory it was served from and its real path; for a
+  bucketed table, ``bucket_receipt`` (the storage owner's
+  ``bucket_source_receipt``): the manifest and build-receipt sha256 and the
+  ``derived_from`` sources by real path with the builder's sha256. Every flat
+  read and every bucket source must resolve under the input's data root (the
+  real directory of its ``conversion_manifest.json``, else the input's real
+  path), and every bucket installation under the input's real path;
 * for SICdb, ``cases_binding``: the prepared conversion manifest records
   ``cases.parquet`` from ``cases.csv.gz`` without content digests and without
   a converter commit, so the receipt carries both sha256s, the manifest record
@@ -250,13 +257,66 @@ def _status_exits(run_root: Path) -> Dict[str, Any]:
     return exits
 
 
+def _within(path: str, root: Path) -> bool:
+    try:
+        Path(path).relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _storage_reads(db: str, reads: List[Dict[str, Any]], input_real: Path,
+                   data_root: Path) -> List[Dict[str, Any]]:
+    """Each table read with where it was served from; bucket reads with their binding."""
+    from easyicu.storage_layout import LAYOUT_FLAT, StorageIntegrityError, bucket_source_receipt
+
+    receipt = []
+    for read in reads:
+        entry = dict(read)
+        realpath = entry.get("layout_realpath")
+        if not entry.get("layout_path") or not realpath:
+            raise ReceiptError("storage_read_layout_missing",
+                               f"{db} {entry.get('table')} read names no layout directory",
+                               database=db, table=entry.get("table"))
+        if entry.get("layout") == LAYOUT_FLAT:
+            if not _within(realpath, data_root):
+                raise ReceiptError("storage_read_outside_input",
+                                   f"{db} {entry['table']} was read outside the data root",
+                                   database=db, table=entry["table"])
+        else:
+            try:
+                binding = bucket_source_receipt(entry["layout_path"])
+            except (StorageIntegrityError, OSError) as exc:
+                raise ReceiptError("bucket_receipt_unverifiable",
+                                   f"{db} {entry['table']}: {getattr(exc, 'reason', exc)}",
+                                   database=db, table=entry["table"],
+                                   reason=getattr(exc, "reason", None)) from exc
+            if binding["layout_realpath"] != realpath or not _within(realpath, input_real):
+                raise ReceiptError("storage_read_outside_input",
+                                   f"{db} {entry['table']} bucket is not the one the run read "
+                                   "under the input", database=db, table=entry["table"])
+            outside = [f["path"] for f in binding["derived_from"]["files"]
+                       if not _within(f["realpath"], data_root)]
+            if outside:
+                raise ReceiptError("bucket_source_outside_input",
+                                   f"{db} {entry['table']} bucket was derived from files "
+                                   "outside the data root", database=db, table=entry["table"],
+                                   sources=outside)
+            entry["bucket_receipt"] = binding
+        receipt.append(entry)
+    return receipt
+
+
 def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                       exit_status: Any, sealed_sha: str) -> Dict[str, Any]:
     out = run_root / db
     input_real = Path(input_dir).resolve()
     input_manifest = input_real / "conversion_manifest.json"
+    data_root = input_manifest.resolve().parent if input_manifest.is_file() else input_real
     section: Dict[str, Any] = {
+        "input_path": str(input_dir),
         "input_realpath": str(input_real),
+        "data_root_realpath": str(data_root),
         "input_manifest_sha256": sha256_file(input_manifest) if input_manifest.is_file() else None,
         "cores": cores,
         "exit_status": exit_status,
@@ -293,7 +353,8 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
     if "storage_reads" not in manifest:
         raise ReceiptError("storage_reads_missing",
                            f"{db} native manifest lists no per-table storage reads", database=db)
-    section["storage_reads"] = manifest["storage_reads"]
+    section["storage_reads"] = _storage_reads(db, list(manifest["storage_reads"]),
+                                              input_real, data_root)
     section["storage_fallbacks"] = manifest.get("storage_fallbacks") or []
     return section
 
