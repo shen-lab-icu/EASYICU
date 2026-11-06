@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
 import pyarrow.parquet as pq
 
 from easyicu.runtime import duckdb_spill
@@ -70,6 +71,96 @@ def _sql_string(value: str | Path) -> str:
 
 def _identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
+
+
+# DuckDB's parquet dictionary encoder keys floating-point values by equality, so
+# -0.0 and +0.0 (and NaN payloads) share one dictionary entry and come back with
+# whichever bit pattern was inserted first: the sign of zero would depend on row
+# and thread order. A table with a floating-point column is therefore written
+# without dictionary encoding (DICTIONARY_SIZE_LIMIT 0 keeps every bit pattern);
+# other tables keep the default. Never canonicalise: the flat path reads the
+# source bits, and a bucket must return the same bits.
+_FLOAT_TYPES = frozenset({"FLOAT", "DOUBLE", "REAL", "FLOAT4", "FLOAT8"})
+FLOAT_FIDELITY_ALGORITHM = (
+    "per float column over non-null values: count, -0.0, +0.0, NaN, and "
+    "count/sum/xor of splitmix64(IEEE bit pattern) (order-independent multiset hash)"
+)
+
+
+class FloatFidelityError(RuntimeError):
+    """A bucket's floating-point bits differ from its source (typed build failure)."""
+
+    reason = "bucket_float_fidelity_mismatch"
+
+    def __init__(self, column: str, source: dict, target: dict):
+        self.column, self.source, self.target = column, source, target
+        super().__init__(f"{self.reason}: column {column!r} source {source} target {target}")
+
+
+def _float_columns(schema: list[list[str]]) -> list[str]:
+    return [name for name, kind in schema if kind.upper() in _FLOAT_TYPES]
+
+
+def _parquet_options(schema: list[list[str]], *extra: str) -> str:
+    """COPY options shared by staging and final writes (see ``_FLOAT_TYPES``)."""
+    options = ["FORMAT PARQUET", *extra, "COMPRESSION ZSTD"]
+    if _float_columns(schema):
+        options.append("DICTIONARY_SIZE_LIMIT 0")
+    return ", ".join(options)
+
+
+def _splitmix64(bits: np.ndarray) -> np.ndarray:
+    with np.errstate(over="ignore"):
+        z = bits + np.uint64(0x9E3779B97F4A7C15)
+        z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        return z ^ (z >> np.uint64(31))
+
+
+def _float_profile(files, columns: list[str]) -> dict[str, dict[str, int | str]]:
+    """Sign/NaN counts and a bit-pattern multiset hash per float column."""
+    acc = {c: {"values": 0, "neg_zero": 0, "pos_zero": 0, "nan": 0, "sum": 0, "xor": 0} for c in columns}
+    mask = (1 << 64) - 1
+    for path in files:
+        handle = pq.ParquetFile(path)
+        present = [c for c in columns if c in handle.schema_arrow.names]
+        for batch in handle.iter_batches(columns=present, batch_size=1 << 20):
+            for name in present:
+                array = batch.column(name)
+                if array.null_count:
+                    array = array.drop_null()
+                if not len(array):
+                    continue
+                values = array.to_numpy(zero_copy_only=False)
+                width = values.dtype.itemsize
+                bits = values.view({2: np.uint16, 4: np.uint32, 8: np.uint64}[width]).astype(np.uint64)
+                zero = values == 0
+                negative = np.signbit(values)
+                mixed = _splitmix64(bits)
+                entry = acc[name]
+                entry["values"] += int(values.size)
+                entry["neg_zero"] += int(np.count_nonzero(zero & negative))
+                entry["pos_zero"] += int(np.count_nonzero(zero & ~negative))
+                entry["nan"] += int(np.count_nonzero(np.isnan(values)))
+                entry["sum"] = (entry["sum"] + int(mixed.sum(dtype=np.uint64))) & mask
+                entry["xor"] ^= int(np.bitwise_xor.reduce(mixed))
+    return {c: {**{k: v for k, v in e.items() if k not in ("sum", "xor")},
+                "sum_hash": str(e["sum"]), "xor_hash": str(e["xor"])} for c, e in acc.items()}
+
+
+def _assert_float_fidelity(source_files, target_files, schema) -> dict[str, Any]:
+    """Source vs bucket float bits must agree exactly, or the build fails typed."""
+    columns = _float_columns(schema)
+    source = _float_profile(source_files, columns)
+    target = _float_profile(target_files, columns)
+    for column in columns:
+        if source[column] != target[column]:
+            raise FloatFidelityError(column, source[column], target[column])
+    return {
+        "algorithm": FLOAT_FIDELITY_ALGORITHM,
+        "dictionary_encoding": "disabled" if columns else "default",
+        "columns": source,
+    }
 
 
 def _relation(files) -> str:
@@ -341,7 +432,7 @@ def build_bucket_cache(
                     CAST(row_number() OVER (ORDER BY filename, file_row_number) - 1 AS BIGINT) AS {_identifier(ORDINAL)},
                     {partition} AS _easyicu_bucket_id
                 FROM read_parquet({paths}, filename=true, file_row_number=true, union_by_name=true, hive_partitioning=false)
-            ) TO {_sql_string(staging)} (FORMAT PARQUET, PARTITION_BY (_easyicu_bucket_id), COMPRESSION ZSTD)""")
+            ) TO {_sql_string(staging)} ({_parquet_options(schema, "PARTITION_BY (_easyicu_bucket_id)")})""")
             for bid in range(count):
                 directory = temporary / f"bucket_id={bid}"
                 directory.mkdir()
@@ -361,7 +452,8 @@ def build_bucket_cache(
                 path = directory / "part.parquet"
                 order = ",".join(_identifier(c) + " ASC NULLS LAST" for c in sort)
                 con.execute(
-                    f"COPY (SELECT * FROM {relation} ORDER BY {order}) TO {_sql_string(path)} (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {row_group_target})"
+                    f"COPY (SELECT * FROM {relation} ORDER BY {order}) TO {_sql_string(path)} "
+                    f"({_parquet_options(schema, f'ROW_GROUP_SIZE {row_group_target}')})"
                 )
                 _verify_bucket(con, path, sort, expected_rows)
             shutil.rmtree(staging, ignore_errors=True)
@@ -375,6 +467,7 @@ def build_bucket_cache(
             fingerprint = _assert_multiset(
                 con, source_relation, target_relation, columns
             )
+            float_fidelity = _assert_float_fidelity(source_files, target_files, schema)
             derived = _derived_from(data_path, table, source_files)
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
@@ -402,6 +495,7 @@ def build_bucket_cache(
                 sort_keys=sort,
                 row_group_target=row_group_target,
                 row_multiset_fingerprint=fingerprint,
+                float_fidelity=float_fidelity,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
             manifest = _manifest(
@@ -416,6 +510,7 @@ def build_bucket_cache(
                 row_group_target=row_group_target,
                 source_order=ORDINAL,
             )
+            manifest["float_fidelity"] = float_fidelity
             (temporary / "_BUCKET_BUILD_RECEIPT.json").write_text(
                 json.dumps(receipt, indent=2, sort_keys=True) + "\n"
             )
@@ -589,7 +684,7 @@ def build_variable_cache(
                                       union_by_name=true, hive_partitioning=false)
                 ) s
                 JOIN _easyicu_partitions m ON s.{_identifier(key)} IS NOT DISTINCT FROM m.value
-            ) TO {_sql_string(staging)} (FORMAT PARQUET, PARTITION_BY (_easyicu_partition_id), COMPRESSION ZSTD)""")
+            ) TO {_sql_string(staging)} ({_parquet_options(schema, "PARTITION_BY (_easyicu_partition_id)")})""")
             order = ",".join(_identifier(c) + " ASC NULLS LAST" for c in sort)
             secondary_total = 0
             for part in partitions:
@@ -612,7 +707,7 @@ def build_variable_cache(
                     con.execute(
                         f"COPY (SELECT * EXCLUDE (_easyicu_bucket_id) FROM {relation} "
                         f"WHERE _easyicu_bucket_id = {bid} ORDER BY {order}) TO {_sql_string(path)} "
-                        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {row_group_target})"
+                        f"({_parquet_options(schema, f'ROW_GROUP_SIZE {row_group_target}')})"
                     )
                     _verify_bucket(con, path, sort, expected_rows)
                 part["secondary"] = {}
@@ -638,6 +733,7 @@ def build_variable_cache(
             ):
                 raise RuntimeError("Schema mismatch")
             fingerprint = _assert_multiset(con, source_relation, target_relation, columns)
+            float_fidelity = _assert_float_fidelity(source_files, target_files, schema)
             derived = _derived_from(data_path, table, source_files)
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
@@ -670,6 +766,7 @@ def build_variable_cache(
                 sort_keys=sort,
                 row_group_target=row_group_target,
                 row_multiset_fingerprint=fingerprint,
+                float_fidelity=float_fidelity,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
             manifest = dict(
@@ -691,6 +788,7 @@ def build_variable_cache(
                 source_order=ORDINAL,
                 row_group_target=row_group_target,
                 builder_version=BUILDER_VERSION,
+                float_fidelity=float_fidelity,
                 inventory=[
                     dict(
                         relative_path=p.relative_to(temporary).as_posix(),
