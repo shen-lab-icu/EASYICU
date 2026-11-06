@@ -5772,7 +5772,7 @@ class ConceptResolver:
             if DEBUG_MODE and (has_dur_var or has_endtime or has_stoptime):
                 print(f"   🔍 DEBUG: should_expand={should_expand}, has_dur_var={has_dur_var}, has_endtime={has_endtime}, is_point_event={is_point_event}, callback_already_expanded={callback_already_expanded}, is_win_tbl_target={is_win_tbl_target}")
             if should_expand:
-                from ..io.ts_utils import expand
+                from ..io.ts_utils import TimeAxisUnitError, expand
                 
                 # 🔧 FIX 2024-12-26: Handle dur_var column from grp_mount_to_rate callback
                 # dur_var contains duration as Timedelta or numeric hours, calculate endtime = starttime + dur_var
@@ -5909,10 +5909,13 @@ class ConceptResolver:
                         # Unaligned numeric axes keep the source clock (eICU
                         # minutes, SICdb seconds, ...). That unit is declared by
                         # the producer or the window is refused; it is never
-                        # inferred from the values (lead-r13 sweep, #2).
-                        raise ConceptError(
+                        # inferred from the values (lead-r13 sweep, #2). The
+                        # refusal is a typed value failure, so the raw-row
+                        # fallback below lets it through (delta4 D4-AXIS-CATCH).
+                        raise TimeAxisUnitError(
+                            "time_axis_unit_undeclared",
                             f"{concept_name}: unaligned numeric time axis {index_column!r} "
-                            "declares no unit; window expansion needs a declared clock"
+                            "declares no unit; window expansion needs a declared clock",
                         )
                     expanded = expand(
                         expansion_input,
@@ -5942,6 +5945,10 @@ class ConceptResolver:
                         print(f"   🔍 DEBUG: expand后, 行数={len(combined)}")
                     if verbose:
                         logger.info(f"   ✅ 展开 win_tbl '{concept_name}' 到 {len(combined)} 行")
+                except TYPED_VALUE_FAILURES:
+                    # An undeclared or unknown time-axis unit (or a failed exact
+                    # aggregation) has no raw-row fallback.
+                    raise
                 except Exception as e:
                     # 🔧 2026-05-16: known issue — when start/end columns have
                     # mismatched dtypes (numeric hours vs datetime, mixed datetime
