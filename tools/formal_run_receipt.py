@@ -63,6 +63,22 @@ class ReceiptError(Exception):
         self.details = details
 
 
+def load_json_object(path: Path, what: str) -> Dict[str, Any]:
+    """A JSON object input of the receipt; anything else is a typed stop."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ReceiptError("receipt_input_missing", f"{what} is missing",
+                           input=what, path=str(path)) from exc
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ReceiptError("receipt_input_malformed", f"{what} is not readable JSON",
+                           input=what, path=str(path)) from exc
+    if not isinstance(payload, dict):
+        raise ReceiptError("receipt_input_malformed", f"{what} is not a JSON object",
+                           input=what, path=str(path))
+    return payload
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -141,7 +157,7 @@ def _manifest_record(prepared: Path, csv: Path, parquet: Path) -> Dict[str, Any]
     manifest_path = prepared / "conversion_manifest.json"
     if not manifest_path.is_file():
         raise ReceiptError("sic_cases_manifest_missing", "prepared conversion_manifest.json is missing")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = load_json_object(manifest_path, "prepared conversion_manifest.json")
     tables = manifest.get("tables")
     matches = [
         (index, entry) for index, entry in enumerate(tables if isinstance(tables, list) else [])
@@ -331,7 +347,7 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
     }
     if str(exit_status) != "0":
         raise ReceiptError("database_run_failed", f"{db} exited {exit_status}", database=db)
-    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    summary = load_json_object(out / "summary.json", f"{db} summary.json")
     if summary.get("exception") or summary.get("errors") or summary.get("worker_failures"):
         raise ReceiptError("database_run_reported_errors", f"{db} reported errors", database=db)
     section.update({
@@ -342,8 +358,11 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
         "batch_size": summary.get("batch_size"),
     })
     manifest_path = out / "export" / "_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = load_json_object(manifest_path, f"{db} native _manifest.json")
     provenance = manifest.get("runtime_provenance") or {}
+    if not isinstance(provenance, dict):
+        raise ReceiptError("receipt_input_malformed", f"{db} runtime_provenance is not an object",
+                           input=f"{db} native _manifest.json", path=str(manifest_path))
     if (
         provenance.get("easyicu_git_commit") != sealed_sha
         or provenance.get("easyicu_git_dirty") is not False
@@ -375,6 +394,29 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
     return section
 
 
+def _input_roots(input_dir: str) -> List[Path]:
+    """Every real directory a database input reads from (its root, its data root,
+    and a SIC prepared tree behind cases.*), for the containment check."""
+    base = Path(input_dir)
+    roots = [base.resolve()]
+    for name in ("conversion_manifest.json", "cases.csv.gz", "cases.parquet"):
+        if (base / name).exists():
+            roots.append((base / name).resolve().parent)
+    return roots
+
+
+def _refuse_paths_inside_inputs(paths: Mapping[str, Path], specs: List[str]) -> None:
+    """NB9P-SCRATCH-CONTAINMENT: nothing the receipt writes may sit in an input."""
+    for spec in specs:
+        _db, input_dir, _cores = spec.split(":", 2)
+        for root in _input_roots(input_dir):
+            for kind, path in paths.items():
+                if _within(str(Path(path).resolve()), root):
+                    raise ReceiptError(f"{kind}_inside_input",
+                                       f"the receipt's {kind} lies inside an input",
+                                       path=str(path), input=str(root))
+
+
 def build_run_receipt(
     run_root: Path,
     sealed_sha: str,
@@ -385,15 +427,22 @@ def build_run_receipt(
     parameters: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     run_root = Path(run_root)
+    specs = list(specs)
+    _refuse_paths_inside_inputs({"scratch": Path(scratch), "run_root": run_root}, specs)
     code = sealed_code_identity(sealed_sha)
     exits = _status_exits(run_root)
     databases: Dict[str, Any] = {}
     for spec in specs:
         db, input_dir, cores = spec.split(":", 2)
-        section = _database_section(run_root, db, input_dir, cores, exits.get(db), sealed_sha,
-                                    code.get("version"))
-        if db in SIC_DATABASES:
-            section["cases_binding"] = sic_cases_binding(Path(input_dir), Path(scratch), code)
+        try:
+            section = _database_section(run_root, db, input_dir, cores, exits.get(db),
+                                        sealed_sha, code.get("version"))
+            if db in SIC_DATABASES:
+                section["cases_binding"] = sic_cases_binding(Path(input_dir), Path(scratch), code)
+        except (KeyError, TypeError, AttributeError) as exc:
+            # A field of an input has the wrong shape: a typed stop, never a pass.
+            raise ReceiptError("receipt_input_malformed", f"{db}: {type(exc).__name__}: {exc}",
+                               database=db) from exc
         databases[db] = section
     finished = time.time()
     peaks = [s["cgroup_peak_gib"] for s in databases.values() if s.get("cgroup_peak_gib") is not None]

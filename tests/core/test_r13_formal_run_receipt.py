@@ -290,3 +290,83 @@ def test_a_native_manifest_naming_another_version_stops_the_receipt(tmp_path, mo
         receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
                                   scratch=tmp_path / "scratch")
     assert error.value.code == "native_manifest_version_mismatch"
+
+
+# delta9p NB9P-SCRATCH-CONTAINMENT: nothing the receipt writes may sit in an input.
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_a_scratch_inside_the_input_is_refused_before_anything_is_written(
+        tmp_path, monkeypatch, alias):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"])
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+    scratch = prepared / "scratch"
+    if alias:  # a link elsewhere that resolves into the prepared tree
+        (tmp_path / "alias").symlink_to(prepared, target_is_directory=True)
+        scratch = tmp_path / "alias" / "scratch"
+    before = sorted(p.name for p in prepared.iterdir())
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=scratch)
+
+    assert error.value.code == "scratch_inside_input"
+    assert sorted(p.name for p in prepared.iterdir()) == before
+
+
+def test_a_scratch_inside_the_real_prepared_tree_behind_a_layout_root_is_refused(
+        tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    run = _run_root(tmp_path, root, commit=CODE["commit"])
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{root}:144-145"],
+                                  scratch=prepared / "s")
+    assert error.value.code == "scratch_inside_input"
+
+
+def test_a_run_root_inside_the_input_is_refused(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(prepared / "run", CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == "run_root_inside_input"
+
+
+# Malformed inputs are typed stops (delta9p NB).
+
+@pytest.mark.parametrize(
+    ("relative", "payload", "code"),
+    [
+        ("sic/summary.json", "{not json", "receipt_input_malformed"),
+        ("sic/summary.json", None, "receipt_input_missing"),
+        ("sic/export/_manifest.json", "[]", "receipt_input_malformed"),
+        ("sic/export/_manifest.json", '{"runtime_provenance": "x"}', "receipt_input_malformed"),
+    ],
+)
+def test_a_malformed_receipt_input_is_a_typed_stop(tmp_path, monkeypatch, relative, payload, code):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"])
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+    if payload is None:
+        (run / relative).unlink()
+    else:
+        (run / relative).write_text(payload)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == code
+
+
+def test_a_malformed_prepared_manifest_is_a_typed_stop(tmp_path):
+    prepared = _prepared(tmp_path / "prepared")
+    (prepared / "conversion_manifest.json").write_text("{broken")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.sic_cases_binding(prepared, tmp_path / "scratch", CODE)
+    assert error.value.code == "receipt_input_malformed"
