@@ -235,10 +235,98 @@ def test_derived_manifest_is_stale_once_its_source_changes(tmp_path):
     assert caught.value.reason == "table_scan_manifest_stale"
 
 
-def test_derived_manifest_with_a_missing_source_only_warns(tmp_path, caplog):
+def test_derived_manifest_with_a_missing_source_fails_closed(tmp_path):
     _view, farm, source_manifest = _farm_with_derived_manifest(tmp_path)
     source_manifest.unlink()
     source = _source(farm, "labevents.parquet")
-    with caplog.at_level("WARNING", logger="easyicu.storage_layout"):
-        assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 1
-    assert "conversion_manifest_source_missing" in caplog.text
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+    assert caught.value.reason == "conversion_manifest_source_missing"
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [None, "elsewhere.json", ["x"], {"path": "x"}, {"path": "", "sha256": "0" * 64},
+     {"path": "x", "sha256": "ABC"}],
+)
+def test_a_derived_binding_that_cannot_be_verified_is_not_unbound(tmp_path, binding):
+    import json
+
+    files = _write_chunks(tmp_path, 1)
+    (tmp_path / "conversion_manifest.json").write_text(json.dumps({
+        "tables": [{"table": "labevents", "row_count": 1,
+                    "outputs": [{"relative_path": "labevents/1.parquet"}]}],
+        "derived_from": binding,
+    }))
+    source = _source(tmp_path, files)
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+    assert caught.value.reason == "conversion_manifest_derived_invalid"
+
+
+# --- a manifest is the whole inventory (final review B-STORAGE-INVENTORY) ---
+
+
+def test_a_registered_table_with_no_files_fails_instead_of_reading_empty(tmp_path):
+    import shutil
+
+    _write_chunks(tmp_path, 2)
+    _write_manifest(tmp_path, ["1.parquet", "2.parquet"], 2)
+    shutil.rmtree(tmp_path / "labevents")
+    source = _source(tmp_path, ["labevents/1.parquet", "labevents/2.parquet"])
+    assert flat_table_files(source, "labevents") == ()
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "labevents", ())
+    assert caught.value.reason == "table_scan_files_missing"
+
+
+def test_an_unregistered_table_without_files_is_simply_absent(tmp_path):
+    _write_chunks(tmp_path, 1)
+    _write_manifest(tmp_path, ["1.parquet"], 1)
+    source = _source(tmp_path, "chartevents.parquet")
+    assert verify_flat_scan(source, "chartevents", ()) == ()
+
+
+def _single_file_beside_a_manifest(tmp_path):
+    _write_chunks(tmp_path, 2)
+    _write_manifest(tmp_path, ["1.parquet", "2.parquet"], 2)
+    pq.write_table(pa.table({"itemid": [7]}), tmp_path / "chartevents.parquet")
+    return _source(tmp_path, "chartevents.parquet")
+
+
+def test_files_no_manifest_entry_owns_fail_closed(tmp_path, monkeypatch):
+    monkeypatch.delenv("EASYICU_ALLOW_UNREGISTERED_SCAN", raising=False)
+    source = _single_file_beside_a_manifest(tmp_path)
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "chartevents", flat_table_files(source, "chartevents"))
+    assert caught.value.reason == "table_scan_unregistered"
+
+
+def test_an_unregistered_scan_is_accepted_only_by_explicit_opt_in_and_recorded(tmp_path, monkeypatch):
+    from easyicu.storage_layout import scan_fallbacks
+
+    monkeypatch.setenv("EASYICU_ALLOW_UNREGISTERED_SCAN", "1")
+    source = _single_file_beside_a_manifest(tmp_path)
+    assert verify_flat_scan(source, "chartevents", flat_table_files(source, "chartevents")) == (
+        tmp_path / "chartevents.parquet",
+    )
+    assert {"reason": "table_scan_unregistered", "root": str(tmp_path),
+            "table": "chartevents"} in scan_fallbacks()
+
+
+def test_the_no_manifest_fallback_is_recorded(tmp_path):
+    from easyicu.storage_layout import scan_fallbacks
+
+    files = _write_chunks(tmp_path, 2)
+    source = _source(tmp_path, files)
+    assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 2
+    assert {"reason": "table_scan_unmanifested", "root": str(tmp_path),
+            "table": "labevents"} in scan_fallbacks()
+
+
+def test_storage_integrity_errors_are_not_missing_source_errors():
+    from easyicu.storage_layout import BucketLayoutError, StorageIntegrityError
+
+    for kind in (TableScanError, BucketLayoutError):
+        assert issubclass(kind, StorageIntegrityError)
+        assert not issubclass(kind, (ValueError, KeyError, OSError))

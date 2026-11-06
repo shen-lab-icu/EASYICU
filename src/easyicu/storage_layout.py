@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import numbers
+import os
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -39,7 +40,19 @@ INTEGER_TYPES = frozenset(
 KEY_TYPES = INTEGER_TYPES | {"VARCHAR", "FLOAT", "DOUBLE"}
 
 
-class BucketLayoutError(ValueError):
+class StorageIntegrityError(Exception):
+    """An installation contradicts its own inventory; never "source absent".
+
+    Deliberately not a ``ValueError``/``KeyError``/``OSError``: concept and
+    table readers catch those as "this source is not available here" and move
+    on, which turned a missing chunk into a silently absent concept.  Every
+    subclass carries a stable ``reason`` code.
+    """
+
+    reason: str
+
+
+class BucketLayoutError(StorageIntegrityError):
     """A stable, data-independent reason for rejecting a physical layout."""
 
     def __init__(self, reason: str, root: Path):
@@ -374,7 +387,7 @@ def flat_table_files(source, table: str) -> tuple[Path, ...]:
     return ()
 
 
-class TableScanError(ValueError):
+class TableScanError(StorageIntegrityError):
     """A flat table scan does not cover the table's complete on-disk inventory."""
 
     def __init__(self, reason: str, table: str, detail: str):
@@ -414,34 +427,62 @@ _DERIVED_FROM: dict[tuple[str, int, int], dict | None] = {}
 _SOURCE_SHA: dict[tuple[str, int, int], str] = {}
 
 
+_SHA256_HEX = frozenset("0123456789abcdef")
+
+
+def _derived_binding(path: Path, manifest: dict) -> dict | None:
+    """Validate the optional ``derived_from`` binding of a conversion manifest.
+
+    Absent means unbound.  Present means bound: an object naming the source
+    manifest ``path`` and its 64-hex ``sha256``.  Any other shape is an
+    unverifiable binding, not an absent one.
+    """
+    if "derived_from" not in manifest:
+        return None
+    derived = manifest["derived_from"]
+    source = derived.get("path") if isinstance(derived, dict) else None
+    digest = derived.get("sha256") if isinstance(derived, dict) else None
+    if (
+        not isinstance(source, str)
+        or not source
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or not set(digest) <= _SHA256_HEX
+    ):
+        raise TableScanError(
+            "conversion_manifest_derived_invalid", path.name,
+            "derived_from must be an object with a source path and a lowercase "
+            "hex sha256; regenerate the derived manifest",
+        )
+    return {"path": source, "sha256": digest}
+
+
 def _check_derived_from(path: Path, derived: dict | None) -> None:
     """A manifest derived from another (a symlink farm's) must match its source.
 
     A rebuilt source view leaves the derived manifest stale even when row
-    counts happen to agree, so the source bytes are compared by SHA-256.
+    counts happen to agree, so the source bytes are compared by SHA-256.  A
+    source that cannot be read cannot be compared, so the binding fails.
     """
-    if not derived:
+    if derived is None:
         return
-    source = Path(str(derived.get("path", "")))
+    source = Path(derived["path"])
     try:
         stat = source.stat()
-    except OSError:
-        warned = (str(path), "derived_from")
-        if warned not in _FALLBACK_WARNED:
-            _FALLBACK_WARNED.add(warned)
-            logging.getLogger(__name__).warning(
-                "conversion_manifest_source_missing: %s was derived from %s, which "
-                "no longer exists; regenerate it if the source moved.", path, source,
-            )
-        return
-    key = (str(source), stat.st_size, stat.st_mtime_ns)
-    digest = _SOURCE_SHA.get(key)
-    if digest is None:
-        digest = _SOURCE_SHA[key] = hashlib.sha256(source.read_bytes()).hexdigest()
-    if digest != derived.get("sha256"):
+        key = (str(source), stat.st_size, stat.st_mtime_ns)
+        digest = _SOURCE_SHA.get(key)
+        if digest is None:
+            digest = _SOURCE_SHA[key] = hashlib.sha256(source.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise TableScanError(
+            "conversion_manifest_source_missing", path.name,
+            f"derived from {source}, which cannot be read ({type(exc).__name__}); "
+            "restore the source or regenerate the derived manifest",
+        ) from exc
+    if digest != derived["sha256"]:
         raise TableScanError(
             "table_scan_manifest_stale", path.name,
-            f"derived from {source} (sha256 {str(derived.get('sha256'))[:12]}), "
+            f"derived from {source} (sha256 {derived['sha256'][:12]}), "
             f"which is now {digest[:12]}; regenerate the derived manifest",
         )
 
@@ -465,7 +506,11 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
             raise TableScanError(
                 "conversion_manifest_unreadable", path.name, str(exc)[:200]
             ) from exc
-        derived = manifest.get("derived_from") if isinstance(manifest.get("derived_from"), dict) else None
+        if not isinstance(manifest, dict) or not isinstance(entries, list):
+            raise TableScanError(
+                "conversion_manifest_unreadable", path.name, "tables must be a list"
+            )
+        derived = _derived_binding(path, manifest)
         _check_derived_from(path, derived)
         _DERIVED_FROM[key] = derived
         # One table may span several entries (HiRID converts each CSV part
@@ -498,6 +543,43 @@ def _relative(base: Path, path: Path) -> str | None:
         return None
 
 
+ALLOW_UNREGISTERED_SCAN_ENV = "EASYICU_ALLOW_UNREGISTERED_SCAN"
+_SCAN_FALLBACKS: list[dict[str, str]] = []
+
+
+def scan_fallbacks() -> tuple[dict[str, str], ...]:
+    """Every flat scan accepted without a conversion-manifest entry, in order.
+
+    ``table_scan_unmanifested``: the installation has no manifest at all (the
+    compatibility path for older or hand-made installations).
+    ``table_scan_unregistered``: a manifest exists but does not own the scan,
+    accepted only because ``EASYICU_ALLOW_UNREGISTERED_SCAN=1`` was set.
+    Both were checked against the directory inventory only.
+    """
+    return tuple(dict(entry) for entry in _SCAN_FALLBACKS)
+
+
+def _record_fallback(reason: str, base: Path, table: str) -> None:
+    warned = (str(base), table)
+    if warned in _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED.add(warned)
+    _SCAN_FALLBACKS.append({"reason": reason, "root": str(base), "table": table})
+    logging.getLogger(__name__).warning(
+        "%s: %s under %s has no conversion-manifest entry; checking the "
+        "directory only. Re-run or verify the conversion to detect a missing "
+        "chunk.", reason, table, base,
+    )
+
+
+def _registered_outputs(index: dict, table: str) -> frozenset:
+    wanted = table.lower()
+    for name, outputs, _rows in index.values():
+        if name.lower() == wanted:
+            return outputs
+    return frozenset()
+
+
 def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
     """Fail closed unless a flat scan covers its table's whole inventory.
 
@@ -505,24 +587,36 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     (``conversion_manifest.json``: each table's output files and total rows)
     is the inventory: the scan must be exactly the outputs of the table entry
     that owns its files, and the Parquet footer rows must equal the entry's
-    row count, so a missing or truncated chunk fails the load.  Without a
-    manifest, or for files no entry owns (older installations, hand-made
-    views), the inventory is every visible Parquet file under the directory
-    holding the scan, or the single file itself, and a warning asks for the
-    conversion to be re-run or verified.  The registry's file list names
-    ricu's CSV-era chunks and is not an installation manifest.  Bucket layouts
-    carry their own manifest inventory, validated on open (lead-r13: MIIV
-    labevents read 1 of 10 files).
+    row count, so a missing or truncated chunk fails the load.  A table the
+    manifest lists with outputs cannot resolve to no files, and when a
+    manifest exists every scanned file must belong to one of its entries
+    (``EASYICU_ALLOW_UNREGISTERED_SCAN=1`` downgrades the latter to the
+    directory check, recorded in :func:`scan_fallbacks`).  Without any
+    manifest (older installations, hand-made views) the inventory is every
+    visible Parquet file under the directory holding the scan, or the single
+    file itself, and the fallback is warned and recorded.  The registry's
+    file list names ricu's CSV-era chunks and is not an installation
+    manifest.  Bucket layouts carry their own manifest inventory, validated
+    on open (lead-r13: MIIV labevents read 1 of 10 files).
     """
+    files = tuple(files)
+    if source.base_path is None:
+        return files
+    base = Path(source.base_path)
+    index = _conversion_index(base)
     if not files:
+        registered = _registered_outputs(index, table) if index else frozenset()
+        if registered:
+            raise TableScanError(
+                "table_scan_files_missing", table,
+                f"conversion manifest lists {len(registered)} files; none found",
+            )
         return files
     parents = {p.parent for p in files}
     if len(parents) != 1:
         raise TableScanError("table_scan_mixed_roots", table, f"{len(parents)} directories")
-    base = Path(source.base_path)
     scanned_rows = sum(_footer_rows(p) for p in files)
     relatives = {_relative(base, p) for p in files}
-    index = _conversion_index(base)
     owners = {index.get(r) for r in relatives} if index is not None and None not in relatives else {None}
     if None not in owners and len(owners) == 1:
         owner, outputs, rows = next(iter(owners))
@@ -535,13 +629,16 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
         return files
     if None not in owners:
         raise TableScanError("table_scan_mixed_roots", table, f"{len(owners)} manifest tables")
-    warned = (str(base), table)
-    if warned not in _FALLBACK_WARNED:
-        _FALLBACK_WARNED.add(warned)
-        logging.getLogger(__name__).warning(
-            "table_scan_unmanifested: %s under %s has no conversion-manifest entry; "
-            "checking the directory only. Re-run or verify the conversion to "
-            "detect a missing chunk.", table, base,
+    if index is None:
+        _record_fallback("table_scan_unmanifested", base, table)
+    elif os.environ.get(ALLOW_UNREGISTERED_SCAN_ENV) == "1":
+        _record_fallback("table_scan_unregistered", base, table)
+    else:
+        raise TableScanError(
+            "table_scan_unregistered", table,
+            f"{len(files)} scanned files are not outputs of any {CONVERSION_MANIFEST} "
+            f"entry; regenerate the manifest (or set {ALLOW_UNREGISTERED_SCAN_ENV}=1 "
+            "to accept a recorded directory-only check)",
         )
     parent = next(iter(parents))
     names = {table.lower(), f"{table.lower()}_bucket"}
@@ -557,16 +654,61 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     return files
 
 
+def _file_identity(path: Path) -> tuple[int, int]:
+    stat = Path(path).stat()
+    return stat.st_dev, stat.st_ino
+
+
+def _loader_scan(table: str, loader: Path, files: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Bind the file set a reader opened (``loader``) to the policy's file set.
+
+    The disk loader and the policy locate files independently (registry
+    mappings, case-insensitive exports).  The reader must consume the policy's
+    validated set; a loader the policy cannot see is validated as the table's
+    scan, and a loader that disagrees with the policy fails closed.
+    """
+    if loader.is_dir():
+        own = tuple(sorted(p for p in loader.glob("*.parquet") if not p.name.startswith(".")))
+    elif loader.is_file() and loader.suffix.lower() in {".parquet", ".pq"}:
+        own = (loader,)
+    else:
+        own = ()
+    if not files:
+        return own
+    if {_file_identity(p) for p in own} != {_file_identity(p) for p in files}:
+        raise TableScanError(
+            "table_scan_loader_mismatch", table,
+            f"the reader opened {loader.name} ({len(own)} files) but the storage "
+            f"policy resolves {len(files)} files under {files[0].parent.name}",
+        )
+    return files
+
+
 def resolve_table_files(
     source,
     table: str,
     selector_column: str | None = None,
     selector_values: Iterable | None = None,
+    *,
+    loader: Path | None = None,
 ) -> tuple[Path, ...]:
-    """The sole table + selector → files policy, shared by all read paths."""
+    """The sole table + selector → files policy, shared by all read paths.
+
+    ``loader`` is the path a disk reader resolved for the table; the returned
+    set is what it must read (see :func:`_loader_scan`).
+    """
     root = source.resolve_bucket_directory(table)
     if root is None:
-        return verify_flat_scan(source, table, flat_table_files(source, table))
+        files = flat_table_files(source, table)
+        if loader is not None:
+            files = _loader_scan(table, Path(loader), files)
+        return verify_flat_scan(source, table, files)
+    if loader is not None and Path(loader) != root:
+        raise TableScanError(
+            "table_scan_loader_mismatch", table,
+            f"the reader opened {Path(loader).name} but the storage policy "
+            f"resolves the bucket installation {root.name}",
+        )
     layout = read_bucket_contract(
         root,
         allow_legacy=source.config.name == "aumc",
