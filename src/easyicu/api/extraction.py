@@ -1643,11 +1643,10 @@ def _oom_kill_delta(before: Optional[int], after: Optional[int]) -> Optional[int
     return max(0, int(after) - int(before))
 
 
-# Exit statuses of a worker stopped from outside with no record of why:
-# SIGKILL (-9 from multiprocessing, 137 from a shell) and the Windows
-# statuses of a process terminated under memory pressure (fail-fast
-# 0xC0000409, STATUS_NO_MEMORY 0xC0000017).
-_UNVERIFIED_KILL_EXIT_CODES = frozenset({-9, 137, 0xC0000409, 0xC0000017})
+# Exit statuses of a worker stopped with no record of why: SIGKILL (-9 from
+# multiprocessing, 137 from a shell) and Windows STATUS_NO_MEMORY
+# (0xC0000017). A crash status such as 0xC0000409 (fail-fast) is not a kill.
+_UNVERIFIED_KILL_EXIT_CODES = frozenset({-9, 137, 0xC0000017})
 
 
 def _host_reports_oom_kills() -> bool:

@@ -369,7 +369,7 @@ def test_the_host_reports_oom_kills_from_its_counter_or_linux(monkeypatch):
         assert api._host_reports_oom_kills() is False
 
 
-@pytest.mark.parametrize("exit_code", [-9, 137, 0xC0000409, 0xC0000017])
+@pytest.mark.parametrize("exit_code", [-9, 137, 0xC0000017])
 def test_a_bare_kill_is_eligible_only_without_a_counter(monkeypatch, exit_code):
     _no_counter(monkeypatch)
     assert api._unverified_kill_retry_eligible(exit_code, [])
@@ -380,6 +380,19 @@ def test_a_bare_kill_is_eligible_only_without_a_counter(monkeypatch, exit_code):
     # Unexplained kills stay typed.
     assert api._worker_failure_class(exit_code, []) == "worker_killed_unknown"
     monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: True)
+    assert not api._unverified_kill_retry_eligible(exit_code, [])
+
+
+@pytest.mark.parametrize(
+    "exit_code",
+    [
+        0xC0000409,  # Windows fail-fast crash, not a kill
+        -15,  # multiprocessing terminate() (TerminateProcess maps to -SIGTERM)
+        1,  # an external TerminateProcess / taskkill /F exit code
+    ],
+)
+def test_crashes_and_terminations_are_not_bare_kills(monkeypatch, exit_code):
+    _no_counter(monkeypatch)
     assert not api._unverified_kill_retry_eligible(exit_code, [])
 
 
