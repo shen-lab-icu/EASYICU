@@ -181,6 +181,35 @@ def test_a_non_empty_code_with_no_reference_row_is_an_unknown_disposition(monkey
     result = outcomes.load_outcomes("sic").set_index("CaseID")
     for horizon in ("mort_28d", "mort_90d", "mort_365d"):
         assert pd.isna(result.loc[1, horizon])
+        assert bool(result.loc[1, f"{horizon}_assumption_based"]) is True
+
+
+@pytest.mark.parametrize("case", ["unregistered_code", "unknown_category_year"])
+def test_a_cohort_whose_survivors_all_have_unknown_followup_is_na_not_refused(monkeypatch, case):
+    """A one-stay extraction must not fail where the cohort succeeds.
+
+    Every survivor's follow-up here is unknown for a stated reason. The
+    horizons are NA and flagged; the no-follow-up refusal is for a source that
+    has no follow-up at all (lead-r13 delta2 D2-SIC regression,
+    test_r6_f040_native_respiratory_retains_explicit_sic_airway).
+    """
+    cases = _cases_108().iloc[[0]].copy()
+    if case == "unregistered_code":
+        cases["HospitalDischargeType"] = 9999
+    else:
+        cases["AdmissionYear"] = 2030
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+    for horizon in ("mort_28d", "mort_90d", "mort_365d"):
+        assert pd.isna(result.loc[1, horizon])
+        assert bool(result.loc[1, f"{horizon}_assumption_based"]) is True
+
+
+def test_a_source_without_any_followup_mechanism_is_still_refused(monkeypatch):
+    cases = _cases_108().drop(columns=["EstimatedSurvivalObservationTime"])
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    with pytest.raises(ValueError, match="no follow-up"):
+        outcomes.load_outcomes("sic")
 
 
 @pytest.mark.parametrize("blank", [None, np.nan])

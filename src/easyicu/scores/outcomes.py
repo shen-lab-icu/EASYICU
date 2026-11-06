@@ -362,6 +362,10 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
     df["followup_days"] = np.nan
     df["followup_assumed"] = False
     df["followup_category_unknown"] = False
+    # A survivor whose discharge code is not a known death or survival code:
+    # its follow-up is unknown for a stated reason (NA and flagged), not
+    # missing from the source.
+    df["followup_disposition_unknown"] = unknown_disposition.to_numpy(dtype=bool)
     followup_column = cmap.get("estimatedsurvivalobservationtime")
     if followup_column is not None:
         followup = cases[followup_column]
@@ -513,10 +517,27 @@ def _load_followup_outcomes(
         base.get("followup_grace_days", pd.Series(0.0, index=base.index)),
         errors="coerce",
     ).fillna(0.0).to_numpy()
-    # A survivor reaches a horizon only through follow-up.  Without follow-up
-    # for any stay that records no death, every survivor would be missing and
-    # the horizon would be defined for the dead only.
-    if (~has_death).any() and not np.isfinite(followup_days[~has_death]).any():
+    # Stays whose follow-up the source states is unknown (SICdb: a follow-up
+    # category that cannot be rebuilt, or an unregistered discharge code).
+    # Their horizons are NA and flagged, below; they are not a source defect.
+    def _flag(column: str) -> np.ndarray:
+        return (
+            base.get(column, pd.Series(False, index=base.index))
+            .astype("boolean").fillna(False).to_numpy(dtype=bool)
+        )
+
+    category_unknown = _flag("followup_category_unknown")
+    disposition_unknown = _flag("followup_disposition_unknown") & ~has_death
+    followup_unknown = category_unknown | disposition_unknown
+    # A survivor reaches a horizon only through follow-up.  When no stay that
+    # records no death has follow-up, and the source states no reason for
+    # that, the follow-up mechanism itself is missing (no category column, no
+    # discharge times): every survivor would be missing and the horizon would
+    # be defined for the dead only.  A cohort whose survivors are all
+    # explicitly unknown publishes NA and flags instead: refusing it would
+    # fail an extraction depending on which stays it holds.
+    expected = ~has_death & ~followup_unknown
+    if expected.any() and not np.isfinite(followup_days[expected]).any():
         raise ValueError(
             f"{database}: fixed-horizon mortality has no follow-up for any "
             "stay without a recorded death"
@@ -534,17 +555,14 @@ def _load_followup_outcomes(
         base.get("followup_assumed", pd.Series(False, index=base.index))
         .astype("boolean").fillna(False).to_numpy(dtype=bool)
     )
-    # SICdb stays whose follow-up category could not be rebuilt, recorded
-    # deaths included: every horizon stays NA and is flagged as resting on
-    # that unknown assumption; days_to_death is unchanged (lead-r13 D2-SIC).
-    category_unknown = (
-        base.get("followup_category_unknown", pd.Series(False, index=base.index))
-        .astype("boolean").fillna(False).to_numpy(dtype=bool)
-    )
+    # SICdb stays whose follow-up category could not be rebuilt (recorded
+    # deaths included) and survivors with an unregistered discharge code:
+    # every horizon stays NA and is flagged as resting on that unknown
+    # follow-up; days_to_death is unchanged (lead-r13 D2-SIC).
     for name, horizon in _HORIZONS.items():
         unreachable = (
             np.isfinite(source_bound) & lt(source_bound + grace_days, horizon)
-        ) | category_unknown
+        ) | followup_unknown
         died_by = has_death & le(dtd, horizon) & (dtd >= 0) & ~unreachable
         known_alive = ((has_death & gt(dtd, horizon)) | (
             ~has_death & ge(followup_days + grace_days, horizon)
@@ -561,7 +579,7 @@ def _load_followup_outcomes(
         )
         flag = pd.array([pd.NA] * len(base), dtype="boolean")
         flag[died_by | known_alive] = False
-        flag[assumed | category_unknown] = True
+        flag[assumed | followup_unknown] = True
         out[f"{name}_assumption_based"] = flag
         followup_name = FIXED_HORIZON_MORTALITY_ENDPOINTS[name].followup_concept
         followup_time = np.full(len(base), np.nan, dtype="float64")
