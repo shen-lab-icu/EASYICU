@@ -530,6 +530,10 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     _set_cached_stay_limits(data_source, limits)
     return limits
 
+class ScoreGridUndeclaredError(ValueError):
+    """A score callback was run without a declared grid interval."""
+
+
 def _score_grid_and_window(
     observed_interval: Optional[pd.Timedelta],
     ctx: "ConceptCallbackContext",
@@ -537,8 +541,10 @@ def _score_grid_and_window(
 ) -> Tuple[pd.Timedelta, pd.Timedelta]:
     """Grid interval and ``slide`` lookback for a 24-hour worst-value score.
 
-    The grid follows the requested interval (``ctx.interval``); the observed
-    spacing is used only when none was requested.  ``slide(before=b)`` is
+    The grid is the requested interval (``ctx.interval``). The observed row
+    spacing is never used: its median depended on which stays shared the
+    batch (lead-r13 magnitude-inference sweep, #12), so a missing request
+    interval raises :class:`ScoreGridUndeclaredError`.  ``slide(before=b)`` is
     closed at both ends, so a 24-hour window on an hourly grid takes
     ``before = 24 h - 1 h`` (24 cells, as mimic-code's 23 PRECEDING) rather
     than 25 (2026-11-04 extraction audit round 4, R4-009/R4-064).
@@ -548,9 +554,16 @@ def _score_grid_and_window(
             "explicit_wins is not supported by the SOFA callbacks; only the "
             "continuous 24-hour window is implemented (audit round 4, R4-101)"
         )
-    interval = ctx.interval if ctx.interval is not None else observed_interval
-    if interval is None or interval <= pd.Timedelta(0):
-        interval = pd.Timedelta(hours=1)
+    del observed_interval  # kept in the signature; never consulted
+    interval = ctx.interval
+    if interval is None:
+        raise ScoreGridUndeclaredError(
+            "a 24-hour score needs the requested grid interval (ctx.interval); "
+            "it is never inferred from the observed row spacing"
+        )
+    interval = pd.Timedelta(interval)
+    if interval <= pd.Timedelta(0):
+        raise ScoreGridUndeclaredError(f"score grid interval must be positive, got {interval}")
     before = win_length - interval if win_length >= interval else win_length
     return interval, before
 
@@ -3567,14 +3580,7 @@ def _callback_sofa_score(
             else:
                 _pos = _diffs[_diffs > pd.Timedelta(0)]
             if len(_pos) > 0:
-                inferred_interval = _pos.median()
-                # Handle numeric (hours) vs timedelta
-                if isinstance(inferred_interval, (int, float)):
-                    inferred = pd.Timedelta(hours=max(1, round(inferred_interval)))
-                else:
-                    inferred_hours = round(inferred_interval.total_seconds() / 3600)
-                    inferred = pd.Timedelta(hours=max(1, inferred_hours))
-                interval, sofa_before = _score_grid_and_window(inferred, ctx, win_length)
+                interval, sofa_before = _score_grid_and_window(None, ctx, win_length)
 
                 # fill_gaps takes absolute start/end limits; the end is not
                 # a duration (2026-11-04 audit round 4, R4-063).
@@ -3776,17 +3782,7 @@ def _callback_sofa2_score(
             else:
                 positive_diffs = diffs[diffs > pd.Timedelta(0)]
             if len(positive_diffs) > 0:
-                inferred_interval = positive_diffs.median()
-                if isinstance(inferred_interval, (int, float)):
-                    inferred = pd.Timedelta(
-                        hours=max(1, round(inferred_interval))
-                    )
-                else:
-                    inferred_hours = round(
-                        inferred_interval.total_seconds() / 3600
-                    )
-                    inferred = pd.Timedelta(hours=max(1, inferred_hours))
-                interval, sofa2_before = _score_grid_and_window(inferred, ctx, win_length)
+                interval, sofa2_before = _score_grid_and_window(None, ctx, win_length)
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
@@ -5255,7 +5251,8 @@ def _callback_vent_ind(
             data=result_df,
             id_vars=list(id_columns),
             index_var="starttime",
-            dur_var="dur_var"
+            dur_var="dur_var",
+            interval=interval,  # the callback's grid, never derived from rows
         )
 
     def _windows_from_mech(mech: ICUTable | WinTbl) -> Optional[ICUTable]:
@@ -5816,19 +5813,17 @@ def _callback_vaso_ind(
     def _coerce_duration(series: pd.Series) -> pd.Series:
         if pd.api.types.is_timedelta64_dtype(series):
             return series
-        # Check if it's datetime type (bug in some duration columns)
+        # A datetime is a point in time, not a duration. The former branch
+        # guessed seconds-since-2000 when every value lay within a year of
+        # 2000-01-01 and otherwise wiped the whole column, so one row decided
+        # the rest (lead-r13 magnitude-inference sweep, #13).
         if pd.api.types.is_datetime64_any_dtype(series):
-            # This might be a datetime column mistakenly used as duration
-            # Try to interpret as offset from base time
-            dt_series = pd.to_datetime(series, errors="coerce")
-            base = pd.Timestamp("2000-01-01")
-            # If values are close to base_time, they might represent durations stored as timestamps
-            time_diffs = (dt_series - base).dt.total_seconds()
-            # Check if these look like reasonable durations (< 1 year in seconds)
-            if time_diffs.notna().any() and (time_diffs[time_diffs.notna()].abs() < 365*24*3600).all():
-                return pd.to_timedelta(time_diffs, unit="s", errors="coerce")
-            # Otherwise, return NaT for all invalid entries
-            return pd.Series([pd.NaT] * len(series), index=series.index, dtype='timedelta64[ns]')
+            from ..table.duration import DurationUnitError
+
+            raise DurationUnitError(
+                "vaso_ind received a datetime-typed duration; the producer must "
+                "publish a timedelta or a numeric duration with a declared unit"
+            )
         # For numeric values, assume duration is in HOURS (consistent with eICU/ricu conventions)
         # pd.to_timedelta on raw numbers defaults to nanoseconds, which is wrong
         # First try to convert to numeric - if successful, interpret as hours

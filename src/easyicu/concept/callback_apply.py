@@ -4367,6 +4367,7 @@ def _apply_callback(
             frame,
             val_var=val_var,
             index_var=index_var,
+            interval=interval,
         )
 
     # sum_at_same_time: components charted at one time add up to the concept,

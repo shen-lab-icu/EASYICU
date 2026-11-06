@@ -280,11 +280,12 @@ def _eicu_episode_upper_by_stay(
     return keyed.groupby("stay", sort=False)["upper"].max()
 
 
-def _aumc_admittedat_scale(admittedat: pd.Series) -> float:
-    """AUMC clock units per hour: minutes as loaded, raw milliseconds otherwise."""
-
-    median = pd.to_numeric(admittedat, errors="coerce").abs().median(skipna=True)
-    return 3_600_000.0 if median > 1_000_000_000 else 60.0
+# AUMC clock units per hour as loaded: ICUDataSource converts every declared
+# AUMC time column from source milliseconds to minutes by database name
+# (datasource.py). The unit is declared there, never inferred here; the former
+# median rule (> 1e9 → milliseconds) read the batch's values (lead-r13
+# magnitude-inference sweep, #5).
+_AUMC_LOADED_UNITS_PER_HOUR = 60.0
 
 
 def _aumc_episode_upper_hours(
@@ -5899,6 +5900,20 @@ class ConceptResolver:
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: expand前, 行数={len(expansion_input)}, start_var={index_column}, end_var={end_col}")
                         print(f"   🔍 DEBUG: endtime样本: {expansion_input[end_col].head(3).tolist() if end_col in expansion_input.columns else 'N/A'}")
+                    if (
+                        not align_to_admission
+                        and index_column in expansion_input.columns
+                        and pd.api.types.is_numeric_dtype(expansion_input[index_column])
+                        and index_column not in expansion_input.attrs.get("easyicu_time_columns", {})
+                    ):
+                        # Unaligned numeric axes keep the source clock (eICU
+                        # minutes, SICdb seconds, ...). That unit is declared by
+                        # the producer or the window is refused; it is never
+                        # inferred from the values (lead-r13 sweep, #2).
+                        raise ConceptError(
+                            f"{concept_name}: unaligned numeric time axis {index_column!r} "
+                            "declares no unit; window expansion needs a declared clock"
+                        )
                     expanded = expand(
                         expansion_input,
                         start_var=index_column,
@@ -6194,6 +6209,9 @@ class ConceptResolver:
                 id_vars=id_columns,
                 index_var=index_column,
                 dur_var='dur_var',
+                # The grid this table was loaded for. The raw cache compares it
+                # with each request; it is never derived from the rows.
+                interval=interval,
             )
             # 🔧 FIX 2026-03-11: Save TsTbl source rows for later expansion
             # These rows came from sources without dur_var (e.g., eICU infusiondrug, MIMIC inputevents_cv)
@@ -6443,7 +6461,7 @@ class ConceptResolver:
             )
             upper = _aumc_episode_upper_hours(
                 bounds["admittedat"], bounds["dischargedat"],
-                scale=_aumc_admittedat_scale(bounds["admittedat"]),
+                scale=_AUMC_LOADED_UNITS_PER_HOUR,
                 post_discharge_hours=post, fallback_hours=fallback,
             )
             return window(pd.Series(upper.to_numpy(), index=bounds[stay_column].to_numpy()))
@@ -6776,7 +6794,7 @@ class ConceptResolver:
             # ICUDataSource normalises AUMC timestamp columns from raw
             # milliseconds to minutes.  Accept raw milliseconds as a defensive
             # fallback for custom datasource implementations.
-            admittedat_scale = _aumc_admittedat_scale(admittedat)
+            admittedat_scale = _AUMC_LOADED_UNITS_PER_HOUR
             for col in cols_to_convert:
                 if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
                     # Source columns reach this layer as absolute minutes.
@@ -9074,6 +9092,8 @@ class ConceptResolver:
                     id_vars=id_cols,
                     index_var=idx_col,
                     dur_var="dur_var",
+                    # The base table's declared grid; never derived from the rows.
+                    interval=getattr(base_table, "interval", None),
                 )
             # 使用非贪婪匹配，并支持嵌套括号（如 mins(360L)）
             dur_match = re.search(r"ts_to_win_tbl\(([^)]+\))\)", callback, flags=re.DOTALL)
@@ -9115,6 +9135,8 @@ class ConceptResolver:
                 id_vars=base_id_cols,
                 index_var=base_idx_col,
                 dur_var="dur_var",  # Use 'dur_var' to match R ricu
+                # The base table's declared grid; never derived from the rows.
+                interval=getattr(base_table, "interval", None),
             )
 
         # 🔧 FIX 2025-02-13: 当 base_table 是 WinTbl 时，保留 dur_var 列
@@ -9160,6 +9182,8 @@ class ConceptResolver:
                 id_vars=base_id_cols,
                 index_var=idx_col,
                 dur_var=dur_col,
+                # The base table's declared grid; never derived from the rows.
+                interval=getattr(base_table, "interval", None),
             )
         
         # 🔧 FIX 2025-02-14: Use id_vars for WinTbl  
