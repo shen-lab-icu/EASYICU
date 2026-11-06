@@ -530,3 +530,43 @@ def test_an_interrupted_refresh_promotion_is_refused_until_resume_completes(tmp_
     assert refresher.refresh_candidate(**arguments, resume=True) == candidate
     for target in targets:
         assert publication.require_published_native_export(target) == target / "_manifest.json"
+
+    # A fresh, uninterrupted refresh clears every target it marked.
+    fresh = tmp_path / "fresh_candidate"
+    assert refresher.refresh_candidate(**{**arguments, "output_root": fresh}) == fresh
+    for database in refresher.DATABASES:
+        assert publication.unpublished_reason(fresh / "exports" / database) is None
+
+
+# --- delta13p: a source receipt never turns export files into a source ------
+
+def test_a_leftover_source_receipt_beside_module_files_is_refused(bare_export):
+    from easyicu.webserver import dataio
+
+    (bare_export / "conversion_manifest.json").write_text("{}", encoding="utf-8")
+    assert publication.folder_unpublished_reason(
+        bare_export, module_names=api.EXTRACT_MODULES
+    ) == publication.REASON_AMBIGUOUS
+    for reader in (dataio.scan_path, dataio.describe_export_source, dataio.describe_source_tables):
+        answer = reader(str(bare_export))
+        assert (answer["ok"], answer["error"], answer["reason"]) == (
+            False, "native_export_unpublished", publication.REASON_AMBIGUOUS,
+        ), reader.__name__
+
+
+def test_a_farm_shaped_source_root_is_accepted(web_source, tmp_path):
+    """A b6_root-style farm: links to table files, bucket dirs, its own receipt."""
+    from easyicu.webserver import dataio
+
+    farm = tmp_path / "farm"
+    farm.mkdir()
+    for path in sorted(web_source.raw.iterdir()):
+        if path.name.startswith("."):
+            continue
+        (farm / path.name).symlink_to(path)
+    bucket = farm / "vitalperiodic_bucket"
+    bucket.mkdir()
+    (bucket / "manifest.json").write_text("{}", encoding="utf-8")
+    assert (farm / "conversion_manifest.json").exists()
+    assert publication.folder_unpublished_reason(farm, module_names=api.EXTRACT_MODULES) is None
+    assert dataio.scan_path(str(farm))["ok"] is True

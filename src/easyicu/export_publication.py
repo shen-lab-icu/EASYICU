@@ -33,6 +33,7 @@ UNPUBLISHED_CODE = "native_export_unpublished"
 REASON_IN_PROGRESS = "in_progress_marker"
 REASON_MANIFEST_MISSING = "manifest_missing"
 REASON_STALE_PARTIAL = "stale_partial_export"
+REASON_AMBIGUOUS = "export_source_ambiguous"
 
 _MARKER_TEXT = (
     "EasyICU native export in progress or interrupted. The files in this "
@@ -157,12 +158,15 @@ def folder_unpublished_reason(
 
     For entry points that accept both exports and sources. A published export
     has no marker and a root manifest (native, or the older
-    ``easyicu_export_manifest.json`` package). A prepared source is recognised
-    by its own preparation receipt. Absent both, a folder holding any export
-    file (a ``{module}`` data file named after an extraction module, a
-    producer manifest, the metadata sidecar or feature definitions) is an
-    unpublished export: missing export sidecars never prove a source. Any
-    other folder (a raw CSV source) is left to its own detection contract.
+    ``easyicu_export_manifest.json`` package). A legitimate source folder
+    holds only its own source tables. Without a root manifest, a folder
+    holding any export file (a ``{module}`` data file named after an
+    extraction module, a producer manifest, the metadata sidecar or feature
+    definitions) is an unpublished export (``manifest_missing``), and
+    ``export_source_ambiguous`` when a source preparation receipt sits beside
+    it: missing export sidecars never prove a source, and a receipt never
+    turns export files into one. Any other folder (a prepared source, a raw
+    CSV source) is left to its own contract.
     """
 
     root = Path(export_dir)
@@ -170,9 +174,12 @@ def folder_unpublished_reason(
         return REASON_IN_PROGRESS
     if _has_root_manifest(root):
         return None
-    if any((root / name).is_file() for name in SOURCE_PREPARATION_MANIFESTS):
-        return None
     if _holds_export_files(root, module_names):
+        # A legitimate source holds only its own source tables. A preparation
+        # receipt beside export files (an export written into, or copied from,
+        # a prepared source folder) cannot make them a source.
+        if any(os.path.lexists(root / name) for name in SOURCE_PREPARATION_MANIFESTS):
+            return REASON_AMBIGUOUS
         return REASON_MANIFEST_MISSING
     return None
 
