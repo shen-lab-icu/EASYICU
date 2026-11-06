@@ -223,6 +223,8 @@ def _legacy_manifest(root: Path, manifest: dict, marker, allow: bool) -> dict:
         if not (manifest["complete_size"] == marker.st_size):
             raise ValueError("legacy receipt mismatch")
         inventory = []
+        if not isinstance(manifest["files_by_bucket"], dict):
+            raise ValueError("files_by_bucket must be an object")
         for bid, paths in manifest["files_by_bucket"].items():
             for relative in paths:
                 path = _inventory_path(root, relative, count)
@@ -250,7 +252,7 @@ def _legacy_manifest(root: Path, manifest: dict, marker, allow: bool) -> dict:
             builder_version="legacy-aumc-v1",
             inventory=inventory,
         )
-    except (OSError, KeyError, TypeError, ValueError) as exc:
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
         raise BucketLayoutError("bucket_legacy_unverifiable", root) from exc
 
 
@@ -300,7 +302,9 @@ def read_bucket_contract(
             )
         _check_bucket_derived_from(root, manifest)
         if manifest.get("scheme") == VARIABLE_SCHEME:
-            return _read_variable_contract(root, manifest, cache)
+            layout = _read_variable_contract(root, manifest, cache)
+            _verify_bucket_sources(root, manifest)
+            return layout
         scheme, key, kind = (manifest[k] for k in ("scheme", "key_column", "key_type"))
         if (
             scheme not in {"hash", "range"}
@@ -348,6 +352,8 @@ def read_bucket_contract(
         by_bucket: dict[int, list[Path]] = {i: [] for i in range(count)}
         seen = set()
         for entry in inventory:
+            if not isinstance(entry, dict):
+                raise BucketLayoutError("bucket_inventory_mismatch", root)
             path = _inventory_path(root, entry["relative_path"], count)
             if any(
                 not isinstance(entry[k], int)
@@ -394,6 +400,7 @@ def read_bucket_contract(
         actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
         if actual != seen:
             raise BucketLayoutError("bucket_inventory_mismatch", root)
+        _verify_bucket_sources(root, manifest)
         return BucketLayout(
             root,
             scheme,
@@ -406,7 +413,9 @@ def read_bucket_contract(
         )
     except BucketLayoutError:
         raise
-    except (OSError, KeyError, TypeError, ValueError) as exc:
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        # AttributeError: a field of the wrong JSON type (``[]`` where an
+        # object belongs) is the manifest's defect, not an untyped crash.
         raise BucketLayoutError("bucket_manifest_invalid", root) from exc
 
 
@@ -427,7 +436,8 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
     """A bucket manifest's optional ``derived_from`` must be well formed.
 
     Present means bound to exact source files (relative path, size, mtime and
-    sha256 of each); any other shape is an unverifiable binding.
+    sha256 of each); any other shape is an unverifiable binding. The current
+    sources are compared with it by ``_verify_bucket_sources``.
     """
     if "derived_from" not in manifest:
         return
@@ -451,6 +461,41 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
             or not set(digest) <= _SHA256_HEX
         ):
             raise BucketLayoutError("bucket_derived_from_invalid", root)
+
+
+def _verify_bucket_sources(root: Path, manifest: dict) -> None:
+    """The source files ``derived_from`` binds still are the files it recorded.
+
+    Checked on every open, after the layout's own structure, so structural
+    defects keep their reasons. Each recorded path is relative to the
+    installation root (the bucket directory's parent), where the builder's
+    data path and the flat source live; a symlinked source is compared
+    through its link, as the builder stat'ed it. Size and mtime must equal
+    the recorded values (no bytes are read; the recorded sha256 stays the
+    builder's binding):
+    - a recorded source that no longer exists is
+      ``bucket_derived_from_source_missing``: the layout claims a provenance
+      it can no longer show, so it is not served (rebuild the layout or
+      restore the source);
+    - a changed size or mtime is ``bucket_derived_from_source_changed``.
+    A manifest without ``derived_from`` (layouts built before the binding)
+    is not checked here, as before.
+    """
+    derived = manifest.get("derived_from")
+    if derived is None:
+        return
+    base = root.parent
+    for entry in derived["files"]:
+        relative = PurePosixPath(entry["path"])
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise BucketLayoutError("bucket_derived_from_invalid", root)
+        source = base.joinpath(*relative.parts)
+        try:
+            stat = source.stat()
+        except OSError as exc:
+            raise BucketLayoutError("bucket_derived_from_source_missing", root) from exc
+        if stat.st_size != entry["size"] or stat.st_mtime_ns != entry["mtime_ns"]:
+            raise BucketLayoutError("bucket_derived_from_source_changed", root)
 
 
 def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> BucketLayout:
@@ -501,6 +546,8 @@ def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> B
         raise ValueError("missing partitions")
     partitions, seen_values = [], set()
     for index, entry in enumerate(raw_partitions):
+        if not isinstance(entry, dict):
+            raise BucketLayoutError("bucket_partition_invalid", root)
         if entry["id"] != index or not _is_power_of_two(entry["modulus"]):
             raise BucketLayoutError("bucket_partition_invalid", root)
         if count % entry["modulus"]:
@@ -511,8 +558,16 @@ def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> B
             raise BucketLayoutError("bucket_partition_invalid", root)
         seen_values.add(marker)
         secondary = entry.get("secondary", {})
-        if set(secondary) != set(secondary_columns) or any(
-            not isinstance(v, list) for v in secondary.values()
+        # Types first: ``secondary`` is an object of selector column -> list
+        # of scalar values ([] or a string has no ``values()``).
+        if (
+            not isinstance(secondary, dict)
+            or set(secondary) != set(secondary_columns)
+            or any(
+                not isinstance(v, list)
+                or any(isinstance(x, (list, dict)) for x in v)
+                for v in secondary.values()
+            )
         ):
             raise BucketLayoutError("bucket_partition_invalid", root)
         partitions.append(
@@ -542,6 +597,8 @@ def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> B
     by_partition: dict[tuple[int, int], list[Path]] = {}
     seen: set[Path] = set()
     for entry in inventory:
+        if not isinstance(entry, dict):
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
         relative = entry["relative_path"]
         parts = PurePosixPath(relative).parts if isinstance(relative, str) else ()
         if (
@@ -819,6 +876,16 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
         # separately); its inventory is the union, its rows the sum.
         tables: dict[str, tuple[set, int | None]] = {}
         for entry in entries:
+            outputs_list = entry.get("outputs") if isinstance(entry, dict) else None
+            if not isinstance(entry, dict) or not (
+                outputs_list is None
+                or (isinstance(outputs_list, list)
+                    and all(isinstance(o, dict) for o in outputs_list))
+            ):
+                raise TableScanError(
+                    "conversion_manifest_unreadable", path.name,
+                    "each table entry must be an object whose outputs are objects",
+                )
             name = str(entry.get("table"))
             outputs, rows = tables.setdefault(name, (set(), 0))
             outputs.update(
