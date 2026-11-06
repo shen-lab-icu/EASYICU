@@ -28,6 +28,25 @@ class MissingTableSourceError(KeyError):
     """
 
 
+class SourceTimeFormatError(storage_layout.StorageIntegrityError):
+    """A declared relative-offset time column mixes numeric and other tokens.
+
+    Which reading applies cannot be decided from the values: the column would
+    become numbers or calendar datetimes depending on which rows a batch holds.
+    Not a ``ValueError``, so readers cannot mistake it for an absent source.
+    """
+
+    def __init__(self, table: str, column: str, *, numeric: int, other: int):
+        self.reason = "mixed_time_tokens"
+        self.table = table
+        self.column = column
+        super().__init__(
+            f"mixed_time_tokens: {table}.{column} holds {numeric} numeric and "
+            f"{other} non-numeric non-blank values; the source declares relative "
+            "offsets, so this column cannot be read as either"
+        )
+
+
 def _duckdb_path(p) -> str:
     """Convert a Path or string to a DuckDB-safe path string.
 
@@ -1065,6 +1084,16 @@ class ICUDataSource:
                     if populated.any() and numeric.loc[populated].notna().all():
                         frame[column] = numeric
                         continue
+                    numeric_count = int(numeric.loc[populated].notna().sum())
+                    if numeric_count:
+                        # Some rows parse as offsets and others do not: refuse
+                        # rather than let the batch's rows pick the reading.
+                        raise SourceTimeFormatError(
+                            table_name,
+                            column,
+                            numeric=numeric_count,
+                            other=int(populated.sum()) - numeric_count,
+                        )
                 frame[column] = _coerce_datetime(values)
 
         # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
