@@ -594,15 +594,47 @@ def distribute_volume_hourly(
     ends = end.loc[valid].astype(float).reset_index(drop=True)
     amounts = amount.loc[valid].astype(float).reset_index(drop=True)
 
+    from .exact_sum import exact_groupby_sum
+
+    # Hourly totals must not depend on how rows fall into chunks (a batch or
+    # thread layout reorders them): a stay's rows share one chunk, and each
+    # (stay, hour) total is an order-independent exact sum.
+    chunk_starts = [0]
+    if aggregate and len(ids):
+        stay_codes = pd.factorize(ids, sort=False)[0]
+        order = np.argsort(stay_codes, kind="stable")
+        ids, starts, ends, amounts = (
+            series.iloc[order].reset_index(drop=True)
+            for series in (ids, starts, ends, amounts)
+        )
+        stay_codes = stay_codes[order]
+        stay_starts = np.flatnonzero(
+            np.concatenate(([True], stay_codes[1:] != stay_codes[:-1]))
+        )
+        while chunk_starts[-1] + row_chunk_size < len(ids):
+            nxt = int(
+                stay_starts[
+                    min(
+                        np.searchsorted(stay_starts, chunk_starts[-1] + row_chunk_size),
+                        len(stay_starts) - 1,
+                    )
+                ]
+            )
+            if nxt <= chunk_starts[-1]:
+                break
+            chunk_starts.append(nxt)
+    else:
+        chunk_starts = list(range(0, len(ids), row_chunk_size)) or [0]
+    chunk_bounds = list(zip(chunk_starts, chunk_starts[1:] + [len(ids)]))
+
     def _reduce_pieces(pieces: List[pd.DataFrame]) -> pd.DataFrame:
         if len(pieces) == 1:
             return pieces[0]
         if not aggregate:
             return pd.concat(pieces, ignore_index=True)
-        return (
-            pd.concat(pieces, ignore_index=True)
-            .groupby([id_col, index_col], as_index=False, sort=False)[val_col]
-            .sum(min_count=1)
+        return exact_groupby_sum(
+            pd.concat(pieces, ignore_index=True), [id_col, index_col], val_col,
+            min_count=1,
         )
 
     def _allocate_piece(lo: int, hi: int) -> pd.DataFrame:
@@ -659,18 +691,16 @@ def distribute_volume_hourly(
         piece = piece[np.isfinite(piece[val_col])]
         if not aggregate:
             return piece.reset_index(drop=True)
-        return (
-            piece.groupby([id_col, index_col], as_index=False, sort=False)[val_col]
-            .sum(min_count=1)
-            .reset_index(drop=True)
-        )
+        return exact_groupby_sum(
+            piece, [id_col, index_col], val_col, min_count=1
+        ).reset_index(drop=True)
 
     # Binary-tree compaction keeps the largest live intermediate close to the
     # final hourly output size instead of retaining one expanded array for all
     # source intervals. This is the important 16-GB portability bound.
     reduction_levels: List[Optional[pd.DataFrame]] = []
-    for lo in range(0, len(ids), row_chunk_size):
-        carry = _allocate_piece(lo, min(lo + row_chunk_size, len(ids)))
+    for lo, hi in chunk_bounds:
+        carry = _allocate_piece(lo, hi)
         level = 0
         while level < len(reduction_levels) and reduction_levels[level] is not None:
             carry = _reduce_pieces([reduction_levels[level], carry])

@@ -45,7 +45,11 @@ def _fast_groupby_agg(df: pd.DataFrame, group_cols: list, agg_dict: dict) -> pd.
     For 2-column numeric groupby (patient_id, time_hour), computes a single
     combined integer key to avoid pandas' expensive compress_group_index
     (~5.7s for 24M rows → ~0s with single-column groupby).
+
+    ``sum`` and ``mean`` are order-independent (``utils.exact_sum``): the same
+    rows give the same bits whatever batch, thread or load path ordered them.
     """
+    from ..utils.exact_sum import apply_exact_columns, exact_groupby_agg
     # Try combined-key optimization for 2-column numeric groupby
     if (len(group_cols) == 2
             and pd.api.types.is_numeric_dtype(df[group_cols[0]])
@@ -73,13 +77,13 @@ def _fast_groupby_agg(df: pd.DataFrame, group_cols: list, agg_dict: dict) -> pd.
             for values in (g0, g1)
         )
         if not packable:
-            return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+            return exact_groupby_agg(df, group_cols, agg_dict)
         time_span = int(g1.max()) - int(g1.min())
         stride = time_span + 2
         if (time_span > key_max or stride > key_max
                 or int(g0.min()) * stride < key_min
                 or int(g0.max()) * stride + time_span > key_max):
-            return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+            return exact_groupby_agg(df, group_cols, agg_dict)
 
         # Compute combined int64 key: pid * stride + (time - time_min)
         g1_int = g1.astype(np.int64)
@@ -96,10 +100,13 @@ def _fast_groupby_agg(df: pd.DataFrame, group_cols: list, agg_dict: dict) -> pd.
         # Group by numpy array directly (no DataFrame copy needed)
         result = df.groupby(combined_key, sort=False).agg(fast_agg)
         result.index = pd.RangeIndex(len(result))
-        return result
+        if not any(how in ("sum", "mean") for how in agg_dict.values()):
+            return result
+        codes, uniques = pd.factorize(combined_key, sort=False)
+        return apply_exact_columns(result, df, codes, len(uniques), agg_dict)
 
     # Fallback: standard pandas groupby
-    return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+    return exact_groupby_agg(df, group_cols, agg_dict)
 
 
 def change_interval(

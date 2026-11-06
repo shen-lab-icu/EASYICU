@@ -113,7 +113,11 @@ def systemic_intake(frame: pd.DataFrame, column: str) -> pd.DataFrame:
     work[column] = values.loc[work.index]
     pieces = work.iloc[:0].copy()
     if not work.empty:
-        work = work.sort_values(["patientunitstayid", "cellpath", "intakeoutputoffset"])
+        # Total order: same-time records of one channel resolve the same way
+        # whatever order the batch or thread layout delivered them in.
+        work = work.sort_values(
+            ["patientunitstayid", "cellpath", "intakeoutputoffset", column], kind="mergesort"
+        )
         work["_next"] = work.groupby(["patientunitstayid", "cellpath"])["intakeoutputoffset"].shift(-1)
         duration = work._next - work.intakeoutputoffset
         work = work.loc[duration.gt(0) & duration.le(360) & work[column].gt(0) & work[column].le(10000)]

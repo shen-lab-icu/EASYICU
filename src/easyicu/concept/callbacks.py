@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
 
 from ..utils.unit_conversion import convert_vaso_rate
+from ..utils.exact_sum import exact_groupby_agg, exact_groupby_sum
 from ..utils.thresholds import ge, gt, le, lt
 from .errors import ConceptTableReadError
 from .availability_signal import (
@@ -2912,9 +2913,7 @@ def _callback_norepi_equiv(
     # to potency summation across DIFFERENT drugs. SOFA cardio is unaffected:
     # it consumes norepi60/dopa60/dobu60/epi60 + map, never norepi_equiv.
     if key_cols:
-        aggregated = (
-            combined.groupby(key_cols)["norepi_equiv"].sum().reset_index()
-        )
+        aggregated = exact_groupby_sum(combined, key_cols, "norepi_equiv", sort=True)
         aggregated = aggregated.sort_values(key_cols).reset_index(drop=True)
     else:
         aggregated = pd.DataFrame({"norepi_equiv": [combined["norepi_equiv"].sum()]})
@@ -8464,16 +8463,16 @@ def _callback_fluid_balance_admitted(
             input_df["_hour"] = np.floor(input_df["_hour"]).astype(int)
 
         # Sum input per (stay, hour)
-        input_hourly = input_df.groupby([id_col, "_hour"], as_index=False).agg(
-            {amount_col: "sum"}
+        input_hourly = exact_groupby_agg(
+            input_df, [id_col, "_hour"], {amount_col: "sum"}, sort=True
         ).rename(columns={"_hour": time_col, amount_col: "input_ml"})
 
         # Prepare urine hourly
         urine_df[urine_val_col] = pd.to_numeric(urine_df[urine_val_col], errors="coerce").fillna(0)
         urine_df[time_col] = pd.to_numeric(urine_df[time_col], errors="coerce")
         urine_df["_hour"] = np.floor(urine_df[time_col]).astype(int)
-        urine_hourly = urine_df.groupby([id_col, "_hour"], as_index=False).agg(
-            {urine_val_col: "sum"}
+        urine_hourly = exact_groupby_agg(
+            urine_df, [id_col, "_hour"], {urine_val_col: "sum"}, sort=True
         ).rename(columns={"_hour": time_col, urine_val_col: "urine_ml"})
 
         # Merge input and urine on (stay, hour) — outer join
@@ -8701,7 +8700,9 @@ def _callback_fluid_balance_cumulative(
         & df[val_col].notna()
         & df[time_col].ge(0)
     ].copy()
-    df = df.sort_values([id_col, time_col])
+    # Strict time order with a total tie-break: the running sum adds the same
+    # terms in the same order whatever order the rows arrived in.
+    df = df.sort_values([id_col, time_col, val_col], kind="mergesort")
     df["fluid_balance_cumulative"] = df.groupby(id_col)[val_col].cumsum()
     result = df[[id_col, time_col, "fluid_balance_cumulative"]].copy()
 

@@ -3338,11 +3338,21 @@ def load_bucketed_table_aggregated(
             return f"CASE WHEN {' AND '.join(conditions)} THEN ({expr}) END"
         return expr
 
+    # SQL SUM/AVG depend on DuckDB's thread and partition order. Sum and mean
+    # return the group's terms instead; ``exact_terms_to_values`` collapses them
+    # with the same order-independent sum as the pandas path.
+    _exact_terms = duckdb_agg in ("SUM", "AVG")
+
+    def _sql_aggregate(expr: str) -> str:
+        if _exact_terms:
+            return f"LIST({expr}) FILTER (WHERE ({expr}) IS NOT NULL)"
+        return f"{duckdb_agg}({expr})"
+
     def _aggregate_select(expr: str):
         """Build bounded aggregation plus raw-value diagnostics."""
         bounded_expr = _bounded_value(expr)
-        bounded_agg = f"{duckdb_agg}({bounded_expr})"
-        unbounded_agg = f"{duckdb_agg}({expr})"
+        bounded_agg = _sql_aggregate(bounded_expr)
+        unbounded_agg = _sql_aggregate(expr)
         select = f"{bounded_agg} as {value_column}"
         if _needs_bounds_diagnostics:
             select += (
@@ -3965,9 +3975,15 @@ def load_bucketed_table_aggregated(
                 arrow_table = conn.execute(sql).fetch_arrow_table()
                 result = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
                 del arrow_table
-                return result
             except Exception:
-                return conn.execute(sql).fetchdf()
+                result = conn.execute(sql).fetchdf()
+        if _exact_terms and value_column in result.columns:
+            from .utils.exact_sum import exact_terms_to_values
+
+            result[value_column] = exact_terms_to_values(
+                result[value_column], "mean" if duckdb_agg == "AVG" else "sum"
+            )
+        return result
 
     try:
         df = finish_miiv_lab_frame(_execute_aggregation(query))

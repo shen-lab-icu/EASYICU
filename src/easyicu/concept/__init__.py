@@ -3441,10 +3441,17 @@ class ConceptResolver:
                                 _wt_bounds += f' AND {_wt_val_var} >= {float(definition.minimum)}'
                             if definition.maximum is not None:
                                 _wt_bounds += f' AND {_wt_val_var} <= {float(definition.maximum)}'
+                            # Sum and mean return the hour's terms; they are collapsed
+                            # by the same order-independent sum as the pandas path.
+                            _wt_exact = _wt_agg_func in ('SUM', 'AVG')
+                            _wt_agg_sql = (
+                                f'LIST({_wt_val_var})' if _wt_exact
+                                else f'{_wt_agg_func}({_wt_val_var})'
+                            )
                             _wt_query = f"""
                                 SELECT {_wt_id_col},
                                        {_wt_time_expr} AS {_wt_time_col},
-                                       {_wt_agg_func}({_wt_val_var}) AS {_wt_val_var}
+                                       {_wt_agg_sql} AS {_wt_val_var}
                                 FROM read_parquet('{_wt_glob}', union_by_name=true)
                                 WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_bounds}
                                 GROUP BY {_wt_id_col}, {_wt_time_expr}
@@ -3457,6 +3464,12 @@ class ConceptResolver:
                             except Exception:
                                 # Fallback to raw loading
                                 frame = None
+                            if frame is not None and _wt_exact and _wt_val_var in frame.columns:
+                                from ..utils.exact_sum import exact_terms_to_values
+
+                                frame[_wt_val_var] = exact_terms_to_values(
+                                    frame[_wt_val_var], 'mean' if _wt_agg_func == 'AVG' else 'sum'
+                                )
 
                             if frame is not None and len(frame) > 0:
                                 table = ICUTable(
@@ -3701,7 +3714,9 @@ class ConceptResolver:
                                     
                                     if agg_dict:  # 只有当有列需要聚合时才执行
                                         try:
-                                            frame = frame.groupby(group_cols, as_index=False).agg(agg_dict)
+                                            from ..utils.exact_sum import exact_groupby_agg
+
+                                            frame = exact_groupby_agg(frame, group_cols, agg_dict, sort=True)
                                             frame = frame.rename(columns={time_col + '_rounded': time_col})
                                         except Exception as e:
                                             if verbose:
@@ -6070,9 +6085,11 @@ class ConceptResolver:
                 keys = [*id_columns, index_column]
                 if not index_column or any(key not in combined for key in keys):
                     raise ValueError("Signed irrigation sum requires patient and time keys")
-                combined = combined.groupby(keys, as_index=False, dropna=False)[
-                    concept_name
-                ].sum(min_count=1)
+                from ..utils.exact_sum import exact_groupby_sum
+
+                combined = exact_groupby_sum(
+                    combined, keys, concept_name, min_count=1, dropna=False, sort=True
+                )
             combined = bound_signed_total(
                 combined, concept_name, definition.minimum, definition.maximum
             )

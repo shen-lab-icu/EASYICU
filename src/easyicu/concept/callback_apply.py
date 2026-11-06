@@ -2408,10 +2408,10 @@ def _apply_callback(
             
             # Group by id and time, apply aggregation
             group_cols = [id_col, time_col]
-            if agg_func == 'sum':
-                result = frame.groupby(group_cols, as_index=False)[val_col].sum()
-            elif agg_func == 'mean':
-                result = frame.groupby(group_cols, as_index=False)[val_col].mean()
+            if agg_func in ('sum', 'mean'):
+                from ..utils.exact_sum import exact_groupby_agg
+
+                result = exact_groupby_agg(frame, group_cols, {val_col: agg_func}, sort=True)
             elif agg_func == 'max':
                 result = frame.groupby(group_cols, as_index=False)[val_col].max()
             elif agg_func == 'min':
@@ -4389,7 +4389,9 @@ def _apply_callback(
         # two to seven times with one value) is one measurement, not a summand.
         if source.sub_var and source.sub_var in work.columns:
             work = work.drop_duplicates([id_column, index_column, source.sub_var], keep="last")
-        summed = work.groupby([id_column, index_column], as_index=False)[concept_name].sum()
+        from ..utils.exact_sum import exact_groupby_sum
+
+        summed = exact_groupby_sum(work, [id_column, index_column], concept_name, sort=True)
         first = work.drop(columns=[concept_name]).drop_duplicates([id_column, index_column])
         return first.merge(summed, on=[id_column, index_column], how="inner")
 
