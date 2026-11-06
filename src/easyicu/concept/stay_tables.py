@@ -23,13 +23,15 @@ Every lookup resolves and stats the files again (no data is re-read):
 Lifetime: one batch scope (:func:`stay_table_batch`). A streamed export
 opens one around its batches, so a module's load and its dependency loads
 (several top-level calls, several resolvers) share the read; the batch
-boundary releases it (``clear_stay_tables``, called by ``api.extraction``
-with the batch's loaders). A top-level ``load_concepts`` outside any batch
-is its own batch and releases its entries when it returns, so a later call
-in the same process (a rerun, another read path) reads the current files
-instead of meeting a frame held from a finished call (Codex delta5). Within
-a scope an entry lives only while its stays are the latest ones (another
-stay set evicts it). A resolver's unscoped (whole-cohort) memo uses the same
+boundary releases that batch's entries (``release_stay_table_batch``,
+called by ``api.extraction`` with the batch's loaders); another batch's
+entries are never evicted by it or by this batch's next stays. A
+top-level ``load_concepts`` outside any batch is its own batch, opened
+before its preloads (Codex delta7c D7C-PRELOAD), and releases its entries
+when it returns, so a later call in the same process (a rerun, another
+read path) reads the current files instead of meeting a frame held from a
+finished call (Codex delta5). Within a batch an entry lives only while its
+stays are that batch's latest ones (the batch's next stay set evicts it). A resolver's unscoped (whole-cohort) memo uses the same
 binding check through ``checked_memo_frame``.
 """
 
@@ -116,11 +118,19 @@ def stay_table_batch() -> Iterator[object]:
 
 def _release(token: object) -> None:
     with _LOCK:
-        for key in [
-            k for k in _STORE
-            if isinstance(k[-1], tuple) and k[-1] and k[-1][0] is token
-        ]:
+        for key in [k for k in _STORE if k[-1][0] is token]:
             del _STORE[key]
+
+
+def release_stay_table_batch() -> None:
+    """Release the active batch's entries (a streamed batch boundary).
+
+    Entries owned by any other batch are kept; outside a batch this does
+    nothing.
+    """
+    token = _BATCH.get()
+    if token is not None:
+        _release(token)
 
 
 def _versions(table: str, paths) -> tuple:
@@ -157,12 +167,24 @@ def _check(binding: SourceBinding, held: tuple) -> None:
 
 
 def stay_table_frame(
-    binding: SourceBinding, scope: object, read: Callable[[], pd.DataFrame]
+    binding: SourceBinding, scope: tuple, read: Callable[[], pd.DataFrame]
 ) -> pd.DataFrame:
-    """Return the batch's frame for ``binding`` (read once per scope)."""
+    """Return the batch's frame for ``binding`` (read once per scope).
+
+    ``scope`` is ``(owner, stays)``: ``owner`` is the batch token that owns
+    the entry and releases it (``_release``); there is no entry without an
+    owner. Only this owner's entries for other stays are evicted: an
+    independent batch (another thread's, or an interleaved one) never
+    evicts this batch's entries, so each live batch keeps its source
+    binding, and refuses a changed file, until it ends (Codex delta7c
+    D7C-CROSS-BATCH).
+    """
+    if not isinstance(scope, tuple) or len(scope) != 2 or scope[0] is None:
+        raise ValueError("a stay-table entry needs an owning batch: scope is (owner, stays)")
+    owner = scope[0]
     key = (binding.identity, binding.table, scope)
     with _LOCK:
-        stale = [k for k in _STORE if k[-1] != scope]
+        stale = [k for k in _STORE if k[-1][0] is owner and k[-1] != scope]
         for k in stale:
             del _STORE[k]
         entry = _STORE.get(key)
@@ -190,9 +212,19 @@ def checked_memo_frame(
 
 
 def clear_stay_tables() -> None:
-    """Release every held stay table (a batch or call boundary)."""
+    """Release every held stay table of every batch (test isolation only).
+
+    Production boundaries release by owner: ``release_stay_table_batch``
+    or the end of the owning batch.
+    """
     with _LOCK:
         _STORE.clear()
+
+
+def held_stay_tables() -> int:
+    """Number of stay-table frames held now, across every live batch."""
+    with _LOCK:
+        return len(_STORE)
 
 
 def stay_table_reads() -> int:

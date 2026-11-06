@@ -180,7 +180,7 @@ def test_a_source_over_the_same_path_naming_other_files_misses(tmp_path):
             return pd.DataFrame({"x": [tag]})
         return _read
 
-    scope = ("patientunitstayid", frozenset({1}))
+    scope = (object(), ("patientunitstayid", frozenset({1})))  # (owning batch, stays)
     first = stay_table_frame(source_binding(_Files(tmp_path, [a]), "patient"), scope, read("a"))
     second = stay_table_frame(source_binding(_Files(tmp_path, [b]), "patient"), scope, read("b"))
     assert reads == ["a", "b"]

@@ -2607,10 +2607,11 @@ def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
 
 
 def _clear_stream_loader_caches(loader) -> None:
-    from ..concept.stay_tables import clear_stay_tables
+    from ..concept.stay_tables import release_stay_table_batch
 
-    # The batch's stay-origin tables are released with its loaders.
-    clear_stay_tables()
+    # The batch's stay-origin tables are released with its loaders (only
+    # this batch's: another live batch keeps its own).
+    release_stay_table_batch()
     if loader is None:
         # Streamed exports disable module grouping, so this helper normally
         # receives no explicitly shared loader.  ``load_concepts`` still owns

@@ -737,6 +737,36 @@ def _batch_stay_scope(patient_ids) -> Optional[tuple[str, frozenset]]:
     return None
 
 
+def _owns_stay_table_batch(method):
+    """Run a top-level ``load_concepts`` call inside one stay-table batch.
+
+    The batch is opened before anything in the call can read a stay-origin
+    table (wide/long-table preloads, episode windows, the concepts
+    themselves) and closed in ``finally``, so every read of the call,
+    including an early return or an exception, shares one token and
+    nothing outlives the call unless an enclosing batch owns it (Codex
+    delta7c D7C-PRELOAD). A nested call (a recursive concept on the same
+    resolver) keeps the outer call's batch.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if getattr(self, "_load_depth", 0):
+            return method(self, *args, **kwargs)
+        from .stay_tables import open_stay_table_batch
+
+        token, close = open_stay_table_batch()
+        self._stay_batch = token
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self.__dict__.pop("_stay_batch", None)
+            if close is not None:
+                close()
+
+    return wrapper
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -1424,6 +1454,7 @@ class ConceptResolver:
         
         return patient_ids
 
+    @_owns_stay_table_batch
     def load_concepts(
         self,
         concept_names: Iterable[str],
@@ -2152,13 +2183,6 @@ class ConceptResolver:
                 logger.info("✅  概念 '%s' 已加载 (行数: %s)", name, row_count)
             return name, concept_table
 
-        if is_top_level:
-            # The stay-table batch this call reads under: the enclosing one
-            # (a streamed export's batch) or this call alone, released when
-            # it returns (``concept.stay_tables``).
-            from .stay_tables import open_stay_table_batch
-
-            self._stay_batch, self._stay_batch_close = open_stay_table_batch()
         try:
             results: Dict[str, ICUTable] = {}
             if effective_workers > 1 and total > 1:
@@ -2420,11 +2444,6 @@ class ConceptResolver:
         finally:
             # 🔧 嵌套调用深度跟踪：减少深度计数器
             self._load_depth -= 1
-            if is_top_level:
-                close_stay_batch = self.__dict__.pop("_stay_batch_close", None)
-                self.__dict__.pop("_stay_batch", None)
-                if close_stay_batch is not None:
-                    close_stay_batch()
             # 🔧 只有顶层调用才清除概念缓存和inflight，避免递归概念内部调用清除外层所需的缓存
             if is_top_level:
                 with self._cache_lock:
@@ -6388,12 +6407,15 @@ class ConceptResolver:
             frame = checked_memo_frame(memo, binding, read)
         else:
             # One process-level owner per batch: the resolvers of one batch (a
-            # module's load and its dependency loads) share the read. It is
-            # released at the batch boundary and when the batch changes.
-            # Keyed by the batch too: a finished call's frame is never met
-            # by a later call outside its batch.
-            frame = stay_table_frame(
-                binding, (getattr(self, "_stay_batch", None), scope), read
+            # module's load and its dependency loads) share the read, keyed by
+            # the owning batch so a finished call's frame is never met by a
+            # later call and an independent batch never shares or evicts it.
+            # A read outside any load_concepts call has no owning batch and is
+            # not cached at all.
+            token = getattr(self, "_stay_batch", None)
+            frame = (
+                read().reset_index(drop=True) if token is None
+                else stay_table_frame(binding, (token, scope), read)
             )
         if wanted is not None:
             column = next(c for c in frame.columns if c.casefold() == id_col.casefold())
