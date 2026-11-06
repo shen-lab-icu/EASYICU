@@ -19,6 +19,17 @@ def load_optional(data_source, table, stays, columns=None, *, selectors=()):
     if data_source is None or not len(stays):
         return pd.DataFrame(columns=columns)
     filters = [FilterSpec(STAY, FilterOp.IN, list(stays))]
+    resolver = getattr(data_source, "_resolver", None)
+    stay_cfg = getattr(getattr(data_source, "config", None), "id_configs", {}).get("icustay")
+    if (
+        not selectors and resolver is not None and hasattr(resolver, "_stay_table")
+        and stay_cfg is not None and table == stay_cfg.table
+    ):
+        # The stay-origin table has one batch owner (one read per batch).
+        return resolver._stay_table(
+            getattr(data_source, "_source", data_source), table,
+            stays=stays, columns=columns,
+        )
     try:
         # These auxiliary channels already use table-wide reads for FiO2.
         # Share their union projection before the unchanged specimen/device

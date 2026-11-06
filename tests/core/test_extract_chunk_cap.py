@@ -30,7 +30,8 @@ from easyicu.api.extraction import (
     _extract_worker_env_setup,
     _resource_budget_execution_limits,
     _resolve_stream_batch_size,
-    _worker_failure_is_memory,
+    _worker_failure_class,
+    _worker_memory_evidence,
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
@@ -250,21 +251,27 @@ def test_no_crash_retry_without_a_memory_crash_in_a_streamed_export(kwargs):
     assert _crash_retry(20_000, **kwargs) is None
 
 
-@pytest.mark.parametrize("exit_code", [-9, 137, 3221226505])
-def test_killed_worker_exit_codes_count_as_memory(exit_code):
-    assert _worker_failure_is_memory(exit_code, [])
+@pytest.mark.parametrize("exit_code", [-9, 9, 137, 3221226505])
+def test_killed_worker_exit_codes_alone_are_not_memory_evidence(exit_code):
+    # lead-r13 B-RETRY: a bare exit code is not OOM evidence.
+    assert _worker_memory_evidence(exit_code, []) is None
+    assert _worker_failure_class(exit_code, []) != "out_of_memory"
+
+
+def test_a_kill_with_a_cgroup_oom_kill_event_counts_as_memory():
+    assert _worker_memory_evidence(-9, [], oom_kill_delta=1) == "oom_kill_event"
 
 
 @pytest.mark.parametrize(
     "exception_type", ["MemoryError", "duckdb.OutOfMemoryException", "_duckdb.OutOfMemoryException"]
 )
 def test_recorded_out_of_memory_exceptions_count_as_memory(exception_type):
-    assert _worker_failure_is_memory(1, [{"exception_type": exception_type}])
+    assert _worker_memory_evidence(1, [{"exception_type": exception_type}]) == "memory_exception"
 
 
 def test_code_errors_do_not_trigger_the_oom_retry():
-    assert not _worker_failure_is_memory(1, [{"exception_type": "ValueError"}])
-    assert not _worker_failure_is_memory(None, None)
+    assert _worker_memory_evidence(1, [{"exception_type": "ValueError"}]) is None
+    assert _worker_memory_evidence(None, None) is None
 
 
 def test_explicit_stream_batch_size_always_wins():

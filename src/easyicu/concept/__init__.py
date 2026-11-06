@@ -721,6 +721,15 @@ def _merge_eicu_time_columns(combined: pd.DataFrame, time_columns) -> tuple:
     combined['charttime'] = merged_time
     return combined, True
 
+def _batch_stay_scope(patient_ids) -> Optional[tuple[str, frozenset]]:
+    """``(id column, stays)`` of a ``{id_col: ids}`` batch filter, else None."""
+    if isinstance(patient_ids, Mapping) and len(patient_ids) == 1:
+        column, ids = next(iter(patient_ids.items()))
+        if ids is not None:
+            return str(column), frozenset(ids)
+    return None
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -1460,6 +1469,9 @@ class ConceptResolver:
             # normal byte-bounded caches.
             self._thread_local.requested_names = frozenset(names)
             self._thread_local.requested_results = {}
+            # The batch's stays scope every stay-origin table read of this
+            # call (``_stay_table``): one read per table per batch.
+            self._batch_stays = _batch_stay_scope(patient_ids)
         self._load_depth += 1
         
         # 🚀 性能优化: 不要清空 _concept_cache，保留用于递归调用的缓存
@@ -6222,16 +6234,8 @@ class ConceptResolver:
         """
 
         db_name = getattr(getattr(data_source, "config", None), "name", "")
-        key = (db_name, str(getattr(data_source, "base_path", "")), table, tuple(columns), tuple(optional))
-        cache = self.__dict__.setdefault("_icu_window_bounds", {})
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
         try:
-            loaded = data_source.load_table(
-                table, columns=None if optional else list(columns), verbose=False
-            )
-            frame = loaded.data if hasattr(loaded, "data") else loaded
+            frame = self._stay_table(data_source, table)
             keep = list(columns) + [c for c in optional if c in frame.columns and c not in columns]
             frame = frame[keep].copy()
         except StorageIntegrityError:
@@ -6248,8 +6252,88 @@ class ConceptResolver:
             ) from exc
         if unique_on is not None:
             frame = frame.drop_duplicates(subset=[unique_on], keep="last")
-        cache[key] = frame
         return frame
+
+    def _stay_table(
+        self,
+        data_source: ICUDataSource,
+        table: str,
+        *,
+        stays: Optional[Iterable[object]] = None,
+        columns: Optional[Iterable[str]] = None,
+    ) -> pd.DataFrame:
+        """The batch owner of one stay-origin table: read once, every column.
+
+        Within a top-level ``load_concepts`` call the table is read once,
+        restricted to the batch's stays (``_batch_stays``) when the table
+        carries the batch's id column, with all its columns; every reader of
+        the call gets a row/column subset of that frame. Rows keep the
+        table's order, so a subset equals the filtered read it replaces.
+        Without a batch scope (or an id the table lacks) the whole table is
+        read once. ``stays`` outside the batch scope are read directly.
+        Caching every column means a narrower first reader can never narrow
+        a later one (a cache that held only ``intime`` once widened a clip).
+        """
+
+        from ..datasource import FilterOp, FilterSpec
+
+        scope = getattr(self, "_batch_stays", None)
+        get_table = getattr(getattr(data_source, "config", None), "get_table", None)
+        declared = {
+            str(name).casefold()
+            for name in (
+                (getattr(get_table(table), "columns", None) or {}) if get_table else {}
+            )
+        }
+        id_col = scope[0] if scope is not None else None
+        if id_col is not None and id_col.casefold() not in declared:
+            # A table without the batch's id (or without a schema to tell)
+            # is read whole, as before.
+            scope, id_col = None, None
+        wanted = None if stays is None else frozenset(stays)
+        if wanted is not None and (scope is None or not wanted <= scope[1]):
+            # Outside the batch scope: the exact filtered read, uncached.
+            if id_col is None:
+                icustay = getattr(data_source.config, "id_configs", {}).get("icustay")
+                id_col = icustay.id if icustay is not None else None
+            loaded = data_source.load_table(
+                table,
+                columns=None if columns is None else list(columns),
+                filters=[FilterSpec(id_col, FilterOp.IN, sorted(wanted, key=repr))],
+                verbose=False,
+            )
+            return loaded.data if hasattr(loaded, "data") else loaded
+        from .stay_tables import source_identity, stay_table_frame
+
+        def read() -> pd.DataFrame:
+            filters = (
+                None if scope is None
+                else [FilterSpec(id_col, FilterOp.IN, sorted(scope[1], key=repr))]
+            )
+            loaded = data_source.load_table(table, filters=filters, verbose=False)
+            return loaded.data if hasattr(loaded, "data") else loaded
+
+        if scope is None:
+            # Unscoped (a whole-cohort call): this resolver's own memo, as
+            # before; nothing is shared across calls or resolvers.
+            memo = self.__dict__.setdefault("_stay_tables_unscoped", {})
+            frame = memo.get((id(data_source), table))
+            if frame is None:
+                frame = read().reset_index(drop=True)
+                memo[(id(data_source), table)] = frame
+        else:
+            # One process-level owner per batch: the resolvers of one batch (a
+            # module's load and its dependency loads) share the read. It is
+            # released at the batch boundary and when the batch changes.
+            frame = stay_table_frame(
+                (source_identity(data_source), table, scope), scope, read
+            )
+        if wanted is not None:
+            column = next(c for c in frame.columns if c.casefold() == id_col.casefold())
+            frame = frame.loc[frame[column].isin(wanted)].reset_index(drop=True)
+        if columns is not None:
+            frame = frame[list(columns)]
+        return frame.copy()
 
     def _icu_episode_window(
         self,

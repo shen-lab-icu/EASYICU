@@ -151,6 +151,7 @@ def test_memory_killed_one_shot_retries_streamed_at_half_the_cohort(
     monkeypatch, tmp_path, stream
 ):
     calls = []
+    oom_kills = [0]
 
     class KilledThenCaptured:
         def __init__(self, *, target, args, daemon):
@@ -160,7 +161,9 @@ def test_memory_killed_one_shot_retries_streamed_at_half_the_cohort(
             self.exitcode = None
 
         def start(self):
-            self.exitcode = -9  # SIGKILL from the OOM killer
+            # SIGKILL from the OOM killer: the cgroup records the event.
+            oom_kills[0] += 1
+            self.exitcode = -9
 
         def join(self):
             return None
@@ -169,6 +172,7 @@ def test_memory_killed_one_shot_retries_streamed_at_half_the_cohort(
         api, "_get_extraction_mp_context",
         lambda _: SimpleNamespace(Process=KilledThenCaptured),
     )
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: oom_kills[0])
     with pytest.raises(DispatchCaptured):
         api.extract_database(
             "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
@@ -177,6 +181,34 @@ def test_memory_killed_one_shot_retries_streamed_at_half_the_cohort(
         )
     assert [call["stream_output_batches"] for call in calls] == [False, True]
     assert [call["batch_size"] for call in calls] == [23106, 11553]
+
+
+def test_a_kill_without_oom_evidence_is_not_retried_as_memory(monkeypatch, tmp_path):
+    """Exit -9 alone is not evidence (lead-r13 B-RETRY): no smaller retry."""
+    calls = []
+
+    class Killed:
+        def __init__(self, *, target, args, daemon):
+            calls.append(inspect.signature(target).bind(*args).arguments)
+            self.exitcode = None
+
+        def start(self):
+            self.exitcode = -9
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(
+        api, "_get_extraction_mp_context", lambda _: SimpleNamespace(Process=Killed)
+    )
+    monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: 0)
+    with pytest.raises(api.NativeExportPublicationError):
+        api.extract_database(
+            "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
+            modules=["demographics"], patient_ids={"admissionid": list(range(23106))},
+            resource_budget_mb=8192, verbose=False,
+        )
+    assert len(calls) == 1
 
 
 def test_memory_killed_one_shot_does_not_stream_when_the_caller_forbids_it(
@@ -210,14 +242,17 @@ def test_memory_killed_one_shot_does_not_stream_when_the_caller_forbids_it(
 
 
 @pytest.mark.parametrize(
-    ("error", "retried"),
+    ("error", "memory_exhausted", "retried"),
     [
-        ("load_concepts(demographics): Out of Memory Error: could not allocate block", True),
-        ("load_concepts(demographics): ValueError: bad unit", False),
+        # The worker flags a memory exception by type (DuckDB
+        # OutOfMemoryException); the text alone is not evidence.
+        ("load_concepts(demographics): Out of Memory Error: could not allocate block", True, True),
+        ("load_concepts(demographics): Out of Memory Error: could not allocate block", False, False),
+        ("load_concepts(demographics): ValueError: bad unit", False, False),
     ],
 )
 def test_module_recording_a_duckdb_oom_retries_at_half_the_cohort(
-    monkeypatch, tmp_path, error, retried
+    monkeypatch, tmp_path, error, memory_exhausted, retried
 ):
     import json as _json
 
@@ -237,7 +272,10 @@ def test_module_recording_a_duckdb_oom_retries_at_half_the_cohort(
             module_dir = os.path.join(self.root, "demographics")
             os.makedirs(module_dir, exist_ok=True)
             with open(os.path.join(module_dir, "_manifest.json"), "w") as handle:
-                _json.dump({"module": "demographics", "errors": [error], "saved": {}}, handle)
+                _json.dump({
+                    "module": "demographics", "errors": [error], "saved": {},
+                    "memory_exhausted": memory_exhausted,
+                }, handle)
             self.exitcode = 0
 
         def join(self):
