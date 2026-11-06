@@ -152,6 +152,10 @@ def test_empty_antibiotics_are_evaluated_but_absent_inputs_are_unavailable(tmp_p
         # Only this test's invented raw/converted table files are removed.
         for path in paths.raw.glob(f"{table}.*"):
             path.unlink()
+    if missing_tables:
+        # An install without these tables: reconverting rewrites the manifest
+        # from the sources present, so the tables are absent, not damaged.
+        assert dataio.make_convert_runner(str(paths.raw), "eicu")(Job())["failed"] == 0
     manifest = _export(paths, "eicu", ["sepsis_shared", "sepsis3_sofa1", "sepsis3_sofa2"])
     entries = {entry["module"]: entry for entry in manifest["files"]}
     for module, concept in (
@@ -174,6 +178,18 @@ def test_empty_antibiotics_are_evaluated_but_absent_inputs_are_unavailable(tmp_p
         assert "patientunitstayid" in frame
         assert "stay_id" not in frame
         assert not frame[concept].fillna(False).any()
+
+
+def test_a_listed_table_whose_files_vanished_is_refused_not_unavailable(tmp_path):
+    # The manifest still lists medication but its files are gone: a damaged
+    # install (A2), refused with the storage reason, never read as "absent".
+    from easyicu.storage_layout import StorageIntegrityError
+
+    paths = _converted_source(tmp_path, "eicu")
+    for path in paths.raw.glob("medication.*"):
+        path.unlink()
+    with pytest.raises(StorageIntegrityError, match="table_scan_files_missing"):
+        _export(paths, "eicu", ["sepsis_shared"])
 
 
 def test_header_only_labs_publish_an_empty_module_with_primary_bindings(tmp_path):
