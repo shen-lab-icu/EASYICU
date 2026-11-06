@@ -2287,10 +2287,15 @@ class ConceptResolver:
                                     if cand in df.columns:
                                         result_cols.append(cand)
                                         break
-                                time_col = None
+                                # The table's declared index wins: a name list
+                                # alone dropped SICdb's ``Offset`` and published
+                                # the window concept without a time (r13gcs).
+                                time_col = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
+                                if time_col not in df.columns:
+                                    time_col = None
                                 for cand in ['nursingchartoffset', 'nursingchartentryoffset', 'observationoffset',
                                              'charttime', 'measuredat', 'datetime', 'givenat', 'starttime', 'start']:
-                                    if cand in df.columns:
+                                    if time_col is None and cand in df.columns:
                                         time_col = cand
                                         break
                                 if time_col:

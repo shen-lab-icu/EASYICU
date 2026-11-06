@@ -91,3 +91,17 @@ def test_false_rows_keep_the_window_duration(tmp_path):
     frame = table.data
     assert frame["ett_gcs"].tolist() == [True, False, True]
     assert resolve_dur_var_hours(frame).tolist() == [6.0, 6.0, 6.0]
+
+
+def test_sicdb_ett_gcs_keeps_its_declared_time_index(tmp_path):
+    # The single win_tbl output picked its time column from a name list that
+    # lacks SICdb's ``Offset``, so the public ett_gcs had no time at all.
+    from easyicu.synthetic_sources import generate_source
+
+    root = tmp_path / "sic"
+    generate_source(root, "sic", stays=3)
+    frame = easyicu.load_concepts(
+        ["ett_gcs"], database="sic", data_path=str(root), merge=True, verbose=False,
+    )
+    assert "Offset" in frame.columns
+    assert frame["ett_gcs"].dtype == bool
