@@ -11,13 +11,21 @@ exited. It binds the run to the sealed code and to its inputs:
   exit status, wall time, cgroup and process-tree peaks, the native manifest
   sha256 and its commit, and per table actually read the layout used with
   any fallback reason (``storage_reads``, from the storage owner's run log);
+* the inputs did not change: ``INPUT_SNAPSHOT.json`` (taken before any job,
+  ``easyicu.formal_inputs``) and ``INPUT_SNAPSHOT_POST.json`` (the same set
+  hashed after every job exited) must exist and agree per database; the
+  receipt records both digests, the files, bytes and hash seconds, and a
+  declared view's chain;
+* every file the run consumed (``storage_consumed``, the storage owner's
+  ``table_consumed`` events from every worker) is in the snapshot by real
+  path, its link still resolves to that real path, and it carries the
+  snapshot's sha256 and how it was admitted (``admitted_by``: ``data_root``
+  or ``declared_view``, from the storage owner). An empty set is refused;
 * per table read, the directory it was served from and its real path; for a
   bucketed table, ``bucket_receipt`` (the storage owner's
-  ``bucket_source_receipt``): the manifest and build-receipt sha256 and the
-  ``derived_from`` sources by real path with the builder's sha256. Every flat
-  read and every bucket source must resolve under the input's data root (the
-  real directory of its ``conversion_manifest.json``, else the input's real
-  path), and every bucket installation under the input's real path;
+  ``bucket_source_receipt``: manifest and build-receipt sha256, the
+  ``derived_from`` sources by real path); the installation must be one the
+  snapshot covers, where the builder's sha256 were compared with the hashes;
 * the parent run binding's digest from the native manifest
   (``storage_binding``, see its ``note``);
 * for SICdb, ``cases_binding``: the prepared conversion manifest records
@@ -289,11 +297,12 @@ def _within(path: str, root: Path) -> bool:
     return True
 
 
-def _storage_reads(db: str, reads: List[Dict[str, Any]], input_real: Path,
-                   data_root: Path) -> List[Dict[str, Any]]:
+def _storage_reads(db: str, reads: List[Dict[str, Any]],
+                   snapshot: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Each table read with where it was served from; bucket reads with their binding."""
     from easyicu.storage_layout import LAYOUT_FLAT, StorageIntegrityError, bucket_source_receipt
 
+    snapshotted = {b["layout_realpath"] for b in snapshot.get("buckets") or ()}
     receipt = []
     for read in reads:
         entry = dict(read)
@@ -302,12 +311,7 @@ def _storage_reads(db: str, reads: List[Dict[str, Any]], input_real: Path,
             raise ReceiptError("storage_read_layout_missing",
                                f"{db} {entry.get('table')} read names no layout directory",
                                database=db, table=entry.get("table"))
-        if entry.get("layout") == LAYOUT_FLAT:
-            if not _within(realpath, data_root):
-                raise ReceiptError("storage_read_outside_input",
-                                   f"{db} {entry['table']} was read outside the data root",
-                                   database=db, table=entry["table"])
-        else:
+        if entry.get("layout") != LAYOUT_FLAT:
             try:
                 binding = bucket_source_receipt(entry["layout_path"])
             except (StorageIntegrityError, OSError) as exc:
@@ -315,25 +319,129 @@ def _storage_reads(db: str, reads: List[Dict[str, Any]], input_real: Path,
                                    f"{db} {entry['table']}: {getattr(exc, 'reason', exc)}",
                                    database=db, table=entry["table"],
                                    reason=getattr(exc, "reason", None)) from exc
-            if binding["layout_realpath"] != realpath or not _within(realpath, input_real):
-                raise ReceiptError("storage_read_outside_input",
-                                   f"{db} {entry['table']} bucket is not the one the run read "
-                                   "under the input", database=db, table=entry["table"])
-            outside = [f["path"] for f in binding["derived_from"]["files"]
-                       if not _within(f["realpath"], data_root)]
-            if outside:
-                raise ReceiptError("bucket_source_outside_input",
-                                   f"{db} {entry['table']} bucket was derived from files "
-                                   "outside the data root", database=db, table=entry["table"],
-                                   sources=outside)
+            if binding["layout_realpath"] != realpath or realpath not in snapshotted:
+                raise ReceiptError("storage_read_outside_snapshot",
+                                   f"{db} {entry['table']} bucket is not one the input "
+                                   "snapshot covers", database=db, table=entry["table"])
             entry["bucket_receipt"] = binding
         receipt.append(entry)
     return receipt
 
 
+def _admit_consumed(base: str, table: str, path: str) -> Dict[str, Any]:
+    """How the storage owner admits a consumed file (the single call site of its rule)."""
+    from easyicu.storage_layout import admit_consumed_realpath
+
+    return admit_consumed_realpath(base, table, path)
+
+
+def _consumed(db: str, input_dir: str, consumed: Any,
+              snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+    """Every consumed file is a snapshotted file, by real path; none is an empty set."""
+    from easyicu.storage_layout import StorageIntegrityError
+
+    if not isinstance(consumed, list) or not consumed:
+        raise ReceiptError("storage_consumed_empty",
+                           f"{db} native manifest lists no consumed files", database=db)
+    hashed = {f["realpath"]: f for f in snapshot["files"]}
+    files, declared = [], False
+    for item in consumed:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(k), str) for k in ("table", "path", "realpath", "format")
+        ):
+            raise ReceiptError("receipt_input_malformed",
+                               f"{db} consumed entry is not {{table, path, realpath, format}}",
+                               database=db)
+        if os.path.realpath(item["path"]) != item["realpath"]:
+            raise ReceiptError("storage_consumed_realpath_changed",
+                               f"{db} {item['table']} consumed file no longer resolves to "
+                               "what the run read", database=db, table=item["table"],
+                               path=item["path"])
+        held = hashed.get(item["realpath"])
+        if held is None:
+            raise ReceiptError("storage_consumed_outside_snapshot",
+                               f"{db} {item['table']} consumed a file outside the input "
+                               "snapshot", database=db, table=item["table"], path=item["path"])
+        entry = {**item, "sha256": held["sha256"], "size": held["size"]}
+        if item["format"] in {"csv", "parquet"}:
+            try:
+                admission = _admit_consumed(input_dir, item["table"], item["path"])
+            except StorageIntegrityError as exc:
+                raise ReceiptError("storage_consumed_not_admitted",
+                                   f"{db} {item['table']}: {getattr(exc, 'reason', exc)}",
+                                   database=db, table=item["table"], path=item["path"],
+                                   reason=getattr(exc, "reason", None)) from exc
+            if admission["target_realpath"] != item["realpath"]:
+                raise ReceiptError("storage_consumed_realpath_changed",
+                                   f"{db} {item['table']} admission names another file",
+                                   database=db, table=item["table"], path=item["path"])
+            entry["admitted_by"] = admission["admitted_by"]
+            declared = declared or admission["admitted_by"] == "declared_view"
+        files.append(entry)
+    result: Dict[str, Any] = {
+        "files": sorted(files, key=lambda e: (e["table"], e["path"], e["format"])),
+        "count": len(files),
+        "bytes": sum(e["size"] for e in {e["realpath"]: e for e in files}.values()),
+    }
+    if declared:
+        chain = snapshot.get("declared_view_chain")
+        if not chain:
+            raise ReceiptError("declared_view_chain_missing",
+                               f"{db} read through a declared view the snapshot has no chain "
+                               "for", database=db)
+        result["declared_view_chain"] = chain
+    return result
+
+
+def _snapshots(run_root: Path) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """The pre- and post-run input snapshots, and their file digests."""
+    from easyicu.formal_inputs import SNAPSHOT_SCHEMA
+
+    pre_path, post_path = run_root / "INPUT_SNAPSHOT.json", run_root / "INPUT_SNAPSHOT_POST.json"
+    pre = load_json_object(pre_path, "INPUT_SNAPSHOT.json")
+    post = load_json_object(post_path, "INPUT_SNAPSHOT_POST.json")
+    for name, payload in (("INPUT_SNAPSHOT.json", pre), ("INPUT_SNAPSHOT_POST.json", post)):
+        if payload.get("schema") != SNAPSHOT_SCHEMA or not isinstance(
+                payload.get("databases"), dict):
+            raise ReceiptError("receipt_input_malformed", f"{name} is not an input snapshot",
+                               input=name)
+    return pre, post, {"sha256": sha256_file(pre_path), "post_sha256": sha256_file(post_path)}
+
+
+def _snapshot_section(db: str, input_dir: str, pre: Mapping[str, Any],
+                      post: Mapping[str, Any]) -> Dict[str, Any]:
+    before, after = pre["databases"].get(db), post["databases"].get(db)
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ReceiptError("input_snapshot_missing",
+                           f"{db} has no pre- and post-run input snapshot", database=db)
+    if os.path.realpath(before.get("data_path", "")) != os.path.realpath(input_dir):
+        raise ReceiptError("input_snapshot_other_input",
+                           f"{db} snapshot is of another input", database=db)
+    if before.get("digest") != after.get("digest"):
+        raise ReceiptError("input_changed_during_run",
+                           f"{db} inputs differ before and after the run", database=db)
+    return {
+        "digest": before["digest"],
+        "post_digest": after["digest"],
+        "post_equal": True,
+        "files": before.get("file_count"),
+        "bytes": before.get("bytes"),
+        "hash_seconds": before.get("hash_seconds"),
+        "post_hash_seconds": after.get("hash_seconds"),
+        "declared_view_chain": before.get("declared_view_chain"),
+        "buckets": [
+            {"table": b["table"], "layout_realpath": b["layout_realpath"],
+             "derived_from_matches_snapshot": all(
+                 s.get("sha256_matches_snapshot") for s in b["derived_from"])}
+            for b in before.get("buckets") or ()
+        ],
+    }
+
+
 def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                       exit_status: Any, sealed_sha: str,
-                      version: Optional[str] = None) -> Dict[str, Any]:
+                      version: Optional[str] = None,
+                      snapshots: Optional[tuple] = None) -> Dict[str, Any]:
     out = run_root / db
     input_real = Path(input_dir).resolve()
     input_manifest = input_real / "conversion_manifest.json"
@@ -390,8 +498,12 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
     if "storage_reads" not in manifest:
         raise ReceiptError("storage_reads_missing",
                            f"{db} native manifest lists no per-table storage reads", database=db)
-    section["storage_reads"] = _storage_reads(db, list(manifest["storage_reads"]),
-                                              input_real, data_root)
+    pre, post = snapshots if snapshots is not None else _snapshots(run_root)[:2]
+    section["input_snapshot"] = _snapshot_section(db, input_dir, pre, post)
+    before = pre["databases"][db]
+    section["storage_reads"] = _storage_reads(db, list(manifest["storage_reads"]), before)
+    section["storage_consumed"] = _consumed(db, input_dir, manifest.get("storage_consumed"),
+                                            before)
     binding = manifest.get("storage_binding")
     if not isinstance(binding, dict) or not isinstance(binding.get("digest"), str):
         raise ReceiptError("storage_binding_missing",
@@ -442,13 +554,14 @@ def build_run_receipt(
     specs = list(specs)
     _refuse_paths_inside_inputs({"scratch": Path(scratch), "run_root": run_root}, specs)
     code = sealed_code_identity(sealed_sha)
+    pre, post, snapshot_files = _snapshots(run_root)
     exits = _status_exits(run_root)
     databases: Dict[str, Any] = {}
     for spec in specs:
         db, input_dir, cores = spec.split(":", 2)
         try:
             section = _database_section(run_root, db, input_dir, cores, exits.get(db),
-                                        sealed_sha, code.get("version"))
+                                        sealed_sha, code.get("version"), (pre, post))
             if db in SIC_DATABASES:
                 section["cases_binding"] = sic_cases_binding(Path(input_dir), Path(scratch), code)
         except (KeyError, TypeError, AttributeError) as exc:
@@ -463,6 +576,7 @@ def build_run_receipt(
         "sealed_sha": sealed_sha,
         "easyicu_version": code.get("version"),
         "code_identity": code,
+        "input_snapshot": snapshot_files,
         "parameters": dict(parameters or {}),
         "run_root": str(run_root.resolve()),
         "wall_seconds": None if started_at is None else round(finished - float(started_at), 1),

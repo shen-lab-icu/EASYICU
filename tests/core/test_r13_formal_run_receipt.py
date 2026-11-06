@@ -110,11 +110,44 @@ def _flat(root: Path, table: str, directory: Path) -> dict:
             "layout_path": str(directory), "layout_realpath": os.path.realpath(directory)}
 
 
+_REAL_ADMISSION = receipt._admit_consumed
+
+
+@pytest.fixture(autouse=True)
+def _admission(monkeypatch):
+    """Stand in for the storage owner's admission rule (tests of the rule use ``real_admission``)."""
+    monkeypatch.setattr(receipt, "_admit_consumed", lambda base, table, path: {
+        "target_realpath": os.path.realpath(path), "admitted_by": "data_root",
+        "size": None, "sha256": None,
+    })
+
+
+@pytest.fixture
+def real_admission(monkeypatch):
+    monkeypatch.setattr(receipt, "_admit_consumed", _REAL_ADMISSION)
+
+
+def _consumed(path: Path, table: str = "cases", fmt: str = "parquet") -> dict:
+    return {"table": table, "path": str(path), "realpath": os.path.realpath(path),
+            "format": fmt}
+
+
+def _snapshots(run: Path, input_root: Path) -> None:
+    """What bench7 writes: the input snapshot before the jobs and its verification after."""
+    from easyicu import formal_inputs
+
+    pre = formal_inputs.take_snapshot([f"sic:{input_root}:144-145"])
+    formal_inputs.write_snapshot(run / "INPUT_SNAPSHOT.json", pre)
+    formal_inputs.write_snapshot(run / "INPUT_SNAPSHOT_POST.json",
+                                 formal_inputs.verify_snapshot(pre))
+
+
 def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
-              version: str = CODE["version"]) -> Path:
+              version: str = CODE["version"], consumed=None) -> Path:
     run = tmp_path / "run"
     export = run / "sic" / "export"
     export.mkdir(parents=True)
+    _snapshots(run, prepared)
     (run / "status").write_text("tag=t sha=x\nsic exit=0\nDONE\n")
     (run / "sic" / "summary.json").write_text(json.dumps({
         "secs": 12.5, "cgroup_peak_gib": 1.5, "peak_tree_rss_gib": 1.2,
@@ -129,6 +162,8 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
         },
         "storage_reads": reads if reads is not None else [_flat(prepared, "cases", prepared)],
         "storage_binding": {"digest": "b" * 64, "files": 3, "scope": "parent_run_binding"},
+        "storage_consumed": (consumed if consumed is not None
+                             else [_consumed(prepared / "cases.parquet")]),
     }))
     return run
 
@@ -157,6 +192,16 @@ def test_the_sic_section_of_the_receipt_carries_the_binding_and_the_reads(tmp_pa
     assert "parent extraction" in sic["storage_binding"]["note"]
     assert sic["native_manifest"]["easyicu_version"] == CODE["version"]
     assert sic["native_manifest"]["easyicu_installed_dist_version"] == "9.9.9"
+    pre = json.loads((run / "INPUT_SNAPSHOT.json").read_text())["databases"]["sic"]
+    assert saved["input_snapshot"]["sha256"] == receipt.sha256_file(run / "INPUT_SNAPSHOT.json")
+    assert sic["input_snapshot"]["digest"] == pre["digest"]
+    assert sic["input_snapshot"]["post_digest"] == pre["digest"]
+    assert sic["input_snapshot"]["post_equal"] is True
+    assert sic["input_snapshot"]["bytes"] == pre["bytes"]
+    (consumed,) = sic["storage_consumed"]["files"]
+    assert consumed["admitted_by"] == "data_root"
+    assert consumed["sha256"] == receipt.sha256_file(prepared / "cases.parquet")
+    assert "declared_view_chain" not in sic["storage_consumed"]
     with pytest.raises(receipt.ReceiptError) as error:
         receipt.write_run_receipt(run, built)
     assert error.value.code == "run_receipt_exists"
@@ -190,6 +235,11 @@ def _sic_layout_root(tmp_path: Path, prepared: Path) -> Path:
     for name in ("cases.csv.gz", "cases.parquet", "conversion_manifest.json"):
         (root / name).symlink_to(prepared / name)
     (root / "laboratory" / "1.parquet").symlink_to(prepared / "laboratory" / "1.parquet")
+    manifest = json.loads((prepared / "conversion_manifest.json").read_text())
+    manifest["tables"].append({"table": "laboratory", "status": "completed", "outputs": [
+        {"relative_path": "laboratory/1.parquet",
+         "size_bytes": (prepared / "laboratory" / "1.parquet").stat().st_size}]})
+    (prepared / "conversion_manifest.json").write_text(json.dumps(manifest))
     build_bucket_cache(root, table="laboratory", key="LaboratoryID", bucket_count=4,
                        memory_limit="256MB", threads=1)
     (root / "laboratory_bucket" / "_BUCKET_BUILD_RECEIPT.json").write_text("{}")
@@ -202,8 +252,10 @@ def _bucket_read(root: Path, table: str) -> dict:
             "layout_path": str(bucket), "layout_realpath": os.path.realpath(bucket)}
 
 
-def _sic_receipt(tmp_path, root, reads, monkeypatch):
-    run = _run_root(tmp_path, root, commit=CODE["commit"], reads=reads)
+def _sic_receipt(tmp_path, root, reads, monkeypatch, *, consumed=None, after_run=None):
+    run = _run_root(tmp_path, root, commit=CODE["commit"], reads=reads, consumed=consumed)
+    if after_run is not None:
+        after_run(run)
     monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
     return receipt.build_run_receipt(run, CODE["commit"], [f"sic:{root}:144-145"],
                                      scratch=tmp_path / "scratch")
@@ -236,32 +288,17 @@ def test_a_sic_layout_root_receipt_maps_each_table_to_the_prepared_files(tmp_pat
         prepared / "cases.parquet")
 
 
-def test_a_bucket_derived_from_files_outside_the_prepared_tree_stops_the_receipt(
+def test_a_bucket_whose_source_changed_after_the_snapshot_stops_the_receipt(
         tmp_path, monkeypatch):
     prepared = _prepared(tmp_path / "prepared")
     root = _sic_layout_root(tmp_path, prepared)
-    # A copy of the table that is not the prepared file, with the bucket rebuilt from it.
-    link = root / "laboratory" / "1.parquet"
-    link.unlink()
-    pd.read_parquet(prepared / "laboratory" / "1.parquet").to_parquet(link, index=False)
-    shutil.rmtree(root / "laboratory_bucket")
-    from scripts.build_itemid_bucket_cache import build_bucket_cache
 
-    build_bucket_cache(root, table="laboratory", key="LaboratoryID", bucket_count=4,
-                       memory_limit="256MB", threads=1)
+    def touch(run):
+        os.utime(prepared / "laboratory" / "1.parquet", ns=(1_800_000_000_000_000_000,) * 2)
 
     with pytest.raises(receipt.ReceiptError) as error:
-        _sic_receipt(tmp_path, root, [_bucket_read(root, "laboratory")], monkeypatch)
-    assert error.value.code == "bucket_source_outside_input"
-
-
-def test_a_bucket_whose_source_changed_since_the_build_stops_the_receipt(tmp_path, monkeypatch):
-    prepared = _prepared(tmp_path / "prepared")
-    root = _sic_layout_root(tmp_path, prepared)
-    os.utime(prepared / "laboratory" / "1.parquet", ns=(1_800_000_000_000_000_000,) * 2)
-
-    with pytest.raises(receipt.ReceiptError) as error:
-        _sic_receipt(tmp_path, root, [_bucket_read(root, "laboratory")], monkeypatch)
+        _sic_receipt(tmp_path, root, [_bucket_read(root, "laboratory")], monkeypatch,
+                     after_run=touch)
     assert error.value.code == "bucket_receipt_unverifiable"
     assert error.value.details["reason"] == "bucket_derived_from_source_changed"
 
@@ -275,14 +312,188 @@ def test_a_read_without_its_layout_directory_stops_the_receipt(tmp_path, monkeyp
     assert error.value.code == "storage_read_layout_missing"
 
 
-def test_a_flat_read_outside_the_data_root_stops_the_receipt(tmp_path, monkeypatch):
+# delta9b ruling: the run's inputs are hashed before and after; every consumed
+# file is a snapshotted file.
+
+def test_inputs_that_differ_before_and_after_the_run_stop_the_receipt(tmp_path, monkeypatch):
     prepared = _prepared(tmp_path / "prepared")
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
+
+    def tamper(run):
+        post = json.loads((run / "INPUT_SNAPSHOT_POST.json").read_text())
+        post["databases"]["sic"]["digest"] = "0" * 64
+        (run / "INPUT_SNAPSHOT_POST.json").write_text(json.dumps(post))
 
     with pytest.raises(receipt.ReceiptError) as error:
-        _sic_receipt(tmp_path, prepared, [_flat(prepared, "cases", elsewhere)], monkeypatch)
-    assert error.value.code == "storage_read_outside_input"
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, after_run=tamper)
+    assert error.value.code == "input_changed_during_run"
+
+
+def test_a_run_without_its_post_run_snapshot_has_no_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch,
+                     after_run=lambda run: (run / "INPUT_SNAPSHOT_POST.json").unlink())
+    assert error.value.code == "receipt_input_missing"
+
+
+def test_a_consumed_file_outside_the_snapshot_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    stray = tmp_path / "elsewhere" / "cases.parquet"
+    stray.parent.mkdir()
+    stray.write_bytes((prepared / "cases.parquet").read_bytes())
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, consumed=[_consumed(stray)])
+    assert error.value.code == "storage_consumed_outside_snapshot"
+
+
+def test_a_run_that_consumed_nothing_has_no_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, consumed=[])
+    assert error.value.code == "storage_consumed_empty"
+
+
+def test_a_consumed_link_that_now_resolves_elsewhere_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    entry = _consumed(root / "cases.parquet")
+
+    def retarget(run):
+        (root / "cases.parquet").unlink()
+        (root / "cases.parquet").symlink_to(prepared / "cases.csv.gz")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, None, monkeypatch, consumed=[entry], after_run=retarget)
+    assert error.value.code == "storage_consumed_realpath_changed"
+
+
+def test_a_bucket_read_must_be_an_installation_the_snapshot_covers(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    read = _bucket_read(root, "laboratory")
+
+    def drop_bucket(run):
+        for name in ("INPUT_SNAPSHOT.json", "INPUT_SNAPSHOT_POST.json"):
+            payload = json.loads((run / name).read_text())
+            payload["databases"]["sic"]["buckets"] = []
+            (run / name).write_text(json.dumps(payload))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, [read], monkeypatch, after_run=drop_bucket)
+    assert error.value.code == "storage_read_outside_snapshot"
+
+
+# B9P-CSV-BINDING with the storage owner's admission rule (d5fixB follow-up).
+
+PENDING = pytest.mark.xfail(
+    strict=True, reason="needs storage_layout.admit_consumed_realpath (d5fixB follow-up)")
+
+
+@PENDING
+def test_csv_and_parquet_consumed_side_by_side_are_each_bound(tmp_path, monkeypatch, real_admission):
+    prepared = _prepared(tmp_path / "prepared")
+    consumed = [_consumed(prepared / "cases.parquet"),
+                _consumed(prepared / "cases.csv.gz", fmt="csv")]
+
+    sic = _sic_receipt(tmp_path, prepared, None, monkeypatch,
+                       consumed=consumed)["databases"]["sic"]
+
+    files = {f["format"]: f for f in sic["storage_consumed"]["files"]}
+    assert set(files) == {"csv", "parquet"}
+    assert files["csv"]["sha256"] == receipt.sha256_file(prepared / "cases.csv.gz")
+    assert all(f["admitted_by"] == "data_root" for f in files.values())
+    assert "declared_view_chain" not in sic["storage_consumed"]
+
+
+@PENDING
+def test_a_csv_linked_from_outside_the_data_root_is_refused(tmp_path, monkeypatch, real_admission):
+    prepared = _prepared(tmp_path / "prepared")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "cases.csv.gz").write_bytes((prepared / "cases.csv.gz").read_bytes())
+    root = tmp_path / "root"
+    root.mkdir()
+    for name in ("cases.parquet", "conversion_manifest.json"):
+        (root / name).symlink_to(prepared / name)
+    (root / "cases.csv.gz").symlink_to(outside / "cases.csv.gz")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, None, monkeypatch,
+                     consumed=[_consumed(root / "cases.csv.gz", fmt="csv")])
+    assert error.value.code in {"storage_consumed_not_admitted",
+                                "storage_consumed_outside_snapshot"}
+
+
+def _view(tmp_path: Path, prepared: Path) -> Path:
+    import hashlib
+
+    farm = tmp_path / "farm"
+    farm.mkdir()
+    for name in ("cases.parquet", "cases.csv.gz"):
+        (farm / name).symlink_to(prepared / name)
+    manifest = json.loads((prepared / "conversion_manifest.json").read_text())
+    manifest["derived_from"] = {
+        "path": str(prepared / "conversion_manifest.json"),
+        "sha256": hashlib.sha256((prepared / "conversion_manifest.json").read_bytes()).hexdigest(),
+    }
+    (farm / "conversion_manifest.json").write_text(json.dumps(manifest))
+    return farm
+
+
+@PENDING
+def test_a_declared_view_read_records_its_chain(tmp_path, monkeypatch, real_admission):
+    prepared = _prepared(tmp_path / "prepared")
+    farm = _view(tmp_path, prepared)
+
+    sic = _sic_receipt(tmp_path, farm, None, monkeypatch,
+                       consumed=[_consumed(farm / "cases.parquet")])["databases"]["sic"]
+
+    (entry,) = sic["storage_consumed"]["files"]
+    assert entry["admitted_by"] == "declared_view"
+    chain = sic["storage_consumed"]["declared_view_chain"]
+    assert chain["source_manifest_path"] == str(prepared / "conversion_manifest.json")
+    assert chain["farm_manifest_sha256"] == receipt.sha256_file(farm / "conversion_manifest.json")
+
+
+@PENDING
+def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeypatch, real_admission):
+    # MIMIC-III services prefers CSV over a converted parquet beside it; the
+    # consumed-files event, not the parquet resolver, must name the CSV.
+    from easyicu.datasource import ICUDataSource
+    from easyicu.resources import load_data_sources
+    from easyicu.storage_layout import SCAN_FALLBACK_LOG_ENV, read_consumed_log
+
+    root = tmp_path / "mimic"
+    root.mkdir()
+    frame = pd.DataFrame({"row_id": [1], "subject_id": [10], "hadm_id": [100],
+                          "transfertime": ["2150-01-01 00:00:00"], "prev_service": [None],
+                          "curr_service": ["MED"]})
+    frame.to_csv(root / "services.csv.gz", index=False)
+    frame.assign(curr_service="SURG").to_parquet(root / "services.parquet", index=False)
+    (root / "conversion_manifest.json").write_text(json.dumps({"tables": [{
+        "table": "services", "status": "completed",
+        "input": {"relative_path": "services.csv.gz"},
+        "outputs": [{"relative_path": "services.parquet"}]}]}))
+    log = tmp_path / "run_storage_log.jsonl"
+    monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
+    ICUDataSource(config=load_data_sources().get("mimic"), base_path=root).load_table("services")
+    consumed = [{k: e[k] for k in ("table", "path", "realpath", "format")}
+                for e in read_consumed_log(log) if e["table"] == "services"]
+
+    assert [c["format"] for c in consumed] == ["csv"]
+    run = tmp_path / "run"
+    (run / "mimic" / "export").mkdir(parents=True)
+    from easyicu import formal_inputs
+
+    pre = formal_inputs.take_snapshot([f"mimic:{root}"])
+    entry = receipt._consumed("mimic", str(root), consumed, pre["databases"]["mimic"])
+    (named,) = entry["files"]
+    assert named["realpath"] == os.path.realpath(root / "services.csv.gz")
+    assert named["admitted_by"] == "data_root"
+    assert named["sha256"] == receipt.sha256_file(root / "services.csv.gz")
 
 
 def test_a_native_manifest_naming_another_version_stops_the_receipt(tmp_path, monkeypatch):
