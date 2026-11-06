@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Union
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -3210,18 +3210,15 @@ def _consolidate_special_score_dependency(
     # complete-case sensitivity analyses and prevent a disclaimed non-zero
     # value from entering the primary total. An entirely unsupported database
     # domain remains a structural failure rather than patient-level missingness.
-    grouped[score_name] = (
+    from ..scores.sepsis_sofa2 import sofa2_total_for_sepsis_delta
+
+    grouped[score_name] = sofa2_total_for_sepsis_delta(
         grouped[components]
         .where(grouped[available].astype("boolean").fillna(False).to_numpy(), 0)
         .fillna(0)
-        .sum(axis=1)
+        .sum(axis=1),
+        database,
     )
-    if not sofa2_total_structurally_supported(database):
-        grouped[score_name] = pd.Series(
-            pd.NA,
-            index=grouped.index,
-            dtype="Float64",
-        )
     return grouped[[id_col, time_col, score_name]]
 
 
@@ -3603,6 +3600,96 @@ def _stream_special_extraction_batches(
         json.dump(manifest, handle)
 
 
+_SPECIAL_DEPENDENCY_DIRNAME = ".special-dependencies"
+
+
+class SpecialDependencyError(RuntimeError):
+    """A Sepsis-3 dependency module is missing or failed; never derive around it."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(f"{reason_code}: {message}")
+        self.reason_code = reason_code
+
+
+def _stage_special_dependencies(
+    modules: Sequence[str],
+    *,
+    staging_dir: Union[str, Path],
+    published_output_dir: Optional[str],
+    group_output_root: Optional[str],
+    produce: Callable[[str, Path], None],
+) -> None:
+    """Lay out each dependency module the way the streamed Sepsis-3 path reads it.
+
+    ``<module>.parquet`` (or the empty-module manifest) comes from, in order:
+    the published output, this worker group's own module output, or a private
+    extraction by the module owner.  A failed or missing module raises.
+    """
+    import json
+
+    staging = Path(staging_dir)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    def _link(source: Path, target: Path) -> None:
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        os.symlink(source.resolve(), target)
+
+    for module in modules:
+        target = staging / f"{module}.parquet"
+        manifest_target = staging / f"{module}.manifest.json"
+        if published_output_dir:
+            published = Path(published_output_dir) / f"{module}.parquet"
+            if published.exists():
+                _link(published, target)
+                continue
+            published_manifest = Path(published_output_dir) / f"{module}.manifest.json"
+            try:
+                manifest = json.loads(published_manifest.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                manifest = None
+            if (
+                isinstance(manifest, dict)
+                and manifest.get("module") == module
+                and not manifest.get("errors")
+                and not manifest.get("saved")
+            ):
+                manifest_target.write_text(
+                    json.dumps({"module": module, "saved": {}, "errors": []}),
+                    encoding="utf-8",
+                )
+                continue
+        source_dir = Path(group_output_root) / module if group_output_root else None
+        if source_dir is None or not (source_dir / "_manifest.json").is_file():
+            source_dir = staging / "_produced" / module
+            source_dir.mkdir(parents=True, exist_ok=True)
+            produce(module, source_dir)
+        try:
+            manifest = json.loads((source_dir / "_manifest.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            raise SpecialDependencyError(
+                "sepsis_dependency_manifest_missing", f"{module}: {exc}"
+            ) from exc
+        if manifest.get("errors"):
+            raise SpecialDependencyError(
+                "sepsis_dependency_module_failed",
+                f"{module}: {list(manifest['errors'])[:3]}",
+            )
+        info = (manifest.get("saved") or {}).get(module)
+        if info:
+            path = Path(str(info.get("path") or ""))
+            if not path.exists():
+                raise SpecialDependencyError(
+                    "sepsis_dependency_output_missing", f"{module}: {path}"
+                )
+            _link(path, target)
+        else:
+            manifest_target.write_text(
+                json.dumps({"module": module, "saved": {}, "errors": []}),
+                encoding="utf-8",
+            )
+
+
 def _run_special_extraction(
     special_modules: List[str],
     database: str,
@@ -3614,19 +3701,16 @@ def _run_special_extraction(
     stream_output_batches: bool = False,
     published_output_dir: Optional[str] = None,
     failure_context: Optional[Dict] = None,
+    group_output_root: Optional[str] = None,
 ) -> None:
     """加载特殊概念（Sepsis-3 等）并写入 parquet + _manifest.json。
 
-    sep3_sofa1/sep3_sofa2 不在 concept-dict 中，需要先加载 susp_inf + sofa/sofa2，
-    然后通过 _load_sep3_diagnosis 逻辑计算 Sepsis-3 诊断。分组模式下与
-    sofa1_score/sofa2_score 同进程运行，susp_inf/sofa/sofa2 直接命中组内缓存。
+    sep3_sofa1/sep3_sofa2 always derive from the published-form score module
+    outputs (sepsis_shared, sofa1_score, sofa2_score) through one streamed
+    derivation, whatever the execution mode: published files, this group's own
+    module outputs, or a private extraction by the module owner.
     """
-    import json
-    import os
-    import time
-    import traceback
-    import pandas as pd
-    from easyicu import load_concepts as _lc
+    import shutil
 
     if failure_context is not None:
         failure_context["stage"] = "special_dependency_discovery"
@@ -3661,173 +3745,53 @@ def _run_special_extraction(
         )
         return
 
-    t0 = time.time()
-    module_memory_sampler = _RSSPeakSampler().start()
-    saved = {}
-    errors = []
-
-    # 构建公共加载参数（use_sofa2 显式传入以保持组内 loader 配置一致）
-    load_kw = dict(
-        data_path=data_path,
-        database=database,
-        verbose=False,
-        merge=True,
-        use_sofa2=use_sofa2,
-    )
-    if patient_ids_filter:
-        load_kw["patient_ids"] = patient_ids_filter
-    if batch_size:
-        load_kw["batch_size"] = batch_size
-
-    # 收集需要的概念: sep3_sofa1 需要 sofa, sep3_sofa2 需要 sofa2
-    need_sofa1 = any(
-        "sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules
-    )
-    need_sofa2 = any(
-        "sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules
-    )
-
-    deps = ["susp_inf"]
-    if need_sofa1:
-        deps.append("sofa")
-    if need_sofa2:
-        deps.append("sofa2")
-
-    context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
-               if need_sofa1 else None)
-
+    # No published dependency: derive Sepsis-3 from the score *module
+    # outputs*, never from a separate recomputation.  The former in-process
+    # branch recomputed ``sofa2`` through load_concepts and left an unscored
+    # hour NA, which moved the delta baseline and so the onset (lead-r13 p9b:
+    # the same CareVue cohort gave 928 rows in-process and 929 streamed).
+    # Modules produced earlier in this worker's group are staged exactly as
+    # they will be published; a dependency not produced here is extracted by
+    # its module owner into a private directory first.
     if failure_context is not None:
-        failure_context["stage"] = "special_load_dependencies"
+        failure_context["stage"] = "special_stage_dependencies"
+    cohort = list(next(iter(patient_ids_filter.values()))) if patient_ids_filter else []
+    if not cohort:
+        raise SpecialDependencyError(
+            "sepsis_special_cohort_missing",
+            "Sepsis-3 export needs the explicit patient cohort",
+        )
+    staging = Path(output_dir) / _SPECIAL_DEPENDENCY_DIRNAME
     try:
-        merged = _lc(concepts=deps, **load_kw)
-    except Exception as e:
-        # A sofa2 failure is not "sofa2 unavailable": retrying without it
-        # silently left sep3_sofa2 unproduced and sealed as absent.
-        traceback.print_exc()
-        errors.append(f"sepsis_dependency_load_failed: {deps}: {e}")
-        merged = pd.DataFrame()
-
-    if isinstance(merged, pd.DataFrame) and not merged.empty:
-        # 检测 ID 和时间列
-        id_col = next(
-            (
-                c
-                for c in [
-                    "stay_id",
-                    "patientunitstayid",
-                    "admissionid",
-                    "patientid",
-                    "icustay_id",
-                    "CaseID",
-                ]
-                if c in merged.columns
+        _stage_special_dependencies(
+            required_dependency_modules,
+            staging_dir=staging,
+            published_output_dir=published_output_dir,
+            group_output_root=group_output_root,
+            produce=lambda module, target: _run_module_extraction(
+                module,
+                EXTRACT_MODULES[module],
+                database,
+                data_path,
+                patient_ids_filter,
+                batch_size,
+                str(target),
+                use_sofa2=use_sofa2,
             ),
-            None,
         )
-        time_col = next(
-            (
-                c
-                for c in [
-                    "charttime",
-                    "time",
-                    "starttime",
-                    "datetime",
-                    "Offset",
-                    "measuredat_minutes",
-                    "measuredat",
-                ]
-                if c in merged.columns
-            ),
-            None,
+        _stream_special_extraction_batches(
+            special_modules,
+            database,
+            data_path,
+            patient_ids_filter,
+            int(batch_size or len(cohort)),
+            output_dir,
+            use_sofa2=use_sofa2,
+            published_output_dir=str(staging),
+            failure_context=failure_context,
         )
-
-        if id_col and time_col and "susp_inf" in merged.columns:
-            _require_timed_positive_suspicion(
-                merged,
-                id_col=id_col,
-                time_col=time_col,
-                database=database,
-            )
-            # Sepsis-3 = a >=2-point SOFA increase WITHIN the suspected-infection
-            # window (delta rule, R ricu sep3), NOT an absolute SOFA>=2. Use the
-            # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
-            # module export (unified to delta 2026-06-22).
-            if need_sofa1 and "sofa" in merged.columns:
-                if failure_context is not None:
-                    failure_context["stage"] = "special_derive_sep3_sofa1"
-                context_ids = (next(iter(patient_ids_filter.values()))
-                               if patient_ids_filter else merged[id_col].drop_duplicates())
-                result = context.derive(
-                    merged[[id_col, time_col, "sofa"]],
-                    merged[[id_col, time_col, "susp_inf"]],
-                    ids=context_ids, id_col=id_col, time_col=time_col,
-                ).rename(columns={"sep3": "sep3_sofa1"})
-                if "sep3_sofa1" in result.columns:
-                    result["sep3_sofa1"] = result["sep3_sofa1"].fillna(0).astype(int)
-                if len(result) > 0:
-                    if failure_context is not None:
-                        failure_context["stage"] = "special_write_sep3_sofa1"
-                    path = os.path.join(output_dir, "sep3_sofa1.parquet")
-                    result.to_parquet(path, index=False, engine="pyarrow")
-                    saved["sep3_sofa1"] = {"path": path, "rows": len(result)}
-
-            if need_sofa2 and "sofa2" in merged.columns:
-                if failure_context is not None:
-                    failure_context["stage"] = "special_derive_sep3_sofa2"
-                from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
-
-                result = _sep3_sofa2(
-                    merged[[id_col, time_col, "sofa2"]],
-                    merged[[id_col, time_col, "susp_inf"]],
-                    id_cols=[id_col],
-                    index_col=time_col,
-                )
-                if "sep3_sofa2" in result.columns:
-                    result["sep3_sofa2"] = result["sep3_sofa2"].fillna(0).astype(int)
-                if len(result) > 0:
-                    if failure_context is not None:
-                        failure_context["stage"] = "special_write_sep3_sofa2"
-                    path = os.path.join(output_dir, "sep3_sofa2.parquet")
-                    result.to_parquet(path, index=False, engine="pyarrow")
-                    saved["sep3_sofa2"] = {"path": path, "rows": len(result)}
-        else:
-            missing = []
-            if not id_col:
-                missing.append("id_col")
-            if not time_col:
-                missing.append("time_col")
-            if "susp_inf" not in merged.columns:
-                missing.append("susp_inf")
-            # 🔧 FIX 2026-05-11: 对于 sic/hirid 等不支持 susp_inf 的数据库，
-            # sep3_sofa1/sep3_sofa2 无法计算属正常情况，不应记为错误。
-            # 只有当 id/time 列也缺失时才认为是真正的错误。
-            if missing == ["susp_inf"]:
-                pass  # 静默跳过：数据库不支持 susp_inf，sep3 概念不适用
-            else:
-                errors.append(
-                    f"Missing columns: {missing}, available: {list(merged.columns)[:10]}"
-                )
-
-    if context is not None and not context.batches and not errors and merged.empty and patient_ids_filter:
-        empty_id_col, empty_ids = next(iter(patient_ids_filter.items()))
-        context.record(None, merged, ids=empty_ids, id_col=empty_id_col,
-                       time_col=None, action="empty_si")
-    elapsed = time.time() - t0
-    if failure_context is not None:
-        failure_context["stage"] = "special_write_manifest"
-    manifest = {
-        "module": "special_concepts",
-        "saved": saved,
-        "derivation_contexts": ({"sep3_sofa1": context.finish(
-            expected_ids=(next(iter(patient_ids_filter.values()))
-                          if patient_ids_filter else None))}
-            if context is not None and context.batches and not errors else {}),
-        "errors": errors,
-        "elapsed_sec": round(elapsed, 1),
-        **module_memory_sampler.stop(),
-    }
-    with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
-        json.dump(manifest, f)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 _EXTRACTION_WORKER_FAILURE_SCHEMA = "easyicu.extraction_worker_failure/1"
@@ -4208,6 +4172,7 @@ def _extract_module_group_worker(
                     stream_output_batches=stream_output_batches,
                     published_output_dir=published_output_dir,
                     failure_context=failure_context,
+                    group_output_root=output_root,
                 )
             except Exception:
                 try:

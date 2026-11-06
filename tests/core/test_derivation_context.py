@@ -88,6 +88,21 @@ def _build(root, monkeypatch, *, streamed=True, backend="arrow", id_col="stay_id
     pd.DataFrame({id_col: range(1, 10), "los_icu": 2.0}).to_parquet(
         root / "outcome.parquet", index=False
     )
+    if not streamed:
+        # Nothing is published yet: the special asks the module owner for its
+        # score dependencies (never a separate recomputation) and derives from
+        # those outputs exactly as the streamed path does.
+        def module_owner(module_name, concepts, database, data_path, ids, batch_size,
+                         output_dir, use_sofa2=False, **_kwargs):
+            target = Path(output_dir) / f"{module_name}.parquet"
+            shutil.copyfile(root / f"{module_name}.parquet", target)
+            (Path(output_dir) / "_manifest.json").write_text(json.dumps({
+                "module": module_name,
+                "saved": {module_name: {"path": str(target)}},
+                "errors": [],
+            }))
+
+        monkeypatch.setattr(api, "_run_module_extraction", module_owner)
     api._run_special_extraction(
         ["sepsis3_sofa1"],
         "miiv",

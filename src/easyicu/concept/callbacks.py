@@ -64,6 +64,7 @@ from ..scores.sepsis import (
     suspected_infection_mode,
 )
 from ..scores.sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
+from ..scores.sepsis_sofa2 import sofa2_total_for_sepsis_delta
 from ..table import ICUTable, WinTbl
 from ..utils import coalesce  # 🔧 统一的 patient_ids hash 函数
 
@@ -6144,8 +6145,10 @@ def _callback_sep3_sofa2(
     # same values here so the onset does not depend on the execution path.
     # A database without structural SOFA-2 support keeps an all-NA total.
     sofa2_database = getattr(getattr(ctx.data_source, "config", None), "name", "") if ctx else ""
-    if "sofa2" in sofa2_data.columns and sofa2_total_structurally_supported(sofa2_database):
-        sofa2_data["sofa2"] = pd.to_numeric(sofa2_data["sofa2"], errors="coerce").fillna(0)
+    if "sofa2" in sofa2_data.columns:
+        sofa2_data["sofa2"] = sofa2_total_for_sepsis_delta(
+            sofa2_data["sofa2"], sofa2_database
+        ).to_numpy()
 
     if sofa2_tbl.index_column and sofa2_tbl.index_column != index_column and sofa2_tbl.index_column in sofa2_data.columns:
         sofa2_data = sofa2_data.rename(columns={sofa2_tbl.index_column: index_column})

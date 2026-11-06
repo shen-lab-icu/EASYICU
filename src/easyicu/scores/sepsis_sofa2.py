@@ -31,6 +31,25 @@ from .sepsis import (
     delta_start,
     susp_inf
 )
+from .sofa2_aggregate import sofa2_total_structurally_supported
+
+
+def sofa2_total_for_sepsis_delta(values, database: object) -> pd.Series:
+    """The SOFA-2 total a Sepsis-3 delta is taken over: one rule for every path.
+
+    ricu's ``sofa_score`` fills the hourly grid and sums the components with
+    ``rowSums(na.rm = TRUE)``, so an hour without any scored component counts
+    0, not missing; ``sep3`` then takes ``delta_cummin`` over
+    ``[SI - 48 h, SI + 24 h]``.  Leaving such an hour NA moves the running
+    minimum (baseline) later and so the onset, which made Sepsis-3 depend on
+    whether the module read the published total or recomputed it in-process.
+    A database without structural SOFA-2 support keeps an all-NA total.
+    """
+
+    series = pd.to_numeric(pd.Series(values), errors="coerce")
+    if not sofa2_total_structurally_supported(database):
+        return pd.Series(pd.NA, index=series.index, dtype="Float64")
+    return series.fillna(0)
 
 def sep3_sofa2(
     sofa2: pd.DataFrame,
@@ -270,6 +289,7 @@ __all__ = [
     "label_sep3_sofa2",
     "susp_inf",
     "delta_cummin",
+    "sofa2_total_for_sepsis_delta",
     "delta_min",
     "delta_start",
 ]
