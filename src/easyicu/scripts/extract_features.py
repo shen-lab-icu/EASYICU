@@ -152,6 +152,15 @@ def resolve_datasource(
     return datasource
 
 
+INPUT_SNAPSHOT_HELP = (
+    "Check that the listed input files are unchanged before and after the run "
+    "(INPUT_SNAPSHOT.json and INPUT_SNAPSHOT_POST.json in --output; exit 3 if any "
+    "changed). It does NOT publish a consumed set or a RUN_RECEIPT, and it does NOT "
+    "prove that every file the run read was in the snapshot. The formal guarantee "
+    "comes only from bench7v2 / extract_database with RUN_RECEIPT."
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -220,11 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument(
         "--input-snapshot",
         action="store_true",
-        help=(
-            "Hash every input file before and after the run (INPUT_SNAPSHOT.json and "
-            "INPUT_SNAPSHOT_POST.json in --output) and exit 3 if any input changed. "
-            "Inputs must not change during a run; runtime source binding is best-effort."
-        ),
+        help=INPUT_SNAPSHOT_HELP,
     )
 
     # Download command

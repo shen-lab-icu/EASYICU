@@ -230,3 +230,20 @@ def test_a_built_layout_records_the_code_and_engine_that_wrote_it(tmp_path):
     assert manifest["builder_version"].startswith("easyicu.bucket_builder/")
     # The layout with its extra metadata still opens.
     assert formal_inputs.take_snapshot([f"hirid:{root}"])["databases"]["hirid"]["buckets"]
+
+
+def test_the_cli_opt_in_says_it_is_not_the_formal_guarantee():
+    # Supervisor ruling (D10D-CONSUMED-DELIVERY NB): no reader may take the CLI
+    # snapshot for the formal guarantee.
+    from easyicu.scripts import extract_features
+
+    parser = extract_features.build_parser()
+    extract = next(a for a in parser._subparsers._group_actions[0].choices.values()
+                   if any("--input-snapshot" in o.option_strings for o in a._actions))
+    (option,) = [o for o in extract._actions if "--input-snapshot" in o.option_strings]
+    for text in (option.help, formal_inputs.__doc__):
+        flat = " ".join(text.split())
+        assert "listed input files are unchanged before and after the run" in flat
+        assert "does NOT publish a consumed set or a RUN_RECEIPT" in flat
+        assert "does NOT prove that every file the run read was in the snapshot" in flat
+        assert "formal guarantee comes only from bench7v2 / " in flat

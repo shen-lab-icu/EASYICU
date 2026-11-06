@@ -28,9 +28,16 @@ restored to the same bytes during the run is not detected (an accepted,
 documented limitation). The snapshot is written outside the input.
 
 Inputs must not change while a run reads them; runtime source binding catches
-many changes but is best-effort. Proving it for a run is opt-in: ``easyicu
-extract --input-snapshot``, or this module directly (bench7 uses it for every
-formal run)::
+many changes but is best-effort. The formal guarantee comes only from bench7v2 /
+``extract_database`` with ``RUN_RECEIPT``: there the snapshot is combined with
+the run's consumed files, every one of which must be in it.
+
+``easyicu extract --input-snapshot`` is a narrower opt-in for end users: it
+checks that the listed input files are unchanged before and after the run. It
+does NOT publish a consumed set or a RUN_RECEIPT, and it does NOT prove that
+every file the run read was in the snapshot.
+
+This module's command line (bench7v2 calls it for every formal run)::
 
     python -m easyicu.formal_inputs snapshot --out PRE.json DB:DATA_PATH ...
     python -m easyicu.formal_inputs verify --pre PRE.json --out POST.json
