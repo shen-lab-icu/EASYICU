@@ -187,12 +187,14 @@ def test_parts_assemble_to_the_bytes_the_single_writer_produced(tmp_path, monkey
 
     out = tmp_path / "parts"
     out.mkdir()
-    info = _run(out, monkeypatch, 4)
+    seen = []
+    info = _run(out, monkeypatch, 4, calls=seen)
     reference = tmp_path / "reference.parquet"
     writer = None
     schema = None
-    for ids in ([1, 4, 7, 10], [2, 5, 8, 3], [6, 9]):
-        # The interleaved order of 10 stays at batch 4, cut into batches of 4.
+    # The reference writes the batches the planner actually produced, so the
+    # check holds for any batch order (contiguous since r13varlay).
+    for ids in seen:
         table = api._module_arrow_table(
             api._normalise_module_frame_for_parquet(_frame(ids), ["test_signal"], reorder=False),
             ["test_signal"], pa, module="test_module", schema=schema,
