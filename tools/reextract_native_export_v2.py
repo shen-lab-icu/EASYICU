@@ -807,9 +807,10 @@ def _validate_export_package(
     if not isinstance(provenance, dict):
         raise ExtractionRunError("native manifest lacks runtime_provenance")
     identity_source = provenance.get("easyicu_code_identity_source")
-    if identity_source is not None and identity_source != "git_checkout":
-        # A formal extraction runs from this clean checkout; unknown or
-        # stamped code identity is not that checkout.
+    if identity_source != "git_checkout":
+        # A formal extraction runs from this clean checkout. Unknown or
+        # stamped identity, a missing key or a null are not that checkout;
+        # there is no legacy-manifest exemption (delta7p D7P-SOURCE-GATE).
         raise ExtractionRunError(
             "native manifest code identity is not this checkout: "
             f"{identity_source!r} "

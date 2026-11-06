@@ -280,7 +280,7 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
     if (
         provenance.get("easyicu_git_commit") != sealed_sha
         or provenance.get("easyicu_git_dirty") is not False
-        or provenance.get("easyicu_code_identity_source", "git_checkout") != "git_checkout"
+        or provenance.get("easyicu_code_identity_source") != "git_checkout"
     ):
         raise ReceiptError("native_manifest_not_sealed",
                            f"{db} native manifest was not produced by the sealed checkout",

@@ -64,6 +64,7 @@ def _build_native_export(root: Path, *, database: str = "miiv") -> dict:
         "runtime_provenance": {
             "easyicu_git_commit": COMMIT,
             "easyicu_git_dirty": False,
+            "easyicu_code_identity_source": "git_checkout",
         },
         "module_timings_seconds": {
             module: float(index + 1)
@@ -379,6 +380,23 @@ def test_native_package_validation_refuses_code_identity_that_is_not_this_checko
         (export / "_manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
         with pytest.raises(launcher.ExtractionRunError, match="code identity is not this checkout"):
             launcher._validate_export_package(export, COMMIT, "miiv")
+
+
+@pytest.mark.parametrize("variant", ["missing", "null"])
+def test_native_package_validation_refuses_a_missing_or_null_code_identity(
+    tmp_path: Path, variant: str
+) -> None:
+    # delta7p D7P-SOURCE-GATE: a manifest that does not say git_checkout is
+    # refused even with the right commit and dirty=False.
+    export = tmp_path / "export"
+    manifest = _build_native_export(export)
+    if variant == "missing":
+        del manifest["runtime_provenance"]["easyicu_code_identity_source"]
+    else:
+        manifest["runtime_provenance"]["easyicu_code_identity_source"] = None
+    (export / "_manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    with pytest.raises(launcher.ExtractionRunError, match="code identity is not this checkout"):
+        launcher._validate_export_package(export, COMMIT, "miiv")
 
 
 def test_native_package_validation_requires_a_full_commit(tmp_path: Path) -> None:
