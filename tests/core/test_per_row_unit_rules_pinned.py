@@ -11,6 +11,10 @@ check. These tests pin two things for each rule:
 
 A future edit that swaps a row rule for a frame statistic (max, median, share
 of rows) fails here. Synthetic values only.
+
+Sites #17-#24 and #26 are pinned in this file; #25 (the MIMIC-III epoch-us
+charttime guard) needs a concept load, so it is pinned in
+test_mimic_epoch_us_rule_pinned.py.
 """
 
 from __future__ import annotations
