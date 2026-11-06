@@ -6134,6 +6134,17 @@ def _callback_sep3_sofa2(
     sofa2_data = sofa2_tbl.data.copy()
     susp_data = susp_tbl.data.copy()
 
+    # The SOFA-2 concept leaves a gap-filled hour without any owner row
+    # unscored (NA), but the published sofa2_score total normal-imputes it to
+    # 0, as ricu's sofa_score does (fill_gaps, slide, rowSums(na.rm = TRUE))
+    # before sep3 takes delta_cummin over [SI - 48 h, SI + 24 h].  The
+    # streamed export derives sep3_sofa2 from that published total; use the
+    # same values here so the onset does not depend on the execution path.
+    # A database without structural SOFA-2 support keeps an all-NA total.
+    sofa2_database = getattr(getattr(ctx.data_source, "config", None), "name", "") if ctx else ""
+    if "sofa2" in sofa2_data.columns and sofa2_total_structurally_supported(sofa2_database):
+        sofa2_data["sofa2"] = pd.to_numeric(sofa2_data["sofa2"], errors="coerce").fillna(0)
+
     if sofa2_tbl.index_column and sofa2_tbl.index_column != index_column and sofa2_tbl.index_column in sofa2_data.columns:
         sofa2_data = sofa2_data.rename(columns={sofa2_tbl.index_column: index_column})
     if susp_tbl.index_column and susp_tbl.index_column != index_column and susp_tbl.index_column in susp_data.columns:
