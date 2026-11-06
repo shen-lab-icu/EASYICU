@@ -2,6 +2,9 @@
 
 import logging
 
+# lead-r13 (eae58e67b): the decimal threshold rule applies to the reference
+# too, so this file still pins the pre-P8 algorithm, not pre-tolerance bounds.
+
 import numpy as np
 import pandas as pd
 
@@ -11,6 +14,7 @@ from easyicu.scores.kdigo_aki import (
     KDIGOComponentCalculationError, KDIGOComponentSchemaError,
 )
 from easyicu.scores.urine_output import collection_windows, time_hours
+from easyicu.utils.thresholds import ge, lt
 from easyicu.urine_weight_linkage import (
     ConflictingKeyedWeightError, resolve_keyed_unique_weights,
     resolve_unkeyed_single_entity_weight,
@@ -84,12 +88,12 @@ def descriptive_windows(
         weights = pd.to_numeric(data.weight.iloc[positions], errors="coerce").to_numpy(dtype=float)
         for window, minimum in windows:
             volume, covered, available = integrated[window]
-            valid = (covered >= minimum - 1e-9) & np.isfinite(weights) & (weights > 0)
+            valid = ge(covered, minimum) & np.isfinite(weights) & (weights > 0)
             values = np.divide(volume, covered * weights, out=np.full(len(volume), np.nan), where=valid)
             name = f"uo_{window}h"
             result[name].loc[positions, name] = values
             result[name].loc[positions, f"{name}_covered_h"] = covered
-            result[name].loc[positions, f"{name}_partial_window"] = covered < window - 1e-9
+            result[name].loc[positions, f"{name}_partial_window"] = lt(covered, window)
             result[name].loc[positions, f"{name}_available_at"] = available
     return result
 
@@ -294,7 +298,7 @@ def _calculate_uo_rates_simple(
         for window in (6, 12, 24):
             volume, covered, available = integrated[window]
             wt = urine['_wt'].to_numpy()[positions]
-            valid = (covered >= window - 1e-9) & np.isfinite(wt) & (wt > 0)
+            valid = ge(covered, window) & np.isfinite(wt) & (wt > 0)
             name = f"uo_rt_{window}hr"
             urine.loc[positions, name] = np.divide(
                 volume, wt * covered, out=np.full(len(ends), np.nan), where=valid,
