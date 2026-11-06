@@ -302,7 +302,9 @@ def read_bucket_contract(
             )
         _check_bucket_derived_from(root, manifest)
         if manifest.get("scheme") == VARIABLE_SCHEME:
-            return _read_variable_contract(root, manifest, cache)
+            layout = _read_variable_contract(root, manifest, cache)
+            _verify_bucket_sources(root, manifest)
+            return layout
         scheme, key, kind = (manifest[k] for k in ("scheme", "key_column", "key_type"))
         if (
             scheme not in {"hash", "range"}
@@ -398,6 +400,7 @@ def read_bucket_contract(
         actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
         if actual != seen:
             raise BucketLayoutError("bucket_inventory_mismatch", root)
+        _verify_bucket_sources(root, manifest)
         return BucketLayout(
             root,
             scheme,
@@ -433,7 +436,8 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
     """A bucket manifest's optional ``derived_from`` must be well formed.
 
     Present means bound to exact source files (relative path, size, mtime and
-    sha256 of each); any other shape is an unverifiable binding.
+    sha256 of each); any other shape is an unverifiable binding. The current
+    sources are compared with it by ``_verify_bucket_sources``.
     """
     if "derived_from" not in manifest:
         return
@@ -457,6 +461,41 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
             or not set(digest) <= _SHA256_HEX
         ):
             raise BucketLayoutError("bucket_derived_from_invalid", root)
+
+
+def _verify_bucket_sources(root: Path, manifest: dict) -> None:
+    """The source files ``derived_from`` binds still are the files it recorded.
+
+    Checked on every open, after the layout's own structure, so structural
+    defects keep their reasons. Each recorded path is relative to the
+    installation root (the bucket directory's parent), where the builder's
+    data path and the flat source live; a symlinked source is compared
+    through its link, as the builder stat'ed it. Size and mtime must equal
+    the recorded values (no bytes are read; the recorded sha256 stays the
+    builder's binding):
+    - a recorded source that no longer exists is
+      ``bucket_derived_from_source_missing``: the layout claims a provenance
+      it can no longer show, so it is not served (rebuild the layout or
+      restore the source);
+    - a changed size or mtime is ``bucket_derived_from_source_changed``.
+    A manifest without ``derived_from`` (layouts built before the binding)
+    is not checked here, as before.
+    """
+    derived = manifest.get("derived_from")
+    if derived is None:
+        return
+    base = root.parent
+    for entry in derived["files"]:
+        relative = PurePosixPath(entry["path"])
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise BucketLayoutError("bucket_derived_from_invalid", root)
+        source = base.joinpath(*relative.parts)
+        try:
+            stat = source.stat()
+        except OSError as exc:
+            raise BucketLayoutError("bucket_derived_from_source_missing", root) from exc
+        if stat.st_size != entry["size"] or stat.st_mtime_ns != entry["mtime_ns"]:
+            raise BucketLayoutError("bucket_derived_from_source_changed", root)
 
 
 def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> BucketLayout:
