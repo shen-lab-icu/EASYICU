@@ -145,6 +145,12 @@ def test_a_rerun_over_a_stale_partial_export_is_refused_not_cleaned(interrupted,
         _extract(source, interrupted)
     assert caught.value.reason == publication.REASON_STALE_PARTIAL
     assert sorted(path.name for path in interrupted.iterdir()) == before
+    # The refusal names the remedy in plain words and never suggests deletion.
+    message = str(caught.value)
+    assert "unfinished export from an interrupted run" in message
+    assert "Choose a new output folder" in message
+    assert "move this one aside after checking it" in message
+    assert "remove" not in message.lower() and "delete it" not in message.lower()
 
 
 def test_a_publication_failure_quarantines_the_marker_with_the_files(source, tmp_path, monkeypatch):
@@ -256,3 +262,87 @@ def test_release_and_refresh_scripts_refuse(marked, tmp_path, monkeypatch):
         (root / publication.IN_PROGRESS_MARKER).write_text("", encoding="utf-8")
     with pytest.raises(sealer.ReleaseValidationError, match="native_export_unpublished"):
         sealer.validate_release(run_root)
+
+
+# --- the web cohort export ---------------------------------------------------
+
+class _Job:
+    def emit(self, _payload):
+        pass
+
+
+@pytest.fixture
+def web_source(tmp_path):
+    from easyicu.webserver import dataio
+    from easyicu.webserver.demo_source_contracts import SOURCES
+    from tests.support.windows_laptop_demo import isolated_demo_paths, synthetic_demo_download
+
+    source = next(item for item in SOURCES if item.database == "eicu_demo")
+    paths = isolated_demo_paths(tmp_path, source)
+    synthetic_demo_download(source, paths, _Job())
+    assert dataio.make_convert_runner(str(paths.raw), "eicu")(_Job())["failed"] == 0
+    return paths
+
+
+def _web_export(paths):
+    from easyicu.webserver import dataio
+
+    return dataio.make_export_runner(
+        str(paths.raw), "eicu", modules=["demographics"], out_dir=str(paths.export),
+        export_format="parquet", include_feature_definitions=False,
+    )(_Job())
+
+
+def test_a_web_export_interrupted_after_the_manifest_delete_is_refused(web_source, monkeypatch):
+    from easyicu.webserver import dataio
+
+    assert _web_export(web_source)["manifest"] == "_manifest.json"
+    export = web_source.export
+    assert not (export / publication.IN_PROGRESS_MARKER).exists()
+    assert dataio.scan_path(str(export))["ok"] is True
+
+    def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(dataio, "_write_frame", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            _web_export(web_source)
+    assert not (export / "_manifest.json").exists()  # the old manifest is gone
+    assert (export / publication.IN_PROGRESS_MARKER).is_file()
+    for reader in (
+        dataio.scan_path,
+        dataio.describe_export_source,
+        dataio.describe_source_tables,
+        dataio.summarize_export_workspace,
+    ):
+        answer = reader(str(export))
+        assert answer["ok"] is False, reader.__name__
+        assert answer["error"] == "native_export_unpublished", reader.__name__
+        assert answer["reason"] == publication.REASON_IN_PROGRESS, reader.__name__
+
+    # A new web export into the same folder is refused in plain words.
+    with pytest.raises(dataio.ExportCohortError) as again:
+        _web_export(web_source)
+    assert again.value.error == "native_export_unpublished"
+    assert "Choose a new output folder" in again.value.detail["message"]
+
+
+def test_an_export_folder_without_a_manifest_is_refused_but_a_source_is_not(web_source):
+    from easyicu.webserver import dataio
+
+    # A prepared (converted) source folder is not an export: still served.
+    assert dataio.scan_path(str(web_source.raw))["ok"] is True
+    assert publication.folder_unpublished_reason(web_source.raw) is None
+
+    # An export folder (producer manifests) without a root manifest and with no
+    # marker, as a pre-marker interrupted run left it, is refused.
+    _web_export(web_source)
+    export = web_source.export
+    (export / "_manifest.json").unlink()
+    (export / "demographics.manifest.json").write_text("{}", encoding="utf-8")
+    answer = dataio.describe_export_source(str(export))
+    assert answer["ok"] is False
+    assert (answer["error"], answer["reason"]) == (
+        "native_export_unpublished", publication.REASON_MANIFEST_MISSING,
+    )

@@ -512,12 +512,13 @@ ascertainment is unavailable.
 > manifests, and Sepsis derivation reuses the same outer batch instead of a
 > hidden 2k sub-batch. Explicit `batch_size` values remain authoritative.
 >
-> **Unfinished exports are refused.** While `extract_database` runs, the export
+> **Unfinished exports are refused.** While `extract_database` or a web export runs, the export
 > folder holds an `_IN_PROGRESS` marker and raw, unpublished module files; the
 > marker is removed only after the root `_manifest.json` is written. EasyICU
 > readers refuse a folder with the marker, or without `_manifest.json`
-> (`native_export_unpublished`), and a new extraction into a folder that still
-> holds a stale marker is refused rather than cleaned: use a fresh folder.
+> (`native_export_unpublished`). A new extraction into a folder that still
+> holds the marker of an interrupted run is refused, and nothing in it is
+> deleted: choose a new output folder, or move that one aside after checking it.
 
 ### Domain-Specific Loaders
 

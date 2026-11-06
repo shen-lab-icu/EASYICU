@@ -46,6 +46,10 @@ from easyicu.databases import normalize_database_key
 from easyicu.export_publication import (
     REASON_IN_PROGRESS,
     UNPUBLISHED_CODE,
+    NativeExportUnpublishedError,
+    begin_native_export,
+    finish_native_export,
+    folder_unpublished_reason,
     unpublished_reason,
 )
 from easyicu.outcome_availability import structural_outcome_unavailability
@@ -293,17 +297,19 @@ def _shortcuts(home: Path) -> List[Dict[str, str]]:
 
 
 def _unpublished_export_error(path: Path) -> Optional[Dict[str, Any]]:
-    """Refuse a folder an interrupted native extraction left behind.
+    """Refuse a folder an interrupted extraction or web export left behind.
 
     Its module files are raw, unpublished outputs (native ids, raw dtypes,
-    rows outside the episode window), so no screen may treat it as data.
+    rows outside the episode window), so no screen may treat it as data. A
+    raw or prepared source folder is not an export and is never refused here.
     """
-    if unpublished_reason(path) != REASON_IN_PROGRESS:
+    reason = folder_unpublished_reason(path)
+    if reason is None:
         return None
     return {
         "ok": False,
         "error": UNPUBLISHED_CODE,
-        "reason": REASON_IN_PROGRESS,
+        "reason": reason,
         "path": str(path),
         "ready": False,
         "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
@@ -2744,6 +2750,15 @@ def make_export_runner(
             }
         )
 
+        # Mark the folder before the old manifest goes and before any module
+        # file is written; only the new manifest clears it, so an interrupted
+        # or cancelled export is never read as a finished one.
+        try:
+            begin_native_export(out)
+        except NativeExportUnpublishedError as exc:
+            raise ExportCohortError(
+                UNPUBLISHED_CODE, {"reason": exc.reason, "message": str(exc)}
+            ) from exc
         current_manifest = out / "_manifest.json"
         if current_manifest.exists() or current_manifest.is_symlink():
             if current_manifest.is_symlink() or not current_manifest.is_file():
@@ -3103,6 +3118,7 @@ def make_export_runner(
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        finish_native_export(out)
         (out / "README.md").write_text(
             _render_export_readme(
                 manifest, files=files, definition_files=definition_files

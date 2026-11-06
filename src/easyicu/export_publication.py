@@ -75,8 +75,9 @@ def begin_native_export(export_dir: Union[str, Path]) -> Path:
     marker = in_progress_marker_path(root)
     if os.path.lexists(marker):
         raise NativeExportUnpublishedError(
-            f"{root} holds a stale partial export ({IN_PROGRESS_MARKER} present); "
-            "use a fresh output directory or remove the stale one",
+            f"This folder holds an unfinished export from an interrupted run: {root} "
+            f"({IN_PROGRESS_MARKER} present). Choose a new output folder, or move "
+            "this one aside after checking it. EasyICU does not delete or reuse it.",
             reason=REASON_STALE_PARTIAL,
             path=root,
         )
@@ -112,6 +113,49 @@ def unpublished_reason(export_dir: Union[str, Path]) -> str | None:
     if not (root / NATIVE_MANIFEST).is_file():
         return REASON_MANIFEST_MISSING
     return None
+
+
+LEGACY_MANIFEST = "easyicu_export_manifest.json"
+#: Files only an EasyICU export writes: producer module manifests, the
+#: content-addressed column-metadata sidecar and the feature definitions. A raw
+#: or prepared source folder holds none of them.
+_EXPORT_ARTIFACT_GLOBS = (
+    "*.manifest.json",
+    "column_metadata.sha256-*.json",
+    "feature_definitions.json",
+    "feature_definitions.csv",
+)
+
+
+def is_export_folder(export_dir: Union[str, Path]) -> bool:
+    """Whether ``export_dir`` is (or was being written as) an EasyICU export."""
+
+    root = Path(export_dir)
+    for name in (IN_PROGRESS_MARKER, NATIVE_MANIFEST, LEGACY_MANIFEST):
+        if os.path.lexists(root / name):
+            return True
+    try:
+        return any(next(root.glob(pattern), None) is not None for pattern in _EXPORT_ARTIFACT_GLOBS)
+    except OSError:
+        return False
+
+
+def folder_unpublished_reason(export_dir: Union[str, Path]) -> str | None:
+    """Why a folder served as a data source is an unpublished export, or None.
+
+    A raw or prepared source folder is never an export and passes. An export
+    folder must carry no marker and a root manifest (native, or the older
+    ``easyicu_export_manifest.json`` packages).
+    """
+
+    root = Path(export_dir)
+    if os.path.lexists(in_progress_marker_path(root)):
+        return REASON_IN_PROGRESS
+    if not is_export_folder(root):
+        return None
+    if (root / NATIVE_MANIFEST).is_file() or (root / LEGACY_MANIFEST).is_file():
+        return None
+    return REASON_MANIFEST_MISSING
 
 
 def require_no_in_progress_marker(export_dir: Union[str, Path]) -> None:

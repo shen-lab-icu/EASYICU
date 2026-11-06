@@ -443,11 +443,11 @@ all_features = load_concepts(
 > manifest 会记录模块及逐批峰值 RSS；Sepsis 标签派生复用相同外层批次，
 > 不再暗中固定切成 2,000-stay 小批。用户显式传入的 `batch_size` 始终优先。
 >
-> **未完成的导出会被拒绝。** `extract_database` 运行期间，导出目录中有
+> **未完成的导出会被拒绝。** `extract_database` 或网页导出运行期间，导出目录中有
 > `_IN_PROGRESS` 标记和尚未发布的原始模块文件；只有根 `_manifest.json` 写完后
 > 才删除该标记。EasyICU 的读取方会拒绝带标记或缺少 `_manifest.json` 的目录
-> （`native_export_unpublished`）；若目录中残留旧标记，新的提取会被拒绝而不是
-> 自动清理，请换用新目录。
+> （`native_export_unpublished`）。若目录中残留中断运行留下的标记，新的提取会被
+> 拒绝，且不会删除其中任何文件：请选择新的输出目录，或在检查后把该目录移到别处。
 
 ### 专业模块
 
