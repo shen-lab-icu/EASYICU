@@ -3018,15 +3018,111 @@ def _write_json_atomic(path, payload) -> None:
     os.replace(temporary, target)
 
 
+# Load parameters that change how a run executes, never what it computes:
+# the batch size and worker count may differ between an attempt and its
+# resume (the patient set is bound by ``ids_sha256``).
+_STREAM_EXECUTION_PARAMS = frozenset({"batch_size", "patient_ids", "concept_workers", "verbose"})
+
+
+def _canonical_sha256(payload) -> str:
+    import hashlib
+    import json
+
+    text = json.dumps(payload, sort_keys=True, default=repr, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stream_load_params_sha256(load_kwargs: Mapping) -> str:
+    """The value-affecting load parameters (all but the execution ones)."""
+
+    return _canonical_sha256({
+        str(k): v for k, v in load_kwargs.items() if k not in _STREAM_EXECUTION_PARAMS
+    })
+
+
+def _stream_source_identity_sha256(data_path) -> str:
+    """The installation a streamed module reads: its path and file signature.
+
+    Every file under ``data_path`` (its ``conversion_manifest.json``
+    included; symlinked directories followed once) contributes its relative
+    path, size and modification time. A source replaced, rebuilt or edited
+    between an attempt and its resume changes the identity.
+    """
+
+    if not data_path:
+        return _canonical_sha256({"data_path": None})
+    root = os.path.abspath(str(data_path))
+    if not os.path.isdir(root):
+        try:
+            stat = os.stat(root)
+            return _canonical_sha256({"data_path": root, "file": [stat.st_size, stat.st_mtime_ns]})
+        except OSError as exc:
+            return _canonical_sha256({"data_path": root, "unreadable": type(exc).__name__})
+    rows = []
+    seen = set()
+    for directory, subdirs, files in os.walk(root, followlinks=True):
+        real = os.path.realpath(directory)
+        if real in seen:
+            subdirs[:] = []
+            continue
+        seen.add(real)
+        subdirs.sort()
+        relative = os.path.relpath(directory, root)
+        for name in sorted(files):
+            try:
+                stat = os.stat(os.path.join(directory, name))
+            except OSError as exc:
+                rows.append([relative, name, type(exc).__name__])
+                continue
+            rows.append([relative, name, stat.st_size, stat.st_mtime_ns])
+    return _canonical_sha256({"data_path": root, "files": rows})
+
+
+@lru_cache(maxsize=8)
+def _stream_code_identity_sha256(database: str) -> str:
+    """The code and dictionaries a run computes with, from the provenance owner.
+
+    Fixed for a process (imported code does not change under it); a resume
+    in a new worker recomputes it.
+    """
+
+    provenance = _native_export_runtime_provenance(source_name=database or None)
+    excluded = {"python_executable", "platform"}
+    return _canonical_sha256({k: v for k, v in provenance.items() if k not in excluded})
+
+
 def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_digest) -> dict:
+    """What a stream ledger must match to be resumed (lead-r13 D3-RESUME-IDENTITY).
+
+    The module, concepts, database and cohort, plus the source installation,
+    the code and dictionary digests and every value-affecting load parameter.
+    Only the execution parameters (batch size, workers) may differ.
+    """
+
+    database = str(load_kwargs.get("database") or "")
     return {
         "schema": _STREAM_LEDGER_SCHEMA,
         "module": str(module_name),
         "concepts": list(concepts),
-        "database": str(load_kwargs.get("database") or ""),
+        "database": database,
         "id_col": str(id_col),
         "ids_sha256": ids_digest,
+        "load_params_sha256": _stream_load_params_sha256(load_kwargs),
+        "source_identity_sha256": _stream_source_identity_sha256(load_kwargs.get("data_path")),
+        "code_identity_sha256": _stream_code_identity_sha256(database),
     }
+
+
+def _discard_stream_attempt(ledger: Mapping, destination: Path, *paths: Path) -> int:
+    """Remove an earlier attempt's committed parts and files; count its batches."""
+
+    batches = [b for b in (ledger.get("batches") or []) if isinstance(b, Mapping)]
+    for entry in batches:
+        if entry.get("part"):
+            destination.with_name(str(entry["part"])).unlink(missing_ok=True)
+    for path in paths:
+        path.unlink(missing_ok=True)
+    return len(batches)
 
 
 def _stream_module_batches_to_parquet(
@@ -3090,11 +3186,23 @@ def _stream_module_batches_to_parquet(
     ledger = None
     if ledger_path.exists():
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-        if {k: ledger.get(k) for k in identity} != identity:
-            raise ValueError(
-                f"{module_name}: stream ledger does not match this request "
-                f"({ledger_path.name}); refusing to resume"
+        if not isinstance(ledger, dict):
+            raise ValueError(f"{module_name}: stream ledger is not a ledger ({ledger_path.name})")
+        changed = sorted(k for k in identity if ledger.get(k) != identity[k])
+        if changed:
+            # A different source, code, dictionary, load parameter or request:
+            # the committed batches are not this run's, so it starts fresh and
+            # says why (D3-RESUME-IDENTITY).
+            discarded = _discard_stream_attempt(
+                ledger, destination, ledger_path, order_path, partial
             )
+            resume_events.append({
+                "kind": "resume_refused_identity_changed",
+                "changed": changed,
+                "discarded_batches": discarded,
+            })
+            ledger = None
+    if ledger is not None:
         all_ids = pq.read_table(order_path).column("id").to_pylist()
         if _stream_ids_digest(id_col, all_ids) != identity["ids_sha256"]:
             raise ValueError(f"{module_name}: stream order file does not match its ledger")
