@@ -37,8 +37,10 @@ exited. It binds the run to the sealed code and to its inputs:
 * no storage fallback: a formal run that read through one is
   ``storage_fallback_in_formal_run`` (with counts per reason);
 * ``REQUIRED_LAYOUT.json`` in the run root (``complete: true``, per database
-  {table: flat|bucket}): its sha256 is recorded and every table read must
-  have been served from the required layout, else ``layout_deviation``;
+  {table: {layout: flat|bucket, root_realpath}}, schema /2): its sha256 is
+  recorded and every read of every table must have been served from the
+  required layout at the required root (a flat table defaults to this input),
+  else ``layout_deviation``;
 * the code carries no working-tree diff: the code identity's and the native
   manifest's ``diff_sha256`` are copied and must be null;
 * for SICdb, ``cases_binding``: the prepared conversion manifest records
@@ -73,7 +75,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 RECEIPT_FILE = "RUN_RECEIPT.json"
 REQUIRED_LAYOUT_FILE = "REQUIRED_LAYOUT.json"
-REQUIRED_LAYOUT_SCHEMA = "easyicu.required_layout/1"
+REQUIRED_LAYOUT_SCHEMA = "easyicu.required_layout/2"
 LAYOUT_KINDS = ("flat", "bucket")
 # A consumed entry in the receipt: the storage owner's table_consumed event
 # without the log's own keys (``event``, ``root``), which are checked and dropped.
@@ -470,7 +472,8 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
     database's input (with the snapshot's declared-view chain if it names
     one); a bucket read must be an installation the snapshot covers, record
     its ``derived_from``, and name a manifest and sources whose sha256 are the
-    snapshot's. Returns {table: primary layout} for the layout requirement.
+    snapshot's. Returns {table: [{layout, root_realpath}, ...]}: every distinct
+    read of the table, for the layout requirement.
     """
     tables = binding.get("tables")
     if not isinstance(tables, dict):
@@ -485,7 +488,7 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
     buckets = {b["layout_realpath"] for b in snapshot.get("buckets") or ()}
     input_real = os.path.realpath(input_dir)
     chain = snapshot.get("declared_view_chain")
-    observed: Dict[str, str] = {}
+    observed: Dict[str, List[Dict[str, str]]] = {}
     for table, record in tables.items():
         records = record.get("reads") if isinstance(record, dict) else None
         if not isinstance(records, list) or not records:
@@ -539,7 +542,9 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
             raise ReceiptError("storage_layout_unrecorded",
                                f"{db} {table} layout record names no primary layout",
                                database=db, table=table)
-        observed[table] = primary
+        observed[table] = sorted(
+            {(r["layout"], os.path.realpath(r["root"])) for r in records})
+        observed[table] = [{"layout": k, "root_realpath": r} for k, r in observed[table]]
     # The run log's per-read layout (storage_reads) agrees with the record.
     for read in reads:
         kind = _read_kind(read.get("layout"))
@@ -570,10 +575,13 @@ def _refuse_fallbacks(db: str, fallbacks: Any) -> None:
 def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict[str, Any], str]:
     """G4: the run's REQUIRED_LAYOUT.json and its sha256.
 
-    {"schema": "easyicu.required_layout/1", "complete": true,
-    "databases": {db: {table: "flat" | "bucket"}}}. ``complete`` states the
-    list names every table the run may read; anything else, or a database the
-    run extracts without an entry, is a stop.
+    {"schema": "easyicu.required_layout/2", "complete": true, "databases":
+    {db: {table: {"layout": "flat" | "bucket", "root_realpath": "<abs>"}}}}.
+    ``root_realpath`` is required for a bucket (the installation it must be
+    served from) and optional for a flat table (default: the database's
+    input). ``complete`` states the list names every table the run may read.
+    Anything else, schema /1 included, or a database the run extracts
+    without an entry, is a stop.
     """
     path = Path(run_root) / REQUIRED_LAYOUT_FILE
     if not path.is_file():
@@ -583,7 +591,7 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
     listed = payload.get("databases")
     if payload.get("schema") != REQUIRED_LAYOUT_SCHEMA or not isinstance(listed, dict):
         raise ReceiptError("receipt_input_malformed",
-                           f"{REQUIRED_LAYOUT_FILE} is not a required-layout list",
+                           f"{REQUIRED_LAYOUT_FILE} is not a {REQUIRED_LAYOUT_SCHEMA} list",
                            input=REQUIRED_LAYOUT_FILE)
     if payload.get("complete") is not True:
         raise ReceiptError("required_layout_incomplete",
@@ -594,34 +602,56 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
             raise ReceiptError("required_layout_missing",
                                f"{REQUIRED_LAYOUT_FILE} lists no layout for {db}", database=db)
         names = [str(t).lower() for t in tables]
-        if len(set(names)) != len(names) or any(v not in LAYOUT_KINDS for v in tables.values()):
+        if len(set(names)) != len(names) or not all(
+                _required_entry_valid(v) for v in tables.values()):
             raise ReceiptError("receipt_input_malformed",
-                               f"{REQUIRED_LAYOUT_FILE} {db}: each table once, flat or bucket",
+                               f"{REQUIRED_LAYOUT_FILE} {db}: each table once, as "
+                               "{layout: flat|bucket, root_realpath} (required for a bucket)",
                                input=REQUIRED_LAYOUT_FILE, database=db)
     return payload, sha256_file(path)
 
 
-def _layout_requirement(db: str, required: Optional[Mapping[str, str]],
-                        observed: Mapping[str, str]) -> Dict[str, Any]:
-    """G4: every table the run read was served from the layout the run required."""
+def _required_entry_valid(entry: Any) -> bool:
+    if not isinstance(entry, dict) or set(entry) - {"layout", "root_realpath"}:
+        return False
+    root = entry.get("root_realpath")
+    if entry.get("layout") == "bucket":
+        return isinstance(root, str) and os.path.isabs(root)
+    return entry.get("layout") == "flat" and (
+        root is None and "root_realpath" not in entry
+        or isinstance(root, str) and os.path.isabs(root))
+
+
+def _layout_requirement(db: str, input_dir: str, required: Optional[Mapping[str, Any]],
+                        observed: Mapping[str, List[Dict[str, str]]]) -> Dict[str, Any]:
+    """G4: every read of every table matches its required layout and root realpath.
+
+    Both sides are compared after resolving symlinks; a flat table without
+    ``root_realpath`` must be served under the database's input.
+    """
     if not isinstance(required, Mapping):
         raise ReceiptError("required_layout_missing",
                            f"{REQUIRED_LAYOUT_FILE} lists no layout for {db}", database=db)
-    wanted = {str(t).lower(): v for t, v in required.items()}
+    wanted = {}
+    for table, entry in required.items():
+        root = entry.get("root_realpath") or input_dir
+        wanted[str(table).lower()] = {"layout": entry["layout"],
+                                      "root_realpath": os.path.realpath(root)}
     deviations = []
-    for table, layout in sorted(observed.items()):
+    for table, reads in sorted(observed.items()):
         need = wanted.get(table.lower())
-        if need != layout:
-            deviations.append({"table": table, "required": need, "observed": layout})
+        for read in reads:
+            if need != read:
+                deviations.append({"table": table, "required": need, "observed": read})
     if deviations:
         raise ReceiptError("layout_deviation",
-                           f"{db}: {len(deviations)} table(s) not served from the required layout",
-                           database=db, deviations=deviations)
-    read = {t.lower() for t in observed}
+                           f"{db}: {len(deviations)} read(s) not served from the required "
+                           "layout and root", database=db, deviations=deviations)
+    read_tables = {t.lower() for t in observed}
     return {
-        "required": dict(sorted(required.items())),
+        "required": {t: wanted[str(t).lower()] for t in sorted(required)},
         "observed": dict(sorted(observed.items())),
-        "not_read": sorted(t for t in required if str(t).lower() not in read),
+        "not_read": sorted(t for t in required if str(t).lower() not in read_tables),
     }
 
 
@@ -759,7 +789,7 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                               section["storage_reads"], before)
     _refuse_fallbacks(db, manifest.get("storage_fallbacks"))
     section["storage_fallbacks"] = []
-    section["layout_requirement"] = _layout_requirement(db, required, observed)
+    section["layout_requirement"] = _layout_requirement(db, input_dir, required, observed)
     return section
 
 

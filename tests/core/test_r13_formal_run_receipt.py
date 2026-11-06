@@ -167,12 +167,15 @@ def _tables(input_root: Path, reads: list) -> dict:
 
 
 def _required(reads: list) -> dict:
-    tables = {}
+    """REQUIRED_LAYOUT.json (schema /2) that these reads satisfy."""
+    tables: dict = {}
     for read in reads:
-        kind = "flat" if read["layout"] == "flat" else "bucket"
-        if tables.get(read["table"]) != "bucket":
-            tables[read["table"]] = kind
-    return {"schema": "easyicu.required_layout/1", "complete": True,
+        if read["layout"] == "flat":
+            tables.setdefault(read["table"], {"layout": "flat"})
+        else:
+            tables[read["table"]] = {"layout": "bucket",
+                                     "root_realpath": os.path.realpath(read["layout_path"])}
+    return {"schema": "easyicu.required_layout/2", "complete": True,
             "databases": {"sic": tables}}
 
 
@@ -856,7 +859,11 @@ def test_a_layout_root_receipt_checks_every_layout_record(tmp_path, monkeypatch)
 
     sic = _sic_receipt(tmp_path, root, reads, monkeypatch)["databases"]["sic"]
 
-    assert sic["layout_requirement"]["observed"] == {"cases": "flat", "laboratory": "bucket"}
+    assert sic["layout_requirement"]["observed"] == {
+        "cases": [{"layout": "flat", "root_realpath": os.path.realpath(root)}],
+        "laboratory": [{"layout": "bucket",
+                        "root_realpath": os.path.realpath(root / "laboratory_bucket")}],
+    }
     assert sic["storage_binding"]["tables"]["laboratory"]["derived_from_recorded"] is True
 
 
@@ -958,13 +965,22 @@ def test_a_run_without_fallbacks_records_none(tmp_path, monkeypatch):
     assert sic["storage_fallbacks"] == []
 
 
-# G4: REQUIRED_LAYOUT.json, complete, with its sha256; any deviation is a stop.
+# G4: REQUIRED_LAYOUT.json (schema /2), complete, with its sha256: every read
+# of every table matches the required layout AND root realpath, else a stop.
+
+def _schema2(tables: dict) -> dict:
+    return {"schema": "easyicu.required_layout/2", "complete": True,
+            "databases": {"sic": tables}}
+
 
 def test_the_required_layout_is_recorded_with_its_sha256(tmp_path, monkeypatch):
     _prepared_root, root, reads = _layout_root_reads(tmp_path)
-    required = {"schema": "easyicu.required_layout/1", "complete": True,
-                "databases": {"sic": {"cases": "flat", "laboratory": "bucket",
-                                      "medication": "bucket"}}}
+    bucket = os.path.realpath(root / "laboratory_bucket")
+    required = _schema2({
+        "cases": {"layout": "flat"},
+        "laboratory": {"layout": "bucket", "root_realpath": bucket},
+        "medication": {"layout": "bucket", "root_realpath": "/elsewhere/medication_bucket"},
+    })
 
     built = _sic_receipt(tmp_path, root, reads, monkeypatch, required=required)
 
@@ -973,39 +989,110 @@ def test_the_required_layout_is_recorded_with_its_sha256(tmp_path, monkeypatch):
     assert built["required_layout"]["complete"] is True
     check = built["databases"]["sic"]["layout_requirement"]
     assert check["not_read"] == ["medication"]
-    assert check["observed"] == {"cases": "flat", "laboratory": "bucket"}
+    assert check["required"]["cases"] == {"layout": "flat",
+                                          "root_realpath": os.path.realpath(root)}
+    assert check["observed"]["laboratory"] == [{"layout": "bucket", "root_realpath": bucket}]
 
 
-@pytest.mark.parametrize(("tables", "deviation"), [
-    ({"cases": "flat", "laboratory": "flat"},
-     {"table": "laboratory", "required": "flat", "observed": "bucket"}),
-    ({"cases": "bucket", "laboratory": "bucket"},
-     {"table": "cases", "required": "bucket", "observed": "flat"}),
-    ({"cases": "flat"}, {"table": "laboratory", "required": None, "observed": "bucket"}),
-])
-def test_a_table_served_from_another_layout_is_a_layout_deviation(
-        tmp_path, monkeypatch, tables, deviation):
+@pytest.mark.parametrize("spelling", ["realpath", "link", "explicit_flat"])
+def test_a_bucket_at_its_required_root_passes_however_the_root_is_spelled(
+        tmp_path, monkeypatch, spelling):
     _prepared_root, root, reads = _layout_root_reads(tmp_path)
-    required = {"schema": "easyicu.required_layout/1", "complete": True,
-                "databases": {"sic": tables}}
+    bucket = root / "laboratory_bucket"
+    cases = {"layout": "flat"}
+    if spelling == "link":  # a symlink to the same installation resolves to it
+        (tmp_path / "bucket_link").symlink_to(bucket, target_is_directory=True)
+        bucket = tmp_path / "bucket_link"
+    if spelling == "explicit_flat":
+        cases["root_realpath"] = os.path.realpath(root)
+    required = _schema2({"cases": cases,
+                         "laboratory": {"layout": "bucket", "root_realpath": str(bucket)}})
+
+    sic = _sic_receipt(tmp_path, root, reads, monkeypatch, required=required)["databases"]["sic"]
+
+    assert sic["layout_requirement"]["not_read"] == []
+
+
+def _deviation_cases(tmp_path, root, prepared):
+    bucket = os.path.realpath(root / "laboratory_bucket")
+    flat = {"layout": "flat", "root_realpath": os.path.realpath(root)}
+    other = str(tmp_path / "b6_root" / "sic_other" / "laboratory_bucket")
+    observed_bucket = {"layout": "bucket", "root_realpath": bucket}
+    return {
+        # The supervisor's rule: a bucket from another installation is a deviation.
+        "wrong_bucket_root": (
+            {"cases": {"layout": "flat"},
+             "laboratory": {"layout": "bucket", "root_realpath": other}},
+            {"table": "laboratory", "required": {"layout": "bucket",
+                                                 "root_realpath": os.path.realpath(other)},
+             "observed": observed_bucket}),
+        "flat_explicit_other_root": (
+            {"cases": {"layout": "flat", "root_realpath": str(prepared)},
+             "laboratory": {"layout": "bucket", "root_realpath": bucket}},
+            {"table": "cases", "required": {"layout": "flat",
+                                            "root_realpath": os.path.realpath(prepared)},
+             "observed": flat}),
+        "bucket_required_flat": (
+            {"cases": {"layout": "flat"}, "laboratory": {"layout": "flat"}},
+            {"table": "laboratory", "required": flat, "observed": observed_bucket}),
+        "flat_required_bucket": (
+            {"cases": {"layout": "bucket", "root_realpath": bucket},
+             "laboratory": {"layout": "bucket", "root_realpath": bucket}},
+            {"table": "cases", "required": {"layout": "bucket", "root_realpath": bucket},
+             "observed": flat}),
+        "unlisted": (
+            {"cases": {"layout": "flat"}},
+            {"table": "laboratory", "required": None, "observed": observed_bucket}),
+    }
+
+
+@pytest.mark.parametrize("case", ["wrong_bucket_root", "flat_explicit_other_root",
+                                  "bucket_required_flat", "flat_required_bucket", "unlisted"])
+def test_a_read_from_another_layout_or_root_is_a_layout_deviation(tmp_path, monkeypatch, case):
+    prepared, root, reads = _layout_root_reads(tmp_path)
+    tables, deviation = _deviation_cases(tmp_path, root, prepared)[case]
 
     with pytest.raises(receipt.ReceiptError) as error:
-        _sic_receipt(tmp_path, root, reads, monkeypatch, required=required)
+        _sic_receipt(tmp_path, root, reads, monkeypatch, required=_schema2(tables))
     assert error.value.code == "layout_deviation"
     assert error.value.details["deviations"] == [deviation]
 
 
+def test_every_read_of_a_table_must_match_its_required_root(tmp_path, monkeypatch):
+    # A flat read beside the required bucket is a second read of the table:
+    # it does not match the bucket requirement.
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    tables = _tables(root, reads)
+    tables["laboratory"]["reads"].append({"layout": "flat", "root": str(root),
+                                          "derived_from": None})
+    required = _schema2({"cases": {"layout": "flat"}, "laboratory": {
+        "layout": "bucket", "root_realpath": os.path.realpath(root / "laboratory_bucket")}})
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, tables=tables, required=required)
+    assert error.value.code == "layout_deviation"
+    (deviation,) = error.value.details["deviations"]
+    assert deviation["observed"] == {"layout": "flat", "root_realpath": os.path.realpath(root)}
+
+
+_FLAT = {"cases": {"layout": "flat"}}
+
+
 @pytest.mark.parametrize(("payload", "code"), [
     (None, "required_layout_missing"),
-    ({"schema": "easyicu.required_layout/1", "complete": False,
-      "databases": {"sic": {"cases": "flat"}}}, "required_layout_incomplete"),
-    ({"schema": "easyicu.required_layout/1", "complete": True,
-      "databases": {"eicu": {"cases": "flat"}}}, "required_layout_missing"),
-    ({"schema": "easyicu.required_layout/1", "complete": True,
-      "databases": {"sic": {"cases": "parquet"}}}, "receipt_input_malformed"),
-    ({"schema": "easyicu.required_layout/1", "complete": True,
-      "databases": {"sic": {"cases": "flat", "CASES": "flat"}}}, "receipt_input_malformed"),
-    ({"complete": True, "databases": {"sic": {"cases": "flat"}}}, "receipt_input_malformed"),
+    ({**_schema2(_FLAT), "complete": False}, "required_layout_incomplete"),
+    ({**_schema2(_FLAT), "databases": {"eicu": _FLAT}}, "required_layout_missing"),
+    ({**_schema2(_FLAT), "schema": "easyicu.required_layout/1"}, "receipt_input_malformed"),
+    ({**_schema2(_FLAT), "databases": {"sic": {"cases": "flat"}}}, "receipt_input_malformed"),
+    (_schema2({"cases": {"layout": "parquet"}}), "receipt_input_malformed"),
+    (_schema2({"cases": {"layout": "bucket"}}), "receipt_input_malformed"),
+    (_schema2({"cases": {"layout": "bucket", "root_realpath": "rel/bucket"}}),
+     "receipt_input_malformed"),
+    (_schema2({"cases": {"layout": "flat", "root_realpath": None}}), "receipt_input_malformed"),
+    (_schema2({"cases": {"layout": "flat", "root": "/x"}}), "receipt_input_malformed"),
+    (_schema2({"cases": {"layout": "flat"}, "CASES": {"layout": "flat"}}),
+     "receipt_input_malformed"),
+    ({"complete": True, "databases": {"sic": _FLAT}}, "receipt_input_malformed"),
 ])
 def test_a_missing_incomplete_or_malformed_required_layout_stops_the_receipt(
         tmp_path, monkeypatch, payload, code):
