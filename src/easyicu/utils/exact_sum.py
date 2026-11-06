@@ -13,7 +13,8 @@ an infinity keeps its IEEE result (``inf + -inf`` is NaN), decided directly.
 A group of finite values whose partial sums overflow (``fsum`` then raises,
 in some orders only) is summed as exact rationals. Its correctly rounded total
 is the same for every order. A group of finite values whose exact total is
-beyond the float64 range, of any size, is refused with
+beyond the largest finite float64 (compared exactly, before rounding), of any
+size, is refused with
 :class:`ExactSumOverflowError`, reason ``exact_sum_overflow``. No path falls
 back to a floating-point summation. The former fallback published an
 order-dependent result, finite for one order and infinite for another.
@@ -70,13 +71,17 @@ def _fsum(values: np.ndarray) -> float:
     if not np.isfinite(values).all():
         return _ieee_non_finite_sum(values)
     try:
-        return math.fsum(values.tolist())
+        total = math.fsum(values.tolist())
     except OverflowError:
         # fsum raises on an overflowing partial sum, which depends on the
         # order: [M, -M, M] passes and [M, M, -M] raises. Sum the exact
         # rationals instead (each float is an integer multiple of 2**-1074);
         # the correctly rounded total is the same for every order.
         return _exact_rational_sum(values)
+    if abs(total) == _MAX_FINITE:
+        # A correctly rounded max may stand for an exact total beyond it.
+        return _exact_rational_sum(values)
+    return total
 
 
 def _ieee_non_finite_sum(values: np.ndarray) -> float:
@@ -98,23 +103,34 @@ def _ieee_non_finite_sum(values: np.ndarray) -> float:
 _SCALE_BITS = 1074  # every finite float64 is an integer multiple of 2**-1074
 
 
+def _units(value: float) -> int:
+    """``value`` as an exact integer number of 2**-1074 units."""
+
+    numerator, denominator = value.as_integer_ratio()
+    return numerator * ((1 << _SCALE_BITS) // denominator)
+
+
+_MAX_FINITE = float(np.finfo(np.float64).max)
+_MAX_UNITS = _units(_MAX_FINITE)
+
+
 def _exact_rational_sum(values: np.ndarray) -> float:
     """Correctly rounded sum of finite floats, or the typed refusal.
 
-    Only reached after ``fsum`` overflowed. The total is the integer sum of the
-    values in units of 2**-1074, so it is exact in any order. It is converted
-    once with correct rounding. A total beyond the float64 range is refused:
-    publishing ``inf`` for finite inputs would invent a value.
+    Reached when a finite group's float result is not trustworthy at the
+    range edge: ``fsum`` overflowed, or a rounded total equals the largest
+    finite float64. The total is the integer sum of the values in units of
+    2**-1074, so it is exact in any order. It is compared with the largest
+    finite float64 *before* rounding (lead-r13 delta4 D4-EXACT-RANGE). An
+    exact total beyond it is refused, whether it would round to inf or back
+    to the maximum, because publishing either would invent a value. Otherwise
+    it is converted once, with correct rounding.
     """
 
-    total = 0
-    for value in values.tolist():
-        numerator, denominator = value.as_integer_ratio()
-        total += numerator * ((1 << _SCALE_BITS) // denominator)
-    try:
-        return total / (1 << _SCALE_BITS)
-    except OverflowError:
-        raise ExactSumOverflowError(len(values)) from None
+    total = sum(_units(value) for value in values.tolist())
+    if abs(total) > _MAX_UNITS:
+        raise ExactSumOverflowError(len(values))
+    return total / (1 << _SCALE_BITS)
 
 
 def exact_group_totals(
@@ -134,12 +150,16 @@ def exact_group_totals(
     counts = np.bincount(codes, minlength=n_groups)
     # Exact for groups of at most two values.
     totals = np.bincount(codes, weights=values, minlength=n_groups)
-    # Two finite values whose exact total is beyond the float64 range round
-    # to an infinity: refused, as for larger groups.
+    # Two finite values whose rounded total reaches the range edge (inf or the
+    # largest finite value) are re-decided exactly: a total beyond the range
+    # is refused, as for larger groups.
     non_finite_terms = np.bincount(codes, weights=~np.isfinite(values), minlength=n_groups)
-    invented = (counts <= 2) & (non_finite_terms == 0) & ~np.isfinite(totals)
-    if invented.any():
-        raise ExactSumOverflowError(int(counts[invented][0]))
+    edge = (
+        (counts <= 2) & (non_finite_terms == 0)
+        & (~np.isfinite(totals) | (np.abs(totals) == _MAX_FINITE))
+    )
+    for code in np.flatnonzero(edge):
+        totals[code] = _exact_rational_sum(values[codes == code])
     many = counts >= 3
     if many.any():
         rows = many[codes]
