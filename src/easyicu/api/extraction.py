@@ -1611,6 +1611,33 @@ def _worker_failure_is_memory(exit_code: object, failures: object) -> bool:
     return False
 
 
+def _module_memory_errors(temp_root: str, modules: Sequence[str]) -> list[str]:
+    """Modules whose worker finished but recorded an out-of-memory error.
+
+    DuckDB raises OutOfMemoryException inside the module when its buffer
+    limit cannot be met; the worker then exits normally with the error in
+    the module manifest.  Such a module is retried like a killed worker.
+    """
+
+    import json
+
+    hits = []
+    for module in modules:
+        path = os.path.join(temp_root, module, "_manifest.json")
+        try:
+            with open(path, encoding="utf-8") as handle:
+                errors = json.load(handle).get("errors") or []
+        except (OSError, ValueError):
+            continue
+        if any(
+            marker in str(error).lower()
+            for error in errors
+            for marker in _MEMORY_FAILURE_MARKERS
+        ):
+            hits.append(module)
+    return hits
+
+
 def _crash_retry_batch_size(
     *,
     crashed: bool,
@@ -7912,10 +7939,16 @@ def extract_database(
         # A one-shot the planner chose from a stale or optimistic profile may
         # be streamed instead whenever the caller allowed streamed output.
         group_may_stream = group_stream_output_batches or oom_stream_fallback_allowed
+        memory_error_modules = (
+            [] if crashed else _module_memory_errors(tmp_root, group_mods)
+        )
         crash_retry = _crash_retry_batch_size(
-            crashed=crashed
-            and incomplete
-            and _worker_failure_is_memory(proc.exitcode, attempt_failures),
+            crashed=(
+                crashed
+                and incomplete
+                and _worker_failure_is_memory(proc.exitcode, attempt_failures)
+            )
+            or bool(memory_error_modules),
             stream_output_batches=group_may_stream,
             adaptive=group_adaptive_stream_batches,
             attempt=stream_retry_attempt,
@@ -7936,6 +7969,7 @@ def extract_database(
                     "retry_batch_size": retry_batch_size,
                     "policy": "adaptive" if adaptive_retry else "halve_on_oom",
                     "from_one_shot": not group_stream_output_batches,
+                    "memory_error_in_module": bool(memory_error_modules),
                 }
             )
             logger.warning(
@@ -7968,6 +8002,21 @@ def extract_database(
             # modules in the database output remain untouched.
             group_mods = []
             group_special = []
+        elif memory_error_modules and can_split:
+            # A module that ran out of memory inside a shared group worker is
+            # retried alone at the same batch; alone, it halves from there.
+            for m in reversed(memory_error_modules):
+                pending_groups.appendleft(
+                    {
+                        "modules": [m],
+                        "special": [],
+                        "_batch_size": group_batch_size,
+                        "_stream_output_batches": group_stream_output_batches,
+                        "_adaptive_stream_batches": group_adaptive_stream_batches,
+                        "_stream_retry_attempt": stream_retry_attempt,
+                    }
+                )
+            group_mods = [m for m in group_mods if m not in memory_error_modules]
         elif crashed and can_split and incomplete:
             if verbose:
                 retry_units = incomplete_mods + (

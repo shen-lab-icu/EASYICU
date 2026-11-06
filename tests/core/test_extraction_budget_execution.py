@@ -207,3 +207,60 @@ def test_memory_killed_one_shot_does_not_stream_when_the_caller_forbids_it(
             resource_budget_mb=8192, stream_output_batches=False, verbose=False,
         )
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "retried"),
+    [
+        ("load_concepts(demographics): Out of Memory Error: could not allocate block", True),
+        ("load_concepts(demographics): ValueError: bad unit", False),
+    ],
+)
+def test_module_recording_a_duckdb_oom_retries_at_half_the_cohort(
+    monkeypatch, tmp_path, error, retried
+):
+    import json as _json
+
+    calls = []
+
+    class RecordsModuleError:
+        def __init__(self, *, target, args, daemon):
+            bound = inspect.signature(target).bind(*args).arguments
+            calls.append(bound)
+            if len(calls) > 1:
+                raise DispatchCaptured
+            self.root = bound["output_root"]
+            self.exitcode = None
+
+        def start(self):
+            # The worker survives a DuckDB OutOfMemoryException and records it.
+            module_dir = os.path.join(self.root, "demographics")
+            os.makedirs(module_dir, exist_ok=True)
+            with open(os.path.join(module_dir, "_manifest.json"), "w") as handle:
+                _json.dump({"module": "demographics", "errors": [error], "saved": {}}, handle)
+            self.exitcode = 0
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(
+        api, "_get_extraction_mp_context",
+        lambda _: SimpleNamespace(Process=RecordsModuleError),
+    )
+    if retried:
+        with pytest.raises(DispatchCaptured):
+            api.extract_database(
+                "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
+                modules=["demographics"], patient_ids={"admissionid": list(range(23106))},
+                resource_budget_mb=8192, verbose=False,
+            )
+        assert [call["batch_size"] for call in calls] == [23106, 11553]
+        assert [call["stream_output_batches"] for call in calls] == [False, True]
+    else:
+        with pytest.raises(api.NativeExportPublicationError):
+            api.extract_database(
+                "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
+                modules=["demographics"], patient_ids={"admissionid": list(range(23106))},
+                resource_budget_mb=8192, verbose=False,
+            )
+        assert len(calls) == 1
