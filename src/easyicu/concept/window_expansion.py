@@ -177,8 +177,9 @@ def expand_windows_inclusive_any(
     start sits on the grid because ricu loads the index at the interval; it is
     floored here for the same reason. A row without a duration occupies its
     own cell (a zero-length window), so a point assessment is not dropped.
-    ricu's clamp of a negative end to zero, which stretches a window that
-    closed before admission up to hour zero, is not reproduced.
+    As in ricu (``x[end < 0, end := 0]``), a window that closes before
+    admission on an admission-relative clock is extended to hour zero; the
+    eICU demo had six GCS cells where only this differed from ricu.
     """
 
     if interval_hours <= 0:
@@ -194,6 +195,8 @@ def expand_windows_inclusive_any(
     duration = np.where(np.isnan(duration), 0.0, duration)
     start = np.floor(raw_start / interval_hours) * interval_hours
     end = np.floor((start + duration) / interval_hours) * interval_hours
+    if kind != "datetime":
+        end = np.where(end < 0, 0.0, end)
     valid = np.isfinite(start) & np.isfinite(end) & (end >= start)
     counts = np.where(valid, np.rint((np.where(valid, end, 0) - np.where(valid, start, 0)) / interval_hours) + 1, 0).astype(np.int64)
     total = int(counts.sum())

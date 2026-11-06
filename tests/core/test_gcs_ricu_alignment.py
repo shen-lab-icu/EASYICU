@@ -55,3 +55,15 @@ def test_the_window_grid_is_ricu_expand_with_any():
     assert cells["t"].tolist() == [0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16]
     assert cells["v"].tolist() == [True] * 7 + [False, False, True, True] + [False] * 3
     assert cells["v"].dtype == bool
+
+
+def test_a_window_closing_before_admission_reaches_hour_zero():
+    # ricu expand(): x[end < 0, end := 0]. ricu 0.6.3 on win_tbl(start = -10 h,
+    # -3 h; dur = 360, 1 mins; TRUE, FALSE) gives hours -10..0, all TRUE.
+    frame = pd.DataFrame({"id": [1, 1], "t": [-10.0, -3.0], "v": [True, False]})
+    cells = expand_windows_inclusive_any(
+        frame, idx_col="t", id_cols=["id"], value_col="v",
+        dur_hours=pd.Series([6.0, 1.0 / 60.0]),
+    )
+    assert cells["t"].tolist() == [float(h) for h in range(-10, 1)]
+    assert cells["v"].all()
