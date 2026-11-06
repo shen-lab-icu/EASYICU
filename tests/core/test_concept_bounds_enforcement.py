@@ -76,19 +76,15 @@ def test_enforce_concept_bounds_preserves_unbounded_concepts(monkeypatch):
     assert filtered.equals(df)
 
 
-def test_enforce_concept_bounds_refuses_a_unit_suspect_batch(monkeypatch):
-    # lead-r13 sweep #14: a median outside the bounds no longer skips
-    # enforcement as "probably another unit"; it refuses typed.
-    from easyicu.utils.declared_units import UndeclaredUnitError
-
+def test_enforce_concept_bounds_drops_a_frame_of_out_of_bounds_values(monkeypatch):
+    # lead-r13 bounds ruling: a frame whose values all lie outside the bounds
+    # is neither kept as "probably another unit" nor refused; it is dropped
+    # per row, as for 99 values or for one.
     monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", {"temperature": (32.0, 42.0)})
     df = pd.DataFrame({"temperature": [98.6] * 100})
 
-    with pytest.raises(UndeclaredUnitError) as caught:
-        api._enforce_concept_bounds(df, "temperature")
-    assert caught.value.reason == "bounds_unit_suspect"
-
-    # 99 values are below the evidence floor: ordinary enforcement drops them.
+    filtered, dropped = api._enforce_concept_bounds(df, "temperature")
+    assert dropped == 100 and filtered.empty
     filtered, dropped = api._enforce_concept_bounds(df.iloc[:99], "temperature")
     assert dropped == 99 and filtered.empty
 

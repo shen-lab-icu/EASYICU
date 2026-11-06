@@ -504,3 +504,46 @@ def composite_score_completeness(
         "n_complete_components": n_complete,
         "frac_complete_components": (n_complete / n_rows) if n_rows else None,
     }
+
+
+#: Release-QC warning on a source whose declared concept bounds rejected every
+#: value of many stays: at least this many such stays (counts below 10 are
+#: never reported) ...
+SOURCE_BOUNDS_WARN_MIN_STAYS = 10
+#: ... making up at least this share of the stays the source had values for.
+#: On full eICU and MIMIC-IV (2026-11-06 counts) this flags e.g. eICU
+#: etco2/vitalperiodic (3.9 % of stays: monitor zeros), plateau pressure (2.3 %)
+#: and cvp_raw/vitalperiodic (0.9 %), and leaves lab sources such as
+#: hgb (<0.1 %) alone.
+SOURCE_BOUNDS_WARN_MIN_FRACTION = 0.005
+
+
+def source_bounds_warnings(drops: Dict[str, Dict[str, Dict[str, int]]]) -> List[Dict[str, Any]]:
+    """Release-QC table of sources whose bounds rejected every value of many stays.
+
+    ``drops`` is ``{concept: {source_table: counts}}`` from
+    ``easyicu.bounds_audit``. A row is a warning only: the values were
+    dropped as ricu drops them, and extraction is never blocked. Rows are
+    sorted by concept and table.
+    """
+    rows: List[Dict[str, Any]] = []
+    for concept in sorted(drops or {}):
+        for table in sorted(drops[concept] or {}):
+            counts = drops[concept][table]
+            stays_out = int(counts.get("stays_all_out_of_bounds", 0))
+            stays_read = int(counts.get("stays_read", 0))
+            if stays_out < SOURCE_BOUNDS_WARN_MIN_STAYS or stays_read <= 0:
+                continue
+            fraction = stays_out / stays_read
+            if fraction < SOURCE_BOUNDS_WARN_MIN_FRACTION:
+                continue
+            rows.append({
+                "concept": concept,
+                "source_table": table,
+                "stays_all_out_of_bounds": stays_out,
+                "stays_read": stays_read,
+                "fraction_of_stays": round(fraction, 4),
+                "dropped_values": int(counts.get("dropped_values", 0)),
+                "reason": "declared_bounds_reject_all_values_of_many_stays",
+            })
+    return rows

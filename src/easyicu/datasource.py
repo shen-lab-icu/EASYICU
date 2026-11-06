@@ -3171,6 +3171,7 @@ def load_bucketed_table_aggregated(
     itemid_col: Optional[str] = None,
     retain_source_time: bool = False,
     icu_window: Optional["IcuEpisodeWindow"] = None,
+    bounds_audit_concept: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -3424,7 +3425,7 @@ def load_bucketed_table_aggregated(
     # - value_transform (fahr_to_cels/percent_as_numeric): raw column 可能是 VARCHAR 或不同单位
     # - _has_inline_convert (binary_op(*, factor)): raw 值单位与 min/max 不同（如 µmol/L vs mg/dL）
     # 对这些路径不能在 WHERE 中按 raw column 过滤；下方会先转换每个原始值，
-    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 unit-suspect 审计。
+    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 bounds_audit 记录。
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     
@@ -3446,7 +3447,6 @@ def load_bucketed_table_aggregated(
     # 并且不按 itemid 分组（R ricu 行为：跨 itemid 取 median）
     _raw_count_col = "__easyicu_raw_transformed_non_null"
     _bounded_count_col = "__easyicu_bounded_transformed_non_null"
-    _nonzero_count_col = "__easyicu_raw_transformed_nonzero"
     _needs_bounds_diagnostics = bool(
         value_min is not None or value_max is not None
     )
@@ -3482,7 +3482,6 @@ def load_bucketed_table_aggregated(
             select += (
                 f", COUNT({expr}) as {_raw_count_col}"
                 f", COUNT({bounded_expr}) as {_bounded_count_col}"
-                f", COUNT(CASE WHEN ({expr}) <> 0 THEN 1 END) as {_nonzero_count_col}"
             )
         return select, bounded_agg, unbounded_agg
     
@@ -4145,45 +4144,26 @@ def load_bucketed_table_aggregated(
             bounded_aggregate_non_null = int(
                 pd.to_numeric(df[value_column], errors="coerce").notna().sum()
             )
-            nonzero_values = int(
-                pd.to_numeric(df[_nonzero_count_col], errors="coerce").fillna(0).sum()
-            )
-            from .utils.declared_units import (
-                bounds_unit_suspect,
-                refuse_bounds_unit_suspect,
-            )
+            # Values outside the declared bounds are dropped per row, as in
+            # ricu, whatever shares this read; the counts are recorded per
+            # stay (lead-r13 bounds ruling: no refusal, no unit guess).
+            from .bounds_audit import record_read_counts
 
-            unit_suspect = bounds_unit_suspect(
-                nonzero_values, bounded_non_null, bounded_aggregate_non_null
+            record_read_counts(
+                database=db_name,
+                concept=bounds_audit_concept or str(value_column),
+                table=table_name,
+                stays=patient_ids,
+                frame=df,
+                id_column=id_col if id_col in df.columns else df.columns[0],
+                raw_column=_raw_count_col,
+                bounded_column=_bounded_count_col,
             )
-            unbounded_retry = False
-            # At least 100 values in this batch and none within the declared
-            # bounds. This used to retry without bounds and keep them as
-            # "probably another unit", a decision that depended on the batch:
-            # 99 values, or a single in-range one, dropped them all. The bounds
-            # are declared, and the values contradict them in this batch;
-            # refuse rather than guess (lead-r13 magnitude/format sweep #14).
-            # The multi-concept and wide owners and the raw path apply the
-            # same rule (Codex delta4 V6).
-            refuse_bounds_unit_suspect(
-                quantity=str(value_column),
-                site=f"datasource.load_bucketed_table_aggregated[{db_name}.{table_name}]",
-                nonzero_values=nonzero_values,
-                bounded_non_null=bounded_non_null,
-                bounded_aggregate_non_null=bounded_aggregate_non_null,
-                value_min=value_min,
-                value_max=value_max,
-            )
-            df = df.drop(
-                columns=[_raw_count_col, _bounded_count_col, _nonzero_count_col],
-                errors="ignore",
-            )
+            df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
             bounds_diagnostics = {
                 "bounds_raw_transformed_non_null": raw_non_null,
                 "bounds_bounded_transformed_non_null": bounded_non_null,
                 "bounds_bounded_aggregate_non_null": bounded_aggregate_non_null,
-                "bounds_unit_suspect": unit_suspect,
-                "bounds_unbounded_retry": unbounded_retry,
             }
             df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
         if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput":
@@ -4194,7 +4174,6 @@ def load_bucketed_table_aggregated(
             bounds_diagnostics is not None
             and not value_transform
             and not _has_inline_convert
-            and not bounds_diagnostics["bounds_unit_suspect"]
         ):
             # The former raw-value WHERE bounds omitted groups containing only
             # invalid values. Preserve that output shape while retaining the
@@ -4303,11 +4282,9 @@ def load_bucketed_table_multi_aggregated(
     _interval_seconds = interval_minutes * 60.0
 
     # ── Build CASE WHEN select expressions ─────────────────
-    # A bounded concept also counts its values before and after the bounds, so
-    # the same bounds-unit-suspect rule as the single-concept owner decides it
-    # here (Codex delta4 V6): sharing a table with a valid concept must not
-    # turn a refused read into an absent result.
-    _multi_raw_prefix = "__easyicu_multi_raw_nonzero_"
+    # A bounded concept also counts its values before and after the bounds;
+    # the per-stay counts are recorded (bounds_audit), never used to decide.
+    _multi_raw_prefix = "__easyicu_multi_raw_non_null_"
     _multi_bounded_prefix = "__easyicu_multi_bounded_non_null_"
     _multi_bounded = []  # (concept, diagnostic suffix, bounds)
 
@@ -4331,8 +4308,8 @@ def load_bucketed_table_multi_aggregated(
             )
             if bounds.get("min") is not None or bounds.get("max") is not None:
                 exprs.append(
-                    f"COUNT(CASE WHEN {item_match} AND {prefix}{value_column} <> 0 "
-                    f"THEN {prefix}{value_column} END) AS {_multi_raw_prefix}{position}"
+                    f"COUNT(CASE WHEN {item_match} THEN {prefix}{value_column} END) "
+                    f"AS {_multi_raw_prefix}{position}"
                 )
                 exprs.append(
                     f"COUNT(CASE WHEN {case_when} THEN {prefix}{value_column} END) "
@@ -4666,27 +4643,19 @@ def load_bucketed_table_multi_aggregated(
                     df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
                 )
     if _multi_bounded:
-        from .utils.declared_units import refuse_bounds_unit_suspect
+        from .bounds_audit import record_read_counts
 
         _diagnostic_columns = []
+        _audit_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
         for _concept, _position, _bounds in _multi_bounded:
             _raw_col = f"{_multi_raw_prefix}{_position}"
             _bounded_col = f"{_multi_bounded_prefix}{_position}"
             _diagnostic_columns += [_raw_col, _bounded_col]
-            if _raw_col not in df.columns:
+            if _raw_col not in df.columns or _audit_id is None:
                 continue
-            refuse_bounds_unit_suspect(
-                quantity=_concept,
-                site=f"datasource.load_bucketed_table_multi_aggregated[{db_name}.{table_name}]",
-                nonzero_values=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
-                bounded_non_null=int(
-                    pd.to_numeric(df[_bounded_col], errors="coerce").fillna(0).sum()
-                ),
-                bounded_aggregate_non_null=(
-                    int(df[_concept].notna().sum()) if _concept in df.columns else 0
-                ),
-                value_min=_bounds.get("min"),
-                value_max=_bounds.get("max"),
+            record_read_counts(
+                database=db_name, concept=_concept, table=table_name, stays=patient_ids,
+                frame=df, id_column=_audit_id, raw_column=_raw_col, bounded_column=_bounded_col,
             )
         df = df.drop(columns=_diagnostic_columns, errors="ignore")
     df = finish_miiv_lab_frame(df)
@@ -4763,6 +4732,7 @@ def load_wide_table_aggregated(
     agg_func: str = 'median',  # 'median' (default, matches R ricu), 'first', 'mean', 'max', 'min'
     column_bounds: Optional[dict] = None,  # {col_name: (min_val, max_val)} for pre-aggregation filtering
     icu_window: Optional["IcuEpisodeWindow"] = None,
+    column_concepts: Optional[dict] = None,  # {col_name: [concept, ...]} names the bounds counts
 ) -> pd.DataFrame:
     """
     🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
@@ -4825,6 +4795,7 @@ def load_wide_table_aggregated(
                 agg_func=agg_func,
                 column_bounds=column_bounds,
                 icu_window=icu_window,
+                column_concepts=column_concepts,
             )
             chunk = chunk.sort_values(
                 key_columns,
@@ -4908,9 +4879,8 @@ def load_wide_table_aggregated(
     # 🔧 FIX: 使用 CASE WHEN 实现 per-column filter_bounds（R ricu pre-aggregation filtering）
     # 将超出 [min, max] 范围的值替换为 NULL，这样 MEDIAN 会忽略它们
     # A bounded column also counts its values before and after the bounds; the
-    # same bounds-unit-suspect rule as the single-concept owner decides it
-    # (Codex delta4 V6).
-    _wide_raw_prefix = "__easyicu_wide_raw_nonzero_"
+    # per-stay counts are recorded (bounds_audit), never used to decide.
+    _wide_raw_prefix = "__easyicu_wide_raw_non_null_"
     _wide_bounded_prefix = "__easyicu_wide_bounded_non_null_"
     _wide_bounded = []  # (column, position, (min, max))
     for _position, _column in enumerate(value_columns):
@@ -4932,7 +4902,7 @@ def load_wide_table_aggregated(
                 agg_parts.append(f"{_wide_agg(f'CASE WHEN {filter_expr} THEN {col} END')} as {col}")
                 if conditions:
                     agg_parts.append(
-                        f"COUNT(CASE WHEN {col} <> 0 THEN {col} END) as {_wide_raw_prefix}{position}"
+                        f"COUNT({col}) as {_wide_raw_prefix}{position}"
                     )
                     agg_parts.append(
                         f"COUNT(CASE WHEN {filter_expr} THEN {col} END) "
@@ -4985,8 +4955,7 @@ def load_wide_table_aggregated(
                 )
                 if conditions:
                     community_agg_parts.append(
-                        f"COUNT(CASE WHEN {numeric_column} <> 0 THEN {numeric_column} END) "
-                        f"AS {_wide_raw_prefix}{position}"
+                        f"COUNT({numeric_column}) AS {_wide_raw_prefix}{position}"
                     )
                     community_agg_parts.append(
                         f"COUNT(CASE WHEN {condition} THEN {numeric_column} END) "
@@ -5058,28 +5027,21 @@ def load_wide_table_aggregated(
                     df[_column], "mean" if duckdb_agg == "AVG" else "sum"
                 )
     if _wide_bounded:
-        from .utils.declared_units import refuse_bounds_unit_suspect
+        from .bounds_audit import record_read_counts
 
         _diagnostic_columns = []
-        for _column, _position, (_vmin, _vmax) in _wide_bounded:
+        _audit_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
+        for _column, _position, _bounds in _wide_bounded:
             _raw_col = f"{_wide_raw_prefix}{_position}"
             _bounded_col = f"{_wide_bounded_prefix}{_position}"
             _diagnostic_columns += [_raw_col, _bounded_col]
-            if _raw_col not in df.columns:
+            if _raw_col not in df.columns or _audit_id is None:
                 continue
-            refuse_bounds_unit_suspect(
-                quantity=_column,
-                site=f"datasource.load_wide_table_aggregated[{db_name}.{table_name}]",
-                nonzero_values=int(pd.to_numeric(df[_raw_col], errors="coerce").fillna(0).sum()),
-                bounded_non_null=int(
-                    pd.to_numeric(df[_bounded_col], errors="coerce").fillna(0).sum()
-                ),
-                bounded_aggregate_non_null=(
-                    int(df[_column].notna().sum()) if _column in df.columns else 0
-                ),
-                value_min=_vmin,
-                value_max=_vmax,
-            )
+            for _concept in (column_concepts or {}).get(_column) or [_column]:
+                record_read_counts(
+                    database=db_name, concept=_concept, table=table_name, stays=patient_ids,
+                    frame=df, id_column=_audit_id, raw_column=_raw_col, bounded_column=_bounded_col,
+                )
         df = df.drop(columns=_diagnostic_columns, errors="ignore")
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df

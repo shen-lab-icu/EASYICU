@@ -2172,8 +2172,6 @@ _BOUNDS_METADATA_KEYS = (
     "bounds_raw_transformed_non_null",
     "bounds_bounded_transformed_non_null",
     "bounds_bounded_aggregate_non_null",
-    "bounds_unit_suspect",
-    "bounds_unbounded_retry",
     "bounds_skipped",
     "bounds_status",
 )
@@ -2274,18 +2272,8 @@ def _enforce_concept_bounds(df, concept_name):
         in_range &= v <= mx
     # A median outside [min, max] used to skip enforcement as "probably another
     # unit" (sentinel -1); whether it skipped depended on the rows in the frame
-    # (lead-r13 magnitude/format sweep #14). Every bounded path now decides
-    # with the one rule the SQL owners use (Codex delta4 V6).
-    from ..utils.declared_units import refuse_bounds_unit_suspect
-
-    refuse_bounds_unit_suspect(
-        quantity=str(concept_name),
-        site="api.extraction._enforce_concept_bounds",
-        nonzero_values=int((numeric & (v != 0)).sum()),
-        bounded_non_null=int((numeric & in_range).sum()),
-        value_min=mn,
-        value_max=mx,
-    )
+    # (lead-r13 magnitude/format sweep #14). Values are dropped per row, as in
+    # ricu, whatever else the frame holds (lead-r13 bounds ruling).
     # keep non-numeric/missing rows (NaN is "missing", not "out of range") and
     # numeric rows that are within [min, max]; drop only genuine out-of-range values.
     keep = (~numeric) | in_range
@@ -6936,9 +6924,10 @@ def _try_publish_native_export_arrow_fast_path(
                 }
             else:
                 for concept, record in batch_bounds_audit.items():
-                    bounds_audit[concept]["excluded_out_of_bounds"] = int(
-                        bounds_audit[concept]["excluded_out_of_bounds"]
-                    ) + int(record["excluded_out_of_bounds"])
+                    for field in ("excluded_out_of_bounds", "stays_all_out_of_bounds"):
+                        bounds_audit[concept][field] = int(
+                            bounds_audit[concept].get(field, 0)
+                        ) + int(record.get(field, 0))
             if semantic_audit is None:
                 semantic_audit = {
                     concept: dict(record)
@@ -7248,6 +7237,7 @@ def _enforce_native_export_concept_bounds(
             minimum is not None or maximum is not None
         )
         excluded = 0
+        stays_all_out = 0
         if bounded:
             out_of_bounds = frame[concept].notna()
             if minimum is not None:
@@ -7260,25 +7250,26 @@ def _enforce_native_export_concept_bounds(
                 )
                 out_of_bounds |= above_maximum
             excluded = int(out_of_bounds.sum())
-            # Values that all contradict the declared bounds are refused, as
-            # on every read path, rather than published as an absent concept
-            # (Codex delta4 V6).
-            from ..utils.declared_units import refuse_bounds_unit_suspect
-
-            present = int(frame[concept].notna().sum())
-            refuse_bounds_unit_suspect(
-                quantity=str(concept),
-                site="api.extraction._enforce_native_export_concept_bounds",
-                nonzero_values=int((frame[concept].notna() & (frame[concept] != 0)).sum()),
-                bounded_non_null=present - excluded,
-                value_min=minimum,
-                value_max=maximum,
-            )
+            # Dropped per cell, whatever shares the frame (as in ricu); the
+            # stays whose every value is excluded are counted, never refused.
+            if excluded and "stay_id" in frame.columns:
+                present = frame[concept].notna()
+                per_stay = (
+                    pd.DataFrame({
+                        "stay": frame["stay_id"].to_numpy(),
+                        "present": present.to_numpy(),
+                        "kept": (present & ~out_of_bounds).to_numpy(),
+                    })
+                    .groupby("stay", sort=False, dropna=False)[["present", "kept"]]
+                    .sum()
+                )
+                stays_all_out = int(((per_stay["present"] > 0) & (per_stay["kept"] == 0)).sum())
             if excluded:
                 frame.loc[out_of_bounds, concept] = np.nan
 
         record: Dict[str, object] = {
             "excluded_out_of_bounds": excluded,
+            "stays_all_out_of_bounds": stays_all_out,
         }
         if bounded:
             record["declared_bounds"] = {
@@ -7689,9 +7680,10 @@ def _publish_native_export_v2(
                         database=normalized_database,
                     )
                     for concept, post_audit in post_consolidation_bounds.items():
-                        bounds_audit[concept]["excluded_out_of_bounds"] += int(
-                            post_audit["excluded_out_of_bounds"]
-                        )
+                        for field in ("excluded_out_of_bounds", "stays_all_out_of_bounds"):
+                            bounds_audit[concept][field] = int(
+                                bounds_audit[concept].get(field, 0)
+                            ) + int(post_audit.get(field, 0))
                 else:
                     # Null physical bound violations before taking a duplicate-key
                     # median; otherwise two invalid source values could average to
@@ -7818,6 +7810,14 @@ def _publish_native_export_v2(
                 "excluded_out_of_bounds": bounds_audit[concept][
                     "excluded_out_of_bounds"
                 ],
+                "stays_all_out_of_bounds": int(
+                    bounds_audit[concept].get("stays_all_out_of_bounds", 0)
+                ),
+                # Source values the loaders dropped by the declared bounds,
+                # per source table (bounds_audit); counts only.
+                "source_bounds": dict(
+                    (result.get("source_bounds_drops") or {}).get(concept) or {}
+                ),
             }
             if concept in semantic_audit:
                 status["excluded_semantically_invalid"] = int(
@@ -7993,6 +7993,14 @@ def _publish_native_export_v2(
     if result.get("storage_fallbacks"):
         # Published (a corrupt cache falls back to its true source), but marked.
         manifest["storage_fallbacks"] = list(result["storage_fallbacks"])
+    # Values outside declared bounds are dropped, never refused: the receipt
+    # carries the totals and the release QC warns on suspect sources.
+    from ..io.data_quality import source_bounds_warnings
+
+    manifest["source_bounds_drops"] = dict(result.get("source_bounds_drops") or {})
+    manifest["qc_warnings"] = {
+        "source_bounds_suspect": source_bounds_warnings(manifest["source_bounds_drops"]),
+    }
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -8204,6 +8212,17 @@ def extract_database(
     os.close(_fallback_handle)
     previous_fallback_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
     os.environ[SCAN_FALLBACK_LOG_ENV] = scan_fallback_log
+    # Source values dropped by declared concept bounds, recorded per read by
+    # every bounded loader here and in workers, become receipt facts:
+    # result["source_bounds_drops"], the module manifests and the release QC.
+    from ..bounds_audit import BOUNDS_DROP_LOG_ENV, read_bounds_drop_log
+
+    _bounds_handle, bounds_drop_log = tempfile.mkstemp(
+        prefix="easyicu_bounds_drops_", suffix=".jsonl"
+    )
+    os.close(_bounds_handle)
+    previous_bounds_log = os.environ.get(BOUNDS_DROP_LOG_ENV)
+    os.environ[BOUNDS_DROP_LOG_ENV] = bounds_drop_log
 
     # 确定数据路径
     if data_path is None:
@@ -9056,6 +9075,12 @@ def extract_database(
     else:
         os.environ[SCAN_FALLBACK_LOG_ENV] = previous_fallback_log
     os.unlink(scan_fallback_log)
+    result["source_bounds_drops"] = read_bounds_drop_log(bounds_drop_log)
+    if previous_bounds_log is None:
+        os.environ.pop(BOUNDS_DROP_LOG_ENV, None)
+    else:
+        os.environ[BOUNDS_DROP_LOG_ENV] = previous_bounds_log
+    os.unlink(bounds_drop_log)
 
     if native_export_v2:
         assert output_dir is not None

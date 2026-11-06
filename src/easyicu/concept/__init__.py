@@ -1708,6 +1708,10 @@ class ConceptResolver:
                             patient_ids=patient_ids_list,
                             agg_func='median',
                             column_bounds=column_bounds,
+                            column_concepts={
+                                column: [name for name, val_var in concepts_info_filtered if val_var == column]
+                                for column in column_bounds
+                            },
                             icu_window=(
                                 self._icu_episode_window(
                                     data_source,
@@ -2021,8 +2025,8 @@ class ConceptResolver:
                                 len(names),
                             )
                 except (DuckDBQueryInterrupted, UndeclaredUnitError):
-                    # A bounds-unit-suspect refusal keeps its type and reason,
-                    # as on the single-concept owner (Codex delta4 V6).
+                    # A declared-unit refusal (e.g. an invalid FiO2 unit)
+                    # keeps its type and reason, as on the single-concept owner.
                     raise
                 except ConceptError:
                     raise
@@ -3342,6 +3346,7 @@ class ConceptResolver:
                             # Clip on the raw event hour before the floor,
                             # with the same window the pandas path applies.
                             icu_window=_duckdb_icu_window(),
+                            bounds_audit_concept=concept_name,
                         )
                         note_duckdb_route("bucketed_single")
                         
@@ -3674,24 +3679,24 @@ class ConceptResolver:
                                 )
                                 _wt_query = _wt_query.replace("{__easyicu_window__}", _wt_window_cond)
                                 # The bounds sit in WHERE, so out-of-bounds values
-                                # never reach the result: count this read's raw
-                                # and in-bounds values first, so that a read whose
-                                # values all contradict the declared bounds is
-                                # refused (bounds_unit_suspect) like every other
-                                # bounded path, never published as absent
-                                # (Codex delta5 D5V-WIDE-SINGLE).
+                                # never reach the result: count this read's values
+                                # and in-bounds values per stay, and record them
+                                # like every other bounded path (bounds_audit).
                                 _wt_count_query = None
-                                if _wt_bounds:
+                                from ..bounds_audit import BOUNDS_DROP_LOG_ENV as _bounds_log_env
+
+                                if _wt_bounds and os.environ.get(_bounds_log_env):
                                     _wt_in_bounds = _wt_bounds.removeprefix(' AND ')
                                     _wt_count_query = f"""
-                                        SELECT COUNT(CASE WHEN {_wt_val_var} <> 0 THEN 1 END),
-                                               COUNT(CASE WHEN {_wt_in_bounds} THEN 1 END)
+                                        SELECT {_wt_id_col}, COUNT(*) AS raw,
+                                               COUNT(CASE WHEN {_wt_in_bounds} THEN 1 END) AS bounded
                                         FROM read_parquet({_wt_read}, union_by_name=true)
                                         WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_window_cond}
+                                        GROUP BY {_wt_id_col}
                                     """
                                 try:
                                     _wt_counts = (
-                                        _wt_conn.execute(_wt_count_query).fetchone()
+                                        _wt_conn.execute(_wt_count_query).fetchdf()
                                         if _wt_count_query is not None else None
                                     )
                                     frame = _wt_conn.execute(_wt_query).fetchdf()
@@ -3709,15 +3714,13 @@ class ConceptResolver:
                                     _wt_window_sql.close()
                                 note_duckdb_route("wide_single_column")
                                 if _wt_counts is not None:
-                                    from ..utils.declared_units import refuse_bounds_unit_suspect
+                                    from ..bounds_audit import record_read_counts
 
-                                    refuse_bounds_unit_suspect(
-                                        quantity=concept_name,
-                                        site=f"concept.wide_single_column[{db_name}.{source.table}]",
-                                        nonzero_values=int(_wt_counts[0] or 0),
-                                        bounded_non_null=int(_wt_counts[1] or 0),
-                                        value_min=definition.minimum,
-                                        value_max=definition.maximum,
+                                    record_read_counts(
+                                        database=db_name, concept=concept_name,
+                                        table=source.table, stays=_wt_pid_list,
+                                        frame=_wt_counts, id_column=_wt_id_col,
+                                        raw_column="raw", bounded_column="bounded",
                                     )
                                 if _wt_exact and _wt_val_var in frame.columns:
                                     from ..utils.exact_sum import exact_terms_to_values
@@ -6027,29 +6030,38 @@ class ConceptResolver:
             if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
-                    # The SQL owners refuse a read whose values all contradict
-                    # the declared bounds; the raw path decides with the same
-                    # rule instead of dropping every value (Codex delta4 V6).
-                    # Rows the SQL already bounded are in range by construction.
-                    from ..utils.declared_units import refuse_bounds_unit_suspect
+                    # Out-of-bounds values are dropped per row below, as in
+                    # ricu; this read's per-stay counts are recorded first
+                    # (bounds_audit). Rows the SQL already bounded are in range
+                    # by construction and were counted by their SQL owner.
+                    from ..bounds_audit import BOUNDS_DROP_LOG_ENV as _bounds_log_env
 
-                    _bound_candidates = combined.loc[
-                        ~_sql_bounded_rows.reindex(combined.index, fill_value=False).astype(bool),
-                        concept_name,
-                    ]
-                    _within = _bound_candidates.notna()
-                    if definition.minimum is not None:
-                        _within &= _bound_candidates >= definition.minimum
-                    if definition.maximum is not None:
-                        _within &= _bound_candidates <= definition.maximum
-                    refuse_bounds_unit_suspect(
-                        quantity=concept_name,
-                        site="concept.ConceptResolver._load_single_concept[filter_bounds]",
-                        nonzero_values=int((_bound_candidates.notna() & (_bound_candidates != 0)).sum()),
-                        bounded_non_null=int(_within.sum()),
-                        value_min=definition.minimum,
-                        value_max=definition.maximum,
-                    )
+                    if os.environ.get(_bounds_log_env) and id_columns and id_columns[0] in combined.columns:
+                        from ..bounds_audit import record_read_counts
+
+                        _unbounded = ~_sql_bounded_rows.reindex(combined.index, fill_value=False).astype(bool)
+                        _candidates = combined.loc[_unbounded, [id_columns[0], concept_name]]
+                        _within = _candidates[concept_name].notna()
+                        if definition.minimum is not None:
+                            _within &= _candidates[concept_name] >= definition.minimum
+                        if definition.maximum is not None:
+                            _within &= _candidates[concept_name] <= definition.maximum
+                        if isinstance(patient_ids, dict):
+                            _read_stays = list(next(iter(patient_ids.values()), []))
+                        else:
+                            _read_stays = None if patient_ids is None else list(patient_ids)
+                        record_read_counts(
+                            database=getattr(getattr(data_source, "config", None), "name", "unknown"),
+                            concept=concept_name,
+                            table="+".join(sorted({str(getattr(src, "table", "")) for src in sources})),
+                            stays=_read_stays,
+                            frame=pd.DataFrame({
+                                "stay": _candidates[id_columns[0]].to_numpy(),
+                                "raw": _candidates[concept_name].notna().to_numpy().astype("int64"),
+                                "bounded": _within.to_numpy().astype("int64"),
+                            }),
+                            id_column="stay", raw_column="raw", bounded_column="bounded",
+                        )
                 if definition.minimum is not None:
                     before_len = len(combined)
                     combined = combined[_sql_bounded_rows.reindex(combined.index) | (combined[concept_name] >= definition.minimum)]
