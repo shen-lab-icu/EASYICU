@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 import numpy as np
 import pandas as pd
 
 WinTblEndMode = Literal["raw", "floored_clamped"]
 
-__all__ = ["WinTblEndMode", "expand_wintbl_vectorized"]
+#: Window concepts published on the hourly grid exactly as ricu ``expand(x,
+#: aggregate = "any")`` builds them inside its ``gcs`` callback: the window's
+#: start cell through ``re_time(start + dur, interval)`` inclusive, one row per
+#: stay and cell, TRUE when any window covering the cell is TRUE. The GCS
+#: callback and every published ``ett_gcs`` column read this one owner.
+INCLUSIVE_ANY_WINDOW_CONCEPTS = frozenset({"ett_gcs"})
+
+__all__ = [
+    "INCLUSIVE_ANY_WINDOW_CONCEPTS",
+    "WinTblEndMode",
+    "expand_windows_inclusive_any",
+    "expand_wintbl_vectorized",
+    "publish_inclusive_any_window",
+]
 
 
 def clip_episode_windows(
@@ -123,3 +136,140 @@ def expand_wintbl_vectorized(
             output[column] = data[column].to_numpy()[row_indices]
             seen.add(column)
     return pd.DataFrame(output)
+
+
+def _clock_hours(series: pd.Series) -> tuple[np.ndarray, str]:
+    """Return ``series`` as float hours plus the clock kind to restore later."""
+
+    if pd.api.types.is_timedelta64_dtype(series):
+        return (series.dt.total_seconds() / 3600.0).to_numpy(dtype=np.float64), "timedelta"
+    if pd.api.types.is_datetime64_any_dtype(series):
+        origin = pd.Timestamp("1970-01-01", tz=series.dt.tz)
+        return ((series - origin) / pd.Timedelta(hours=1)).to_numpy(dtype=np.float64), "datetime"
+    return pd.to_numeric(series, errors="coerce").to_numpy(dtype=np.float64), "numeric"
+
+
+def _restore_clock(hours: np.ndarray, kind: str, template: pd.Series) -> pd.Series:
+    if kind == "timedelta":
+        return pd.Series(pd.to_timedelta(hours, unit="h"))
+    if kind == "datetime":
+        origin = pd.Timestamp("1970-01-01", tz=template.dt.tz)
+        return pd.Series(origin + pd.to_timedelta(hours, unit="h"))
+    return pd.Series(hours, dtype=np.float64)
+
+
+def expand_windows_inclusive_any(
+    data: pd.DataFrame,
+    *,
+    idx_col: str,
+    id_cols: List[str],
+    value_col: str,
+    dur_hours: pd.Series,
+    interval_hours: float = 1.0,
+) -> pd.DataFrame:
+    """ricu ``expand(x, aggregate = "any")`` for a logical window table.
+
+    ricu 0.6.3 (``expand``): ``end := re_time(start + dur, interval)`` where
+    ``re_time`` is ``round_to`` = floor to the interval, rows with a missing
+    start or end are dropped, rows with ``start <= end`` become
+    ``seq(start, end, step)`` (both ends included), and cells are aggregated
+    with ``any`` so a TRUE window wins a cell it shares with a FALSE one. The
+    start sits on the grid because ricu loads the index at the interval; it is
+    floored here for the same reason. A row without a duration occupies its
+    own cell (a zero-length window), so a point assessment is not dropped.
+    ricu's clamp of a negative end to zero, which stretches a window that
+    closed before admission up to hour zero, is not reproduced.
+    """
+
+    if interval_hours <= 0:
+        raise ValueError("interval_hours must be positive")
+    columns = [*id_cols, idx_col, value_col]
+    if data.empty:
+        empty = pd.DataFrame({column: data[column].iloc[0:0] for column in columns[:-1]})
+        empty[value_col] = pd.Series([], dtype=bool)
+        return empty
+
+    raw_start, kind = _clock_hours(data[idx_col])
+    duration = pd.to_numeric(dur_hours, errors="coerce").to_numpy(dtype=np.float64)
+    duration = np.where(np.isnan(duration), 0.0, duration)
+    start = np.floor(raw_start / interval_hours) * interval_hours
+    end = np.floor((start + duration) / interval_hours) * interval_hours
+    valid = np.isfinite(start) & np.isfinite(end) & (end >= start)
+    counts = np.where(valid, np.rint((np.where(valid, end, 0) - np.where(valid, start, 0)) / interval_hours) + 1, 0).astype(np.int64)
+    total = int(counts.sum())
+    values = data[value_col].astype("boolean").fillna(False).to_numpy(dtype=bool)
+    if total == 0:
+        empty = {column: data[column].iloc[0:0] for column in id_cols}
+        empty[idx_col] = _restore_clock(np.empty(0), kind, data[idx_col])
+        empty[value_col] = pd.Series([], dtype=bool)
+        return pd.DataFrame(empty)[columns]
+
+    rows = np.repeat(np.arange(len(start)), counts)
+    offsets = np.arange(total) - np.repeat(np.concatenate(([0], np.cumsum(counts)[:-1])), counts)
+    times = start[rows] + offsets.astype(np.float64) * interval_hours
+    out = {column: data[column].to_numpy()[rows] for column in id_cols}
+    out[idx_col] = times
+    out[value_col] = values[rows]
+    expanded = pd.DataFrame(out)
+    expanded = (
+        expanded.groupby([*id_cols, idx_col], as_index=False, sort=True, dropna=False)[value_col]
+        .any()
+    )
+    expanded[value_col] = expanded[value_col].astype(bool)
+    expanded[idx_col] = _restore_clock(expanded[idx_col].to_numpy(dtype=np.float64), kind, data[idx_col]).to_numpy()
+    return expanded[columns].reset_index(drop=True)
+
+
+def _window_parts(table) -> tuple[pd.DataFrame, List[str], Optional[str], Optional[str]]:
+    frame = getattr(table, "data", table)
+    id_cols = list(getattr(table, "id_vars", None) or getattr(table, "id_columns", None) or [])
+    index = getattr(table, "index_var", None) or getattr(table, "index_column", None)
+    dur = getattr(table, "dur_var", None)
+    if dur is None and "dur_var" in frame.columns:
+        dur = "dur_var"
+    return frame, id_cols, index, dur
+
+
+def window_duration_hours(frame: pd.DataFrame, dur_col: Optional[str], *, concept: str) -> pd.Series:
+    """Read a window table's duration as hours from its declared unit."""
+
+    from ..table.duration import get_dur_var_unit, resolve_dur_var_hours, set_dur_var_unit
+
+    if not dur_col or dur_col not in frame.columns:
+        return pd.Series(np.nan, index=frame.index, dtype=np.float64)
+    probe = frame[[dur_col]].rename(columns={dur_col: "dur_var"})
+    unit = get_dur_var_unit(frame)
+    if unit:
+        set_dur_var_unit(probe, unit)
+    return resolve_dur_var_hours(probe, concept=concept)
+
+
+def publish_inclusive_any_window(table, concept_name: str, interval_hours: float = 1.0):
+    """Return ``table`` as the hourly ``ett_gcs`` column every output publishes.
+
+    The window table becomes a time-series table (ids, index, value) built by
+    :func:`expand_windows_inclusive_any`; it carries no duration afterwards.
+    """
+
+    from ..table import ICUTable
+
+    frame, id_cols, index, dur = _window_parts(table)
+    if index is None or index not in frame.columns or concept_name not in frame.columns:
+        return table
+    id_cols = [column for column in id_cols if column in frame.columns]
+    expanded = expand_windows_inclusive_any(
+        frame,
+        idx_col=index,
+        id_cols=id_cols,
+        value_col=concept_name,
+        dur_hours=window_duration_hours(frame, dur, concept=concept_name),
+        interval_hours=interval_hours,
+    )
+    return ICUTable(
+        data=expanded,
+        id_columns=id_cols,
+        index_column=index,
+        value_column=concept_name,
+        time_basis=getattr(table, "time_basis", None),
+        interval=getattr(table, "interval", None),
+    )
