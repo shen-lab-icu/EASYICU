@@ -547,16 +547,17 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         },
     },
     "eicu": {
-        # Current medication semantics at 486bb169. Five 50k streamed
-        # partitions matched the current one-shot table's complete
-        # row-multiset fingerprint. Keep the measured 11,249.3-MiB one-shot
-        # peak as a separate high-memory admission threshold.
+        # lead-r13 (2026-11-06), after 089701e34 moved single-file eICU
+        # tables onto the DuckDB path without the table cache: the one-shot
+        # rose from 11,249.3 MiB (486bb169) to a 16.66-GiB cgroup peak and
+        # was OOM-killed at 14 GiB; 50k streamed partitions peaked at
+        # 5.62 GiB (both full cohort, product thread defaults).
         "medications": {
             "cohort_stays": 200_859,
             "batch_size": 50_000,
-            "peak_rss_mb": 1_669.3,
-            "full_cohort_peak_rss_mb": 11_249.3,
-            "seconds": 333.6,
+            "peak_rss_mb": 5_755.0,
+            "full_cohort_peak_rss_mb": 17_060.0,
+            "seconds": 550.8,
         },
         # The stale full-cohort profile crossed 8 GiB after the current
         # KDIGO/episode-bound changes. At commit 589d2e85, 50k isolated

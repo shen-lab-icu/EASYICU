@@ -629,7 +629,7 @@ def test_invalidated_profiles_cannot_remain_in_measured_registries():
 @pytest.mark.parametrize(
     ("database", "module", "num_patients", "expected_batch", "peak"),
     (
-        ("eicu", "medications", 200_859, 50_000, 1_669.3),
+        ("eicu", "medications", 200_859, 50_000, 5_755.0),
         ("miiv", "sofa2_score", 94_458, 30_000, 5_056.7),
     ),
 )
@@ -825,8 +825,10 @@ def test_miiv_renal_scales_continuously_above_8gib_baseline(
     ("database", "module", "num_patients", "available_gib", "expected_batch", "expected_mode"),
     [
         ("eicu", "medications", 200_859, 8, 50_000, "patient_batches"),
-        ("eicu", "medications", 200_859, 12, 100_430, "patient_batches"),
-        ("eicu", "medications", 200_859, 16, 200_859, "one_shot"),
+        ("eicu", "medications", 200_859, 12, 50_000, "patient_batches"),
+        # lead-r13: the one-shot measured 16.66 GiB after 089701e34.
+        ("eicu", "medications", 200_859, 16, 50_000, "patient_batches"),
+        ("eicu", "medications", 200_859, 20, 200_859, "one_shot"),
         ("eicu", "medications", 200_859, 32, 200_859, "one_shot"),
         ("eicu", "medications", 200_859, 64, 200_859, "one_shot"),
         ("miiv", "sofa2_score", 94_458, 8, 30_000, "patient_batches"),
