@@ -57,7 +57,12 @@ def clip_episode_windows(
         points &= le(start, upper)
     valid |= points
     out = frame.loc[valid].copy()
-    clipped_start = start.loc[valid].clip(lower=lower)
+    # Only a real interval is clipped. A point row keeps its own time, as the
+    # ordinary point quarantine keeps it: the inclusive decimal lower bound
+    # admits a point a rounding step below the bound, and clamping it would
+    # move it onto the bound on this path only (delta4 D4-POINT-TIME).
+    kept_start = start.loc[valid]
+    clipped_start = kept_start.where(~window.loc[valid], kept_start.clip(lower=lower))
     clipped_end = end.loc[valid]
     if not keep_post_discharge:
         clipped_end = clipped_end.clip(upper=upper.loc[valid])
