@@ -3576,9 +3576,11 @@ class ConceptResolver:
                         _wt_time_col = _wt_table_cfg.defaults.index_var or 'observationoffset'
                         _wt_interval_minutes = interval.total_seconds() / 60.0 if hasattr(interval, 'total_seconds') else float(interval) * 60.0
 
+                        # ``mean`` is AVG: it must reach the exact LIST collapse
+                        # below, not DuckDB's order-dependent floating MEAN.
                         _wt_agg_func = 'MEDIAN'
                         if isinstance(aggregator, str) and aggregator in ('min', 'max', 'mean', 'sum'):
-                            _wt_agg_func = aggregator.upper()
+                            _wt_agg_func = {'min': 'MIN', 'max': 'MAX', 'mean': 'AVG', 'sum': 'SUM'}[aggregator]
 
                         # Find parquet files
                         _wt_table_path = storage.resolve_loader_from_disk(source.table)
