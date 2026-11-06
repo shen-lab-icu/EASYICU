@@ -20,6 +20,7 @@ import pandas as pd
 
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
+from .value_failures import TYPED_VALUE_FAILURES
 from .storage_binding import binding_unit, child_binding, in_binding_unit
 from .databases.detection import (
     DatabaseDetectionError,
@@ -373,6 +374,8 @@ class BaseICULoader:
             if self.verbose:
                 logger.info(f"Initialized datasource for {self.database}")
 
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize datasource: {e}")
 
@@ -418,6 +421,8 @@ class BaseICULoader:
                 concept_count = len(list(self.concept_dict.keys()))
                 logger.info(f"Initialized concept system with {concept_count} concepts")
 
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize concept system: {e}")
 
@@ -665,6 +670,8 @@ class BaseICULoader:
         except StorageIntegrityError:
             # A typed storage refusal keeps its type and stable reason code.
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(f"Failed to load concepts {concepts}: {e}")
         # 🚀 优化：移除finally中的强制清除缓存

@@ -1043,7 +1043,7 @@ def _log_fallback(entry: dict[str, str]) -> None:
     target = os.environ.get(SCAN_FALLBACK_LOG_ENV)
     if not target:
         return
-    key = (target, tuple(sorted(entry.items())))
+    key = (target, json.dumps(entry, sort_keys=True))
     if key in _FALLBACK_LOGGED:
         return
     _FALLBACK_LOGGED.add(key)
@@ -1052,47 +1052,63 @@ def _log_fallback(entry: dict[str, str]) -> None:
 
 
 CONSUMED_EVENT = "table_consumed"
+LAYOUT_EVENT = "table_layout"
 FORMAT_PARQUET, FORMAT_CSV = "parquet", "csv"
 FORMAT_BUCKET_PART, FORMAT_BUCKET_METADATA = "bucket_part", "bucket_metadata"
-_VIEW_TARGETS: dict[tuple, dict[str, tuple[str, int]]] = {}
 
 
-def _declared_view(manifest: Path) -> dict[str, tuple[str, int]]:
-    """Link targets a declared view admits: realpath -> (table, size_bytes).
+def _declared_view(manifest: Path) -> dict[tuple[str, str], int]:
+    """Link targets a declared view admits: (table, realpath) -> size_bytes.
 
     A symlink farm declares its view with ``derived_from`` = {path, sha256}
     of the source installation's conversion manifest. A farm output is
     admitted when the source manifest still has that sha256 and the link
     resolves to an output of the same table there with the same size_bytes.
     Anything else admits nothing.
+
+    The view is read once per run unit, never across runs (D10D-VIEW-ADMISSION):
+    both manifests are bound with their sha256, so a later change in the run
+    is ``storage_source_changed``. Outside a unit it is re-read every time.
     """
-    stat = manifest.stat()
-    key = (str(manifest), stat.st_mtime_ns, stat.st_size, stat.st_ino)
-    if key in _VIEW_TARGETS:
-        return _VIEW_TARGETS[key]
-    targets: dict[str, tuple[str, int]] = {}
+    from .storage_binding import active_unit, bind_files
+
+    unit = active_unit()
+    views = None if unit is None else unit.caches.setdefault("declared_views", {})
+    if views is not None and str(manifest) in views:
+        bind_files("conversion_manifest", views[str(manifest)][1], sha256=True)
+        return views[str(manifest)][0]
+    targets: dict[tuple[str, str], int] = {}
+    bound: tuple = ()
     try:
-        own = json.loads(manifest.read_text(encoding="utf-8"))
+        raw_own = manifest.read_bytes()
+        own = json.loads(raw_own)
         derived = own.get("derived_from")
         if isinstance(derived, dict) and derived.get("path") and derived.get("sha256"):
             source = Path(derived["path"])
             raw = source.read_bytes()
             if hashlib.sha256(raw).hexdigest() == derived["sha256"]:
                 declared = {
-                    (str(entry["table"]), os.path.realpath(source.parent / out["relative_path"])):
-                        out.get("size_bytes")
+                    (str(entry["table"]).lower(),
+                     os.path.realpath(source.parent / out["relative_path"])): out.get("size_bytes")
                     for entry in json.loads(raw).get("tables", ())
                     for out in entry.get("outputs") or ()
                 }
                 for entry in own.get("tables", ()):
                     for out in entry.get("outputs") or ():
+                        table = str(entry["table"]).lower()
                         real = os.path.realpath(manifest.parent / out["relative_path"])
                         size = out.get("size_bytes")
-                        if declared.get((str(entry["table"]), real), object()) == size:
-                            targets[real] = (str(entry["table"]), size)
+                        if isinstance(size, int) and declared.get((table, real), object()) == size:
+                            targets[(table, real)] = size
+                bound = (str(manifest), str(source))
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        targets = {}
-    _VIEW_TARGETS[key] = targets
+        targets, bound = {}, ()
+    if bound:
+        # What admitted the view is what this run read: a later rewrite of
+        # either manifest in the run is a changed source.
+        bind_files("conversion_manifest", bound, sha256=True)
+    if views is not None:
+        views[str(manifest)] = (targets, bound)
     return targets
 
 
@@ -1127,9 +1143,9 @@ def admit_consumed_realpath(base, table: str, path) -> dict[str, Any]:
     It must resolve under the data root: the real directory of the
     installation's ``conversion_manifest.json`` (a manifest linked in from
     the prepared installation names that installation), or ``realpath(base)``
-    without a manifest. Otherwise a declared view must list it
-    (:func:`_declared_view`). Anything else is
-    ``storage_read_outside_data_root``.
+    without a manifest. Otherwise a declared view must list it for this
+    ``table`` with its current size (:func:`_declared_view`). Anything else
+    is ``storage_read_outside_data_root``.
     """
     real = os.path.realpath(path)
     manifest = Path(base) / CONVERSION_MANIFEST
@@ -1139,10 +1155,18 @@ def admit_consumed_realpath(base, table: str, path) -> dict[str, Any]:
     )
     if os.path.commonpath([real, root]) == root:
         return {"target_realpath": real, "admitted_by": "data_root", "size": None, "sha256": None}
-    declared = _declared_view(manifest).get(real) if manifest.is_file() else None
+    declared = (
+        _declared_view(manifest).get((str(table).lower(), real)) if manifest.is_file() else None
+    )
     if declared is not None:
-        return {"target_realpath": real, "admitted_by": "declared_view",
-                "size": declared[1], "sha256": None}
+        try:
+            size = os.stat(real).st_size
+        except OSError:
+            size = None
+        # Admitted for this table only, and only at the declared size now.
+        if size == declared:
+            return {"target_realpath": real, "admitted_by": "declared_view",
+                    "size": declared, "sha256": None}
     raise TableScanError(
         "storage_read_outside_data_root", table,
         f"{Path(path).name} resolves outside the data root and no declared view lists it",
@@ -1171,12 +1195,149 @@ def record_consumed(
     entries = consume(table, files, fmt, key=key, sha256=sha256)
     for entry in entries:
         _log_fallback({"event": CONSUMED_EVENT, "root": str(base), **entry})
+    if fmt in (FORMAT_PARQUET, FORMAT_CSV) and files:
+        _log_table_layout(base, table, "flat", base, lambda: _flat_derived_from(base, files))
     return entries
 
 
+def _flat_derived_from(base, files) -> dict | None:
+    """A flat read's declared-view chain when a file lies outside the data root, else None.
+
+    Such a file was admitted only through the declared view
+    (:func:`admit_consumed_realpath`), so the chain is what admitted it.
+    """
+    if base is None:
+        return None
+    manifest = Path(base) / CONVERSION_MANIFEST
+    root = (
+        os.path.dirname(os.path.realpath(manifest)) if manifest.is_file()
+        else os.path.realpath(base)
+    )
+    if all(os.path.commonpath([os.path.realpath(p), root]) == root for p in files):
+        return None
+    return declared_view_chain(base)
+
+
+def _bucket_record(layout: BucketLayout) -> dict:
+    """A bucket read's manifest and ``derived_from`` sources (null for a legacy layout)."""
+    from .storage_binding import bound_sha256
+
+    manifest_path = layout.root / MANIFEST
+    try:
+        raw = manifest_path.read_bytes()
+        manifest = json.loads(raw)
+    except (OSError, ValueError):
+        manifest, raw = None, None
+    if not isinstance(manifest, dict):  # a legacy layout without a manifest
+        return {"manifest": None, "derived_from": None, "derived_from_recorded": False}
+    digest = bound_sha256(manifest_path) or hashlib.sha256(raw).hexdigest()
+    derived = manifest.get("derived_from")
+    if not isinstance(derived, dict):  # never guessed: the receipt refuses it
+        return {"manifest": {"path": str(manifest_path), "sha256": digest},
+                "derived_from": None, "derived_from_recorded": False}
+    return {
+        "manifest": {"path": str(manifest_path), "sha256": digest},
+        "derived_from_recorded": True,
+        "derived_from": {
+            "table": derived["table"],
+            "files": [
+                {
+                    "path": entry["path"],
+                    "realpath": os.path.realpath(_derived_source(layout.root, derived, entry)),
+                    "size": entry["size"],
+                    "mtime_ns": entry["mtime_ns"],
+                    "sha256": entry["sha256"],
+                }
+                for entry in derived["files"]
+            ],
+        },
+    }
+
+
+def _log_table_layout(base, table: str, layout: str, layout_root, details) -> None:
+    """Log which layout a read of ``table`` was served from (``table_layout``).
+
+    Written once per unit per (table, layout, root); ``details`` computes the
+    rest of the record (bucket manifest and ``derived_from``, or a flat
+    read's declared-view chain) only then.
+    """
+    from .storage_binding import active_unit
+
+    if not os.environ.get(SCAN_FALLBACK_LOG_ENV):
+        return
+    unit = active_unit()
+    seen = None if unit is None else unit.caches.setdefault("table_layouts_logged", set())
+    marker = (os.environ.get(SCAN_FALLBACK_LOG_ENV), str(base), table, layout, str(layout_root))
+    if seen is not None and marker in seen:
+        return
+    extra = details()
+    if layout == "flat":
+        extra = {"derived_from": extra}
+    _log_fallback({"event": LAYOUT_EVENT, "root": str(base), "table": table,
+                   "layout": layout, "layout_root": str(layout_root), **extra})
+    if seen is not None:
+        seen.add(marker)
+
+
+def read_layout_log(path) -> tuple[dict, ...]:
+    """The ``table_layout`` events of a run log (every worker's reads)."""
+    return tuple(e for e in _read_run_log(path) if e.get("event") == LAYOUT_EVENT)
+
+
+def consumed_table_layouts(consumed, layouts) -> dict[str, dict]:
+    """The per-table layout record of a run: what served every consumed table.
+
+    {table: {layout, root, derived_from[, manifest], reads}}. ``reads`` is
+    every distinct layout record of the table (a flat read beside its bucket
+    is legitimate); the top-level fields are the bucket's when there is one.
+    A consumed table with no layout record is ``storage_layout_unrecorded``.
+    """
+    records: dict[str, dict] = {}
+    for event in layouts:
+        record = {k: v for k, v in event.items() if k not in ("event", "root", "table", "layout_root")}
+        record["root"] = event["layout_root"]
+        reads = records.setdefault(str(event["table"]), {"reads": []})["reads"]
+        if record not in reads:
+            reads.append(record)
+    tables: dict[str, dict] = {}
+    for entry in consumed:
+        table = str(entry["table"])
+        if table in tables:
+            continue
+        if table not in records:
+            raise TableScanError(
+                "storage_layout_unrecorded", table,
+                "a file of this table was consumed but no layout record names what served it",
+            )
+        reads = sorted(records[table]["reads"], key=lambda r: json.dumps(r, sort_keys=True))
+        primary = next((r for r in reads if r["layout"] == "bucket"), reads[0])
+        tables[table] = {**primary, "reads": reads}
+    return {table: tables[table] for table in sorted(tables)}
+
+
+def replay_consumed(where, captured) -> None:
+    """Record again what a cached payload was read from (a payload cache hit).
+
+    ``captured`` is what :func:`storage_binding.capturing_consumed` collected
+    when the payload was read. The same files are admitted, bound and
+    verified as if they were read now, so the consumed set names the CSV a
+    cached frame came from, never only a Parquet candidate.
+    """
+    groups: dict[tuple, list] = {}
+    for table, path, fmt, sha256, _version in captured:
+        groups.setdefault((table, fmt, bool(sha256)), []).append(path)
+    for (table, fmt, sha256), paths in groups.items():
+        record_consumed(where, table, paths, fmt, sha256=sha256)
+
+
 def record_bucket_consumed(source, table: str, layout: BucketLayout, files) -> None:
-    """A bucket read consumes its selected parts, its manifest and build receipt."""
-    from .storage_binding import is_bound
+    """A bucket read consumes its selected parts, its manifest and build receipt.
+
+    It is also the table's layout choice for the run: bucket at this root.
+    """
+    from .storage_binding import bind_layout, is_bound, source_key
+
+    bind_layout(source_key(source, table), table, "bucket", layout.root)
 
     receipt = layout.root / BUILD_RECEIPT
     # A receipt bound earlier must still be there (a deleted one is missing).
@@ -1184,6 +1345,10 @@ def record_bucket_consumed(source, table: str, layout: BucketLayout, files) -> N
     metadata = (layout.root / MANIFEST, *((receipt,) if has_receipt else ()))
     record_consumed(source, table, metadata, FORMAT_BUCKET_METADATA, sha256=True)
     record_consumed(source, table, files, FORMAT_BUCKET_PART)
+    _log_table_layout(
+        getattr(source, "base_path", source), table, "bucket", layout.root,
+        lambda: _bucket_record(layout),
+    )
 
 
 def read_consumed_log(path) -> tuple[dict[str, str], ...]:
@@ -1210,7 +1375,7 @@ def _read_run_log(path) -> tuple[dict[str, str], ...]:
     for line in lines:
         if line.strip():
             entry = json.loads(line)
-            entries.setdefault(tuple(sorted(entry.items())), entry)
+            entries.setdefault(json.dumps(entry, sort_keys=True), entry)
     return tuple(entries.values())
 
 
@@ -1411,11 +1576,21 @@ def resolve_table_files(
     consumed (:func:`record_consumed`). An integrity precheck or existence
     probe passes ``consume=False``.
     """
-    from .storage_binding import StorageSourceChanged, bound_set, source_key
+    from .storage_binding import (
+        StorageSourceChanged, bind_layout, bound_layout, bound_set, source_key,
+    )
 
     key = source_key(source, table)
+    # The layout this run chose for the table is checked before any
+    # existence branch (D10D): a bound bucket that vanished is missing, and
+    # a bound flat table never turns into a bucket mid-run. Other tables'
+    # reads, and a deliberate flat read beside a bucket, are not a choice.
+    chosen = bound_layout(key)
     root = source.resolve_bucket_directory(table)
-    held = bound_set(key) if consume else ()
+    if chosen is not None and chosen["layout"] == "bucket" and root is None:
+        raise StorageSourceChanged("storage_source_missing", table, chosen["root"])
+    if chosen is not None and chosen["layout"] == "flat" and root is not None:
+        raise StorageSourceChanged("storage_source_changed", table, str(root))
     if root is None:
         files = flat_table_files(source, table)
         if loader is not None:
@@ -1423,13 +1598,14 @@ def resolve_table_files(
         files = verify_flat_scan(source, table, files)
         if consume and files:
             record_consumed(source, table, files, FORMAT_PARQUET, key=key)
-        elif held:
-            # Bound non-empty earlier in this run, gone now (D9B-EMPTY-RESOLVE).
-            raise StorageSourceChanged("storage_source_missing", table, held[0])
+            bind_layout(key, table, "flat", None)
+        elif not files and chosen is not None:
+            # Read non-empty earlier in this run, gone now (D9B-EMPTY-RESOLVE).
+            held = bound_set(key)
+            raise StorageSourceChanged(
+                "storage_source_missing", table, held[0] if held else table
+            )
         return files
-    if held:
-        # The run read this table flat; it never switches layout mid-run.
-        raise StorageSourceChanged("storage_source_changed", table, str(root))
     if loader is not None and Path(loader) != root:
         raise TableScanError(
             "table_scan_loader_mismatch", table,

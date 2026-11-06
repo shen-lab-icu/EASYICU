@@ -1710,8 +1710,12 @@ def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
             raise ValueError(f"Unknown id_type '{id_type}' for source '{src}'")
     
     # Load the table
+    from ..value_failures import TYPED_VALUE_FAILURES
+
     try:
         return load_table(src, table_name, **kwargs)
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as e:
         # If specific table load fails, try to provide a helpful error
         raise ValueError(f"Failed to load ID table for '{id_type}' (table: '{table_name}'): {e}")

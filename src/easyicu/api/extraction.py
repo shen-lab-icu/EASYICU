@@ -8009,6 +8009,10 @@ def _publish_native_export_v2(
     if result.get("storage_fallbacks"):
         # Published (a corrupt cache falls back to its true source), but marked.
         manifest["storage_fallbacks"] = list(result["storage_fallbacks"])
+    if result.get("storage_binding"):
+        manifest["storage_binding"] = dict(result["storage_binding"])
+    if "storage_consumed" in result:
+        manifest["storage_consumed"] = list(result["storage_consumed"])
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -8102,6 +8106,60 @@ def _quarantine_unpublished_outputs(
     return str(target)
 
 
+def _keeps_storage_evidence(function):
+    """A failed extraction keeps its storage evidence and cleans up its run log.
+
+    ``extract_database`` points ``EASYICU_SCAN_FALLBACK_LOG`` at its own run
+    log and, on success, restores it and removes the log itself. When it
+    raises while that log is still active, the same exception object
+    propagates unchanged; an ``Exception`` first gets ``storage_evidence``
+    ({storage_consumed, storage_fallbacks} as read from the log, or
+    {"error": "<type>: <reason>"} if the log cannot be read). The variable is
+    restored and the log removed on any exit (D10D-CONSUMED-DELIVERY).
+    """
+    import functools
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        from ..storage_layout import (
+            SCAN_FALLBACK_LOG_ENV, read_consumed_log, read_scan_fallback_log,
+        )
+
+        previous = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+        try:
+            return function(*args, **kwargs)
+        except Exception as exc:
+            run_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+            if run_log and run_log != previous and not hasattr(exc, "storage_evidence"):
+                try:
+                    evidence = {
+                        "storage_consumed": [dict(e) for e in read_consumed_log(run_log)],
+                        "storage_fallbacks": list(read_scan_fallback_log(run_log)),
+                    }
+                except (OSError, ValueError, TypeError) as read_error:
+                    evidence = {"error": f"{type(read_error).__name__}: storage_run_log_unreadable"}
+                try:
+                    exc.storage_evidence = evidence
+                except AttributeError:  # an exception type that takes no attributes
+                    pass
+            raise
+        finally:
+            run_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+            if run_log != previous:  # still the run's own log: it never got to clean up
+                if previous is None:
+                    os.environ.pop(SCAN_FALLBACK_LOG_ENV, None)
+                else:
+                    os.environ[SCAN_FALLBACK_LOG_ENV] = previous
+                if run_log:
+                    try:
+                        os.unlink(run_log)
+                    except OSError:  # never masks the exception being raised
+                        pass
+
+    return wrapper
+
+
+@_keeps_storage_evidence
 def extract_database(
     database: str,
     data_path: Optional[Union[str, Path]] = None,
@@ -9077,6 +9135,30 @@ def extract_database(
         shutil.rmtree(tmp_root, ignore_errors=True)
 
     result["storage_fallbacks"] = list(read_scan_fallback_log(scan_fallback_log))
+    # Every file any worker consumed, from the storage owner's table_consumed
+    # events in the shared run log (formal-run receipt, delta9p B9P-CSV-BINDING).
+    from ..storage_layout import read_consumed_log
+
+    result["storage_consumed"] = [dict(e) for e in read_consumed_log(scan_fallback_log)]
+    # The run binding's digest as the parent holds it: the snapshot every
+    # group worker and isolated child verifies against (each extends it in its
+    # own process; those extensions are not merged back here).
+    from ..storage_binding import binding_summary, binding_unit
+
+    with binding_unit(run_stay_binding):
+        run_binding = binding_summary()
+    result["storage_binding"] = {
+        "digest": run_binding.digest,
+        "files": run_binding.files,
+        "scope": "parent_run_binding",
+    }
+    # What served every consumed table, from every worker's table_layout
+    # events; a consumed table without one is storage_layout_unrecorded (D10D).
+    from ..storage_layout import consumed_table_layouts, read_layout_log
+
+    result["storage_binding"]["tables"] = consumed_table_layouts(
+        result["storage_consumed"], read_layout_log(scan_fallback_log)
+    )
     if previous_fallback_log is None:
         os.environ.pop(SCAN_FALLBACK_LOG_ENV, None)
     else:
@@ -9100,10 +9182,16 @@ def extract_database(
             quarantine = _quarantine_unpublished_outputs(
                 output_dir, entries_before_extraction, exc
             )
-            raise NativeExportPublicationError(
+            error = NativeExportPublicationError(
                 f"{exc} [unpublished files moved to {quarantine}]",
                 quarantine=quarantine,
-            ) from exc
+            )
+            # The run's storage evidence survives the refusal (D10D).
+            error.storage_evidence = {
+                "storage_consumed": list(result.get("storage_consumed", [])),
+                "storage_fallbacks": list(result.get("storage_fallbacks", [])),
+            }
+            raise error from exc
 
     total_elapsed = time.time() - t_start
     result["total_elapsed"] = round(total_elapsed, 1)

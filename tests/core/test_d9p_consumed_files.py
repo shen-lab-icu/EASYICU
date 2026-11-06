@@ -210,3 +210,98 @@ def test_a_clock_table_opened_by_name_is_recorded(tmp_path):
         assert "read_parquet" in _sic_cases_relation_sql(source)
         [entry] = consumed_files()
     assert (entry["table"], entry["format"]) == ("cases", "parquet")
+
+
+# Codex delta10d D10D-VIEW-ADMISSION: admission is per (table, realpath) at
+# the current size, and the view is read once per run, never across runs.
+
+
+def test_a_warm_view_does_not_admit_a_link_for_another_table(tmp_path):
+    farm, _ = _farm(tmp_path)
+    with binding_unit():
+        assert admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+        with pytest.raises(TableScanError) as error:
+            admit_consumed_realpath(farm, "services", farm / "icustays.parquet")
+    assert error.value.reason == "storage_read_outside_data_root"
+
+
+def test_a_warm_view_checks_the_current_size(tmp_path):
+    farm, _ = _farm(tmp_path)
+    with binding_unit():
+        assert admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+        with open(os.path.realpath(farm / "icustays.parquet"), "ab") as handle:
+            handle.write(b"x")
+        with pytest.raises(TableScanError):
+            admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+
+
+def test_a_changed_source_manifest_is_not_admitted_by_an_earlier_run(tmp_path):
+    farm, source_manifest = _farm(tmp_path)
+    with binding_unit():
+        assert admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+    source_manifest.write_text(source_manifest.read_text() + " ")  # farm manifest untouched
+    with binding_unit(), pytest.raises(TableScanError):
+        admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+
+
+def test_a_source_manifest_changed_within_the_run_is_a_changed_source(tmp_path):
+    farm, source_manifest = _farm(tmp_path)
+    with binding_unit():
+        assert admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+        source_manifest.write_text(source_manifest.read_text() + " ")
+        _touch(source_manifest)
+        with pytest.raises(StorageSourceChanged):
+            admit_consumed_realpath(farm, "icustays", farm / "icustays.parquet")
+
+
+def test_a_clock_helper_link_is_admitted_like_any_consumed_file(tmp_path):
+    view = tmp_path / "view"
+    view.mkdir()
+    pd.DataFrame({"CaseID": [1], "ICUOffset": [0]}).to_parquet(view / "cases.parquet", index=False)
+    source_manifest = _manifest(view, {"cases": 1})
+    farm = tmp_path / "farm"
+    farm.mkdir()
+    (farm / "cases.parquet").symlink_to(view / "cases.parquet")
+    (farm / "conversion_manifest.json").write_text(json.dumps({
+        "schema_version": "easyicu.conversion_manifest/1",
+        "tables": [{"table": "cases", "row_count": 1, "outputs": [
+            {"relative_path": "cases.parquet",
+             "size_bytes": (view / "cases.parquet").stat().st_size}]}],
+        "derived_from": {"path": str(source_manifest),
+                         "sha256": hashlib.sha256(source_manifest.read_bytes()).hexdigest()},
+    }))
+    source = ICUDataSource(_config("sic"), base_path=farm)
+    with binding_unit():
+        assert "read_parquet" in _sic_cases_relation_sql(source)  # admitted: view is warm
+    with open(view / "cases.parquet", "ab") as handle:
+        handle.write(b"x")  # no longer the declared size
+    with binding_unit(), pytest.raises(TableScanError) as error:
+        _sic_cases_relation_sql(source)
+    assert error.value.reason == "storage_read_outside_data_root"
+
+
+# Codex delta10d: a warm raw-frame cache hit records the files it was read from.
+
+
+def test_a_cached_csv_payload_is_recorded_again_on_a_hit(tmp_path):
+    root = _converted_mimic(tmp_path / "mimic")
+    source = ICUDataSource(_config("mimic"), base_path=root)
+    csv = str(root / "SERVICES.csv.gz")
+    with binding_unit():
+        _services(source)
+    with binding_unit():
+        assert _services(source)["curr_service"].tolist() == ["MED"]
+        consumed = [(e["table"], e["path"], e["format"]) for e in consumed_files()]
+    assert ("services", csv, "csv") in consumed
+
+
+def test_a_cached_payload_whose_file_changed_is_read_again(tmp_path):
+    root = _converted_mimic(tmp_path / "mimic")
+    source = ICUDataSource(_config("mimic"), base_path=root)
+    with binding_unit():
+        assert _services(source)["curr_service"].tolist() == ["MED"]
+    changed = _SERVICES.assign(CURR_SERVICE=["CSURG", "SURG"])
+    changed.to_csv(root / "SERVICES.csv.gz", index=False)
+    _touch(root / "SERVICES.csv.gz")
+    with binding_unit():
+        assert _services(source)["curr_service"].tolist() == ["CSURG"]

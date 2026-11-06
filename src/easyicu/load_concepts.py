@@ -1136,6 +1136,8 @@ class ConceptLoader:
                 verbose=False,
             )
             bounds = table.data if hasattr(table, 'data') else table
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise ValueError(
                 "MIMIC duration time alignment could not load ICU intime"

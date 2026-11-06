@@ -74,7 +74,9 @@ def _bound(data_source, table: str) -> tuple:
     if not paths:
         return ("object", id(data_source), table)
     key = source_key(data_source, table)
-    bind_files(table, paths, key=key)
+    # The resolved stay set is bound under its own key: a flat read of the
+    # same table beside its bucket is another, separately verified set (D10D).
+    bind_files(table, paths, key=(*key, "stay_resolved"))
     return key
 
 

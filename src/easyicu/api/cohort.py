@@ -9,6 +9,7 @@ import pandas as pd
 
 from ..patient_filter import PatientFilter
 from ..storage_layout import StorageIntegrityError
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..patient_filter import get_cohort_stats as _get_cohort_stats
 
 
@@ -162,7 +163,7 @@ def get_all_patient_ids_impl(
         if max_patients and len(all_ids) > max_patients:
             all_ids = all_ids[:max_patients]
         return all_ids, id_col
-    except StorageIntegrityError:
+    except TYPED_VALUE_FAILURES:
         raise
     except Exception as exc:
         raise PatientIdDiscoveryError(

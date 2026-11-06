@@ -433,6 +433,8 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
         )
     except (FileNotFoundError, KeyError):
         return None
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as exc:
         raise _raise_table_read_error(
             data_source, "icustays", "stay_window_limits", exc
@@ -448,6 +450,8 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
         )
     except (FileNotFoundError, KeyError):
         return None
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as exc:
         raise _raise_table_read_error(
             data_source, "admissions", "stay_window_limits", exc
@@ -461,6 +465,8 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
         )
     except (FileNotFoundError, KeyError):
         pat_tbl = None
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as exc:
         raise _raise_table_read_error(
             data_source, "patients", "stay_window_limits", exc
@@ -831,6 +837,8 @@ def _load_concept_for_callback(ctx: ConceptCallbackContext, concept_name: str) -
                 return result.df
             elif isinstance(result, pd.DataFrame):
                 return result
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as e:
         raise RuntimeError(
             f"callback_concept_load_failed: {concept_name} ({type(e).__name__}: {e})"
@@ -892,6 +900,8 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
                 logger.warning("icustays 表为空或未加载")
     except (FileNotFoundError, KeyError):
         return None
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as e:
         # Read failure (not absence): fail loudly with source identity so a
         # corrupt/unreadable mapping table never masquerades as "no mapping".
@@ -2133,6 +2143,8 @@ def _callback_blood_cell_ratio(
                 data[value_column] = np.nan
                 data[assessment_column] = "missing_wbc_time_alignment"
                     
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as e:
         raise RuntimeError(
             f"wbc_ratio_calculation_failed: {value_column} ({type(e).__name__}: {e})"
@@ -2295,6 +2307,8 @@ def _callback_mimic_age(
             if stay_id_col in data.columns:
                 id_columns = [stay_id_col]
             
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             # Age is anchored to ICU admission. An admittime-based age would
             # be another estimand and an empty table would read as "no age";
@@ -2438,6 +2452,8 @@ def _callback_mimic_kg_rate(
                     data[value_column] = data[value_column] / data["__weight_kg"]
                     normalized = True
                     data = data.drop(columns=["__weight_kg"], errors='ignore')
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as exc:
         raise RuntimeError(
             f"mimic_kg_rate_weight_load_failed: weight for {value_column} "
@@ -6610,6 +6626,8 @@ def _callback_vaso60(
                             weight_table = loaded.get(weight_concept)
                         else:
                             weight_table = loaded
+                    except TYPED_VALUE_FAILURES:
+                        raise  # a typed failure keeps its type (D10D)
                     except Exception as exc:
                         # A failed weight load is not a stay without weight:
                         # every per-minute rate in the batch would become NA.

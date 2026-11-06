@@ -5,6 +5,7 @@ from __future__ import annotations
 from easyicu.runtime import duckdb_spill
 from . import storage_layout
 import enum
+import os
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -655,6 +656,7 @@ class ICUDataSource:
         }
         self.enable_cache = enable_cache
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
+        self._table_cache_sources: dict = {}  # cache_key -> files the payload was read from
         self._preloaded_tables: dict = {}  # 🚀 预加载的完整表（用于多患者批处理）
         self._bucket_dir_logged: set = set()  # 🔧 已打印日志的分桶目录（避免重复日志）
         self._bucket_dir_cache: dict = {}  # 缓存已发现的分桶目录（只缓存正结果）
@@ -704,6 +706,7 @@ class ICUDataSource:
         """清除表缓存,释放内存。"""
         with self._lock:
             self._table_cache.clear()
+            self._table_cache_sources.clear()
             self._preloaded_tables.clear()
             self._bucket_dir_cache.clear()
             self._flat_parquet_dir_cache.clear()
@@ -1024,6 +1027,8 @@ class ICUDataSource:
                                     patient_ids_filter = mapped_filter
                                     if verbose:
                                         logger.info(f"✅ [{table_name}] 映射成功: {len(spec.value)} stay_ids -> {len(valid_hadm_ids)} hadm_ids")
+                            except TYPED_VALUE_FAILURES:
+                                raise  # a typed failure keeps its type (D10D)
                             except Exception as e:
                                 # Left on stay_id, a hospital table without that
                                 # column would come back empty for the batch.
@@ -1414,6 +1419,8 @@ class ICUDataSource:
                         if verbose:
                             logger.debug(f"[{table_name}] 补全 {target_id_col} 后更新 id_columns: subject_id → {target_id_col}")
                         
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as e:
                     # A half-joined frame (no stay column, or rows not yet
                     # deduplicated to the target stays) must not be returned.
@@ -1510,11 +1517,22 @@ class ICUDataSource:
         cache_key = (table_name, tuple(sorted(columns)) if columns else None, filter_key, itemid_filter_key)
         
         # 检查缓存
+        from .storage_binding import capturing_consumed, captured_still_current
+
         cached_frame = None
         if enable_caching:
             with self._lock:
                 cached_frame = self._table_cache.get(cache_key)
-        
+                cached_sources = self._table_cache_sources.get(cache_key)
+            # A payload is served only with the files it was read from, and only
+            # while they are unchanged; a hit records them again, CSV included.
+            if cached_frame is not None and (
+                cached_sources is None or not captured_still_current(cached_sources)
+            ):
+                cached_frame = None
+            if cached_frame is not None:
+                storage_layout.replay_consumed(self, cached_sources)
+
         if cached_frame is not None:
             # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
             # 这样多个概念可以共享同一个缓存的表副本
@@ -1528,7 +1546,28 @@ class ICUDataSource:
                 return patient_ids_filter.apply(cached_frame)
             # 如果不需要过滤，返回切片视图而非副本
             return cached_frame[:]
-        
+
+        with capturing_consumed():
+            return self._load_raw_frame_uncached(
+                table_name, columns, patient_ids_filter, concept_itemid_filter,
+                wide_table_value_columns, enable_caching, cache_key,
+            )
+
+    def _load_raw_frame_uncached(
+        self,
+        table_name: str,
+        columns: Optional[Iterable[str]],
+        patient_ids_filter: Optional[FilterSpec],
+        concept_itemid_filter: Optional[Tuple[str, set]],
+        wide_table_value_columns: Optional[List[str]],
+        enable_caching: bool,
+        cache_key: tuple,
+    ) -> pd.DataFrame:
+        """The read behind :meth:`_load_raw_frame`'s payload cache.
+
+        It runs inside ``capturing_consumed``: a cached payload is stored with
+        the files it was read from (D10D warm-cache sources).
+        """
         loader = self._table_sources.get(table_name)
         # A registered source is the caller's own file; a disk loader is
         # bound to the storage policy's validated file set.
@@ -1604,8 +1643,7 @@ class ICUDataSource:
                     
                     # An error-only or unmatched selection is a valid empty source.
                     if enable_caching:
-                        with self._lock:
-                            self._table_cache[cache_key] = frame
+                        self._cache_raw_frame(cache_key, frame)
                     return frame
             
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
@@ -1690,9 +1728,8 @@ class ICUDataSource:
         # ⚡ 性能优化: 缓存原始frame，返回过滤后的结果
         # 不缓存需要特殊处理的表（labevents/admissions等）
         if enable_caching:
-            with self._lock:
-                # 缓存原始未过滤的表
-                self._table_cache[cache_key] = frame
+            # 缓存原始未过滤的表
+            self._cache_raw_frame(cache_key, frame)
         
         # 应用patient过滤(如果有)
         if patient_ids_filter:
@@ -1700,6 +1737,15 @@ class ICUDataSource:
         
         # 未过滤且未缓存时返回切片
         return frame[:] if self.enable_cache else frame
+
+    def _cache_raw_frame(self, cache_key: tuple, frame: pd.DataFrame) -> None:
+        """Keep a raw payload with the files it was read from."""
+        from .storage_binding import current_capture
+
+        sources = current_capture()
+        with self._lock:
+            self._table_cache[cache_key] = frame
+            self._table_cache_sources[cache_key] = sources
 
     def resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
         """Return a partitioned table directory through the public layout contract."""
@@ -1722,6 +1768,29 @@ class ICUDataSource:
         """Prefer a validated installation; reject corrupt caches without a flat source."""
         if not self.base_path:
             return None
+        from .storage_binding import StorageSourceChanged, bound_layout, source_key
+
+        # The layout this run already chose for the table is checked before
+        # any existence branch (D10D): a vanished bound bucket is missing,
+        # never a fallback to flat or to nothing.
+        chosen = bound_layout(source_key(self, table_name))
+        if chosen is not None and chosen["layout"] == "bucket":
+            root = Path(chosen["root"])
+            if not root.is_dir():
+                raise StorageSourceChanged(
+                    "storage_source_missing", table_name, str(root / storage_layout.MANIFEST)
+                )
+            if os.path.realpath(root) != chosen["realpath"]:  # another installation there
+                raise StorageSourceChanged("storage_source_changed", table_name, str(root))
+            try:
+                storage_layout.read_bucket_contract(
+                    root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
+                )
+            except storage_layout.BucketLayoutError as exc:
+                raise StorageSourceChanged(
+                    "storage_source_changed", table_name, str(root / storage_layout.MANIFEST)
+                ) from exc
+            return root
         failure = None
         for base in (self.base_path, self.base_path / "icu", self.base_path / "hosp"):
             for name in dict.fromkeys((table_name, table_name.lower())):
@@ -1733,7 +1802,7 @@ class ICUDataSource:
                         root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
                     )
                 except storage_layout.BucketLayoutError as exc:
-                    from .storage_binding import StorageSourceChanged, is_bound
+                    from .storage_binding import is_bound
 
                     if is_bound(root / storage_layout.MANIFEST):
                         # This run already read the layout: a change under it is
@@ -1743,6 +1812,8 @@ class ICUDataSource:
                         ) from exc
                     failure = exc
                     continue
+                if chosen is not None:  # chosen flat: no bucket appears mid-run
+                    raise StorageSourceChanged("storage_source_changed", table_name, str(root))
                 self._bucket_dir_cache[str(table_name).lower()] = root
                 return root
         if failure is not None:
@@ -2468,6 +2539,8 @@ class ICUDataSource:
             logger.info("CSV fallback succeeded: loaded %d rows", len(df))
             return df
             
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(
                 f"mimic3_chartevents_csv_read_failed: ({type(e).__name__}: {e})"
@@ -2910,6 +2983,8 @@ class ICUDataSource:
                     else:
                         return pd.DataFrame()
             
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as e:
                 # Both the dataset scan and the per-file read failed on the
                 # resolved files.  The legacy fallback globs only top-level
@@ -3361,6 +3436,8 @@ def load_bucketed_table_aggregated(
                     f"SELECT * FROM {target_relation} LIMIT 0"
                 ).description
             }
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise RuntimeError(
                 f"Could not inspect Parquet schema for {table_name!r}"
@@ -4390,6 +4467,8 @@ def load_bucketed_table_multi_aggregated(
                 raw_columns = {col[0] for col in conn.execute(
                     f"SELECT * FROM {target_relation} LIMIT 0"
                 ).description}
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as exc:
                 raise RuntimeError(
                     f"Could not inspect Parquet schema for {table_name!r}"

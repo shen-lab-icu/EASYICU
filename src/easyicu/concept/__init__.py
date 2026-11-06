@@ -1105,6 +1105,8 @@ class ConceptResolver:
                         store_legacy=True,
                     )
                 return result.copy() if hasattr(result, 'copy') else result
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             # Callers would otherwise fall back to aggregated data, a
             # different reading of the concept (lead-r13 sweep).
@@ -1428,6 +1430,8 @@ class ConceptResolver:
                     
                 if verbose:
                     if DEBUG_MODE: print(f"   🔗 加载 ID 映射表: {len(self._id_mapping_cache)} 条记录")
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as e:
                 if verbose:
                     print(f"   ⚠️  无法加载 icustays 进行 ID 转换: {e}")
@@ -1816,6 +1820,8 @@ class ConceptResolver:
                         raise
                     except ConceptError:
                         raise
+                    except TYPED_VALUE_FAILURES:
+                        raise  # a typed failure keeps its type (D10D)
                     except Exception as e:
                         # The per-concept path is not a fallback for a failed
                         # batch read; a failure here has no value to publish.
@@ -2057,6 +2063,8 @@ class ConceptResolver:
                     raise
                 except ConceptError:
                     raise
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as e:
                     # Same contract as the wide batch: no silent per-concept
                     # re-read after a failed batch read.
@@ -2581,6 +2589,8 @@ class ConceptResolver:
                             )
                             if sub_result is not None:
                                 tables[sub_name] = sub_result
+                        except TYPED_VALUE_FAILURES:
+                            raise  # a typed failure keeps its type (D10D)
                         except Exception as e:
                             # A callback run without one of its inputs would
                             # publish a partial or empty concept.
@@ -3470,6 +3480,8 @@ class ConceptResolver:
                         except StorageIntegrityError:
                             _hd_conn.close()
                             raise
+                        except TYPED_VALUE_FAILURES:
+                            raise  # a typed failure keeps its type (D10D)
                         except Exception as _hd_general_exc:
                             _hd_conn.close()
                             raise ConceptExtractionUnavailable(
@@ -3712,6 +3724,8 @@ class ConceptResolver:
                                 )
                                 try:
                                     frame = _wt_conn.execute(_wt_query).fetchdf()
+                                except TYPED_VALUE_FAILURES:
+                                    raise  # a typed failure keeps its type (D10D)
                                 except Exception as exc:
                                     # Raw loading is not the same definition (window
                                     # clip, bounds); a failed query is a failure.
@@ -6332,6 +6346,8 @@ class ConceptResolver:
             frame = frame[keep].copy()
         except StorageIntegrityError:
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             from .errors import ConceptTableReadError
 
@@ -6636,6 +6652,8 @@ class ConceptResolver:
                         how="left",
                         validate="many_to_one",
                     )
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as exc:
                     raise ConceptError(
                         f"{db_name} time alignment failed while loading "
@@ -6830,6 +6848,8 @@ class ConceptResolver:
                         how="left",
                         validate="many_to_one",
                     )
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as exc:
                     raise ValueError(
                         "AUMC time alignment requires admissions.admittedat"
@@ -6971,6 +6991,8 @@ class ConceptResolver:
                             how="left",
                             validate="many_to_one",
                         )
+                    except TYPED_VALUE_FAILURES:
+                        raise  # a typed failure keeps its type (D10D)
                     except Exception as exc:
                         raise ValueError(
                             "SICdb raw time alignment requires cases.ICUOffset"
@@ -7036,6 +7058,8 @@ class ConceptResolver:
                         bounds = cases_df[
                             [primary_id, "ICUOffset", "TimeOfStay"]
                         ].copy()
+                    except TYPED_VALUE_FAILURES:
+                        raise  # a typed failure keeps its type (D10D)
                     except Exception as exc:
                         raise ValueError(
                             "SICdb episode-bound validation requires "
@@ -7165,6 +7189,8 @@ class ConceptResolver:
                         how='left',
                         validate='many_to_one',
                     )
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as exc:
                     raise ConceptError(
                         "HiRID time alignment failed while loading its "
@@ -7663,6 +7689,8 @@ class ConceptResolver:
             
         except ConceptError:
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             # Alignment is a data-semantics step, not best-effort: every
             # downstream consumer reads this index as relative hours, so

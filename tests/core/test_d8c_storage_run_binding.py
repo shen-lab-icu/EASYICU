@@ -177,3 +177,75 @@ def test_binding_refusals_cross_process_boundaries():
             type(error), error.reason, error.table, error.path, str(error))
     again = pickle.loads(pickle.dumps(StayTableUnbound("patient")))
     assert (again.table, again.reason) == ("patient", "stay_table_unbound")
+
+
+# Codex delta10d: the table's layout choice is an explicit record, checked
+# before any existence branch; legitimate coexisting reads are each verified.
+
+
+def test_a_vanished_bound_bucket_is_missing_not_a_flat_fallback(bucket, tmp_path):
+    source, root = bucket
+    with binding_unit():
+        assert all(Path(p).is_relative_to(root) for p in _read(source))
+        root.rename(tmp_path / "moved_bucket")  # the flat table is still beside it
+        with pytest.raises(StorageSourceChanged) as error:
+            _read(source)
+    assert error.value.reason == "storage_source_missing"
+
+
+def test_a_vanished_bound_bucket_without_flat_is_missing_not_empty(bucket, tmp_path):
+    from easyicu.storage_layout import flat_table_files
+
+    source, root = bucket
+    with binding_unit():
+        _read(source)
+        for flat in flat_table_files(source, TABLE):
+            Path(flat).unlink()
+        root.rename(tmp_path / "moved_bucket")
+        with pytest.raises(StorageSourceChanged) as error:
+            source.resolve_target_files(TABLE)
+    assert error.value.reason == "storage_source_missing"
+
+
+def test_a_bound_bucket_swapped_for_another_copy_is_refused(bucket, tmp_path):
+    import shutil
+
+    source, root = bucket
+    with binding_unit():
+        _read(source)
+        copy = tmp_path / "other_bucket"
+        shutil.copytree(root, copy)
+        root.rename(tmp_path / "moved_bucket")
+        root.symlink_to(copy, target_is_directory=True)  # same path, another installation
+        with pytest.raises(StorageSourceChanged) as error:
+            _read(source)
+    assert error.value.reason == "storage_source_changed"
+
+
+def test_a_flat_read_beside_the_bucket_and_the_bucket_read_coexist(bucket):
+    # HiRID-shaped: a deliberate flat read of the table, then the resolver's
+    # bucket read, in one unit. Each is bound and verified on its own.
+    from easyicu.storage_layout import flat_table_files, flat_table_scan
+
+    source, root = bucket
+    (flat,) = flat_table_files(source, TABLE)
+    with binding_unit():
+        assert flat_table_scan(source, TABLE, Path(flat)) == (Path(flat),)
+        assert all(Path(p).is_relative_to(root) for p in _read(source))
+        assert flat_table_scan(source, TABLE, Path(flat)) == (Path(flat),)
+        _rewrite(Path(flat))  # the flat read stays bound on its own
+        with pytest.raises(StorageSourceChanged):
+            flat_table_scan(source, TABLE, Path(flat))
+
+
+def test_a_bucketed_stay_binding_and_a_flat_read_of_the_table_coexist(bucket):
+    from easyicu.concept.stay_tables import _bound
+    from easyicu.storage_layout import flat_table_files, flat_table_scan
+
+    source, _root = bucket
+    (flat,) = flat_table_files(source, TABLE)
+    with binding_unit():
+        _bound(source, TABLE)
+        assert flat_table_scan(source, TABLE, Path(flat)) == (Path(flat),)
+        _bound(source, TABLE)
+        assert _read(source)

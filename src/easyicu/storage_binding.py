@@ -64,6 +64,9 @@ class _Unit:
         self.files: dict = dict(snapshot.get("files", {}))  # (database, base, table) -> paths
         self.versions: dict = dict(snapshot.get("versions", {}))  # path -> (size, mtime_ns, ino)
         self.sha256: dict = dict(snapshot.get("sha256", {}))  # path -> hex (manifests, receipts)
+        # (database, base, table) -> {"layout": "flat"|"bucket", "root", "realpath"}:
+        # the layout the storage policy chose for the table (D10D).
+        self.layouts: dict = {k: dict(v) for k, v in snapshot.get("layouts", {}).items()}
         self.consumed: dict = {}  # (table, path) -> {table, path, realpath, format}
         self.caches: dict = {}  # payload owners' caches, dropped with the unit
 
@@ -79,6 +82,7 @@ class BindingSummary:
 _LOCK = threading.RLock()
 _LIVE: set = set()
 _UNIT: contextvars.ContextVar = contextvars.ContextVar("easyicu_binding_unit", default=None)
+_CAPTURE: contextvars.ContextVar = contextvars.ContextVar("easyicu_consumed_capture", default=None)
 
 
 @contextmanager
@@ -168,6 +172,15 @@ def bound_set(key: Optional[tuple]) -> tuple:
         return tuple(unit.files.get(key, ()))
 
 
+def bound_sha256(path) -> Optional[str]:
+    """The sha256 the active unit bound for ``path`` (manifests, receipts); None if none."""
+    unit = _UNIT.get()
+    if unit is None:
+        return None
+    with _LOCK:
+        return unit.sha256.get(str(path))
+
+
 def is_bound(path) -> bool:
     """Whether the active unit has bound ``path``."""
     unit = _UNIT.get()
@@ -194,7 +207,81 @@ def consume(
         with _LOCK:
             for entry in entries:
                 unit.consumed[(table, entry["path"])] = entry
+    captured = _CAPTURE.get()
+    if captured is not None:
+        for path in paths:
+            captured.append((table, path, fmt, sha256, _version(table, path)))
     return entries
+
+
+@contextmanager
+def capturing_consumed() -> Iterator[list]:
+    """Collect what is consumed in this context: (table, path, format, sha256, version).
+
+    A payload cache stores these with the payload, so a later hit records
+    and verifies the same sources (``storage_layout.replay_consumed``).
+    """
+    outer = _CAPTURE.get()
+    captured: list = []
+    reset = _CAPTURE.set(captured)
+    try:
+        yield captured
+    finally:
+        _CAPTURE.reset(reset)
+        if outer is not None:  # a nested read is part of the outer one
+            outer.extend(captured)
+
+
+def current_capture() -> Optional[tuple]:
+    """What the innermost :func:`capturing_consumed` has collected so far; None outside one."""
+    captured = _CAPTURE.get()
+    return None if captured is None else tuple(captured)
+
+
+def captured_still_current(captured) -> bool:
+    """Whether every captured file still has the version it had when read."""
+    for table, path, _fmt, _sha, version in captured:
+        try:
+            if _version(table, path) != version:
+                return False
+        except StorageSourceChanged:
+            return False
+    return True
+
+
+def layout_key(key: Optional[tuple]) -> Optional[tuple]:
+    """The layout-record key of a source key (table names are case-blind on disk)."""
+    return None if key is None else (*key[:-1], str(key[-1]).lower())
+
+
+def bound_layout(key: Optional[tuple]) -> Optional[dict]:
+    """The layout this unit chose for the table at ``key``; None if none yet."""
+    unit = _UNIT.get()
+    if unit is None or key is None:
+        return None
+    with _LOCK:
+        held = unit.layouts.get(layout_key(key))
+        return dict(held) if held is not None else None
+
+
+def bind_layout(key: Optional[tuple], table: str, layout: str, root) -> None:
+    """Record the layout the storage policy chose for a table; refuse a replacement.
+
+    The first choice in a unit is kept (``layout`` "flat" or "bucket", the
+    bucket ``root`` and its realpath). A later choice of another layout, or
+    of a bucket at another root or realpath, for the same table raises
+    ``storage_source_changed``. A deliberate flat read beside a bucket
+    (``storage_layout.flat_table_scan``) is not a layout choice.
+    """
+    unit = _UNIT.get()
+    if unit is None or key is None:
+        return
+    root = "" if root is None else str(root)
+    now = {"layout": layout, "root": root, "realpath": os.path.realpath(root) if root else ""}
+    with _LOCK:
+        held = unit.layouts.setdefault(layout_key(key), now)
+    if held != now:
+        raise StorageSourceChanged("storage_source_changed", table, root or held["root"] or table)
 
 
 def consumed_files() -> tuple[dict, ...]:
@@ -245,6 +332,7 @@ def _pinned(unit: _Unit, data_source) -> dict:
             "files": dict(unit.files),
             "versions": dict(unit.versions),
             "sha256": dict(unit.sha256),
+            "layouts": {k: dict(v) for k, v in unit.layouts.items()},
         }
 
 
@@ -258,6 +346,10 @@ def binding_summary() -> Optional[BindingSummary]:
             "files": sorted([list(key), list(paths)] for key, paths in unit.files.items()),
             "versions": sorted([path, list(v)] for path, v in unit.versions.items()),
             "sha256": sorted([path, digest] for path, digest in unit.sha256.items()),
+            "layouts": sorted(
+                [list(key), [v["layout"], v["root"], v["realpath"]]]
+                for key, v in unit.layouts.items()
+            ),
             "consumed": sorted(
                 [e["table"], e["path"], e["realpath"], e["format"]] for e in unit.consumed.values()
             ),
