@@ -225,3 +225,17 @@ def test_the_empty_antibiotic_shortcut_checks_every_suspicion_input():
     ))
     result = _callback_susp_inf({"abx": _event("abx", []), "samp": samp}, _ctx("susp_inf"))
     assert _receipt(result, "susp_inf")[1:3] == ("not_evaluable", "component_time_index_missing")
+
+
+@pytest.mark.parametrize(
+    ("concept", "callback"), [("sep3", _callback_sep3), ("sep3_sofa2", _callback_sep3_sofa2)]
+)
+def test_an_evaluated_suspicion_without_the_score_input_is_not_evaluable(concept, callback):
+    # delta11r NB-COMPONENT-ABSENT: only susp_inf is supplied (an evaluated
+    # empty from its own callback); the score key is absent altogether.
+    susp_inf = _callback_susp_inf(
+        {"abx": _event("abx", []), "samp": _event("samp", [(7, 1.0)])}, _ctx("susp_inf"),
+    )
+    result = callback({"susp_inf": susp_inf}, _ctx(concept))
+    assert result.data.empty
+    assert _receipt(result, concept)[1:3] == ("not_evaluable", "required_component_missing")

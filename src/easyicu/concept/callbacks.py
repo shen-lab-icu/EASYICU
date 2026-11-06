@@ -6101,6 +6101,14 @@ def _evaluated_empty_result(
     tables: Dict[str, ICUTable], ctx: ConceptCallbackContext, components: Iterable[str],
 ) -> ICUTable:
     """An empty event set: evaluated only when every required input is complete."""
+    components = tuple(components)
+    if any(name not in tables for name in components):
+        # A required input that was never loaded cannot support "no event"
+        # (delta11r NB-COMPONENT-ABSENT).
+        return _infection_empty_result(
+            tables, ctx, reason_code="required_component_missing",
+            evaluation_status="not_evaluable",
+        )
     incomplete = _incomplete_component(tables, components)
     if incomplete is not None:
         return _not_evaluable_from(incomplete, tables, ctx)
