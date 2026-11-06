@@ -1,19 +1,9 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/research_agent/concept_catalog.py"
+      "src/easyicu/data/concept-dict.json"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 63423,
-        "was": 63403
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 59015,
-        "was": 58995
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -325,9 +315,16 @@
           "was": 58995
         }
       }
+    },
+    {
+      "reason": "lead-r13: concept-dict.json bytes changed by c747d1900 (exact SI factors) and ec2f10a6f (SICdb 1.0.8 RASS and O2 flow), both pending the user's reseal; every measured planner/resource/coder size, task and read count is unchanged",
+      "source_digest_changes": [
+        "src/easyicu/data/concept-dict.json"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "lead-r13: concept-dict.json gained the urine chemistry concepts and dropped two MIMIC-IV-only ids from MIMIC-III other_output_ml; planner.py changed; historical ceilings retained",
+  "baseline_reason": "lead-r13: concept-dict.json bytes changed by c747d1900 (exact SI factors) and ec2f10a6f (SICdb 1.0.8 RASS and O2 flow), both pending the user's reseal; every measured planner/resource/coder size, task and read count is unchanged",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -338,7 +335,7 @@
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/concept/loader.py": "0494b9b1decc5055de2beee32129289ebbfce438317067d5054eae081a8888f8",
-    "src/easyicu/data/concept-dict.json": "78ba12972c66c71a7c5bc3fda970994040042168667f2f0e59fc97aa4574f2c6",
+    "src/easyicu/data/concept-dict.json": "4e9bb4c8011730ebeb1ed0b828048f0c51f671be1e7ce050a52696eb83abca15",
     "src/easyicu/data/sic-case-duration-overlay.v1.json": "fa3106b181e1c624a268aeb6d393b78abd4a630c9bbd8c25f552c789a06c9c9b",
     "src/easyicu/data/sofa2-dict.json": "a3f64f28dbf704a6d4822376a6778620eff455f1e703ee9081e51c85a750b118",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",

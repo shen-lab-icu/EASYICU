@@ -129,3 +129,45 @@ def test_publication_calls_the_canonical_order_for_every_module(module):
 
     source = inspect.getsource(extraction._publish_native_export_v2)
     assert "_canonicalise_native_export_row_order(" in source
+
+
+def test_grouped_streamed_sepsis_reads_its_group_outputs_not_the_unpublished_root(tmp_path, monkeypatch):
+    """A worker group that holds the score modules and Sepsis-3 publishes Sepsis-3.
+
+    With module grouping (a large host), the Sepsis specials run in the score
+    group, before that group's outputs are collected. The streamed derivation
+    used to read the unpublished output root and refused the module with
+    sepsis_dependency_output_missing; the dependency staging owner now lays out
+    the group's own outputs. Bytes equal the ungrouped run.
+    """
+    from easyicu.api.concepts import clear_global_loader
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    root = tmp_path / "source"
+    generate_source(root, "hirid", stays=4)
+    modules = ["outcome", "sepsis_shared", "sofa1_score", "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2"]
+    outputs = {}
+    try:
+        for grouping in ("1", "0"):
+            monkeypatch.setenv("EASYICU_EXTRACT_GROUPING", grouping)
+            clear_global_loader()
+            result = extract_database(
+                "hirid",
+                data_path=str(root),
+                output_dir=str(tmp_path / f"grouping_{grouping}"),
+                modules=modules,
+                patient_ids={"patientid": [1, 2, 3, 4]},
+                batch_size=4,
+                max_workers=4,
+                native_export_v2=True,
+                stream_output_batches=True,
+                resource_budget_mb=2048,
+                verbose=False,
+            )
+            assert all(not state["errors"] for state in result["modules"].values())
+            outputs[grouping] = tmp_path / f"grouping_{grouping}"
+    finally:
+        clear_global_loader()
+    for module in modules:
+        assert _sha(outputs["1"] / f"{module}.parquet") == _sha(outputs["0"] / f"{module}.parquet"), module

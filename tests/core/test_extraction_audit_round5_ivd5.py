@@ -614,3 +614,19 @@ def test_r5c_iii_012_compatibility_loader_selects_adjunct_definition(tmp_path, m
     monkeypatch.setattr(module, "load_dictionary", selected_dictionary)
     with pytest.raises(SelectedDefinition):
         loader.load_concepts(["vaso_ind"], patient_ids=[1], verbose=False)
+
+
+@pytest.mark.parametrize("bucketed", [False, True])
+def test_mapped_logical_concept_without_matching_rows_keeps_boolean_type(tmp_path, bucketed):
+    # The ordered rocuronium proxy is mapped on MIMIC-III; a source whose
+    # prescriptions never name it yields zero rows that keep the lgl type.
+    start = pd.Timestamp("2150-01-01")
+    orders = pd.DataFrame({"subject_id": [11, 12], "hadm_id": [21, 22], "icustay_id": [1, 2],
+                           "startdate": start, "enddate": start + pd.Timedelta(days=1),
+                           "drug": ["Heparin", "Insulin"], "route": ["IV", "IV"],
+                           "dose_val_rx": "1", "dose_unit_rx": "g"})
+    assert _spec("rocuronium", "mimic", "prescriptions")["exposure_kind"] == "ordered"
+    source = _synthetic_source(tmp_path, "mimic", bucketed=bucketed, prescriptions=orders)
+    frame = _load(source, ["rocuronium"])["rocuronium"].data
+    assert frame.empty
+    assert pd.api.types.is_bool_dtype(frame["rocuronium"])

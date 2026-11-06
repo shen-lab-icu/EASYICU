@@ -19,9 +19,13 @@ import pytest
 from easyicu.datasource import ICUDataSource
 from easyicu.resources import load_data_sources
 from easyicu.storage_layout import StorageIntegrityError, scan_fallbacks
-from tests.core.test_storage_integrity_public_entry import _chart
+from tests.support.mimic_chartevents import chart
 
 T = pd.Timestamp("2150-01-01 08:00")
+
+
+def _chart(rows):
+    return chart(rows, T)
 
 
 def _source(database, root):

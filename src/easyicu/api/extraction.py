@@ -4517,12 +4517,40 @@ def _run_special_extraction(
         required_dependency_modules.append("sofa1_score")
     if any("sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules):
         required_dependency_modules.append("sofa2_score")
-    published_dependencies_ready = bool(published_output_dir) and all(
-        (dependency_root / f"{module}.parquet").is_file()
-        for module in required_dependency_modules
+    def _published(module: str) -> bool:
+        # Published as a parquet, or as the empty-success manifest the
+        # streamed reader accepts for a module that completed with zero rows.
+        if (dependency_root / f"{module}.parquet").is_file():
+            return True
+        try:
+            manifest = json.loads(
+                (dependency_root / f"{module}.manifest.json").read_text(encoding="utf-8")
+            )
+        except FileNotFoundError:
+            return False
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            raise SpecialDependencyError(
+                "sepsis_dependency_manifest_unreadable",
+                f"{module}: {type(exc).__name__}",
+            ) from exc
+        return (
+            isinstance(manifest, dict)
+            and manifest.get("module") == module
+            and not manifest.get("errors")
+            and not manifest.get("saved")
+        )
+
+    published_dependencies_ready = all(
+        _published(module) for module in required_dependency_modules
     )
 
-    if stream_output_batches or published_dependencies_ready:
+    # Streamed derivation reads published dependency outputs. When they are
+    # not published yet (the score modules ran earlier in this worker group,
+    # whose outputs are collected only after the group ends), the staging
+    # owner below lays out this group's own outputs, or a private extraction,
+    # exactly as they will be published. Reading the unpublished directory
+    # failed with sepsis_dependency_output_missing in grouped streamed runs.
+    if published_dependencies_ready:
         if failure_context is not None:
             failure_context["stage"] = "special_stream_dispatch"
         cohort = list(next(iter(patient_ids_filter.values()))) if patient_ids_filter else []
