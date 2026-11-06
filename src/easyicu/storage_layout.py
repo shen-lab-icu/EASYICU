@@ -1330,6 +1330,178 @@ def replay_consumed(where, captured) -> None:
         record_consumed(where, table, paths, fmt, sha256=sha256)
 
 
+def _stat_signature(path) -> tuple | None:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+
+
+def _file_sha256(path) -> str | None:
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.file_digest(handle, "sha256").hexdigest()
+    except OSError:
+        return None
+
+
+def payload_identity(source, captured) -> tuple[dict, ...] | None:
+    """What a cached raw payload was read from, per table and kind (D14D).
+
+    ``captured`` is what ``capturing_consumed`` collected while the payload
+    was read. Each entry names the table, its kind (``flat``, ``csv`` or
+    ``bucket``), the files read and the metadata identity: the conversion
+    manifest (flat) or bucket manifest (bucket) with its sha256, and, for a
+    bucket, every part its contract lists. None when a bucket read cannot be
+    identified; such a payload is never served from the cache.
+    """
+    from .storage_binding import bound_layout, bound_sha256, source_key
+
+    groups: dict[tuple[str, str], set] = {}
+    for table, path, fmt, _sha, _version in captured:
+        kind = {FORMAT_CSV: "csv", FORMAT_PARQUET: "flat"}.get(fmt, "bucket")
+        groups.setdefault((table, kind), set()).add(str(path))
+    base = getattr(source, "base_path", None)
+    identity = []
+    for (table, kind), paths in sorted(groups.items()):
+        entry: dict[str, Any] = {"table": table, "kind": kind, "paths": tuple(sorted(paths))}
+        if kind == "bucket":
+            manifest = next((p for p in paths if Path(p).name == MANIFEST), None)
+            if manifest is None:
+                return None
+            root = Path(manifest).parent
+            layout = read_bucket_contract(
+                root, allow_legacy=source.config.name == "aumc",
+                cache=source._bucket_layout_cache,
+            )
+            entry.update(root=str(root), manifest=manifest,
+                         manifest_sha256=bound_sha256(manifest) or _file_sha256(manifest),
+                         files=tuple(sorted(str(f) for f in layout.files)))
+        else:
+            manifest = None if base is None else str(Path(base) / CONVERSION_MANIFEST)
+            entry.update(manifest=manifest, manifest_sha256=None if manifest is None else _file_sha256(manifest))
+        if kind == "flat":
+            own = tuple(sorted(str(f) for f in flat_table_files(source, table)))
+            # The table's own flat set: revalidated through the resolver (or the
+            # deliberate flat scan beside a bucket). Any other directory read is
+            # revalidated file by file.
+            # A read of the table's flat set while a bucket serves the table
+            # is the deliberate flat scan beside it, not the resolver's choice.
+            chosen = bound_layout(source_key(source, table))
+            if own != entry["paths"]:
+                entry["via"] = "paths"
+            elif chosen is not None:
+                entry["via"] = "flat_scan" if chosen["layout"] == "bucket" else "resolver"
+            else:
+                entry["via"] = (
+                    "flat_scan" if source.resolve_bucket_directory(table) is not None else "resolver"
+                )
+        identity.append(entry)
+    return tuple(identity)
+
+
+def _payload_signature(source, entry: dict) -> tuple:
+    """Cheap stats that change whenever the full revalidation could change."""
+    manifest = entry.get("manifest")
+    signature: list = [_stat_signature(manifest) if manifest else None]
+    if entry["kind"] == "flat":
+        listing = flat_table_files(source, entry["table"]) if entry["via"] != "paths" else entry["paths"]
+        signature.append(tuple((str(f), _stat_signature(f)) for f in sorted(map(str, listing))))
+    elif entry["kind"] == "csv":
+        signature.append(tuple((p, _stat_signature(p)) for p in entry["paths"]))
+    else:
+        root = Path(entry["root"])
+        try:
+            children = sorted(root.iterdir())
+        except OSError:
+            children = []
+        signature.append(_stat_signature(root))
+        signature.append(tuple((c.name, _stat_signature(c)) for c in children))
+    return tuple(signature)
+
+
+def _revalidate_entry(source, entry: dict) -> bool:
+    """The owner's own check of one cached source; False = it no longer matches."""
+    from .storage_binding import StorageSourceChanged
+
+    table, kind = entry["table"], entry["kind"]
+    if entry.get("manifest") and entry.get("manifest_sha256") != _file_sha256(entry["manifest"]):
+        return False
+    if kind == "csv":
+        for path in entry["paths"]:
+            csv_table_scan(source, table, Path(path))
+        return True
+    if kind == "bucket":
+        root = source.resolve_bucket_directory(table)
+        if root is None or str(root) != entry["root"]:
+            return False
+        try:
+            layout = read_bucket_contract(
+                root, allow_legacy=source.config.name == "aumc",
+                cache=source._bucket_layout_cache,
+            )
+        except BucketLayoutError as exc:
+            raise StorageSourceChanged("storage_source_changed", table, entry["manifest"]) from exc
+        return tuple(sorted(str(f) for f in layout.files)) == entry["files"]
+    if entry["via"] == "resolver":
+        files = resolve_table_files(source, table, consume=False)
+    elif entry["via"] == "flat_scan":
+        files = verify_flat_scan(source, table, flat_table_files(source, table))
+    else:
+        files = tuple(Path(p) for p in entry["paths"] if Path(p).is_file())
+    return tuple(sorted(str(f) for f in files)) == entry["paths"]
+
+
+def revalidate_payload(source, identity, captured) -> bool:
+    """Whether a cached raw payload may be served now; a hit records its sources.
+
+    Every hit revalidates each source through its owner: the resolver (layout
+    choice, file set, empty resolve), the bucket contract, or the CSV
+    admission, plus the metadata sha256. The full check runs once per unit
+    per source while its cheap signature (manifest stat, the table's file
+    listing with stats, the bucket directory) is unchanged. In a unit that
+    has already bound the source, a mismatch raises
+    ``storage_source_changed`` / ``storage_source_missing``: never a miss
+    that falls through to an empty table, and never a stale payload. Only a
+    unit that has not bound it may refresh (False: read again).
+    """
+    from .storage_binding import (
+        StorageSourceChanged, active_unit, bound_layout, captured_still_current,
+        is_bound, source_key,
+    )
+
+    if identity is None:
+        return False
+    unit = active_unit()
+    memo = None if unit is None else unit.caches.setdefault("payload_revalidated", {})
+    for entry in identity:
+        key = source_key(source, entry["table"])
+        bound = unit is not None and (
+            bound_layout(key) is not None or any(is_bound(p) for p in entry["paths"])
+        )
+        marker = (entry["table"], entry["kind"], entry["paths"])
+        signature = _payload_signature(source, entry)
+        if memo is not None and memo.get(marker) == signature:
+            continue
+        if not _revalidate_entry(source, entry):
+            if bound:
+                missing = [p for p in entry["paths"] if not Path(p).exists()]
+                raise StorageSourceChanged(
+                    "storage_source_missing" if missing else "storage_source_changed",
+                    entry["table"], missing[0] if missing else entry["paths"][0],
+                )
+            return False
+        if memo is not None:
+            memo[marker] = signature
+    if not captured_still_current(captured):
+        if unit is not None and any(is_bound(c[1]) for c in captured):
+            replay_consumed(source, captured)  # raises the bound file's change
+        return False
+    replay_consumed(source, captured)
+    return True
+
+
 def record_bucket_consumed(source, table: str, layout: BucketLayout, files) -> None:
     """A bucket read consumes its selected parts, its manifest and build receipt.
 

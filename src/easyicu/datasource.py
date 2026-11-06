@@ -656,7 +656,7 @@ class ICUDataSource:
         }
         self.enable_cache = enable_cache
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
-        self._table_cache_sources: dict = {}  # cache_key -> files the payload was read from
+        self._table_cache_sources: dict = {}  # cache_key -> (identity, captured reads) of the payload
         self._preloaded_tables: dict = {}  # 🚀 预加载的完整表（用于多患者批处理）
         self._bucket_dir_logged: set = set()  # 🔧 已打印日志的分桶目录（避免重复日志）
         self._bucket_dir_cache: dict = {}  # 缓存已发现的分桶目录（只缓存正结果）
@@ -1517,21 +1517,21 @@ class ICUDataSource:
         cache_key = (table_name, tuple(sorted(columns)) if columns else None, filter_key, itemid_filter_key)
         
         # 检查缓存
-        from .storage_binding import capturing_consumed, captured_still_current
+        from .storage_binding import capturing_consumed
 
         cached_frame = None
         if enable_caching:
             with self._lock:
                 cached_frame = self._table_cache.get(cache_key)
                 cached_sources = self._table_cache_sources.get(cache_key)
-            # A payload is served only with the files it was read from, and only
-            # while they are unchanged; a hit records them again, CSV included.
+            # A payload is served only after its owner revalidates every source
+            # it was read from (D14D); a hit records them again, CSV included.
+            # A source this run already bound that changed or vanished raises.
             if cached_frame is not None and (
-                cached_sources is None or not captured_still_current(cached_sources)
+                cached_sources is None
+                or not storage_layout.revalidate_payload(self, *cached_sources)
             ):
                 cached_frame = None
-            if cached_frame is not None:
-                storage_layout.replay_consumed(self, cached_sources)
 
         if cached_frame is not None:
             # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
@@ -1742,10 +1742,15 @@ class ICUDataSource:
         """Keep a raw payload with the files it was read from."""
         from .storage_binding import current_capture
 
-        sources = current_capture()
+        captured = current_capture()
+        identity = (
+            None if captured is None else storage_layout.payload_identity(self, captured)
+        )
         with self._lock:
             self._table_cache[cache_key] = frame
-            self._table_cache_sources[cache_key] = sources
+            self._table_cache_sources[cache_key] = (
+                None if captured is None else (identity, captured)
+            )
 
     def resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
         """Return a partitioned table directory through the public layout contract."""
