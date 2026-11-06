@@ -94,6 +94,7 @@
     "src/easyicu/clinical_contracts.py",
     "src/easyicu/cohort_visualization.py",
     "src/easyicu/concept/__init__.py",
+    "src/easyicu/concept/aggregation_route.py",
     "src/easyicu/concept/aumc_intervals.py",
     "src/easyicu/concept/aumc_sources.py",
     "src/easyicu/concept/availability_signal.py",
@@ -1201,7 +1202,9 @@
     "src/easyicu/utils/compat.py",
     "src/easyicu/utils/death_time_semantics.py",
     "src/easyicu/utils/df_utils.py",
+    "src/easyicu/utils/exact_sum.py",
     "src/easyicu/utils/file_utils.py",
+    "src/easyicu/utils/icu_window.py",
     "src/easyicu/utils/logging_utils.py",
     "src/easyicu/utils/thresholds.py",
     "src/easyicu/utils/time_units.py",
@@ -1543,7 +1546,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "1da62f62a3dffbfe85b982f3fdec81d6bfb893e3b7f88ea381cf8342b9a99e90",
+  "scorer_tree_sha256": "cb5babc63fc3eb261c356faab9106678e9c12655e56b50d09edb6d0e11aa81e0",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
