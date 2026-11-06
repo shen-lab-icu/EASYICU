@@ -39,8 +39,34 @@ own files, but a lost chunk cannot be detected there. EasyICU logs
 above once to write the manifest.
 
 Bucketed tables (`<table>_bucket/`) carry their own manifest of files and rows
-and are verified whenever they are opened.
+and are verified whenever they are opened. A bucket layout records the source
+files it was built from (`derived_from`); if a source file's size or
+modification time no longer matches, the layout is refused, or ignored when a
+complete flat table sits beside it. Copy an installation with its
+modification times (`cp -p`, `rsync -t`), or rebuild the layouts after
+copying.
+
+## Recommended storage layout per database / 推荐存储布局
+
+lead-r13 measured each database's layouts on a 3,000-stay sample: 20 module
+files, 4 DuckDB threads, 2 workers. Both layouts of a database produced
+byte-identical module files; the recommendation is the faster one within the
+14 GiB target.
+
+| Database | Recommended layout | Sample time / peak | Other layout |
+|---|---|---|---|
+| eICU-CRD | variable × stay buckets (two-level, contiguous) | 487 s / 3.9 GiB | hash buckets: same within noise (487 s / 3.9 GiB) |
+| SICdb 1.0.8 | variable × stay buckets (`data_float_h`, `laboratory` single-key hash; `medication` two-level) | 236 s / 1.8 GiB | flat Parquet: 261 s / 8.9 GiB |
+| MIMIC-III CareVue view | hash buckets | 375 s / 2.6 GiB | variable × stay buckets: 2,165 s / 2.7 GiB (each open re-validates about 5,700 bucket files) |
+| MIMIC-IV | TODO(miiv_var): pending the variable-layout measurement | | |
+| HiRID | contiguous batches on the current layout | 2,142 s / 3.5 GiB | |
+| AmsterdamUMCdb | unchanged | 2,040 s / 6.0 GiB | |
 
 ## Memory / 内存
 
-FILL from the lead-r13 14 GiB and 64 GiB full-cohort runs.
+Peak memory of the full-cohort extractions (the 14 GiB local target and the
+64 GiB server runs) is recorded in each database's formal 0.2.0
+`RUN_RECEIPT`, after the formal run. On the 3,000-stay samples every database
+peaked at or below 8.9 GiB (cgroup peak, 2 workers): SICdb flat 8.9 GiB,
+MIMIC-IV 6.8 GiB, AmsterdamUMCdb 6.0 GiB, eICU 3.9 GiB, HiRID 3.5 GiB,
+MIMIC-III 3.2 GiB, CareVue 2.7 GiB.

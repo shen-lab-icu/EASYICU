@@ -7,7 +7,364 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
-## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
+Deviations from ricu 0.6.3, and the rules this release aligned with ricu, are
+listed in [ricu_deviations.md](ricu_deviations.md). Counts of 1–9 are written
+as "<10". "Sample" means the 3,000-stay server sample of a database used for
+the lead-r13 gates. "Formal `RUN_RECEIPT`" means the errata block of the
+receipt that the post-seal 0.2.0 extraction writes for each database. Counts
+deferred to it are compared against `2786ea872` there.
+
+## lead-r13 — entries pending merge
+
+- TODO(r13bounds): out-of-bounds values. The `bounds_unit_suspect` refusal
+  introduced by `0aa5a8185` is being withdrawn; the line follows when that
+  branch merges.
+- TODO(r13prov): runtime provenance (`easyicu_git_commit`, `git_dirty`,
+  `git_diff_sha256`) and the build-time commit stamp.
+- TODO(mpfixAKI): eICU AKI bundle with a zero-row `renal_urine_chem`, and the
+  MIMIC chart batch event clock.
+- TODO(d5fixB): bucket source-set and source-root checks
+  (B-SOURCE-SET, B-ROOT).
+
+## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
+
+**Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)
+when it lies on ricu's inclusive hourly grid of a TRUE `ett_gcs` window, read
+in the window's declared unit. `ett_gcs` is published as one hourly boolean
+column, for the public API and module exports alike: every window, TRUE or
+FALSE, covers its start hour through `floor(start + dur)` inclusive (ricu
+`expand(aggregate = "any")`); TRUE wins a shared hour. In detail:
+
+- `80b1cb964`: GCS reads the window in its declared unit. The old callback
+  read `dur_var` as hours whatever its unit, so eICU's 360-minute windows
+  marked GCS rows up to 15 days later as sedated.
+- `432ddaf3c`: the eICU `fwd_concept` + `ts_to_win_tbl` branch declares its
+  `dur_var` unit (minutes). Loading `ett_gcs` alone through the public API
+  raised `DurationUnitError` before; extraction never took that path.
+- `e70102c94`: FALSE windows keep their duration (the 2025-02 zero duration is
+  reverted), and exports publish the inclusive grid instead of start hours.
+- `f9b45386c`: a window that closes before admission is extended to hour 0, as
+  ricu `expand()` does (`end < 0` → 0).
+- `b7509c080`: a window concept loaded alone keeps the table's declared time
+  index. SICdb `Offset` was dropped from the public single-concept output;
+  module exports kept it.
+- `e1d73cd7b`: pins the eICU RASS sources to ricu's value name plus EasyICU's
+  two declared label extensions ([ricu_deviations.md](ricu_deviations.md)).
+- `2c0579bd5`: a streamed batch with no `ett_gcs` window marks no hour. Before,
+  every GCS-dependent streamed eICU module failed ("Cannot cast DatetimeArray
+  to dtype float64"); a non-empty clock mismatch raises
+  `gcs_ett_clock_mismatch`. Regression from `80b1cb964`, never in a release.
+- `942bfcbfb` (D4G-POINT): `ett_gcs` from a point table without a duration
+  (SICdb `data_range` airway, AUMC listitems/processitems) keeps each point in
+  its own floored hour, merged with `any`. ricu expands the airway table only
+  when it is a window table.
+- `3e23c65d4` (D4G-MISSING-DURATION): a window with a missing duration is
+  dropped (ricu `rm_na`); an explicit zero-length window is still one cell.
+- `06f30f7b0` (D4-POINT-TIME): on the MIMIC episode-window path only a real
+  interval is clipped; a point row keeps its time, as on the ordinary point
+  path.
+
+**Rationale.** The old GCS callback imputed GCS 15 over far too many eICU
+hours. On the eICU demo against ricu 0.6.3 (22,486 shared cells), differing
+cells fell from 1,860 to 176; the fix removed exactly the 1,684 wrongly
+imputed cells. Of the remaining 176, 170 come from the declared eICU RASS
+label extension and 6 from the pre-admission data-layer bound (deviation
+table).
+
+**Affected databases.** GCS values: eICU only, because only eICU passes a
+minutes-valued window table into GCS (MIIV and MIMIC-III windows are in hours;
+HiRID 4–6 h; AUMC and SICdb are expanded hourly). The `ett_gcs` grid: every
+database with `ett_gcs`. Concepts: `gcs`, `avpu`, SOFA-1 and SOFA-2 CNS and
+totals, qSOFA, MEWS, NEWS, Sepsis-3, `ett_gcs`.
+
+**Impact.**
+- eICU demo: GCS 1,684 cells in 73 stays (15 → measured); SOFA totals +6,938
+  cells, SOFA-2 totals +6,952 cells, all upward through the 24 h worst CNS
+  score; Sepsis-3 224 → 225 rows. Export `ett_gcs` TRUE/FALSE hours
+  1,808/10,944 → 4,485/27,675 (export and public API now byte-identical);
+  `f9b45386c` adds 118 FALSE cells in 15 stays and changes no GCS, SOFA or
+  Sepsis-3 cell.
+- eICU sample (vs `586a93a29`): GCS 3,899 cells in 135 stays, every one 15 →
+  below 15; AVPU 2,573; SOFA-1 13,404 and SOFA-2 13,440 rows in 134 stays
+  (CNS only); qSOFA 7,544, MEWS 7,548, NEWS 7,565 cells; Sepsis-3 <10 rows
+  each way; `ett_gcs` 5,549 respiratory rows added and 27,038 cells changed
+  (TRUE hours 2,682 → 6,527, FALSE 21,316 → 49,175).
+- MIIV sample: `ett_gcs` only, TRUE hours 25,335 → 24,753 (−582 in 102 stays);
+  GCS, SOFA and Sepsis-3 unchanged. MIIV demo TRUE hours 1,333 → 1,332.
+- MIMIC-III sample: `ett_gcs` +117 TRUE hours in 97 stays, all at hour 0 or
+  earlier; GCS, SOFA and Sepsis-3 unchanged.
+- CareVue sample: `ett_gcs` +236 TRUE hours in 192 stays (hour 0 or earlier);
+  GCS <10 cells (below 15 → 15 at hour 0, newly sedated); SOFA-1 and SOFA-2
+  28 rows each (CNS); qSOFA, MEWS, NEWS <10 each; Sepsis-3 <10 rows each way.
+- AUMC sample: `ett_gcs` 54 cells (52 FALSE, <10 TRUE added at hour 0) from
+  `f9b45386c`; `942bfcbfb` then returns 54 cells to NA (52 FALSE → NA,
+  2 TRUE → NA; 53 stays). GCS, SOFA and Sepsis-3 unchanged.
+- SICdb sample: `ett_gcs` <10 cells NA → TRUE at hour 0 from `e70102c94` and
+  `f9b45386c`; `942bfcbfb` returns 3 cells TRUE → NA (3 stays).
+- HiRID: `ett_gcs` only; counts on the sample: formal `RUN_RECEIPT` (the
+  seal-tip gate reruns HiRID).
+- `3e23c65d4` and `06f30f7b0`: no change on the eICU, MIIV and MIMIC-III demos.
+- Full cohorts against `2786ea872`: formal `RUN_RECEIPT`, per database.
+
+## 2026-11-06 — units and time axes are declared, never inferred from the values [lead-r13, `be2009611`, `d9424b274`, `e45f5595e`, `0aa5a8185`, `0be9c32a4`, `ef7804d6a`, `49418a0b7`]
+
+**Rule.** A unit (seconds, minutes or hours; fraction or percent) and a time
+grid come from a declaration: the source table, the loader, the requested load
+interval or an explicit parameter. Where a value's size used to decide it, the
+decision is removed; a guessed branch reached without a declaration raises a
+typed error instead of guessing.
+
+- `be2009611` (SICdb time units): only the official raw offset columns
+  (`ICUOffset`, `Offset`, `OffsetEnd`, `OffsetDrugEnd`) are seconds; both SICdb
+  DuckDB loaders declare `charttime` as ICU-relative hours. The rule that read
+  any column whose batch maximum exceeded 5,000 as seconds is removed.
+- `d9424b274` (time axes): `slide`/`expand` take a declared numeric time unit
+  (the inference `_infer_numeric_time_unit` is removed); AUMC's loaded unit is
+  the declared constant 60 per hour (the median rule is removed); tables carry
+  the load interval they were built for (`meta.interval()` raises
+  `IntervalUndeclaredError` without one); the SOFA grid comes from the
+  requested interval only (`ScoreGridUndeclaredError`); an undeclared
+  `dur_var` unit raises `DurationUnitError` (the environment opt-in is
+  retired); a datetime-typed `vaso_ind` duration raises. The eICU dextrose
+  infusion duration (`eicu_dex_inf`) is the requested load interval, 60 min by
+  default (ricu `interval(x)`), instead of the smallest offset gap pooled
+  across the batch.
+- `e45f5595e` (Jinhua): a time column that mixes numeric and non-numeric
+  tokens raises `SourceTimeFormatError` (`mixed_time_tokens`); before, one
+  stray token decided how every row of the batch was read. The per-row unit
+  rules of the sweep are pinned by partition-invariance tests.
+- `0aa5a8185` (value scale): FiO₂ standardization and the concept
+  `pafi`/`safi` no longer multiply a whole frame by 100 when it looks
+  fraction-like; they raise `UndeclaredUnitError` unless `fio2_unit` is
+  declared. The public `easyicu.callbacks.pafi`/`safi` gain a `fio2_unit`
+  parameter: any FiO₂ in (0, 1] without it raises (before, they multiplied by
+  100 only when the whole column was ≤ 1, so a mixed column kept its fractions
+  and P/F came out 100× high). The eICU tidal-volume litre/mL decision is
+  judged within the stay and pinned.
+- `0be9c32a4` (eICU unit-dose rates, e.g. `adh_rate`): an all-integer rate
+  column is cast to float64 before the ÷60 rescale. Under pandas 3 the
+  in-place division failed and surfaced as
+  `circ_failure_dependency_load_failed: adh_rate`.
+- `ef7804d6a` (D4-AXIS-CATCH): an undeclared or unknown time-axis unit raises
+  `TimeAxisUnitError` to the caller. Before, a broad catch published the
+  window rows unexpanded.
+- `49418a0b7` (D4-NATIVE-CACHE): a cached window table without a grid never
+  answers a gridded request; the concept is loaded cold. Before, a warm cache
+  (`keep_cache`) returned the raw window rows where a cold load expanded them.
+
+**Rationale.** A unit read from a batch statistic depends on which stays
+share the batch. On SICdb 1.0.8, a 3,000-stay batch holding one pre-ICU RASS
+record at −166,360 h had lost all in-ICU RASS hours (3,039 instead of 58,133
+values) while a 60-stay batch was correct. The general time-unit guess gave
+the same sparse stay windows of [3, 2, 1] pooled and [3, 3, 3] alone.
+
+**Affected databases.** SICdb (`be2009611`); eICU (dextrose, unit-dose
+rates); AUMC (declared minutes); every database for the time-axis and FiO₂
+declarations; Jinhua; users of the public `pafi`/`safi`.
+
+**Impact.**
+- Instrumented 6-database sample (default mode and batch 50): the SICdb
+  magnitude rule had 0 hits on an unnamed column; the time-unit guess always
+  resolved to hours (13 calls on 6 databases); the AUMC rule always 60 (424
+  calls); the FiO₂ and P/F guesses, and the bounds escape, never fired. Every
+  database's module files are byte-identical to `586a93a29`, except eICU
+  `medications`.
+- eICU dextrose: on the eICU sample, 1 cell (dex cells 21 → 22, <10 stays: a
+  last infusion row now lasts 60 instead of 20 min and reaches the next hour);
+  every other eICU module is byte-identical. Full eICU: formal `RUN_RECEIPT`.
+- `0be9c32a4`: a failed module becomes a published one; no published value
+  changes.
+- Public `pafi`/`safi` callers that relied on the automatic ×100 must now pass
+  `fio2_unit`.
+- The bounds escape (`bounds_unit_suspect`, sweep #14) is TODO(r13bounds).
+
+## 2026-11-06 — research-agent display: percent and proportion columns are named, not guessed [lead-r13, `0aa5a8185`, `c48be478e`]
+
+Not an extraction change. In the research agent's strata figures, rigor
+review and publication bundles, whether a rate column is a percent or a
+proportion now comes from its name (`_pct`/`percent` suffix); a proportion
+column above 1 raises. Before, a percent column of rare rates (every value ≤
+1, e.g. a mortality below 1%) was read as a proportion and displayed 100×
+high. The phenotype outcome panel also accepts declared percent columns
+(`c48be478e`): such a column is plotted at scale 1 and keeps its name in the
+exported source data instead of being relabelled `mortality_rate`.
+Proportion columns are unchanged. Affected: research-agent reports only.
+
+## 2026-11-06 — exact sums refuse a total beyond float64 and cover nullable columns and wide means [lead-r13, `cc22d3edc`, `1e57701ce`, `15fc847bd`, `691e24f3e`]
+
+**Rule.** Hourly sums and means use one exact, order-independent sum
+(`utils/exact_sum`). A finite group whose partial sum overflows is summed as
+exact rationals (units of 2⁻¹⁰⁷⁴) and rounded once (`cc22d3edc`). A group
+whose exact total lies beyond the largest finite float64 raises
+`ExactSumOverflowError` (`exact_sum_overflow`), on every path and group size,
+including two-value groups and totals that would round back to the maximum
+(`1e57701ce`, `15fc847bd`). Groups with infinite terms follow IEEE directly;
+no floating-point fallback remains. Pandas nullable numeric columns (`Int64`,
+`Float64`, …) take the same exact path. The wide-table DuckDB route maps
+`mean` to the exact `AVG` collapse (`691e24f3e`); it used DuckDB's floating
+mean.
+
+**Rationale.** `math.fsum` raises on some orders of the same values only, and
+the old fallback could publish `inf` for one order and a finite total for
+another; nullable columns were summed by pandas in row order; the wide mean
+varied with row order (15 of 18 synthetic cells off by an ulp).
+
+**Affected databases.** All; values only where a group's total is near the
+float64 range (none in clinical data), a nullable numeric column is summed,
+or a wide single-column mean is taken.
+
+**Impact.** Ordinary float64 input is byte-identical (5,000 rows, 400
+groups); the eICU, MIIV, MIMIC-III, AUMC and SICdb samples show no change
+attributable to these commits. Full cohorts: formal `RUN_RECEIPT`.
+
+## 2026-11-06 — the ICU episode bound is inclusive with a decimal tolerance, the same in pandas and SQL [lead-r13, `f565a0db9`]
+
+**Rule.** Both ends of the ICU episode window are inclusive and decided with
+the threshold helpers: an event within `1e-6 × max(1, |bound|)` hours of a
+bound is kept (0.09 s at the 24 h pre-admission bound, 3.6 s at a 1,000 h
+upper bound, 31.6 s at the 366-day fallback). One pandas rule
+(`utils/icu_window.outside_episode`) serves
+`concept._quarantine_rows_outside_icu_episode` and the MIMIC point rows in
+`window_expansion.clip_episode_windows`; the SQL (`IcuWindowSql`) compares
+the raw hour with limits computed by the same helpers in Python. eGFR and the
+row-wise derived indices (`_derive_rowwise`) bound their values with the same
+inclusive helpers.
+
+**Rationale.** The event hour and the bound are both derived (an offset ÷ 60
+or ÷ 3,600; a discharge hour + 24 h), so an event charted exactly on the
+bound could land an ulp past it and be dropped.
+
+**Affected databases.** All.
+
+**Impact.**
+- eICU demo: 2 cells (one glucose row at discharge + 1,440 min; one
+  nicardipine cell at a bound hour).
+- SICdb sample: extra rows exactly at the bound hour in chemistry,
+  hematology, other_scores and renal (<10 each, <10 stays); the SOFA grids
+  extend to that hour (sofa1 26, sofa2 50 rows). The raw `laboratory` holds
+  35 events within 1 s above the bound for these stays.
+- eICU sample: vitals and medications <10 rows each at the bound hour; SIRS
+  <10 cells.
+- Full cohorts: formal `RUN_RECEIPT`.
+
+## 2026-11-06 — storage and resume integrity [lead-r13, `8c9d118f9`, `f625e2dc6`, `dcf7d3f08`, `71cc76eb1`, `78e68a571`, `8cbabd744`, `cde2051ed`]
+
+Guards; no value changes on the samples. They close paths where a value could
+have changed silently:
+
+- **One layout per table (`f625e2dc6`, `8c9d118f9`).** The SICdb outcome reader
+  and `PatientFilter` read the file set the storage owner resolves: the
+  validated bucket installation, otherwise the flat table, checked against the
+  conversion manifest, bucket rows in source order. Before, they listed files
+  themselves; where a table existed both as `<table>/` and `<table>_bucket/`,
+  the outcome reader concatenated both and `PatientFilter` opened the flat
+  file. A listed table whose files are gone raises `StorageIntegrityError`
+  (`table_scan_files_missing`) instead of reading as "survival unknown".
+  Samples: byte-identical.
+- **Stream resume (`dcf7d3f08`).** A streamed module resumes only batches whose
+  ledger matches this run's load parameters, source files and code. Since
+  `2e51a0bb1`, a resume after a code, dictionary, data or parameter change
+  could join old batches to new ones.
+- **D3-STAY-CACHE (`cde2051ed`).** The per-batch stay-table cache (from
+  `01e33eab8`) is keyed by the files the storage owner validates, and each
+  lookup stats them. A changed size or mtime raises
+  `stay_table_source_changed`; a validated file that has gone raises
+  `stay_table_source_missing` (`StorageIntegrityError`). Its lifetime is one
+  batch scope. Before, a replaced stay table under the same path could serve
+  stale discharge bounds and weights.
+- **derived_from (`8cbabd744`).** Opening a bucket layout compares each
+  recorded source, relative to the installation root, with the current file's
+  size and mtime. Changed: `bucket_derived_from_source_changed`; missing:
+  `bucket_derived_from_source_missing`; a path escaping the installation:
+  `bucket_derived_from_invalid`. Beside a complete flat source the read falls
+  back to it and records `bucket_cache_ignored`; otherwise it refuses.
+  Copying an installation must preserve mtimes (`cp -p`, `rsync -t`), or the
+  layouts must be rebuilt.
+- **Converter source scan (`71cc76eb1`).** The CSV scan skips hidden
+  directories (for example `.Trashes` on an external drive), and a converter
+  source that cannot be read fails typed.
+- **D3-MANIFEST-TYPE (`78e68a571`).** An ill-typed bucket-manifest field raises
+  `BucketLayoutError` (`bucket_partition_invalid`,
+  `bucket_inventory_mismatch` or `bucket_manifest_invalid`, cause chained)
+  instead of `AttributeError`; an ill-typed conversion-manifest entry raises
+  `conversion_manifest_unreadable`.
+
+## 2026-11-06 — Sepsis-3 in a grouped streamed run, and empty logical concepts [lead-r13, `a8b24a204`, `bb2390079`]
+
+- **`a8b24a204`.** A grouped run with an explicit batch at or above the cohort
+  size streams its group but had not published the score modules yet, so
+  Sepsis-3 failed with `sepsis_dependency_output_missing`. It now reads the
+  group's outputs through the staging owner. Byte-neutral on every run that
+  published before: eICU, MIIV and MIMIC-III demos, 30 of 30 comparable
+  module files identical (default and batch 50). Default and smaller-batch
+  runs take the same branch as before.
+- **`bb2390079`.** A mapped logical concept whose sources match no rows keeps a
+  boolean column (it came back as `object`), e.g. MIMIC-III `rocuronium` on the
+  demo, which has no rocuronium prescriptions. Pre-existing in `2786ea872`.
+  Exported files are unchanged: native export already writes every logical
+  column as boolean (schema audit of 10 sample runs: 0 non-boolean logical
+  columns).
+
+## 2026-11-06 — MIMIC-III RRT hours do not depend on the batch [lead-r13, `805a50cf2`]
+
+**Rule.** The CareVue RRT procedure callback (`rrt_procedure_hours`, item 582)
+concatenates only non-empty parts and returns a typed empty frame with the
+source's clock; `other_vaso_points` uses the same helper.
+
+**Rationale.** The callback expands closed dialysis courses and unclosed
+starts separately. A batch with only one kind got an untyped empty part, the
+time column became `object`, and the MIMIC-III resolver then took a branch
+that lost most RRT hours: 230 instead of 761 for one demo stay. Present since
+`f4e4a848a` (2026-11-04), also in `2786ea872`.
+
+**Affected databases.** MIMIC-III only (full, flat and the CareVue layout);
+eICU, MIIV, AUMC, HiRID and SICdb use other callbacks. Concepts: `rrt` and what
+derives from it (`renal` AKI reference columns, `sofa2_renal`, `sofa2`,
+`sepsis3_sofa2`).
+
+**Impact.** MIMIC-III demo, batch 50 before the fix vs default: `sofa2_score`
+936 cells in 1 stay, `renal` 2,137 cells in 2 stays; after the fix, batch 50,
+500 and 1,000 equal default, and default is unchanged on the eICU, MIIV and
+MIMIC-III demos. v6 predates the callback; every `2786ea872` and sample
+MIMIC-III run found ran these modules as one batch, so no published output is
+affected.
+
+## 2026-11-06 — the reseal tool survives a crash during recovery or locking [lead-r13, `f115ce6c3`, `4011bb55e`]
+
+Tooling, no value change. `tools/reseal_concept_dict.py` recovery syncs an
+entry already at its original bytes (and its directory) before removing the
+journal, and keeps the journal and refuses on any other error
+(`f115ce6c3`). A failure after the lock is taken and before the descriptor is
+handed over releases the lock (`4011bb55e`).
+
+## 2026-11-06 — out-of-memory retries need evidence; CareVue SOFA and sepsis in default mode [lead-r13, `2e51a0bb1`, `42b757a58`, `dcf7d3f08`]
+
+Execution only; a module that finishes publishes the same values.
+
+- A worker counts as out of memory only on evidence: a cgroup `oom_kill`
+  event while it ran, or a `MemoryError` / DuckDB `OutOfMemoryException` in
+  its cause chain (`memory_exhausted`). Exit codes 9/137, signals and words in
+  a traceback are not evidence; an unexplained kill is
+  `worker_killed_unknown` and is not retried smaller (`2e51a0bb1`). The
+  native-export driver reads the same typed classification
+  (`api.extraction.is_memory_exception`, `worker_failure_is_memory`) instead of
+  matching exit codes or text (`42b757a58`).
+- A streamed module commits each batch as a part plus a ledger. After a
+  memory failure the retry continues after the last committed batch at half
+  the size, and the output equals a run that replays those boundaries
+  (`stream_resume_events` in the manifest). A ledger resumes only the attempt
+  this run would have produced (`dcf7d3f08`, see "storage and resume
+  integrity").
+- **CareVue SOFA and sepsis.** `2786ea872` could not finish the SOFA and
+  Sepsis-3 modules on the CareVue view (37,776 stays) in default mode: it ran
+  the cohort as one batch and was killed for memory 4 times at 200 GiB. This
+  release runs them streamed in bounded batches; peak and wall time are
+  recorded in the CareVue formal `RUN_RECEIPT`. There is no old-vs-new
+  comparison against `2786ea872` for these modules. The comparison against v6
+  (`97f508c6`) is the paper side's line-by-line check (FLIP_CHECK) and is not
+  counted here.
+
+## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `0d3a03f94`, `691e24f3e`]
 
 **What changed.** A concept loaded through DuckDB hourly aggregation now
 publishes byte-identical rows, values and dtypes to the same concept loaded
@@ -31,7 +388,9 @@ through `load_table` (parity census: `tools/duckdb_raw_parity_census.py`).
   before, they fell back to keep-first rows, a raw re-read, or an unclipped
   frame.
 - **Batch sums.** The wide and long batch loaders sum and average with the
-  same order-independent exact sum as the single-concept path.
+  same order-independent exact sum as the single-concept path. The wide-table
+  single-column route maps `mean` to the exact `AVG` collapse (`691e24f3e`);
+  it had used DuckDB's floating mean.
 - **HiRID same-time duplicates** (`neut`, segmented + band) keep the latest
   entry, then the value; before, input row order decided.
 - **MIMIC numeric clip** reads its own stay bounds; it used the shared
@@ -92,7 +451,10 @@ database: `sepsis3_sofa2` rows AUMC 5,178, MIIV 42,368, eICU 24,569, HiRID 0,
 SICdb 0. No `2786ea872` receipts were found; its code selects the same path.
 
 **Errata.** `sepsis3_sofa2` and `sepsis3_sofa1` rows changed versus
-`2786ea872`, per database (counts of 10 or more rounded to tens): FILL.
+`2786ea872`, per database (counts of 10 or more rounded to tens): filled after
+the formal run, in each database's formal `RUN_RECEIPT`. Samples: no Sepsis-3
+row change attributable to this commit (MIIV, MIMIC-III, AUMC and SICdb
+byte-identical to `586a93a29`).
 
 ## 2026-11-06 — HiRID values no longer depend on the batch (no hourly pre-aggregation) [lead-r13, `20c71d62e`]
 
@@ -118,7 +480,9 @@ values.
 sepsis definitions derived from it.
 
 **Errata.** Changed cells and stays per concept versus `2786ea872` (counts of
-10 or more rounded to tens): FILL.
+10 or more rounded to tens): filled after the formal run, in the HiRID formal
+`RUN_RECEIPT`. p9b sample: 7 weight rows of 2 stays became 5 under the old
+step, weight moved by up to 2.4%.
 
 ## 2026-11-06 — values stay float64; decimal thresholds are decided with a tolerance [lead-r13, `206439895`, `eae58e67b`]
 
@@ -169,7 +533,10 @@ at most 4.6e-13 (eICU) and 7.3e-12 (MIIV) absolute.
 
 **Errata.** Float64 with the tolerance is the correct value. Stays whose
 KDIGO stage, AKI occurrence, SOFA components or Sepsis-3 changed versus
-v6 (`97f508c6`) and `2786ea872`, per database: FILL.
+v6 (`97f508c6`) and `2786ea872`, per database: filled after the formal run,
+in each database's formal `RUN_RECEIPT`. Measured so far: MIMIC-IV `urine24`
++35 stay-hours in 1 stay (`d14e628ba` section below); `1962535eb` moves
+`total_input_ml` by 1 ulp in 22 (eICU demo) and 578 (MIIV demo) cells.
 
 ## 2026-11-06 — eICU intake rates: the largest same-time rate owns the segment [lead-r13, `1962535eb`; pinned by `43cbe4aca`]
 
@@ -227,10 +594,11 @@ of 1.2, 442 µmol/L 4.9986 instead of 5.0, 34.2 µmol/L 1.99957 instead of
 recorded precision: creatinine 442 µmol/L (SOFA-1 renal 3 → 4; AUMC, HiRID),
 HiRID creatinine 176.8, 309.4, 353.6 µmol/L, and bilirubin 34.2, 102.6,
 205.2 µmol/L (SOFA-1 liver). All other converted values shift by at most
-1e-3 relative. Deviation from ricu, recorded in the deviation table.
+1e-3 relative. Deviation from ricu, recorded in [ricu_deviations.md](ricu_deviations.md).
 
 **Errata.** AUMC and HiRID stays with a changed SOFA renal or liver
-component versus v6 and `2786ea872`: FILL.
+component versus v6 and `2786ea872`: filled after the formal run, in the AUMC
+and HiRID formal `RUN_RECEIPT`s.
 
 ## 2026-11-06 — SICdb 1.0.8 is the default release [lead-r13, `130ad381a`, `0a64917e7`, `ec2f10a6f`, `d6f89bee9`] (dictionary reseal)
 
@@ -257,13 +625,38 @@ admission year (`b0c995204`), so its 365-day horizon stays capped as in
 
 **Why.** 1.0.8 renumbered the discharge types and left ESOT empty for
 survivors; with the 1.0.6 codes every 1.0.8 outcome was unknown. Details and
-evidence: deviation table, "SICdb 1.0.8".
+evidence: [ricu_deviations.md](ricu_deviations.md), SICdb 1.0.8 row.
+
+**Unknown dispositions and unknown-year deaths (`e21d6d8d9`, `385abf174`).**
+A non-empty discharge code that is not a known death or survival code is an
+unknown disposition, including a code with no `d_references` row at all
+(before, only codes whose reference row had a blank or unknown label counted,
+so an unregistered code read as alive and got follow-up). Empty codes are
+unchanged. An empty follow-up category whose admission year is outside
+2013–2021 now makes every 28/90/365-day horizon and follow-up time NA and
+flagged (`followup_category_unknown`, `mort_<h>_assumption_based`) for
+recorded deaths as well as survivors; the death itself and `days_to_death`
+are kept. This is a selection-bias rule: an observed death within the horizon
+is still NA when the follow-up category is unknown, because keeping deaths
+while survivors of the same category go NA would inflate mortality among
+those stays. Survivors with an unregistered or unknown-label code
+(`followup_disposition_unknown`, new stay column) are NA and now flagged too,
+and they never make the outcome module refuse, even when they are every
+survivor in the extraction (`385abf174`). The pinned test
+`tests/core/test_a_mortality_horizon_needs_its_survivors_followed.py`
+`::test_a_survivor_with_followup_keeps_the_horizon` is renamed
+`::test_only_a_known_followup_category_reaches_a_horizon`, and its expectation
+changed: its day-5 death with an unknown category was 28-day mortality True
+and is now NA, flagged. Impact: 0 of the 3,000 sample stays,
+0 of 27,350 (SICdb 1.0.8 full) and 0 of 27,386 (SICdb 1.0.6 full) stays
+change.
 
 **Errata.** On the same 1.0.6 data, baseline and lead-r13 agree on 28/90/365-day
 mortality, follow-up and assumption flags (1.0.6 empty categories are rebuilt
 too; no value changes). Across releases, on the cases common to 1.0.6 and
 1.0.8 the values are not all equal: `mort_28d`/`mort_90d` do not differ,
-`mort_365d` differs on FILL (<10 before `b0c995204`); `followup_days` for
+`mort_365d` differs on <10 cases before `b0c995204` (the count on the sealed
+SHA is recorded in the SICdb formal `RUN_RECEIPT`); `followup_days` for
 28/90/365 days differs on 25/25/26 cases, because 1.0.8 changed
 `TimeOfStay` (taken as published) and a case without a death time ends at its
 stay end; the assumption flags differ on 22,229/22,229/8,335 cases, because
@@ -324,8 +717,11 @@ Hand check (MIMIC-IV sample, one stay, from raw `outputevents`): records
 24 h windows that span it; the float64 raw path dropped 35 hourly values, the
 float32 DuckDB path kept them. Both now keep them.
 
-**Errata.** FILL (stays and hours with changed urine24; SOFA renal and total
-flips; KDIGO stage changes), per database, full cohort, against `2786ea872`.
+**Errata.** Stays and hours with changed `urine24`, SOFA renal and total
+flips and KDIGO stage changes, per database, full cohort, against
+`2786ea872`: filled after the formal run, in each database's formal
+`RUN_RECEIPT`. Measured: the MIMIC-IV hand-checked stay above (35 hourly
+values).
 
 ## 2026-11-06 — vaso60 expands only rows that carry an infusion id [lead-r13, `cc20f06a3`]
 
@@ -349,11 +745,16 @@ second expansion of already hourly rows changed nothing: the 3,000-stay
 CareVue sample is byte-identical before and after the fix (20 of 20 module
 files); full view below.
 
-**Errata.** Affected: MIMIC-III exports from FILL on (`2786ea872`, r12; v6
-CareVue `97f508c6`: FILL; v0.1.2: FILL). CareVue full view (37,776 stays),
-`2786ea872` vs this fix: FILL (stays and hours with a changed vasopressor
-60-min rate, by magnitude; SOFA cardiovascular and total flips; Sepsis-3
-onset changes). Full MIMIC-III with MetaVision: FILL.
+**Errata.** Affected: full MIMIC-III exports with a batch that holds CareVue
+but no MetaVision rows (`2786ea872`, r12, batched). A batch holding MetaVision
+rows is unaffected, and on the CareVue-only view the extra expansion changed
+nothing (3,000-stay CareVue sample byte-identical). Against v6 CareVue
+(`97f508c6`): the paper side's line-by-line check (FLIP_CHECK), not counted
+here. CareVue full view
+(37,776 stays) and full MIMIC-III with MetaVision, against `2786ea872`
+(stays and hours with a changed vasopressor 60-min rate, by magnitude; SOFA
+cardiovascular and total flips; Sepsis-3 onset changes): filled after the
+formal run, in the MIMIC-III and CareVue formal `RUN_RECEIPT`s.
 
 ## 2026-11-06 — a table stored as several files is read whole [lead-r13, `92d1876ed`]
 
@@ -390,7 +791,8 @@ unscored hours as 0 on both paths. SOFA-1 Sepsis-3 was not affected.
 **Errata** (re-derived from each export's own published SOFA-2 total):
 r12 full MIMIC-IV 0 of 42,364 onsets changed; v6 AUMCdb <10 of 5,178 changed
 (1-24 h, all earlier after the fix); v6 HiRID has no suspected infection.
-`2786ea872` full: FILL.
+`2786ea872` full: filled after the formal run, in each database's formal
+`RUN_RECEIPT`.
 
 ## 2026-11-06 — SICdb death times are not realigned per batch [lead-r13, `9764fb7e9`]
 
@@ -407,7 +809,8 @@ column as ICU-relative hours.
 
 **Errata.** v6 and r12 full SICdb: 2,089 of 2,107 registry deaths had an early
 `death_time` (median 180 h early; 1-24 h 276, 1-7 d 731, 7-30 d 792,
-> 30 d 290). Derived columns: FILL (mort_28d/90d/365d, followup_days).
+> 30 d 290). Derived columns (`mort_28d`/`90d`/`365d`, `followup_days`):
+filled after the formal run, in the SICdb formal `RUN_RECEIPT`.
 
 ## 2026-11-06 — HiRID death and length-of-stay timing skip the full sort [lead-r13, `30088a639`]
 
@@ -488,7 +891,8 @@ byte-identical across layouts, engine threads and the no-perf build.
   the raw path (`aa79c777a`).
 - A module worker killed for memory is retried with half its batch, down to a
   single stay, and the retry is logged (`stream_batch_oom_retry`) and recorded
-  in `stream_retry_history`. A one-shot the planner chose from a stale profile
+  in `stream_retry_history`. (Since `2e51a0bb1`, only typed memory evidence
+  counts as a memory failure; see the 2026-11-06 out-of-memory entry.) A one-shot the planner chose from a stale profile
   retries streamed from half the cohort when the caller has an output
   directory and allows streaming (`83d26bc0e`). eICU medications needed this:
   since `089701e34` its single-file tables take DuckDB without the table
