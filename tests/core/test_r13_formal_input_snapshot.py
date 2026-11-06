@@ -247,3 +247,23 @@ def test_the_cli_opt_in_says_it_is_not_the_formal_guarantee():
         assert "does NOT publish a consumed set or a RUN_RECEIPT" in flat
         assert "does NOT prove that every file the run read was in the snapshot" in flat
         assert "formal guarantee comes only from bench7v2 / " in flat
+
+
+@pytest.mark.parametrize("scheme", ["variable", "hash"])
+def test_every_layout_scheme_records_its_builder_in_manifest_and_receipt(tmp_path, scheme):
+    import duckdb
+
+    from easyicu import code_identity
+    from tests.support.bucket_storage import install_layout
+
+    source = b6_source(tmp_path / "eicu", "eicu")
+    install_layout(source, scheme)
+    bucket = source.base_path / f"{TABLE_CONFIGS['eicu'][0]}_bucket"
+    manifest = json.loads((bucket / "_BUCKET_MANIFEST.json").read_text())
+    build = json.loads((bucket / "_BUCKET_BUILD_RECEIPT.json").read_text())
+
+    identity = code_identity.resolve_code_identity(Path(formal_inputs.__file__).resolve().parent)
+    expected = {k: identity[k] for k in ("source", "commit", "dirty", "version")}
+    for record in (manifest, build):
+        assert {k: record["builder_code"][k] for k in expected} == expected
+        assert record["duckdb_version"] == duckdb.__version__

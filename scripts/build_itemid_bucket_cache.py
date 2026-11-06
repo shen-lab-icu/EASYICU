@@ -916,6 +916,7 @@ def build_bucket_cache(
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
                 builder_version=BUILDER_VERSION,
+                builder_code=_builder_code(),
                 derived_from=derived,
                 source=str(data_path / table),
                 source_files=len(source_files),
@@ -1226,6 +1227,7 @@ def build_variable_cache(
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
                 builder_version=BUILDER_VERSION,
+                builder_code=_builder_code(),
                 derived_from=derived,
                 layout_scheme=VARIABLE_SCHEME,
                 source=str(data_path / table),
@@ -1284,6 +1286,7 @@ def build_variable_cache(
                 builder_version=BUILDER_VERSION,
                 builder_code=code,
                 float_fidelity=float_fidelity,
+                duckdb_version=duckdb.__version__,
                 inventory=[
                     dict(
                         relative_path=p.relative_to(temporary).as_posix(),
