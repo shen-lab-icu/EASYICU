@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from easyicu.io.ts_utils import _grouped_row_batches
+from easyicu.utils.thresholds import REL_EPS, ge, gt, lt
 
 from .urine_output import collection_intervals, collection_windows, window_availability
 
@@ -153,7 +154,7 @@ def assess_urine_windows(
             weight_ok = np.isfinite(weights) & (weights > 0)
             for window in WINDOWS:
                 volume, covered, available = integrated[window]
-                assessable = (covered >= window - 1e-9) & weight_ok
+                assessable = ge(covered, window) & weight_ok
                 covered_by_window[window][batch] = covered
                 rate_by_window[window][batch] = np.divide(
                     volume, window * weights, out=np.full(len(ends), np.nan), where=assessable,
@@ -167,11 +168,11 @@ def assess_urine_windows(
 
             # Find the closest complete segment start strictly before t-6. Reset
             # continuity at every invalid segment or genuine gap, per patient.
-            candidate = np.searchsorted(starts, ends - 6.0 - 1e-9, side="left") - 1
+            candidate = np.searchsorted(starts, ends - 6.0 * (1 + REL_EPS), side="left") - 1
             safe = np.maximum(candidate, 0)
             break_before = ~valid
             if len(ends) > 1:
-                break_before[1:] |= (~valid[:-1]) | (starts[1:] > ends[:-1] + 1e-9)
+                break_before[1:] |= (~valid[:-1]) | gt(starts[1:] - ends[:-1], 0.0)
             break_before[0] = True
             block_start = np.maximum.accumulate(
                 np.where(break_before, offsets, 0),
@@ -179,8 +180,8 @@ def assess_urine_windows(
             duration = ends - starts[safe]
             covered = cumulative_h[1:] - cumulative_h[safe]
             volume = cumulative_v[1:] - cumulative_v[safe]
-            assessable = (candidate >= block_start) & valid & (duration > 6.0 + 1e-9)
-            assessable &= covered >= duration - 1e-9
+            assessable = (candidate >= block_start) & valid & gt(duration, 6.0)
+            assessable &= ge(covered, duration)
             assessable &= np.isfinite(weights) & (weights > 0)
             rate = np.full(len(ends), np.nan)
             rate[assessable] = (
@@ -189,7 +190,7 @@ def assess_urine_windows(
             oliguria_available[batch] = np.where(assessable, window_availability(source_times, safe, valid), np.nan)
             oliguria_duration_h[batch] = np.where(assessable, duration, np.nan)
             oliguria_rate[batch] = rate
-            oliguria_gt6h[batch] = assessable & (rate < 0.3)
+            oliguria_gt6h[batch] = assessable & lt(rate, 0.3)
 
     # Assign each result column once. Repeated ``DataFrame.loc`` writes per
     # patient make pandas rebuild indexers hundreds of thousands of times on a

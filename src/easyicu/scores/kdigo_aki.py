@@ -37,6 +37,7 @@ import numpy as np
 import logging
 
 from easyicu.io.ts_utils import infer_numeric_time_unit
+from easyicu.utils.thresholds import REL_EPS, ge, le, lt
 from easyicu.urine_weight_linkage import (
     ConflictingKeyedWeightError,
     resolve_keyed_unique_weights,
@@ -308,8 +309,11 @@ def kdigo_creatinine(
         # For each i, find the leftmost j where hours[i] - hours[j] <= window
         # i.e. hours[j] >= hours[i] - window
         # searchsorted gives first index >= target
-        bounds_48 = np.searchsorted(hours, hours - 48.0, side='left')
-        bounds_7d = np.searchsorted(hours, hours - 168.0, side='left')
+        # An earlier value exactly 48 h / 7 d back is inside the window; the
+        # elapsed time is float hours, so the edge moves out by the shared
+        # decimal-threshold eps (utils.thresholds).
+        bounds_48 = np.searchsorted(hours, hours - 48.0 * (1 + REL_EPS), side='left')
+        bounds_7d = np.searchsorted(hours, hours - 168.0 * (1 + REL_EPS), side='left')
         
         for i in range(1, n):
             left_48 = bounds_48[i]
@@ -406,20 +410,22 @@ def _calc_aki_stage_creat(
     stage.loc[assessable] = 0
     
     # Stage 1: ≥1.5x baseline (7-day) OR ≥0.3 increase in 48h
-    mask_1_fold = creat >= (creat_low_7day * 1.5)
-    mask_1_abs = creat >= (creat_low_48hr + 0.3)
+    # A rise of exactly 0.3 mg/dL or exactly 1.5x is AKI; the sums and
+    # products put that boundary a few ulps either side (utils.thresholds).
+    mask_1_fold = ge(creat, creat_low_7day * 1.5)
+    mask_1_abs = ge(creat, creat_low_48hr + 0.3)
     stage[mask_1_fold | mask_1_abs] = 1
     
     # Stage 2: ≥2.0x baseline (7-day)
-    mask_2 = creat >= (creat_low_7day * 2.0)
+    mask_2 = ge(creat, creat_low_7day * 2.0)
     stage[mask_2] = 2
     
     # Stage 3: ≥3.0x baseline OR (≥4.0 with acute increase)
-    mask_3_fold = creat >= (creat_low_7day * 3.0)
+    mask_3_fold = ge(creat, creat_low_7day * 3.0)
     # For creat ≥ 4.0, require acute increase (≥0.3 in 48h or ≥1.5x baseline)
-    mask_3_abs = (creat >= 4.0) & (
-        (creat >= creat_low_48hr + 0.3) |
-        (creat >= creat_low_7day * 1.5)  # Or 1.5x baseline
+    mask_3_abs = ge(creat, 4.0) & (
+        ge(creat, creat_low_48hr + 0.3) |
+        ge(creat, creat_low_7day * 1.5)  # Or 1.5x baseline
     )
     stage[mask_3_fold | mask_3_abs] = 3
     
@@ -804,7 +810,7 @@ def _calculate_uo_rates_simple(
         wt = weights[positions]
         for window in (6, 12, 24):
             volume, covered, available = integrated[window]
-            valid = (covered >= window - 1e-9) & np.isfinite(wt) & (wt > 0)
+            valid = ge(covered, float(window)) & np.isfinite(wt) & (wt > 0)
             name = f"uo_rt_{window}hr"
             arrays[name][positions] = np.divide(
                 volume, wt * covered, out=np.full(len(ends), np.nan), where=valid,
@@ -848,17 +854,18 @@ def _calc_aki_stage_uo(
     ] = 0
     
     # Stage 1: UO < 0.5 for 6h but NOT for 12h
-    mask_1 = (uo_6h_num < 0.5) & ((uo_12h_num >= 0.5) | uo_12h_num.isna())
+    # Rates are volume / (weight x hours): exactly 0.5 is not < 0.5.
+    mask_1 = lt(uo_6h_num, 0.5) & (ge(uo_12h_num, 0.5) | uo_12h_num.isna())
     stage[mask_1] = 1
     
     # Stage 2: UO < 0.5 for ≥12h
-    mask_2 = uo_12h_num < 0.5
+    mask_2 = lt(uo_12h_num, 0.5)
     stage[mask_2] = 2
     
     # Stage 3: UO < 0.3 for ≥24h OR anuria (0) for ≥12h
-    mask_3_oliguria = uo_24h_num < 0.3
+    mask_3_oliguria = lt(uo_24h_num, 0.3)
     # Anuria is zero output (R4-061); 0.01 mL/kg/h was a non-zero cut-off.
-    mask_3_anuria = uo_12h_num <= 1e-9
+    mask_3_anuria = le(uo_12h_num, 0.0)
     stage[mask_3_oliguria | mask_3_anuria] = 3
     
     return stage

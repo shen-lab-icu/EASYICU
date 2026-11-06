@@ -63,6 +63,8 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
+
+from ..utils.thresholds import ge, gt, le, lt
 import pandas as pd
 
 from .sofa2_aggregate import SOFA2_COMPONENT_NAMES, sofa2_score
@@ -192,7 +194,7 @@ def sofa2_component_evidence(
         for name in ("uo_6h", "uo_12h", "uo_24h"):
             window = int(name.removeprefix("uo_").removesuffix("h"))
             urine_windows |= numeric(inputs.get(name)) & (
-                numeric_values(inputs.get(f"{name}_covered_h")) >= window - 1e-9
+                ge(numeric_values(inputs.get(f"{name}_covered_h")), window)
             )
         urine_rate = numeric(inputs.get("urine_mlkgph"))
         urine_duration = numeric(inputs.get("urine_duration_h"))
@@ -408,18 +410,18 @@ def sofa2_resp(
     
     # Case 1: P/F available → use P/F thresholds
     pf_mask = pf_available & ratio_eligible
-    score[pf_mask & (pf <= 300)] = 1
-    score[pf_mask & (pf <= 225)] = 2
+    score[pf_mask & le(pf, 300.0)] = 1
+    score[pf_mask & le(pf, 225.0)] = 2
     # For 3/4, advanced support or ECMO is required
-    score[pf_mask & (pf <= 150) & severe_ratio_eligible] = 3
-    score[pf_mask & (pf <= 75) & severe_ratio_eligible] = 4
+    score[pf_mask & le(pf, 150.0) & severe_ratio_eligible] = 3
+    score[pf_mask & le(pf, 75.0) & severe_ratio_eligible] = 4
     
     # Case 2: P/F unavailable but S/F applicable → use S/F thresholds
     sf_mask = ~pf_available & sf_applicable & ratio_eligible
-    score[sf_mask & (sf <= 300)] = 1
-    score[sf_mask & (sf <= 250)] = 2
-    score[sf_mask & (sf <= 200) & severe_ratio_eligible] = 3
-    score[sf_mask & (sf <= 120) & severe_ratio_eligible] = 4
+    score[sf_mask & le(sf, 300.0)] = 1
+    score[sf_mask & le(sf, 250.0)] = 2
+    score[sf_mask & le(sf, 200.0) & severe_ratio_eligible] = 3
+    score[sf_mask & le(sf, 120.0) & severe_ratio_eligible] = 4
     
     # SOFA-2 footnote (i): any patient on ECMO scores 4 on the respiratory
     # component regardless of PaO2:FiO2. (ECMO for respiratory failure scores 4
@@ -526,10 +528,10 @@ def sofa2_liver(
 
     # Apply thresholds according to SOFA-2 table (using upper bounds)
     # 0pt: ≤1.20, 1pt: >1.20-3.0, 2pt: >3.0-6.0, 3pt: >6.0-12.0, 4pt: >12.0
-    score[b > 1.20] = 1
-    score[b > 3.0] = 2
-    score[b > 6.0] = 3
-    score[b > 12.0] = 4
+    score[gt(b, 1.2)] = 1
+    score[gt(b, 3.0)] = 2
+    score[gt(b, 6.0)] = 3
+    score[gt(b, 12.0)] = 4
     return score
 
 def sofa2_cardio(
@@ -752,15 +754,17 @@ def sofa2_cardio(
 
     # Primary norepi+epi rule (SOFA-2 combined dosing)
     ne_ep_mask = total > 0
-    score[ne_ep_mask & (total <= 0.2)] = 2  # Low dose
-    score[ne_ep_mask & (total > 0.2) & (total <= 0.4)] = 3  # Medium dose
-    score[ne_ep_mask & (total > 0.4)] = 4  # High dose
+    # Doses are rates per kg (and NE+E a sum); P/F, S/F and urine rates are
+    # ratios: every cut-off below is decided as written (utils.thresholds).
+    score[ne_ep_mask & le(total, 0.2)] = 2  # Low dose
+    score[ne_ep_mask & gt(total, 0.2) & le(total, 0.4)] = 3  # Medium dose
+    score[ne_ep_mask & gt(total, 0.4)] = 4  # High dose
 
     # Table 2 uses "any other vasopressor or inotrope". Dopamine and
     # dobutamine are therefore adjuncts here, not only in the zero-NE/Epi path.
     adjunct = (da > 0) | (db > 0) | others
-    score[(total > 0.2) & (total <= 0.4) & adjunct] = 4
-    score[(total > 0) & (total <= 0.2) & adjunct] = 3
+    score[gt(total, 0.2) & le(total, 0.4) & adjunct] = 4
+    score[(total > 0) & le(total, 0.2) & adjunct] = 3
 
     # Any other vasopressor/inotrope (when no norepi+epi)
     no_ne_ep = total == 0
@@ -768,9 +772,9 @@ def sofa2_cardio(
 
     # ALTERNATE: Dopamine-only scoring when norepi+epi == 0 (SOFA-2 backup rule)
     dopamine_only = (total == 0) & (da > 0) & (db <= 0) & (~others)
-    score[dopamine_only & (da <= 20)] = 2
-    score[dopamine_only & (da > 20) & (da <= 40)] = 3
-    score[dopamine_only & (da > 40)] = 4
+    score[dopamine_only & le(da, 20.0)] = 2
+    score[dopamine_only & gt(da, 20.0) & le(da, 40.0)] = 3
+    score[dopamine_only & gt(da, 40.0)] = 4
 
     # MAP-only fallback when vasopressors unavailable (ceiling of care).
     # Restricted to rows with no vasoactive exposure at all: after the conflict
@@ -1293,9 +1297,9 @@ def sofa2_renal(
     u24 = renal_numeric(uo_24h, "uo_24h")
     # Direct callers must supply coverage for the same window as each rate.
     # Missing coverage disables only urine criteria, preserving independent evidence.
-    u6 = u6.where(renal_numeric(uo_6h_covered_h, "uo_6h_covered_h") >= 6 - 1e-9)
-    u12 = u12.where(renal_numeric(uo_12h_covered_h, "uo_12h_covered_h") >= 12 - 1e-9)
-    u24 = u24.where(renal_numeric(uo_24h_covered_h, "uo_24h_covered_h") >= 24 - 1e-9)
+    u6 = u6.where(ge(renal_numeric(uo_6h_covered_h, "uo_6h_covered_h"), 6))
+    u12 = u12.where(ge(renal_numeric(uo_12h_covered_h, "uo_12h_covered_h"), 12))
+    u24 = u24.where(ge(renal_numeric(uo_24h_covered_h, "uo_24h_covered_h"), 24))
     oligo_evidence = (
         validate_aligned_input(
             oliguria_gt6h, component="sofa2_renal", field="oliguria_gt6h", index=idx,
@@ -1352,14 +1356,14 @@ def sofa2_renal(
 
     # EasyICU runtime-aligned path: use windowed urine concepts when available.
     if any(series is not None for series in (uo_6h, uo_12h, uo_24h)):
-        score[(c > 1.20) | ((u6 < 0.5) & ~(u12 < 0.5))] = np.maximum(score[(c > 1.20) | ((u6 < 0.5) & ~(u12 < 0.5))], 1)
-        score[(c > 2.0) | (u12 < 0.5)] = np.maximum(score[(c > 2.0) | (u12 < 0.5)], 2)
-        score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)] = np.maximum(score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)], 3)
+        score[gt(c, 1.2) | (lt(u6, 0.5) & ~lt(u12, 0.5))] = np.maximum(score[gt(c, 1.2) | (lt(u6, 0.5) & ~lt(u12, 0.5))], 1)
+        score[gt(c, 2.0) | lt(u12, 0.5)] = np.maximum(score[gt(c, 2.0) | lt(u12, 0.5)], 2)
+        score[gt(c, 3.5) | lt(u24, 0.3) | le(u12, 0.0)] = np.maximum(score[gt(c, 3.5) | lt(u24, 0.3) | le(u12, 0.0)], 3)
 
         # Each metabolic route stands alone: a missing optional potassium input
         # must not disable the pH/HCO3 route, nor missing pH/HCO3 the potassium route.
         if any(series is not None for series in (potassium, ph, bicarbonate_series)):
-            base_injury = (c > 1.2) | oligo_evidence
+            base_injury = gt(c, 1.2) | oligo_evidence
             metabolic_crisis = (potassium_value >= 6.0) | (
                 (ph_value <= 7.20) & (bicarbonate_value <= 12)
             )
@@ -1376,13 +1380,11 @@ def sofa2_renal(
         # wires the windowed urine concepts (uo_6h/uo_12h/uo_24h) and the windowed
         # path above consumes a shared strictly >6 h interval assessment. This fallback is for direct API callers; aligned here for
         # consistency.
-        oliguria = (urine_rate < 0.3) & (
-            urine_duration > 6
-        )  # <0.3 mL/kg/h sustained for >6 h
+        oliguria = lt(urine_rate, 0.3) & gt(urine_duration, 6.0)  # <0.3 mL/kg/h sustained for >6 h
         metabolic_crisis = (potassium_value >= 6.0) | (
             (ph_value <= 7.20) & (bicarbonate_value <= 12)
         )
-        rrt_criteria = ((c > 1.2) | oliguria) & metabolic_crisis
+        rrt_criteria = (gt(c, 1.2) | oliguria) & metabolic_crisis
 
         # Score 4pt if meets RRT criteria but not receiving RRT
         score[rrt_criteria & (score < 4)] = 4
@@ -1390,23 +1392,23 @@ def sofa2_renal(
     # Urine output criteria (body weight standardized)
     if urine_mlkgph is not None:
         # Anuria (0 mL for ≥12h) → 3pt
-        anuria = (urine_rate == 0) & (urine_duration >= 12)
+        anuria = le(urine_rate, 0.0) & ge(urine_duration, 12.0)
         score[anuria] = np.maximum(score[anuria], 3)
         
         # <0.3 mL/kg/h for ≥24h → 3pt
-        score[(urine_rate < 0.3) & (urine_duration >= 24)] = np.maximum(score[(urine_rate < 0.3) & (urine_duration >= 24)], 3)
+        score[lt(urine_rate, 0.3) & ge(urine_duration, 24.0)] = np.maximum(score[lt(urine_rate, 0.3) & ge(urine_duration, 24.0)], 3)
         
         # <0.5 mL/kg/h for ≥12h → 2pt
-        score[(urine_rate < 0.5) & (urine_duration >= 12) & (score < 3)] = np.maximum(score[(urine_rate < 0.5) & (urine_duration >= 12) & (score < 3)], 2)
+        score[lt(urine_rate, 0.5) & ge(urine_duration, 12.0) & (score < 3)] = np.maximum(score[lt(urine_rate, 0.5) & ge(urine_duration, 12.0) & (score < 3)], 2)
         
         # <0.5 mL/kg/h for 6-12h → 1pt
-        score[(urine_rate < 0.5) & (urine_duration >= 6) & (urine_duration < 12) & (score < 2)] = np.maximum(score[(urine_rate < 0.5) & (urine_duration >= 6) & (urine_duration < 12) & (score < 2)], 1)
+        score[lt(urine_rate, 0.5) & ge(urine_duration, 6.0) & lt(urine_duration, 12.0) & (score < 2)] = np.maximum(score[lt(urine_rate, 0.5) & ge(urine_duration, 6.0) & lt(urine_duration, 12.0) & (score < 2)], 1)
 
     # Creatinine thresholds according to SOFA-2 table
     # Note: Table shows ≤1.20/≤2.0/≤3.50/>3.50, meaning boundaries at these values
-    score[c > 1.20] = np.maximum(score[c > 1.20], 1)
-    score[c > 2.0] = np.maximum(score[c > 2.0], 2)
-    score[c > 3.50] = np.maximum(score[c > 3.50], 3)
+    score[gt(c, 1.2)] = np.maximum(score[gt(c, 1.2)], 1)
+    score[gt(c, 2.0)] = np.maximum(score[gt(c, 2.0)], 2)
+    score[gt(c, 3.5)] = np.maximum(score[gt(c, 3.5)], 3)
 
     return score
 

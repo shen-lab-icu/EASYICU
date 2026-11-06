@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from ..utils.thresholds import gt
 from .schema import ConceptSource
 from .blood_gas_specimen import (
     parse_arterial_specimen_callback,
@@ -491,7 +492,7 @@ def _mimiciii_ventilation_interval_rows(
                 else:
                     gap_hours = float(time) - float(last_setting)
 
-                if start is None or require_new_episode or gap_hours > 8.0:
+                if start is None or require_new_episode or gt(gap_hours, 8.0):
                     append_episode(stay_id, start, end)
                     start = time
                 end = time

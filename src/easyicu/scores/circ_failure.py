@@ -27,6 +27,7 @@ import pandas as pd
 from typing import Optional, List, Dict, Any
 
 from ..concept_output_sources import COMPOSITE_LOADER_SUPPORT
+from ..utils.thresholds import ge, lt
 
 
 # ============================================================================
@@ -113,14 +114,14 @@ def circ_failure_event(
     # Lactate is elevated, now check drug levels
     
     # Level 3: norepi/epi ≥ 0.1 μg/kg/min OR any vasopressin
-    if (pd.notna(norepi_rate) and norepi_rate >= NOREPI_EPI_LEVEL2_THRESHOLD) or \
-       (pd.notna(epi_rate) and epi_rate >= NOREPI_EPI_LEVEL2_THRESHOLD) or \
+    if (pd.notna(norepi_rate) and ge(norepi_rate, NOREPI_EPI_LEVEL2_THRESHOLD)) or \
+       (pd.notna(epi_rate) and ge(epi_rate, NOREPI_EPI_LEVEL2_THRESHOLD)) or \
        (pd.notna(vaso_rate) and vaso_rate > 0):
         return 3
     
     # Level 2: 0 < norepi/epi < 0.1 μg/kg/min
-    if (pd.notna(norepi_rate) and 0 < norepi_rate < NOREPI_EPI_LEVEL2_THRESHOLD) or \
-       (pd.notna(epi_rate) and 0 < epi_rate < NOREPI_EPI_LEVEL2_THRESHOLD):
+    if (pd.notna(norepi_rate) and 0 < norepi_rate and lt(norepi_rate, NOREPI_EPI_LEVEL2_THRESHOLD)) or \
+       (pd.notna(epi_rate) and 0 < epi_rate and lt(epi_rate, NOREPI_EPI_LEVEL2_THRESHOLD)):
         return 2
     
     # Level 1: MAP ≤ 65 OR Level 1 drugs present
@@ -242,26 +243,26 @@ def calculate_circ_failure_status(
         df['level2_drugs'] = df['level2_drugs'] | nullable_flag(
             df[norepi_rate_col],
             (df[norepi_rate_col] > 0)
-            & (df[norepi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD),
+            & lt(df[norepi_rate_col], NOREPI_EPI_LEVEL2_THRESHOLD),
         )
     if epi_rate_col and epi_rate_col in df.columns:
         evidence_columns.append(epi_rate_col)
         df['level2_drugs'] = df['level2_drugs'] | nullable_flag(
             df[epi_rate_col],
             (df[epi_rate_col] > 0)
-            & (df[epi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD),
+            & lt(df[epi_rate_col], NOREPI_EPI_LEVEL2_THRESHOLD),
         )
     
     # Level 3 drugs (norepi/epi ≥ 0.1 OR vasopressin)
     if norepi_rate_col and norepi_rate_col in df.columns:
         df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
             df[norepi_rate_col],
-            df[norepi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD,
+            ge(df[norepi_rate_col], NOREPI_EPI_LEVEL2_THRESHOLD),
         )
     if epi_rate_col and epi_rate_col in df.columns:
         df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
             df[epi_rate_col],
-            df[epi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD,
+            ge(df[epi_rate_col], NOREPI_EPI_LEVEL2_THRESHOLD),
         )
     if vaso_rate_col and vaso_rate_col in df.columns:
         evidence_columns.append(vaso_rate_col)
@@ -321,7 +322,7 @@ def calculate_circ_failure_status(
                 values = win.astype(int).to_numpy()
                 events[i] = 0
                 for k in (3, 2, 1):
-                    if (values >= k).mean() >= WINDOW_FRACTION_THRESHOLD:
+                    if ge((values >= k).mean(), WINDOW_FRACTION_THRESHOLD):
                         events[i] = k
                         break
             group['circ_event'] = events

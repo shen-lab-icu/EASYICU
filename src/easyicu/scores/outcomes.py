@@ -63,6 +63,7 @@ from easyicu.outcome_availability import (
     ICU_READMISSION_DATABASES,
 )
 
+from ..utils.thresholds import ge, gt, le, lt
 from .comorbidity import lower_cols
 from ..databases.profiles import get_database_profile, normalize_database_key
 from ..io.identity import require_unique_keys
@@ -453,10 +454,10 @@ def _load_followup_outcomes(
         .astype("boolean").fillna(False).to_numpy(dtype=bool)
     )
     for name, horizon in _HORIZONS.items():
-        unreachable = np.isfinite(source_bound) & (source_bound + grace_days < horizon)
-        died_by = has_death & (dtd <= horizon) & (dtd >= 0) & ~unreachable
-        known_alive = ((has_death & (dtd > horizon)) | (
-            ~has_death & (followup_days + grace_days >= horizon)
+        unreachable = np.isfinite(source_bound) & lt(source_bound + grace_days, horizon)
+        died_by = has_death & le(dtd, horizon) & (dtd >= 0) & ~unreachable
+        known_alive = ((has_death & gt(dtd, horizon)) | (
+            ~has_death & ge(followup_days + grace_days, horizon)
         )) & ~unreachable
         endpoint = pd.array([pd.NA] * len(base), dtype="boolean")
         endpoint[died_by] = True
@@ -466,7 +467,7 @@ def _load_followup_outcomes(
         # an assumed horizon (AUMC) or a horizon reached by the grace day
         # (SICdb). Recorded deaths and documented follow-up are not assumed.
         assumed = known_alive & ~has_death & (
-            followup_assumed | ~(followup_days >= horizon)
+            followup_assumed | ~ge(followup_days, horizon)
         )
         flag = pd.array([pd.NA] * len(base), dtype="boolean")
         flag[died_by | known_alive] = False

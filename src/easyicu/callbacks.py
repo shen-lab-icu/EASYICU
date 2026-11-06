@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .utils.common_utils import SeriesUtils
+from .utils.thresholds import ge, gt, le, lt
 from .table import IdTbl
 
 
@@ -162,14 +163,15 @@ def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Serie
         vent_mask = pd.Series(False, index=idx)
 
     adj = pafi_num.copy()
-    mask = SeriesUtils.is_true(adj < 200) & (~vent_mask)
+    # P/F is 100 * PaO2 / FiO2: decide the decimal cut-offs as written.
+    mask = SeriesUtils.is_true(lt(adj, 200)) & (~vent_mask)
     adj[mask] = 200
 
     score = pd.Series(0, index=idx, dtype=float)
-    mask_100 = SeriesUtils.is_true(adj < 100)
-    mask_200 = SeriesUtils.is_true(adj < 200) & ~mask_100
-    mask_300 = SeriesUtils.is_true(adj < 300) & ~mask_200 & ~mask_100
-    mask_400 = SeriesUtils.is_true(adj < 400) & ~mask_300 & ~mask_200 & ~mask_100
+    mask_100 = SeriesUtils.is_true(lt(adj, 100))
+    mask_200 = SeriesUtils.is_true(lt(adj, 200)) & ~mask_100
+    mask_300 = SeriesUtils.is_true(lt(adj, 300)) & ~mask_200 & ~mask_100
+    mask_400 = SeriesUtils.is_true(lt(adj, 400)) & ~mask_300 & ~mask_200 & ~mask_100
 
     score[mask_100] = 4
     score[mask_200] = 3
@@ -260,16 +262,18 @@ def sofa_liver(bili: pd.Series) -> pd.Series:
     # x < 1.2: findInterval = 0, score = 0 (already set)
     
     # 1.2 <= x < 2: findInterval = 1, score = 1
-    score[valid_mask & (bili >= 1.2) & (bili < 2.0)] = 1
+    # Bilirubin can be a unit-converted value (umol/L x factor): the
+    # boundaries are decided as written (utils.thresholds).
+    score[valid_mask & ge(bili, 1.2) & lt(bili, 2.0)] = 1
     
     # 2 <= x < 6: findInterval = 2, score = 2
-    score[valid_mask & (bili >= 2.0) & (bili < 6.0)] = 2
+    score[valid_mask & ge(bili, 2.0) & lt(bili, 6.0)] = 2
     
     # 6 <= x < 12: findInterval = 3, score = 3
-    score[valid_mask & (bili >= 6.0) & (bili < 12.0)] = 3
+    score[valid_mask & ge(bili, 6.0) & lt(bili, 12.0)] = 3
     
     # x >= 12: findInterval = 4, score = 4
-    score[valid_mask & (bili >= 12.0)] = 4
+    score[valid_mask & ge(bili, 12.0)] = 4
     
     return score
 
@@ -323,14 +327,15 @@ def sofa_cardio(
     # Chain of fifelse (if-else) with priority from highest to lowest
     # Score 4: highest priority
     score = pd.Series(0, index=map.index, dtype=int)
-    score[SeriesUtils.is_true((dopa > 15) | (epi > 0.1) | (norepi > 0.1))] = 4
+    # Rates are dose / weight / time: decide the decimal cut-offs as written.
+    score[SeriesUtils.is_true(gt(dopa, 15) | gt(epi, 0.1) | gt(norepi, 0.1))] = 4
     
     # Score 3: second priority (only if not already 4)
-    mask3 = SeriesUtils.is_true((dopa > 5) | ((epi > 0) & (epi <= 0.1)) | ((norepi > 0) & (norepi <= 0.1)))
+    mask3 = SeriesUtils.is_true(gt(dopa, 5) | ((epi > 0) & le(epi, 0.1)) | ((norepi > 0) & le(norepi, 0.1)))
     score[mask3 & (score != 4)] = 3
     
     # Score 2: third priority (only if not already 3 or 4)
-    mask2 = SeriesUtils.is_true(((dopa > 0) & (dopa <= 5)) | (dobu > 0))
+    mask2 = SeriesUtils.is_true(((dopa > 0) & le(dopa, 5)) | (dobu > 0))
     score[mask2 & (score < 3)] = 2
     
     # Score 1: lowest priority (only if not already 2, 3, or 4)
@@ -424,21 +429,23 @@ def sofa_renal(
     score = pd.Series(0, index=crea.index, dtype=int)
 
     # Score 1: crea >= 1.2 & crea < 2 (only based on crea)
-    mask1 = SeriesUtils.is_true((crea_num >= 1.2) & (crea_num < 2))
+    # Creatinine can be unit-converted and urine24 is a rolling sum of
+    # apportioned volumes: decide the cut-offs as written (utils.thresholds).
+    mask1 = SeriesUtils.is_true(ge(crea_num, 1.2) & lt(crea_num, 2))
     score[mask1] = 1
     
     # Score 2: crea >= 2 & crea < 3.5 (only based on crea)
-    mask2 = SeriesUtils.is_true((crea_num >= 2) & (crea_num < 3.5))
+    mask2 = SeriesUtils.is_true(ge(crea_num, 2) & lt(crea_num, 3.5))
     score[mask2] = 2
     
     # Score 3: (crea >= 3.5 & crea < 5) OR urine24 < 500
-    mask_crea_3 = SeriesUtils.is_true((crea_num >= 3.5) & (crea_num < 5))
-    mask_uri_3 = SeriesUtils.is_true(uri_num < 500)
+    mask_crea_3 = SeriesUtils.is_true(ge(crea_num, 3.5) & lt(crea_num, 5))
+    mask_uri_3 = SeriesUtils.is_true(lt(uri_num, 500))
     score[mask_crea_3 | mask_uri_3] = 3
     
     # Score 4: crea >= 5 OR urine24 < 200
-    mask_crea_4 = SeriesUtils.is_true(crea_num >= 5)
-    mask_uri_4 = SeriesUtils.is_true(uri_num < 200)
+    mask_crea_4 = SeriesUtils.is_true(ge(crea_num, 5))
+    mask_uri_4 = SeriesUtils.is_true(lt(uri_num, 200))
     score[mask_crea_4 | mask_uri_4] = 4
     
     return score
@@ -1055,7 +1062,7 @@ def sirs_score(
     # Match R ricu: rspi <- function(re, pa) fifelse(re > 20 | pa < 32, 1L, 0L)
     resp_crit = (resp > 20)
     if pco2 is not None:
-        resp_crit = resp_crit | (pco2 < 32)
+        resp_crit = resp_crit | lt(pco2, 32.0)
     score[resp_crit] += 1
     
     # WBC criterion: wbc < 4 OR wbc > 12 OR bnd > 10 (combined as one point)

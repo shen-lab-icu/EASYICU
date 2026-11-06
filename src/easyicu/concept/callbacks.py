@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
 
 from ..utils.unit_conversion import convert_vaso_rate
+from ..utils.thresholds import ge, le, lt
 from .errors import ConceptTableReadError
 from .availability_signal import (
     ConceptAvailabilityRecord,
@@ -2641,11 +2642,12 @@ def _cvp_quality_result(
         next_t = hgroup.shift(-1) if hgroup is not None else hours_s.shift(-1)
         prev_v = pd.to_numeric(prev_v, errors="coerce")
         next_v = pd.to_numeric(next_v, errors="coerce")
-        near = (hours_s - prev_t).between(0, 6) & (next_t - hours_s).between(0, 6)
+        near = (ge(hours_s - prev_t, 0.0) & le(hours_s - prev_t, 6.0)
+                & ge(next_t - hours_s, 0.0) & le(next_t - hours_s, 6.0))
         spike = (
             high & near
             & prev_v.le(30) & next_v.le(30)
-            & (cvp - np.maximum(prev_v, next_v)).ge(10)
+            & ge(cvp - np.maximum(prev_v, next_v), 10.0)
         ).fillna(False)
     else:
         spike = pd.Series(False, index=data.index)
@@ -2658,7 +2660,7 @@ def _cvp_quality_result(
         # the arterial check applies; an unflagged in-range hour stays "kept".
         (high & cuff_only, "cuff_dbp_only"),
         (high & arterial.isna() & ~cuff_only, "arterial_evidence_unavailable"),
-        (high & (cvp - arterial).abs().lt(10), "arterial_diastolic_match"),
+        (high & lt((cvp - arterial).abs(), 10.0), "arterial_diastolic_match"),
         (spike, "isolated_spike"),
     ]:
         reason = reason.mask(mask, reason + "|" + label)
@@ -3446,7 +3448,9 @@ def _callback_sofa_resp(
     # R ricu adjustment: if pafi < 200 and NOT ventilated, set pafi = 200
     # This limits score to max 2 for non-ventilated patients
     # R: dat[is_true(get(pafi_var) < 200) & !is_true(get(vent_var)), c(pafi_var) := 200]
-    adj_mask = (result['pafi'] < 200) & (~result['vent_ind'])
+    # P/F is 100 * PaO2 / FiO2: decide the decimal cut-offs as written
+    # (utils.thresholds; a deviation from ricu's plain double comparison).
+    adj_mask = lt(result['pafi'], 200) & (~result['vent_ind'])
     # is_true(pafi < 200) returns False for NA, so NA pafi is not adjusted
     adj_mask = adj_mask.fillna(False)
     result.loc[adj_mask, 'pafi'] = 200.0
@@ -3454,10 +3458,10 @@ def _callback_sofa_resp(
     # R ricu score_calc using is_true() — NA pafi → all is_true checks FALSE → score 0
     pafi_vals = result['pafi']
     score = pd.Series(0, index=result.index, dtype="Int64")
-    score = score.where(~(pafi_vals < 400).fillna(False), 1)
-    score = score.where(~(pafi_vals < 300).fillna(False), 2)
-    score = score.where(~(pafi_vals < 200).fillna(False), 3)
-    score = score.where(~(pafi_vals < 100).fillna(False), 4)
+    score = score.where(~lt(pafi_vals, 400).fillna(False), 1)
+    score = score.where(~lt(pafi_vals, 300).fillna(False), 2)
+    score = score.where(~lt(pafi_vals, 200).fillna(False), 3)
+    score = score.where(~lt(pafi_vals, 100).fillna(False), 4)
     result['sofa_resp'] = score
     
     # Select output columns
@@ -8929,7 +8933,7 @@ def _callback_persistent_critical_illness(tables, ctx):
     """
     return _derive_rowwise(
         tables, ctx, value_name="persistent_critical_illness",
-        compute=lambda m: (pd.to_numeric(m["los_icu"], errors="coerce") >= 10).astype(float),
+        compute=lambda m: ge(pd.to_numeric(m["los_icu"], errors="coerce"), 10.0).astype(float),
         lo=0.0, hi=1.0,
     )
 

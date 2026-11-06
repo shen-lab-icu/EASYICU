@@ -20,6 +20,8 @@ from typing import Any, Iterable, Mapping, Optional
 import numpy as np
 import pandas as pd
 
+from ..utils.thresholds import ge, gt, le, lt
+
 from .kdigo_aki import (
     KDIGOComponentSchemaError,
     detect_id_col,
@@ -1485,7 +1487,7 @@ def _mimic_iii_uo(
         for row_index, current in enumerate(times):
             windows = {}
             for label, width in (("6", 5.0), ("12", 11.0), ("24", 23.0)):
-                mask = (times <= current) & (times >= current - width)
+                mask = (times <= current) & ge(times, current - width)
                 if not mask.any() or not np.isfinite(patient_weight[row_index]):
                     windows[label] = (np.nan, np.nan)
                     continue
@@ -1496,11 +1498,13 @@ def _mimic_iii_uo(
             rate12, duration12 = windows["12"]
             rate24, duration24 = windows["24"]
             stage = 0
-            if duration6 >= 2 and rate6 < 0.5:
+            # Hours and rates come from float arithmetic; decide the decimal
+            # cut-offs as written (utils.thresholds).
+            if ge(duration6, 2) and lt(rate6, 0.5):
                 stage = 1
-            if duration12 >= 5 and rate12 < 0.5:
+            if ge(duration12, 5) and lt(rate12, 0.5):
                 stage = 2
-            if (duration24 >= 11 and rate24 < 0.3) or (duration12 >= 5 and rate12 == 0):
+            if (ge(duration24, 11) and lt(rate24, 0.3)) or (ge(duration12, 5) and le(rate12, 0.0)):
                 stage = 3
             stages[row_index] = stage
         group["aki_stage_uo"] = pd.Series(stages, index=group.index, dtype="Int64")
@@ -1630,23 +1634,25 @@ def _sicdb_profile(
             c["_hours"] = _time_hours(c[resolved_time], resolved_time, time_unit)
             c[crea_col] = pd.to_numeric(c[crea_col], errors="coerce")
             c = c.dropna().sort_values("_hours")
-            baseline_rows = c.loc[(c["_hours"] > -24) & (c["_hours"] < 168)]
+            baseline_rows = c.loc[gt(c["_hours"], -24.0) & lt(c["_hours"], 168.0)]
             baseline = (
                 baseline_rows.iloc[0][crea_col] if not baseline_rows.empty else np.nan
             )
-            max48 = c.loc[(c["_hours"] >= 0) & (c["_hours"] < 48), crea_col].max()
-            max168 = c.loc[(c["_hours"] >= 0) & (c["_hours"] < 168), crea_col].max()
+            max48 = c.loc[ge(c["_hours"], 0.0) & lt(c["_hours"], 48.0), crea_col].max()
+            max168 = c.loc[ge(c["_hours"], 0.0) & lt(c["_hours"], 168.0), crea_col].max()
             if np.isfinite(baseline) and np.isfinite(max168):
                 creat_assessable = True
-                if np.isfinite(max48) and max48 > baseline + 0.3:
+                # SICdb's own definition is strict (>): an exact +0.3 or
+                # exactly 1.5x is not a stage, whatever the float noise.
+                if np.isfinite(max48) and gt(max48, baseline + 0.3):
                     stage = max(stage, 1)
-                if max168 > baseline * 1.5:
+                if gt(max168, baseline * 1.5):
                     stage = max(stage, 1)
-                if max168 > baseline * 2:
+                if gt(max168, baseline * 2):
                     stage = max(stage, 2)
-                if max168 > baseline * 3:
+                if gt(max168, baseline * 3):
                     stage = max(stage, 3)
-                if max168 > 4 and max168 - baseline > 0.5:
+                if gt(max168, 4.0) and gt(max168 - baseline, 0.5):
                     stage = max(stage, 3)
         urine_stage, urine_assessable = _sicdb_urine_stage(
             urine_df,
@@ -1697,7 +1703,7 @@ def _sicdb_urine_stage(
     ).astype(int)
     frame[urine_col] = pd.to_numeric(frame[urine_col], errors="coerce")
     values = dict(
-        frame.loc[(frame["_hours"] >= 0) & (frame["_hours"] < 168)]
+        frame.loc[ge(frame["_hours"], 0.0) & lt(frame["_hours"], 168.0)]
         .dropna()[["_hours", urine_col]]
         .itertuples(index=False, name=None)
     )
@@ -1713,7 +1719,7 @@ def _sicdb_urine_stage(
             if hour <= width or hour - width not in values or hour not in values:
                 continue
             observed = [values[h] for h in range(hour - width, hour + 1) if h in values]
-            if observed and sum(observed) / (width + 1) / 70.0 < threshold:
+            if observed and lt(sum(observed) / (width + 1) / 70.0, threshold):
                 stage = max(stage, candidate)
     return stage, True
 
@@ -1762,17 +1768,17 @@ def _aumc_profile(
         group[crea_col] = pd.to_numeric(group[crea_col], errors="coerce")
         group = group.dropna()
         baseline = group.loc[
-            (group["_hours"] > -(365 * 24)) & (group["_hours"] < 24), crea_col
+            gt(group["_hours"], -365.0 * 24) & lt(group["_hours"], 24.0), crea_col
         ].min()
         maximum = group.loc[
-            (group["_hours"] > 0) & (group["_hours"] < 168), crea_col
+            gt(group["_hours"], 0.0) & lt(group["_hours"], 168.0), crea_col
         ].max()
         assessable = bool(np.isfinite(baseline) and np.isfinite(maximum))
         positive = bool(
             assessable
             and (
-                (baseline > 0 and maximum / baseline > 3)
-                or (maximum >= 354 / 88.4 and maximum - baseline >= 44 / 88.4)
+                (baseline > 0 and gt(maximum / baseline, 3.0))
+                or (ge(maximum, 354 / 88.4) and ge(maximum - baseline, 44 / 88.4))
             )
         )
         rows.append(

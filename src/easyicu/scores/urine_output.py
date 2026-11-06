@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from pandas.api.indexers import BaseIndexer
 
+from easyicu.utils.thresholds import ge, gt, le, lt
 from easyicu.urine_weight_linkage import (
     resolve_keyed_unique_weights,
     resolve_unkeyed_single_entity_weight,
@@ -30,9 +31,6 @@ KDIGO_EVIDENCE_COLUMNS = [
     *[f"uo_rt_{w}hr_covered_h" for w in (6, 12, 24)],
     "aki_stage_uo_available_at",
 ]
-
-#: Float tolerance for the 12 h record-gap rule (about 3.6 ms; sources are whole seconds).
-GAP_TOLERANCE_H = 1e-6
 
 
 def urine_availability_columns(name: str) -> list[str]:
@@ -201,10 +199,9 @@ def collection_intervals(
     # Gaps are differences of float hours on different clocks (minute clock,
     # sub-minute lags), so an exact 12 h gap can land 1e-15 h either side.
     # Source clocks are whole seconds: any real excess is >= 1 s (2.8e-4 h).
-    limit = max_gap + GAP_TOLERANCE_H
-    valid = np.isfinite(amounts) & (amounts >= 0) & (lengths > 0) & (lengths <= limit)
-    valid &= source_gaps <= limit
-    breaks = (lengths > limit) | (source_gaps > limit) | ~np.isfinite(amounts) | (amounts < 0)
+    valid = np.isfinite(amounts) & (amounts >= 0) & (lengths > 0) & le(lengths, max_gap)
+    valid &= le(source_gaps, max_gap)
+    breaks = gt(lengths, max_gap) | gt(source_gaps, max_gap) | ~np.isfinite(amounts) | (amounts < 0)
     segment = np.maximum.accumulate(np.where(breaks, np.arange(len(ends)), 0))
     starts = ends - lengths
     rates = amounts.copy() if source_is_rate else np.divide(
@@ -252,7 +249,7 @@ def collection_windows(
         trimmed = np.where(valid[left], trimmed, 0.)
         covered = np.maximum(cumulative_h[right + 1] - cumulative_h[left] - trimmed, 0.)
         volume = np.maximum(cumulative_v[right + 1] - cumulative_v[left] - rates[left] * trimmed, 0.)
-        available = np.where(covered > 1e-9, window_availability(available_times, left, valid), np.nan)
+        available = np.where(gt(covered, 0.0), window_availability(available_times, left, valid), np.nan)
         result[window] = (volume, covered, available)
     return result
 
@@ -332,12 +329,12 @@ def descriptive_windows(
         weights = all_weights[positions]
         for window, minimum in windows:
             volume, covered, available = integrated[window]
-            valid = (covered >= minimum - 1e-9) & np.isfinite(weights) & (weights > 0)
+            valid = ge(covered, minimum) & np.isfinite(weights) & (weights > 0)
             values = np.divide(volume, covered * weights, out=np.full(len(volume), np.nan), where=valid)
             rates, coverage, partial, availability = arrays[window]
             rates[positions] = values
             coverage[positions] = covered
-            partial[positions] = covered < window - 1e-9
+            partial[positions] = lt(covered, window)
             availability[positions] = available
     result = {}
     for window, _ in windows:
@@ -402,8 +399,8 @@ def assign_daily(
     window: float = 24.,
 ) -> pd.DataFrame:
     """Separate full measured volume from a partial-window daily equivalent."""
-    full = covered >= window - 1e-9
-    partial = (covered >= minimum - 1e-9) & ~full
+    full = ge(covered, window)
+    partial = ge(covered, minimum) & ~full
     frame["urine24"] = np.where(full, volume, np.nan)
     frame["urine24_est"] = np.divide(volume * window, covered,
                                      out=np.full(len(frame), np.nan), where=partial)
@@ -411,7 +408,7 @@ def assign_daily(
     frame["urine24_covered_h"] = covered
     frame["urine24_available_at"] = np.where(full, available, np.nan)
     frame["urine24_est_available_at"] = np.where(partial, available, np.nan)
-    frame["urine24_uses_future"] = (full | partial) & (available > frame["_hours"].to_numpy() + 1e-9)
+    frame["urine24_uses_future"] = (full | partial) & gt(available - frame["_hours"].to_numpy(), 0.0)
     return frame
 
 
@@ -478,7 +475,7 @@ def daily_volume_batch(
         elapsed = rec['_urine_gap_h'].fillna(time_step).to_numpy()
     # Same limit as collection_intervals: an exact 12 h gap is kept even when
     # float clocks put it 1e-15 h above (lead-r13 MIIV renal perf vs twin).
-    rejected = (gap > cap_steps) | (elapsed > cap_steps * time_step + GAP_TOLERANCE_H)
+    rejected = (gap > cap_steps) | gt(elapsed, cap_steps * time_step)
     placed = ~rejected
     reps = gap[placed]
     within = np.arange(int(reps.sum())) - np.repeat(np.cumsum(reps) - reps, reps)
