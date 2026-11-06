@@ -26,6 +26,34 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-06 — a concept's value kind is declared, never sampled from the batch [lead-r13, r13vgcs: `27e369bde`, `18203ef3a` and its follow-up]
+
+**Rule.** Whether a concept's values are numeric, logical or text comes from
+its declared class (`num_cncpt`/`unt_cncpt`, `lgl_cncpt`, `fct_cncpt`/
+`chr_cncpt`), its numeric bounds, or, for a `rec_cncpt`, its declared unit or
+recipe; ricu's default aggregate follows from that kind (numeric median,
+logical any, text first). The rule that coerced a column to numbers when more
+than half of its first 100 non-missing values parsed is removed, together with
+the 100-row boolean sniff in the concept merge and the `infer_dtype` check in
+the requested-column materializer. Before, a batch whose first rows were text
+kept a numeric concept as text and aggregated it with `first` instead of the
+median, so the value depended on which stays shared the batch.
+
+- AUMC `vgcs`: co-hour verbal scores were averaged in one batch and the first
+  one kept in another; now always the median.
+- eICU `tgcs`: the nursecharting text "Unable to score…" made a batch keep
+  `tgcs` as text; it is now NaN and the co-hour median is taken.
+- Export: a declared numeric or logical concept column is written as numbers;
+  a declared text concept stays text whatever its values look like.
+- **Migration.** Custom concepts must declare `class` for logical/categorical
+  values; a classless concept is numeric and refuses non-numeric values
+  (`ConceptValueKindUndeclared`, naming the concept). An explicitly declared
+  `num_cncpt` keeps turning non-numeric values into NaN. A `rec_cncpt` with
+  no unit and no registered recipe kind raises the same error. The community
+  overlay's `adv_resp` now declares `lgl_cncpt`.
+- Demos (eICU, MIIV, MIMIC-III, default mode, 20 modules): identical to the
+  base; no cell that held a value became NaN.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

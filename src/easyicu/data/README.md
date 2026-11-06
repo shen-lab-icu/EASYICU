@@ -76,6 +76,12 @@ load_concept_dictionaries(extra_names=["sofa2-dict"])
 # when calling load_dictionary directly.
 ```
 
+### Custom dictionaries
+
+Custom concepts must declare `class` for logical/categorical values
+(`lgl_cncpt`, `fct_cncpt`, `chr_cncpt`); a classless concept is numeric and
+refuses non-numeric values with `ConceptValueKindUndeclared`.
+
 ### Why not merge `sofa2-dict.json` into `concept-dict.json`?
 
 The 8 override entries can't live in one flat dictionary without an

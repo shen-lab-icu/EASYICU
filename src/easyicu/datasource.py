@@ -4246,8 +4246,9 @@ def load_bucketed_table_multi_aggregated(
         itemid_col = defaults.get('itemid_col', 'itemid')
 
     # ── Detect if itemids are strings (e.g. eICU labname) ─────
-    _sample_ids = next(iter(concept_itemids.values()))
-    ids_are_strings = isinstance(_sample_ids[0], str) if _sample_ids else False
+    ids_are_strings = any(
+        isinstance(x, str) for ids in concept_itemids.values() for x in ids
+    )
 
     # ── Collect all itemids ────────────────────────────────────
     if ids_are_strings:

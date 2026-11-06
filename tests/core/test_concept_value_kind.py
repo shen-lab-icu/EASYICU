@@ -16,12 +16,13 @@ from easyicu.concept.value_kind import (
     ConceptValueKindUndeclared,
     coerce_declared_values,
     declared_value_kind,
+    default_aggregate,
 )
 from tests.support.blood_gas_sources import DICTIONARY
 
 
-def _definition(class_name=None, minimum=None, maximum=None):
-    return SimpleNamespace(name="x", class_name=class_name, minimum=minimum, maximum=maximum)
+def _definition(class_name=None, minimum=None, maximum=None, units=None, name="x"):
+    return SimpleNamespace(name=name, class_name=class_name, minimum=minimum, maximum=maximum, units=units)
 
 
 @pytest.mark.parametrize(
@@ -38,6 +39,16 @@ def _definition(class_name=None, minimum=None, maximum=None):
 )
 def test_kind_follows_the_declared_class_and_bounds(class_name, minimum, kind):
     assert declared_value_kind(_definition(class_name, minimum), database="aumc") == kind
+
+
+@pytest.mark.parametrize(
+    ("units", "name", "kind"),
+    [(["boolean"], "x", "logical"), (["mL"], "x", "numeric"), (None, "sep3", "logical"),
+     (None, "sofa", "numeric"), (None, "avpu", "text")],
+)
+def test_a_recipe_takes_its_unit_or_documented_output_type(units, name, kind):
+    definition = _definition("rec_cncpt", units=units, name=name)
+    assert declared_value_kind(definition, database="eicu") == kind
 
 
 @pytest.mark.parametrize("class_name", ["rec_cncpt", ["lgl_cncpt", "fct_cncpt"], "unknown_cncpt"])
@@ -58,9 +69,19 @@ def test_every_shipped_source_concept_declares_its_kind(path):
             declared_value_kind(definition, database="any")
         except ConceptValueKindUndeclared:
             undecided.append(name)
-    # Unbounded recipes whose sources are callbacks returning typed numbers or
-    # booleans; they would be refused, not guessed, if text ever reached them.
-    assert sorted(undecided) == (["fluid_balance", "supp_o2"] if path == DICTIONARY else [])
+    assert undecided == []
+
+
+@pytest.mark.parametrize("path", [DICTIONARY, DICTIONARY.with_name("sofa2-dict.json")])
+def test_every_shipped_concept_declares_its_kind(path):
+    dictionary = ConceptDictionary.from_json(path)
+    undecided = []
+    for name in dictionary.keys():
+        try:
+            declared_value_kind(dictionary[name], database="any")
+        except ConceptValueKindUndeclared:
+            undecided.append(name)
+    assert undecided == []
 
 
 def test_text_concepts_stay_text_whatever_their_values_look_like():
@@ -70,12 +91,83 @@ def test_text_concepts_stay_text_whatever_their_values_look_like():
 
 def test_numeric_parsing_matches_the_sampled_route_parser():
     # The sampled route parsed with pd.to_numeric(errors="coerce"); every form
-    # it accepted or refused must come out the same.
+    # it accepted or refused comes out the same.
     forms = pd.Series(
         ["1.5", " 2 ", "+3", "-4", "1e3", ".5", "7.", "0x10", "1,5", "5 mg", "", " ", "nan",
          "inf", "-inf", "NA", "Geïntubeerd", 6, 2.25, True, False, None],
         dtype=object,
     )
     old_route = pd.to_numeric(forms, errors="coerce")
-    for kind in ("numeric", "logical"):
-        pd.testing.assert_series_equal(coerce_declared_values(forms, kind), old_route)
+    pd.testing.assert_series_equal(coerce_declared_values(forms, "numeric"), old_route)
+
+
+def test_logical_values_keep_booleans_read_numbers_and_drop_text():
+    values = pd.Series([True, None, 1.0, 0, "0", "x", 2, False], dtype=object)
+    assert coerce_declared_values(values, "logical").tolist() == [
+        True, pd.NA, True, False, False, pd.NA, True, False,
+    ]
+    # Wherever the sampled route parsed a logical column, the truth value agrees.
+    old_route = pd.to_numeric(values, errors="coerce")
+    parsed = old_route.notna()
+    assert coerce_declared_values(values, "logical")[parsed].tolist() == old_route[parsed].ne(0).tolist()
+
+
+@pytest.mark.parametrize(
+    ("kind", "nullable", "aggregate"),
+    [("numeric", False, "median"), ("logical", False, "any"), ("logical", True, "max"), ("text", False, "first")],
+)
+def test_default_aggregate_follows_the_kind(kind, nullable, aggregate):
+    assert default_aggregate(kind, nullable_status=nullable) == aggregate
+
+
+def test_a_classless_unbounded_concept_refuses_text_and_asks_for_a_class():
+    from easyicu.concept.value_kind import implicitly_numeric
+
+    definition = _definition(None, name="custom_score")
+    assert implicitly_numeric(definition)
+    values = pd.Series(["3", "mild", None], dtype=object)
+    with pytest.raises(ConceptValueKindUndeclared, match="'custom_score' on 'miiv'.*declare class"):
+        coerce_declared_values(values, "numeric", refuse_text_for=(definition, "miiv"))
+    # Numeric text parses without complaint.
+    parsed = coerce_declared_values(pd.Series(["3", " 4 ", None], dtype=object), "numeric",
+                                    refuse_text_for=(definition, "miiv"))
+    assert parsed.tolist()[:2] == [3, 4]
+
+
+@pytest.mark.parametrize("declaration", [{"class_name": "num_cncpt"}, {"minimum": 1.0}])
+def test_a_declared_numeric_concept_turns_text_into_missing(declaration):
+    from easyicu.concept.value_kind import implicitly_numeric
+
+    assert not implicitly_numeric(_definition(**declaration))
+    values = pd.Series(["3", "Geïntubeerd", None], dtype=object)
+    assert coerce_declared_values(values, "numeric").isna().tolist() == [False, True, True]
+
+
+@pytest.mark.parametrize("include_sofa2", [False, True])
+def test_shipped_implicit_numerics_are_the_unbounded_raw_measurements(include_sofa2):
+    from easyicu.concept.value_kind import implicitly_numeric
+    from easyicu.resources import load_dictionary
+
+    dictionary = load_dictionary(include_sofa2=include_sofa2)
+    implicit = sorted(name for name in dictionary.keys() if implicitly_numeric(dictionary[name]))
+    # Each reads a numeric value column (labs, numericitems, observations), so
+    # the refusal can only fire on a source that starts publishing text.
+    assert implicit == [
+        "bnd", "bun_raw", "crea_raw", "etco2_raw", "hct_raw", "hgb_raw", "inr_pt", "minute_vol_raw",
+        "myoglobin_raw", "na_raw", "ph_raw", "temp_raw",
+    ]
+    for name in dictionary.keys():
+        declared_value_kind(dictionary[name], database="any")
+
+
+def test_export_keeps_a_text_concept_text_when_its_batch_holds_only_codes():
+    from easyicu.api.extraction import _normalise_module_frame_for_parquet
+
+    frame = pd.DataFrame({
+        "stay_id": [1, 2], "charttime": [0.0, 1.0],
+        "icu_unit_type": pd.Series(["2", "5"], dtype=object),
+        "tgcs": pd.Series(["14", "Unable to score due to medication"], dtype=object),
+    })
+    out = _normalise_module_frame_for_parquet(frame, ["icu_unit_type", "tgcs"], reorder=False)
+    assert out["icu_unit_type"].tolist() == ["2", "5"]
+    assert out["tgcs"].isna().tolist() == [False, True]

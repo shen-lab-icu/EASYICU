@@ -2468,13 +2468,29 @@ def _normalise_module_frame_for_parquet(result, concepts, *, reorder=True):
 
     # Indicator concepts can arrive as bool/float/NA object columns.  Arrow
     # cannot write that mixed representation, while genuine text columns must
-    # stay text.
+    # stay text.  A concept's declared value kind decides, never whether this
+    # batch's cells happen to parse: a text concept whose batch holds only
+    # numeric-looking codes stays text.  Owner sidecar columns outside the
+    # dictionary keep the all-cells-parse rule.
+    kinds = _declared_export_value_kinds()
     for column in result.columns:
         if result[column].dtype == object:
+            kind = kinds.get(column)
+            if kind == "text":
+                continue
             numeric = pd.to_numeric(result[column], errors="coerce")
-            if bool((numeric.notna() | result[column].isna()).all()):
+            if kind is not None or bool((numeric.notna() | result[column].isna()).all()):
                 result[column] = numeric
     return result
+
+
+@lru_cache(maxsize=1)
+def _declared_export_value_kinds():
+    """Declared value kind of every shipped concept, by concept name."""
+    from ..concept.value_kind import declared_value_kind
+
+    dictionary = load_dictionary(include_sofa2=True)
+    return {name: declared_value_kind(dictionary[name], database="export") for name in dictionary.keys()}
 
 
 def _release_stream_batch_memory(

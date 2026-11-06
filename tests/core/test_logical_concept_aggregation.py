@@ -48,7 +48,9 @@ def test_merged_boolean_nulls_survive_parquet(
         "derived_flag": ICUTable(flag, ["stay_id"], "charttime", "derived_flag"),
     }
     resolver = ConceptResolver(ConceptDictionary({
-        name: ConceptDefinition(name=name, sources={}) for name in tables
+        # The flag is declared logical; its value kind never comes from the batch.
+        name: ConceptDefinition(name=name, sources={}, class_name="lgl_cncpt" if name == "derived_flag" else None)
+        for name in tables
     }))
     monkeypatch.setattr(resolver, "_ensure_concept_loaded", lambda name, *args, **kwargs: tables[name])
     result = resolver.load_concepts(
@@ -88,7 +90,7 @@ def test_boolean_normalization_preserves_the_input_frame_and_index():
     frame.index = pd.Index([9, 2, 9], name="row")
     frame.attrs["owner"] = "synthetic"
     original = frame.copy(deep=True)
-    result = ConceptResolver._ensure_requested_concept_columns(frame, iter(["derived"]))
+    result = ConceptResolver._ensure_requested_concept_columns(frame, iter(["derived"]), logical_names={"derived"})
     expected = frame.astype({"derived": "boolean"})
     pd.testing.assert_frame_equal(result, expected)
     pd.testing.assert_frame_equal(frame, original)
@@ -759,6 +761,7 @@ def test_recursive_bool_callback_load_concepts_uses_any_after_callback() -> None
                 },
             ),
             "derived_flag": ConceptDefinition(
+                class_name="lgl_cncpt",
                 name="derived_flag",
                 sources={},
                 sub_concepts=["marker"],
