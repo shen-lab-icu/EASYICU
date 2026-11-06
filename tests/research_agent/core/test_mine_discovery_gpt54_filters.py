@@ -125,6 +125,7 @@ def test_probe_resolves_canonical_column_and_never_fakes_joint(tmp_path) -> None
                    {"stay_id": [1, 2, 3, 4], "peep": [5.0, 8.0, None, None]})
     _write_parquet(tmp_path / "renal.parquet",
                    {"stay_id": [1, 2, 3, 4], "aki": [1, None, 1, 1]})
+    (tmp_path / "_manifest.json").write_text("{}", encoding="utf-8")  # a published export
     runner.EXPORT = tmp_path
 
     col_index = runner._build_column_index()

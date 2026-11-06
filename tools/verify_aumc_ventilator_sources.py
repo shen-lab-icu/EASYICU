@@ -28,6 +28,12 @@ def main():
 
 
 def verify(args, output, con):
+    from easyicu.export_publication import require_published_export_package
+
+    # --before/--after are ventilator module files of two exports: each must
+    # come from a published package (B-EXPORT-PARTIAL).
+    for module_file in (args.before, args.after):
+        require_published_export_package(Path(module_file).parent)
     con.read_parquet(args.before).create_view('old')
     con.read_parquet(args.after).create_view('new')
     raw = Path(args.raw)

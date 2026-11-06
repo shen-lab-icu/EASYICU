@@ -671,3 +671,98 @@ def test_the_source_status_profiler_never_decodes_an_unpublished_export(tmp_path
             "--out-dir", str(tmp_path / "out"),
         ])
     assert decoded == []
+
+
+# --- B15: export consumers in the remaining tools ----------------------------
+
+_B15_STATES = ("marker", "marker_with_manifest", "manifest_missing", "published")
+
+
+def _b15_package(root: Path, state: str) -> Path:
+    import pandas as pd
+
+    root.mkdir(parents=True)
+    if state.startswith("marker"):
+        (root / publication.IN_PROGRESS_MARKER).write_text("", encoding="utf-8")
+    if state in {"marker_with_manifest", "published"}:
+        (root / publication.NATIVE_MANIFEST).write_text("{}", encoding="utf-8")
+    frame = pd.DataFrame({"stay_id": [1, 2], "charttime": [1.0, 2.0], "charlson": [0, 1],
+                          "death": [0, 1], "map": [70.0, 80.0]})
+    for name in ("first_day.parquet", "other_scores.parquet",
+                 "vitals_dbp_hr_map_resp_etc7.parquet"):
+        frame.to_parquet(root / name)
+    return root
+
+
+@pytest.mark.parametrize("state", _B15_STATES)
+def test_the_kdigo_gradient_materializer_gates_every_export_read(tmp_path, monkeypatch, state):
+    monkeypatch.syspath_prepend(str(REPO))
+    tool = _load_script("r13partial_e3_gradient", "tools/materialize_e3_miiv_kdigo_gradient.py")
+    root = _b15_package(tmp_path / "export", state)
+    calls = (
+        lambda: tool._one_row_per_stay(root / "first_day.parquet", columns=["stay_id"],
+                                       label="full6 first_day"),
+        lambda: tool._charlson_24h(root / "other_scores.parquet"),
+        lambda: tool._assemble_cohort(raw_root=tmp_path / "raw", export_root=root,
+                                      parts=tmp_path / "parts", identity_path=tmp_path / "id",
+                                      identity_sha256="0" * 64),
+    )
+    if state != "published":
+        for call in calls:
+            with pytest.raises(publication.NativeExportUnpublishedError):
+                call()
+        return
+    assert list(calls[0]()["stay_id"]) == [1, 2]
+    assert list(calls[1]()["charlson"]) == [0, 1]
+    with pytest.raises(ValueError, match="raw icustays"):  # past the gate: raw input next
+        calls[2]()
+
+
+@pytest.mark.parametrize("state", _B15_STATES)
+def test_the_s6_harness_gates_its_cohort_builders_and_smoke(tmp_path, monkeypatch, state):
+    harness = _load_script("r13partial_s6", "tools/run_idea_mining_s6_validation_harness.py")
+    root = _b15_package(tmp_path / "export", state)
+
+    class _Fetched(Exception):
+        pass
+
+    def _fetch(**_kwargs):
+        raise _Fetched
+
+    monkeypatch.setattr(harness, "fetch_review_editorial_articles", _fetch)
+    output = tmp_path / "smoke"
+    smoke = lambda: harness.run_yield_smoke(  # noqa: E731
+        output_dir=output, search_client=None, data_dir=root, article_count=1, top_n=1)
+    if state != "published":
+        with pytest.raises(publication.NativeExportUnpublishedError):
+            harness._aggregate_column(root, "vitals_dbp_hr_map_resp_etc7.parquet", "map", "median")
+        with pytest.raises(publication.NativeExportUnpublishedError):
+            harness.build_wide_cohort(root, tmp_path / "wide.parquet")
+        with pytest.raises(publication.NativeExportUnpublishedError):
+            smoke()
+        assert not output.exists()  # refused before any literature or output work
+        return
+    aggregated = harness._aggregate_column(
+        root, "vitals_dbp_hr_map_resp_etc7.parquet", "map", "median")
+    assert list(aggregated["map"]) == [70.0, 80.0]
+    with pytest.raises(FileNotFoundError):  # past the gate: the outcome module is absent
+        harness.build_wide_cohort(root, tmp_path / "wide.parquet")
+    with pytest.raises(_Fetched):
+        smoke()
+
+
+def test_the_aumc_ventilator_check_refuses_an_unpublished_module_file(tmp_path):
+    from types import SimpleNamespace
+
+    tool = _load_script("r13partial_aumc_vent", "tools/verify_aumc_ventilator_sources.py")
+    before = _b15_package(tmp_path / "before", "published")
+    after = _b15_package(tmp_path / "after", "marker_with_manifest")
+
+    class _NoRead:
+        def read_parquet(self, *_args, **_kwargs):
+            raise AssertionError("read before the publication gate")
+
+    args = SimpleNamespace(before=str(before / "first_day.parquet"),
+                           after=str(after / "first_day.parquet"), raw=str(tmp_path))
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        tool.verify(args, tmp_path / "receipt.json", _NoRead())

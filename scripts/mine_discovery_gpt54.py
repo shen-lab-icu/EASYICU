@@ -69,6 +69,7 @@ from easyicu.research_agent.providers.factory import (  # noqa: E402
 )
 
 import run_idea_mining_s6_validation_harness as H  # noqa: E402
+from easyicu.export_publication import require_published_export_package  # noqa: E402
 
 EXPORT = Path(
     os.environ.get(
@@ -99,6 +100,7 @@ def _build_column_index() -> dict[str, str]:
     exports the column as ``aki``). Without the canonical alias, AKI-outcome ideas
     silently mis-probe as "absent"."""
     idx: dict[str, str] = {}
+    require_published_export_package(EXPORT)
     for f in sorted(glob.glob(str(EXPORT / "*.parquet"))):
         try:
             names = pq.read_schema(f).names
@@ -123,6 +125,7 @@ def _present_stays(col_index: dict[str, str], concept: str) -> Optional[set]:
     if f is None:
         return None
     # find the actual column physically present in that file
+    require_published_export_package(Path(f).parent)  # file-level: its package
     names = pq.read_schema(f).names
     col = concept if concept in names else next(
         (c for c in names if normalize_concept_name(c) == normalize_concept_name(concept)),
