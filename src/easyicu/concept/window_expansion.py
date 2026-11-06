@@ -57,7 +57,12 @@ def clip_episode_windows(
         points &= le(start, upper)
     valid |= points
     out = frame.loc[valid].copy()
-    clipped_start = start.loc[valid].clip(lower=lower)
+    # Only a real interval is clipped. A point row keeps its own time, as the
+    # ordinary point quarantine keeps it: the inclusive decimal lower bound
+    # admits a point a rounding step below the bound, and clamping it would
+    # move it onto the bound on this path only (delta4 D4-POINT-TIME).
+    kept_start = start.loc[valid]
+    clipped_start = kept_start.where(~window.loc[valid], kept_start.clip(lower=lower))
     clipped_end = end.loc[valid]
     if not keep_post_discharge:
         clipped_end = clipped_end.clip(upper=upper.loc[valid])
@@ -167,22 +172,27 @@ def expand_windows_inclusive_any(
     idx_col: str,
     id_cols: List[str],
     value_col: str,
-    dur_hours: pd.Series,
+    dur_hours: Optional[pd.Series],
     interval_hours: float = 1.0,
 ) -> pd.DataFrame:
     """ricu ``expand(x, aggregate = "any")`` for a logical window table.
 
     ricu 0.6.3 (``expand``): ``end := re_time(start + dur, interval)`` where
     ``re_time`` is ``round_to`` = floor to the interval, rows with a missing
-    start or end are dropped, rows with ``start <= end`` become
+    start or end are dropped (``rm_na``), rows with ``start <= end`` become
     ``seq(start, end, step)`` (both ends included), and cells are aggregated
     with ``any`` so a TRUE window wins a cell it shares with a FALSE one. The
     start sits on the grid because ricu loads the index at the interval; it is
-    floored here for the same reason. A row without a duration occupies its
-    own cell (a zero-length window), so a point assessment is not dropped.
-    As in ricu (``x[end < 0, end := 0]``), a window that closes before
-    admission on an admission-relative clock is extended to hour zero; the
-    eICU demo had six GCS cells where only this differed from ricu.
+    floored here for the same reason. As in ricu (``x[end < 0, end := 0]``), a
+    window that closes before admission on an admission-relative clock is
+    extended to hour zero.
+
+    ``dur_hours`` is ``None`` for a point table (no duration column; SICdb and
+    AUMC publish hourly airway points): ricu expands only a ``win_tbl``, so
+    each point stays in its own cell, merged with ``any``, never clamped or
+    extended (delta4 D4G-POINT). A window whose declared duration is missing
+    is dropped, as ``rm_na`` drops it; it is not a zero-length exposure
+    (D4G-MISSING-DURATION). An explicit zero duration is a one-cell window.
     """
 
     if interval_hours <= 0:
@@ -194,12 +204,15 @@ def expand_windows_inclusive_any(
         return empty
 
     raw_start, kind = _clock_hours(data[idx_col])
-    duration = pd.to_numeric(dur_hours, errors="coerce").to_numpy(dtype=np.float64)
-    duration = np.where(np.isnan(duration), 0.0, duration)
     start = np.floor(raw_start / interval_hours) * interval_hours
-    end = np.floor((start + duration) / interval_hours) * interval_hours
-    if kind != "datetime":
-        end = np.where(end < 0, 0.0, end)
+    if dur_hours is None:
+        end = start
+    else:
+        # A missing duration stays NaN, so the finite mask below drops it.
+        duration = pd.to_numeric(dur_hours, errors="coerce").to_numpy(dtype=np.float64)
+        end = np.floor((start + duration) / interval_hours) * interval_hours
+        if kind != "datetime":
+            end = np.where(end < 0, 0.0, end)
     valid = np.isfinite(start) & np.isfinite(end) & (end >= start)
     counts = np.where(valid, np.rint((np.where(valid, end, 0) - np.where(valid, start, 0)) / interval_hours) + 1, 0).astype(np.int64)
     total = int(counts.sum())
@@ -255,6 +268,8 @@ def publish_inclusive_any_window(table, concept_name: str, interval_hours: float
 
     The window table becomes a time-series table (ids, index, value) built by
     :func:`expand_windows_inclusive_any`; it carries no duration afterwards.
+    A table without a duration column is a point table: its rows keep their
+    own cells.
     """
 
     from ..table import ICUTable
@@ -268,7 +283,10 @@ def publish_inclusive_any_window(table, concept_name: str, interval_hours: float
         idx_col=index,
         id_cols=id_cols,
         value_col=concept_name,
-        dur_hours=window_duration_hours(frame, dur, concept=concept_name),
+        dur_hours=(
+            window_duration_hours(frame, dur, concept=concept_name)
+            if dur and dur in frame.columns else None
+        ),
         interval_hours=interval_hours,
     )
     return ICUTable(

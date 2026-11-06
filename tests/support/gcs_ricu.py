@@ -36,8 +36,15 @@ def airway_windows(hours: Iterable[float], minutes: Iterable[float], flags: Iter
     return WinTbl(data=frame, id_vars=[ID], index_var=TIME, dur_var="dur_var")
 
 
+def airway_points(hours: Iterable[float], flags: Iterable[bool]) -> ICUTable:
+    """A point ``ett_gcs`` table (no duration), as SICdb and AUMC publish it."""
+    frame = pd.DataFrame({ID: 1, TIME: [float(h) for h in hours], "ett_gcs": list(flags)})
+    frame[ID] = frame[ID].astype("int64")
+    return ICUTable(data=frame, id_columns=[ID], index_column=TIME, value_column="ett_gcs")
+
+
 def run_gcs(
-    egcs: ICUTable, mgcs: ICUTable, vgcs: ICUTable, ett_gcs: WinTbl,
+    egcs: ICUTable, mgcs: ICUTable, vgcs: ICUTable, ett_gcs: ICUTable,
     tgcs: Optional[ICUTable] = None,
 ) -> Dict[float, float]:
     tables = {
