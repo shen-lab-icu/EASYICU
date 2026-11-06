@@ -3669,11 +3669,31 @@ class ConceptResolver:
                                     )
                                 _wt_window_sql = IcuWindowSql(_wt_conn, _wt_window)
                                 # eICU offsets are minutes; the raw path divides by 60.
-                                _wt_query = _wt_query.replace(
-                                    "{__easyicu_window__}",
-                                    _wt_window_sql.condition(f"{_wt_time_col} / 60.0", _wt_id_col),
+                                _wt_window_cond = _wt_window_sql.condition(
+                                    f"{_wt_time_col} / 60.0", _wt_id_col
                                 )
+                                _wt_query = _wt_query.replace("{__easyicu_window__}", _wt_window_cond)
+                                # The bounds sit in WHERE, so out-of-bounds values
+                                # never reach the result: count this read's raw
+                                # and in-bounds values first, so that a read whose
+                                # values all contradict the declared bounds is
+                                # refused (bounds_unit_suspect) like every other
+                                # bounded path, never published as absent
+                                # (Codex delta5 D5V-WIDE-SINGLE).
+                                _wt_count_query = None
+                                if _wt_bounds:
+                                    _wt_in_bounds = _wt_bounds.removeprefix(' AND ')
+                                    _wt_count_query = f"""
+                                        SELECT COUNT(CASE WHEN {_wt_val_var} <> 0 THEN 1 END),
+                                               COUNT(CASE WHEN {_wt_in_bounds} THEN 1 END)
+                                        FROM read_parquet({_wt_read}, union_by_name=true)
+                                        WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_window_cond}
+                                    """
                                 try:
+                                    _wt_counts = (
+                                        _wt_conn.execute(_wt_count_query).fetchone()
+                                        if _wt_count_query is not None else None
+                                    )
                                     frame = _wt_conn.execute(_wt_query).fetchdf()
                                 except Exception as exc:
                                     # Raw loading is not the same definition (window
@@ -3688,6 +3708,17 @@ class ConceptResolver:
                                 finally:
                                     _wt_window_sql.close()
                                 note_duckdb_route("wide_single_column")
+                                if _wt_counts is not None:
+                                    from ..utils.declared_units import refuse_bounds_unit_suspect
+
+                                    refuse_bounds_unit_suspect(
+                                        quantity=concept_name,
+                                        site=f"concept.wide_single_column[{db_name}.{source.table}]",
+                                        nonzero_values=int(_wt_counts[0] or 0),
+                                        bounded_non_null=int(_wt_counts[1] or 0),
+                                        value_min=definition.minimum,
+                                        value_max=definition.maximum,
+                                    )
                                 if _wt_exact and _wt_val_var in frame.columns:
                                     from ..utils.exact_sum import exact_terms_to_values
 
