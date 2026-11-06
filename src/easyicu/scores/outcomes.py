@@ -362,15 +362,17 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
         text = followup.astype(str).str.strip().str.lower()
         followup_days.loc[text.str.contains("6 month", na=False)] = 180.0
         followup_days.loc[text.str.contains("1 year", na=False)] = 365.0
-        # SICdb 1.0.8 leaves ESOT empty for survivors: set the category by the
-        # follow-up policy and flag every survivor it decides.
-        empty = followup.isna() & ~recorded
+        # SICdb 1.0.8 leaves ESOT empty for survivors and for 33 recorded
+        # deaths without OffsetOfDeath: set every empty category by the
+        # follow-up policy (it bounds the deaths' evaluable horizons too) and
+        # flag the survivors it decides; death status is unchanged.
+        empty = followup.isna()
         year_column = cmap.get("admissionyear")
         years = cases[year_column] if year_column is not None else pd.Series(np.nan, index=cases.index)
         rebuilt = sic_followup_from_admission_year(years, policy=followup_policy)
         followup_days = followup_days.where(~empty, rebuilt)
-        df["followup_assumed"] = empty.to_numpy()
-        unknown = empty & rebuilt.isna()
+        df["followup_assumed"] = (empty & ~recorded).to_numpy()
+        unknown = empty & rebuilt.isna() & ~recorded
         df["followup_category_unknown"] = unknown.to_numpy()
         if unknown.any():
             LOGGER.warning(

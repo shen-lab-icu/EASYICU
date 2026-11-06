@@ -150,3 +150,21 @@ def test_an_unknown_disposition_has_no_mortality_horizon(monkeypatch):
     for horizon in ("mort_28d", "mort_90d", "mort_365d"):
         assert pd.isna(result.loc[1, horizon])
 
+
+def test_a_recorded_death_with_an_empty_category_keeps_its_year_bound(monkeypatch):
+    """1.0.8: 33 recorded deaths have neither OffsetOfDeath nor ESOT."""
+    cases = _cases_108()
+    # Case 7 died in hospital (3130) without OffsetOfDeath or ESOT, admitted
+    # 2021: its six-month category bounds the evaluable horizons.
+    cases = pd.concat([cases, pd.DataFrame({
+        "CaseID": [7], "ICUOffset": [0], "TimeOfStay": [86_400], "OffsetOfDeath": [None],
+        "HospitalDischargeType": [3130], "DischargeState": [2202], "AdmissionYear": [2021],
+        "EstimatedSurvivalObservationTime": [None],
+    })], ignore_index=True)
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert base.loc[7, "source_bound_days"] == 180.0
+    assert not base.loc[7, "followup_assumed"]
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+    assert bool(result.loc[7, "mort_28d"]) is True
+    assert bool(result.loc[7, "mort_28d_assumption_based"]) is False
