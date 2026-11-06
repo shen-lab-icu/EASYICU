@@ -161,3 +161,30 @@ def test_ordinary_float_input_is_byte_identical_to_the_previous_algorithm():
     got = exact_groupby_sum(frame, ["k"], "v")["v"].to_numpy()
     want = previous(frame)
     assert got.tobytes() == want.tobytes()
+
+
+@pytest.mark.parametrize("values", [[_BIG, _BIG], [-_BIG, -_BIG / 2**52]])
+def test_a_two_value_group_beyond_the_range_is_refused_too(values):
+    with pytest.raises(ExactSumOverflowError) as caught:
+        exact_group_totals(np.zeros(2, dtype=np.int64), np.array(values), 1)
+    assert caught.value.reason == EXACT_SUM_OVERFLOW
+    with pytest.raises(ExactSumOverflowError):
+        exact_groupby_sum(pd.DataFrame({"k": [1, 1], "v": values}), ["k"], "v")
+
+
+@pytest.mark.parametrize(
+    "values,expected",
+    [([_BIG], _BIG), ([_BIG, -_BIG], 0.0), ([np.inf, _BIG], np.inf), ([np.inf, -np.inf], np.nan)],
+)
+def test_small_groups_keep_exact_and_ieee_results(values, expected):
+    totals, _ = exact_group_totals(np.zeros(len(values), dtype=np.int64), np.array(values), 1)
+    assert (np.isnan(totals[0]) and np.isnan(expected)) or totals[0] == expected
+
+
+def test_no_path_falls_back_to_a_floating_point_summation():
+    import inspect
+
+    from easyicu.utils import exact_sum
+
+    source = inspect.getsource(exact_sum)
+    assert "np.sum(" not in source and ".sum()" not in source

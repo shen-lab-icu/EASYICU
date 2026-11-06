@@ -8,14 +8,15 @@ which is the same for any order of the same multiset of values.
 
 Groups of one or two values are already correctly rounded by a single IEEE
 addition (``0 + a`` is exact, ``a + b`` is correctly rounded and commutative),
-so only groups of three or more values take the ``fsum`` path. Non-finite
-groups keep IEEE semantics (``inf + -inf`` is NaN), summed in sorted order.
+so only groups of three or more values take the ``fsum`` path. A group with
+an infinity keeps its IEEE result (``inf + -inf`` is NaN), decided directly.
 A group of finite values whose partial sums overflow (``fsum`` then raises,
 in some orders only) is summed as exact rationals. Its correctly rounded total
-is the same for every order. If the exact total itself is beyond the float64
-range, it is refused with :class:`ExactSumOverflowError`, reason
-``exact_sum_overflow``. The former fallback to a floating-point sum published
-an order-dependent result, finite for one order and infinite for another.
+is the same for every order. A group of finite values whose exact total is
+beyond the float64 range, of any size, is refused with
+:class:`ExactSumOverflowError`, reason ``exact_sum_overflow``. No path falls
+back to a floating-point summation. The former fallback published an
+order-dependent result, finite for one order and infinite for another.
 
 Pandas nullable numeric columns (``Int64``, ``Float64`` and the like) are
 converted to float64 with ``NA`` as NaN and take the same path, so they
@@ -66,20 +67,32 @@ class ExactSumOverflowError(ArithmeticError):
 
 
 def _fsum(values: np.ndarray) -> float:
+    if not np.isfinite(values).all():
+        return _ieee_non_finite_sum(values)
     try:
         return math.fsum(values.tolist())
-    except ValueError:
-        # inf + -inf: IEEE semantics (NaN), the same for every order.
-        return float(np.sum(np.sort(values)))
     except OverflowError:
-        if not np.isfinite(values).all():
-            # Unreachable with fsum's own inf handling; kept as IEEE.
-            return float(np.sum(np.sort(values)))
         # fsum raises on an overflowing partial sum, which depends on the
         # order: [M, -M, M] passes and [M, M, -M] raises. Sum the exact
         # rationals instead (each float is an integer multiple of 2**-1074);
         # the correctly rounded total is the same for every order.
         return _exact_rational_sum(values)
+
+
+def _ieee_non_finite_sum(values: np.ndarray) -> float:
+    """The IEEE sum of a group holding NaN or an infinity, in any order.
+
+    NaN, or both infinities, give NaN; otherwise the one infinity's sign wins
+    over every finite term. Decided directly, no floating-point summation.
+    """
+
+    if np.isnan(values).any():
+        return math.nan
+    positive = bool(np.isposinf(values).any())
+    negative = bool(np.isneginf(values).any())
+    if positive and negative:
+        return math.nan
+    return math.inf if positive else -math.inf
 
 
 _SCALE_BITS = 1074  # every finite float64 is an integer multiple of 2**-1074
@@ -121,6 +134,12 @@ def exact_group_totals(
     counts = np.bincount(codes, minlength=n_groups)
     # Exact for groups of at most two values.
     totals = np.bincount(codes, weights=values, minlength=n_groups)
+    # Two finite values whose exact total is beyond the float64 range round
+    # to an infinity: refused, as for larger groups.
+    non_finite_terms = np.bincount(codes, weights=~np.isfinite(values), minlength=n_groups)
+    invented = (counts <= 2) & (non_finite_terms == 0) & ~np.isfinite(totals)
+    if invented.any():
+        raise ExactSumOverflowError(int(counts[invented][0]))
     many = counts >= 3
     if many.any():
         rows = many[codes]
