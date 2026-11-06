@@ -738,8 +738,8 @@ def _batch_stay_scope(patient_ids) -> Optional[tuple[str, frozenset]]:
     return None
 
 
-def _in_stay_table_unit(method):
-    """Run ``load_concepts`` inside the stay-table unit (Codex delta8c).
+def _in_binding_unit(method):
+    """Run ``load_concepts`` inside the run's binding unit (Codex delta8c).
 
     A top-level call joins the active unit (an extraction run, or the
     loader's public call) or opens its own, before anything can read a
@@ -752,13 +752,14 @@ def _in_stay_table_unit(method):
 
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        from .stay_tables import StayTableUnbound, stay_table_unit, stay_table_unit_active
+        from ..storage_binding import active_unit, binding_unit
+        from .stay_tables import StayTableUnbound
 
         if getattr(self, "_load_depth", 0):
-            if not stay_table_unit_active():
+            if active_unit() is None:
                 raise StayTableUnbound("load_concepts")
             return method(self, *args, **kwargs)
-        with stay_table_unit():
+        with binding_unit():
             try:
                 return method(self, *args, **kwargs)
             finally:
@@ -1456,7 +1457,7 @@ class ConceptResolver:
         
         return patient_ids
 
-    @_in_stay_table_unit
+    @_in_binding_unit
     def load_concepts(
         self,
         concept_names: Iterable[str],

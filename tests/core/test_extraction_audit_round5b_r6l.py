@@ -392,3 +392,13 @@ def test_r6_f008_real_columns_keep_cvp_flags_in_single_batch_and_native(tmp_path
     assert "arterial_diastolic_match" in published.loc[7., "cvp_qc"]
     assert published.loc[8., "cvp_qc"] == "kept"  # A measured zero is not missing.
     assert pd.isna(published.loc[11., "cvp_qc"])
+
+
+@pytest.fixture(autouse=True)
+def _one_run():
+    """Each test is one run: resolver internals called directly read stay
+    tables under its source binding (Codex delta8c), as load_concepts does."""
+    from easyicu.storage_binding import binding_unit
+
+    with binding_unit():
+        yield

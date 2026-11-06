@@ -2794,8 +2794,8 @@ def _write_isolated_stream_batch(
 ) -> None:
     """Extract one patient batch and atomically write it from a fresh process.
 
-    ``stay_binding`` is the parent run's stay-table source binding: this
-    child's reads verify against it (``concept.stay_tables``).
+    ``stay_binding`` is the parent run's source binding: this child's
+    storage reads verify against it (``storage_binding``).
     """
 
     import os
@@ -2816,9 +2816,9 @@ def _write_isolated_stream_batch(
     frame = None
     table = None
     try:
-        from ..concept.stay_tables import stay_table_unit
+        from ..storage_binding import binding_unit
 
-        with stay_table_unit(stay_binding):
+        with binding_unit(stay_binding):
             batch = _load_stream_module_batch(
                 _lc,
                 module_name=module_name,
@@ -3274,10 +3274,10 @@ def _stream_module_batches_to_parquet(
     batch_process_context = _get_extraction_mp_context(mp) if isolate_batch_process else None
     stay_binding = None
     if isolate_batch_process and load_kwargs.get("data_path"):
-        from ..concept.stay_tables import child_stay_binding
+        from ..storage_binding import child_binding
         from ..datasource import storage_source
 
-        stay_binding = child_stay_binding(storage_source(
+        stay_binding = child_binding(storage_source(
             str(load_kwargs.get("database") or ""), str(load_kwargs["data_path"]),
         ))
     writer = None
@@ -3663,12 +3663,12 @@ def _run_module_extraction(
                     "streamed module export requires patient_ids and batch_size"
                 )
             streamed = True
-            from ..concept.stay_tables import stay_table_unit
+            from ..storage_binding import binding_unit
 
-            # One stay-table unit across the module's batches (or the run's,
-            # when a group worker opened it): every load verifies against one
-            # source binding; batch boundaries drop only the payload.
-            with stay_table_unit():
+            # One binding unit across the module's batches (or the run's, when a
+            # group worker opened it): every read verifies against one source
+            # binding; batch boundaries drop only the stay-table payload.
+            with binding_unit():
                 stream_info = _stream_module_batches_to_parquet(
                     module_name,
                     concepts,
@@ -4981,8 +4981,8 @@ def _extract_module_group_worker(
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
 
-    ``stay_binding`` is the extraction run's stay-table source binding; every
-    module of the group verifies against it (``concept.stay_tables``).
+    ``stay_binding`` is the extraction run's source binding; every module of
+    the group verifies against it (``storage_binding``).
 
     keep_cache 让组内模块共享 raw/table 缓存（受 EASYICU_CACHE_BUDGET_MB
     字节预算约束），chartevents/labevents 等重表每组只扫一次，而不是每
@@ -5000,9 +5000,9 @@ def _extract_module_group_worker(
     else:
         _extract_worker_env_setup(data_path, resource_budget_mb, max_workers=max_workers)
     from easyicu.api import keep_cache as _keep_cache
-    from easyicu.concept.stay_tables import stay_table_unit
+    from easyicu.storage_binding import binding_unit
 
-    with stay_table_unit(stay_binding), _keep_cache(
+    with binding_unit(stay_binding), _keep_cache(
         database=database, data_path=data_path, use_sofa2=use_sofa2
     ) as _loader:
         for module_name, concepts in module_specs:
@@ -8429,13 +8429,14 @@ def extract_database(
     )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
-    # The run's stay-table source binding, pinned once: every group worker
-    # (and its isolated batch children) verifies against it.
-    from ..concept.stay_tables import child_stay_binding
+    # The run's source binding, opened here with the stay-origin table
+    # pinned: every group worker (and its isolated batch children) verifies
+    # against it and extends it as it resolves tables.
+    from ..storage_binding import child_binding
     from ..datasource import storage_source
 
     run_stay_binding = (
-        child_stay_binding(storage_source(database, data_path)) if data_path else None
+        child_binding(storage_source(database, data_path)) if data_path else None
     )
     if (automatic_batch or normalized_module_batch_sizes) and not group_flag:
         # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.

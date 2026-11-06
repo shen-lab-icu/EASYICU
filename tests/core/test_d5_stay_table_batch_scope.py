@@ -7,7 +7,7 @@ returned; a later call for the same stays (another read path, a rerun
 after the installation was rewritten) met it and was refused as
 ``stay_table_source_changed``, although no batch was live any more. Now
 a top-level call outside a unit is its own unit and drops its binding
-and payload on return, while a run's ``stay_table_unit`` still shares one
+and payload on return, while a run's ``binding_unit`` still shares one
 read across its loads and still refuses a file that changes inside it.
 Rows are synthetic.
 """
@@ -20,11 +20,8 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import ConceptDictionary, ConceptResolver
-from easyicu.concept.stay_tables import (
-    StayTableSourceChanged,
-    stay_table_reads,
-    stay_table_unit,
-)
+from easyicu.concept.stay_tables import stay_table_reads
+from easyicu.storage_binding import StorageSourceChanged, binding_unit
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from tests.support.bucket_storage import write_fixture_parquet
@@ -75,12 +72,14 @@ def test_a_rewritten_installation_is_read_fresh_by_the_next_call(tmp_path):
 
 def test_a_change_inside_one_batch_is_still_refused(tmp_path):
     root = _install(tmp_path / "eicu", 10 * 60)
-    with stay_table_unit():
+    with binding_unit():
         _hr(root)
-        _install(root, 20 * 60)
-        with pytest.raises(StayTableSourceChanged) as error:
+        _install(root, 20 * 60)  # rewrites patient and vitalperiodic
+        with pytest.raises(StorageSourceChanged) as error:
             _hr(root)
-    assert error.value.reason == "stay_table_source_changed"
+    # Whichever bound file the next read meets first refuses (the run binds
+    # every storage read; a stay table refuses as StayTableSourceChanged).
+    assert error.value.reason in {"storage_source_changed", "stay_table_source_changed"}
     # The unit is over: its binding is dropped and the new bytes are read.
     pd.testing.assert_frame_equal(
         _hr(root), _hr(_install(tmp_path / "fresh", 20 * 60)), check_exact=True)
@@ -89,8 +88,8 @@ def test_a_change_inside_one_batch_is_still_refused(tmp_path):
 def test_nested_units_keep_the_outer_binding(tmp_path):
     root = _install(tmp_path / "eicu", 10 * 60)
     before = stay_table_reads()
-    with stay_table_unit() as outer:
-        with stay_table_unit() as inner:
+    with binding_unit() as outer:
+        with binding_unit() as inner:
             assert inner is outer
             _hr(root)
         _hr(root)

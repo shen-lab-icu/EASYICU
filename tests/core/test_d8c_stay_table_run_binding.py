@@ -29,12 +29,11 @@ from easyicu.concept import stay_tables
 from easyicu.concept.stay_tables import (
     StayTableSourceChanged,
     StayTableUnbound,
-    child_stay_binding,
     drop_stay_table_frames,
     held_stay_tables,
     stay_table_reads,
-    stay_table_unit,
 )
+from easyicu.storage_binding import binding_unit, child_binding
 from easyicu.resources import load_dictionary
 from tests.support.stay_table_child import load_twice_in_own_unit, load_under_binding
 from tests.support.urine_raw_source import _load, _source
@@ -146,7 +145,7 @@ def test_base_then_dropped_payload_then_derived_still_verifies(tmp_path):
             _touch(patient)  # between the base and the derived concept
         return frame
 
-    with stay_table_unit():
+    with binding_unit():
         with pytest.raises(StayTableSourceChanged) as error:
             api._load_stream_module_batch(
                 load_concepts_fn, module_name="vitals",
@@ -161,7 +160,7 @@ def test_base_then_dropped_payload_then_derived_still_verifies(tmp_path):
 def test_a_dropped_payload_is_reread_and_verified(tmp_path):
     source = _eicu(tmp_path / "eicu")
     before = stay_table_reads()
-    with stay_table_unit():
+    with binding_unit():
         _load(source, ["pap_mean"], patient_ids=_ids())
         drop_stay_table_frames()
         _load(source, ["pap_mean"], patient_ids=_ids())
@@ -179,7 +178,7 @@ def test_concurrent_units_neither_share_nor_evict_and_each_refuses(tmp_path):
 
     def unit(name, stays):
         try:
-            with stay_table_unit():
+            with binding_unit():
                 _load(source, ["pap_mean"], patient_ids=_ids(stays))
                 loaded.wait(timeout=60)
                 touched.wait(timeout=60)
@@ -217,7 +216,7 @@ def test_chunk_threads_of_one_unit_keep_their_own_stay_sets(tmp_path):
         both.wait(timeout=60)  # both chunks hold their stay sets now
         _load(source, ["pap_mean"], patient_ids=_ids(stays))
 
-    with stay_table_unit():
+    with binding_unit():
         threads = [
             threading.Thread(target=contextvars.copy_context().run, args=(chunk, stays))
             for stays in ([1, 2], [2, 3])
@@ -305,9 +304,9 @@ def test_a_child_process_verifies_against_the_parent_binding(tmp_path):
     root = tmp_path / "eicu"
     source = _eicu(root)
     results = multiprocessing.get_context("spawn").Queue()
-    with stay_table_unit():
+    with binding_unit():
         _load(source, ["pap_mean"], patient_ids=_ids())
-        snapshot = child_stay_binding(source)
+        snapshot = child_binding(source)
     assert str(root / "patient.parquet") in snapshot["versions"]
     assert _in_child(snapshot, root, results) == "ok"
     _touch(root / "patient.parquet")

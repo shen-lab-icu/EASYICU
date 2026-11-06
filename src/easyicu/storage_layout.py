@@ -25,6 +25,7 @@ SCHEMA = "easyicu.bucket_storage/1"
 BUILDER_VERSION = "easyicu.bucket_builder/2"
 ORDINAL = "_easyicu_source_ordinal"
 MANIFEST = "_BUCKET_MANIFEST.json"
+BUILD_RECEIPT = "_BUCKET_BUILD_RECEIPT.json"
 # Two-level layout: one partition per value of a variable key (label/itemid),
 # then stay ranges inside each partition. The layout has M stay ranges (M a
 # power of two, M - 1 shared breakpoints, ``v <= b`` belongs to the earlier
@@ -114,7 +115,15 @@ class BucketLayout:
 
         ``stay_column``/``stay_values`` narrow only a variable layout whose
         stay key is that column; single-key layouts select exactly as before.
+        The selected part files are bound to the run (``storage_binding``).
         """
+        from .storage_binding import bind_files
+
+        targets, files = self._select(source, column, values, stay_column, stay_values)
+        bind_files(self.root.name, files)
+        return targets, files
+
+    def _select(self, source, column, values, stay_column, stay_values):
         values = None if values is None else tuple(values)
         if self.scheme == VARIABLE_SCHEME:
             return self._select_variable(source, column, values, stay_column, stay_values)
@@ -205,7 +214,7 @@ def _legacy_manifest(root: Path, manifest: dict, marker, allow: bool) -> dict:
     if not allow or root.name != "numericitems_bucket":
         raise BucketLayoutError("bucket_manifest_invalid", root)
     try:
-        receipt = json.loads((root / "_BUCKET_BUILD_RECEIPT.json").read_text())
+        receipt = json.loads((root / BUILD_RECEIPT).read_text())
         count = receipt["bucket_count"]
         schema = dict(receipt["source_schema"])
         if not (receipt["schema"] == "easyicu_itemid_bucket_cache_v1"):
@@ -286,8 +295,22 @@ def read_bucket_contract(
 
     Only footer validation is cached; file sizes and directory membership are
     checked on every open, including for an already resolved data source.
+    The manifest and the build receipt are bound to the run, with their
+    sha256 (``storage_binding``).
     """
-    root = Path(root)
+    from .storage_binding import bind_files
+
+    layout = _read_bucket_contract(Path(root), allow_legacy=allow_legacy, cache=cache)
+    receipt = layout.root / BUILD_RECEIPT
+    bind_files(
+        layout.root.name,
+        (layout.root / MANIFEST, *((receipt,) if receipt.is_file() else ())),
+        sha256=True,
+    )
+    return layout
+
+
+def _read_bucket_contract(root: Path, *, allow_legacy: bool, cache: dict | None) -> BucketLayout:
     if not (root / MANIFEST).is_file():
         raise BucketLayoutError("bucket_manifest_missing", root)
     if not (root / "_COMPLETE").is_file():
@@ -511,6 +534,18 @@ def _derived_from_base(root: Path, derived: dict) -> Path:
     return root.resolve().parent.joinpath(*relative.parts)
 
 
+def _derived_source(root: Path, derived: dict, entry: dict) -> Path:
+    """Where one ``derived_from`` file lives: the single derived-source path rule.
+
+    The recorded path is relative to :func:`_derived_from_base` and confined
+    below it; any other path is ``bucket_derived_from_invalid``.
+    """
+    relative = PurePosixPath(entry["path"])
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise BucketLayoutError("bucket_derived_from_invalid", root)
+    return _derived_from_base(root, derived).joinpath(*relative.parts)
+
+
 def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     """The flat source ``derived_from`` binds is still exactly what it recorded.
 
@@ -538,12 +573,10 @@ def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     if derived is None:
         return
     base = _derived_from_base(root, derived)
-    recorded: dict[str, tuple[Path, dict]] = {}
-    for entry in derived["files"]:
-        relative = PurePosixPath(entry["path"])
-        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
-            raise BucketLayoutError("bucket_derived_from_invalid", root)
-        recorded[relative.as_posix()] = (base.joinpath(*relative.parts), entry)
+    recorded: dict[str, tuple[Path, dict]] = {
+        PurePosixPath(entry["path"]).as_posix(): (_derived_source(root, derived, entry), entry)
+        for entry in derived["files"]
+    }
     stats = {}
     for name, (source, _entry) in recorded.items():
         try:
@@ -1076,6 +1109,20 @@ def _registered_outputs(index: dict, table: str) -> frozenset:
 
 def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
     """Fail closed unless a flat scan covers its table's whole inventory.
+
+    A verified non-empty set is bound to the run, as a set and per file
+    (``storage_binding``); see :func:`_verify_flat_inventory`.
+    """
+    from .storage_binding import bind_files, source_key
+
+    files = _verify_flat_inventory(source, table, files)
+    if files:
+        bind_files(table, files, key=source_key(source, table))
+    return files
+
+
+def _verify_flat_inventory(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
+    """The inventory check of :func:`verify_flat_scan`.
 
     The conversion manifest written when the installation was converted
     (``conversion_manifest.json``: each table's output files and total rows)

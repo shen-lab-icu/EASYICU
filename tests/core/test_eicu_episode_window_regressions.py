@@ -135,3 +135,13 @@ def test_eicu_los_is_unit_offset_minutes_in_days_for_each_unit_stay():
     assert summary["count"] == 3
     assert summary["median"] == 2.0
     assert summary["max"] == pytest.approx(506.4)
+
+
+@pytest.fixture(autouse=True)
+def _one_run():
+    """Each test is one run: resolver internals called directly read stay
+    tables under its source binding (Codex delta8c), as load_concepts does."""
+    from easyicu.storage_binding import binding_unit
+
+    with binding_unit():
+        yield

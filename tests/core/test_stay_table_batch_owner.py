@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pandas as pd
 from easyicu.concept import ConceptDictionary, ConceptResolver
-from easyicu.concept.stay_tables import stay_table_reads, stay_table_unit
+from easyicu.concept.stay_tables import stay_table_reads
+from easyicu.storage_binding import binding_unit
 from easyicu.config import load_src_cfg
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 from tests.support.bucket_storage import write_fixture_parquet
@@ -59,7 +60,7 @@ def _hr(source, stays):
 def test_one_read_per_batch_across_resolvers(tmp_path):
     source = _source(tmp_path / "eicu")
     before = stay_table_reads()
-    with stay_table_unit():  # a streamed export's run unit
+    with binding_unit():  # a streamed export's run unit
         _hr(source, [1, 2])
         # A dependency load of the same batch on a fresh resolver and source.
         _hr(ICUDataSource(load_src_cfg("eicu"), base_path=tmp_path / "eicu", enable_cache=False), [1, 2])
@@ -85,7 +86,7 @@ def test_batch_clip_equals_a_clip_from_the_whole_table(tmp_path):
 def test_subset_equals_the_filtered_read_it_replaces(tmp_path):
     source = _source(tmp_path / "eicu")
     resolver, _ = _hr(source, STAYS)
-    with stay_table_unit():  # every stay-table read is bound
+    with binding_unit():  # every stay-table read is bound
         owned = resolver._stay_table(
             source, "patient", stays=[4, 2], columns=["patientunitstayid", "admissionweight"]
         )
@@ -101,7 +102,7 @@ def test_subset_equals_the_filtered_read_it_replaces(tmp_path):
 def test_a_narrow_first_reader_cannot_narrow_a_later_one(tmp_path):
     source = _source(tmp_path / "eicu")
     resolver, _ = _hr(source, STAYS)
-    with stay_table_unit():
+    with binding_unit():
         resolver._stay_table(source, "patient", columns=["patientunitstayid"])
         later = resolver._stay_table(
             source, "patient", columns=["patientunitstayid", "unitdischargeoffset"])
@@ -113,7 +114,7 @@ def test_stays_outside_the_batch_are_read_directly(tmp_path):
     source = _source(tmp_path / "eicu")
     resolver, _ = _hr(source, [1, 2])
     before = stay_table_reads()
-    with stay_table_unit():
+    with binding_unit():
         frame = resolver._stay_table(source, "patient", stays=[3], columns=["patientunitstayid"])
     assert frame["patientunitstayid"].tolist() == [3]
     assert stay_table_reads() == before  # not cached under the batch scope

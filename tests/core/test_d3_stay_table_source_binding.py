@@ -26,8 +26,8 @@ from easyicu.concept.stay_tables import (
     StayTableSourceChanged,
     stay_table_frame,
     stay_table_reads,
-    stay_table_unit,
 )
+from easyicu.storage_binding import binding_unit
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu.storage_layout import StorageIntegrityError
@@ -78,14 +78,14 @@ def _hr(source, stays):
     )
 
 
-# A run (an extraction, or a loader call) opens one stay_table_unit; the
+# A run (an extraction, or a loader call) opens one binding_unit; the
 # loads inside it (several top-level resolver calls) share it, as here.
 
 
 def test_the_same_files_are_read_once_per_batch_across_sources(tmp_path):
     root = _install(tmp_path / "eicu")
     before = stay_table_reads()
-    with stay_table_unit():
+    with binding_unit():
         _hr(_source(root), [1, 2])
         _hr(_source(root), [1, 2])
     assert stay_table_reads() - before == 1
@@ -93,7 +93,7 @@ def test_the_same_files_are_read_once_per_batch_across_sources(tmp_path):
 
 def test_a_replaced_stay_table_within_the_batch_is_refused_not_reused(tmp_path):
     root = _install(tmp_path / "eicu")
-    with stay_table_unit():
+    with binding_unit():
         first = _hr(_source(root), [2, 4])
         # Same path, new bytes: stay 2 now stays 40 h instead of 24 h.
         write_fixture_parquet(_patient((48, 40, 36, 12)), root / "patient.parquet", index=False)
@@ -106,7 +106,7 @@ def test_a_replaced_stay_table_within_the_batch_is_refused_not_reused(tmp_path):
 
 def test_a_touched_stay_table_within_the_batch_is_refused(tmp_path):
     root = _install(tmp_path / "eicu")
-    with stay_table_unit():
+    with binding_unit():
         _hr(_source(root), [1, 2])
         stat = (root / "patient.parquet").stat()
         os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
@@ -138,7 +138,7 @@ def test_an_unscoped_read_is_bound_too(tmp_path):
     root = _install(tmp_path / "eicu")
     source = _source(root)
     resolver = ConceptResolver(ConceptDictionary.from_json(DICTIONARY))
-    with stay_table_unit():
+    with binding_unit():
         resolver._stay_table(source, "patient")
         stat = (root / "patient.parquet").stat()
         os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
@@ -170,7 +170,7 @@ def test_a_source_over_the_same_path_naming_other_files_is_refused(tmp_path):
     a.write_bytes(b"a"), b.write_bytes(b"bb")
     reads: list = []
     stays = ("patientunitstayid", frozenset({1}))
-    with stay_table_unit():
+    with binding_unit():
         first = stay_table_frame(_Files(tmp_path, [a]), "patient", stays, _reader(reads, "a"))
         # The unit is bound to file a for this source table: another file set
         # is a changed source, never another frame of the same run.
@@ -178,14 +178,14 @@ def test_a_source_over_the_same_path_naming_other_files_is_refused(tmp_path):
             stay_table_frame(_Files(tmp_path, [b]), "patient", stays, _reader(reads, "b"))
     assert error.value.reason == "stay_table_source_changed"
     assert reads == ["a"] and first["x"].tolist() == ["a"]
-    with stay_table_unit():  # a new run binds the new file set
+    with binding_unit():  # a new run binds the new file set
         second = stay_table_frame(_Files(tmp_path, [b]), "patient", stays, _reader(reads, "b"))
     assert second["x"].tolist() == ["b"]
 
 
 def test_a_validated_file_that_is_gone_is_a_typed_failure(tmp_path):
     gone = tmp_path / "patient.parquet"
-    with stay_table_unit(), pytest.raises(StayTableSourceChanged) as error:
+    with binding_unit(), pytest.raises(StayTableSourceChanged) as error:
         stay_table_frame(_Files(tmp_path, [gone]), "patient", None, _reader([], "x"))
     assert error.value.reason == "stay_table_source_missing"
     assert isinstance(error.value, StorageIntegrityError)
@@ -194,7 +194,7 @@ def test_a_validated_file_that_is_gone_is_a_typed_failure(tmp_path):
 def test_a_source_without_files_shares_nothing(tmp_path):
     reads: list = []
     one, two = _Files(tmp_path, []), _Files(tmp_path, [])
-    with stay_table_unit():
+    with binding_unit():
         stay_table_frame(one, "patient", None, _reader(reads, "one"))
         stay_table_frame(two, "patient", None, _reader(reads, "two"))
     assert reads == ["one", "two"]

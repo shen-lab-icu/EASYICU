@@ -126,3 +126,13 @@ def test_wide_route_mean_is_exact_and_matches_raw_across_threads_and_layouts(tmp
         assert not raw_routes
     for key, frame in results.items():
         pd.testing.assert_frame_equal(frame, expected, check_exact=True, check_dtype=False, obj=str(key))
+
+
+@pytest.fixture(autouse=True)
+def _one_run():
+    """Each test is one run: resolver internals called directly read stay
+    tables under its source binding (Codex delta8c), as load_concepts does."""
+    from easyicu.storage_binding import binding_unit
+
+    with binding_unit():
+        yield

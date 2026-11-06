@@ -7,14 +7,15 @@ from pathlib import Path
 
 def load_under_binding(snapshot, root: str, names, stays, results) -> None:
     """Load ``names`` for ``stays`` in a unit opened from ``snapshot``; report the outcome."""
-    from easyicu.concept.stay_tables import StayTableSourceChanged, stay_table_unit
+    from easyicu.concept.stay_tables import StayTableSourceChanged
+    from easyicu.storage_binding import binding_unit
     from easyicu.config import load_src_cfg
     from easyicu.datasource import ICUDataSource
     from tests.support.urine_raw_source import _load
 
     source = ICUDataSource(load_src_cfg("eicu"), base_path=Path(root), enable_cache=False)
     try:
-        with stay_table_unit(snapshot):
+        with binding_unit(snapshot):
             _load(source, list(names), patient_ids={"patientunitstayid": list(stays)})
         results.put("ok")
     except StayTableSourceChanged as error:
@@ -25,11 +26,8 @@ def load_under_binding(snapshot, root: str, names, stays, results) -> None:
 
 def load_twice_in_own_unit(root: str, names, stays, loaded, go, results, tag, drop=False) -> None:
     """One top-level unit: load, (drop its payload), signal, wait, load again; report."""
-    from easyicu.concept.stay_tables import (
-        StayTableSourceChanged,
-        drop_stay_table_frames,
-        stay_table_unit,
-    )
+    from easyicu.concept.stay_tables import StayTableSourceChanged, drop_stay_table_frames
+    from easyicu.storage_binding import binding_unit
     from easyicu.config import load_src_cfg
     from easyicu.datasource import ICUDataSource
     from tests.support.urine_raw_source import _load
@@ -37,7 +35,7 @@ def load_twice_in_own_unit(root: str, names, stays, loaded, go, results, tag, dr
     source = ICUDataSource(load_src_cfg("eicu"), base_path=Path(root), enable_cache=False)
     ids = {"patientunitstayid": list(stays)}
     try:
-        with stay_table_unit():
+        with binding_unit():
             try:
                 _load(source, list(names), patient_ids=ids)
                 if drop:
