@@ -1643,6 +1643,97 @@ def _oom_kill_delta(before: Optional[int], after: Optional[int]) -> Optional[int
     return max(0, int(after) - int(before))
 
 
+# Exit statuses of a worker stopped from outside with no record of why:
+# SIGKILL (-9 from multiprocessing, 137 from a shell) and the Windows
+# statuses of a process terminated under memory pressure (fail-fast
+# 0xC0000409, STATUS_NO_MEMORY 0xC0000017).
+_UNVERIFIED_KILL_EXIT_CODES = frozenset({-9, 137, 0xC0000409, 0xC0000017})
+
+
+def _host_reports_oom_kills() -> bool:
+    """True where an OOM kill leaves evidence (a readable cgroup counter).
+
+    Linux is evidence-only even without a readable cgroup v2 counter; macOS
+    and Windows have no such counter.
+    """
+
+    import sys
+
+    return _cgroup_oom_kills() is not None or sys.platform.startswith("linux")
+
+
+def _host_total_memory_mb() -> Optional[float]:
+    try:
+        import psutil
+
+        return round(psutil.virtual_memory().total / (1024.0**2), 1)
+    except Exception:
+        return None
+
+
+def _unverified_kill_retry_eligible(
+    exit_code: object,
+    failures: object,
+    oom_kill_delta: Optional[int] = None,
+) -> bool:
+    """A bare kill on a host that cannot report OOM kills (lead-r13 #13 C).
+
+    Such a kill may be memory pressure (macOS jetsam, Windows commit limit)
+    but nothing proves it, so it earns one retry at half the batch, recorded
+    as ``unverified_kill_retry``; a second one is ``worker_killed_unknown``.
+    A worker that recorded an exception, or a host with a cgroup counter
+    (Linux), never qualifies.
+    """
+
+    if _worker_memory_evidence(exit_code, failures, oom_kill_delta):
+        return False
+    for item in failures if isinstance(failures, list) else ():
+        if isinstance(item, Mapping) and item.get("exception_type"):
+            return False
+    try:
+        code = int(exit_code)
+    except (TypeError, ValueError):
+        return False
+    if code not in _UNVERIFIED_KILL_EXIT_CODES:
+        return False
+    return not _host_reports_oom_kills()
+
+
+def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bool:
+    """Whether a module's stream ledger already used its unverified-kill retry."""
+
+    import json
+
+    for module in modules:
+        path = os.path.join(tmp_root, module, f".{module}.stream_ledger.json")
+        try:
+            with open(path, encoding="utf-8") as handle:
+                events = json.load(handle).get("resume_events") or []
+        except (OSError, ValueError):
+            continue
+        if any(event.get("kind") == "unverified_kill_retry" for event in events):
+            return True
+    return False
+
+
+def _record_unverified_kill_in_ledgers(held: Mapping[str, str], event: Mapping) -> None:
+    """Add the group-level ``unverified_kill_retry`` to each held ledger."""
+
+    import json
+
+    for module, folder in held.items():
+        path = Path(folder) / f".{module}.stream_ledger.json"
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+        batches = list(ledger.get("batches") or [])
+        ledger.setdefault("resume_events", []).append({
+            **dict(event),
+            "batch_index": len(batches) + 1,
+            "start_offset": sum(int(b["stays"]) for b in batches),
+        })
+        ledger["pending_reason"] = "unverified_kill"
+        _write_json_atomic(path, ledger)
+
+
 # Exact recorded type names (``type(exc).__name__`` or a qualified name);
 # compared by equality, never searched for in text.
 _MEMORY_EXCEPTION_TYPE_NAMES = frozenset({
@@ -1704,7 +1795,7 @@ def _worker_failure_class(
         return None
     # A signal kill (negative on POSIX, 128+N from a shell) without OOM
     # evidence: the cause is unknown, so it is reported, not retried smaller.
-    if code < 0 or code in (137, 143):
+    if code < 0 or code == 143 or code in _UNVERIFIED_KILL_EXIT_CODES:
         return "worker_killed_unknown"
     return "worker_failed"
 
@@ -2757,6 +2848,14 @@ class StreamBatchMemoryExhausted(RuntimeError):
     """A one-stay streamed batch still ran out of memory."""
 
 
+class StreamBatchWorkerKilled(RuntimeError):
+    """An isolated batch worker died without memory evidence."""
+
+    def __init__(self, message: str, failure_class: Optional[str]):
+        super().__init__(message)
+        self.failure_class = failure_class
+
+
 def _stream_ids_digest(id_col: str, ids) -> str:
     import hashlib
 
@@ -3030,6 +3129,37 @@ def _stream_module_batches_to_parquet(
                             current_batch_size = retry
                             commit_ledger(current_batch_size)
                             continue
+                        if (
+                            not evidence
+                            and current_batch_size > 1
+                            and not any(
+                                event.get("kind") == "unverified_kill_retry"
+                                for event in resume_events
+                            )
+                            and _unverified_kill_retry_eligible(
+                                process.exitcode, [record] if record else [], delta
+                            )
+                        ):
+                            retry = _next_oom_retry_batch_size(current_batch_size)
+                            resume_events.append({
+                                "kind": "unverified_kill_retry",
+                                "level": "isolated_batch",
+                                "batch_index": index,
+                                "start_offset": start,
+                                "previous_batch_size": current_batch_size,
+                                "batch_size": retry,
+                                "worker_exit_code": process.exitcode,
+                                "oom_kill_counter": "unavailable",
+                                # Supporting evidence only: the sampled peak of
+                                # this process tree while the child ran.
+                                "process_tree_peak_rss_mb": round(
+                                    batch_sampler.peak_rss_mb, 1
+                                ),
+                                "host_total_memory_mb": _host_total_memory_mb(),
+                            })
+                            current_batch_size = retry
+                            commit_ledger(current_batch_size)
+                            continue
                         failure_class = _worker_failure_class(
                             process.exitcode, [record] if record else [], delta
                         )
@@ -3039,7 +3169,7 @@ def _stream_module_batches_to_parquet(
                         )
                         if evidence:
                             raise StreamBatchMemoryExhausted(message)
-                        raise RuntimeError(message)
+                        raise StreamBatchWorkerKilled(message, failure_class)
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
@@ -8285,8 +8415,12 @@ def extract_database(
             daemon=not requires_batch_process_isolation,
         )
         oom_kills_before = _cgroup_oom_kills()
-        proc.start()
-        proc.join()
+        group_rss_sampler = _RSSPeakSampler(interval_seconds=0.5).start()
+        try:
+            proc.start()
+            proc.join()
+        finally:
+            group_rss = group_rss_sampler.stop()
         oom_kill_delta = _oom_kill_delta(oom_kills_before, _cgroup_oom_kills())
 
         # 组 worker 硬崩溃（如 OOM kill）：已完成模块正常读回；未完成的
@@ -8348,10 +8482,41 @@ def extract_database(
             attempt=stream_retry_attempt,
             batch_size=group_batch_size,
         )
+        unverified_kill = None
+        unverified_kill_retried = bool(group.get("_unverified_kill_retried"))
+        if (
+            crash_retry is None
+            and crashed
+            and incomplete
+            and not can_split
+            and group_may_stream
+            and group_batch_size > 1
+            and not unverified_kill_retried
+            and not _ledgers_record_unverified_kill(tmp_root, group_mods)
+            and _unverified_kill_retry_eligible(
+                proc.exitcode, attempt_failures, oom_kill_delta
+            )
+        ):
+            # No OOM counter on this host (macOS/Windows): one retry at half
+            # the batch, resuming from the committed batches (#13 C).
+            unverified_kill = {
+                "kind": "unverified_kill_retry",
+                "level": "module_worker",
+                "previous_batch_size": group_batch_size,
+                "batch_size": _next_oom_retry_batch_size(group_batch_size),
+                "worker_exit_code": proc.exitcode,
+                "oom_kill_counter": "unavailable",
+                # Supporting evidence only: the sampled peak of this process
+                # tree while the worker ran, and the host's memory.
+                "process_tree_peak_rss_mb": group_rss["peak_rss_mb"],
+                "host_total_memory_mb": _host_total_memory_mb(),
+            }
+            crash_retry = (unverified_kill["batch_size"], "unverified_kill_retry")
+            for summary in attempt_failures:
+                summary["unverified_kill_retry"] = True
         can_retry_smaller = crash_retry is not None
         if can_retry_smaller and not can_split:
             retry_batch_size, retry_policy = crash_retry
-            adaptive_retry = retry_policy == "adaptive"
             retry_modules = list(group_mods)
             retry_special = list(group_special)
             result["stream_retry_history"].append(
@@ -8361,7 +8526,16 @@ def extract_database(
                     "attempt": stream_retry_attempt + 1,
                     "previous_batch_size": group_batch_size,
                     "retry_batch_size": retry_batch_size,
-                    "policy": "adaptive" if adaptive_retry else "halve_on_oom",
+                    "policy": retry_policy,
+                    **(
+                        {
+                            "process_tree_peak_rss_mb": unverified_kill[
+                                "process_tree_peak_rss_mb"
+                            ],
+                            "host_total_memory_mb": unverified_kill["host_total_memory_mb"],
+                        }
+                        if unverified_kill else {}
+                    ),
                     "from_one_shot": not group_stream_output_batches,
                     "memory_error_in_module": bool(memory_error_modules),
                     "memory_evidence": memory_evidence or (
@@ -8374,17 +8548,18 @@ def extract_database(
                 "stream_batch_oom_retry: %s worker exit=%s; batch_size %s -> %s "
                 "(attempt %s, %s)",
                 retry_modules + retry_special, proc.exitcode, group_batch_size,
-                retry_batch_size, stream_retry_attempt + 1,
-                "adaptive" if adaptive_retry else "halve_on_oom",
+                retry_batch_size, stream_retry_attempt + 1, retry_policy,
             )
             if verbose:
                 print(
                     f"   ⚠️ worker exit={proc.exitcode}; adaptive memory retry "
                     f"{retry_modules + retry_special}: "
                     f"batch_size {group_batch_size} -> {retry_batch_size} "
-                    f"(attempt {stream_retry_attempt + 1}, "
-                    f"{'adaptive' if adaptive_retry else 'halve_on_oom'})"
+                    f"(attempt {stream_retry_attempt + 1}, {retry_policy})"
                 )
+            held_dirs = _hold_resumable_module_dirs(tmp_root, retry_modules)
+            if unverified_kill:
+                _record_unverified_kill_in_ledgers(held_dirs, unverified_kill)
             pending_groups.appendleft(
                 {
                     "modules": retry_modules,
@@ -8394,7 +8569,10 @@ def extract_database(
                     "_adaptive_stream_batches": group_adaptive_stream_batches,
                     "_stream_retry_attempt": stream_retry_attempt + 1,
                     # The retry continues after the last committed batch.
-                    "_resume_dirs": _hold_resumable_module_dirs(tmp_root, retry_modules),
+                    "_resume_dirs": held_dirs,
+                    "_unverified_kill_retried": (
+                        unverified_kill_retried or unverified_kill is not None
+                    ),
                 }
             )
             # Do not publish an error result from the killed attempt.  Its
@@ -8414,6 +8592,7 @@ def extract_database(
                         "_stream_output_batches": group_stream_output_batches,
                         "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
+                        "_unverified_kill_retried": unverified_kill_retried,
                         "_resume_dirs": _hold_resumable_module_dirs(tmp_root, [m]),
                     }
                 )
@@ -8436,6 +8615,7 @@ def extract_database(
                         "_stream_output_batches": group_stream_output_batches,
                         "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
+                        "_unverified_kill_retried": unverified_kill_retried,
                     }
                 )
                 group_special = []
@@ -8448,6 +8628,7 @@ def extract_database(
                         "_stream_output_batches": group_stream_output_batches,
                         "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
+                        "_unverified_kill_retried": unverified_kill_retried,
                         # Only a memory failure keeps committed batches; an
                         # unknown kill starts the module again.
                         "_resume_dirs": (
