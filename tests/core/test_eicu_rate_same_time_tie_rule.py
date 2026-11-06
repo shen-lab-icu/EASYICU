@@ -12,6 +12,8 @@ UNEXPECTED_CHANGE, item 10). Synthetic rows only.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -62,3 +64,15 @@ def test_a_same_time_zero_does_not_stop_a_larger_rate():
     # stop is the next record, not the same-time zero.
     out = systemic_intake(_frame([0.0, 50.0]), _COLUMN)
     assert _hourly(out) == {0: 50.0}
+
+
+def test_the_rule_change_has_its_own_changelog_section():
+    # Codex delta2 UNEXPECTED_CHANGE systemic_intake: accepted as a definition
+    # change, recorded in its own section with the measured impact.
+    text = " ".join(
+        (Path(__file__).resolve().parents[2] / "docs/extraction_changelog.md").read_text().split()
+    )
+    assert "eICU intake rates: the largest same-time rate owns the segment" in text
+    assert "(stay, channel, offset, rate)" in text
+    assert "0 same-time groups with conflicting rates" in text
+    assert "test_eicu_rate_same_time_tie_rule.py" in text

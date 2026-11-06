@@ -171,6 +171,47 @@ at most 4.6e-13 (eICU) and 7.3e-12 (MIIV) absolute.
 KDIGO stage, AKI occurrence, SOFA components or Sepsis-3 changed versus
 v6 (`97f508c6`) and `2786ea872`, per database: FILL.
 
+## 2026-11-06 — eICU intake rates: the largest same-time rate owns the segment [lead-r13, `1962535eb`; pinned by `43cbe4aca`]
+
+**Rule.** eICU `intakeoutput` rows labelled as a rate (`mL/hr`) are integrated
+from their offset to the next record of the same stay and channel (`cellpath`),
+at most six hours. When one channel has two or more different rates at the same
+offset, the records are now ordered by (stay, channel, offset, rate) with a
+stable sort. The **largest** rate owns the segment to the next record. The
+smaller same-time rates get duration 0 and add no volume. A same-time 0 does
+not stop a larger rate.
+
+**Rationale.** Only one of the same-time records can own the following
+segment. Before `1962535eb` the sort key ended at the offset, so the record the
+loader delivered last owned it. That record depends on batch size, bucket
+layout and thread count, so `total_input_ml` (and the fluid balances built on
+it) could change with how the extraction was split. A total order on the value
+makes the result layout-independent. The rule takes the largest rate and
+does not sum same-time rates: those are alternative entries for one channel,
+not separate infusions. This is a definition change accepted in review (Codex
+delta2 UNEXPECTED_CHANGE systemic_intake: recorded here, not reverted).
+
+**Impact.** None measured:
+- **eICU demo (v2.0.1):** after deduplication its `intakeoutput` has 0
+  rate-labelled systemic rows. Hourly intake is identical under the old and
+  new keys: 60,510 stay-hours, 0 differing, 0 stays affected.
+- **eICU 3,000-stay server sample:** 0 rate-labelled rows; 95,864 stay-hours,
+  0 differing.
+- **Full eICU (180,855 stays):** 6,192 rate-labelled rows in 75 stays, but
+  0 same-time groups with conflicting rates. 6,676,112 stay-hours, 0
+  differing.
+
+Under the old key, reversing the input order changed 0 stay-hours on this
+data. The rule matters only for a source that charts different rates for one
+channel at the same minute.
+
+**Pinned by** `tests/core/test_eicu_rate_same_time_tie_rule.py`:
+- the largest rate wins in every input order;
+- the rule applies per channel and per stay;
+- a same-time zero does not stop a larger rate.
+
+Four of its six cases fail under the old key.
+
 ## 2026-11-06 — creatinine, bilirubin and urea use exact SI factors [lead-r13, `c747d1900`] (dictionary reseal)
 
 **What changed.** AUMC and HiRID creatinine (µmol/L → mg/dL) is multiplied by
