@@ -580,6 +580,16 @@ def test_aumc_respiratory_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("aumc", "other_scores") is False
 
 
+def test_eicu_circulatory_and_vitals_run_each_batch_in_a_fresh_process() -> None:
+    # p7_full14: memory accumulated across batches in one worker, so the
+    # OOM halving loop could not finish full eICU at 14 GiB.
+    assert api._requires_isolated_stream_batch("eicu", "circulatory") is True
+    assert api._requires_isolated_stream_batch("eicu", "vitals") is True
+    assert api._requires_isolated_stream_batch("eicu", "respiratory") is False
+    assert api._requires_isolated_stream_batch("miiv", "circulatory") is False
+    assert api._requires_isolated_stream_batch("miiv", "vitals") is False
+
+
 def test_eicu_renal_uses_isolated_deferred_stream_batches() -> None:
     assert api._requires_isolated_stream_batch("eicu", "renal") is True
     assert ("eicu", "renal") in api._DEFERRED_STREAM_MERGE_TARGETS

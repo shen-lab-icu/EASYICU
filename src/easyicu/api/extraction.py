@@ -2295,6 +2295,17 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
         # accumulate across the five full-cohort batches.
         ("miiv", "medications"),
         ("eicu", "sofa2_score"),
+        # The 2026-11-06 full eICU run at a 14-GiB cap (p7_full14) halved
+        # circulatory from 50,000 to 195 stays and vitals from 200,859 to
+        # 25,107 stays, and still hit the cap. About 430 batches completed
+        # before each OOM whatever the batch size, so memory accumulated
+        # across batches in the one worker (about 30-35 MB per batch) rather
+        # than scaling with a batch's stays; full eICU needs more than 1,000
+        # batches at 195 stays. The single-batch profile for circulatory was
+        # 6,173 MB at 50,000 stays, so a fresh interpreter per batch bounds
+        # the peak by one batch.
+        ("eicu", "circulatory"),
+        ("eicu", "vitals"),
         # The current KDIGO/episode-bound implementation crossed 8 GiB when
         # the stale full-cohort profile admitted all 200,859 stays at once.
         # A fresh interpreter per patient partition prevents native allocator
