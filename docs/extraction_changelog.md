@@ -26,6 +26,42 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-06 — AUMC per-kg rates do not depend on the batch; weight-load failures raise [lead-r13, `6aec07c8a` and its legacy-loader follow-up]
+
+- Rule: an AUMC row with no `admittedat` of its own takes its admission origin
+  from the admissions table. AUMC `weight` is the only concept that
+  concatenates admissions rows (weightgroup, which carry `admittedat`) with
+  rows from another table (measured `numericitems` weights, which do not). An
+  empty input aligns to an empty frame. A frame where no row has an origin
+  still raises.
+- Rationale: the origin used to come from the frame. A stay with measured
+  weights but no weightgroup had no origin when it was the only stay of its
+  per-kg rate frame. The weight load then raised, `aumc_rate_kg` swallowed the
+  error, and every absolute-dose rate of that stay was NA. This happened only
+  when a stream batch's only stay with a given drug was such a stay.
+- Failure handling: a failed weight load for `aumc_rate_kg` now raises
+  `aumc_rate_kg_weight_load_failed` with its cause, as `hirid_rate_kg`,
+  `mimic_kg_rate` and `sic_rate_kg` already did. The deprecated
+  `ConceptLoader` follows the same rule:
+  - a table read failure raises instead of returning an empty table;
+  - only a table the source does not declare (`MissingTableSourceError`) is
+    empty;
+  - its per-kg weight load raises `kg_rate_weight_load_failed`;
+  - its parallel collector refuses the whole result on a failed concept, as
+    serial loading does, instead of returning the healthy concepts.
+- Affected: AUMC only.
+- Impact:
+  - At batch 50 on the AUMC sample, `epi_rate` and `epi60` regain 115 hourly
+    cells in 1 stay and `dobu_rate` and `dobu60` regain 14. That restores the
+    knock-on `norepi_equiv` and SOFA cardiovascular cells (sofa1 63, sofa2 133).
+    These modules at batch 50 now equal the default byte for byte.
+  - Default output is unchanged: 20/20 module files are byte-identical with
+    `8999b6728` on the AUMC sample.
+  - In the raw `weight` concept, before its per-stay aggregation, the time
+    column of measured-weight rows changes from NA to hours since ICU
+    admission. Weight values, static weight, BMI and per-kg values are
+    unchanged.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

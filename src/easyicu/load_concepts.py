@@ -11,9 +11,8 @@ import pandas as pd
 
 from .value_failures import TYPED_VALUE_FAILURES
 from .concept import Concept, load_dictionary
-from .concept.errors import ConceptExtractionUnavailable
 from .config import DataSourceConfig, TableConfig, load_src_cfg
-from .datasource import ICUDataSource
+from .datasource import ICUDataSource, MissingTableSourceError
 from .table import load_table
 from .io.ts_utils import change_interval
 
@@ -557,6 +556,7 @@ class ConceptLoader:
                     for concept in concept_objs
                 }
                 
+                failures = {}
                 for future in as_completed(future_to_concept):
                     concept = future_to_concept[future]
                     try:
@@ -565,14 +565,19 @@ class ConceptLoader:
                             print(f"  ✅ {concept.name}")
                         if data is not None and len(data) > 0:
                             results[concept.name] = data
-                    except ConceptExtractionUnavailable:
-                        raise
-                    except TYPED_VALUE_FAILURES:
-                        raise
                     except Exception as e:
                         if verbose:
                             print(f"  ❌ {concept.name}: {e}")
                         logger.error(f"加载概念 {concept.name} 失败", exc_info=True)
+                        failures[concept.name] = e
+            if failures:
+                # Serial loading raises on the first failed concept; the
+                # parallel collector refuses the whole result the same way
+                # (never a partial set of the healthy concepts), raising the
+                # failure of the earliest requested concept so both modes
+                # surface the same error.
+                first = next(c.name for c in concept_objs if c.name in failures)
+                raise failures[first]
         else:
             # 串行加载（默认行为）
             for concept in concept_objs:
@@ -755,10 +760,8 @@ class ConceptLoader:
         
         try:
             df = self._safe_load_table(table_name, required_columns)
-        except TYPED_VALUE_FAILURES:
-            raise
-        except Exception as e:
-            logger.warning(f"无法加载表 {table_name}: {e}")
+        except MissingTableSourceError:
+            # The source declares no such table: absence, not a failed read.
             return pd.DataFrame()
         
         # 2. 过滤患者
@@ -885,10 +888,8 @@ class ConceptLoader:
         
         try:
             df = self._safe_load_table(table_name, required_columns)
-        except TYPED_VALUE_FAILURES:
-            raise
-        except Exception as e:
-            logger.warning(f"无法加载表 {table_name}: {e}")
+        except MissingTableSourceError:
+            # The source declares no such table: absence, not a failed read.
             return pd.DataFrame()
         
         # 2. 过滤 sub_var (如 itemid)

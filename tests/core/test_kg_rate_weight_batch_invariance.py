@@ -193,3 +193,72 @@ def test_legacy_loader_weight_load_failure_raises():
     frame = pd.DataFrame({"admissionid": [1], "dose": [np.float64(1.0)]})
     with pytest.raises(RuntimeError, match="kg_rate_weight_load_failed"):
         loader._get_patient_weights(frame, "admissionid", "icustay")
+
+
+# --- Legacy ConceptLoader: a read failure is never "no data" (delta13w D13W-LEGACY-CATCH)
+
+
+def _legacy_loader():
+    from easyicu.load_concepts import ConceptLoader
+
+    loader = ConceptLoader.__new__(ConceptLoader)
+    loader._src_name = "aumc"
+    loader._columns_for_source = lambda *_args, **_kwargs: None
+    loader._preload_tables = lambda *_args, **_kwargs: None
+    return loader
+
+
+def test_legacy_source_read_failure_raises():
+    loader = _legacy_loader()
+
+    def _fail(*_args, **_kwargs):
+        raise OSError("read failed")
+
+    loader._safe_load_table = _fail
+    with pytest.raises(OSError, match="read failed"):
+        loader._load_concept_source(
+            source=ConceptSource(table="numericitems", sub_var="itemid", ids=[1]),
+            concept_name="weight", patient_ids=None, id_type="icustay", interval=None,
+        )
+
+
+def test_legacy_missing_table_source_is_empty():
+    from easyicu.datasource import MissingTableSourceError
+
+    loader = _legacy_loader()
+
+    def _absent(*_args, **_kwargs):
+        raise MissingTableSourceError("no table source registered")
+
+    loader._safe_load_table = _absent
+    out = loader._load_concept_source(
+        source=ConceptSource(table="numericitems", sub_var="itemid", ids=[1]),
+        concept_name="weight", patient_ids=None, id_type="icustay", interval=None,
+    )
+    assert out.empty
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_legacy_load_concepts_refuses_partial_results_in_both_modes(workers):
+    from easyicu.concept import load_dictionary
+
+    dictionary = load_dictionary("miiv")
+    concepts = [dictionary["hr"], dictionary["sbp"], dictionary["map"]]
+    loader = _legacy_loader()
+
+    def _one(*, concept, **_kwargs):
+        if concept.name == "sbp":
+            raise OSError("injected read failure")
+        return pd.DataFrame({"stay_id": [1], "charttime": [0.0], concept.name: [1.0]})
+
+    loader._load_one_concept = _one
+    with pytest.raises(OSError, match="injected read failure"):
+        loader.load_concepts(concepts, verbose=False, concept_workers=workers)
+
+
+def test_legacy_weightless_stay_gives_no_weight_without_raising():
+    loader = _legacy_loader()
+    loader._load_one_concept = lambda **_kwargs: pd.DataFrame()
+    frame = pd.DataFrame({"admissionid": [1], "dose": [1.0]})
+
+    assert loader._get_patient_weights(frame, "admissionid", "icustay") is None
