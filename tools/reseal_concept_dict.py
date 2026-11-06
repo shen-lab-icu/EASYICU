@@ -16,13 +16,28 @@ A dictionary reseal moves two pins that must always agree:
 ``client_trust.ACCEPTANCE_PROFILE_REF`` follows PUBLIC_DEMO_ACCEPTANCE.
 
 The default run is a dry run that reports what would change (paths and digests
-only, never dictionary content). ``--apply`` needs the user's consent text. All
-files are written together. The pins are then verified in a fresh interpreter,
-and every file is restored if any pin disagrees.
+only, never dictionary content). ``--apply`` needs the user's consent text.
+
+The three files live in different source directories, so they cannot be
+switched in one atomic step. Instead ``--apply``:
+
+1. takes an exclusive lock (``.reseal.lock`` under ``--root``);
+2. writes a recovery journal (``.reseal-recovery.json``) holding every
+   original file and its digest, before touching any of them;
+3. replaces the files one by one (each replacement is atomic) and verifies the
+   pins in a fresh interpreter;
+4. on any failure restores every file, attempting each one and reporting every
+   restore that failed; lock and journal are removed only when all files are
+   back to their journalled originals (or after a verified success).
+
+If a run is interrupted, or a restore failed, the lock and journal remain and
+any later ``--apply`` refuses; ``--recover`` restores every journalled file,
+checks each digest and then removes them.
 
 Usage::
 
     python tools/reseal_concept_dict.py
+    python tools/reseal_concept_dict.py --recover [--root <repo>]
     python tools/reseal_concept_dict.py --apply --consent "<user's words>" \
         --label "twelfth reseal: lead-r13 final review" \
         --locked-at 2026-11-07T12:00:00Z [--source-commit <sha>] [--root <repo>]
@@ -34,6 +49,7 @@ resource baseline are separate steps; the tool prints a reminder.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -65,8 +81,23 @@ _OVERLAY_VERSION = re.compile(r'"version": "\d{8}-sic-overlay-v(\d+)"')
 _ACCEPTANCE = re.compile(r'^ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/[^"]+"$', re.M)
 
 
+RESEAL_LOCK = ".reseal.lock"
+RECOVERY_JOURNAL = ".reseal-recovery.json"
+
+
 class ResealError(RuntimeError):
-    """A reseal precondition failed; nothing was written."""
+    """A reseal precondition failed or the reseal was rolled back.
+
+    ``reason`` is a stable code. After ``reseal_rolled_back`` every file is
+    its journalled original; after ``reseal_rollback_incomplete`` the lock and
+    journal remain for ``--recover`` and ``failures`` lists every file that
+    could not be restored.
+    """
+
+    def __init__(self, message: str, *, reason: str = "reseal_refused", failures: tuple = ()) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.failures = tuple(failures)
 
 
 def sha256_file(path: Path) -> str:
@@ -240,9 +271,118 @@ def verify_pins(root: Path) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return  # platforms without directory handles (Windows)
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _write_atomic(path: Path, raw: bytes) -> None:
+    tmp = path.with_name(f"{path.name}.reseal-tmp")
+    with open(tmp, "wb") as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
+def _acquire_lock(root: Path) -> Path:
+    lock = root / RESEAL_LOCK
+    journal = root / RECOVERY_JOURNAL
+    if journal.exists():
+        raise ResealError(
+            f"an interrupted reseal left {RECOVERY_JOURNAL}; run --recover first",
+            reason="reseal_recovery_pending",
+        )
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise ResealError(
+            f"another reseal holds {RESEAL_LOCK} (remove it only if no reseal is running)",
+            reason="reseal_locked",
+        ) from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"pid": os.getpid(), "started_at": datetime.now().isoformat()}))
+    return lock
+
+
+def _write_journal(root: Path, originals: dict[str, bytes], targets: dict[str, bytes]) -> Path:
+    journal = root / RECOVERY_JOURNAL
+    payload = {
+        "schema": "easyicu_reseal_recovery_v1",
+        "files": [
+            {
+                "path": rel,
+                "original_sha256": hashlib.sha256(raw).hexdigest(),
+                "target_sha256": hashlib.sha256(targets[rel]).hexdigest(),
+                "original_b64": base64.b64encode(raw).decode("ascii"),
+            }
+            for rel, raw in originals.items()
+        ],
+    }
+    _write_atomic(journal, json.dumps(payload, indent=1).encode("utf-8"))
+    return journal
+
+
+def _restore(root: Path, entries: list[dict]) -> list[str]:
+    """Restore every journalled file; return one line per file that failed."""
+    failures = []
+    for entry in entries:
+        rel = entry["path"]
+        try:
+            raw = base64.b64decode(entry["original_b64"])
+            if hashlib.sha256(raw).hexdigest() != entry["original_sha256"]:
+                raise ValueError("journal copy does not match its digest")
+            path = root / rel
+            if not path.exists() or sha256_file(path) != entry["original_sha256"]:
+                _write_atomic(path, raw)
+            if sha256_file(path) != entry["original_sha256"]:
+                raise ValueError("restored file does not match the journalled digest")
+        except Exception as exc:  # every file is attempted; each failure is reported
+            failures.append(f"{rel}: {type(exc).__name__}: {exc}")
+    return failures
+
+
+def recover(root: Path) -> dict:
+    """Restore the files an interrupted reseal journalled, then drop lock and journal."""
+    journal = root / RECOVERY_JOURNAL
+    if not journal.exists():
+        raise ResealError(f"no {RECOVERY_JOURNAL} under {root}; nothing to recover",
+                          reason="reseal_nothing_to_recover")
+    entries = json.loads(journal.read_text(encoding="utf-8"))["files"]
+    failures = _restore(root, entries)
+    if failures:
+        raise ResealError("recovery incomplete: " + "; ".join(failures),
+                          reason="reseal_rollback_incomplete", failures=failures)
+    journal.unlink()
+    (root / RESEAL_LOCK).unlink(missing_ok=True)
+    _fsync_dir(root)
+    return {"restored": [entry["path"] for entry in entries]}
+
+
 def apply(root: Path, *, consent: str, label: str, locked_at: str, source_commit: str) -> dict:
     if not consent.strip():
         raise ResealError("--consent with the user's own words is required")
+    # Lock first: a pending journal or a running reseal refuses before anything is read.
+    lock = _acquire_lock(root)
+    try:
+        return _apply_locked(root, lock, consent=consent, label=label, locked_at=locked_at,
+                             source_commit=source_commit)
+    finally:
+        if not (root / RECOVERY_JOURNAL).exists():
+            lock.unlink(missing_ok=True)
+
+
+def _apply_locked(root: Path, lock: Path, *, consent: str, label: str, locked_at: str,
+                  source_commit: str) -> dict:
     state = plan(root)
     concept, sofa2 = state["digests"]["concept_dict_sha256"], state["digests"]["sofa2_dict_sha256"]
     if concept == state["lock"]["concept_dict_sha256"] and sofa2 == state["lock"]["sofa2_dict_sha256"]:
@@ -259,19 +399,47 @@ def apply(root: Path, *, consent: str, label: str, locked_at: str, source_commit
     )
     change = {"git_commit": source_commit, "change": f"User-approved {gen.version} reseal: {label} Consent: {consent}"}
     new_lock = render_lock(state["lock"], state["digests"], state["total"], change)
-    originals = {rel: (root / rel).read_bytes() for rel in (LOCK, PROFILES, CLIENT_TRUST)}
+    targets = {
+        PROFILES: new_profiles.encode("utf-8"),
+        CLIENT_TRUST: new_trust.encode("utf-8"),
+        LOCK: new_lock.encode("utf-8"),
+    }
+    journal = None
     try:
-        for rel, content in ((PROFILES, new_profiles), (CLIENT_TRUST, new_trust), (LOCK, new_lock)):
-            tmp = root / f"{rel}.reseal-tmp"
-            tmp.write_text(content, encoding="utf-8")
-            os.replace(tmp, root / rel)
+        originals = {rel: (root / rel).read_bytes() for rel in targets}
+        journal = _write_journal(root, originals, targets)
+        for rel, raw in targets.items():
+            _write_atomic(root / rel, raw)
         result = verify_pins(root)
         if result["problems"]:
-            raise ResealError("pins disagree after writing: " + "; ".join(result["problems"]))
-    except BaseException:
-        for rel, raw in originals.items():
-            (root / rel).write_bytes(raw)
-        raise
+            raise ResealError("pins disagree after writing: " + "; ".join(result["problems"]),
+                              reason="reseal_pins_disagree")
+    except BaseException as exc:
+        if journal is None:
+            # Nothing was written; the journal never existed.
+            lock.unlink(missing_ok=True)
+            raise
+        entries = json.loads(journal.read_text(encoding="utf-8"))["files"]
+        failures = _restore(root, entries)
+        if failures:
+            raise ResealError(
+                f"reseal failed ({type(exc).__name__}: {exc}) and {len(failures)} file(s) could "
+                f"not be restored; {RECOVERY_JOURNAL} and {RESEAL_LOCK} remain for --recover: "
+                + "; ".join(failures),
+                reason="reseal_rollback_incomplete", failures=failures,
+            ) from exc
+        journal.unlink()
+        lock.unlink(missing_ok=True)
+        if not isinstance(exc, Exception):
+            raise  # an interrupt stays an interrupt, after the restore
+        cause = getattr(exc, "reason", type(exc).__name__)
+        raise ResealError(
+            f"reseal failed ({cause}: {exc}); every file was restored",
+            reason="reseal_rolled_back",
+        ) from exc
+    journal.unlink()
+    lock.unlink(missing_ok=True)
+    _fsync_dir(root)
     return {"generation": gen, "changed": state["changed"], "verify": result}
 
 
@@ -279,14 +447,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--recover", action="store_true",
+                        help="restore the files an interrupted --apply journalled")
     parser.add_argument("--consent", default="")
     parser.add_argument("--label", default="")
     parser.add_argument("--locked-at", default="")
     parser.add_argument("--source-commit", default="")
     args = parser.parse_args(argv)
     root = args.root.resolve()
+    if args.recover:
+        try:
+            out = recover(root)
+        except ResealError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        print(f"restored: {', '.join(out['restored'])}")
+        return 0
     state = plan(root)
     print(f"root: {root}")
+    if (root / RECOVERY_JOURNAL).exists():
+        print(f"interrupted reseal: {RECOVERY_JOURNAL} present; run --recover before --apply")
     if not state["changed"]:
         print("LOCK matches every foundation resource; no reseal pending.")
     for field, (old, new) in state["changed"].items():
