@@ -453,6 +453,9 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
         raise BucketLayoutError("bucket_derived_from_invalid", root)
     if not isinstance(files, list) or not files:
         raise BucketLayoutError("bucket_derived_from_invalid", root)
+    source_root = derived.get("source_root")
+    if "source_root" in derived and (not isinstance(source_root, str) or not source_root):
+        raise BucketLayoutError("bucket_derived_from_invalid", root)
     for entry in files:
         digest = entry.get("sha256") if isinstance(entry, dict) else None
         if (
@@ -487,13 +490,35 @@ def bucket_source_files(data_path: Path, table: str) -> tuple[Path, ...]:
     return tuple(files)
 
 
+def _derived_from_base(root: Path, derived: dict) -> Path:
+    """The directory ``derived_from``'s source paths are relative to.
+
+    A layout built beside its data (the builder's default output) records no
+    ``source_root``: its sources are relative to the bucket directory's
+    parent, as before. A layout built to another output root records
+    ``source_root``, the builder's data path relative to the real (resolved)
+    parent of the bucket directory, or absolute when no relative path
+    exists; the reader resolves it the same way, so opening the layout
+    directly or through a symlink placed beside the source finds the same
+    files. Recorded file paths stay confined below this directory.
+    """
+    recorded = derived.get("source_root")
+    if recorded is None:
+        return root.parent
+    relative = PurePosixPath(recorded)
+    if relative.is_absolute():
+        return Path(recorded)
+    return root.resolve().parent.joinpath(*relative.parts)
+
+
 def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     """The flat source ``derived_from`` binds is still exactly what it recorded.
 
     Checked on every open, after the layout's own structure, so structural
     defects keep their reasons. Each recorded path is relative to the
-    installation root (the bucket directory's parent), where the builder's
-    data path and the flat source live; a symlinked source is compared
+    builder's data path, where the flat source lives: the bucket directory's
+    parent, or the recorded ``source_root`` of a layout built to another
+    output root (:func:`_derived_from_base`); a symlinked source is compared
     through its link, as the builder stat'ed it. No bytes are read; the
     recorded sha256 stays the builder's binding:
     - a recorded source that no longer exists is
@@ -512,7 +537,7 @@ def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     derived = manifest.get("derived_from")
     if derived is None:
         return
-    base = root.parent
+    base = _derived_from_base(root, derived)
     recorded: dict[str, tuple[Path, dict]] = {}
     for entry in derived["files"]:
         relative = PurePosixPath(entry["path"])
