@@ -3386,6 +3386,12 @@ def eicu_rate_units_callback(
     def _normalize_units(frame: pd.DataFrame, val_var: str, unit_col: str) -> pd.DataFrame:
         work = frame.copy()
         work[unit_col] = work[unit_col].fillna("")
+        # Rates are rescaled in place below (/60, *1000, ...): an integer
+        # column (a batch whose charted rates are all whole numbers) cannot
+        # hold the result. Cast to float64 first; non-numeric values still
+        # raise, as before.
+        if not pd.api.types.is_float_dtype(work[val_var]):
+            work[val_var] = work[val_var].to_numpy(dtype="float64", na_value=np.nan)
 
         # 1) '/hr' -> '/min'
         mask = work[unit_col].str.contains(r"/hr$", case=False, na=False)
