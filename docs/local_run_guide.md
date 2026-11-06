@@ -2,8 +2,9 @@
 
 ## Check that a conversion is complete / 校验转换完整性
 
-Extraction reads the Parquet files that the converter wrote. The converter
-records every output file and the row count of each table in
+Extraction reads only the Parquet files that the converter wrote; a directory
+of source CSV files is not a supported runtime layout, so convert it first.
+The converter records every output file and the row count of each table in
 `conversion_manifest.json` at the root of the database directory. On every
 read of an unbucketed table EasyICU checks the files it scans against that
 record:

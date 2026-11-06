@@ -7,6 +7,59 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
+
+**What changed.** A concept loaded through DuckDB hourly aggregation now
+publishes byte-identical rows, values and dtypes to the same concept loaded
+through `load_table` (parity census: `tools/duckdb_raw_parity_census.py`).
+
+- **Episode window before the hour floor.** DuckDB floored each event to its
+  hour and the ICU-episode clip then judged the hour, so the hour containing
+  discharge + 24 h kept events up to 59 minutes past the bound. Every DuckDB
+  entry point now filters the raw event hour against the window first, and
+  the window has one owner (`ConceptResolver._icu_episode_window`) shared
+  with the pandas clip.
+- **Hourly sums are not bounded twice.** ricu bounds each value, then sums;
+  the DuckDB path bounded the hourly total again, dropping hours whose
+  in-bound records add up past the maximum (eICU urine above 5000 mL from
+  several in-bound Foley records). The MIIV/MIMIC signed urine sum keeps its
+  documented post-sum bound (`SIGNED_SUM_THEN_BOUNDS_V1`).
+- **Integer sums are float64** on both paths (MIIV integer urine values).
+- **Failures are typed.** A failed hourly aggregation
+  (`interval_aggregation_failed`), a failed DuckDB wide or batch read, and a
+  failed episode-bound read (`icu_episode_window`) stop the extraction;
+  before, they fell back to keep-first rows, a raw re-read, or an unclipped
+  frame.
+- **Batch sums.** The wide and long batch loaders sum and average with the
+  same order-independent exact sum as the single-concept path.
+- **HiRID same-time duplicates** (`neut`, segmented + band) keep the latest
+  entry, then the value; before, input row order decided.
+- **MIMIC numeric clip** reads its own stay bounds; it used the shared
+  icustays cache, which could hold only `intime` and then widened the clip
+  to the 366-day fallback.
+- **Multi-source pooling.** A regex source (`rgx_itm`) counts as a numeric
+  source in the pooling decision, so a concept with a regex source and
+  another numeric source pools raw values into one hourly median, as ricu
+  does (eICU `etco2`: respiratory charting plus the monitor column). Before,
+  each source was pre-aggregated and the per-source medians were averaged.
+- **Batch rows need a value.** The wide and long batch loaders no longer
+  publish hours where none of the requested concepts has a value.
+- **A failed batch read is a failure.** The wide and long batch pre-loads
+  re-read each concept on the per-concept path after any error; they now
+  stop with a typed error (an absent table still takes the per-concept
+  path, which reports it).
+
+**Errata (demo counts versus `1962535eb`).** eICU demo: urine loses 37 hours
+past the episode bound, regains 5 hours whose in-bound records total more
+than 5000 mL, and changes 1 hourly total; 180 lab and vital hours past the
+episode bound leave 40 concepts (at most 10 per concept); 25 `etco2` (and
+`etco2_raw`) hours change to the pooled median; `co`, `icp`, `pap_*` and
+`pawp` drop 116,000–138,000 rows that carried no value (their values are
+unchanged apart from one `co` hour past the bound). MIMIC-IV demo: `cl`, `k`
+and `na` each lose fewer than 10 hours past the bound. Parity census after
+the change: eICU 78 of 78 and MIMIC-IV 113 of 113 DuckDB-routed concepts
+byte-identical to the pandas path.
+
 ## 2026-11-06 — Sepsis-3 counts unscored SOFA-2 hours as 0 in every execution mode [lead-r13, `c58852fb9`]
 
 **What changed.** The Sepsis-3 modules (`sepsis3_sofa2`, `sepsis3_sofa1`)
@@ -106,6 +159,13 @@ as zero. Below 1e-6 mL/kg/h a rate can only be float noise: charted urine has
 at least 1 mL resolution, so the smallest real rate (one 1 mL record over
 24 h at 300 kg) is 1.4e-4 mL/kg/h. This is a definition change at the zero
 boundary, recorded here and in the threshold audit (D1).
+
+**Hourly sums in a canonical order (`1962535eb`).** Sums and means are
+computed with an order-independent exact sum, so batch size, thread count
+and load path can no longer move the last bit. On the demos this moves
+`total_input_ml` by 1 ulp in 22 (eICU) and 578 (MIIV) cells and
+`norepi_equiv` in 10 and 17 cells; fluid balances that inherit them move by
+at most 4.6e-13 (eICU) and 7.3e-12 (MIIV) absolute.
 
 **Errata.** Float64 with the tolerance is the correct value. Stays whose
 KDIGO stage, AKI occurrence, SOFA components or Sepsis-3 changed versus
