@@ -99,10 +99,9 @@ def test_a_survivor_with_followup_keeps_the_horizon(monkeypatch) -> None:
     assert bool(result.loc[1, "mort_28d"]) is False
     assert result.loc[1, "followup_days_28d"] == 28.0
     assert bool(result.loc[2, "mort_28d"]) is True
-    # A survivor with an empty follow-up category and no admission year keeps
-    # the 6-month minimum both categories share (SICdb 1.0.8 policy): 28 days
-    # are reached on that assumption, one year is not.
-    assert bool(result.loc[3, "mort_28d"]) is False
+    # A survivor with an empty follow-up category and no admission year has
+    # an unknown category (SICdb 1.0.8 policy): no horizon is reached.
+    assert pd.isna(result.loc[3, "mort_28d"])
     assert bool(result.loc[3, "mort_28d_assumption_based"]) is True
     assert pd.isna(result.loc[3, "mort_365d"])
 

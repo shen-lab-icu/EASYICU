@@ -65,8 +65,9 @@ found and the release is detected from the schema. Hospital discharge types
 are read by their `d_references` label (1.0.6: 2026 Survived / 2028 Deceased;
 1.0.8: 3129–3134, death 3130 "Sterbefall"), never by number. An empty
 survivor follow-up category (ESOT, empty for every 1.0.8 survivor) is
-rebuilt from the admission year (2013–2020: one year; 2021: six months),
-flagged assumption-based; `TimeOfStay` is taken as published. RASS (3123)
+rebuilt from the admission year (2013–2020: one year; 2021: six months;
+any other or missing year: unknown, so every horizon and the follow-up are
+NA, flagged and warned), flagged assumption-based; `TimeOfStay` is taken as published. RASS (3123)
 and O₂ flow (3144) are mapped for SICdb.
 
 **Why.** 1.0.8 renumbered the discharge types and left ESOT empty for

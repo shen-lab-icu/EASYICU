@@ -285,8 +285,10 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
 #: ESOT for deaths only. ``reconstruct_by_admission_year`` (default) uses the
 #: regularity that decides every recorded ESOT in 1.0.6 and every death's in
 #: 1.0.8 (2026-11-06 SIC 1.0.8 review, report section 9.3): admission year
-#: 2021 is "6 Months", 2013-2020 "1 Year"; any other or missing year is
-#: unknown and keeps only the 6-month minimum both categories share.
+#: 2021 is "6 Months", 2013-2020 "1 Year"; any other or missing year has an
+#: unknown category, so its survivors get no follow-up: every horizon and the
+#: follow-up time are NA, flagged and warned (no evidence supports even six
+#: months for an admission year SICdb has not shown).
 #: ``six_month_minimum`` gives every empty ESOT that minimum. Both flag such
 #: survivors ``mort_<h>_assumption_based``; neither is documented by SICdb
 #: (Documentation p.4: "either 1-year or 6-month").
@@ -297,17 +299,19 @@ SIC_ONE_YEAR_ADMISSION_YEARS = frozenset(range(2013, 2021))
 
 
 def sic_followup_from_admission_year(admission_year: pd.Series, *, policy: str = SIC_FOLLOWUP_POLICY) -> pd.Series:
-    """Follow-up days for SICdb cases whose ESOT is empty.
+    """Follow-up days for SICdb cases whose ESOT is empty (NaN: unknown).
 
-    Every case has at least the 180 days both categories share, so 28- and
-    90-day mortality stay defined; only a reconstructed "1 Year" reaches 365.
+    ``reconstruct_by_admission_year``: 2021 gives 180 days, 2013-2020 365;
+    any other or missing year is NaN. ``six_month_minimum``: 180 for all.
     """
     if policy not in SIC_FOLLOWUP_POLICIES:
         raise ValueError(f"unknown SICdb follow-up policy {policy!r}")
-    days = pd.Series(180.0, index=admission_year.index, dtype="float64")
-    if policy == "reconstruct_by_admission_year":
-        year = pd.to_numeric(admission_year, errors="coerce")
-        days.loc[year.isin(SIC_ONE_YEAR_ADMISSION_YEARS)] = 365.0
+    if policy == "six_month_minimum":
+        return pd.Series(180.0, index=admission_year.index, dtype="float64")
+    year = pd.to_numeric(admission_year, errors="coerce")
+    days = pd.Series(np.nan, index=admission_year.index, dtype="float64")
+    days.loc[year.isin(SIC_SIX_MONTH_ADMISSION_YEARS)] = 180.0
+    days.loc[year.isin(SIC_ONE_YEAR_ADMISSION_YEARS)] = 365.0
     return days
 
 
@@ -344,6 +348,7 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
     df["los_days"] = los_seconds.where(los_seconds >= 0) / 86400.0
     df["followup_days"] = np.nan
     df["followup_assumed"] = False
+    df["followup_category_unknown"] = False
     followup_column = cmap.get("estimatedsurvivalobservationtime")
     if followup_column is not None:
         followup = cases[followup_column]
@@ -360,6 +365,14 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
         rebuilt = sic_followup_from_admission_year(years, policy=followup_policy)
         followup_days = followup_days.where(~empty, rebuilt)
         df["followup_assumed"] = empty.to_numpy()
+        unknown = empty & rebuilt.isna()
+        df["followup_category_unknown"] = unknown.to_numpy()
+        if unknown.any():
+            LOGGER.warning(
+                "sicdb_followup_category_unknown: %d survivors have an empty follow-up "
+                "category and an admission year outside 2013-2021; their 28/90/365-day "
+                "mortality and follow-up are NA", int(unknown.sum()),
+            )
         # Source (round-12 citations): d_references labels "6 Months" and
         # "1 Year" (ReferenceName EstimatedSurvivalObservationTime); the
         # SICdb wiki says "For technical reasons observation time is only 6
@@ -500,6 +513,12 @@ def _load_followup_outcomes(
         base.get("followup_assumed", pd.Series(False, index=base.index))
         .astype("boolean").fillna(False).to_numpy(dtype=bool)
     )
+    # SICdb survivors whose follow-up category could not be rebuilt: every
+    # horizon stays NA and is flagged as resting on that unknown assumption.
+    category_unknown = (
+        base.get("followup_category_unknown", pd.Series(False, index=base.index))
+        .astype("boolean").fillna(False).to_numpy(dtype=bool)
+    ) & ~has_death
     for name, horizon in _HORIZONS.items():
         unreachable = np.isfinite(source_bound) & lt(source_bound + grace_days, horizon)
         died_by = has_death & le(dtd, horizon) & (dtd >= 0) & ~unreachable
@@ -518,7 +537,7 @@ def _load_followup_outcomes(
         )
         flag = pd.array([pd.NA] * len(base), dtype="boolean")
         flag[died_by | known_alive] = False
-        flag[assumed] = True
+        flag[assumed | category_unknown] = True
         out[f"{name}_assumption_based"] = flag
         followup_name = FIXED_HORIZON_MORTALITY_ENDPOINTS[name].followup_concept
         followup_time = np.full(len(base), np.nan, dtype="float64")

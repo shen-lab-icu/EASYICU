@@ -44,11 +44,10 @@ def test_sic_flags_only_horizons_reached_through_the_grace_day(monkeypatch) -> N
     assert result.loc[2, list(FLAGS)].tolist() == [False, False, True]
     # A recorded death is documented.
     assert not result.loc[3, list(FLAGS)].any()
-    # An empty category (SICdb 1.0.8 survivors) without an admission year
-    # keeps the six-month minimum: 28 and 90 days rest on that assumption,
-    # one year is unknown and carries no flag.
-    assert result.loc[4, list(FLAGS[:2])].tolist() == [True, True]
-    assert pd.isna(result.loc[4, FLAGS[2]])
+    # An empty category (SICdb 1.0.8 survivors) without an admission year is
+    # unknown: no horizon is known, and every one is flagged as resting on it.
+    assert result.loc[4, ["mort_28d", "mort_90d", "mort_365d"]].isna().all()
+    assert result.loc[4, list(FLAGS)].tolist() == [True, True, True]
 
 
 def test_aumc_survivors_known_only_by_the_assumed_year_are_flagged(monkeypatch) -> None:

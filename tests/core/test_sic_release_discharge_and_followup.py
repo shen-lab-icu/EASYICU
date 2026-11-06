@@ -60,18 +60,25 @@ def _cases_108() -> pd.DataFrame:
 def test_1_0_8_followup_is_rebuilt_from_the_admission_year(monkeypatch):
     monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(_cases_108(), "1.0.8"))
     base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
-    assert base.loc[[1, 2, 3, 4], "followup_days"].tolist() == [365.0, 180.0, 180.0, 180.0]
+    assert base.loc[[1, 2], "followup_days"].tolist() == [365.0, 180.0]
+    assert base.loc[[3, 4], "followup_days"].isna().all()
     assert base.loc[[1, 2, 3, 4], "followup_assumed"].tolist() == [True] * 4
+    assert base.loc[[1, 2, 3, 4], "followup_category_unknown"].tolist() == [False, False, True, True]
     assert base.loc[[5, 6], "followup_assumed"].tolist() == [False, False]
 
     result = outcomes.load_outcomes("sic").set_index("CaseID")
     # One-year category from 2013-2020: every horizon is reached, on the rebuilt category.
     assert bool(result.loc[1, "mort_365d"]) is False
     assert bool(result.loc[1, "mort_365d_assumption_based"]) is True
-    # 2021, another year, or no year: 28 and 90 days are reached, one year is not.
-    for case in (2, 3, 4):
-        assert bool(result.loc[case, "mort_90d"]) is False
-        assert pd.isna(result.loc[case, "mort_365d"])
+    # 2021: six months, so 28 and 90 days are reached and one year is not.
+    assert bool(result.loc[2, "mort_90d"]) is False
+    assert pd.isna(result.loc[2, "mort_365d"])
+    # Another year (2030) or no year: the category is unknown, so no horizon
+    # is known; each is NA and flagged as resting on that assumption.
+    for case in (3, 4):
+        for horizon in ("mort_28d", "mort_90d", "mort_365d"):
+            assert pd.isna(result.loc[case, horizon])
+            assert bool(result.loc[case, f"{horizon}_assumption_based"]) is True
     assert bool(result.loc[5, "mort_28d"]) is True
     assert bool(result.loc[5, "mort_28d_assumption_based"]) is False
     assert bool(result.loc[6, "mort_365d"]) is True
@@ -103,3 +110,16 @@ def test_1_0_6_followup_keeps_its_recorded_category(monkeypatch):
     assert base["followup_days"].tolist() == [365.0, 180.0, 365.0, 180.0, 180.0, 365.0]
     assert not base["followup_assumed"].any()
     assert np.isfinite(base.loc[5, "days_to_death"])
+
+
+def test_a_2023_survivor_without_a_category_has_no_mortality_horizon(monkeypatch, caplog):
+    cases = _cases_108()
+    cases.loc[cases["CaseID"] == 1, "AdmissionYear"] = 2023
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    with caplog.at_level("WARNING", logger=outcomes.__name__):
+        result = outcomes.load_outcomes("sic").set_index("CaseID")
+    assert "sicdb_followup_category_unknown" in caplog.text
+    survivor = 1  # ESOT empty, no recorded death
+    for horizon in ("mort_28d", "mort_90d", "mort_365d"):
+        assert pd.isna(result.loc[survivor, horizon])
+        assert bool(result.loc[survivor, f"{horizon}_assumption_based"]) is True
