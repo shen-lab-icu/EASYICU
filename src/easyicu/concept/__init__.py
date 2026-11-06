@@ -6316,7 +6316,7 @@ class ConceptResolver:
                 verbose=False,
             )
             return loaded.data if hasattr(loaded, "data") else loaded
-        from .stay_tables import source_identity, stay_table_frame
+        from .stay_tables import checked_memo_frame, source_binding, stay_table_frame
 
         def read() -> pd.DataFrame:
             filters = (
@@ -6326,21 +6326,20 @@ class ConceptResolver:
             loaded = data_source.load_table(table, filters=filters, verbose=False)
             return loaded.data if hasattr(loaded, "data") else loaded
 
+        # Bound to the storage owner's validated files and their versions:
+        # another file set misses, a changed or vanished file is a
+        # StorageIntegrityError, never the held frame (Codex delta3).
+        binding = source_binding(data_source, table)
         if scope is None:
             # Unscoped (a whole-cohort call): this resolver's own memo, as
             # before; nothing is shared across calls or resolvers.
             memo = self.__dict__.setdefault("_stay_tables_unscoped", {})
-            frame = memo.get((id(data_source), table))
-            if frame is None:
-                frame = read().reset_index(drop=True)
-                memo[(id(data_source), table)] = frame
+            frame = checked_memo_frame(memo, binding, read)
         else:
             # One process-level owner per batch: the resolvers of one batch (a
             # module's load and its dependency loads) share the read. It is
             # released at the batch boundary and when the batch changes.
-            frame = stay_table_frame(
-                (source_identity(data_source), table, scope), scope, read
-            )
+            frame = stay_table_frame(binding, scope, read)
         if wanted is not None:
             column = next(c for c in frame.columns if c.casefold() == id_col.casefold())
             frame = frame.loc[frame[column].isin(wanted)].reset_index(drop=True)
