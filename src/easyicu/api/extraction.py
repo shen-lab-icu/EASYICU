@@ -1994,32 +1994,24 @@ def _enforce_concept_bounds(df, concept_name):
     bnd = _load_concept_bounds_map().get(concept_name)
     if bnd is None:
         return df, 0
-    loader_diagnostics = df.attrs.get("easyicu_bounds_loader", {})
-    if isinstance(loader_diagnostics, dict) and loader_diagnostics.get(
-        "bounds_unit_suspect"
-    ):
-        # The SQL fast path saw at least 100 transformed non-null values but
-        # none within the declared bounds. It already retried without bounds,
-        # so retain those recovered values and surface the existing -1 signal.
-        return df, -1
     mn, mx = bnd
     v = _pd.to_numeric(df[concept_name], errors="coerce")
     numeric = v.notna()
-    # UNIT-SAFETY GUARD: if a concept has BOTH bounds and its central value (median)
-    # falls outside [min,max], the values are almost certainly in the wrong unit for
-    # this database (e.g. temperature still in Fahrenheit, median ~98 vs bounds
-    # [32,42]). Bound-dropping would then delete valid-but-mis-united data, so SKIP
-    # enforcement and leave the concept untouched (surfaced upstream as a WARN). A
-    # correctly-united physiological concept always has its median well within bounds,
-    # so this never suppresses legitimate outlier removal. Requires enough data to
-    # make the median meaningful.
+    # A median outside [min, max] used to skip enforcement as "probably another
+    # unit" (sentinel -1). Whether it skipped depended on the rows in the frame,
+    # so the frame's values now contradict the declared bounds and it refuses
+    # (lead-r13 magnitude/format sweep #14). The SQL loader refuses the same
+    # case instead of retrying without bounds.
     if mn is not None and mx is not None and int(numeric.sum()) >= 100:
         med = float(v[numeric].median())
         if med < mn or med > mx:
-            return (
-                df,
-                -1,
-            )  # sentinel: enforcement SKIPPED (unit-suspect), nothing dropped
+            from ..utils.declared_units import UndeclaredUnitError
+
+            raise UndeclaredUnitError(
+                reason="bounds_unit_suspect", quantity=str(concept_name),
+                site="api.extraction._enforce_concept_bounds",
+                detail=f"median {med:g} of {int(numeric.sum())} values lies outside [{mn}, {mx}]",
+            )
     in_range = _pd.Series(True, index=df.index)
     if mn is not None:
         in_range &= v >= mn

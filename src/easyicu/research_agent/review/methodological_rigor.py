@@ -317,8 +317,20 @@ def _missing_fraction(
                 if series.empty:
                     continue
                 value = float(series.max())
-                # Accept either a 0-1 fraction or a 0-100 percentage.
-                return value / 100.0 if value > 1.0 else value
+                # The column name declares the unit (``pct`` = percent,
+                # ``frac``/``fraction`` = 0-1); the value never decides it
+                # (lead-r13 magnitude/format sweep #16).
+                if "pct" in low:
+                    return value / 100.0
+                if value > 1.0:
+                    from ...utils.declared_units import UndeclaredUnitError
+
+                    raise UndeclaredUnitError(
+                        reason="rate_unit_contradiction", quantity=str(col),
+                        site="review.methodological_rigor",
+                        detail=f"a fraction column holds {value:g}",
+                    )
+                return value
     return None
 
 
