@@ -403,11 +403,11 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     """Fail closed unless a flat scan covers its table's whole inventory.
 
     The inventory is every visible Parquet file under the directory that holds
-    the scan, or the single file itself; a multi-file configuration whose
-    directory exists must have every configured file present.  Files and
-    footer row counts must agree, so a reader cannot silently see a subset
-    (lead-r13: MIIV labevents read 1 of 10 files).  Bucket layouts carry
-    their own manifest inventory, validated on open.
+    the scan, or the single file itself.  Files and footer row counts must
+    agree, so a reader cannot silently see a subset (lead-r13: MIIV labevents
+    read 1 of 10 files).  The registry's file list names ricu's CSV-era chunks
+    and is not an installation manifest, so it is not checked here.  Bucket
+    layouts carry their own manifest inventory, validated on open.
     """
     if not files:
         return files
@@ -418,21 +418,6 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     names = {table.lower(), f"{table.lower()}_bucket"}
     single = len(files) == 1 and parent.name.lower() not in names
     inventory = set(files) if single else _visible_parquet(parent)
-    try:
-        entries = [e.get("path") or e.get("file") for e in source.config.get_table(table).files]
-    except (AttributeError, KeyError, ValueError):
-        entries = []
-    configured = [
-        source.base_path / e for e in entries
-        if e and Path(e).suffix.lower() in {".parquet", ".pq"}
-    ]
-    if len(configured) > 1 and configured[0].parent == parent:
-        missing = [p.name for p in configured if p not in inventory]
-        if missing:
-            raise TableScanError(
-                "table_configured_file_missing", table,
-                f"{len(missing)} of {len(configured)} configured files absent",
-            )
     scanned_rows = sum(_footer_rows(p) for p in files)
     inventory_rows = sum(_footer_rows(p) for p in inventory)
     if set(files) != inventory or scanned_rows != inventory_rows:

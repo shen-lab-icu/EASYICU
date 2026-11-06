@@ -79,13 +79,16 @@ def test_scan_of_the_first_chunk_alone_fails_closed(tmp_path):
     assert "1 files/1 rows of 10 files/10 rows" in str(caught.value)
 
 
-def test_missing_configured_chunk_fails_closed(tmp_path):
-    files = _write_chunks(tmp_path, 10)
-    (tmp_path / "labevents" / "7.parquet").unlink()
-    source = _source(tmp_path, files)
-    with pytest.raises(TableScanError) as caught:
-        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
-    assert caught.value.reason == "table_configured_file_missing"
+def test_chunks_named_unlike_the_registry_list_are_read_whole(tmp_path):
+    # The registry lists ricu's chunk names; an installation may name them
+    # differently.  The directory inventory, not the list, is the table.
+    directory = tmp_path / "labevents"
+    directory.mkdir()
+    for index in range(3):
+        pq.write_table(pa.table({"itemid": [index]}), directory / f"part-{index}.parquet")
+    source = _source(tmp_path, [f"labevents/{i}.parquet" for i in range(1, 11)])
+    resolved = verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+    assert len(resolved) == 3
 
 
 def test_nested_parquet_outside_the_scan_fails_closed(tmp_path):
