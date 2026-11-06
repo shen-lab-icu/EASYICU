@@ -337,9 +337,18 @@ def flat_table_files(source, table: str) -> tuple[Path, ...]:
     roots = (source.base_path, source.base_path / "icu", source.base_path / "hosp")
     candidates = []
     try:
-        explicit = source.config.get_table(table).first_file()
-        if explicit:
-            candidates.append(source.base_path / explicit)
+        entries = [
+            entry.get("path") or entry.get("file")
+            for entry in source.config.get_table(table).files
+        ]
+        entries = [entry for entry in entries if entry]
+        # A table configured as several files (MIIV labevents/1..10.parquet)
+        # is the whole directory, as in load_table; its first file alone is
+        # a silent subset of the table.
+        if len(entries) > 1:
+            candidates.append(source.base_path / Path(entries[0]).parent)
+        elif entries:
+            candidates.append(source.base_path / entries[0])
     except (AttributeError, KeyError, ValueError):
         pass
     for base in roots:
@@ -359,6 +368,82 @@ def flat_table_files(source, table: str) -> tuple[Path, ...]:
     return ()
 
 
+class TableScanError(ValueError):
+    """A flat table scan does not cover the table's complete on-disk inventory."""
+
+    def __init__(self, reason: str, table: str, detail: str):
+        self.reason = reason
+        self.table = table
+        super().__init__(f"{reason}: {table}: {detail}")
+
+
+_FOOTER_ROWS: dict[tuple[str, int, int], int] = {}
+
+
+def _footer_rows(path: Path) -> int:
+    stat = path.stat()
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    rows = _FOOTER_ROWS.get(key)
+    if rows is None:
+        rows = _FOOTER_ROWS[key] = pq.ParquetFile(path).metadata.num_rows
+    return rows
+
+
+def _visible_parquet(directory: Path) -> set[Path]:
+    return {
+        p
+        for p in directory.rglob("*")
+        if p.suffix.lower() in {".parquet", ".pq"}
+        and p.is_file()
+        and not any(part.startswith(".") for part in p.relative_to(directory).parts)
+    }
+
+
+def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Fail closed unless a flat scan covers its table's whole inventory.
+
+    The inventory is every visible Parquet file under the directory that holds
+    the scan, or the single file itself; a multi-file configuration whose
+    directory exists must have every configured file present.  Files and
+    footer row counts must agree, so a reader cannot silently see a subset
+    (lead-r13: MIIV labevents read 1 of 10 files).  Bucket layouts carry
+    their own manifest inventory, validated on open.
+    """
+    if not files:
+        return files
+    parents = {p.parent for p in files}
+    if len(parents) != 1:
+        raise TableScanError("table_scan_mixed_roots", table, f"{len(parents)} directories")
+    parent = next(iter(parents))
+    names = {table.lower(), f"{table.lower()}_bucket"}
+    single = len(files) == 1 and parent.name.lower() not in names
+    inventory = set(files) if single else _visible_parquet(parent)
+    try:
+        entries = [e.get("path") or e.get("file") for e in source.config.get_table(table).files]
+    except (AttributeError, KeyError, ValueError):
+        entries = []
+    configured = [
+        source.base_path / e for e in entries
+        if e and Path(e).suffix.lower() in {".parquet", ".pq"}
+    ]
+    if len(configured) > 1 and configured[0].parent == parent:
+        missing = [p.name for p in configured if p not in inventory]
+        if missing:
+            raise TableScanError(
+                "table_configured_file_missing", table,
+                f"{len(missing)} of {len(configured)} configured files absent",
+            )
+    scanned_rows = sum(_footer_rows(p) for p in files)
+    inventory_rows = sum(_footer_rows(p) for p in inventory)
+    if set(files) != inventory or scanned_rows != inventory_rows:
+        raise TableScanError(
+            "table_scan_incomplete", table,
+            f"scanned {len(files)} files/{scanned_rows} rows of "
+            f"{len(inventory)} files/{inventory_rows} rows",
+        )
+    return files
+
+
 def resolve_table_files(
     source,
     table: str,
@@ -368,7 +453,7 @@ def resolve_table_files(
     """The sole table + selector → files policy, shared by all read paths."""
     root = source.resolve_bucket_directory(table)
     if root is None:
-        return flat_table_files(source, table)
+        return verify_flat_scan(source, table, flat_table_files(source, table))
     layout = read_bucket_contract(
         root,
         allow_legacy=source.config.name == "aumc",
