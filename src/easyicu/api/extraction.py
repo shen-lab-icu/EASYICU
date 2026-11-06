@@ -1823,17 +1823,23 @@ def worker_failure_is_memory(record: object) -> bool:
     Reads the classification this module wrote (``failure_class``,
     ``memory_exhausted``, the exact exception type, an ``oom_kill_delta``);
     an exit status or traceback text alone is never evidence (B-RETRY).
+    The rule is ``_worker_memory_evidence``'s, for every consumer (the
+    re-extraction driver included; lead-r13 D4-DRIVER-OOM): a record's own
+    non-memory exception wins over a stored ``out_of_memory`` class and over
+    the shared cgroup counter, which classifies only an unrecorded SIGKILL.
     """
 
     if not isinstance(record, Mapping):
         return False
-    if record.get("failure_class") == "out_of_memory":
-        return True
     try:
         delta = int(record["oom_kill_delta"]) if record.get("oom_kill_delta") is not None else None
     except (TypeError, ValueError):
         delta = None
-    return _worker_memory_evidence(record.get("worker_exit_code"), [record], delta) is not None
+    if _worker_memory_evidence(record.get("worker_exit_code"), [record], delta) is not None:
+        return True
+    if record.get("exception_type"):
+        return False
+    return record.get("failure_class") == "out_of_memory"
 
 
 def _worker_failure_class(
