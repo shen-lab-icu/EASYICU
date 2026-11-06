@@ -99,9 +99,12 @@ def test_aumc_large_offsets_preserve_exact_integer_hour_boundaries():
         load_table=lambda *_args, **_kwargs: pd.DataFrame(
             {
                 "admissionid": [90002],
-                # Converted source clock in integer minutes.
+                # Synthetic source clock in integer minutes (A9): the
                 # admission origin is not a whole hour, so dividing the
                 # two absolute offsets separately floors an exact
+                # 240 h boundary to 239 h.
+                "admittedat": [50_000.0],
+                "dischargedat": [90_000.0],
             }
         ),
     )
