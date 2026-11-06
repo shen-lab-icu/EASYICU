@@ -94,7 +94,8 @@ def test_an_unknown_export_exposure_does_not_refuse_planning_but_a_known_unmappe
     assert [(item["capability"], item["code"]) for item in gap["missing_capabilities"]] == [
         ("concept:d_dimer", "required_concept_unmapped"),
     ]
-    assert set(gap["supported_databases"]) == {"mimic", "miiv"}
+    # AUMC maps its native D-dimer since 4e22f18dd (round 12, R7).
+    assert set(gap["supported_databases"]) == {"aumc", "mimic", "miiv"}
 
 
 def test_an_unregistered_source_keeps_its_existing_preplanning_path():
