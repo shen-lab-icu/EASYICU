@@ -3775,10 +3775,9 @@ def _callback_sofa2_score(
                         ctx,
                     ),
                     method="none",
-                    # SOFA-2 components and binary evidence receipts are small
-                    # ordinals.  A float32 gap grid represents them exactly and
-                    # avoids doubling this callback's largest dense frame.
-                    value_dtype="float32",
+                    # The grid keeps float64: it also carries the source
+                    # assessment time, which float32 would round (lead-r13
+                    # final review A7).
                 )
 
         # The rolling window alone bounds score and availability carry, as in
