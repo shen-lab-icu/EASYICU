@@ -6382,6 +6382,22 @@ def _callback_vaso60(
             _infusion_col = _candidate
             break
 
+    # Only a row with an infusion id is an infusion.  The column itself can be
+    # present and entirely NA: MIMIC-III's MetaVision rate source keeps
+    # linkorderid only while it has no rows, so a patient batch without
+    # MetaVision epinephrine carried an all-NA linkorderid and its CareVue
+    # rows were LOCF-expanded as one null-id infusion, while the same stays in
+    # a larger batch were not (lead-r13: epi60 in 16 of 3,000 sample stays,
+    # SOFA cardio in 2).  Deciding per row keeps every stay independent of
+    # the others in its batch.
+    _plain_rate_rows = None
+    if _infusion_col is not None:
+        _has_infusion = rate_df[_infusion_col].notna()
+        _plain_rate_rows = rate_df.loc[~_has_infusion].drop(columns=[_infusion_col])
+        rate_df = rate_df.loc[_has_infusion]
+        if rate_df.empty:
+            rate_df, _plain_rate_rows, _infusion_col = _plain_rate_rows, None, None
+
     if _infusion_col is not None and len(rate_df) > 0:
         # Vectorized per-infusion LOCF expansion at minute level
         # (R ricu create_intervals overhang=1h, max_len=6h + expand step=1min)
@@ -6429,6 +6445,8 @@ def _callback_vaso60(
             .median()
             .reset_index()
         )
+    if _plain_rate_rows is not None and not _plain_rate_rows.empty:
+        rate_df = pd.concat([rate_df, _plain_rate_rows], ignore_index=True, sort=False)
     # Duration starts are exact episode boundaries; minute flooring would
     # shift the end backwards and lose a final partial hour (R6-F015).
     dur_df['__dur_time_min'] = dur_df[dur_index_col]
