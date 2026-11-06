@@ -336,6 +336,10 @@ def arrow_key_type(kind: pa.DataType) -> str:
 
 def flat_table_files(source, table: str) -> tuple[Path, ...]:
     """Locate only ordinary Parquet sources, without inspecting bucket policy."""
+    if source.base_path is None:
+        # An in-memory source (frames handed to ICUDataSource) has no files:
+        # absence, as the resolver contract states, not a layout error.
+        return ()
     roots = (source.base_path, source.base_path / "icu", source.base_path / "hosp")
     candidates = []
     try:

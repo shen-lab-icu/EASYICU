@@ -480,6 +480,14 @@ def load_circ_failure(
             + ", ".join(missing_core)
         )
 
+    # A required input with no row at all (a source without lactate) leaves
+    # circulatory failure not evaluable: no physical output, which the export
+    # seals as a not-evaluable placeholder, not an all-null score (2786ea872
+    # published this through a swallowed exception; lead-r13 kept the
+    # semantics without the swallow).
+    if any(loaded_dfs[c].empty for c in core_concepts):
+        return pd.DataFrame()
+
     # Build merged dataframe from core concepts
     core_dfs = [loaded_dfs[c] for c in core_concepts]
     if not core_dfs:
