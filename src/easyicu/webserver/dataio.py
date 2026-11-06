@@ -50,6 +50,7 @@ from easyicu.export_publication import (
     begin_native_export,
     finish_native_export,
     folder_unpublished_reason,
+    require_published_export_package,
     unpublished_reason,
 )
 from easyicu.outcome_availability import structural_outcome_unavailability
@@ -296,14 +297,27 @@ def _shortcuts(home: Path) -> List[Dict[str, str]]:
     return out
 
 
-def _unpublished_export_error(path: Path) -> Optional[Dict[str, Any]]:
+def _unpublished_export_error(
+    path: Path, *, export_only: bool = False
+) -> Optional[Dict[str, Any]]:
     """Refuse a folder an interrupted extraction or web export left behind.
 
     Its module files are raw, unpublished outputs (native ids, raw dtypes,
-    rows outside the episode window), so no screen may treat it as data. A
-    raw or prepared source folder is not an export and is never refused here.
+    rows outside the episode window), so no screen may treat it as data.
+    ``export_only`` entry points require a published package outright; shared
+    entry points also serve sources, recognised by their own preparation
+    receipt (see ``export_publication.folder_unpublished_reason``).
     """
-    reason = folder_unpublished_reason(path)
+    if export_only:
+        try:
+            require_published_export_package(path)
+            reason = None
+        except NativeExportUnpublishedError as exc:
+            reason = exc.reason
+    else:
+        from easyicu.api.extraction import EXTRACT_MODULES
+
+        reason = folder_unpublished_reason(path, module_names=EXTRACT_MODULES)
     if reason is None:
         return None
     return {
@@ -3169,7 +3183,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
-    unpublished = _unpublished_export_error(path)
+    unpublished = _unpublished_export_error(path, export_only=True)
     if unpublished is not None:
         return unpublished
 
@@ -4189,8 +4203,13 @@ def read_export_projection(
     stay_ids: Optional[set[str]] = None,
     entity_column: str = "stay_id",
 ) -> Any:
-    """Public, projected export reader for bounded webserver owners."""
+    """Public, projected export reader for bounded webserver owners.
 
+    A file-level reader: its parent package must be published (no in-progress
+    marker, a native or legacy root manifest).
+    """
+
+    require_published_export_package(Path(path).parent)
     return _read_export_projection(
         path,
         columns=columns,

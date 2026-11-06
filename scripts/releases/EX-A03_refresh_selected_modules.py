@@ -52,6 +52,13 @@ from easyicu.api.extraction import (  # noqa: E402
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
+from easyicu.export_publication import (  # noqa: E402
+    NativeExportUnpublishedError,
+    adopt_native_export,
+    begin_native_export,
+    finish_native_export,
+    require_published_native_export,
+)
 from easyicu.scores.sofa2_aggregate import (  # noqa: E402
     sofa2_total_structurally_supported,
 )
@@ -992,6 +999,8 @@ def _recover_native_staging_publication(
         },
         require_stay_time_bounds=True,
     )
+    # This recovery completes the interrupted extraction's transaction.
+    finish_native_export(staging_root)
 
 
 def _validate_existing_staging_native_manifest(
@@ -1001,11 +1010,6 @@ def _validate_existing_staging_native_manifest(
     modules: Sequence[str],
 ) -> None:
     """Reject a stale or unrelated root manifest before staged promotion."""
-
-    from easyicu.export_publication import (
-        NativeExportUnpublishedError,
-        require_published_native_export,
-    )
 
     try:
         require_published_native_export(staging_root)
@@ -2063,6 +2067,16 @@ def refresh_candidate(
         (destination / "module_refresh_provenance.json").unlink(missing_ok=True)
         shutil.rmtree(destination / ".module_refresh_staging", ignore_errors=True)
         shutil.rmtree(destination / "publication_qc", ignore_errors=True)
+    # Every target database is mutated below (selected modules replaced, all
+    # six manifests republished). Mark each before the first mutation; clear
+    # them only after the manifests, sidecars and the final run manifest are
+    # written. A fresh candidate begins its markers (a clone of a published
+    # source has none); an explicit --resume of this candidate is the
+    # transaction that left them, so it adopts them. Any other reader refuses
+    # the candidate until then.
+    target_roots = [destination / "exports" / database for database in DATABASES]
+    for target in target_roots:
+        (adopt_native_export if resume else begin_native_export)(target)
 
     refreshed: dict[str, dict[str, Any]] = {}
     try:
@@ -2501,6 +2515,8 @@ def refresh_candidate(
         REPUBLICATION._atomic_write_json(
             destination / "run_manifest.json", updated_run_manifest
         )
+        for target in target_roots:
+            finish_native_export(target)
     except Exception:
         # The unsealed candidate is intentionally retained for diagnosis.  It
         # can neither replace a source package nor be promoted without EX-A01.

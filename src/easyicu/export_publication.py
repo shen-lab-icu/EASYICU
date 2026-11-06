@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Union
+from typing import Iterable, Union
 
 IN_PROGRESS_MARKER = "_IN_PROGRESS"
 NATIVE_MANIFEST = "_manifest.json"
@@ -116,46 +116,104 @@ def unpublished_reason(export_dir: Union[str, Path]) -> str | None:
 
 
 LEGACY_MANIFEST = "easyicu_export_manifest.json"
+#: A prepared source proves itself by its own preparation receipt.
+SOURCE_PREPARATION_MANIFESTS = (
+    "conversion_manifest.json",
+    "community_preparation_manifest.json",
+)
 #: Files only an EasyICU export writes: producer module manifests, the
-#: content-addressed column-metadata sidecar and the feature definitions. A raw
-#: or prepared source folder holds none of them.
+#: content-addressed column-metadata sidecar and the feature definitions.
 _EXPORT_ARTIFACT_GLOBS = (
     "*.manifest.json",
     "column_metadata.sha256-*.json",
     "feature_definitions.json",
     "feature_definitions.csv",
 )
+#: Module data files an export writes as ``{module}.{ext}``.
+_MODULE_DATA_SUFFIXES = (".parquet", ".csv", ".csv.gz", ".xlsx")
 
 
-def is_export_folder(export_dir: Union[str, Path]) -> bool:
-    """Whether ``export_dir`` is (or was being written as) an EasyICU export."""
+def _has_root_manifest(root: Path) -> bool:
+    return (root / NATIVE_MANIFEST).is_file() or (root / LEGACY_MANIFEST).is_file()
 
-    root = Path(export_dir)
-    for name in (IN_PROGRESS_MARKER, NATIVE_MANIFEST, LEGACY_MANIFEST):
-        if os.path.lexists(root / name):
-            return True
+
+def _holds_export_files(root: Path, module_names: Iterable[str]) -> bool:
     try:
-        return any(next(root.glob(pattern), None) is not None for pattern in _EXPORT_ARTIFACT_GLOBS)
+        if any(next(root.glob(pattern), None) is not None for pattern in _EXPORT_ARTIFACT_GLOBS):
+            return True
+        return any(
+            (root / f"{module}{suffix}").exists()
+            for module in module_names
+            for suffix in _MODULE_DATA_SUFFIXES
+        )
     except OSError:
         return False
 
 
-def folder_unpublished_reason(export_dir: Union[str, Path]) -> str | None:
+def folder_unpublished_reason(
+    export_dir: Union[str, Path], *, module_names: Iterable[str] = ()
+) -> str | None:
     """Why a folder served as a data source is an unpublished export, or None.
 
-    A raw or prepared source folder is never an export and passes. An export
-    folder must carry no marker and a root manifest (native, or the older
-    ``easyicu_export_manifest.json`` packages).
+    For entry points that accept both exports and sources. A published export
+    has no marker and a root manifest (native, or the older
+    ``easyicu_export_manifest.json`` package). A prepared source is recognised
+    by its own preparation receipt. Absent both, a folder holding any export
+    file (a ``{module}`` data file named after an extraction module, a
+    producer manifest, the metadata sidecar or feature definitions) is an
+    unpublished export: missing export sidecars never prove a source. Any
+    other folder (a raw CSV source) is left to its own detection contract.
     """
 
     root = Path(export_dir)
     if os.path.lexists(in_progress_marker_path(root)):
         return REASON_IN_PROGRESS
-    if not is_export_folder(root):
+    if _has_root_manifest(root):
         return None
-    if (root / NATIVE_MANIFEST).is_file() or (root / LEGACY_MANIFEST).is_file():
+    if any((root / name).is_file() for name in SOURCE_PREPARATION_MANIFESTS):
         return None
-    return REASON_MANIFEST_MISSING
+    if _holds_export_files(root, module_names):
+        return REASON_MANIFEST_MISSING
+    return None
+
+
+def require_published_export_package(export_dir: Union[str, Path]) -> Path:
+    """For export-only readers: no marker, and a native or legacy root manifest.
+
+    Returns the root manifest path (native first).
+    """
+
+    root = Path(export_dir)
+    require_no_in_progress_marker(root)
+    for name in (NATIVE_MANIFEST, LEGACY_MANIFEST):
+        if (root / name).is_file():
+            return root / name
+    raise NativeExportUnpublishedError(
+        f"{root} is not a published export (no {NATIVE_MANIFEST} or {LEGACY_MANIFEST})",
+        reason=REASON_MANIFEST_MISSING,
+        path=root,
+    )
+
+
+def adopt_native_export(export_dir: Union[str, Path]) -> Path:
+    """Take over an export folder for an explicit resume of the same transaction.
+
+    Unlike :func:`begin_native_export`, an existing marker is not refused: the
+    caller (an explicit ``--resume`` of the same candidate) is the transaction
+    that left it. A folder without a marker gets one before any mutation.
+    """
+
+    root = Path(export_dir)
+    marker = in_progress_marker_path(root)
+    if os.path.lexists(marker):
+        if marker.is_symlink() or not marker.is_file():
+            raise NativeExportUnpublishedError(
+                f"{root}: {IN_PROGRESS_MARKER} is not a regular file",
+                reason=REASON_IN_PROGRESS,
+                path=root,
+            )
+        return marker
+    return begin_native_export(root)
 
 
 def require_no_in_progress_marker(export_dir: Union[str, Path]) -> None:

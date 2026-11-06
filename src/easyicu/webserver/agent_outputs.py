@@ -259,6 +259,19 @@ def _metadata_features(source: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     root = Path(export_path).expanduser()
+    # File-level reads below: the parent folder must not be an unpublished
+    # export (an interrupted extraction or web export).
+    from easyicu.api.extraction import EXTRACT_MODULES
+    from easyicu.export_publication import (
+        NativeExportUnpublishedError,
+        folder_unpublished_reason,
+    )
+
+    reason = folder_unpublished_reason(root, module_names=EXTRACT_MODULES)
+    if reason is not None:
+        raise NativeExportUnpublishedError(
+            f"{root} is an unpublished export ({reason})", reason=reason, path=root
+        )
     files = [f for f in source.get("files", []) if isinstance(f, dict)]
     entries: List[Tuple[str, Path, Dict[str, Any]]] = []
     for meta in files:

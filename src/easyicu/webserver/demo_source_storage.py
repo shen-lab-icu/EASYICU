@@ -238,12 +238,15 @@ def export_ready(paths: DemoSourcePaths, source: DemoSourceSpec) -> bool:
     row boundaries are those of the code that wrote it.
     """
 
+    from easyicu.export_publication import unpublished_reason
+
     manifest = paths.export / "_manifest.json"
     if not (
         paths.export.is_dir()
         and not paths.export.is_symlink()
         and manifest.is_file()
         and not manifest.is_symlink()
+        and unpublished_reason(paths.export) is None
     ):
         return False
     marker = read_marker(paths.prepared_marker, source)

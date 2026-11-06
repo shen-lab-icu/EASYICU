@@ -640,6 +640,15 @@ def _source_run_lineage(
     }
 
 
+def _require_published_exports(export_root: Path) -> None:
+    """Refuse the audit unless all six database exports are published."""
+
+    from easyicu.export_publication import require_published_native_export
+
+    for database in DATABASES:
+        require_published_native_export(export_root / database)
+
+
 def _load_root_manifests(export_root: Path) -> dict[str, dict[str, Any]]:
     manifests: dict[str, dict[str, Any]] = {}
     for database in DATABASES:
@@ -2204,6 +2213,7 @@ def main() -> None:
     raw_run_metadata = args.run_metadata.read_bytes()
     run_metadata = json.loads(raw_run_metadata)
     lineage = _source_run_lineage(args.run_metadata, raw_run_metadata)
+    _require_published_exports(args.export_root)
     source_manifest_sha256 = _verify_source_manifest_hashes(
         args.export_root,
         run_metadata,

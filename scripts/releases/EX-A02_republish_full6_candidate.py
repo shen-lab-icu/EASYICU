@@ -34,6 +34,8 @@ if str(SOURCE_ROOT) not in sys.path:
 from easyicu.api import extraction as extraction_api  # noqa: E402
 from easyicu.export_publication import (  # noqa: E402
     NativeExportUnpublishedError,
+    begin_native_export,
+    finish_native_export,
     require_published_native_export,
 )
 
@@ -412,6 +414,15 @@ def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
         # across a republication would make a new candidate appear audited by
         # evidence generated from its parent package.
         shutil.rmtree(destination / "publication_qc", ignore_errors=True)
+        # Each cloned database is republished in place. Mark all six before
+        # the first rewrite and clear them only after the final run manifest:
+        # an interrupted republication is refused everywhere (EX-A01 cannot
+        # seal it, EX-A03 cannot take it as a source). There is no resume: the
+        # destination must be fresh, so a marked candidate is discarded and
+        # made again, never taken over.
+        target_roots = [destination / "exports" / database for database in DATABASES]
+        for target in target_roots:
+            begin_native_export(target)
         new_manifests = {
             database: _republish_database(
                 destination / "exports" / database,
@@ -457,6 +468,8 @@ def republish_candidate(source_run_root: Path, output_root: Path) -> Path:
             publication_commit=publication_commit,
         )
         _atomic_write_json(destination / "run_manifest.json", updated_run_manifest)
+        for target in target_roots:
+            finish_native_export(target)
     except Exception:
         # A failed destination is intentionally retained for diagnosis.  It has
         # no run_metadata.json and cannot be promoted by EX-A01.

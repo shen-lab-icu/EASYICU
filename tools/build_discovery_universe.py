@@ -49,6 +49,9 @@ OUTCOME = ["death", "los_icu"]
 
 
 def file_for(concept: str) -> Path:
+    from easyicu.export_publication import require_published_export_package
+
+    require_published_export_package(EXPORT)
     for f in sorted(EXPORT.glob("*.parquet")):
         if concept in pq.read_schema(f).names:
             return f

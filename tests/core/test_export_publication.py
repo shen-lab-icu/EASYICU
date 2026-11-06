@@ -346,3 +346,187 @@ def test_an_export_folder_without_a_manifest_is_refused_but_a_source_is_not(web_
     assert (answer["error"], answer["reason"]) == (
         "native_export_unpublished", publication.REASON_MANIFEST_MISSING,
     )
+
+
+# --- B12: bare module folders, more readers, release transactions -----------
+
+@pytest.fixture
+def bare_export(web_source, tmp_path):
+    """An old web export interrupted after its module files: parquets only."""
+    import shutil
+
+    _web_export(web_source)
+    bare = tmp_path / "bare_export"
+    bare.mkdir()
+    shutil.copy2(web_source.export / "demographics.parquet", bare / "demographics.parquet")
+    return bare
+
+
+def test_a_bare_module_folder_is_refused_and_a_converted_source_is_not(bare_export, web_source):
+    from easyicu.webserver import dataio
+
+    for reader in (
+        dataio.scan_path,
+        dataio.describe_export_source,
+        dataio.describe_source_tables,
+        dataio.summarize_export_workspace,
+    ):
+        answer = reader(str(bare_export))
+        assert answer["ok"] is False, reader.__name__
+        assert (answer["error"], answer["reason"]) == (
+            "native_export_unpublished", publication.REASON_MANIFEST_MISSING,
+        ), reader.__name__
+
+    # A converted source proves itself by its own preparation receipt.
+    assert (web_source.raw / "conversion_manifest.json").is_file()
+    assert dataio.scan_path(str(web_source.raw))["ok"] is True
+    assert dataio.describe_source_tables(str(web_source.raw))["ok"] is True
+    # An export-only reader refuses a source folder: it is not a package.
+    answer = dataio.summarize_export_workspace(str(web_source.raw))
+    assert (answer["ok"], answer["error"]) == (False, "native_export_unpublished")
+
+
+def test_file_level_and_tool_readers_refuse(bare_export, tmp_path, monkeypatch):
+    from easyicu.webserver import agent_outputs, dataio
+
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        dataio.read_export_projection(bare_export / "demographics.parquet", columns=["stay_id"])
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        agent_outputs._load_context(str(bare_export), {"files": []})
+
+    # The tool's loader-exclusion imports drifted before this branch (the three
+    # constants no longer exist); stub them so its publication gate is tested.
+    from easyicu.scores import comorbidity, microbiology, outcomes
+
+    for module, name in ((comorbidity, "_NO_ICD_DATABASES"),
+                         (microbiology, "_NO_MICRO_DATABASES"),
+                         (outcomes, "_FOLLOWUP_DATABASES")):
+        if not hasattr(module, name):
+            monkeypatch.setattr(module, name, frozenset(), raising=False)
+    coverage = _load_script("r13partial_coverage", "tools/audit_extraction_coverage.py")
+    marked = tmp_path / "coverage_marked"
+    (marked / "eicu").mkdir(parents=True)
+    (marked / "eicu" / publication.IN_PROGRESS_MARKER).write_text("", encoding="utf-8")
+    assert coverage.audit(str(marked)) == 1
+    published = tmp_path / "coverage_published"
+    (published / "eicu").mkdir(parents=True)
+    (published / "eicu" / "_manifest.json").write_text("{}", encoding="utf-8")
+    assert coverage.audit(str(published)) == 1  # expected modules are missing: a failure
+
+    qc_a01 = _load_script(
+        "r13partial_qc_a01", "scripts/figures/QC-A01_cross_database_distributions.py"
+    )
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        qc_a01.module_names(marked)
+    qc_a02 = _load_script(
+        "r13partial_qc_a02",
+        "scripts/figures/QC-A02_easyicu_cross_database_reliability_audit.py",
+    )
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        qc_a02._require_published_exports(marked)
+
+
+def _refresh_source(refresher, root: Path) -> dict:
+    import json
+
+    data_paths = {database: str(root.parent / f"raw-{database}") for database in refresher.DATABASES}
+    for path in data_paths.values():
+        Path(path).mkdir()
+    metrics = {
+        module: {"elapsed_seconds": 1.0, "peak_rss_mb": 1.0, "peak_working_set_mb": 1.0,
+                 "rows": 1, "parquet_bytes": 1, "parquet_sha256": "0" * 64}
+        for module in refresher.MODULES
+    }
+    manifest = {
+        "data_paths": data_paths,
+        "sources": {database: {"module_metrics": dict(metrics)} for database in refresher.DATABASES},
+    }
+    root.mkdir()
+    (root / "run_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (root / "run_metadata.json").write_text(json.dumps({
+        "status": "verified", "easyicu_commit": "d" * 40,
+        "source_manifest_sha256": {database: "c" * 64 for database in refresher.DATABASES},
+    }), encoding="utf-8")
+    (root / "database_extraction_timing.csv").write_text(
+        "database,total_rows,total_parquet_bytes\n", encoding="utf-8"
+    )
+    for database in refresher.DATABASES:
+        (root / "exports" / database).mkdir(parents=True)
+        (root / "exports" / database / "_manifest.json").write_text(
+            json.dumps({"database": database}), encoding="utf-8"
+        )
+    return manifest
+
+
+def test_an_interrupted_refresh_promotion_is_refused_until_resume_completes(tmp_path, monkeypatch):
+    refresher = _load_script(
+        "r13partial_refresh_txn", "scripts/releases/EX-A03_refresh_selected_modules.py"
+    )
+    source, candidate = tmp_path / "source", tmp_path / "candidate"
+    manifest = _refresh_source(refresher, source)
+    republication = refresher.REPUBLICATION
+    monkeypatch.setattr(republication, "_require_clean_checkout", lambda: "a" * 40)
+    monkeypatch.setattr(republication, "_validate_source", lambda _source: manifest)
+    monkeypatch.setattr(republication, "_sha256_file", lambda _path: "b" * 64)
+    monkeypatch.setattr(republication, "_source_database_receipt", lambda _root: {
+        "native_manifest_sha256": "c" * 64, "easyicu_git_commit": "d" * 40,
+        "easyicu_git_dirty": False,
+    })
+    monkeypatch.setattr(republication, "_rebind_extraction_timing_receipts", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        refresher, "_validate_publication_only_database_semantics",
+        lambda *_a, **_k: {"status": "PASS", "modules": {}},
+    )
+    selected = refresher._expand_module_dependency_closure(["respiratory"])
+
+    def interrupted_promotion(**kwargs):
+        # The first selected module file replaced in the target, then the
+        # process stops (old manifest and old modules still beside it).
+        target = kwargs["candidate_root"] / "exports" / kwargs["database"]
+        (target / f"{selected[0]}.parquet").write_bytes(b"new module bytes")
+        raise KeyboardInterrupt
+
+    def refreshed(**kwargs):
+        return {
+            "database": kwargs["database"], "data_path": kwargs["data_path"],
+            "num_patients": 1, "batch_size": 1, "resource_budget_mb": 8192.0,
+            "resource_execution_limits": refresher._resource_budget_execution_limits(8192.0),
+            "total_elapsed_seconds": 1.0,
+            "modules": {module: {"elapsed_seconds": 1.0, "peak_rss_mb": 2.0,
+                                 "peak_working_set_mb": 3.0} for module in selected},
+        }
+
+    def republished(_root, *, database, **_kwargs):
+        return {
+            "database": database,
+            "runtime_provenance": {"easyicu_git_commit": "a" * 40},
+            "source_extraction_provenance": {"publication_only": True, "raw_database_reread": False},
+            "module_timings_seconds": {m: 0.0 for m in refresher.MODULES},
+            "module_peak_rss_mb": {m: 0.0 for m in refresher.MODULES},
+            "module_peak_working_set_mb": {m: 0.0 for m in refresher.MODULES},
+            "files": [{"module": m, "rows": 1, "parquet_bytes": 2, "parquet_sha256": "e" * 64}
+                      for m in refresher.MODULES],
+        }
+
+    monkeypatch.setattr(republication, "_republish_database", republished)
+    arguments = dict(
+        source_run_root=source, output_root=candidate, modules=["respiratory"],
+        data_path_overrides={}, batch_size=1,
+        resource_policy_override_reason="unit-test benchmark override",
+    )
+    monkeypatch.setattr(refresher, "_refresh_one_database", interrupted_promotion)
+    with pytest.raises(KeyboardInterrupt):
+        refresher.refresh_candidate(**arguments)
+    targets = [candidate / "exports" / database for database in refresher.DATABASES]
+    for target in targets:
+        assert (target / "_manifest.json").is_file()  # the cloned old manifest
+        with pytest.raises(publication.NativeExportUnpublishedError) as caught:
+            publication.require_published_native_export(target)
+        assert caught.value.reason == publication.REASON_IN_PROGRESS
+
+    # Contract: only an explicit --resume of this candidate adopts the
+    # markers; it clears them after the manifests and the run manifest.
+    monkeypatch.setattr(refresher, "_refresh_one_database", refreshed)
+    assert refresher.refresh_candidate(**arguments, resume=True) == candidate
+    for target in targets:
+        assert publication.require_published_native_export(target) == target / "_manifest.json"

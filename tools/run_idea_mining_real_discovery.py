@@ -109,6 +109,9 @@ def build_full_wide_cohort(export_dir: Path, output_path: Path) -> dict:
     """
     import pyarrow.parquet as pq
 
+    from easyicu.export_publication import require_published_export_package
+
+    require_published_export_package(export_dir)
     files = sorted(export_dir.glob("*.parquet"))
     if not files:
         raise SystemExit(f"no parquet files under export dir: {export_dir}")

@@ -113,6 +113,20 @@ def audit(root):
     print(f"审计提取根: {root}")
     print(f"库: {dbs}\n" + "=" * 78)
     bugs = []
+    from easyicu.export_publication import (
+        NativeExportUnpublishedError,
+        require_published_export_package,
+    )
+
+    for db in dbs:
+        try:
+            require_published_export_package(os.path.join(root, db))
+        except NativeExportUnpublishedError as exc:
+            print(f"    {db:6s} REFUSED {exc.code} ({exc.reason})")
+            bugs.append(("PUBLICATION", db, "-", [exc.code]))
+    if bugs:
+        print(f"❌ {len(bugs)} 个库的导出未发布(中断或缺 _manifest.json), 拒绝审计")
+        return 1
     for gname, g in SPECIAL_GROUPS.items():
         mod, concepts, excl = g["module"], g["concepts"], g["excluded_dbs"]
         print(f"\n[{gname}] @ {mod}  概念={concepts}")
@@ -120,7 +134,9 @@ def audit(root):
         for db in dbs:
             cols = module_cols(root, db, mod)
             if cols is None:
-                print(f"    {db:6s} SKIP  (未提取 {mod} 模块)")
+                # An expected module that is missing is a failure, never a pass.
+                print(f"    {db:6s} BUG★模块缺失 (未找到 {mod}.parquet)")
+                bugs.append((gname, db, mod, ["<module file missing>"]))
                 continue
             have = [c for c in concepts if c in cols]
             miss = [c for c in concepts if c not in cols]
