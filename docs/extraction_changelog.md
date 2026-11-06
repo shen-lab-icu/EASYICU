@@ -42,6 +42,9 @@ deferred to it are compared against `2786ea872` there.
   single-module run takes. The grid of each cache entry is a field of the
   entry; an entry of unknown grid is a miss. `get_raw_concept` returns the raw
   table or raises `RawConceptLoadError`, never None.
+- NB16-GRID-LIFECYCLE (follow-up to `ddfd55bce`): an entry's grid record is
+  dropped when the entry is evicted (per key or LRU) or the raw cache is
+  cleared, and is recorded only when the store succeeds. Memory only.
 
 **Rationale.** The cache key carries no grid, so a warm cache could answer a
 request with rows from another grid: the result depended on which concepts or
@@ -61,6 +64,8 @@ the guard.
 - `ddfd55bce`: a counts-only tracer on the eICU, MIIV, AUMC and MIMIC-III
   CareVue samples found 0 calls of `vaso_ind`, `urine24` or the uo windows
   that read a warm cache entry, so no published value changes.
+- NB16-GRID-LIFECYCLE: no value change; readers already treated a record
+  whose table was gone as unknown.
 
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 

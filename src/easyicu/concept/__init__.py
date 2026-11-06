@@ -891,7 +891,7 @@ class ConceptResolver:
             self._concept_cache.clear()
             if not keep_concept_cache:
                 self._concept_data_cache.clear()  # 🚀 清除概念数据缓存
-                self._raw_concept_cache.clear()   # 🆕 清除原始数据缓存
+                self._clear_raw_concept_cache()   # 🆕 清除原始数据缓存
                 self._pre_agg_cache.clear()        # 🆕 清除预聚合缓存
                 self._drop_cache_accounting()
             else:
@@ -971,6 +971,14 @@ class ConceptResolver:
                 self._cache_total_bytes -= size
                 self._cache_evictions += 1
             self._cache_role_dict(role).pop(key, None)
+            if role == 'raw':
+                self.__dict__.get('_raw_concept_grid', {}).pop(key, None)
+
+    def _clear_raw_concept_cache(self) -> None:
+        """Empty the raw cache and the grid recorded for each entry together."""
+        with self._cache_lock:
+            self._raw_concept_cache.clear()
+            self.__dict__.get('_raw_concept_grid', {}).clear()
 
     def _drop_cache_accounting(self, *roles: str) -> None:
         """Forget accounting for roles whose dicts were cleared wholesale."""
@@ -990,7 +998,7 @@ class ConceptResolver:
         """
         with self._cache_lock:
             self._table_cache.clear()
-            self._raw_concept_cache.clear()
+            self._clear_raw_concept_cache()
             self._drop_cache_accounting('table', 'raw')
 
     @staticmethod
@@ -1050,13 +1058,16 @@ class ConceptResolver:
         patient_ids: Optional[Union[FrozenSet, Dict, List]],
         interval: Optional[pd.Timedelta],
     ) -> Dict[str, ICUTable]:
-        """Load inputs a concept callback did not receive, as the recursive loader would.
+        """Load standard-recursion inputs a concept callback did not receive.
 
-        Same aggregation (``_build_sub_aggregate`` of the parent's aggregate),
-        same grid (the parent's own interval, else the requested one) and the
-        same raw-cache rules as ``_load_recursive_concept`` gives its
-        sub-concepts, so the callback sees one input whether or not the cache
-        is warm (B-CACHE-WARMTH; ricu's ``collect_dots(concepts, interval, ...)``).
+        Contract: only for sub-concepts the recursive loader would have passed
+        to ``parent`` but did not (for example on a warm-cache path). The
+        aggregation is ``_build_sub_aggregate`` of the parent's aggregate and
+        the grid is the parent's own interval, else the requested one, so such
+        an input matches what ``_load_recursive_concept`` gives a cold load
+        (B-CACHE-WARMTH; ricu's ``collect_dots(concepts, interval, ...)``).
+        It is not a general loader: inputs outside the parent's standard
+        recursion, other grids or other aggregations need their own owner.
         """
         names = list(names)
         definition = self.dictionary.get(parent)
@@ -1319,15 +1330,15 @@ class ConceptResolver:
         can refuse an entry from the other grid (``_raw_entry_serves``).
         """
         key = self._raw_cache_key(concept_name, patient_ids_hash, aggregator, cache_scope)
-        self._record_raw_grid(key, table, grid)
         stored = self._bounded_cache_store('raw', key, table)
+        # A grid is recorded only for a table the cache now holds under the key.
+        self._record_raw_grid(key, table, grid if stored else self._RAW_GRID_UNKNOWN)
         if store_legacy and cache_scope is None and stored:
-            self._record_raw_grid((concept_name, patient_ids_hash), table, grid)
             # Alias key to the same object — charge 0 bytes so the table is
             # not double-counted against the cache budget.
-            self._bounded_cache_store(
-                'raw', (concept_name, patient_ids_hash), table, charge_bytes=0,
-            )
+            alias = (concept_name, patient_ids_hash)
+            alias_stored = self._bounded_cache_store('raw', alias, table, charge_bytes=0)
+            self._record_raw_grid(alias, table, grid if alias_stored else self._RAW_GRID_UNKNOWN)
 
     def _get_inflight(self) -> set:
         """获取当前线程的inflight集合（线程安全）"""
@@ -2573,7 +2584,7 @@ class ConceptResolver:
                     if not self._keep_cache_between_calls:
                         # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
                         # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
-                        self._raw_concept_cache.clear()
+                        self._clear_raw_concept_cache()
                         self._table_cache.clear()
                         self._drop_cache_accounting()
                     else:
@@ -10737,7 +10748,7 @@ class ConceptResolver:
             with self._cache_lock:
                 self._concept_cache.clear()
                 self._concept_data_cache.clear()
-                self._raw_concept_cache.clear()
+                self._clear_raw_concept_cache()
                 self._table_cache.clear()
                 self._drop_cache_accounting()
             if data_source is not None:
