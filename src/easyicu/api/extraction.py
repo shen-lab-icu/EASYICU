@@ -2900,16 +2900,67 @@ def _append_isolated_stream_batch(
 _STREAM_LEDGER_SCHEMA = "easyicu.stream_batch_ledger/1"
 
 
-class StreamBatchMemoryExhausted(RuntimeError):
+# Resume events that spend the streamed module's retry budget.
+_STREAM_RETRY_EVENT_KINDS = frozenset({"isolated_batch_memory_retry", "unverified_kill_retry"})
+
+
+class StreamBatchFailure(RuntimeError):
+    """A streamed module stopped at one batch, with its typed evidence.
+
+    Carries the failure class, the memory evidence (if any), the batch it
+    stopped at and the resume events so far, so the module boundary records
+    them instead of a string (lead-r13 D3-EXCEPT).
+    """
+
+    default_failure_class: Optional[str] = None
+
+    def __init__(
+        self,
+        message: str,
+        failure_class: Optional[str] = None,
+        *,
+        memory_evidence: Optional[str] = None,
+        worker_exit_code: object = None,
+        batch_index: Optional[int] = None,
+        start_offset: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        resume_events: Sequence[Mapping] = (),
+    ):
+        super().__init__(message)
+        self.failure_class = failure_class or self.default_failure_class
+        self.memory_evidence = memory_evidence
+        self.worker_exit_code = worker_exit_code
+        self.batch_index = batch_index
+        self.start_offset = start_offset
+        self.batch_size = batch_size
+        self.resume_events = [dict(event) for event in resume_events]
+
+    @property
+    def retries_used(self) -> int:
+        return sum(1 for e in self.resume_events if e.get("kind") in _STREAM_RETRY_EVENT_KINDS)
+
+    def to_record(self) -> Dict[str, object]:
+        return {
+            "exception_type": type(self).__name__,
+            "failure_class": self.failure_class,
+            "memory_evidence": self.memory_evidence,
+            "worker_exit_code": self.worker_exit_code,
+            "batch_index": self.batch_index,
+            "start_offset": self.start_offset,
+            "batch_size": self.batch_size,
+            "retries_used": self.retries_used,
+            "message": str(self),
+        }
+
+
+class StreamBatchMemoryExhausted(StreamBatchFailure):
     """A one-stay streamed batch still ran out of memory."""
 
+    default_failure_class = "out_of_memory"
 
-class StreamBatchWorkerKilled(RuntimeError):
+
+class StreamBatchWorkerKilled(StreamBatchFailure):
     """An isolated batch worker died without memory evidence."""
-
-    def __init__(self, message: str, failure_class: Optional[str]):
-        super().__init__(message)
-        self.failure_class = failure_class
 
 
 def _stream_ids_digest(id_col: str, ids) -> str:
@@ -3223,9 +3274,17 @@ def _stream_module_batches_to_parquet(
                             f"{module_name}: isolated batch worker exited "
                             f"with code {process.exitcode} ({failure_class})"
                         )
+                        failure = dict(
+                            memory_evidence=evidence,
+                            worker_exit_code=process.exitcode,
+                            batch_index=index,
+                            start_offset=start,
+                            batch_size=current_batch_size,
+                            resume_events=resume_events,
+                        )
                         if evidence:
-                            raise StreamBatchMemoryExhausted(message)
-                        raise StreamBatchWorkerKilled(message, failure_class)
+                            raise StreamBatchMemoryExhausted(message, **failure)
+                        raise StreamBatchWorkerKilled(message, failure_class, **failure)
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
@@ -3335,6 +3394,12 @@ def _stream_module_batches_to_parquet(
             # continues after the last committed batch.
             keep_parts = True
             commit_ledger(current_batch_size, pending_reason="memory_exception")
+        elif isinstance(exc, StreamBatchFailure):
+            # A terminated module keeps its failure ledger (D3-EXCEPT): the
+            # committed parts, the resume events and why it stopped.
+            keep_parts = True
+            ledger["termination"] = exc.to_record()
+            commit_ledger(current_batch_size, pending_reason=exc.failure_class)
         if not keep_parts:
             for entry in batch_telemetry:
                 if entry.get("part"):
@@ -3431,6 +3496,7 @@ def _run_module_extraction(
     streamed = False
     result = None
     memory_exhausted = False
+    stream_failure = None
     try:
         if stream_output_batches:
             if not patient_ids_filter or not batch_size:
@@ -3489,6 +3555,17 @@ def _run_module_extraction(
                 traceback.print_exc()
                 errors.append(f"load_concepts({module_name}) batched: {e}")
                 result = {}
+    except StreamBatchFailure as e:
+        # Typed at the module boundary (D3-EXCEPT): the failure class, its
+        # memory evidence, the retry budget used and the resume events are
+        # recorded, not flattened to text. The batch-level retries are spent
+        # (a one-stay batch or a refused kill), so the module is not marked
+        # for a smaller retry; it fails, and publication refuses it.
+        traceback.print_exc()
+        errors.append(f"streamed export({module_name}): {e}")
+        stream_failure = e.to_record()
+        stream_failure["resume_events"] = list(e.resume_events)
+        result = {}
     except Exception as e:
         traceback.print_exc()
         errors.append(
@@ -3572,6 +3649,11 @@ def _run_module_extraction(
         )
         manifest["deferred_batch_merge"] = stream_info.get("deferred_batch_merge", False)
         manifest["stream_resume_events"] = stream_info.get("stream_resume_events", [])
+    if stream_failure is not None:
+        manifest["stream_failure"] = {
+            k: v for k, v in stream_failure.items() if k != "resume_events"
+        }
+        manifest["stream_resume_events"] = stream_failure["resume_events"]
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 

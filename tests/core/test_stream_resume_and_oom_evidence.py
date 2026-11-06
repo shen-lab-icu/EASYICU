@@ -447,7 +447,14 @@ def test_a_second_bare_kill_in_the_module_fails_typed(tmp_path, monkeypatch):
     with pytest.raises(api.StreamBatchWorkerKilled) as caught:
         _isolated_kills(monkeypatch, tmp_path, {1, 3})
     assert caught.value.failure_class == "worker_killed_unknown"
-    assert list(tmp_path.iterdir()) == []
+    assert caught.value.retries_used == 1
+    # The terminated module keeps its failure ledger (lead-r13 D3-EXCEPT);
+    # nothing is published.
+    ledger = json.loads((tmp_path / ".test_module.stream_ledger.json").read_text())
+    assert ledger["pending_reason"] == "worker_killed_unknown"
+    assert ledger["termination"]["failure_class"] == "worker_killed_unknown"
+    assert [e["kind"] for e in ledger["resume_events"]] == ["unverified_kill_retry"]
+    assert not (tmp_path / "test_module.parquet").exists()
 
 
 def test_a_bare_kill_with_a_counter_is_not_retried(tmp_path, monkeypatch):
