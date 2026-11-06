@@ -382,3 +382,87 @@ def test_attached_source_with_an_extended_config_is_read(tmp_path):
     finally:
         attached.detach_src("aumc")
     assert out is not None and len(out) == 2
+
+
+# --- delta19w: one bound source; presence by the reader's own loader
+
+
+def _no_env_root(monkeypatch):
+    for name in ("EASYICU_AUMC_PATH", "EASYICU_HIRID_PATH", "EASYICU_DATA_PATH"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _aumc_admissions():
+    # Synthetic: two admissions, no real identifiers.
+    return pd.DataFrame({
+        "admissionid": [1, 2], "gender": ["Man", "Vrouw"], "agegroup": ["70-79", "60-69"],
+        "admittedat": [0, 0], "dischargedat": [3_600_000, 7_200_000], "dateofdeath": [None, None],
+    })
+
+
+def _aumc_instance(root):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+
+    return ICUDataSource(load_src_cfg("aumc"), base_path=root)
+
+
+@pytest.mark.parametrize("patient_ids", [None, [1, 2]], ids=["safe_read", "icutable_pushdown"])
+def test_a_source_passed_to_the_loader_is_never_reselected_by_name(tmp_path, monkeypatch, patient_ids):
+    from easyicu.concept import load_dictionary
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    _aumc_admissions().to_parquet(tmp_path / "admissions.parquet")
+    source = _aumc_instance(tmp_path)
+    loader = ConceptLoader(source, low_memory=False)  # root carried by the source only
+    loader._preload_tables([load_dictionary("aumc")["sex"]], patient_ids, "icustay")
+    out = loader._read_declared_table("admissions", ["admissionid", "gender"])
+    assert len(out) == 2
+    assert loader._table_source() is source
+    assert loader._table_cache_source["admissions"] is source
+
+
+def test_a_registered_in_memory_source_is_read_through_the_bound_source(monkeypatch):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    source = ICUDataSource(load_src_cfg("aumc"), base_path=None)
+    source.register_table_source("admissions", lambda: _aumc_admissions())
+    loader = ConceptLoader(source, low_memory=False)
+    out = loader._read_declared_table("admissions", ["admissionid", "gender"])
+    assert len(out) == 2
+    assert loader._table_cache_source["admissions"] is source
+
+
+def test_a_cache_entry_from_another_source_is_never_reused(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    _no_env_root(monkeypatch)
+    _aumc_admissions().to_parquet(tmp_path / "admissions.parquet")
+    loader = ConceptLoader(_aumc_instance(tmp_path), low_memory=False)
+    loader._table_cache["admissions"] = _aumc_admissions()
+    loader._table_cache_source["admissions"] = object()
+    with pytest.raises(StorageIntegrityError, match="table_cache_source_changed"):
+        loader._read_declared_table("admissions", None)
+
+
+def test_hirid_multi_file_table_with_only_its_csv_is_missing_not_empty(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    # The packaged HiRID pharma shape: pharma_records/csv/part-0.csv ...;
+    # the reader reads that directory's Parquet, and it holds only a CSV.
+    _no_env_root(monkeypatch)
+    csv_dir = tmp_path / "pharma_records" / "csv"
+    csv_dir.mkdir(parents=True)
+    pd.DataFrame({"patientid": [1], "pharmaid": [7], "givenat": [0], "givendose": [1.0]}).to_csv(
+        csv_dir / "part-0.csv", index=False
+    )
+    loader = ConceptLoader("hirid", data_path=str(tmp_path), low_memory=True)
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
+        loader._read_declared_table("pharma", None)
+    assert loader._table_cache == {}

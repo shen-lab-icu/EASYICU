@@ -44,17 +44,29 @@ deferred to it are compared against `2786ea872` there.
   `hirid_rate_kg`, `mimic_kg_rate` and `sic_rate_kg` already did.
 - Failure handling (deprecated `ConceptLoader`, every database): the loader
   fails closed.
-  - An empty read comes only from a table the database does not declare. That
-    is decided before the read, on the source `load_table` itself would read
-    (`easyicu.table.select_table_source`: an attached source first, with its
-    own configuration and registrations).
+  - One source per loader. Preload, the declared check, the cache and every
+    read use one bound source object, and each cache entry records the source
+    that produced it. A source passed to the constructor is that object and is
+    never re-selected by name. A configuration passed to the constructor is
+    read with that configuration; before, its tables were read with the
+    packaged configuration. A database name binds the source `load_table`
+    selects (`easyicu.table.select_table_source`: an attached source first,
+    with its own configuration and registrations).
+  - An empty read comes only from a table the bound source does not declare.
+    That is decided before the read.
   - A declared table without a file raises `declared_table_source_missing`, a
     `StorageIntegrityError`, on every database. This includes MIIV, where the
     datasource itself returns an empty frame. A table the conversion manifest
-    lists keeps `table_scan_files_missing`.
-  - `load_table` on an attached source accepts a `path` equal to the source's
-    base path and raises `ValueError` for a different one. It used to raise
-    `TypeError` for any `path`.
+    lists keeps `table_scan_files_missing`. Presence is decided by the loader
+    the reader will use: a table configured as several files is a Parquet
+    directory, present only when the storage owner's file set
+    (`resolve_target_files`) is not empty. A CSV next to it does not count
+    (HiRID `pharma_records/csv/` with CSV only used to read as empty). The
+    MIMIC-III `chartevents` CSV counts only as a candidate physical source.
+- Public API change: `easyicu.table.load_table` on an attached source now
+  accepts a `path` equal to the source's base path (or `None`) and raises
+  `ValueError` for a different one. It used to raise `TypeError` for any
+  `path`. Its read half is also available as `easyicu.table.read_table_from`.
   - Any other read, ID-lookup, time-conversion, unit-conversion, preload or
     sub-concept failure propagates. A recursive concept is never built or
     cached from a healthy subset of its sub-concepts.

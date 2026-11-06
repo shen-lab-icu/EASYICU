@@ -13,8 +13,8 @@ from .value_failures import TYPED_VALUE_FAILURES
 from .concept import Concept, load_dictionary
 from .config import DataSourceConfig, TableConfig, load_src_cfg
 from .datasource import ICUDataSource, MissingTableSourceError
-from .storage_layout import TableScanError, flat_table_files, verify_flat_scan
-from .table import load_table
+from .storage_layout import TableScanError, verify_flat_scan
+from .table import read_table_from
 from .io.ts_utils import change_interval
 
 # DataSource 别名用于向后兼容
@@ -118,21 +118,32 @@ def _is_missing_column_projection_error(exc: Exception) -> bool:
 
 
 def _declared_source_present(source, table_name: str) -> bool:
-    """Whether a declared table has a physical source the datasource reads.
+    """Whether the loader the datasource's reader will use finds the table.
 
-    No glob of its own: the datasource's own resolution, in the order its
-    reader uses it.  ``ICUDataSource.resolve_loader_from_disk`` (bucket
-    installation via ``storage_layout.read_bucket_contract``, configured
-    file, CSV), then ``storage_layout.flat_table_files`` (flat Parquet; a
-    table configured as several files is their directory), then the
-    MIMIC-III ``chartevents`` CSV export.  A table the conversion manifest
-    lists is left to ``storage_layout.verify_flat_scan`` by the caller.
+    Decided per reader branch (``ICUDataSource._load_raw_frame``), with the
+    datasource's and the storage owner's own resolution, no glob of its own:
+
+    - a bucket installation (``ICUDataSource.resolve_bucket_directory``) is
+      the reader's first choice;
+    - a table configured as several files is read as a Parquet directory:
+      present only when the storage owner's file set for it
+      (``ICUDataSource.resolve_target_files``, i.e.
+      ``storage_layout.resolve_table_files``) is not empty.  That call keeps
+      ``table_scan_files_missing`` for a table the conversion manifest lists.
+      A CSV the disk resolver would fall back to never vouches for it;
+    - any other table is read from ``ICUDataSource.resolve_loader_from_disk``
+      (configured file, flat Parquet, CSV);
+    - MIMIC-III ``chartevents``: its CSV export is a candidate physical
+      source only (the reader uses it with an item filter).
     """
     if getattr(source, 'base_path', None) is None:
         return False
-    if source.resolve_loader_from_disk(table_name) is not None:
+    if source.resolve_bucket_directory(table_name) is not None:
         return True
-    if flat_table_files(source, table_name):
+    table_cfg = source.config.get_table(table_name)
+    if len(getattr(table_cfg, 'files', None) or ()) > 1:
+        return bool(source.resolve_target_files(table_name))
+    if source.resolve_loader_from_disk(table_name) is not None:
         return True
     return bool(
         getattr(source.config, 'name', None) == 'mimic'
@@ -155,11 +166,17 @@ class ConceptLoader:
                         低内存模式使用 DuckDB filter pushdown，避免加载全表
         """
         self._data_source: Optional[ICUDataSource] = None
+        # The one source every read of this loader uses (see _bound_source).
+        self._bound: Optional[tuple] = None
+        self._explicit_source: Optional[ICUDataSource] = None
+        self._explicit_config = False
         if isinstance(src, ICUDataSource):
             self._data_source = src
+            self._explicit_source = src
             self.src = src.config
         elif isinstance(src, DataSourceConfig):
             self.src = src
+            self._explicit_config = True
         elif isinstance(src, str):
             self.src = load_src_cfg(src)
         else:
@@ -187,11 +204,13 @@ class ConceptLoader:
         
         # 🚀 低内存模式下，自动创建 ICUDataSource 以启用 filter pushdown
         if self._low_memory and self._data_source is None and data_path:
-            self._data_source = ICUDataSource(self.src, base_path=data_path)
+            self._data_source = self._table_source()
             logger.info(f"🧠 低内存模式启用 for {self._src_name}")
         
         self._id_lookup_cache: Optional[pd.DataFrame] = None
         self._table_cache: Dict[str, pd.DataFrame] = {}
+        # The source object that produced each cache entry.
+        self._table_cache_source: Dict[str, object] = {}
     
     def _get_table_config(self, table_name: Optional[str]) -> Optional[TableConfig]:
         """根据表名获取配置。"""
@@ -199,11 +218,61 @@ class ConceptLoader:
             return None
         return self.src.tables.get(table_name)
 
-    def _table_source(self):
-        """The source ``load_table`` reads this database from (the same selection)."""
-        from .table import select_table_source
+    def _bound_source(self) -> tuple:
+        """``(source, resolved_from, resolved_base_path)``, bound once.
 
-        return select_table_source(self._src_name, {'path': self.data_path})[0]
+        Preload, the declared check, the cache and every read use this one
+        object.  A source passed to the constructor is that object and is
+        never re-resolved by name; a configuration passed to the constructor
+        is read with that configuration.  For a database name, the source is
+        the one ``load_table`` selects (``easyicu.table.select_table_source``:
+        an attached source first), selected once.
+        """
+        bound = getattr(self, '_bound', None)
+        if bound is not None:
+            return bound
+        explicit = getattr(self, '_explicit_source', None)
+        if explicit is not None:
+            base = getattr(explicit, 'base_path', None)
+            bound = (explicit, 'explicit_source', None if base is None else str(base))
+        elif getattr(self, '_explicit_config', False):
+            from pathlib import Path
+
+            base = Path(self.data_path) if self.data_path else None
+            bound = (
+                ICUDataSource(self.src, base_path=base),
+                'explicit_config',
+                None if base is None else str(base),
+            )
+        else:
+            from .table import select_table_source
+
+            bound = select_table_source(self._src_name, {'path': self.data_path})
+        self._bound = bound
+        return bound
+
+    def _table_source(self):
+        """The bound source object (see :meth:`_bound_source`)."""
+        return self._bound_source()[0]
+
+    def _cached_table(self, table_name: str, source) -> Optional[pd.DataFrame]:
+        """A cache entry, only when ``source`` produced it."""
+        cached = self._table_cache.get(table_name)
+        if cached is None:
+            return None
+        producer = getattr(self, '_table_cache_source', {}).get(table_name)
+        if producer is not source:
+            raise TableScanError(
+                "table_cache_source_changed", table_name,
+                "the cached rows were produced by a different source object",
+            )
+        return cached
+
+    def _cache_table(self, table_name: str, frame: pd.DataFrame, source) -> None:
+        self._table_cache[table_name] = frame
+        if not hasattr(self, '_table_cache_source'):
+            self._table_cache_source = {}
+        self._table_cache_source[table_name] = source
 
     def _declared_table_source(self, table_name: str, source=None) -> bool:
         """Decide a table before any read, on the source that will be read.
@@ -338,7 +407,8 @@ class ConceptLoader:
         # column requested by the next concept.  Reusing by table name alone
         # made results depend on concept order when callbacks needed extra
         # source columns.
-        cached = self._table_cache.get(table_name)
+        source, resolved_from, resolved_base = self._bound_source()
+        cached = self._cached_table(table_name, source)
         requested_columns = list(dict.fromkeys(columns or []))
         if cached is not None and (
             not requested_columns
@@ -350,11 +420,9 @@ class ConceptLoader:
         df = None
         if requested_columns:
             try:
-                df = load_table(
-                    self._src_name,
-                    table_name,
-                    columns=requested_columns,
-                    path=self.data_path,
+                df = read_table_from(
+                    source, self._src_name, table_name, resolved_from,
+                    resolved_base, columns=requested_columns,
                 )
             except TYPED_VALUE_FAILURES:
                 raise
@@ -366,13 +434,17 @@ class ConceptLoader:
                     "without projection outside low-memory mode",
                     table_name,
                 )
-                df = load_table(self._src_name, table_name, path=self.data_path)
+                df = read_table_from(
+                    source, self._src_name, table_name, resolved_from, resolved_base,
+                )
         else:
-            df = load_table(self._src_name, table_name, path=self.data_path)
+            df = read_table_from(
+                source, self._src_name, table_name, resolved_from, resolved_base,
+            )
         
         # 🚀 存入缓存以供后续复用
         if df is not None:
-            self._table_cache[table_name] = df
+            self._cache_table(table_name, df, source)
         
         return df
     
@@ -1332,17 +1404,9 @@ class ConceptLoader:
                     # 有回调，需要通过 ConceptResolver 处理
                     # 这里我们需要使用不同的路径：直接委托给 ConceptResolver
                     from .concept import ConceptResolver
-                    from .datasource import ICUDataSource
-                    from .config import load_src_cfg
-                    from pathlib import Path
-                    
-                    # 创建或获取数据源
-                    if self._data_source is not None:
-                        data_source = self._data_source
-                    else:
-                        # 创建新的数据源
-                        config = load_src_cfg(self._src_name)
-                        data_source = ICUDataSource(config, base_path=Path(self.data_path) if self.data_path else None)
+
+                    # The loader's one bound source.
+                    data_source = self._table_source()
                     
                     # 创建 ConceptResolver
                     resolver = ConceptResolver(load_dictionary(self._src_name))
@@ -1898,12 +1962,8 @@ class ConceptLoader:
         # 🚀 初始化 ICUDataSource（如果还没有）
         # 这对 rec_cncpt 概念至关重要，因为 ConceptResolver 需要数据源对象
         if self._data_source is None:
-            from .datasource import ICUDataSource
-            from pathlib import Path
-            self._data_source = ICUDataSource(
-                self.src,
-                base_path=Path(self.data_path) if self.data_path else None
-            )
+            # The loader's one bound source (see _bound_source).
+            self._data_source = self._table_source()
             if verbose:
                 print(f"  初始化数据源: {self._src_name}")
             
@@ -1980,16 +2040,12 @@ class ConceptLoader:
             skip_preload_tables.add('observations')
         
         # 2. Load and filter
+        preload_source = self._table_source()
         for table_name, columns in table_columns.items():
-            cached = self._table_cache.get(table_name)
+            cached = self._cached_table(table_name, preload_source)
             if cached is not None and set(columns).issubset(cached.columns):
                 continue
             
-            preload_source = (
-                self._data_source
-                if self._data_source is not None and patient_ids is not None
-                else None
-            )
             if not self._declared_table_source(table_name, preload_source):
                 # Undeclared here: the concept read is empty without a read.
                 continue
@@ -2020,7 +2076,7 @@ class ConceptLoader:
                     
                 if patient_list:
                     patient_filter = FilterSpec(column=id_col, op=FilterOp.IN, value=patient_list)
-                    icu_table = self._data_source.load_table(
+                    icu_table = preload_source.load_table(
                         table_name,
                         columns=list(columns),
                         filters=[patient_filter],
@@ -2041,8 +2097,8 @@ class ConceptLoader:
                 if patient_ids is not None:
                     df = self._filter_by_patient(df, patient_ids, id_type)
                 
-            # Store in cache
-            self._table_cache[table_name] = df
+            # Store in cache, with the source that produced it
+            self._cache_table(table_name, df, preload_source)
                 
 
 def load_concepts(

@@ -1667,7 +1667,19 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
         >>> df = load_table('miiv', 'labevents', path='/data/mimic-iv/3.1')
     """
     data_source, resolved_from, resolved_base_path = select_table_source(src, kwargs)
+    return read_table_from(
+        data_source, src, table_name, resolved_from, resolved_base_path, **kwargs
+    )
 
+
+def read_table_from(
+    data_source, src: str, table_name: str, resolved_from, resolved_base_path, **kwargs
+) -> pd.DataFrame:
+    """Read ``table_name`` from an already selected ``data_source``.
+
+    The read and lineage half of :func:`load_table`, for a caller that has
+    bound one source (``ConceptLoader``) and must not select it again.
+    """
     icu_table = data_source.load_table(table_name, **kwargs)
     result = icu_table.data
     # A-P2-14: env/attach resolution must be traceable on the returned frame,
