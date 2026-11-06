@@ -23,7 +23,7 @@ import pytest
 
 import easyicu
 from easyicu.io import ts_utils
-from easyicu.io.ts_utils import IntervalAggregationError
+from easyicu.io.ts_utils import IntervalAggregationError, TimeAxisUnitError
 from easyicu.storage_layout import StorageIntegrityError, TableScanError
 from easyicu.value_failures import TYPED_VALUE_FAILURES
 from tests.support.urine_raw_source import _load, _source
@@ -48,8 +48,11 @@ def _miiv(root):
     return _source(root, "miiv", icustays=stays, chartevents=chart)
 
 
-def test_the_shared_tuple_names_both_types():
-    assert set(TYPED_VALUE_FAILURES) == {IntervalAggregationError, StorageIntegrityError}
+def test_the_shared_tuple_names_every_typed_value_failure():
+    # TimeAxisUnitError joined with Codex delta4 D4-AXIS-CATCH.
+    assert set(TYPED_VALUE_FAILURES) == {
+        IntervalAggregationError, StorageIntegrityError, TimeAxisUnitError,
+    }
 
 
 def test_recursive_interval_step_does_not_keep_the_unaggregated_result(tmp_path, monkeypatch):
