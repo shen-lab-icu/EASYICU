@@ -104,3 +104,48 @@ def test_an_empty_slice_with_foreign_identifiers_still_raises():
     tables["urine_urea"] = _raw_empty("urine_urea", ids=("subject_id",))
     with pytest.raises(ValueError, match="identical identifier columns"):
         ConceptResolver({})._merge_tables(tables)
+
+
+def test_the_fill_scope_counts_only_filled_empty_slices():
+    from easyicu.concept.merge_time_index import merge_fill_scope
+
+    resolver = ConceptResolver({})
+    with merge_fill_scope() as normal:
+        resolver._merge_tables(_tables({1, 2, 3}, NAMES))
+    with merge_fill_scope() as repro:
+        resolver._merge_tables(_tables({1, 2}, NAMES))
+    assert normal == [] and repro == ["urine_urea"]
+
+
+@pytest.mark.parametrize("drop_urea", [False, True], ids=["normal", "urea_empty_everywhere"])
+def test_the_published_manifest_carries_the_fill_receipt(tmp_path, monkeypatch, drop_urea):
+    import json
+
+    from easyicu.api import extraction as api
+    from easyicu.api.concepts import clear_global_loader
+    from tests.support.urine_chemistry_source import urine_module_source
+
+    monkeypatch.setenv("EASYICU_NATIVE_V2_REAL_ROOT", "")
+    source = tmp_path / "source"
+    urine_module_source(source, "mimic")
+    if drop_urea:
+        labs = pd.read_parquet(source / "labevents.parquet")
+        labs[labs.itemid.ne(51104)].to_parquet(source / "labevents.parquet", index=False)
+    out = tmp_path / "out"
+    try:
+        result = api.extract_database(
+            "mimic", data_path=source, output_dir=out, modules=["outcome", "renal_urine_chem"],
+            native_export_v2=True, resource_budget_mb=2048, verbose=False,
+        )
+        assert not {n: i["errors"] for n, i in result["modules"].items() if i.get("errors")}
+        manifest = json.loads((out / "_manifest.json").read_text())
+        entry = next(row for row in manifest["files"] if row["module"] == "renal_urine_chem")
+        filled = entry["merge_empty_index_filled"]
+        if drop_urea:
+            assert [row["concept"] for row in filled] == ["urine_urea"]
+            frame = pd.read_parquet(out / "renal_urine_chem.parquet")
+            assert frame["charttime"].dtype == "float64" and frame["urine_urea"].isna().all()
+        else:
+            assert filled == []
+    finally:
+        clear_global_loader()

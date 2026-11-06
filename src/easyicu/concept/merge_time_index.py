@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal, Mapping
+import threading
+from contextlib import contextmanager
+from typing import Iterator, Literal, Mapping
 
 import numpy as np
 import pandas as pd
@@ -126,3 +128,34 @@ def batch_index_dtype(tables: Mapping[str, ICUTable | TsTbl], aligned_index: str
         if index and len(table.data) and index in table.data:
             return table.data[index].dtype
     return None
+
+
+_FILL_LOCK = threading.Lock()
+_FILL_SCOPES: list[list[str]] = []
+
+
+@contextmanager
+def merge_fill_scope() -> Iterator[list[str]]:
+    """Collect the concepts whose empty slice took the batch index in this block.
+
+    Process-wide like the source-bounds scopes, so concept-worker threads
+    report into the batch that started them; nested scopes take their own.
+    """
+    fills: list[str] = []
+    with _FILL_LOCK:
+        _FILL_SCOPES.append(fills)
+    try:
+        yield fills
+    finally:
+        with _FILL_LOCK:
+            for position in range(len(_FILL_SCOPES) - 1, -1, -1):
+                if _FILL_SCOPES[position] is fills:
+                    del _FILL_SCOPES[position]
+                    break
+
+
+def record_empty_index_fill(concept: str) -> None:
+    """Note one filled empty slice in the innermost scope; a no-op without one."""
+    with _FILL_LOCK:
+        if _FILL_SCOPES:
+            _FILL_SCOPES[-1].append(str(concept))

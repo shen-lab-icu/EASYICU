@@ -26,6 +26,7 @@ from ..source_bounds import (
     merge_bounds_drops,
 )
 from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
+from ..concept.merge_time_index import merge_fill_scope
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
 from ..utils.death_time_semantics import (
@@ -2768,6 +2769,11 @@ def _stream_batch_bounds_sidecar(part: Path) -> Path:
     return Path(part).with_name(f".{Path(part).name}.bounds.json")
 
 
+def _stream_batch_fill_sidecar(part: Path) -> Path:
+    """Where an isolated batch process leaves its merge-fill concepts for the parent."""
+    return Path(part).with_name(f".{Path(part).name}.merge_fill.json")
+
+
 def _load_stream_module_batch(
     load_concepts_fn,
     *,
@@ -2846,8 +2852,10 @@ def _write_isolated_stream_batch(
     # only when the batch succeeded (a killed child leaves none).
     bounds_sidecar = _stream_batch_bounds_sidecar(target)
     bounds_sidecar.unlink(missing_ok=True)
+    fill_sidecar = _stream_batch_fill_sidecar(target)
+    fill_sidecar.unlink(missing_ok=True)
     try:
-        with bounds_scope() as bounds_records:
+        with bounds_scope() as bounds_records, merge_fill_scope() as batch_fills:
             batch = _load_stream_module_batch(
                 _lc,
                 module_name=module_name,
@@ -2863,6 +2871,7 @@ def _write_isolated_stream_batch(
             reorder=False,
         )
         if frame is None:
+            _write_json_atomic(fill_sidecar, sorted(set(batch_fills)))
             with source_bounds_accounting("isolated_batch_hand_off"):
                 _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
             return
@@ -2884,6 +2893,7 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
+        _write_json_atomic(fill_sidecar, sorted(set(batch_fills)))
         with source_bounds_accounting("isolated_batch_hand_off"):
             _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
     except BaseException as exc:
@@ -3477,13 +3487,20 @@ def _stream_module_batches_to_parquet(
                             )
                         batch_bounds = json.loads(bounds_sidecar.read_text(encoding="utf-8"))
                         bounds_sidecar.unlink()
+                    fill_sidecar = _stream_batch_fill_sidecar(batch_part)
+                    if not fill_sidecar.is_file():
+                        raise FileNotFoundError(
+                            f"isolated batch {index} left no merge-fill record"
+                        )
+                    batch_fills = json.loads(fill_sidecar.read_text(encoding="utf-8"))
+                    fill_sidecar.unlink()
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
                         if schema is None:
                             schema = pq.read_schema(batch_part)
                 else:
-                    with bounds_scope() as bounds_records:
+                    with bounds_scope() as bounds_records, merge_fill_scope() as batch_fills:
                         batch = _load_stream_module_batch(
                             _lc,
                             module_name=module_name,
@@ -3542,6 +3559,8 @@ def _stream_module_batches_to_parquet(
                     "part": part_name,
                     # Committed with the batch: a resumed run sums these.
                     "source_bounds": batch_bounds,
+                    # Concepts whose empty slice took this batch's time index.
+                    "merge_empty_index_filled": sorted(set(batch_fills)),
                     **batch_memory,
                 }
             )
@@ -3702,6 +3721,8 @@ def _run_module_extraction(
     # own per batch); a retried load starts its counts afresh.
     module_bounds_scope = bounds_scope()
     module_bounds_records = module_bounds_scope.__enter__()
+    module_fill_scope = merge_fill_scope()
+    module_fills = module_fill_scope.__enter__()
     try:
         if stream_output_batches:
             if not patient_ids_filter or not batch_size:
@@ -3783,6 +3804,7 @@ def _run_module_extraction(
         result = {}
     finally:
         module_bounds_scope.__exit__(None, None, None)
+        module_fill_scope.__exit__(None, None, None)
 
     # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
     # 与 web 端(dataio.py)完全一致的成熟路径。**不再自造合并**——避免 endtime 列冲突、
@@ -3835,6 +3857,17 @@ def _run_module_extraction(
         "elapsed_sec": round(elapsed, 1),
         **memory_stats,
     }
+    # (batch, concept) pairs whose empty slice took the batch index; a
+    # whole-module load has no batch id (r13mergeidx).
+    manifest["merge_empty_index_filled"] = (
+        [
+            {"batch_id": entry.get("batch_index"), "concept": concept}
+            for entry in stream_info.get("stream_batches", [])
+            for concept in entry.get("merge_empty_index_filled", [])
+        ]
+        if stream_info is not None
+        else [{"batch_id": None, "concept": c} for c in sorted(set(module_fills))]
+    )
     manifest["source_bounds"] = (
         dict(stream_info.get("source_bounds") or {})
         if stream_info is not None
@@ -7942,6 +7975,9 @@ def _publish_native_export_v2(
                 "time_axis_audit": time_axis_audit,
                 "semantic_audit": semantic_audit,
                 "concept_status": concept_status,
+                "merge_empty_index_filled": list(
+                    (result["modules"].get(module) or {}).get("merge_empty_index_filled") or []
+                ),
                 "column_metadata_columns": list(binding.columns),
             }
         )
@@ -8571,6 +8607,7 @@ def extract_database(
             "peak_rss_mb": 0.0,
             "peak_working_set_mb": 0.0,
             "stream_batches": [],
+            "merge_empty_index_filled": [],
             "batch_process_isolation": False,
             "deferred_batch_merge": False,
         }
@@ -8594,6 +8631,9 @@ def extract_database(
         )
         mod_result["stream_batches"] = manifest.get("stream_batches", [])
         mod_result["source_bounds"] = dict(manifest.get("source_bounds") or {})
+        mod_result["merge_empty_index_filled"] = list(
+            manifest.get("merge_empty_index_filled") or []
+        )
         mod_result["batch_process_isolation"] = manifest.get(
             "batch_process_isolation",
             False,
@@ -8624,6 +8664,7 @@ def extract_database(
                 0.0,
             ),
             "stream_batches": mod_result["stream_batches"],
+            "merge_empty_index_filled": mod_result["merge_empty_index_filled"],
             "batch_process_isolation": mod_result["batch_process_isolation"],
             "deferred_batch_merge": mod_result["deferred_batch_merge"],
             "stream_resume_events": mod_result["stream_resume_events"],
