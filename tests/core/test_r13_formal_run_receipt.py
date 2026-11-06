@@ -1318,6 +1318,20 @@ def test_a_nested_bucket_is_snapshotted_and_receipted(tmp_path, monkeypatch, whe
 # delta14v B-TABLE-SOURCE: a bucket of table X must be built from X's own
 # sources, exactly the outputs its conversion manifest lists for X.
 
+def _register(prepared: Path, root: Path, table: str) -> None:
+    """Give ``table`` a converted output and a conversion-manifest entry."""
+    (prepared / table).mkdir()
+    pd.DataFrame({"CaseID": [1], "DrugID": [5]}).to_parquet(
+        prepared / table / "1.parquet", index=False)
+    (root / table).mkdir()
+    (root / table / "1.parquet").symlink_to(prepared / table / "1.parquet")
+    manifest = json.loads((prepared / "conversion_manifest.json").read_text())
+    manifest["tables"].append({"table": table, "status": "completed", "outputs": [
+        {"relative_path": f"{table}/1.parquet",
+         "size_bytes": (prepared / table / "1.parquet").stat().st_size}]})
+    (prepared / "conversion_manifest.json").write_text(json.dumps(manifest))
+
+
 @pytest.mark.parametrize("how", ["copy", "link"])
 def test_a_bucket_built_from_another_tables_sources_is_refused_by_the_snapshot(
         tmp_path, how):
@@ -1325,6 +1339,7 @@ def test_a_bucket_built_from_another_tables_sources_is_refused_by_the_snapshot(
 
     prepared = _prepared(tmp_path / "prepared")
     root = _sic_layout_root(tmp_path, prepared)
+    _register(prepared, root, "medication")
     if how == "copy":
         shutil.copytree(root / "laboratory_bucket", root / "medication_bucket")
     else:
@@ -1444,3 +1459,144 @@ def test_extra_top_level_keys_in_the_required_layout_are_malformed(tmp_path, mon
         receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
                                   scratch=tmp_path / "scratch")
     assert error.value.code == "receipt_input_malformed"
+
+
+# delta16v B-UNUSED-NESTED: the snapshot resolves the conversion-registered
+# tables only; any other on-disk installation is listed, never validated, and
+# a run that reads one anyway is refused.
+
+def _stale_copy(source: Path, target: Path) -> Path:
+    """A legitimate-format installation without derived_from (an older build)."""
+    target.parent.mkdir(exist_ok=True)
+    shutil.copytree(source, target)
+    manifest = json.loads((target / "_BUCKET_MANIFEST.json").read_text())
+    manifest.pop("derived_from")
+    (target / "_BUCKET_MANIFEST.json").write_text(json.dumps(manifest))
+    return target
+
+
+@pytest.mark.parametrize("where", ["icu", "hosp", "."])
+def test_a_stale_bucket_no_registered_table_uses_is_listed_not_validated(
+        tmp_path, monkeypatch, where):
+    from easyicu import formal_inputs
+
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    stale = _stale_copy(root / "laboratory_bucket", root / where / "retired_bucket")
+
+    planned = formal_inputs.plan_input_files("sic", root)
+
+    assert planned["unused_installations"] == [{
+        "path": str(root / where / "retired_bucket").replace("/./", "/"),
+        "realpath": os.path.realpath(stale), "registered_table": False}]
+    assert [b["table"] for b in planned["buckets"]] == ["laboratory"]
+    sic = _sic_receipt(tmp_path, root, reads, monkeypatch)["databases"]["sic"]
+    assert sic["layout_requirement"]["observed"]["laboratory"][0]["layout"] == "bucket"
+
+
+def test_a_stale_nested_bucket_the_resolver_selects_is_refused(tmp_path):
+    from easyicu import formal_inputs
+
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    _stale_copy(root / "laboratory_bucket", root / "icu" / "laboratory_bucket")
+    shutil.rmtree(root / "laboratory_bucket")  # the nested one is now selected
+
+    with pytest.raises(formal_inputs.InputSnapshotError) as error:
+        formal_inputs.plan_input_files("sic", root)
+    assert error.value.code == "input_bucket_invalid"
+    assert error.value.details["reason"] == "bucket_derived_from_missing"
+
+
+def test_a_shadowed_installation_of_a_registered_table_is_listed_as_unused(tmp_path):
+    from easyicu import formal_inputs
+
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    stale = _stale_copy(root / "laboratory_bucket", root / "icu" / "laboratory_bucket")
+
+    planned = formal_inputs.plan_input_files("sic", root)
+
+    assert [b["layout_realpath"] for b in planned["buckets"]] == [
+        os.path.realpath(root / "laboratory_bucket")]
+    assert planned["unused_installations"] == [{
+        "path": str(stale), "realpath": os.path.realpath(stale), "registered_table": True}]
+
+
+def test_a_run_that_read_an_unused_installation_is_refused(tmp_path, monkeypatch):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    stale = _stale_copy(root / "laboratory_bucket", root / "icu" / "retired_bucket")
+    read = {"root": str(root), "table": "laboratory", "layout": "bucket_hash",
+            "layout_path": str(stale), "layout_realpath": os.path.realpath(stale)}
+    tables = _tables(root, reads[:1])
+    tables["laboratory"] = {"layout": "bucket", "root": str(stale), "manifest": None,
+                            "derived_from": None, "derived_from_recorded": False,
+                            "reads": [{"layout": "bucket", "root": str(stale)}]}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, [reads[0], read], monkeypatch, tables=tables,
+                     required=_schema2({"cases": {"layout": "flat"}, "laboratory": {
+                         "layout": "bucket", "root_realpath": os.path.realpath(stale)}}))
+    assert error.value.code == "storage_read_unvalidated_installation"
+
+
+def test_an_unused_installation_appearing_during_the_run_changes_the_inputs(
+        tmp_path, monkeypatch):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+
+    def add_unused(run):
+        _rewrite_post(run, lambda e: e.update(unused_installations=[
+            {"path": "/x/retired_bucket", "realpath": "/x/retired_bucket",
+             "registered_table": False}]))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, after_run=add_unused)
+    assert error.value.code == "input_changed_during_run"
+
+
+# delta16v NBs: a flat read names exactly its files' common directory; a
+# listed CSV is the listed path, not another hard link to it; a bucket read's
+# manifest is its own installation's.
+
+@pytest.mark.parametrize("field", ["layout_realpath", "layout_path"])
+def test_a_flat_read_naming_an_ancestor_directory_stops_the_receipt(
+        tmp_path, monkeypatch, field):
+    prepared = _prepared(tmp_path / "prepared")
+    read = _flat(prepared, "cases", prepared)
+    read[field] = "/"
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, [read], monkeypatch)
+    assert error.value.code == "storage_layout_disagrees"
+
+
+def test_an_unlisted_hard_link_to_the_listed_csv_is_refused(tmp_path, monkeypatch, real_admission):
+    from easyicu.storage_layout import listed_csv_input
+
+    root, consumed, _fallbacks, _reads, _tables, snapshot = _services_run(
+        tmp_path, monkeypatch, listed=True)
+    alias = root / "services_copy.csv.gz"
+    os.link(root / "services.csv.gz", alias)
+
+    assert listed_csv_input(root, "services", root / "services.csv.gz")
+    assert not listed_csv_input(root, "services", alias)
+    if (root / "SERVICES.CSV.GZ").exists():  # case-insensitive file system
+        assert listed_csv_input(root, "services", root / "SERVICES.csv.gz")
+    entry = next(e for e in consumed if e["format"] == "csv")
+    forged = [{**e, "path": str(alias), "realpath": os.path.realpath(alias)}
+              if e is entry else e for e in consumed]
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._consumed("mimic", str(root), forged, snapshot)
+    assert error.value.code == "storage_consumed_csv_unlisted"
+
+
+def test_a_bucket_read_naming_another_snapshotted_json_as_its_manifest_is_refused(
+        tmp_path, monkeypatch):
+    prepared, root, reads = _layout_root_reads(tmp_path)
+    tables = _tables(root, reads)
+    other = root / "conversion_manifest.json"
+    tables["laboratory"]["reads"][0]["manifest"] = {
+        "path": str(other), "sha256": receipt.sha256_file(other)}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, tables=tables)
+    assert error.value.code == "bucket_manifest_not_snapshotted"

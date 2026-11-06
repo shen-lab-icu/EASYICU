@@ -2321,8 +2321,10 @@ def flat_table_scan(source, table: str, loader: Path) -> tuple[Path, ...]:
 def listed_csv_input(base, table: str, path) -> bool:
     """Whether ``base``'s conversion manifest lists ``path`` as ``table``'s input CSV.
 
-    Same file by (device, inode), so a reader that names it with other
-    letter case on a case-insensitive file system still matches.
+    The listed path itself, never another name for the file: the canonical
+    real paths must be equal (or differ only in letter case, for a reader on
+    a case-insensitive file system) AND name the same (device, inode). A hard
+    link under another name is not the listed input.
     """
     manifest = Path(base) / CONVERSION_MANIFEST
     try:
@@ -2338,11 +2340,13 @@ def listed_csv_input(base, table: str, path) -> bool:
         parts = PurePosixPath(relative)
         if parts.is_absolute() or ".." in parts.parts or not parts.parts:
             continue
+        listed_path = Path(base).joinpath(*parts.parts)
         try:
-            listed = os.stat(Path(base).joinpath(*parts.parts))
+            listed = os.stat(listed_path)
         except OSError:
             continue
-        if (listed.st_dev, listed.st_ino) == (target.st_dev, target.st_ino):
+        same_name = os.path.realpath(listed_path).casefold() == os.path.realpath(path).casefold()
+        if same_name and (listed.st_dev, listed.st_ino) == (target.st_dev, target.st_ino):
             return True
     return False
 

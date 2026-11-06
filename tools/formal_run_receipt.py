@@ -333,6 +333,17 @@ def _within(path: str, root: Path) -> bool:
     return True
 
 
+def _refuse_unused_installation(db: str, table: Any, realpath: Any,
+                                snapshot: Mapping[str, Any]) -> None:
+    """delta16v: an installation the snapshot only listed as unused was never
+    validated; a run that read it anyway is refused."""
+    unused = {u.get("realpath") for u in snapshot.get("unused_installations") or ()}
+    if isinstance(realpath, str) and os.path.realpath(realpath) in unused:
+        raise ReceiptError("storage_read_unvalidated_installation",
+                           f"{db} {table} was read from a bucket installation the snapshot "
+                           "listed as unused (never validated)", database=db, table=table)
+
+
 def _storage_reads(db: str, reads: List[Dict[str, Any]],
                    snapshot: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Each table read with where it was served from; bucket reads with their binding."""
@@ -343,6 +354,7 @@ def _storage_reads(db: str, reads: List[Dict[str, Any]],
     snapshotted = {b["layout_realpath"] for b in snapshot.get("buckets") or ()}
     receipt = []
     for read in reads:
+        _refuse_unused_installation(db, read.get("table"), read.get("layout_realpath"), snapshot)
         entry = dict(read)
         realpath = entry.get("layout_realpath")
         if not entry.get("layout_path") or not realpath:
@@ -549,7 +561,7 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
                                        f"{db} {table} {kind} read does not name the snapshot's "
                                        "declared-view chain", database=db, table=table)
                 continue
-            _check_bucket_read(db, table, read, real, buckets, hashed)
+            _check_bucket_read(db, table, read, real, buckets, hashed, snapshot)
         primary = record.get("layout")
         if primary not in LAYOUT_KINDS or not any(r["layout"] == primary for r in records):
             raise ReceiptError("storage_layout_unrecorded",
@@ -569,22 +581,29 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
                                f"{db} {read['table']} read as {read.get('layout')} has no "
                                "matching layout record", database=db, table=read["table"])
         if kind in FLAT_KINDS:
+            # Exactly the common parent of the files it consumed, as named and
+            # by real path (an ancestor such as "/" is not enough). The two may
+            # differ legitimately: a link farm names files that live elsewhere.
             fmt = "csv" if kind == "csv" else "parquet"
-            directory = read.get("layout_realpath")
-            dirs = [os.path.dirname(e["realpath"]) for e in consumed
-                    if e["table"] == read["table"] and e["format"] == fmt]
-            if not isinstance(directory, str) or not dirs or any(
-                    os.path.commonpath([d, directory]) != directory for d in dirs):
+            files = [e for e in consumed if e["table"] == read["table"] and e["format"] == fmt]
+            if not files or (
+                read.get("layout_realpath")
+                != os.path.commonpath([os.path.dirname(e["realpath"]) for e in files])
+                or read.get("layout_path")
+                != os.path.commonpath([os.path.dirname(e["path"]) for e in files])
+            ):
                 raise ReceiptError("storage_layout_disagrees",
-                                   f"{db} {read['table']} {kind} read names a directory the "
-                                   "files it consumed are not in", database=db,
+                                   f"{db} {read['table']} {kind} read does not name the "
+                                   "common directory of the files it consumed", database=db,
                                    table=read["table"])
     return observed
 
 
 def _check_bucket_read(db: str, table: str, read: Mapping[str, Any], real: str,
-                       buckets: Mapping[str, Any], hashed: Mapping[str, Any]) -> None:
+                       buckets: Mapping[str, Any], hashed: Mapping[str, Any],
+                       snapshot: Mapping[str, Any]) -> None:
     """A bucket read: the snapshot's installation of THIS table, its manifest and sources."""
+    _refuse_unused_installation(db, table, real, snapshot)
     bucket = buckets.get(real)
     if bucket is None:
         raise ReceiptError("storage_read_outside_snapshot",
@@ -604,8 +623,11 @@ def _check_bucket_read(db: str, table: str, read: Mapping[str, Any], real: str,
         raise ReceiptError("bucket_derived_from_other_table",
                            f"{db} {table} bucket read is bound to another table's sources",
                            database=db, table=table)
-    held = hashed.get(os.path.realpath(manifest["path"])) if isinstance(
+    from easyicu.storage_layout import MANIFEST
+
+    named = os.path.realpath(manifest["path"]) if isinstance(
         manifest, dict) and isinstance(manifest.get("path"), str) else None
+    held = hashed.get(named) if named == os.path.join(real, MANIFEST) else None
     if held is None or held["sha256"] != manifest.get("sha256"):
         raise ReceiptError("bucket_manifest_not_snapshotted",
                            f"{db} {table} bucket manifest the run read is not the "
@@ -789,7 +811,8 @@ def _snapshot_section(db: str, input_dir: str, pre: Mapping[str, Any],
     for name, snap in (("pre", before), ("post", after)):
         sets[name] = _checked_snapshot(db, input_dir, name, snap)
     if sets["pre"] != sets["post"] or any(
-            before.get(k) != after.get(k) for k in ("declared_view_chain", "buckets")):
+            before.get(k) != after.get(k)
+            for k in ("declared_view_chain", "buckets", "unused_installations")):
         changed = len(sets["pre"] ^ sets["post"])
         raise ReceiptError("input_changed_during_run",
                            f"{db} inputs differ before and after the run", database=db,

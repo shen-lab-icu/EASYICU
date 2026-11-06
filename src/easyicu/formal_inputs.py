@@ -144,18 +144,29 @@ def _declared_view_chain(base: Path) -> Optional[Dict[str, str]]:
     return chain
 
 
-def _bucket_tables(source, base: Path) -> List[str]:
-    """Every table name the storage owner could resolve a bucket for (B-NESTED).
+def _bucket_tables(base: Path) -> List[str]:
+    """The tables a formal run of ``base`` may read: its conversion-registered set.
 
-    The configured table set, plus every ``<name>_bucket`` directory under the
-    roots the resolver searches (``base``, ``base/icu``, ``base/hosp``), so an
-    installation on disk is never missed by the snapshot.
+    Bucket installations are resolved for these tables only, through the
+    reader's own resolver (root, ``icu/``, ``hosp/``); an installation no
+    registered table resolves to is never read and is only reported
+    (``unused_installations``, delta16v B-UNUSED-NESTED).
     """
-    names = {str(t) for t in source.config.tables}
+    names: Dict[str, str] = {}
+    for entry in _load_manifest(base / CONVERSION_MANIFEST)["tables"]:
+        table = entry.get("table") if isinstance(entry, dict) else None
+        if isinstance(table, str) and table:
+            names.setdefault(table.lower(), table)
+    return sorted(names.values())
+
+
+def _installations_on_disk(base: Path) -> List[Path]:
+    """Every ``*_bucket`` directory where the resolver looks (diagnostic listing)."""
+    found = []
     for root in (base, base / "icu", base / "hosp"):
         if root.is_dir():
-            names.update(c.name[: -len(BUCKET_SUFFIX)] for c in root.glob(f"*{BUCKET_SUFFIX}"))
-    return sorted(names)
+            found.extend(c for c in sorted(root.glob(f"*{BUCKET_SUFFIX}")) if c.is_dir())
+    return found
 
 
 def _bucket_owner_outputs(table: str, source_root: Path) -> set:
@@ -176,12 +187,16 @@ def _bucket_owner_outputs(table: str, source_root: Path) -> set:
     return outputs
 
 
-def _bucket_files(database: str, base: Path) -> tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
+def _bucket_files(database: str, base: Path) -> tuple[
+        List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Every file of each bucket installation the storage owner chooses, and its sources.
 
     Installations are enumerated through the reader's own resolver (root,
-    ``icu/`` and ``hosp/``) over every table it could serve, once per real
-    path. Each must be a bucket OF that table: its manifest's
+    ``icu/`` and ``hosp/``) over the conversion-registered tables, once per
+    real path, and are validated strictly. Any other ``*_bucket`` directory
+    there is never read: it is listed in ``unused_installations`` (path, real
+    path, whether its name is a registered table) and not validated; a run
+    that reads one anyway is refused by the receipt. Each must be a bucket OF that table: its manifest's
     ``derived_from.table`` is the table, and its sources are exactly the
     outputs the source installation's conversion manifest lists for it
     (non-empty, complete, nothing else).
@@ -193,7 +208,7 @@ def _bucket_files(database: str, base: Path) -> tuple[List[Dict[str, str]], List
     files: List[Dict[str, str]] = []
     buckets: List[Dict[str, Any]] = []
     seen: Dict[str, str] = {}
-    for table in _bucket_tables(source, base):
+    for table in _bucket_tables(base):
         try:
             chosen = source.resolve_bucket_directory(table)
         except StorageIntegrityError as exc:
@@ -245,7 +260,14 @@ def _bucket_files(database: str, base: Path) -> tuple[List[Dict[str, str]], List
         })
         files.append({"role": "bucket_source_manifest",
                       "path": str(Path(derived["source_root"]) / CONVERSION_MANIFEST)})
-    return files, buckets
+    registered = {t.lower() for t in _bucket_tables(base)}
+    unused = [
+        {"path": str(path), "realpath": os.path.realpath(path),
+         "registered_table": path.name[: -len(BUCKET_SUFFIX)].lower() in registered}
+        for path in _installations_on_disk(base)
+        if os.path.realpath(path) not in seen
+    ]
+    return files, buckets, unused
 
 
 def plan_input_files(database: str, data_path: str | Path) -> Dict[str, Any]:
@@ -256,7 +278,7 @@ def plan_input_files(database: str, data_path: str | Path) -> Dict[str, Any]:
     if chain is not None:
         source_manifest = Path(chain["source_manifest_path"])
         files += _manifest_files(source_manifest.parent, source_manifest, "view_source")
-    bucket_files, buckets = _bucket_files(database, base)
+    bucket_files, buckets, unused = _bucket_files(database, base)
     files += bucket_files
     unique: Dict[str, Dict[str, Any]] = {}
     for item in files:
@@ -270,6 +292,7 @@ def plan_input_files(database: str, data_path: str | Path) -> Dict[str, Any]:
         "data_path_realpath": os.path.realpath(base),
         "declared_view_chain": chain,
         "buckets": buckets,
+        "unused_installations": unused,
         "files": [unique[key] for key in sorted(unique)],
     }
 
@@ -323,7 +346,7 @@ def _snapshot_one(database: str, data_path: str | Path) -> Dict[str, Any]:
             source["sha256_matches_snapshot"] = True
     return {
         **{k: plan[k] for k in ("database", "data_path", "data_path_realpath",
-                                "declared_view_chain", "buckets")},
+                                "declared_view_chain", "buckets", "unused_installations")},
         "files": files,
         "file_count": len(files),
         "bytes": sum(f["size"] for f in files),
