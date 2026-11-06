@@ -90,3 +90,76 @@ def test_an_empty_loaded_component_is_evaluated_not_missing(concept, callback, s
 def test_a_component_never_loaded_stays_not_evaluable(concept, callback):
     result = callback({}, _ctx(concept))
     assert _receipt(result, concept)[1:3] == ("not_evaluable", "required_component_missing")
+
+
+def _blocked(table: ICUTable, concept: str) -> ICUTable:
+    from easyicu.concept.availability_signal import (
+        ConceptAvailabilityRecord,
+        set_table_availability,
+    )
+
+    set_table_availability(table, ConceptAvailabilityRecord(
+        concept=concept, database="miiv", reason="source_unavailable", n_rows=0,
+        sources_defined=("chartevents",), missing_tables=("chartevents",),
+    ))
+    return table
+
+
+def _empty_score(score: str) -> ICUTable:
+    return ICUTable(
+        pd.DataFrame({"stay_id": pd.Series(dtype="int64"), "charttime": pd.Series(dtype="float64"),
+                      score: pd.Series(dtype="float64")}),
+        ["stay_id"], "charttime", score,
+    )
+
+
+@pytest.mark.parametrize(
+    ("concept", "callback", "score"),
+    [("sep3", _callback_sep3, "sofa"), ("sep3_sofa2", _callback_sep3_sofa2, "sofa2")],
+)
+def test_a_blocked_score_source_is_never_an_evaluated_empty(concept, callback, score):
+    # delta9r B-SEPSIS-SCORE-RECEIPT: positive suspected infection over a SOFA
+    # source the loader reports missing.  The pair differs only in that receipt.
+    infection = _event("susp_inf", [(7, 0.0)])
+    blocked = callback(
+        {score: _blocked(_empty_score(score), score), "susp_inf": infection}, _ctx(concept),
+    )
+    complete = callback(
+        {score: _empty_score(score), "susp_inf": _event("susp_inf", [(7, 0.0)])}, _ctx(concept),
+    )
+    assert blocked.data.empty and complete.data.empty
+    assert _receipt(blocked, concept) == (
+        "source_unavailable", "not_evaluable", "required_source_table_missing", ("chartevents",)
+    )
+    assert _receipt(complete, concept) == (
+        "data_missing", "evaluated", "no_qualifying_events_observed", ()
+    )
+
+
+def test_the_export_projection_reports_a_blocked_score_as_structurally_unavailable():
+    from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+    from easyicu.resources import load_dictionary
+    from easyicu.webserver import dataio
+
+    concept, module = "sep3_sofa2", "sepsis3_sofa2"
+    plan = dataio.compile_concept_load_plan(CONCEPT_GROUPS_INTERNAL[module])
+    assert concept in plan.output_concepts
+    statuses = {}
+    for label, score in (
+        ("blocked", _blocked(_empty_score("sofa2"), "sofa2")),
+        ("complete", _empty_score("sofa2")),
+    ):
+        result = _callback_sep3_sofa2(
+            {"sofa2": score, "susp_inf": _event("susp_inf", [(7, 0.0)])}, _ctx(concept),
+        )
+        _, projected = dataio._prepare_export_availability(
+            result.data.copy(), module=module, plan=plan,
+            records={concept: table_availability(result, concept)},
+            dictionary=load_dictionary(include_sofa2=True),
+        )
+        statuses[label] = projected[concept]
+    assert statuses["blocked"]["availability"] == "structurally_unavailable_placeholder"
+    assert statuses["blocked"]["evaluation_status"] == "not_evaluable"
+    assert statuses["blocked"]["missing_tables"] == ["chartevents"]
+    assert statuses["complete"]["availability"] == "produced_all_null"
+    assert statuses["complete"]["evaluation_status"] == "evaluated"
