@@ -786,8 +786,16 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
     path = Path(base) / CONVERSION_MANIFEST
     try:
         stat = path.stat()
-    except OSError:
+    except FileNotFoundError:
+        # Only an absent manifest means "not a converted installation".
         return None
+    except OSError as exc:
+        # A manifest that exists but cannot be stat'ed (permissions, I/O,
+        # a dangling symlink loop) must not downgrade the installation to
+        # the unmanifested directory check.
+        raise TableScanError(
+            "conversion_manifest_unreadable", path.name, str(exc)[:200]
+        ) from exc
     key = (str(path), stat.st_size, stat.st_mtime_ns)
     index = _CONVERSION_INDEX.get(key)
     if index is not None:

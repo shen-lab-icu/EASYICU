@@ -184,6 +184,16 @@ def _chronological_matches(left: pd.DataFrame, right: pd.DataFrame, key: str) ->
     return policy.loc[selected, "_row"].to_numpy()
 
 
+class EmarTableUnavailable(ValueError):
+    """The installation does not contain an eMAR lookup table at all."""
+
+    reason = "emar_diuretic_table_unavailable"
+
+    def __init__(self, table: str) -> None:
+        super().__init__(f"emar_diuretic_table_unavailable:{table}")
+        self.table = table
+
+
 def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd.Series) -> pd.DataFrame:
     """Rows of ``table`` whose ``column`` is in ``values``, read in DuckDB.
 
@@ -201,17 +211,19 @@ def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd
     keys = pd.DataFrame({"key": pd.unique(values.astype(str))})
     if keys.empty:
         return pd.DataFrame(columns=columns)
-    # The storage policy's validated set for the location chosen here (bucket,
-    # flat directory, or the demo's single file), in the former listing order.
-    directory = data_source.resolve_bucket_directory(table) or data_source.resolve_flat_parquet_directory(table)
-    files = list(data_source.resolve_target_files(table, loader=directory)) if directory is not None else []
+    # The storage owner decides the installation (bucket, flat directory, or
+    # the demo's single file) before this reader decides the table is
+    # missing: a table the conversion manifest lists whose files are gone
+    # raises StorageIntegrityError there instead of looking absent.
+    files = list(data_source.resolve_target_files(table))
     if not files:
-        # The MIMIC-IV demo converts each table to one parquet file.
+        # A single-file export at a location only the disk loader knows; the
+        # owner validates it as this table's scan.
         resolved = data_source.resolve_loader_from_disk(table)
         if isinstance(resolved, Path) and resolved.is_file() and resolved.suffix.lower() in {".parquet", ".pq"}:
             files = list(data_source.resolve_target_files(table, loader=resolved))
     if not files:
-        raise ValueError(f"emar_diuretic_table_unavailable:{table}")
+        raise EmarTableUnavailable(table)
     paths = ", ".join("'" + str(path).replace("'", "''") + "'" for path in files)
     selected = ", ".join(f't."{name}"' for name in columns)
     con = _get_duckdb_connection()

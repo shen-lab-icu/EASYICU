@@ -50,6 +50,20 @@ class PatientFilterCriterionError(RuntimeError):
         self.criterion = criterion
 
 
+class SourceTableNotInstalled(FileNotFoundError):
+    """The installation does not contain the table at all.
+
+    Distinct from a table the conversion manifest lists whose files are gone,
+    which the storage owner raises as :class:`StorageIntegrityError`.
+    """
+
+    reason = "source_table_not_installed"
+
+    def __init__(self, table: str, base) -> None:
+        super().__init__(f"table {table!r} is not installed under {base}")
+        self.table = table
+
+
 def _kept(mask: pd.Series) -> pd.Series:
     """A selection mask as plain booleans; a missing verdict keeps no row."""
 
@@ -651,7 +665,11 @@ class PatientFilter:
             from .source_death_times import SicReferenceUnavailable, sic_discharge_codes
             try:
                 codes = sic_discharge_codes(self._read_table('d_references'))
-            except (FileNotFoundError, SicReferenceUnavailable) as exc:
+            except (SourceTableNotInstalled, SicReferenceUnavailable) as exc:
+                # Only a d_references the installation does not contain, or
+                # one without the discharge labels, leaves survival unknown;
+                # a listed table whose files are gone propagates
+                # (StorageIntegrityError) instead of becoming "unknown".
                 logger.warning("SICdb survival unavailable: %s", exc)
             else:
                 survived.loc[numeric.isin(codes.survived)] = True
@@ -684,58 +702,52 @@ class PatientFilter:
         return pd.read_csv(path)
 
     def _read_table(self, table_name: str) -> pd.DataFrame:
-        """读取数据表，支持多种目录结构"""
+        """Read ``table_name`` through the storage owner.
+
+        The storage policy (:func:`storage_layout.resolve_table_files`)
+        decides which installation is read, bucket or flat, before this
+        reader decides that a table is missing. A table the conversion
+        manifest lists whose files are gone raises
+        :class:`StorageIntegrityError` there; only a table the installation
+        does not contain at all is :class:`SourceTableNotInstalled`
+        (a ``FileNotFoundError``), which optional readers may treat as absent.
+        """
         if self.data_path is None:
             raise ValueError("data_path未设置")
-        
-        # 搜索路径优先级: 根目录 → 已知子目录(icu/, hosp/) → 任意子目录
+        if getattr(self, "_storage", None) is None:
+            from .datasource import storage_source
+
+            self._storage = storage_source(self.database, self.data_path)
+        files = self._storage.resolve_target_files(table_name)
+        if files:
+            # Path order, as the former directory and bucket listings.
+            frames = [pd.read_parquet(f) for f in sorted(files)]
+            return frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
+
+        # No Parquet installation of the table: a CSV export, admitted by the
+        # same policy, or a Parquet file at a non-standard depth, which the
+        # policy then validates as this table's scan.
         search_dirs = [self.data_path]
         for sub in ['icu', 'hosp']:
             sub_path = self.data_path / sub
             if sub_path.is_dir():
                 search_dirs.append(sub_path)
-        
         for search_dir in search_dirs:
-            # 尝试多种格式
-            for ext in ['.parquet', '.csv.gz', '.csv']:
+            for ext in ['.csv.gz', '.csv']:
                 path = search_dir / f"{table_name}{ext}"
                 if path.exists():
-                    if ext == '.parquet':
-                        (path,) = self._validated(table_name, path)
-                        return pd.read_parquet(path)
-                    else:
-                        return self._read_csv(table_name, path)
-            
-            # 尝试目录格式（分片parquet）
-            dir_path = search_dir / table_name
-            if dir_path.is_dir():
-                parquet_files = self._validated(table_name, dir_path)
-                if parquet_files:
-                    dfs = [pd.read_parquet(f) for f in parquet_files]
-                    return pd.concat(dfs, ignore_index=True)
-            
-            # 尝试分桶目录
-            bucket_dir = search_dir / f"{table_name}_bucket"
-            if bucket_dir.is_dir():
-                # Bucket files in sorted path order, as the former listing.
-                parquet_files = sorted(self._validated(table_name, bucket_dir))
-                if parquet_files:
-                    dfs = [pd.read_parquet(f) for f in parquet_files]
-                    return pd.concat(dfs, ignore_index=True)
-        
-        # 最后尝试: rglob 搜索任意深度
+                    return self._read_csv(table_name, path)
         for ext in ['.parquet', '.csv.gz', '.csv']:
-            found = list(self.data_path.rglob(f"{table_name}{ext}"))
+            found = sorted(self.data_path.rglob(f"{table_name}{ext}"))
             if found:
                 path = found[0]
                 if ext == '.parquet':
                     (path,) = self._validated(table_name, path)
                     return pd.read_parquet(path)
-                else:
-                    return self._read_csv(table_name, path)
-        
-        raise FileNotFoundError(f"找不到表 {table_name} (路径: {self.data_path})")
-    
+                return self._read_csv(table_name, path)
+
+        raise SourceTableNotInstalled(table_name, self.data_path)
+
     def filter(
         self,
         age_min: Optional[float] = None,
