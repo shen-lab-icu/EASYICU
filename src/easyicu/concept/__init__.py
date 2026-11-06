@@ -22,6 +22,7 @@ from typing import Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Opt
 import numpy as np
 import pandas as pd
 
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..config import DataSourceConfig
 from ..hospital_mortality import DENSE_STATUS_BINDINGS
 from ..datasource import (
@@ -7199,6 +7200,8 @@ class ConceptResolver:
                 if db_stay_id_col in data.columns:
                     primary_id = db_stay_id_col
                 # 已经有intime了，后面不需要再加载
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception as exc:
                 if (
                     pd.api.types.is_numeric_dtype(data[index_column])
@@ -7239,6 +7242,8 @@ class ConceptResolver:
                 # 只合并 intime 列（保持既有输出 schema；outtime/los 只读
                 # icustays 缓存供 producer 层截断，不并入 frame）。
                 data = data.merge(icustays_temp_df[[primary_id, 'intime']], on=primary_id, how='left')
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception as exc:
                 if (
                     pd.api.types.is_numeric_dtype(data[index_column])
@@ -8143,6 +8148,8 @@ class ConceptResolver:
                         result.data = combined_result.data
                     else:
                         result.data = combined_result
+                except TYPED_VALUE_FAILURES:
+                    raise
                 except Exception as e:
                     if protect_urine:
                         raise ConceptError(f"Cannot resample {concept_name} evidence: {e}") from e

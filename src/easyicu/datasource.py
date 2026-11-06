@@ -216,6 +216,7 @@ def _arrow_to_pandas_compat(arrow_table, **kwargs) -> pd.DataFrame:
         df = _coerce_string_dtypes(df)
     return df
 
+from .value_failures import TYPED_VALUE_FAILURES
 from .config import DataSourceConfig, DataSourceRegistry, DatasetOptions
 from .table import ICUTable
 
@@ -2792,6 +2793,8 @@ class ICUDataSource:
                 frame = frame.reindex(columns=requested_columns)
             return frame
             
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception:
             # 回退到简单方式
             try:

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
+from .value_failures import TYPED_VALUE_FAILURES
 from .concept import Concept, load_dictionary
 from .concept.errors import ConceptExtractionUnavailable
 from .config import DataSourceConfig, TableConfig, load_src_cfg
@@ -277,6 +278,8 @@ class ConceptLoader:
                     columns=requested_columns,
                     path=self.data_path,
                 )
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception as exc:
                 if self._low_memory or not _is_missing_column_projection_error(exc):
                     raise
@@ -418,6 +421,8 @@ class ConceptLoader:
 
         try:
             lookup = self._safe_load_table(table_name, columns)
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception as exc:
             logger.warning("无法加载ID映射表 %s: %s", table_name, exc)
             lookup = pd.DataFrame()
@@ -561,6 +566,8 @@ class ConceptLoader:
                         if data is not None and len(data) > 0:
                             results[concept.name] = data
                     except ConceptExtractionUnavailable:
+                        raise
+                    except TYPED_VALUE_FAILURES:
                         raise
                     except Exception as e:
                         if verbose:
@@ -748,6 +755,8 @@ class ConceptLoader:
         
         try:
             df = self._safe_load_table(table_name, required_columns)
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception as e:
             logger.warning(f"无法加载表 {table_name}: {e}")
             return pd.DataFrame()
@@ -876,6 +885,8 @@ class ConceptLoader:
         
         try:
             df = self._safe_load_table(table_name, required_columns)
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception as e:
             logger.warning(f"无法加载表 {table_name}: {e}")
             return pd.DataFrame()
@@ -1048,6 +1059,8 @@ class ConceptLoader:
                     weight_data = weight_data.groupby(id_col)['weight'].median().reset_index()
                     return weight_data
             return None
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception as e:
             logger.debug(f"获取体重数据失败: {e}")
             return None
@@ -1093,6 +1106,8 @@ class ConceptLoader:
                     time_diff = (df[time_col] - df[intime_col]).dt.total_seconds() / 3600
                     df[time_col] = time_diff
                     df = df.drop(columns=[intime_col])
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception as e:
             logger.debug(f"时间转换失败: {e}")
         
@@ -1238,6 +1253,8 @@ class ConceptLoader:
                     if data is not None and len(data) > 0:
                         sub_data[sub_name] = data
                         
+                except TYPED_VALUE_FAILURES:
+                    raise
                 except Exception as e:
                     logger.warning(f"加载子概念 {sub_name} 失败: {e}")
                     import traceback
@@ -1975,6 +1992,8 @@ class ConceptLoader:
                         # 没有有效的患者ID，回退到普通加载
                         try:
                             df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                        except TYPED_VALUE_FAILURES:
+                            raise
                         except Exception:
                             df = load_table(self._src_name, table_name, path=self.data_path)
                         df = self._ensure_id_column(df, id_type)
@@ -1984,6 +2003,8 @@ class ConceptLoader:
                     # 没有 data_source 或 patient_ids，使用原有逻辑
                     try:
                         df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                    except TYPED_VALUE_FAILURES:
+                        raise
                     except Exception:
                         df = load_table(self._src_name, table_name, path=self.data_path)
                     
@@ -1994,6 +2015,8 @@ class ConceptLoader:
                 # Store in cache
                 self._table_cache[table_name] = df
                 
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception as e:
                 if verbose:
                     print(f"  ⚠️  Failed to preload {table_name}: {e}")

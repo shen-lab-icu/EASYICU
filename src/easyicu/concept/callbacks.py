@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..scores.urine_windows import assess_urine_windows, urine_evidence_columns
 from ..scores.urine_output import DAILY_COLUMNS, daily_volume_batch as _urine24_batch, rate_daily
 from .free_days import free_days_callback
@@ -1530,6 +1531,8 @@ def _ensure_time_column_type(
                     list(id_columns or []),
                     index_column,
                 )
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception:
                 aligned = None
             if isinstance(aligned, pd.DataFrame) and index_column in aligned.columns:
@@ -7795,6 +7798,8 @@ def _callback_miiv_icu_patients_filter(
 
             return IdTbl(merged, id_vars=["stay_id"])
         return main_table
+    except TYPED_VALUE_FAILURES:
+        raise
     except Exception:
         return next(iter(tables.values()))
 
@@ -8498,6 +8503,8 @@ def _callback_fluid_balance_admitted(
             value_column="fluid_balance_admitted",
         )
 
+    except TYPED_VALUE_FAILURES:
+        raise
     except Exception as e:
         logger.warning(f"fluid_balance_admitted callback failed: {e}")
         empty_cols = [id_col, time_col, "fluid_balance_admitted"]
