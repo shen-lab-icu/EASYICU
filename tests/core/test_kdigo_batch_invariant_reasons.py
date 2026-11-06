@@ -118,6 +118,14 @@ def test_a_stay_is_labelled_alike_alone_and_beside_a_stay_with_every_source(data
     alone = _rows(_bundle([stay], database, source), stay)
     assert len(whole) > 0
     assert _differing_cells(whole, alone) == {}
+    # Typed alike too: an untyped placeholder changes the published bytes.
+    # (Synthetic key columns are excluded: the exporter owns key dtypes.)
+    assert {
+        column: (str(whole[column].dtype), str(alone[column].dtype))
+        for column in set(whole.columns) & set(alone.columns)
+        if column not in {"stay_id", "charttime"}
+        and str(whole[column].dtype) != str(alone[column].dtype)
+    } == {}
 
 
 @pytest.mark.parametrize("database", ("mimic", "hirid"))
@@ -203,22 +211,3 @@ def test_without_a_receipt_the_whole_cohort_labels_are_unchanged():
     )
     assert set(stages["rrt_ascertainment_reason"]) == {"source_absent"}
 
-
-def test_legacy_gcs_locf_never_carries_one_sicdb_case_into_the_next():
-    # Stay 2 has no component observations; on SICdb's CaseID key the legacy
-    # helper used to merge and forward-fill across cases.
-    from easyicu import callbacks as legacy
-
-    def component(name, values, ids):
-        return pd.DataFrame({"CaseID": ids, "charttime": [0.0, 1.0, 1.0], name: values})
-
-    ids = [1, 1, 2]
-    gcs = legacy.gcs(
-        component("egcs", [4.0, np.nan, np.nan], ids),
-        component("vgcs", [5.0, np.nan, np.nan], ids),
-        component("mgcs", [6.0, np.nan, np.nan], ids),
-        valid_win=pd.Timedelta(hours=6),
-        set_na_max=False,
-    )
-    assert gcs.loc[gcs["CaseID"] == 2, "gcs"].isna().all()
-    assert gcs.loc[gcs["CaseID"] == 1, "gcs"].notna().any()

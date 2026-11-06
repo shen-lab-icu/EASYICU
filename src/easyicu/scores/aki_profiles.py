@@ -1402,17 +1402,15 @@ def _mimic_iv_profile(
             how="left",
         )
     else:
-        result["aki_stage_creat"] = pd.NA
+        result["aki_stage_creat"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
     uo = pd.DataFrame()
-    if (
-        urine_df is not None
-        and not urine_df.empty
-        and weight_df is not None
-        and not weight_df.empty
-    ):
+    # Stage whenever urine rows exist: a stay without weight is <NA> either
+    # way, and its window receipts must not depend on whether another stay in
+    # the batch has a weight.
+    if urine_df is not None and not urine_df.empty:
         uo = kdigo_uo(
             urine_df,
-            weight_df,
+            weight_df if isinstance(weight_df, pd.DataFrame) else pd.DataFrame(),
             id_col=resolved_id,
             time_col=resolved_time,
             urine_col=urine_col,
@@ -1431,7 +1429,7 @@ def _mimic_iv_profile(
             how="left",
         )
     else:
-        result["aki_stage_uo"] = pd.NA
+        result["aki_stage_uo"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
     result["aki_stage_crrt"] = _event_stage_at_exact_rows(
         result, rrt_df, resolved_id, resolved_time
     )
@@ -1515,7 +1513,7 @@ def _mimic_iii_profile(
             how="left",
         )
     else:
-        result["aki_stage_creat"] = pd.NA
+        result["aki_stage_creat"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
     uo = pd.DataFrame()
     # The port stages a urine row without a usable weight as 0, so it must
     # run whenever urine rows exist: gating it on this batch's weight rows
@@ -1533,7 +1531,7 @@ def _mimic_iii_profile(
     if not uo.empty:
         result = result.merge(uo, on=[resolved_id, resolved_time], how="left")
     else:
-        result["aki_stage_uo"] = pd.NA
+        result["aki_stage_uo"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
     result["aki_stage_source_native"] = (
         result[["aki_stage_creat", "aki_stage_uo"]]
         .fillna(0)
@@ -1975,7 +1973,11 @@ def _eicu_components_frame_without_rows(
     )
     keys["urine_output_source_native"] = pd.Series(dtype="float64")
     keys["aki_stage_source_native"] = pd.Series(dtype="Int64")
-    keys[f"{_PROFILE_PREFIX}_ascertainment"] = pd.Series(dtype="object")
+    # The populated profile writes a scalar label, i.e. pandas' default
+    # string dtype; match it so an empty batch publishes the same type.
+    keys[f"{_PROFILE_PREFIX}_ascertainment"] = pd.Series(
+        dtype=pd.Series(["x"]).dtype
+    )
     return keys
 
 

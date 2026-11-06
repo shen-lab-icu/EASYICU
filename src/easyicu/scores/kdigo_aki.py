@@ -153,9 +153,15 @@ def kdigo_component_sources(data_source: Any) -> Optional[KDIGOComponentSources]
 def kdigo_component_sources_for_path(
     database: str, data_path: Optional[str]
 ) -> Optional[KDIGOComponentSources]:
-    """:func:`kdigo_component_sources` for a registered database at ``data_path``."""
+    """:func:`kdigo_component_sources` for a registered database at ``data_path``.
 
-    if data_path is None:
+    A path that is not an installation directory (an in-memory or stub loader
+    carries a nominal path) cannot answer, so the receipt is ``None`` there.
+    """
+
+    from pathlib import Path
+
+    if data_path is None or not Path(data_path).is_dir():
         return None
     from easyicu.datasource import ICUDataSource
     from easyicu.resources import load_data_sources
@@ -1515,7 +1521,9 @@ def kdigo_stages(
         # A successfully queried positive-event source can legitimately be
         # empty for a cohort. Preserve that completed search as negative RRT
         # evidence instead of silently reverting to unknown.
-        result['rrt_ascertainment'] = "negative"
+        result['rrt_ascertainment'] = pd.Series(
+            "negative", index=result.index, dtype="string"
+        )
     rrt_positive = result['aki_stage_rrt'].where(
         result['aki_stage_rrt'] > 0, pd.NA
     )

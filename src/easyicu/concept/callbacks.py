@@ -6063,14 +6063,42 @@ def _infection_empty_result(
     return result
 
 
+def _with_evaluated_empty_receipt(
+    table: ICUTable, tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Give an empty event set from complete sources its one receipt.
+
+    Whether a stay set holds no qualifying event is a property of those stays,
+    so the receipt cannot name why *this* batch is empty (no antibiotics, no
+    suspected infection, no SOFA rise): a batch-wise reason made the published
+    status depend on which stays shared the last batch (2026-11-06 ruling).
+    Structural gaps keep their own source-level receipts.
+    """
+    if table.data.empty and table_availability(table, ctx.concept_name) is None:
+        source = table_availability(tables.get("abx"), "abx")
+        set_table_availability(table, ConceptAvailabilityRecord(
+            concept=ctx.concept_name,
+            database=_callback_source_name(ctx.data_source),
+            reason="data_missing",
+            n_rows=0,
+            sources_defined=source.sources_defined if source else (),
+            reason_code="no_qualifying_events_observed",
+            evaluation_status="evaluated",
+        ))
+    return table
+
+
 def _sepsis_infection_disposition(
     tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
 ) -> Optional[ICUTable]:
     record = table_availability(tables.get("susp_inf"), "susp_inf")
     if record is not None and record.evaluation_status is not None:
+        # An evaluated empty receipt names no tables, exactly like the one a
+        # sepsis owner writes for its own empty output in another batch.
         return _infection_empty_result(
             tables, ctx, reason_code=record.reason_code,
-            evaluation_status=record.evaluation_status, source=record,
+            evaluation_status=record.evaluation_status,
+            source=record if record.evaluation_status == "not_evaluable" else None,
         )
     return None
 
@@ -6097,11 +6125,12 @@ def _callback_sep3(
         convert_ids=True
     )
     
-    # Check if tables still exist after conversion (they may have been removed if empty)
+    # Both components were loaded; one the schema step removed was empty.
+    # No rows in these stays is data, not a missing component.
     if "sofa" not in converted_tables or "susp_inf" not in converted_tables:
         return _infection_empty_result(
-            tables, ctx, reason_code="required_component_missing",
-            evaluation_status="not_evaluable",
+            tables, ctx, reason_code="no_qualifying_events_observed",
+            evaluation_status="evaluated",
         )
     
     # Use converted tables
@@ -6136,7 +6165,10 @@ def _callback_sep3(
         keep_components=_callback_bool(kwargs.get("keep_components"), False),
     )
 
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3")
+    return _with_evaluated_empty_receipt(
+        _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3"),
+        tables, ctx,
+    )
 
 def _callback_sep3_sofa2(
     tables: Dict[str, ICUTable],
@@ -6158,9 +6190,10 @@ def _callback_sep3_sofa2(
     )
 
     if "sofa2" not in converted_tables or "susp_inf" not in converted_tables:
+        # Both loaded; a component removed as empty is data, not a gap.
         return _infection_empty_result(
-            tables, ctx, reason_code="required_component_missing",
-            evaluation_status="not_evaluable",
+            tables, ctx, reason_code="no_qualifying_events_observed",
+            evaluation_status="evaluated",
         )
 
     sofa2_tbl = converted_tables["sofa2"]
@@ -6205,7 +6238,10 @@ def _callback_sep3_sofa2(
         keep_components=_callback_bool(kwargs.get("keep_components"), False),
     )
 
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3_sofa2")
+    return _with_evaluated_empty_receipt(
+        _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3_sofa2"),
+        tables, ctx,
+    )
 
 def _callback_vaso60(
     tables: Dict[str, ICUTable],
@@ -6861,7 +6897,7 @@ def _callback_susp_inf(
             )
     if si_mode in {"and", "abx", "icd_abx"} and tables["abx"].data.empty:
         return _infection_empty_result(
-            tables, ctx, reason_code="no_antibiotics_observed",
+            tables, ctx, reason_code="no_qualifying_events_observed",
             evaluation_status="evaluated", source=table_availability(tables["abx"], "abx"),
         )
 
@@ -6942,12 +6978,12 @@ def _callback_susp_inf(
             f"{len(result)} suspected infection events"
         )
         
-        return _as_icutbl(
+        return _with_evaluated_empty_receipt(_as_icutbl(
             result,
             id_columns=id_columns,
             index_column=abx_idx,
             value_column="susp_inf",
-        )
+        ), tables, ctx)
     
     # ===== 原有策略: and/or/abx/samp =====
     # Convert ID columns if needed (hadm_id → stay_id) before merging
@@ -7008,7 +7044,10 @@ def _callback_susp_inf(
         keep_components=keep_components,
     )
 
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
+    return _with_evaluated_empty_receipt(
+        _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf"),
+        tables, ctx,
+    )
 
 def _callback_gcs(
     tables: Dict[str, ICUTable],
