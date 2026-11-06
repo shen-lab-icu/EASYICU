@@ -101,7 +101,7 @@ jobs:
 
       - name: Run architecture contract tests
         if: ${{ !cancelled() }}
-        run: pytest tests/governance/test_arch_measure.py tests/governance/test_research_agent_module_graph.py -q -m ""
+        run: pytest tests/governance/test_arch_measure.py tests/governance/test_research_agent_module_graph.py -q -rs -m ""
 
   test:
     name: research_agent tests (py${{ matrix.python-version }})
@@ -179,19 +179,19 @@ jobs:
           test "${#critical_tests[@]}" -gt 0
           printf '%s\n' "${critical_tests[@]}" > ci-receipts/critical-files.txt
           pytest "${critical_tests[@]}" -q -m "" --collect-only > ci-receipts/critical-collected-tests.txt
-          pytest "${critical_tests[@]}" -q -m "" --junitxml=ci-receipts/critical-results.xml
+          pytest "${critical_tests[@]}" -q -rs -m "" --junitxml=ci-receipts/critical-results.xml
 
       - name: Run research_agent functional contract suite
         run: |
           # Keep fail-closed runner policy tests in their default environment.
-          pytest tests/research_agent/execution/test_runner.py -q -m ""
+          pytest tests/research_agent/execution/test_runner.py -q -rs -m ""
           # This keyword-selected suite checks import health and typed contracts
           # under the resolved runtime. Named critical regressions run separately
           # above; exhaustive behaviour coverage remains in ci.yml.
           python -c "import easyicu.research_agent as m; print('import OK', m.__name__)"
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
-            pytest tests/research_agent -q -m "" -n auto --dist loadfile \
+            pytest tests/research_agent -q -rs -m "" -n auto --dist loadfile \
               -k "contract or boundary or package or schema or import" \
               --ignore=tests/research_agent/execution/test_runner.py \
               --junitxml=ci-receipts/functional-results.xml
@@ -237,4 +237,4 @@ jobs:
 
       - name: Run the native Anthropic adapter tests
         run: |
-          pytest tests/research_agent/providers/test_anthropic_messages_client.py -q -m ""
+          pytest tests/research_agent/providers/test_anthropic_messages_client.py -q -rs -m ""

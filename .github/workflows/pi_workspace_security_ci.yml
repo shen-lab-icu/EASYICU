@@ -108,7 +108,7 @@ jobs:
         run: |
           # Auto-discover every Pi Copilot owner test so a new contract file
           # cannot exist in the repository while remaining invisible to CI.
-          pytest -q -m "" \
+          pytest -q -rs -m "" \
             tests/webserver/copilot/test_pi_copilot_*.py \
             tests/webserver/test_web_cohort_exclusion_binding.py \
             tests/webserver/test_agent_run_artifact_privacy.py \
