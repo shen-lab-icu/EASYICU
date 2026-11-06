@@ -1,7 +1,7 @@
 """Urine receipts keep raw-path clock precision on every load path.
 
 lead-r13: the DuckDB aggregation path stored the ``_urine_*_lag_h`` receipts
-as float32, while the raw path kept float64.  ``*_available_at`` then differed
+(and every value) as float32, while the raw path kept float64.  ``*_available_at`` then differed
 by up to ~1e-6 h, and one MIIV stay's exact 12 h record gap became 12.0 on one
 path and 12.000000000000007 on the other, so urine24 kept the window on one
 path and dropped it on the other.
@@ -10,22 +10,26 @@ path and dropped it on the other.
 import numpy as np
 import pandas as pd
 
-from easyicu.datasource import _downcast_value_columns
+from easyicu.config import DataSourceConfig
+from easyicu.datasource import ICUDataSource, load_bucketed_table_aggregated
 from easyicu.scores.urine_output import daily_volume_batch
 
 
-def test_receipt_lags_stay_float64_values_are_downcast():
-    df = pd.DataFrame({
-        "stay_id": [1, 2], "charttime": [1.0, 2.0], "urine": [100.0, 250.5],
-        "_urine_source_lag_h": [0.25833333333333336] * 2,
-        "_urine_first_lag_h": [0.25833333333333336] * 2,
-        "_urine_availability_lag_h": [0.4083333333333333] * 2,
-    })
-    _downcast_value_columns(df, {"stay_id", "charttime"})
-    assert df["urine"].dtype == np.float32
-    for c in ("_urine_source_lag_h", "_urine_first_lag_h", "_urine_availability_lag_h"):
-        assert df[c].dtype == np.float64
-    assert df["_urine_availability_lag_h"].iloc[0] == 0.4083333333333333
+def test_an_aggregated_load_keeps_values_float64(tmp_path):
+    # 1.1 and 0.8 are not float32 numbers: rounded, 1.1 - 0.8 falls below 0.3.
+    pd.DataFrame({"CaseID": [7], "ICUOffset": [3_600.0]}).to_parquet(tmp_path / "cases.parquet", index=False)
+    (tmp_path / "data_float_h").mkdir()
+    pd.DataFrame({
+        "CaseID": [7, 7], "Offset": [3_600.0, 7_200.0], "DataID": [725, 725], "DataValue": [0.8, 1.1],
+    }).to_parquet(tmp_path / "data_float_h" / "part.parquet", index=False)
+    source = ICUDataSource(DataSourceConfig(name="sic"), base_path=tmp_path)
+    result = load_bucketed_table_aggregated(
+        source, "data_float_h", "DataValue", [725], patient_ids=[7],
+        agg_func="sum", id_col="CaseID", time_col="Offset",
+    )
+    assert result["DataValue"].dtype == np.float64
+    assert result["DataValue"].tolist() == [0.8, 1.1]
+    assert result["DataValue"].iloc[1] - result["DataValue"].iloc[0] >= 0.3
 
 
 def _windows(gap):

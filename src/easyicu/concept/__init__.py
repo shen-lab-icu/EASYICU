@@ -892,23 +892,6 @@ class ConceptResolver:
             self._drop_cache_accounting('table', 'raw')
 
     @staticmethod
-    def _downcast_float64_to_float32(df: pd.DataFrame) -> pd.DataFrame:
-        """Downcast float64 value columns to float32 to save ~50% memory.
-        
-        Skips ID columns and time columns which need full precision.
-        Idempotent: float32 columns are unchanged.
-        """
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            return df
-        _skip = {'charttime', 'measuredat_minutes',
-                 'stay_id', 'patientunitstayid', 'admissionid',
-                 'patientid', 'icustay_id', 'CaseID'}
-        for col in df.columns:
-            if col not in _skip and df[col].dtype == np.float64:
-                df[col] = df[col].astype(np.float32)
-        return df
-
-    @staticmethod
     def _ensure_requested_concept_columns(
         df: pd.DataFrame,
         concept_names: Iterable[str],
@@ -2132,13 +2115,11 @@ class ConceptResolver:
             ):
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
-                return self._downcast_float64_to_float32(
-                    self._ensure_requested_concept_columns(
-                        wide_table_merged_df,
-                        names,
-                        materialize_missing=not defer_empty_columns_to_arrow,
-                        value_dtypes=value_dtypes,
-                    )
+                return self._ensure_requested_concept_columns(
+                    wide_table_merged_df,
+                    names,
+                    materialize_missing=not defer_empty_columns_to_arrow,
+                    value_dtypes=value_dtypes,
                 )
 
             # 如果是r_compatible模式，使用增强的ricu风格合并
@@ -2212,13 +2193,11 @@ class ConceptResolver:
                         if merged_partial is not None:
                             if verbose:
                                 logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
-                            return self._downcast_float64_to_float32(
-                                self._ensure_requested_concept_columns(
-                                    merged_partial,
-                                    names,
-                                    materialize_missing=not defer_empty_columns_to_arrow,
-                                    value_dtypes=value_dtypes,
-                                )
+                            return self._ensure_requested_concept_columns(
+                                merged_partial,
+                                names,
+                                materialize_missing=not defer_empty_columns_to_arrow,
+                                value_dtypes=value_dtypes,
                             )
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
@@ -2229,13 +2208,11 @@ class ConceptResolver:
                             if _tc in wide_table_merged_df.columns:
                                 _sort_time = _tc
                                 break
-                        return self._downcast_float64_to_float32(
-                            self._ensure_requested_concept_columns(
-                                wide_table_merged_df.reset_index(drop=True),
-                                names,
-                                materialize_missing=not defer_empty_columns_to_arrow,
-                                value_dtypes=value_dtypes,
-                            )
+                        return self._ensure_requested_concept_columns(
+                            wide_table_merged_df.reset_index(drop=True),
+                            names,
+                            materialize_missing=not defer_empty_columns_to_arrow,
+                            value_dtypes=value_dtypes,
                         )
                 _materialize_covered_wide_tables_for_fallback()
                 return self._to_r_format_merged_enhanced(
@@ -10360,13 +10337,6 @@ class ConceptResolver:
         if time_col != 'charttime' and time_col in result.columns:
             result = result.rename(columns={time_col: 'charttime'})
         
-        # 🚀 内存优化：将 float64 值列降级为 float32
-        # 临床数据精度（HR=80, MAP=65.5, FiO2=0.21）完全在 float32 范围内（~7位有效数字）
-        # 对 198K 患者 × 15 概念可节省 ~800MB
-        import numpy as np
-        for col in result.columns:
-            if result[col].dtype == np.float64 and col not in (id_col, 'charttime', time_col):
-                result[col] = result[col].astype(np.float32)
         
         return result
 
