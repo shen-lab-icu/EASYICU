@@ -1702,8 +1702,15 @@ def _unverified_kill_retry_eligible(
     return not _host_reports_oom_kills()
 
 
-def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bool:
-    """Whether a module's stream ledger already used its unverified-kill retry."""
+def _unverified_kill_ledger_state(tmp_root: str, modules: Sequence[str]) -> Optional[str]:
+    """What the modules' stream ledgers say about the unverified-kill retry.
+
+    ``None``: no ledger used it (a ledger that does not exist has not);
+    ``"used"``: a ledger records it; ``"stream_ledger_unreadable"``: a
+    ledger exists but cannot be read or is not a ledger. The audit state is
+    never swallowed into "unused" (lead-r13 D3 ledger reject policy): only
+    ``FileNotFoundError`` means no ledger.
+    """
 
     import json
 
@@ -1711,12 +1718,26 @@ def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bo
         path = os.path.join(tmp_root, module, f".{module}.stream_ledger.json")
         try:
             with open(path, encoding="utf-8") as handle:
-                events = json.load(handle).get("resume_events") or []
-        except (OSError, ValueError):
+                ledger = json.load(handle)
+        except FileNotFoundError:
             continue
-        if any(event.get("kind") == "unverified_kill_retry" for event in events):
-            return True
-    return False
+        except (OSError, ValueError):
+            return "stream_ledger_unreadable"
+        events = ledger.get("resume_events") if isinstance(ledger, dict) else None
+        if not isinstance(ledger, dict) or not isinstance(events or [], list):
+            return "stream_ledger_unreadable"
+        for event in events or []:
+            if not isinstance(event, dict):
+                return "stream_ledger_unreadable"
+            if event.get("kind") == "unverified_kill_retry":
+                return "used"
+    return None
+
+
+def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bool:
+    """Whether the unverified-kill retry is spent: used, or unprovable."""
+
+    return _unverified_kill_ledger_state(tmp_root, modules) is not None
 
 
 def _record_unverified_kill_in_ledgers(held: Mapping[str, str], event: Mapping) -> None:
@@ -8550,7 +8571,7 @@ def extract_database(
         )
         unverified_kill = None
         unverified_kill_retried = bool(group.get("_unverified_kill_retried"))
-        if (
+        unverified_kill_candidate = (
             crash_retry is None
             and crashed
             and incomplete
@@ -8558,11 +8579,19 @@ def extract_database(
             and group_may_stream
             and group_batch_size > 1
             and not unverified_kill_retried
-            and not _ledgers_record_unverified_kill(tmp_root, group_mods)
             and _unverified_kill_retry_eligible(
                 proc.exitcode, attempt_failures, oom_kill_delta
             )
-        ):
+        )
+        ledger_state = (
+            _unverified_kill_ledger_state(tmp_root, group_mods)
+            if unverified_kill_candidate else None
+        )
+        if ledger_state == "stream_ledger_unreadable":
+            # The retry budget cannot be proven unspent: refuse, and say why.
+            for summary in attempt_failures:
+                summary["unverified_kill_retry_refused"] = ledger_state
+        if unverified_kill_candidate and ledger_state is None:
             # No OOM counter on this host (macOS/Windows): one retry at half
             # the batch, resuming from the committed batches (#13 C).
             unverified_kill = {
