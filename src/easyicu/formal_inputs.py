@@ -17,10 +17,13 @@ The set for one database input (its ``data_path``):
   source must equal that source's hash in the snapshot;
 * for a declared view (a symlink farm whose manifest names the manifest it was
   derived from, ``storage_layout.declared_view_chain``): the source manifest
-  and every output it lists.
+  and every output it lists; a declared chain the storage owner does not
+  accept is ``declared_view_chain_broken``.
 
-Files are identified by real path; a file reached through several links is
-hashed once. Equality is by (real path, size, sha256): a file modified and
+Files are identified by real path (and recorded with their device and inode,
+so a consumer can match a file named with other letter case on a
+case-insensitive file system); a file reached through several links is hashed
+once. Equality is by (real path, size, sha256): a file modified and
 restored to the same bytes during the run is not detected (an accepted,
 documented limitation). The snapshot is written outside the input.
 
@@ -117,19 +120,21 @@ def _manifest_files(base: Path, manifest_path: Path, role: str) -> List[Dict[str
 
 
 def _declared_view_chain(base: Path) -> Optional[Dict[str, str]]:
-    """The declared-view chain of ``base`` (single call site of the storage owner's rule)."""
-    try:
-        from .storage_layout import declared_view_chain
-    except ImportError as exc:
-        manifest = _load_manifest(base / CONVERSION_MANIFEST)
-        if manifest.get("derived_from") is None:
-            return None
+    """The declared-view chain of ``base`` (single call site of the storage owner's rule).
+
+    A manifest that declares ``derived_from`` but whose chain the owner does
+    not accept (the source manifest's sha256 no longer matches) is refused.
+    """
+    from .storage_layout import declared_view_chain
+
+    chain = declared_view_chain(base)
+    if chain is None and _load_manifest(base / CONVERSION_MANIFEST).get("derived_from"):
         raise InputSnapshotError(
-            "declared_view_chain_unavailable",
-            "the input declares a derived_from chain but this code cannot verify it",
+            "declared_view_chain_broken",
+            "the input declares a derived_from chain the storage owner does not accept",
             base=str(base),
-        ) from exc
-    return declared_view_chain(base)
+        )
+    return chain
 
 
 def _bucket_files(database: str, base: Path) -> tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
@@ -208,7 +213,7 @@ def _hash(path: str) -> Dict[str, Any]:
         raise InputSnapshotError("input_changed_while_hashed", "an input changed while hashed",
                                  realpath=path)
     return {"size": after.st_size, "mtime_ns": after.st_mtime_ns, "ino": after.st_ino,
-            "sha256": digest}
+            "dev": after.st_dev, "sha256": digest}
 
 
 def snapshot_digest(files: Iterable[Mapping[str, Any]]) -> str:

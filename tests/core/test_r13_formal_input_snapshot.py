@@ -171,7 +171,6 @@ def _view_farm(tmp_path: Path) -> tuple[Path, Path]:
     return source, farm
 
 
-@pytest.mark.xfail(strict=True, reason="needs storage_layout.declared_view_chain (d5fixB follow-up)")
 def test_a_declared_view_snapshot_carries_its_chain_and_the_source_outputs(tmp_path):
     source, farm = _view_farm(tmp_path)
 

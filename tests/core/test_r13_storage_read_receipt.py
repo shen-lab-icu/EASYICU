@@ -101,15 +101,22 @@ def test_a_bucket_whose_source_changed_has_no_receipt(tmp_path, arm_log):
 
 
 def test_a_flat_read_through_links_names_the_directory_it_really_read(tmp_path, arm_log):
+    from easyicu.config import load_src_cfg
+    from easyicu.datasource import ICUDataSource
+
     source = b6_source(tmp_path / "real", "eicu")
     table = TABLE_CONFIGS["eicu"][0]
     files = storage_layout.flat_table_files(source, table)
+    # The real installation's manifest, linked in with the data, makes the real
+    # directory the data root, so the links are admitted.
+    (source.base_path / "conversion_manifest.json").write_text(json.dumps({"tables": [{
+        "table": table, "status": "completed",
+        "outputs": [{"relative_path": f.relative_to(source.base_path).as_posix()}
+                    for f in files]}]}))
     linked = tmp_path / "linked"
     linked.mkdir()
     for item in source.base_path.iterdir():
         (linked / item.name).symlink_to(item, target_is_directory=item.is_dir())
-    from easyicu.config import load_src_cfg
-    from easyicu.datasource import ICUDataSource
 
     through = ICUDataSource(load_src_cfg("eicu"), base_path=linked, enable_cache=False)
     run_log = arm_log()
@@ -121,6 +128,23 @@ def test_a_flat_read_through_links_names_the_directory_it_really_read(tmp_path, 
     assert entry["layout_realpath"] == os.path.commonpath(
         [os.path.dirname(os.path.realpath(f)) for f in files]
     )
+
+
+def test_a_flat_read_through_links_outside_the_data_root_is_refused(tmp_path, arm_log):
+    from easyicu.config import load_src_cfg
+    from easyicu.datasource import ICUDataSource
+
+    source = b6_source(tmp_path / "real", "eicu")
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    for item in source.base_path.iterdir():
+        (linked / item.name).symlink_to(item, target_is_directory=item.is_dir())
+    through = ICUDataSource(load_src_cfg("eicu"), base_path=linked, enable_cache=False)
+    arm_log()
+
+    with pytest.raises(storage_layout.TableScanError) as error:
+        through.resolve_target_files(TABLE_CONFIGS["eicu"][0])
+    assert error.value.reason == "storage_read_outside_data_root"
 
 
 def test_a_flat_read_is_flat_and_carries_its_fallback_reason(tmp_path, arm_log):

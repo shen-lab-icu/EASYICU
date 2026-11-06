@@ -344,6 +344,10 @@ def _consumed(db: str, input_dir: str, consumed: Any,
         raise ReceiptError("storage_consumed_empty",
                            f"{db} native manifest lists no consumed files", database=db)
     hashed = {f["realpath"]: f for f in snapshot["files"]}
+    # The same file under another spelling (letter case on a case-insensitive
+    # file system) is the same (device, inode).
+    by_identity = {(f.get("dev"), f.get("ino")): f for f in snapshot["files"]
+                   if f.get("dev") is not None}
     files, declared = [], False
     for item in consumed:
         if not isinstance(item, dict) or not all(
@@ -358,6 +362,13 @@ def _consumed(db: str, input_dir: str, consumed: Any,
                                "what the run read", database=db, table=item["table"],
                                path=item["path"])
         held = hashed.get(item["realpath"])
+        if held is None:
+            try:
+                stat = os.stat(item["realpath"])
+            except OSError:
+                stat = None
+            if stat is not None:
+                held = by_identity.get((stat.st_dev, stat.st_ino))
         if held is None:
             raise ReceiptError("storage_consumed_outside_snapshot",
                                f"{db} {item['table']} consumed a file outside the input "

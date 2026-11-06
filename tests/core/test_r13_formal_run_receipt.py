@@ -387,13 +387,8 @@ def test_a_bucket_read_must_be_an_installation_the_snapshot_covers(tmp_path, mon
     assert error.value.code == "storage_read_outside_snapshot"
 
 
-# B9P-CSV-BINDING with the storage owner's admission rule (d5fixB follow-up).
+# B9P-CSV-BINDING with the storage owner's admission rule.
 
-PENDING = pytest.mark.xfail(
-    strict=True, reason="needs storage_layout.admit_consumed_realpath (d5fixB follow-up)")
-
-
-@PENDING
 def test_csv_and_parquet_consumed_side_by_side_are_each_bound(tmp_path, monkeypatch, real_admission):
     prepared = _prepared(tmp_path / "prepared")
     consumed = [_consumed(prepared / "cases.parquet"),
@@ -409,7 +404,6 @@ def test_csv_and_parquet_consumed_side_by_side_are_each_bound(tmp_path, monkeypa
     assert "declared_view_chain" not in sic["storage_consumed"]
 
 
-@PENDING
 def test_a_csv_linked_from_outside_the_data_root_is_refused(tmp_path, monkeypatch, real_admission):
     prepared = _prepared(tmp_path / "prepared")
     outside = tmp_path / "outside"
@@ -444,7 +438,6 @@ def _view(tmp_path: Path, prepared: Path) -> Path:
     return farm
 
 
-@PENDING
 def test_a_declared_view_read_records_its_chain(tmp_path, monkeypatch, real_admission):
     prepared = _prepared(tmp_path / "prepared")
     farm = _view(tmp_path, prepared)
@@ -459,7 +452,6 @@ def test_a_declared_view_read_records_its_chain(tmp_path, monkeypatch, real_admi
     assert chain["farm_manifest_sha256"] == receipt.sha256_file(farm / "conversion_manifest.json")
 
 
-@PENDING
 def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeypatch, real_admission):
     # MIMIC-III services prefers CSV over a converted parquet beside it; the
     # consumed-files event, not the parquet resolver, must name the CSV.
@@ -474,10 +466,17 @@ def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, m
                           "curr_service": ["MED"]})
     frame.to_csv(root / "services.csv.gz", index=False)
     frame.assign(curr_service="SURG").to_parquet(root / "services.parquet", index=False)
-    (root / "conversion_manifest.json").write_text(json.dumps({"tables": [{
-        "table": "services", "status": "completed",
-        "input": {"relative_path": "services.csv.gz"},
-        "outputs": [{"relative_path": "services.parquet"}]}]}))
+    # Hospital tables are mapped to ICU stays: a MIMIC-III source has icustays.
+    pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
+                  "intime": pd.to_datetime(["2150-01-01"]),
+                  "outtime": pd.to_datetime(["2150-01-03"])}).to_parquet(
+        root / "icustays.parquet", index=False)
+    (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
+        {"table": "services", "status": "completed",
+         "input": {"relative_path": "services.csv.gz"},
+         "outputs": [{"relative_path": "services.parquet"}]},
+        {"table": "icustays", "status": "completed",
+         "outputs": [{"relative_path": "icustays.parquet"}]}]}))
     log = tmp_path / "run_storage_log.jsonl"
     monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
     ICUDataSource(config=load_data_sources().get("mimic"), base_path=root).load_table("services")
@@ -492,7 +491,8 @@ def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, m
     pre = formal_inputs.take_snapshot([f"mimic:{root}"])
     entry = receipt._consumed("mimic", str(root), consumed, pre["databases"]["mimic"])
     (named,) = entry["files"]
-    assert named["realpath"] == os.path.realpath(root / "services.csv.gz")
+    # The reader may name it SERVICES.csv.gz (case-insensitive file systems).
+    assert os.path.samefile(named["realpath"], root / "services.csv.gz")
     assert named["admitted_by"] == "data_root"
     assert named["sha256"] == receipt.sha256_file(root / "services.csv.gz")
 
