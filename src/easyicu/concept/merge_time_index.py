@@ -108,3 +108,21 @@ def merge_index_name(tables: Mapping[str, ICUTable | TsTbl]) -> str | None:
             if not np.all(np.isfinite(ticks) & np.isclose(ticks, np.rint(ticks), rtol=0, atol=1e-8)):
                 raise MergeTimeIndexError("time_grid_mismatch", name)
     return target
+
+
+def batch_index_dtype(tables: Mapping[str, ICUTable | TsTbl], aligned_index: str | None):
+    """The time-index dtype a batch's populated tables share, else None.
+
+    A concept with no rows in a patient batch can come back without a
+    declared index (its raw frame never reached time alignment).  The
+    resolver gives such an empty slice this batch's index name and dtype so
+    the merged frame matches the unbatched one; populated tables are the only
+    authority for it.
+    """
+    if not aligned_index:
+        return None
+    for table in tables.values():
+        index = getattr(table, "index_var", None) or getattr(table, "index_column", None)
+        if index and len(table.data) and index in table.data:
+            return table.data[index].dtype
+    return None

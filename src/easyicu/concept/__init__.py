@@ -40,7 +40,7 @@ from .availability_signal import (
     table_availability,
 )
 from .data_source_contract import ConceptDataSourceStorage
-from .merge_time_index import declare_resolved_time_index, merge_index_name
+from .merge_time_index import batch_index_dtype, declare_resolved_time_index, merge_index_name
 from ..utils import compat
 
 logger = logging.getLogger(__name__)
@@ -9332,6 +9332,7 @@ class ConceptResolver:
         index_column: Optional[str] = None
         id_columns: Optional[List[str]] = None
         aligned_index = merge_index_name(tables)
+        slice_index_dtype = batch_index_dtype(tables, aligned_index)
 
         for name, table in tables.items():
             frame = table.data.copy()
@@ -9342,6 +9343,12 @@ class ConceptResolver:
             if name == "urine24" and "urine24_est" in tables:
                 frame = frame.drop(columns=["urine24_est_available_at"], errors="ignore")
             table_index = table.index_var if isinstance(table, WinTbl) else table.index_column
+            if not table_index and len(frame) == 0 and slice_index_dtype is not None:
+                # An empty batch slice takes the batch's time axis; its raw
+                # native time column (never aligned) is not that axis.
+                frame = frame.drop(columns=[aligned_index], errors="ignore")
+                frame[aligned_index] = pd.Series(dtype=slice_index_dtype)
+                table_index = aligned_index
             if table_index and table_index != aligned_index:
                 frame = frame.rename(columns={table_index: aligned_index})
                 table_index = aligned_index
