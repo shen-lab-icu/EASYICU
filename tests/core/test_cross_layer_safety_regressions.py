@@ -488,16 +488,18 @@ def test_p0_2_undeclared_unit_fails_closed_by_default(monkeypatch):
         _expand_public_numeric_win_tbl_output(_win_frame([10.0]), "norepi_rate", "1h")
 
 
-def test_p0_2_guess_requires_explicit_opt_out(monkeypatch, caplog):
-    """The legacy guess survives only for a caller who asks for it by name."""
+def test_p0_2_retired_guess_opt_out_no_longer_guesses(monkeypatch):
+    """lead-r13 sweep #9: the env opt-out that re-enabled the distribution guess is gone.
+
+    A quantile/median guess cannot tell 10 minutes from 10 hours, so an
+    undeclared unit fails typed even when the retired variable is set.
+    """
 
     monkeypatch.setenv(ALLOW_GUESS_ENV_VAR, "1")
-    with caplog.at_level("WARNING", logger="easyicu.table.duration"):
-        out = _expand_public_numeric_win_tbl_output(
-            _win_frame([10.0]), "norepi_rate", "1h"
-        )
-    assert not out.empty
-    assert "no declared unit" in caplog.text
+    with pytest.raises(DurationUnitError, match="no declared unit"):
+        _expand_public_numeric_win_tbl_output(_win_frame([10.0]), "norepi_rate", "1h")
+    with pytest.raises(DurationUnitError, match="no declared unit"):
+        resolve_dur_var_hours(pd.DataFrame({"dur_var": [10.0]}), strict=False)
 
 
 # --- Round 2: the datetime branch used to ignore the declaration entirely ---

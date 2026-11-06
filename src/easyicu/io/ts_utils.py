@@ -586,13 +586,9 @@ def expand(
         # MIIV's charttime aligned is in HOURS (values typically 0-168)
         # We use the step_size unit to determine the data unit
         
-        # 🔧 CRITICAL FIX 2025-02-12: Match step_size to data unit. Prefer
-        # the semantic unit inference over a single hardcoded column name;
-        # minute-valued columns such as measuredat_minutes or *offset must
-        # not be expanded on an hour grid.
-        numeric_unit = numeric_time_unit or _infer_numeric_time_unit(data[start_var], start_var)
-        if numeric_unit not in {"h", "min", "s"}:
-            raise ValueError("numeric_time_unit must be h, min or s")
+        # The axis unit is declared (explicit argument, frame attrs, or the
+        # concept-layer hours contract); it is never inferred from the values.
+        numeric_unit = _declared_numeric_time_unit(data, start_var, numeric_time_unit)
         if numeric_unit == 's':
             step_val = float(step_size.total_seconds())
         elif numeric_unit == 'min':
@@ -1709,6 +1705,7 @@ def slide(
     agg_func: Optional[dict] = None,
     full_window: bool = False,
     _pre_sorted: bool = False,
+    numeric_time_unit: Optional[str] = None,
 ) -> pd.DataFrame:
     """Apply sliding window aggregation (R ricu slide) - VECTORIZED VERSION.
     
@@ -1729,6 +1726,9 @@ def slide(
                   Supports: 'max', 'min', 'mean', 'sum', 'count', 'std', 
                            'first', 'last', 'max_or_na', 'min_or_na'
         full_window: If True, only include rows where the full window is available
+        numeric_time_unit: Unit (h/min/s) of a numeric ``index_col``. Defaults
+            to the frame's ``easyicu_time_columns`` declaration, else hours
+            (the concept-layer contract). Never inferred from the values.
         
     Returns:
         DataFrame with windowed aggregations
@@ -1747,110 +1747,47 @@ def slide(
     
     if len(data) == 0:
         return pd.DataFrame()
+    time_unit = _declared_numeric_time_unit(data, index_col, numeric_time_unit)
     
     # 🚀 优化策略选择：after=0 时使用向量化 rolling，否则用循环
     # rolling() 原生不支持 forward window，仅支持 backward
     if after == pd.Timedelta(0):
         # print(f"🚀 使用向量化 slide (vectorized path)", flush=True)
-        return _slide_vectorized(data, id_cols, index_col, before, agg_func, full_window, _pre_sorted=_pre_sorted)
+        return _slide_vectorized(data, id_cols, index_col, before, agg_func, full_window, _pre_sorted=_pre_sorted, time_unit=time_unit)
     else:
         # print(f"⚠️ 使用循环 slide (loop path, after={after})", flush=True)
         # Fallback to loop-based version for forward windows
-        return _slide_loop(data, id_cols, index_col, before, after, agg_func, full_window)
+        return _slide_loop(data, id_cols, index_col, before, after, agg_func, full_window, time_unit=time_unit)
 
 
-def _infer_numeric_time_unit(values: pd.Series, index_col: str | None = None) -> str:
-    """Infer the unit of numeric time axes used by sliding windows.
+_NUMERIC_TIME_UNITS = frozenset({"h", "min", "s"})
+_DECLARED_TIME_UNITS = {"icu_relative_hours": "h"}
 
-    EasyICU normalizes public concept time columns such as ``charttime`` to
-    hours relative to ICU admission.  The previous heuristic used the maximum
-    timestamp and therefore misclassified long MIMIC-IV stays as minute-based,
-    which inflated 24-hour rolling windows in large-cohort SOFA extraction.
-    Prefer semantic column names, then fall back to the observed grid spacing.
+
+def _declared_numeric_time_unit(
+    data: pd.DataFrame,
+    index_col: str | None,
+    numeric_time_unit: str | None = None,
+) -> str:
+    """Return the declared unit (h/min/s) of a numeric time axis.
+
+    Order: the caller's explicit ``numeric_time_unit``; the frame's
+    ``easyicu_time_columns`` declaration; otherwise the concept-layer
+    contract, under which every numeric time axis reaching these window
+    helpers is hours relative to ICU admission (``_align_time_to_admission``).
+    The values are never consulted: the former inference read a quantile and
+    the median row spacing of the frame, so the window width depended on
+    which stays shared the batch (lead-r13 magnitude-inference sweep, #2).
     """
-    name = (index_col or "").lower()
-    hour_like = {
-        "charttime",
-        "time",
-        "starttime",
-        "endtime",
-        "itemtime",
-        "datetime",
-        "measuredat",
-        "givenat",
-        "enteredentryat",
-    }
-    minute_like = {
-        "offset",
-        "observationoffset",
-        "nursingchartoffset",
-        "labresultoffset",
-        "respchartoffset",
-        "intakeoutputoffset",
-        "intakeoutputentryoffset",
-        "measuredat_minutes",
-    }
-
-    # 🔧 FIX 2026-05-11: AUMC 的 measuredat_minutes 在多处被改名为 charttime（值仍为分钟），
-    # 导致按 hour_like 解释会溢出 pd.Timedelta（>106751 days = ~292 years）。
-    # 当 |values| 远超合理小时范围（>10 万 = 11 年）时，回退到分钟解释。
-    REASONABLE_HOURS_THRESHOLD = 100_000  # >11 years in hours is implausible for ICU
-
-    if name in hour_like:
-        try:
-            _numeric = pd.to_numeric(values, errors="coerce").dropna()
-            if len(_numeric):
-                # 🔧 FIX 2026-07-17b: use a ROBUST upper quantile, NOT the raw max. The bulk
-                # sliding-window path (_slide_vectorized_bulk) feeds the WHOLE merged multi-patient
-                # charttime column here. eICU/AUMC charttime is hours-since-admission, but a handful
-                # of corrupt rows carry stray offsets up to ~876k. The old raw-max guard let a SINGLE
-                # garbage row flip the entire (genuinely-hour) column to 'min', mis-scaling SOFA
-                # sliding windows ~60x -> saturated SOFA (eICU 37-41% flat-per-patient, median 5 vs
-                # miiv 1; AUMC sofa2 mean 4.36 vs clean sofa1 1.50 — same DB/population, only the
-                # threshold crossing differed). A robust p99.9 ignores the garbage tail while still
-                # catching a genuinely minute/second-scale column (where MOST values are large).
-                # Corroborate with grid spacing (~1-unit spacing => already hours) before demoting.
-                _robust_max = float(_numeric.abs().quantile(0.999))
-                if _robust_max > REASONABLE_HOURS_THRESHOLD:
-                    if len(_numeric) >= 2:
-                        _pos = _numeric.sort_values().diff().dropna()
-                        _pos = _pos[_pos > 0]
-                        if len(_pos) and float(_pos.median()) < 15:
-                            return "h"
-                    if _robust_max > REASONABLE_HOURS_THRESHOLD * 60:
-                        return "s"
-                    return "min"
-        except Exception:
-            pass
-        return "h"
-    if name in minute_like or name.endswith("offset"):
-        # 🔧 FIX 2026-07-17: EasyICU normalizes concept time to HOURS-since-admission
-        # (see docstring + run_manifest time_axis_policy), but AUMC (`measuredat_minutes`)
-        # and eICU (`*offset`) keep a minutes-like COLUMN NAME. The name-first rule here
-        # demoted already-hour values to minutes, shrinking KDIGO UO/creatinine windows
-        # ~60x (uo_rt 60-70x inflated -> oliguria never trips -> UO-AKI dead for AUMC/eICU;
-        # creatinine baseline collapses to whole-stay min -> Stage-3 over-call). Mirror the
-        # hour_like spacing guard: ~1-unit grid spacing means the values are already hours.
-        _numeric = pd.to_numeric(values, errors="coerce").dropna()
-        if len(_numeric) >= 2:
-            _positive = _numeric.sort_values().diff().dropna()
-            _positive = _positive[_positive > 0]
-            if len(_positive) and float(_positive.median()) < 15:
-                return "h"
-        return "min"
-
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    if len(numeric) >= 2:
-        diffs = numeric.sort_values().diff().dropna()
-        positive = diffs[diffs > 0]
-        if len(positive):
-            step = float(positive.median())
-            if step >= 900:
-                return "s"
-            if step >= 15:
-                return "min"
-            return "h"
-
+    if numeric_time_unit is not None:
+        if numeric_time_unit not in _NUMERIC_TIME_UNITS:
+            raise ValueError("numeric_time_unit must be h, min or s")
+        return numeric_time_unit
+    declared = (getattr(data, "attrs", None) or {}).get("easyicu_time_columns", {}).get(index_col)
+    if declared is not None:
+        if declared not in _DECLARED_TIME_UNITS:
+            raise ValueError(f"unknown declared time unit {declared!r} for column {index_col!r}")
+        return _DECLARED_TIME_UNITS[declared]
     return "h"
 
 
@@ -1862,6 +1799,7 @@ def _slide_vectorized(
     agg_func: dict,
     full_window: bool = False,
     _pre_sorted: bool = False,
+    time_unit: str = "h",
 ) -> pd.DataFrame:
     """Vectorized slide implementation using pandas rolling() - FAST PATH.
     
@@ -1909,7 +1847,7 @@ def _slide_vectorized(
                 agg_map[col] = lambda x: x.iloc[-1] if len(x) > 0 else np.nan
             else:
                 # Fallback to loop version for unknown functions
-                return _slide_loop(data, id_cols, index_col, before, pd.Timedelta(0), agg_func, full_window)
+                return _slide_loop(data, id_cols, index_col, before, pd.Timedelta(0), agg_func, full_window, time_unit=time_unit)
         elif callable(func):
             agg_map[col] = func
         else:
@@ -1932,6 +1870,7 @@ def _slide_vectorized(
                 data, id_cols, index_col, agg_map, 
                 window_size, full_window, is_numeric_time,
                 _pre_sorted=_pre_sorted,
+                time_unit=time_unit,
             )
         except Exception:
             pass  # Fall through to per-group loop
@@ -1948,7 +1887,6 @@ def _slide_vectorized(
         
         # Set time as index for rolling
         if is_numeric_time:
-            time_unit = _infer_numeric_time_unit(group[index_col], index_col)
             group_with_td = group.copy()
             group_with_td['__temp_time__'] = pd.to_timedelta(group[index_col], unit=time_unit)
             group_indexed = group_with_td.set_index('__temp_time__')
@@ -2090,6 +2028,7 @@ def _slide_vectorized_bulk(
     full_window: bool,
     is_numeric_time: bool,
     _pre_sorted: bool = False,
+    time_unit: str = "h",
 ) -> pd.DataFrame:
     """Bulk slide with shared min/max bounds and pandas' other aggregations.
 
@@ -2106,7 +2045,6 @@ def _slide_vectorized_bulk(
     
     # Convert time to TimedeltaIndex for pandas rolling
     if is_numeric_time:
-        time_unit = _infer_numeric_time_unit(data[index_col], index_col)
         td_index = pd.to_timedelta(data[index_col], unit=time_unit)
     else:
         td_index = pd.to_datetime(data[index_col])
@@ -2189,6 +2127,7 @@ def _slide_loop(
     after: pd.Timedelta,
     agg_func: dict,
     full_window: bool = False,
+    time_unit: str = "h",
 ) -> pd.DataFrame:
     """Loop-based slide implementation - FALLBACK for complex cases.
     
@@ -2209,12 +2148,10 @@ def _slide_loop(
             data = data.copy()
             data[index_col] = pd.to_datetime(data[index_col])
     
-    # Convert before/after to compatible units. Numeric axes are not always
-    # hours (eICU/AUMC offsets are minutes); convert the window into the
-    # inferred axis unit instead of assuming hours and silently shrinking or
-    # inflating windows 60x.
+    # Convert before/after into the declared axis unit (never inferred from
+    # the values; see _declared_numeric_time_unit).
     if is_numeric_time:
-        numeric_unit = _infer_numeric_time_unit(data[index_col], index_col)
+        numeric_unit = time_unit
         unit_td = pd.Timedelta(1, unit=numeric_unit)
 
         def _to_axis(td: pd.Timedelta) -> float:
@@ -3379,9 +3316,9 @@ def aggregate_data(
 # --- Public cross-package alias (thin wrapper, no logic change) ---
 # Private name kept for backward compatibility; cross-package callers must
 # use the public name below.
-infer_numeric_time_unit = _infer_numeric_time_unit
+declared_numeric_time_unit = _declared_numeric_time_unit
 
 
 __all__ = [
-    "infer_numeric_time_unit",
+    "declared_numeric_time_unit",
 ]

@@ -3674,38 +3674,6 @@ def eicu_rate_mass_callback(target_unit: str, mg_label_mcg_above: Optional[float
     return callback
 
 
-def _infer_interval_from_series(series: pd.Series) -> pd.Timedelta:
-    """Best-effort detection of interval spacing for offset/time columns."""
-
-    values = series.dropna()
-    if values.empty:
-        return pd.Timedelta(hours=1)
-
-    if pd.api.types.is_datetime64_any_dtype(values):
-        ordered = values.sort_values()
-        diffs = ordered.diff()
-        diffs = diffs[diffs > pd.Timedelta(0)]
-        if not diffs.empty:
-            return diffs.min()
-
-    if pd.api.types.is_timedelta64_dtype(values):
-        ordered = values.sort_values()
-        diffs = ordered.diff()
-        diffs = diffs[diffs > pd.Timedelta(0)]
-        if not diffs.empty:
-            return diffs.min()
-
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    if not numeric.empty:
-        ordered = numeric.sort_values()
-        diffs = ordered.diff()
-        diffs = diffs[diffs > 0]
-        if not diffs.empty and diffs.min() > 0:
-            minutes = diffs.min()
-            return pd.to_timedelta(minutes, unit="m")
-
-    return pd.Timedelta(hours=1)
-
 def eicu_dex_med(
     frame: pd.DataFrame,
     val_var: str,
@@ -3812,8 +3780,17 @@ def eicu_dex_inf(
     frame: pd.DataFrame,
     val_var: str,
     index_var: Optional[str],
+    interval: Optional[Union[str, pd.Timedelta]] = None,
 ) -> pd.DataFrame:
-    """Normalize eICU dex infusion TS rows to win-table compatible rows."""
+    """Normalize eICU dex infusion TS rows to win-table compatible rows.
+
+    Each infusion row lasts one load interval, as ricu's ``eicu_dex_inf``
+    (``dur_var = units<-(interval(x), "mins")``): the item declares no
+    interval, so it is the requested one, ``hours(1L)`` by default. The former
+    rule took the smallest gap between infusion offsets pooled over every stay
+    in the frame, so a row's duration depended on its batch neighbours
+    (lead-r13 magnitude-inference sweep, #3).
+    """
 
     if frame.empty or val_var not in frame.columns:
         return frame
@@ -3821,22 +3798,15 @@ def eicu_dex_inf(
     work = frame.copy()
     work[val_var] = pd.to_numeric(work[val_var], errors="coerce")
 
-    idx_col = index_var
-    if not idx_col or idx_col not in work.columns:
-        candidates = [
-            col
-            for col in work.columns
-            if col.lower().endswith("offset") or col.lower().endswith("time")
-        ]
-        idx_col = candidates[0] if candidates else None
+    del index_var  # the duration no longer depends on the index values
 
-    interval = pd.Timedelta(hours=1)
-    if idx_col and idx_col in work.columns:
-        interval = _infer_interval_from_series(work[idx_col])
+    # Declared, never inferred: the requested load interval, or the documented
+    # load_concepts / ricu default of one hour when none was requested.
+    interval = pd.Timedelta(interval) if interval is not None else pd.Timedelta(hours=1)
+    if interval <= pd.Timedelta(0):
+        raise ValueError(f"eicu_dex_inf needs a positive load interval, got {interval}")
 
-    # 🔧 FIX: Output dur_var in MINUTES (eICU native unit) so that
-    # _align_time_to_admission's auto-detect correctly converts dur_var / 60 → hours.
-    # Previously output hours → auto-detect would double-convert (hours/60 = wrong).
+    # dur_var is published in minutes and declared as such below.
     interval_minutes = interval.total_seconds() / 60.0
     work["dur_var"] = interval_minutes
     work["unit_var"] = "ml/hr"

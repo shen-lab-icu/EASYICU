@@ -390,10 +390,10 @@ class TsTbl(IdTbl):
         # Initialize parent
         super().__init__(data, id_vars, by_ref)
         
-        # Auto-detect interval if not provided
-        if interval is None:
-            interval = self._detect_interval()
-        
+        # The interval is declared or None ("not on a declared grid"). It is
+        # never derived from the values: the former minimum-gap guess depended
+        # on which stays shared the table and decided raw-cache reuse
+        # (lead-r13 magnitude-inference sweep, #11b).
         self.interval = interval
     
     @staticmethod
@@ -411,39 +411,6 @@ class TsTbl(IdTbl):
             raise ValueError(f"Multiple time columns found: {time_cols}. Please specify index_var.")
         
         return time_cols[0]
-    
-    def _detect_interval(self) -> pd.Timedelta:
-        """Auto-detect time interval from data."""
-        # Check if index is numeric (eICU-style) or temporal
-        is_numeric = pd.api.types.is_numeric_dtype(self.data[self.index_var])
-        
-        # Get unique time differences
-        diffs = []
-        for _, group in self.data.groupby(self.id_vars):
-            if len(group) > 1:
-                sorted_times = group[self.index_var].sort_values()
-                group_diffs = sorted_times.diff().dropna()
-                diffs.extend(group_diffs.tolist())
-        
-        if not diffs:
-            # Default to 1 hour if no differences found
-            return pd.Timedelta(hours=1)
-        
-        # Return minimum non-zero difference
-        if is_numeric:
-            # For numeric times (hours), convert to Timedelta
-            positive = [d for d in diffs if d > 0]
-            if not positive:
-                return pd.Timedelta(hours=1)
-            min_diff = min(positive)
-            return pd.Timedelta(hours=min_diff)
-        else:
-            # For temporal types, already Timedelta
-            positive = [d for d in diffs if d > pd.Timedelta(0)]
-            if not positive:
-                return pd.Timedelta(hours=1)
-            min_diff = min(positive)
-            return min_diff
     
     def _validate(self):
         """Validate time series table structure."""

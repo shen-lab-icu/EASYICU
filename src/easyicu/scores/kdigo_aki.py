@@ -36,7 +36,6 @@ import pandas as pd
 import numpy as np
 import logging
 
-from easyicu.io.ts_utils import infer_numeric_time_unit
 from easyicu.utils.thresholds import REL_EPS, ge, le, lt
 from easyicu.urine_weight_linkage import (
     ConflictingKeyedWeightError,
@@ -543,35 +542,24 @@ def kdigo_uo(
 
 
 def _detect_time_unit(time_series: pd.Series, time_col: str | None = None) -> str:
-    """Detect the unit of a numeric time series.
-    
-    Returns:
-        'seconds': Time values are in seconds (e.g., SICdb)
-        'hours': Time values are already in hours
-        'minutes': Time values are in minutes (e.g., MIIV, AUMC, eICU)
-        'datetime': Time values are datetime objects
-        'timedelta': Time values are elapsed timedeltas
+    """Return the unit a time series declares by its dtype.
+
+    Returns 'datetime' or 'timedelta'. A numeric series declares nothing and
+    raises: the caller must pass ``time_unit``.
     """
     if pd.api.types.is_datetime64_any_dtype(time_series):
         return 'datetime'
     if pd.api.types.is_timedelta64_dtype(time_series):
         return 'timedelta'
 
-    # Numeric charttime/time columns do not carry a unit contract.  Spacing is
-    # not a safe substitute: a sparse hourly series and a minute-offset series
-    # can have the same values.  Semantic raw-source names remain inferable;
-    # generic names must be accompanied by an explicit time_unit.
-    index_hint = time_col or getattr(time_series, "name", None)
-    if str(index_hint or "").strip().lower() in {"", "charttime", "time"}:
-        raise ValueError(
-            "numeric KDIGO time axis is ambiguous; pass time_unit explicitly"
-        )
-    inferred = infer_numeric_time_unit(time_series, index_hint)
-    if inferred == 's':
-        return 'seconds'
-    if inferred == 'h':
-        return 'hours'
-    return 'minutes'
+    # A numeric axis carries no unit of its own. Neither its name nor its
+    # spacing is a safe substitute: a sparse hourly series and a minute-offset
+    # series can have the same values, and the old spacing guess depended on
+    # which stays shared the frame (lead-r13 magnitude-inference sweep, #10).
+    # Every numeric axis needs an explicit time_unit.
+    raise ValueError(
+        "numeric KDIGO time axis is ambiguous; pass time_unit explicitly"
+    )
 
 
 def _resolve_time_unit(

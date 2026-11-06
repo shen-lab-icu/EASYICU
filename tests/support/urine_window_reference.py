@@ -12,7 +12,7 @@ from easyicu.callbacks import _urine_rate_window_avg_multi
 from easyicu.scores.aki_profiles import _time_hours, AKIProfileError
 from easyicu.scores.kdigo_aki import detect_id_col, detect_time_col, detect_value_col
 from typing import Optional
-from easyicu.io.ts_utils import _infer_numeric_time_unit
+from easyicu.io.ts_utils import _declared_numeric_time_unit
 
 WINDOWS = (6, 12, 24)
 
@@ -575,7 +575,7 @@ def _slide_vectorized_bulk(
 
     # Convert time to TimedeltaIndex for pandas rolling
     if is_numeric_time:
-        time_unit = _infer_numeric_time_unit(data[index_col], index_col)
+        time_unit = _declared_numeric_time_unit(data, index_col)
         td_index = pd.to_timedelta(data[index_col], unit=time_unit)
     else:
         td_index = pd.to_datetime(data[index_col])

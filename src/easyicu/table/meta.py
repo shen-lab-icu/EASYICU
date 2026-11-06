@@ -210,6 +210,10 @@ def time_step(x: Union[TsTbl, WinTbl]) -> float:
             return interval_obj.total_seconds()
     return 1.0  # Default
 
+class IntervalUndeclaredError(ValueError):
+    """A time table was asked for an interval its producer never declared."""
+
+
 def interval(x: Union[TsTbl, WinTbl]) -> pd.Timedelta:
     """Get time series interval (R ricu interval).
     
@@ -226,23 +230,16 @@ def interval(x: Union[TsTbl, WinTbl]) -> pd.Timedelta:
     if not isinstance(x, (TsTbl, WinTbl)):
         raise TypeError(f"interval requires ts_tbl or win_tbl, got {type(x)}")
     
-    if hasattr(x, '_interval') and x._interval is not None:
-        return x._interval
-    
-    # Try to infer from index column
-    idx_var = index_var(x)
-    if idx_var and idx_var in x.data.columns:
-        idx_col = x.data[idx_var]
-        if pd.api.types.is_timedelta64_dtype(idx_col):
-            # Calculate interval from differences
-            diffs = idx_col.diff().dropna()
-            if len(diffs) > 0:
-                positive_diffs = diffs[diffs > pd.Timedelta(0)]
-                if len(positive_diffs) > 0:
-                    return positive_diffs.min()
-    
-    # Default: 1 hour
-    return pd.Timedelta(hours=1)
+    # The interval is a declaration of the producer. It is never derived from
+    # the rows (the former minimum-gap fallback depended on which stays shared
+    # the table) and never defaulted (lead-r13 magnitude-inference sweep, #11).
+    declared = getattr(x, "interval", None)
+    if declared is None or pd.isna(declared):
+        raise IntervalUndeclaredError(
+            "table declares no time interval; construct it with interval=... "
+            "(an interval is never inferred from the values)"
+        )
+    return pd.Timedelta(declared)
 
 def id_var_opts(x: Any) -> list[str]:
     """Get ID variable options (R ricu id_var_opts).

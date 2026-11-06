@@ -12,8 +12,10 @@ something inferred from its values:
 
 * producers call :func:`set_dur_var_unit` right where they write the column;
 * consumers call :func:`resolve_dur_var_hours`, which converts exactly when
-  the unit is known and only falls back to the legacy heuristic (loudly, and
-  never under strict mode) when it is not.
+  the unit is known and raises :class:`DurationUnitError` when it is not.
+  The legacy distribution guess and its ``EASYICU_ALLOW_DUR_VAR_UNIT_GUESS``
+  opt-in were removed (lead-r13, units are declared, never inferred from
+  values).
 
 ``timedelta64`` durations are self-describing and always take the exact path.
 """
@@ -21,7 +23,6 @@ something inferred from its values:
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -50,9 +51,9 @@ _HOURS_PER_UNIT = {
     UNIT_DAYS: 24.0,
 }
 
-#: Opt-OUT flag. Guessing is off by default: a warning does not stop a wrong
-#: number from reaching a manuscript, so an undeclared unit is an error unless
-#: the caller explicitly accepts the legacy guess.
+#: Retired opt-out flag. It used to re-enable a distribution guess for an
+#: undeclared ``dur_var``; it is no longer read, and an undeclared unit is
+#: always an error (lead-r13 magnitude-inference sweep, #9).
 ALLOW_GUESS_ENV_VAR = "EASYICU_ALLOW_DUR_VAR_UNIT_GUESS"
 
 #: Retired opt-IN flag, still honoured so existing scripts keep working.
@@ -120,26 +121,13 @@ def assert_window_contract(
             _mismatch("id_vars", label, base_ids, id_vars)
 
 
-def _env_flag(name: str) -> bool:
-    return str(os.environ.get(name, "") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def strict_dur_var_units() -> bool:
-    """Return True when an undeclared numeric ``dur_var`` must fail closed.
+    """Return True: an undeclared numeric ``dur_var`` always fails closed.
 
-    Strict is the default. ``EASYICU_ALLOW_DUR_VAR_UNIT_GUESS=1`` re-enables the
-    legacy distribution guess for a transitional path that has no declaration
-    yet; the old ``EASYICU_STRICT_DUR_VAR_UNIT=1`` remains a no-op-compatible
-    way to ask for the same strict behaviour.
+    Kept for callers that ask. The ``EASYICU_ALLOW_DUR_VAR_UNIT_GUESS`` opt-out
+    that once returned False is no longer read.
     """
 
-    if _env_flag(ALLOW_GUESS_ENV_VAR):
-        return False
     return True
 
 
@@ -230,8 +218,7 @@ def combine_dur_var_units(
       both units named rather than picking one;
     * a ``timedelta`` mixed with a numeric unit → always an error;
     * nothing declared → ``None``, preserving the undeclared path;
-    * some declared, some not → an error under
-      :func:`strict_dur_var_units`, otherwise the declared unit with a warning.
+    * some declared, some not → an error.
     """
 
     # Only inputs that actually carry the duration column are party to the
@@ -257,9 +244,7 @@ def combine_dur_var_units(
                 "an undeclared duration is not assumed to share the declared "
                 "unit — declare it at the producer with set_dur_var_unit()"
             )
-            if strict_dur_var_units():
-                raise DurationUnitError(message)
-            logger.warning("%s (assuming %s)", message, unit)
+            raise DurationUnitError(message)
         return unit
     raise DurationUnitError(
         f"cannot combine {column!r} across inputs declaring different units "
@@ -313,15 +298,6 @@ def _validate_hours(
     return hours
 
 
-def _heuristic_unit_is_hours(values: pd.Series) -> bool:
-    """Legacy distribution guess, kept only as an undeclared-unit fallback."""
-
-    sample = values.dropna()
-    if sample.empty:
-        return False
-    return float(sample.quantile(0.95)) <= 48.0 and float(sample.median()) <= 24.0
-
-
 def resolve_dur_var_hours(
     frame: pd.DataFrame,
     *,
@@ -332,9 +308,9 @@ def resolve_dur_var_hours(
     """Return ``frame[column]`` converted to float hours.
 
     The conversion is exact whenever the dtype is ``timedelta64`` or the frame
-    declares a unit. Otherwise it falls back to the legacy distribution guess
-    and logs a warning naming the concept — unless strict mode is on, in which
-    case it raises :class:`DurationUnitError` rather than guessing.
+    declares a unit. Otherwise it raises :class:`DurationUnitError`: a value
+    distribution cannot tell 10 minutes from 10 hours. ``strict`` is accepted
+    for compatibility and has no effect.
     """
 
     if column not in frame.columns:
@@ -360,28 +336,13 @@ def resolve_dur_var_hours(
             "the producer must convert before the unit is consumed"
         )
 
-    if strict is None:
-        strict = strict_dur_var_units()
-    if strict:
-        raise DurationUnitError(
-            f"{column!r} has no declared unit for concept {concept or '<unknown>'!r}; "
-            f"set it with set_dur_var_unit(frame, '{UNIT_MINUTES}'|'{UNIT_HOURS}') "
-            f"at the producer. Set {ALLOW_GUESS_ENV_VAR}=1 to fall back to the "
-            "legacy distribution guess, which cannot distinguish 10 minutes from "
-            "10 hours and may inflate a window 60x"
-        )
-
-    is_hours = _heuristic_unit_is_hours(numeric.fillna(0.0))
-    logger.warning(
-        "dur_var for concept %r has no declared unit; %s=1 so guessing %s from the "
-        "value distribution. This guess cannot distinguish 10 minutes from 10 hours "
-        "— declare the unit at the producer with set_dur_var_unit().",
-        concept or "<unknown>",
-        ALLOW_GUESS_ENV_VAR,
-        UNIT_HOURS if is_hours else UNIT_MINUTES,
+    del strict  # no guess remains to switch on
+    raise DurationUnitError(
+        f"{column!r} has no declared unit for concept {concept or '<unknown>'!r}; "
+        f"set it with set_dur_var_unit(frame, '{UNIT_MINUTES}'|'{UNIT_HOURS}') "
+        "at the producer. A value distribution cannot distinguish 10 minutes "
+        "from 10 hours, so EasyICU does not guess"
     )
-    guessed = numeric if is_hours else numeric.div(60.0)
-    return _validate_hours(guessed, column=column, concept=concept)
 
 
 __all__ = [
