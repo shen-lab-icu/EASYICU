@@ -25,6 +25,7 @@ import easyicu
 from easyicu.io import ts_utils
 from easyicu.io.ts_utils import IntervalAggregationError
 from easyicu.storage_layout import StorageIntegrityError, TableScanError
+from easyicu.utils.exact_sum import ExactSumOverflowError
 from easyicu.value_failures import TYPED_VALUE_FAILURES
 from tests.support.urine_raw_source import _load, _source
 
@@ -48,8 +49,53 @@ def _miiv(root):
     return _source(root, "miiv", icustays=stays, chartevents=chart)
 
 
-def test_the_shared_tuple_names_both_types():
-    assert set(TYPED_VALUE_FAILURES) == {IntervalAggregationError, StorageIntegrityError}
+def test_the_shared_tuple_names_every_type():
+    # lead-r13 delta4 D4-EXACT-CATCH: the exact-sum refusal is a value failure
+    # too; a broad catch must not turn it into an empty or unaggregated result.
+    assert set(TYPED_VALUE_FAILURES) == {
+        IntervalAggregationError, StorageIntegrityError, ExactSumOverflowError,
+    }
+
+
+_BIG = 1.7976931348623157e308
+
+
+def _overflow():
+    return ExactSumOverflowError(3)
+
+
+def test_recursive_interval_step_does_not_keep_the_result_on_an_exact_sum_refusal(tmp_path, monkeypatch):
+    source = _miiv(tmp_path / "miiv")
+    real = ts_utils.change_interval
+
+    def failing(*args, **kwargs):
+        if sys._getframe(1).f_code.co_name == "_load_recursive_concept":
+            raise _overflow()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ts_utils, "change_interval", failing)
+    with pytest.raises(ExactSumOverflowError):
+        _load(source, ["shock_index"])
+
+
+def test_admitted_fluid_balance_is_not_empty_when_its_sum_is_refused():
+    from easyicu.concept import callbacks as concept_callbacks
+    from easyicu.table import ICUTable
+
+    class _Inputs:
+        config = SimpleNamespace(name="miiv")
+
+        def load_table(self, *args, **kwargs):
+            # Two finite amounts in one hour whose exact total is beyond float64.
+            return pd.DataFrame({"stay_id": [1, 1], "starttime": [1.2, 1.7], "amount": [_BIG, _BIG],
+                                 "amountuom": ["mL", "mL"], "statusdescription": ["FinishedRunning"] * 2})
+
+    urine = ICUTable(data=pd.DataFrame({"stay_id": [1], "charttime": [1.0], "urine": [50.0]}),
+                     id_columns=["stay_id"], index_column="charttime", value_column="urine")
+    ctx = SimpleNamespace(data_source=_Inputs(), patient_ids=None, interval=None,
+                          resolver=None, kwargs={}, database="miiv", concept_name="fluid_balance_admitted")
+    with pytest.raises(ExactSumOverflowError):
+        concept_callbacks._callback_fluid_balance_admitted({"urine": urine}, ctx)
 
 
 def test_recursive_interval_step_does_not_keep_the_unaggregated_result(tmp_path, monkeypatch):
@@ -149,12 +195,18 @@ def test_medication_bundle_does_not_report_a_vanished_table_as_one_failed_concep
 
 _VALUE_PATH = ("concept/", "callbacks.py", "io/ts_utils.py", "load_concepts.py", "scores/",
                "table/", "datasource.py", "api/", "patient_filter.py")
+# The exact-sum entry points raise ExactSumOverflowError (lead-r13 delta4
+# D4-EXACT-CATCH): a try around one is an aggregating try.
+_EXACT_SUMS = {"exact_groupby_sum", "exact_groupby_agg", "exact_terms_to_values",
+               "exact_group_totals", "apply_exact_columns"}
 _LOADS = {"load_table", "_safe_load_table", "_load_one_concept", "_load_single_concept",
           "change_interval", "load_concepts", "load_concepts_fn", "resolve_target_files",
-          "_align_time_to_admission", "load_id_tbl", "_load_recursive_concept", "resolve_table_files"}
-# A try that aggregates or loads a concept must also pass IntervalAggregationError.
+          "_align_time_to_admission", "load_id_tbl", "_load_recursive_concept",
+          "resolve_table_files"} | _EXACT_SUMS
+# A try that aggregates or loads a concept must also pass IntervalAggregationError
+# and ExactSumOverflowError: only the shared tuple is accepted.
 _AGGREGATING = {"change_interval", "_load_one_concept", "_load_single_concept", "load_concepts",
-                "load_concepts_fn", "_load_recursive_concept"}
+                "load_concepts_fn", "_load_recursive_concept"} | _EXACT_SUMS
 # The module runner records a failed module in its manifest (never writes it).
 _RECORDING_BOUNDARIES = {("api/extraction.py", "_run_module_extraction")}
 
