@@ -466,8 +466,16 @@ def empty_frame(directory, columns):
     return pa.Table.from_batches([], schema=schema).to_pandas()
 
 
-def parquet_relation(files: Iterable[Path], *, keep_order_column: bool = False) -> str:
-    """Restore source order before scientific operations and hide physical fields."""
+def parquet_relation(
+    files: Iterable[Path], *, keep_order_column: bool = False, ordered: bool = True
+) -> str:
+    """Restore source order before scientific operations and hide physical fields.
+
+    ``ordered=False`` is for order-insensitive aggregates only (for example
+    ``MAX(datetime) ... GROUP BY patientid``): the ORDER BY wraps the whole
+    relation, so filters such as a cohort semi-join run after a full-table
+    sort.  On HiRID observations that sort took minutes and over 20 GiB.
+    """
     files = tuple(files)
     paths = (
         "["
@@ -475,6 +483,10 @@ def parquet_relation(files: Iterable[Path], *, keep_order_column: bool = False) 
         + "]"
     )
     relation = f"read_parquet({paths}, union_by_name=true, hive_partitioning=false)"
+    if not ordered:
+        if files and ORDINAL in pq.read_schema(files[0]).names and not keep_order_column:
+            return f'(SELECT * EXCLUDE("{ORDINAL}") FROM {relation})'
+        return relation
     if files and ORDINAL in pq.read_schema(files[0]).names:
         projection = "*" if keep_order_column else f'* EXCLUDE("{ORDINAL}")'
         return f'(SELECT {projection} FROM {relation} ORDER BY "{ORDINAL}")'

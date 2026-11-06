@@ -183,7 +183,9 @@ def hirid_observation_read_exprs(
     files = source.resolve_target_files("observations")
     if not files:
         return None
-    relation = parquet_relation(files)
+    # Every caller takes MAX(datetime) per patient: row order cannot matter,
+    # and an ordered relation sorts all observations before the cohort filter.
+    relation = parquet_relation(files, ordered=False)
     return relation, relation, "observations"
 
 

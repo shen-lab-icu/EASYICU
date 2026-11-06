@@ -8672,7 +8672,11 @@ class ConceptResolver:
                     if read_expr is None:
                         if data_source.resolve_bucket_directory("observations") is not None:
                             from ..storage_layout import parquet_relation
-                            read_expr = parquet_relation(data_source.resolve_target_files("observations", "patientid", target_patients))
+                            # MAX(datetime) per patient below: order-insensitive.
+                            read_expr = parquet_relation(
+                                data_source.resolve_target_files("observations", "patientid", target_patients),
+                                ordered=False,
+                            )
                         elif obs_path.is_dir():
                             glob_pattern = _duckdb_path(obs_path / '*.parquet')
                             # 🚀 perf B1 (hirid LOS): same-dir parquets share schema.
