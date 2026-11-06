@@ -255,3 +255,44 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
     assert result.loc[result["CaseID"] == 1, "death"].eq(True).all()  # noqa: E712
     assert result.loc[result["CaseID"] == 1, "charttime"].eq(1.0).all()
     assert not result.loc[result["CaseID"] == 2, "death"].eq(True).any()  # noqa: E712
+
+
+def test_sic_death_hours_are_not_realigned_when_a_batch_holds_a_late_death():
+    """The SICdb alignment fallback reads an undeclared column whose batch
+    maximum exceeds 5000 as raw seconds.  sic_death already publishes ICU
+    hours; a registry death after hour 5000 must not move the batch's other
+    deaths earlier by ICUOffset (lead-r13: one-shot vs batched SICdb exports)."""
+    from types import SimpleNamespace
+
+    icu_offset = [360_000, 720_000]  # 100 h and 200 h after primary admission
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1, 2],
+            "death": [icu_offset[0] + 10 * 3600, icu_offset[1] + 6_000 * 3600],
+            "HospitalDischargeType": [2028, 2028],
+            "ICUOffset": icu_offset,
+            "TimeOfStay": [icu_offset[0] + 20 * 3600, icu_offset[1] + 20 * 3600],
+        }
+    )
+    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
+    assert out.set_index("CaseID")["charttime"].tolist() == [10.0, 6000.0]
+    assert out.attrs["easyicu_time_columns"]["charttime"] == "icu_relative_hours"
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="sic"),
+        load_table=lambda *_a, **_k: pd.DataFrame(
+            {"CaseID": [1, 2], "ICUOffset": icu_offset, "TimeOfStay": [icu_offset[0] + 72_000, icu_offset[1] + 72_000]}
+        ),
+    )
+    published = out[["CaseID", "charttime", "death"]].copy()
+    published.attrs = dict(out.attrs)
+    aligned = resolver._align_time_to_admission(
+        published,
+        source,
+        ["CaseID"],
+        "charttime",
+        keep_post_discharge=True,
+        clip_icu_episode=False,
+    )
+    assert aligned.set_index("CaseID")["charttime"].tolist() == [10.0, 6000.0]

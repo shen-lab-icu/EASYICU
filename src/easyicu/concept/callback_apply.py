@@ -1724,6 +1724,15 @@ def _apply_callback(
         known = (died | (survived & pd.to_numeric(df['charttime'], errors='coerce').notna())).to_numpy()
         df = df.loc[known].copy()
         df[concept_name] = died.to_numpy()[known]
+        # charttime is already on the ICU clock in hours.  Undeclared, the SICdb
+        # alignment fallback reads any column whose batch maximum exceeds 5000
+        # as raw seconds and subtracts ICUOffset again, so a batch holding one
+        # registry death after hour 5000 moved every death in it earlier, and
+        # the result depended on the batch (lead-r13).
+        df.attrs["easyicu_time_columns"] = {
+            **df.attrs.get("easyicu_time_columns", {}),
+            "charttime": "icu_relative_hours",
+        }
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)
