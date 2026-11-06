@@ -30,6 +30,7 @@ from ..datasource import (
     _duckdb_path,
 )
 from ..storage_layout import StorageIntegrityError
+from ..utils.declared_units import UndeclaredUnitError
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
 from .availability_signal import (
@@ -1778,7 +1779,7 @@ class ConceptResolver:
                         if verbose:
                             logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
                         
-                    except (DuckDBQueryInterrupted, StorageIntegrityError):
+                    except (DuckDBQueryInterrupted, StorageIntegrityError, UndeclaredUnitError):
                         raise
                     except ConceptError:
                         raise
@@ -2019,7 +2020,9 @@ class ConceptResolver:
                                 len(covered_names),
                                 len(names),
                             )
-                except DuckDBQueryInterrupted:
+                except (DuckDBQueryInterrupted, UndeclaredUnitError):
+                    # A bounds-unit-suspect refusal keeps its type and reason,
+                    # as on the single-concept owner (Codex delta4 V6).
                     raise
                 except ConceptError:
                     raise
@@ -5993,6 +5996,29 @@ class ConceptResolver:
             if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
+                    # The SQL owners refuse a read whose values all contradict
+                    # the declared bounds; the raw path decides with the same
+                    # rule instead of dropping every value (Codex delta4 V6).
+                    # Rows the SQL already bounded are in range by construction.
+                    from ..utils.declared_units import refuse_bounds_unit_suspect
+
+                    _bound_candidates = combined.loc[
+                        ~_sql_bounded_rows.reindex(combined.index, fill_value=False).astype(bool),
+                        concept_name,
+                    ]
+                    _within = _bound_candidates.notna()
+                    if definition.minimum is not None:
+                        _within &= _bound_candidates >= definition.minimum
+                    if definition.maximum is not None:
+                        _within &= _bound_candidates <= definition.maximum
+                    refuse_bounds_unit_suspect(
+                        quantity=concept_name,
+                        site="concept.ConceptResolver._load_single_concept[filter_bounds]",
+                        nonzero_values=int((_bound_candidates.notna() & (_bound_candidates != 0)).sum()),
+                        bounded_non_null=int(_within.sum()),
+                        value_min=definition.minimum,
+                        value_max=definition.maximum,
+                    )
                 if definition.minimum is not None:
                     before_len = len(combined)
                     combined = combined[_sql_bounded_rows.reindex(combined.index) | (combined[concept_name] >= definition.minimum)]
