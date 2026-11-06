@@ -1443,6 +1443,9 @@ class ICUDataSource:
             return cached_frame[:]
         
         loader = self._table_sources.get(table_name)
+        # A registered source is the caller's own file; a disk loader is
+        # bound to the storage policy's validated file set.
+        disk_loader = loader is None
         dataset_cfg = self._dataset_sources.get(table_name)
         if loader is None and dataset_cfg is not None:
             frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
@@ -1519,6 +1522,8 @@ class ICUDataSource:
             
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
+                # A table the conversion manifest lists is not "absent".
+                storage_layout.verify_flat_scan(self, table_name, ())
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:
@@ -1554,7 +1559,8 @@ class ICUDataSource:
                 patient_ids_filter=patient_ids_filter, 
                 table_name=table_name,
                 concept_itemid_filter=concept_itemid_filter,  # 🚀 传递概念特定过滤器
-                wide_table_value_columns=wide_table_value_columns  # 🚀 传递宽表value列用于NULL过滤
+                wide_table_value_columns=wide_table_value_columns,  # 🚀 传递宽表value列用于NULL过滤
+                disk_loader=disk_loader,
             )
 
         # 🔧 FIX 2026-02-07: MIMIC-III 专用列名小写化
@@ -1652,9 +1658,12 @@ class ICUDataSource:
     def resolve_target_files(
         self, table_name: str, selector_column: Optional[str] = None,
         selector_values: Optional[Iterable[object]] = None,
+        *, loader: Optional[Path] = None,
     ) -> Tuple[Path, ...]:
         """Resolve table + selector through the single storage policy owner."""
-        return storage_layout.resolve_table_files(self, table_name, selector_column, selector_values)
+        return storage_layout.resolve_table_files(
+            self, table_name, selector_column, selector_values, loader=loader
+        )
 
     def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
         """检查扁平 parquet 目录（无 bucket_id 子目录结构）"""
@@ -1858,8 +1867,13 @@ class ICUDataSource:
         patient_ids_filter: Optional[FilterSpec] = None, 
         table_name: Optional[str] = None,
         concept_itemid_filter: Optional[Tuple[str, set]] = None,  # 🚀 概念特定 itemid 过滤器
-        wide_table_value_columns: Optional[List[str]] = None  # 🚀 宽表value列用于NULL过滤
+        wide_table_value_columns: Optional[List[str]] = None,  # 🚀 宽表value列用于NULL过滤
+        disk_loader: bool = False,
     ) -> pd.DataFrame:
+        # Every Parquet backend below reads the storage policy's validated
+        # file set for a table resolved from disk (single file, flat
+        # directory, bucket), never its own listing of ``path``.
+        scan_loader = path if disk_loader and table_name else None
         if (
             patient_ids_filter is not None
             and patient_ids_filter.op == FilterOp.IN
@@ -1876,6 +1890,9 @@ class ICUDataSource:
         if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput" and (path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}):
             from .concept.eicu_io import read_io_parquet
 
+            if scan_loader is not None:
+                # Validates the inventory read_io_parquet scans (same files).
+                self.resolve_target_files(table_name, loader=scan_loader)
             return read_io_parquet(path, columns, patient_ids_filter, concept_itemid_filter)
         
         # 🚀 优先使用概念特定的 itemid 过滤器（精确过滤，性能最佳）
@@ -1926,6 +1943,8 @@ class ICUDataSource:
                             try:
                                 _nb, _files_by_bucket = self._get_bucket_layout(path)
                                 has_bucket_layout = bool(_files_by_bucket)
+                            except storage_layout.StorageIntegrityError:
+                                raise
                             except Exception:
                                 has_bucket_layout = False
                         use_duckdb = has_bucket_layout
@@ -1935,10 +1954,14 @@ class ICUDataSource:
                     path, columns, patient_ids_filter, 
                     itemid_filter_config=itemid_filter_config, 
                     table_name=table_name,
-                    wide_table_value_columns=wide_table_value_columns  # 🚀 传递宽表value列用于NULL过滤
+                    wide_table_value_columns=wide_table_value_columns,  # 🚀 传递宽表value列用于NULL过滤
+                    scan_loader=scan_loader,
                 )
             else:
-                return self._read_partitioned_data_optimized(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
+                return self._read_partitioned_data_optimized(
+                    path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
+                    table_name=table_name, scan_loader=scan_loader,
+                )
         
         suffix = path.suffix.lower()
         lower_name = path.name.lower()
@@ -1980,6 +2003,8 @@ class ICUDataSource:
         
         # Preferred: Parquet format
         if suffix in {".parquet", ".pq"}:
+            if scan_loader is not None:
+                (path,) = self.resolve_target_files(table_name, loader=scan_loader)
             def _resolve_parquet_columns_and_filter():
                 read_columns = list(columns) if columns else None
                 filter_column = patient_ids_filter.column if patient_ids_filter else None
@@ -2365,7 +2390,7 @@ class ICUDataSource:
         """Find MIMIC-III CHARTEVENTS.csv.gz file."""
         return self._resolve_mimic3_csv('chartevents')
 
-    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None) -> pd.DataFrame:
+    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None, scan_loader: Optional[Path] = None) -> pd.DataFrame:
         """使用 DuckDB 读取分区数据（高性能版本）
         
         DuckDB 对单患者/小批量患者查询特别高效，比 PyArrow 快 5-6 倍。
@@ -2391,10 +2416,13 @@ class ICUDataSource:
             import duckdb
         except ImportError:
             # DuckDB 未安装，回退到 PyArrow
-            return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
+            return self._read_partitioned_data_optimized(
+                directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
+                table_name=table_name, scan_loader=scan_loader,
+            )
         
         filter_col, filter_ids = itemid_filter_config or (None, None)
-        target_files = self.resolve_target_files(table_name, filter_col, filter_ids) if table_name else storage_layout.files_for_directory(self, directory, filter_col, filter_ids)
+        target_files = self.resolve_target_files(table_name, filter_col, filter_ids, loader=scan_loader) if table_name else storage_layout.files_for_directory(self, directory, filter_col, filter_ids)
         if not target_files:
             return storage_layout.empty_frame(directory, columns)
         target_relation = storage_layout.parquet_relation(target_files)
@@ -2524,11 +2552,16 @@ class ICUDataSource:
             except Exception:
                 df = con.execute(query).fetchdf()
             return df
+        except storage_layout.StorageIntegrityError:
+            raise
         except Exception as e:
             logger.warning(f"DuckDB 读取失败，回退到 PyArrow: {e}")
-            return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
+            return self._read_partitioned_data_optimized(
+                directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
+                table_name=table_name, scan_loader=scan_loader,
+            )
     
-    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None) -> pd.DataFrame:
+    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, scan_loader: Optional[Path] = None) -> pd.DataFrame:
         """读取分区数据（优化版本）
         
         Args:
@@ -2542,7 +2575,10 @@ class ICUDataSource:
             return pd.DataFrame(columns=list(columns) if columns else [])
 
         filter_col, filter_values = itemid_filter_config or (None, None)
-        resolved_files = storage_layout.files_for_directory(self, directory, filter_col, filter_values)
+        if table_name and scan_loader is not None:
+            resolved_files = self.resolve_target_files(table_name, filter_col, filter_values, loader=scan_loader)
+        else:
+            resolved_files = storage_layout.files_for_directory(self, directory, filter_col, filter_values)
         if not resolved_files:
             return storage_layout.empty_frame(directory, columns)
         try:
@@ -3230,6 +3266,8 @@ def load_bucketed_table_aggregated(
                 if mapped_hadm_ids:
                     patient_filter_col = 'hadm_id'
                     patient_filter_values = mapped_hadm_ids
+            except storage_layout.StorageIntegrityError:
+                raise
             except Exception:
                 pass
 
@@ -4153,6 +4191,8 @@ def load_bucketed_table_multi_aggregated(
                     mapped = icustays_df['hadm_id'].dropna().unique().tolist() if 'hadm_id' in icustays_df.columns else []
                     if mapped:
                         patient_filter_values = mapped
+                except storage_layout.StorageIntegrityError:
+                    raise
                 except Exception:
                     pass
 

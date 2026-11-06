@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from ..storage_layout import StorageIntegrityError
 from ..utils.thresholds import gt, lt
 from .schema import ConceptSource
 from .blood_gas_specimen import (
@@ -645,6 +646,8 @@ def _load_eicu_tidal_volume_ages(
             index=demographics[id_column],
         )
         return pd.to_numeric(frame[id_column].map(age_lookup), errors="coerce")
+    except StorageIntegrityError:
+        raise
     except Exception as exc:
         logger.warning(
             "eICU tidal-volume age lookup failed; ambiguous values will be "
@@ -1706,6 +1709,8 @@ def _apply_callback(
                             ),
                             errors="coerce",
                         )
+                    except StorageIntegrityError:
+                        raise
                     except Exception:
                         icu_offset = None
             if icu_offset is None or not bool((np.isfinite(icu_offset) & (icu_offset >= 0)).fillna(False).any()):
@@ -2897,6 +2902,8 @@ def _apply_callback(
                         # Filter to stays in the current frame
                         patient_ids_in_frame = frame[id_col].unique()
                         admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+            except StorageIntegrityError:
+                raise
             except Exception:
                 pass  # Fail silently - will use fallback floor behavior
         
@@ -3017,6 +3024,8 @@ def _apply_callback(
                         patient_ids_in_frame = frame[id_col].unique() if id_col in frame.columns else None
                         if patient_ids_in_frame is not None:
                             admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+            except StorageIntegrityError:
+                raise
             except Exception:
                 pass
         
@@ -4079,6 +4088,8 @@ def _apply_callback(
                         patient_ids_in_frame = frame[id_col].unique() if id_col in frame.columns else None
                         if patient_ids_in_frame is not None:
                             admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+            except StorageIntegrityError:
+                raise
             except Exception:
                 pass  # Fail silently - will use fallback floor behavior
         

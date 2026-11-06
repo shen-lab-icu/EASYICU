@@ -25,6 +25,7 @@ from .databases.detection import (
     peek_table_columns as _peek_table_columns,
 )
 from .resources import load_data_sources, load_dictionary
+from .storage_layout import StorageIntegrityError
 from .runtime.cache_manager import get_cache_manager
 from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 from .table import ICUTable
@@ -656,6 +657,9 @@ class BaseICULoader:
                 preserve_cache=bool(runtime_strategy["preserve_concept_cache"]),
             )
 
+        except StorageIntegrityError:
+            # A typed storage refusal keeps its type and stable reason code.
+            raise
         except Exception as e:
             raise RuntimeError(f"Failed to load concepts {concepts}: {e}")
         # 🚀 优化：移除finally中的强制清除缓存

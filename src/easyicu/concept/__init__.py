@@ -28,6 +28,7 @@ from ..datasource import (
     DuckDBQueryInterrupted, FilterOp, FilterSpec, ICUDataSource,
     _duckdb_path,
 )
+from ..storage_layout import StorageIntegrityError
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
 from .availability_signal import (
@@ -2576,6 +2577,8 @@ class ConceptResolver:
                                 print(f"   ⏭️  rgx_itm 预匹配: {len(_all_vals)} 个唯一值中无匹配 (regex='{source.regex}')，跳过")
                             frame = pd.DataFrame()
                             continue
+                except StorageIntegrityError:
+                    raise
                 except Exception as _rgx_err:
                     if DEBUG_MODE:
                         print(f"   ⚠️  rgx_itm 预匹配失败 ({_rgx_err})，回退到全表加载")
@@ -2816,6 +2819,8 @@ class ConceptResolver:
                                     
                                     if verbose or DEBUG_MODE:
                                         print(f"   🕐 [HiRID缓存] 时间转换: {time_col} 从datetime → 相对小时数")
+                        except StorageIntegrityError:
+                            raise
                         except Exception as e:
                             if DEBUG_MODE:
                                 print(f"   ⚠️  [HiRID缓存] 时间转换失败: {e}")
@@ -3238,6 +3243,9 @@ class ConceptResolver:
                             # 2026-11-03 audit round 2 (R2-03): survivors are
                             # False at their last observation, not missing.
                             alive_pids = set(general_df.loc[_hd_status == 'alive', 'patientid'].unique())
+                        except StorageIntegrityError:
+                            _hd_conn.close()
+                            raise
                         except Exception as _hd_general_exc:
                             _hd_conn.close()
                             raise ConceptExtractionUnavailable(
@@ -3550,6 +3558,8 @@ class ConceptResolver:
                                         
                                         if verbose or DEBUG_MODE:
                                             print(f"   🕐 [HiRID] 时间转换: {time_col} 从datetime → 相对小时数")
+                            except StorageIntegrityError:
+                                raise
                             except Exception as e:
                                 if DEBUG_MODE:
                                     print(f"   ⚠️  [HiRID] 时间转换失败: {e}")
@@ -3872,6 +3882,8 @@ class ConceptResolver:
                         value_column=table.value_column,
                         unit_column=table.unit_column,
                     )
+                except StorageIntegrityError:
+                    raise
                 except Exception as e:
                     if DEBUG_MODE:
                         logger.warning(f"patients 表关联失败: {e}")
@@ -4161,6 +4173,8 @@ class ConceptResolver:
                             if defaults.id_var == 'subject_id':
                                 id_columns = [actual_stay_col]
                                 if DEBUG_MODE: print(f"   🔄 MIMIC特殊处理(无时间列): {source.table} ID列从 subject_id → {actual_stay_col} (行数: {len(frame)})")
+                except StorageIntegrityError:
+                    raise
                 except Exception as ex:
                     logger.warning(f"Failed to time-map labevents to icu stays: {ex}")
                     if verbose:
@@ -4325,6 +4339,8 @@ class ConceptResolver:
                         elif defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                             id_columns = ['stay_id']
                             if DEBUG_MODE: print("   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
+                except StorageIntegrityError:
+                    raise
                 except Exception as ex:
                     logger.warning(f"Failed to map admissions to icu stays: {ex}")
                     if verbose:
@@ -4777,6 +4793,8 @@ class ConceptResolver:
                             remainder = (exact_hours - frame[source_index_column]).fillna(0.0)
                             frame['_urine_availability_lag_h'] = frame['_urine_availability_lag_h'] + remainder.to_numpy()
                         frame = frame.drop(columns=['intime'], errors='ignore')
+                except StorageIntegrityError:
+                    raise
                 except Exception as e:
                     if DEBUG_MODE:
                         logger.warning(f"[MIMIC-III] source级时间标准化失败: {e}")
@@ -5277,6 +5295,8 @@ class ConceptResolver:
                                 # 删除临时的 intime 列
                                 if 'intime' in combined.columns:
                                     combined = combined.drop(columns=['intime'])
+                    except StorageIntegrityError:
+                        raise
                     except Exception as e:
                         if DEBUG_MODE:
                             logger.warning(f"[MIMIC-III] datetime→numeric 转换失败: {e}")
@@ -5360,6 +5380,8 @@ class ConceptResolver:
                                     (converted['charttime_abs'] - converted['intime']).dt.total_seconds() / 60.0
                                 )
                                 combined.loc[remaining_mask, 'charttime'] = rel_minutes / 60.0
+                        except StorageIntegrityError:
+                            raise
                         except Exception as e:
                             if DEBUG_MODE:
                                 logger.warning(f"[MIMIC-III] charttime mixed-type 规范化失败: {e}")
@@ -5398,6 +5420,8 @@ class ConceptResolver:
                                 (conv['abs'] - conv['intime']).dt.total_seconds() / 3600.0
                             )
                             combined.loc[_epoch_mask, 'charttime'] = rel_hours.values
+                    except StorageIntegrityError:
+                        raise
                     except Exception as e:
                         if DEBUG_MODE:
                             logger.warning(f"[MIMIC-III] epoch charttime 规范化失败: {e}")
@@ -6419,6 +6443,8 @@ class ConceptResolver:
                         )
                     except ValueError:
                         raise
+                    except StorageIntegrityError:
+                        raise
                     except Exception:
                         # Cache warmup failed; leave the frame untouched
                         # rather than returning unaligned times.
@@ -7097,6 +7123,8 @@ class ConceptResolver:
                         else:
                             icu_df['outtime'] = outtime_fb
                     self._icustays_cache = icu_df
+                except StorageIntegrityError:
+                    raise
                 except Exception:
                     # cache warmup failed; leave the frame untouched
                     pass
@@ -8703,6 +8731,8 @@ class ConceptResolver:
                         finally:
                             con.close()
                             
+            except StorageIntegrityError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to synthesize HiRID end time: {e}")
         
