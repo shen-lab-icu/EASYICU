@@ -1,4 +1,4 @@
-"""A stay-table frame lives for one batch, never past the call that read it (Codex delta5, test_duckdb_raw_parity).
+"""A stay-table frame and its binding live for one unit, never past it (Codex delta5, test_duckdb_raw_parity).
 
 The process-level stay-table owner keyed a frame by the stays alone, and
 only a streamed export's batch boundary released it. Outside an export,
@@ -6,8 +6,8 @@ a frame read by one top-level ``load_concepts`` stayed held after the call
 returned; a later call for the same stays (another read path, a rerun
 after the installation was rewritten) met it and was refused as
 ``stay_table_source_changed``, although no batch was live any more. Now
-a top-level call outside a batch is its own batch and releases its entries
-on return, while a streamed export's ``stay_table_batch`` still shares one
+a top-level call outside a unit is its own unit and drops its binding
+and payload on return, while a run's ``stay_table_unit`` still shares one
 read across its loads and still refuses a file that changes inside it.
 Rows are synthetic.
 """
@@ -22,9 +22,8 @@ import pytest
 from easyicu.concept import ConceptDictionary, ConceptResolver
 from easyicu.concept.stay_tables import (
     StayTableSourceChanged,
-    clear_stay_tables,
-    stay_table_batch,
     stay_table_reads,
+    stay_table_unit,
 )
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
@@ -56,19 +55,12 @@ def _hr(root: Path) -> pd.DataFrame:
     )
 
 
-@pytest.fixture(autouse=True)
-def _fresh_owner():
-    clear_stay_tables()
-    yield
-    clear_stay_tables()
-
-
 def test_a_finished_call_holds_nothing(tmp_path):
     root = _install(tmp_path / "eicu", 10 * 60)
     before = stay_table_reads()
     _hr(root)
     _hr(root)
-    # Each top-level call outside a batch is its own batch.
+    # Each top-level call outside a unit is its own unit.
     assert stay_table_reads() - before == 2
 
 
@@ -83,22 +75,22 @@ def test_a_rewritten_installation_is_read_fresh_by_the_next_call(tmp_path):
 
 def test_a_change_inside_one_batch_is_still_refused(tmp_path):
     root = _install(tmp_path / "eicu", 10 * 60)
-    with stay_table_batch():
+    with stay_table_unit():
         _hr(root)
         _install(root, 20 * 60)
         with pytest.raises(StayTableSourceChanged) as error:
             _hr(root)
     assert error.value.reason == "stay_table_source_changed"
-    # The batch is over: its frame is released and the new bytes are read.
+    # The unit is over: its binding is dropped and the new bytes are read.
     pd.testing.assert_frame_equal(
         _hr(root), _hr(_install(tmp_path / "fresh", 20 * 60)), check_exact=True)
 
 
-def test_nested_batches_keep_the_outer_scope(tmp_path):
+def test_nested_units_keep_the_outer_binding(tmp_path):
     root = _install(tmp_path / "eicu", 10 * 60)
     before = stay_table_reads()
-    with stay_table_batch() as outer:
-        with stay_table_batch() as inner:
+    with stay_table_unit() as outer:
+        with stay_table_unit() as inner:
             assert inner is outer
             _hr(root)
         _hr(root)

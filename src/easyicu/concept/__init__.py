@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
+import contextvars
 import copy
 import functools
 import json
@@ -737,32 +738,33 @@ def _batch_stay_scope(patient_ids) -> Optional[tuple[str, frozenset]]:
     return None
 
 
-def _owns_stay_table_batch(method):
-    """Run a top-level ``load_concepts`` call inside one stay-table batch.
+def _in_stay_table_unit(method):
+    """Run ``load_concepts`` inside the stay-table unit (Codex delta8c).
 
-    The batch is opened before anything in the call can read a stay-origin
-    table (wide/long-table preloads, episode windows, the concepts
-    themselves) and closed in ``finally``, so every read of the call,
-    including an early return or an exception, shares one token and
-    nothing outlives the call unless an enclosing batch owns it (Codex
-    delta7c D7C-PRELOAD). A nested call (a recursive concept on the same
-    resolver) keeps the outer call's batch.
+    A top-level call joins the active unit (an extraction run, or the
+    loader's public call) or opens its own, before anything can read a
+    stay-origin table. The same ``finally`` that closes the unit restores
+    the call's depth and owner state on every exit path. An exception
+    before the method's own ``try`` (a preload) therefore never leaves the
+    next call looking nested (D8C-RECOVERY-OWNER). A nested call must find
+    its outer call's live unit, and refuses otherwise.
     """
 
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        if getattr(self, "_load_depth", 0):
-            return method(self, *args, **kwargs)
-        from .stay_tables import open_stay_table_batch
+        from .stay_tables import StayTableUnbound, stay_table_unit, stay_table_unit_active
 
-        token, close = open_stay_table_batch()
-        self._stay_batch = token
-        try:
+        if getattr(self, "_load_depth", 0):
+            if not stay_table_unit_active():
+                raise StayTableUnbound("load_concepts")
             return method(self, *args, **kwargs)
-        finally:
-            self.__dict__.pop("_stay_batch", None)
-            if close is not None:
-                close()
+        with stay_table_unit():
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                if self._load_depth:  # left before its own finally ran
+                    self._load_depth = 0
+                    self._end_top_level_load()
 
     return wrapper
 
@@ -1454,7 +1456,7 @@ class ConceptResolver:
         
         return patient_ids
 
-    @_owns_stay_table_batch
+    @_in_stay_table_unit
     def load_concepts(
         self,
         concept_names: Iterable[str],
@@ -2187,8 +2189,10 @@ class ConceptResolver:
             results: Dict[str, ICUTable] = {}
             if effective_workers > 1 and total > 1:
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                    # Each worker runs in a copy of this call's context, so its
+                    # reads (and nested loads) verify against this call's unit.
                     future_map = {
-                        executor.submit(_resolve, name, idx): name
+                        executor.submit(contextvars.copy_context().run, _resolve, name, idx): name
                         for idx, name in enumerate(names, start=1)
                     }
                     for future in as_completed(future_map):
@@ -2446,33 +2450,37 @@ class ConceptResolver:
             self._load_depth -= 1
             # 🔧 只有顶层调用才清除概念缓存和inflight，避免递归概念内部调用清除外层所需的缓存
             if is_top_level:
-                with self._cache_lock:
-                    self._concept_cache.clear()
-                    # 🔧 _concept_data_cache 始终清除：在全患者规模(200K+)下
-                    # 保留会导致 ~30GB 内存占用，引发严重的 swap 性能退化
-                    self._concept_data_cache.clear()
-                    if not self._keep_cache_between_calls:
-                        # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
-                        # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
-                        self._raw_concept_cache.clear()
-                        self._table_cache.clear()
-                        self._drop_cache_accounting()
-                    else:
-                        self._drop_cache_accounting('concept', 'data')
-                    # 清除当前线程的inflight集合
-                    self._get_inflight().clear()
+                self._end_top_level_load()
 
-                # Drop request-owned component references before asking the
-                # allocator to release memory.  Keeping them until after
-                # ``release_memory`` made that call ineffective for exactly
-                # the large SOFA component frames this map is designed to
-                # reuse.
-                self._thread_local.requested_names = None
-                self._thread_local.requested_results = None
+    def _end_top_level_load(self) -> None:
+        """Release a top-level call's caches and request state (every exit path)."""
+        with self._cache_lock:
+            self._concept_cache.clear()
+            # 🔧 _concept_data_cache 始终清除：在全患者规模(200K+)下
+            # 保留会导致 ~30GB 内存占用，引发严重的 swap 性能退化
+            self._concept_data_cache.clear()
+            if not self._keep_cache_between_calls:
+                # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
+                # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
+                self._raw_concept_cache.clear()
+                self._table_cache.clear()
+                self._drop_cache_accounting()
+            else:
+                self._drop_cache_accounting('concept', 'data')
+            # 清除当前线程的inflight集合
+            self._get_inflight().clear()
 
-                # 🔧 释放碎片内存
-                from ..runtime.memory_manager import release_memory
-                release_memory()
+        # Drop request-owned component references before asking the
+        # allocator to release memory.  Keeping them until after
+        # ``release_memory`` made that call ineffective for exactly
+        # the large SOFA component frames this map is designed to
+        # reuse.
+        self._thread_local.requested_names = None
+        self._thread_local.requested_results = None
+
+        # 🔧 释放碎片内存
+        from ..runtime.memory_manager import release_memory
+        release_memory()
 
     def _load_single_concept(
         self,
@@ -6359,6 +6367,7 @@ class ConceptResolver:
         """
 
         from ..datasource import FilterOp, FilterSpec
+        from .stay_tables import stay_table_frame
 
         scope = getattr(self, "_batch_stays", None)
         get_table = getattr(getattr(data_source, "config", None), "get_table", None)
@@ -6379,14 +6388,16 @@ class ConceptResolver:
             if id_col is None:
                 icustay = getattr(data_source.config, "id_configs", {}).get("icustay")
                 id_col = icustay.id if icustay is not None else None
-            loaded = data_source.load_table(
-                table,
-                columns=None if columns is None else list(columns),
-                filters=[FilterSpec(id_col, FilterOp.IN, sorted(wanted, key=repr))],
-                verbose=False,
-            )
-            return loaded.data if hasattr(loaded, "data") else loaded
-        from .stay_tables import checked_memo_frame, source_binding, stay_table_frame
+            def exact() -> pd.DataFrame:
+                loaded = data_source.load_table(
+                    table,
+                    columns=None if columns is None else list(columns),
+                    filters=[FilterSpec(id_col, FilterOp.IN, sorted(wanted, key=repr))],
+                    verbose=False,
+                )
+                return loaded.data if hasattr(loaded, "data") else loaded
+
+            return stay_table_frame(data_source, table, None, exact, cache=False)
 
         def read() -> pd.DataFrame:
             filters = (
@@ -6396,27 +6407,11 @@ class ConceptResolver:
             loaded = data_source.load_table(table, filters=filters, verbose=False)
             return loaded.data if hasattr(loaded, "data") else loaded
 
-        # Bound to the storage owner's validated files and their versions:
-        # another file set misses, a changed or vanished file is a
-        # StorageIntegrityError, never the held frame (Codex delta3).
-        binding = source_binding(data_source, table)
-        if scope is None:
-            # Unscoped (a whole-cohort call): this resolver's own memo, as
-            # before; nothing is shared across calls or resolvers.
-            memo = self.__dict__.setdefault("_stay_tables_unscoped", {})
-            frame = checked_memo_frame(memo, binding, read)
-        else:
-            # One process-level owner per batch: the resolvers of one batch (a
-            # module's load and its dependency loads) share the read, keyed by
-            # the owning batch so a finished call's frame is never met by a
-            # later call and an independent batch never shares or evicts it.
-            # A read outside any load_concepts call has no owning batch and is
-            # not cached at all.
-            token = getattr(self, "_stay_batch", None)
-            frame = (
-                read().reset_index(drop=True) if token is None
-                else stay_table_frame(binding, (token, scope), read)
-            )
+        # Verified against the unit's source binding whether served from the
+        # payload cache or from disk: a changed, swapped or vanished file is
+        # a StorageIntegrityError, never a frame (Codex delta3, delta8c).
+        # Unscoped (a whole-cohort call) is cached as stays ``None``.
+        frame = stay_table_frame(data_source, table, scope, read)
         if wanted is not None:
             column = next(c for c in frame.columns if c.casefold() == id_col.casefold())
             frame = frame.loc[frame[column].isin(wanted)].reset_index(drop=True)

@@ -12,10 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
-
 from easyicu.concept import ConceptDictionary, ConceptResolver
-from easyicu.concept.stay_tables import clear_stay_tables, stay_table_batch, stay_table_reads
+from easyicu.concept.stay_tables import stay_table_reads, stay_table_unit
 from easyicu.config import load_src_cfg
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 from tests.support.bucket_storage import write_fixture_parquet
@@ -58,17 +56,10 @@ def _hr(source, stays):
     )
 
 
-@pytest.fixture(autouse=True)
-def _fresh_owner():
-    clear_stay_tables()
-    yield
-    clear_stay_tables()
-
-
 def test_one_read_per_batch_across_resolvers(tmp_path):
     source = _source(tmp_path / "eicu")
     before = stay_table_reads()
-    with stay_table_batch():  # a streamed export's batch scope
+    with stay_table_unit():  # a streamed export's run unit
         _hr(source, [1, 2])
         # A dependency load of the same batch on a fresh resolver and source.
         _hr(ICUDataSource(load_src_cfg("eicu"), base_path=tmp_path / "eicu", enable_cache=False), [1, 2])
@@ -80,7 +71,6 @@ def test_one_read_per_batch_across_resolvers(tmp_path):
 def test_batch_clip_equals_a_clip_from_the_whole_table(tmp_path):
     source = _source(tmp_path / "eicu")
     _, batched = _hr(source, [2, 4])
-    clear_stay_tables()
     whole = ConceptResolver(ConceptDictionary.from_json(DICTIONARY)).load_concepts(
         ["hr"], source, merge=True, r_compatible=False,
         interval=pd.Timedelta(hours=1), patient_ids=None,
@@ -95,9 +85,10 @@ def test_batch_clip_equals_a_clip_from_the_whole_table(tmp_path):
 def test_subset_equals_the_filtered_read_it_replaces(tmp_path):
     source = _source(tmp_path / "eicu")
     resolver, _ = _hr(source, STAYS)
-    owned = resolver._stay_table(
-        source, "patient", stays=[4, 2], columns=["patientunitstayid", "admissionweight"]
-    )
+    with stay_table_unit():  # every stay-table read is bound
+        owned = resolver._stay_table(
+            source, "patient", stays=[4, 2], columns=["patientunitstayid", "admissionweight"]
+        )
     # ``load_table`` may return more columns than requested; the owner
     # returns exactly the requested ones, with the same rows and values.
     direct = source.load_table(
@@ -110,8 +101,10 @@ def test_subset_equals_the_filtered_read_it_replaces(tmp_path):
 def test_a_narrow_first_reader_cannot_narrow_a_later_one(tmp_path):
     source = _source(tmp_path / "eicu")
     resolver, _ = _hr(source, STAYS)
-    resolver._stay_table(source, "patient", columns=["patientunitstayid"])
-    later = resolver._stay_table(source, "patient", columns=["patientunitstayid", "unitdischargeoffset"])
+    with stay_table_unit():
+        resolver._stay_table(source, "patient", columns=["patientunitstayid"])
+        later = resolver._stay_table(
+            source, "patient", columns=["patientunitstayid", "unitdischargeoffset"])
     assert list(later.columns) == ["patientunitstayid", "unitdischargeoffset"]
     assert later["unitdischargeoffset"].notna().all()
 
@@ -120,6 +113,7 @@ def test_stays_outside_the_batch_are_read_directly(tmp_path):
     source = _source(tmp_path / "eicu")
     resolver, _ = _hr(source, [1, 2])
     before = stay_table_reads()
-    frame = resolver._stay_table(source, "patient", stays=[3], columns=["patientunitstayid"])
+    with stay_table_unit():
+        frame = resolver._stay_table(source, "patient", stays=[3], columns=["patientunitstayid"])
     assert frame["patientunitstayid"].tolist() == [3]
     assert stay_table_reads() == before  # not cached under the batch scope
