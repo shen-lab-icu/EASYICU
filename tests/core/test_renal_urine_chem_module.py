@@ -89,3 +89,55 @@ def test_sparse_module_keeps_zero_and_false_but_omits_value_less_keys(database, 
     )
     assert frame.stay_id.tolist() == [1, 2]
     assert frame[mapped].iloc[1].eq(0).all()
+
+
+@pytest.mark.parametrize("database,mapped,id_col,repeated", [
+    # MIMIC-III: each zero-row concept frame keeps its own time column.
+    ("mimic", CONCEPTS[:4], "icustay_id", "charttime"),
+    # eICU: each keeps its lab source's unit/sub-item column.
+    ("eicu", CONCEPTS[:2], "patientunitstayid", "labmeasurenameinterface"),
+])
+def test_zero_row_module_publishes_one_typed_axis_and_records_unmapped_concepts(
+    database, mapped, id_col, repeated,
+):
+    def load(**kwargs):
+        assert kwargs["concepts"] == mapped
+        columns = [id_col, "charttime"]
+        for name in mapped:
+            columns += [name, repeated] if repeated != "charttime" else [name, "charttime"]
+        frame = pd.DataFrame([], columns=pd.Index(columns))
+        return frame.astype({id_col: "int64"})
+
+    sink = {}
+    frame = api._load_module_concepts(
+        load, module_name=MODULE,
+        load_kwargs={"concepts": CONCEPTS, "database": database, "merge": True,
+                     "availability_sink": sink},
+    )
+    assert frame.empty
+    assert list(frame) == [id_col, "charttime", *mapped]
+    assert frame["charttime"].dtype == "float64"
+    # Concepts with no source here are recorded exactly as the resolver
+    # records an unmapped pair, so the export publishes their placeholder.
+    unmapped = [name for name in CONCEPTS if name not in mapped]
+    assert sorted(sink) == sorted(unmapped)
+    assert {record.reason for record in sink.values()} == {"unmapped"}
+    assert {record.status for record in sink.values()} == {"blocked"}
+
+
+def test_module_with_rows_keeps_its_columns_and_records_unmapped_concepts():
+    mapped = CONCEPTS[:2]
+
+    def load(**kwargs):
+        return pd.DataFrame({"patientunitstayid": [1], "charttime": [1.0],
+                             "urine_na": [40.0], "urine_crea": [120.0]})
+
+    sink = {}
+    frame = api._load_module_concepts(
+        load, module_name=MODULE,
+        load_kwargs={"concepts": CONCEPTS, "database": "eicu", "merge": True,
+                     "availability_sink": sink},
+    )
+    assert list(frame) == ["patientunitstayid", "charttime", *mapped]
+    assert frame["urine_na"].tolist() == [40.0]
+    assert sorted(sink) == sorted(set(CONCEPTS) - set(mapped))
