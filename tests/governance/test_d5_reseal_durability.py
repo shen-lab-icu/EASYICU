@@ -102,3 +102,32 @@ def test_recovery_under_a_persistent_directory_fault_keeps_the_journal(root, mon
     assert sorted(tool.recover(root)["restored"]) == sorted(FILES)
     assert _digests(root) == before
     assert not journal.exists() and not (root / tool.RESEAL_LOCK).exists()
+
+
+@pytest.mark.parametrize("entry", ["apply", "recover"])
+def test_a_failure_while_taking_the_lock_releases_it(root, monkeypatch, entry):
+    tool = _tool()
+    before = _digests(root)
+    real = tool.os.write
+    failed = []
+
+    def write(fd, data):
+        if not failed:  # the lock metadata is the first os.write of either entry
+            failed.append(fd)
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        return real(fd, data)
+
+    monkeypatch.setattr(tool.os, "write", write)
+    if entry == "apply":
+        with pytest.raises(OSError) as caught:
+            tool.apply(root, **APPLY)
+    else:
+        with pytest.raises(OSError) as caught:
+            tool.recover(root)
+    assert caught.value.errno == errno.ENOSPC and failed
+    assert _digests(root) == before
+    monkeypatch.undo()
+    # The same process can take the lock again at once.
+    with tool._Lifecycle(root) as held:
+        assert held.fd is not None
+    assert not (root / tool.RESEAL_LOCK).exists()

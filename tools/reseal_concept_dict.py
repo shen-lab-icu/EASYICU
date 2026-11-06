@@ -345,16 +345,25 @@ class _Lifecycle:
             except BaseException:
                 os.close(fd)
                 raise
+            # From here until the descriptor is handed to self.fd, any failure
+            # (an inode check error, ENOSPC writing the metadata, an
+            # interrupt) closes it, which releases the lock: __exit__ never
+            # runs for a failed __enter__, so a leaked descriptor would keep
+            # this process locked out (reseal_active) until it exits.
             try:
-                same = os.fstat(fd).st_ino == os.stat(self.path).st_ino
-            except FileNotFoundError:
-                same = False
-            if same:
-                os.ftruncate(fd, 0)
-                os.write(fd, json.dumps({"pid": os.getpid(),
-                                         "started_at": datetime.now().isoformat()}).encode("utf-8"))
-                self.fd = fd
-                return self
+                try:
+                    same = os.fstat(fd).st_ino == os.stat(self.path).st_ino
+                except FileNotFoundError:
+                    same = False
+                if same:
+                    os.ftruncate(fd, 0)
+                    os.write(fd, json.dumps({"pid": os.getpid(),
+                                             "started_at": datetime.now().isoformat()}).encode("utf-8"))
+                    self.fd = fd
+                    return self
+            except BaseException:
+                os.close(fd)
+                raise
             os.close(fd)  # the holder we waited behind removed it: take the new file
         raise ResealError(f"{RESEAL_LOCK} kept changing; retry", reason="reseal_active")
 
