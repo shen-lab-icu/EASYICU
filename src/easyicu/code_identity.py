@@ -19,6 +19,11 @@ This module owns the code identity recorded in every native export's
     Neither applies, for example a source tree copied out of Git. The identity
     then says so with a reason code; it is never a silent ``None``. A formal
     run refuses it.
+
+The identity also carries the code's ``version``: the ``[project].version`` of
+the checkout's own ``pyproject.toml``, or the stamp's version; ``None`` for an
+unknown identity. The version of whatever distribution happens to be installed
+in the environment is a different fact (see ``installed_dist_version``).
 """
 
 from __future__ import annotations
@@ -59,13 +64,31 @@ def _git(repository: Path, *arguments: str, text: bool = True) -> Any:
     ).stdout
 
 
-def _is_easyicu_project(root: Path) -> bool:
+def _easyicu_project(root: Path) -> Optional[Dict[str, Any]]:
+    """The ``[project]`` table of ``root``'s pyproject when it names EasyICU."""
     try:
         with (root / "pyproject.toml").open("rb") as handle:
-            project = tomllib.load(handle).get("project") or {}
+            metadata = tomllib.load(handle)
     except (OSError, ValueError):
-        return False
-    return project.get("name") == PROJECT_NAME
+        return None
+    project = metadata.get("project")
+    if not isinstance(project, dict) or project.get("name") != PROJECT_NAME:
+        return None
+    return project
+
+
+def installed_dist_version() -> Optional[str]:
+    """The installed ``easyicu`` distribution's version (diagnostic only).
+
+    It describes the environment, not necessarily the imported code: a
+    checkout on ``PYTHONPATH`` imports over any installed distribution.
+    """
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version(PROJECT_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def git_checkout_identity(repository_root: Path) -> Optional[Dict[str, Any]]:
@@ -76,7 +99,8 @@ def git_checkout_identity(repository_root: Path) -> Optional[Dict[str, Any]]:
     """
 
     root = Path(repository_root).resolve()
-    if not _is_easyicu_project(root):
+    project = _easyicu_project(root)
+    if project is None:
         return None
     try:
         top_level = Path(_git(root, "rev-parse", "--show-toplevel").strip()).resolve()
@@ -94,11 +118,13 @@ def git_checkout_identity(repository_root: Path) -> Optional[Dict[str, Any]]:
     if not _COMMIT.fullmatch(commit):
         return None
     dirty = bool(status.strip())
+    version = project.get("version")
     return {
         "source": SOURCE_GIT_CHECKOUT,
         "commit": commit,
         "dirty": dirty,
         "diff_sha256": hashlib.sha256(diff).hexdigest() if dirty else None,
+        "version": version if isinstance(version, str) else None,
     }
 
 
@@ -156,6 +182,7 @@ def _unknown(reason: str) -> Dict[str, Any]:
         "commit": None,
         "dirty": None,
         "diff_sha256": None,
+        "version": None,
         "reason_code": reason,
     }
 
@@ -184,5 +211,6 @@ __all__ = [
     "SOURCE_UNKNOWN",
     "build_stamp_payload",
     "git_checkout_identity",
+    "installed_dist_version",
     "resolve_code_identity",
 ]

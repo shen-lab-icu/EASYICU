@@ -28,7 +28,8 @@ receipt = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = receipt
 SPEC.loader.exec_module(receipt)
 
-CODE = {"source": "git_checkout", "commit": "c" * 40, "dirty": False, "import_path": "/x"}
+CODE = {"source": "git_checkout", "commit": "c" * 40, "dirty": False, "version": "0.1.2",
+        "installed_dist_version": "9.9.9", "import_path": "/x"}
 
 
 def _prepared(root: Path) -> Path:
@@ -109,7 +110,8 @@ def _flat(root: Path, table: str, directory: Path) -> dict:
             "layout_path": str(directory), "layout_realpath": os.path.realpath(directory)}
 
 
-def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None) -> Path:
+def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
+              version: str = CODE["version"]) -> Path:
     run = tmp_path / "run"
     export = run / "sic" / "export"
     export.mkdir(parents=True)
@@ -123,6 +125,7 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None) -> Pat
         "runtime_provenance": {
             "easyicu_git_commit": commit, "easyicu_git_dirty": False,
             "easyicu_code_identity_source": "git_checkout",
+            "easyicu_version": version, "easyicu_installed_dist_version": "9.9.9",
         },
         "storage_reads": reads if reads is not None else [_flat(prepared, "cases", prepared)],
     }))
@@ -147,6 +150,9 @@ def test_the_sic_section_of_the_receipt_carries_the_binding_and_the_reads(tmp_pa
     assert sic["storage_reads"] == [_flat(prepared, "cases", prepared)]
     assert sic["data_root_realpath"] == os.path.realpath(prepared)
     assert sic["native_manifest"]["easyicu_git_commit"] == CODE["commit"]
+    assert saved["easyicu_version"] == CODE["version"]
+    assert sic["native_manifest"]["easyicu_version"] == CODE["version"]
+    assert sic["native_manifest"]["easyicu_installed_dist_version"] == "9.9.9"
     with pytest.raises(receipt.ReceiptError) as error:
         receipt.write_run_receipt(run, built)
     assert error.value.code == "run_receipt_exists"
@@ -273,3 +279,14 @@ def test_a_flat_read_outside_the_data_root_stops_the_receipt(tmp_path, monkeypat
     with pytest.raises(receipt.ReceiptError) as error:
         _sic_receipt(tmp_path, prepared, [_flat(prepared, "cases", elsewhere)], monkeypatch)
     assert error.value.code == "storage_read_outside_input"
+
+
+def test_a_native_manifest_naming_another_version_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"], version="9.9.9")
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == "native_manifest_version_mismatch"

@@ -9,6 +9,7 @@ nothing saying why. These tests pin the three identities the owner
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -44,16 +45,17 @@ needs_checkout = pytest.mark.skipif(
 def _copied_package(root: Path) -> Path:
     """The bench layout: ``src/easyicu`` copied out of Git without ``.git``."""
 
-    root.mkdir(parents=True)
-    archive = subprocess.run(
-        ["git", "archive", "HEAD", "src/easyicu"],
-        cwd=REPO, check=True, capture_output=True,
-    ).stdout
-    subprocess.run(["tar", "-x", "-C", str(root)], input=archive, check=True)
+    # The tracked files as they are in this tree (so uncommitted edits are
+    # what the copy runs), without Git metadata.
+    tracked = _git("ls-files", "-z", "src/easyicu").split("\0")
+    for relative in filter(None, tracked):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / relative, target)
     return root / "src" / "easyicu"
 
 
-def _provenance_of(package: Path) -> dict:
+def _provenance_of(package: Path, *, extra_path: Path | None = None) -> dict:
     home = package.parents[2] / "home"
     home.mkdir(exist_ok=True)
     code = (
@@ -64,7 +66,9 @@ def _provenance_of(package: Path) -> dict:
         [sys.executable, "-c", code],
         cwd=package.parents[1],
         env={
-            "PYTHONPATH": str(package.parent),
+            "PYTHONPATH": os.pathsep.join(
+                ([str(extra_path)] if extra_path else []) + [str(package.parent)]
+            ),
             "PATH": "/usr/bin:/bin",
             "HOME": str(home),
             "EASYICU_HOME": str(home / ".easyicu"),
@@ -245,3 +249,72 @@ def test_a_stamp_without_every_field_is_a_typed_unknown(tmp_path):
 
     assert identity["source"] == code_identity.SOURCE_UNKNOWN
     assert identity["reason_code"] == code_identity.REASON_STAMP_INVALID
+
+
+
+# Supervisor ruling (B): easyicu_version is the version of the code that ran.
+
+def _committed_checkout(root: Path, *, version: str) -> Path:
+    package = _copied_package(root)
+    (root / "pyproject.toml").write_text(
+        f'[project]\nname = "easyicu"\nversion = "{version}"\n'
+    )
+    _git("init", "-q", cwd=root)
+    _git("add", "-A", cwd=root)
+    _git(
+        "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "commit", "-q", "-m", "checkout", cwd=root,
+    )
+    return package
+
+
+@needs_checkout
+def test_the_manifest_version_is_the_checkouts_not_the_installed_dists(tmp_path):
+    package = _committed_checkout(tmp_path / "checkout", version="7.7.7")
+    # A different easyicu distribution installed ahead of everything else.
+    dist = tmp_path / "site" / "easyicu-9.9.9.dist-info"
+    dist.mkdir(parents=True)
+    (dist / "METADATA").write_text("Metadata-Version: 2.1\nName: easyicu\nVersion: 9.9.9\n")
+
+    provenance = _provenance_of(package, extra_path=dist.parent)
+
+    assert provenance["easyicu_code_identity_source"] == code_identity.SOURCE_GIT_CHECKOUT
+    assert provenance["easyicu_version"] == "7.7.7"
+    assert provenance["easyicu_installed_dist_version"] == "9.9.9"
+
+
+@needs_checkout
+def test_a_stamped_install_records_the_stamps_version(tmp_path):
+    package = _copied_package(tmp_path / "wheel")
+    stamp = code_identity.build_stamp_payload(REPO, version="5.5.5")
+    (package / code_identity.BUILD_IDENTITY_FILE).write_text(json.dumps(stamp))
+
+    assert _provenance_of(package)["easyicu_version"] == "5.5.5"
+
+
+@needs_checkout
+def test_an_unknown_identity_records_no_version(tmp_path):
+    provenance = _provenance_of(_copied_package(tmp_path / "copy"))
+
+    assert provenance["easyicu_version"] is None
+    assert provenance["easyicu_code_identity_reason"] == code_identity.REASON_UNAVAILABLE
+
+
+@needs_git
+def test_a_pyproject_whose_project_is_not_a_table_is_a_typed_unknown(tmp_path):
+    # delta9p NB9P-PROJECT-TYPE: valid TOML, but [project] is not a table.
+    root = _repo(
+        tmp_path / "checkout", name=None,
+        tracked=tuple(f"src/easyicu/{f}" for f in _PACKAGE_FILES),
+    )
+    (root / "pyproject.toml").write_text('project = "easyicu"\n')
+    _git("add", "pyproject.toml", cwd=root)
+    _git(
+        "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "commit", "-q", "-m", "p", cwd=root,
+    )
+
+    identity = code_identity.resolve_code_identity(root / "src" / "easyicu")
+
+    assert identity["source"] == code_identity.SOURCE_UNKNOWN
+    assert identity["reason_code"] == code_identity.REASON_UNAVAILABLE

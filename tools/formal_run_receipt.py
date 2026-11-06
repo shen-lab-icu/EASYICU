@@ -75,7 +75,11 @@ def sealed_code_identity(sealed_sha: str) -> Dict[str, Any]:
     """The imported EasyICU must be a clean checkout of exactly ``sealed_sha``."""
 
     import easyicu
-    from easyicu.code_identity import SOURCE_GIT_CHECKOUT, resolve_code_identity
+    from easyicu.code_identity import (
+        SOURCE_GIT_CHECKOUT,
+        installed_dist_version,
+        resolve_code_identity,
+    )
 
     if not isinstance(sealed_sha, str) or _COMMIT.fullmatch(sealed_sha) is None:
         raise ReceiptError("sealed_sha_invalid", "the sealed SHA must be 40 lowercase hex")
@@ -95,6 +99,8 @@ def sealed_code_identity(sealed_sha: str) -> Dict[str, Any]:
         "source": identity["source"],
         "commit": identity["commit"],
         "dirty": identity["dirty"],
+        "version": identity.get("version"),
+        "installed_dist_version": installed_dist_version(),
         "import_path": str(Path(easyicu.__file__).resolve().parent),
     }
 
@@ -308,7 +314,8 @@ def _storage_reads(db: str, reads: List[Dict[str, Any]], input_real: Path,
 
 
 def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
-                      exit_status: Any, sealed_sha: str) -> Dict[str, Any]:
+                      exit_status: Any, sealed_sha: str,
+                      version: Optional[str] = None) -> Dict[str, Any]:
     out = run_root / db
     input_real = Path(input_dir).resolve()
     input_manifest = input_real / "conversion_manifest.json"
@@ -345,10 +352,19 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
         raise ReceiptError("native_manifest_not_sealed",
                            f"{db} native manifest was not produced by the sealed checkout",
                            database=db)
+    if provenance.get("easyicu_version") != version:
+        raise ReceiptError("native_manifest_version_mismatch",
+                           f"{db} native manifest names another EasyICU version than the "
+                           "sealed checkout", database=db,
+                           manifest_version=provenance.get("easyicu_version"),
+                           sealed_version=version)
     section["native_manifest"] = {
         "sha256": sha256_file(manifest_path),
         "easyicu_git_commit": provenance.get("easyicu_git_commit"),
         "easyicu_git_dirty": provenance.get("easyicu_git_dirty"),
+        "easyicu_version": provenance.get("easyicu_version"),
+        # Diagnostic only: the environment's installed distribution.
+        "easyicu_installed_dist_version": provenance.get("easyicu_installed_dist_version"),
     }
     if "storage_reads" not in manifest:
         raise ReceiptError("storage_reads_missing",
@@ -374,7 +390,8 @@ def build_run_receipt(
     databases: Dict[str, Any] = {}
     for spec in specs:
         db, input_dir, cores = spec.split(":", 2)
-        section = _database_section(run_root, db, input_dir, cores, exits.get(db), sealed_sha)
+        section = _database_section(run_root, db, input_dir, cores, exits.get(db), sealed_sha,
+                                    code.get("version"))
         if db in SIC_DATABASES:
             section["cases_binding"] = sic_cases_binding(Path(input_dir), Path(scratch), code)
         databases[db] = section
@@ -383,6 +400,7 @@ def build_run_receipt(
     return {
         "schema_version": RECEIPT_SCHEMA,
         "sealed_sha": sealed_sha,
+        "easyicu_version": code.get("version"),
         "code_identity": code,
         "parameters": dict(parameters or {}),
         "run_root": str(run_root.resolve()),

@@ -7569,7 +7569,6 @@ def _enforce_native_export_concept_bounds(
 def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict[str, object]:
     """Capture enough runtime identity to reproduce or diagnose an export."""
     import hashlib
-    import importlib.metadata
     import platform
     import sys
 
@@ -7596,16 +7595,12 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         if path.is_file():
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
-    from ..code_identity import SOURCE_UNKNOWN, resolve_code_identity
+    from ..code_identity import SOURCE_UNKNOWN, installed_dist_version, resolve_code_identity
 
     # The code identity owner never borrows a commit from a repository that
     # merely contains this package, and says ``unknown`` (with a reason) when
     # neither a checkout nor a build stamp identifies the code.
     code_identity = resolve_code_identity(package_root)
-    try:
-        package_version = importlib.metadata.version("easyicu")
-    except importlib.metadata.PackageNotFoundError:
-        package_version = None
     overlay_metadata = {}
     from ..resources import SIC_CASE_OVERLAY_FILE, SIC_CASE_OVERLAY_SHA256, _is_sic_source, _sic_case_overlay
     if _is_sic_source(source_name):
@@ -7618,7 +7613,10 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         digest.update(overlay_bytes)
         overlay_metadata = {"sic_case_overlay_sha256": hashlib.sha256(overlay_bytes).hexdigest()}
     return {
-        "easyicu_version": package_version,
+        # The version of the code that ran (its checkout's pyproject, or its
+        # stamp); the installed distribution's version is diagnostic only.
+        "easyicu_version": code_identity["version"],
+        "easyicu_installed_dist_version": installed_dist_version(),
         "easyicu_git_commit": code_identity["commit"],
         "easyicu_git_dirty": code_identity["dirty"],
         "easyicu_git_diff_sha256": code_identity["diff_sha256"],
