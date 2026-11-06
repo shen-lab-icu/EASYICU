@@ -185,7 +185,9 @@ def expand_windows_inclusive_any(
     ``dur_hours`` is ``None`` for a point table (no duration column; SICdb and
     AUMC publish hourly airway points): ricu expands only a ``win_tbl``, so
     each point stays in its own cell, merged with ``any``, never clamped or
-    extended (delta4 D4G-POINT).
+    extended (delta4 D4G-POINT). A window whose declared duration is missing
+    is dropped, as ``rm_na`` drops it; it is not a zero-length exposure
+    (D4G-MISSING-DURATION). An explicit zero duration is a one-cell window.
     """
 
     if interval_hours <= 0:
@@ -201,8 +203,8 @@ def expand_windows_inclusive_any(
     if dur_hours is None:
         end = start
     else:
+        # A missing duration stays NaN, so the finite mask below drops it.
         duration = pd.to_numeric(dur_hours, errors="coerce").to_numpy(dtype=np.float64)
-        duration = np.where(np.isnan(duration), 0.0, duration)
         end = np.floor((start + duration) / interval_hours) * interval_hours
         if kind != "datetime":
             end = np.where(end < 0, 0.0, end)

@@ -19,7 +19,7 @@ from easyicu.concept.window_expansion import (
     publish_inclusive_any_window,
 )
 from easyicu.table import ICUTable
-from tests.support.gcs_ricu import ID, TIME, airway_points, component, run_gcs
+from tests.support.gcs_ricu import ID, TIME, airway_points, airway_windows, component, run_gcs
 
 pytestmark = [pytest.mark.ricu_parity, pytest.mark.clinical_conformance]
 
@@ -54,4 +54,23 @@ def test_the_publisher_never_moves_a_pre_admission_point_to_hour_zero():
 def test_gcs_with_point_airway_evidence_matches_ricu():
     # ricu 0.6.3: points TRUE at -2 and 2, FALSE at 1 -> {0: 7, 1: 7, 2: 15}.
     got = run_gcs(*_components(), airway_points([-2, 1, 2], [True, False, True]))
+    assert got == {0.0: 7.0, 1.0: 7.0, 2.0: 15.0}
+
+
+def test_a_window_without_a_duration_is_dropped_and_a_zero_one_is_kept():
+    # ricu 0.6.3 expand(win_tbl(t = 1 h, 2 h; dur = NA, 0 mins), "any") keeps
+    # only hour 2: rm_na drops the missing end (utils-ts.R), not a zero window.
+    frame = pd.DataFrame({ID: 1, TIME: [1.0, 2.0], "ett_gcs": [True, True]})
+    cells = expand_windows_inclusive_any(
+        frame, idx_col=TIME, id_cols=[ID], value_col="ett_gcs",
+        dur_hours=pd.Series([float("nan"), 0.0]),
+    )
+    assert cells[TIME].tolist() == [2.0]
+    assert cells["ett_gcs"].tolist() == [True]
+
+
+def test_gcs_with_a_missing_window_duration_matches_ricu():
+    # ricu 0.6.3: the NA-duration TRUE window at hour 1 marks nothing; the
+    # 0-minute one at hour 2 marks hour 2 -> {0: 7, 1: 7, 2: 15}.
+    got = run_gcs(*_components(), airway_windows([1, 2], [float("nan"), 0.0], [True, True]))
     assert got == {0.0: 7.0, 1.0: 7.0, 2.0: 15.0}
