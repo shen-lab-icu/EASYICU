@@ -170,6 +170,21 @@ def _duckdb_read_parquet_clause(directory, *, union_by_name: bool = True,
     return storage_layout.parquet_relation(tuple(Path(p) for p in files))
 
 
+def _downcast_value_columns(df: pd.DataFrame, skip) -> None:
+    """Store measured values as float32; keep identifiers and clocks float64.
+
+    Hidden receipt columns (``_urine_*_lag_h``) are clock offsets in hours.
+    float32 moves them by up to ~1e-6 h, which shifts every derived
+    ``*_available_at`` and can decide a 12 h gap at its limit, so they keep
+    the precision of the raw-path clocks (lead-r13 MIIV renal perf vs twin).
+    """
+    for c in df.columns:
+        if c in skip or (isinstance(c, str) and c.endswith("_lag_h")):
+            continue
+        if df[c].dtype == np.float64:
+            df[c] = df[c].astype(np.float32)
+
+
 def _coerce_string_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """Convert pandas StringDtype columns to object dtype for pandas 3.0 compatibility.
 
@@ -3986,10 +4001,7 @@ def load_bucketed_table_aggregated(
             # new pre-aggregation diagnostic counts.
             df = df.loc[df[value_column].notna()].reset_index(drop=True)
         # Downcast float64 value columns to float32 (skip ID/time columns)
-        _skip_cols = {id_col, "charttime", "measuredat_minutes", "unit"}
-        for c in df.columns:
-            if c not in _skip_cols and df[c].dtype == np.float64:
-                df[c] = df[c].astype(np.float32)
+        _downcast_value_columns(df, {id_col, "charttime", "measuredat_minutes", "unit"})
         if bounds_diagnostics is not None:
             df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
         logger.info(
@@ -4404,10 +4416,7 @@ def load_bucketed_table_multi_aggregated(
 
         df = finish_io_audit(df)
     # Downcast float64 value columns to float32 (skip ID/time columns)
-    _skip_cols = {id_col, 'charttime', 'measuredat_minutes'}
-    for c in df.columns:
-        if c not in _skip_cols and df[c].dtype == np.float64:
-            df[c] = df[c].astype(np.float32)
+    _downcast_value_columns(df, {id_col, 'charttime', 'measuredat_minutes'})
     return df
 
 
@@ -4704,10 +4713,7 @@ def load_wide_table_aggregated(
             except Exception:
                 pass
     # Downcast float64 value columns to float32 (skip ID/time columns)
-    _skip_cols = {id_col, 'charttime'}
-    for c in df.columns:
-        if c not in _skip_cols and df[c].dtype == np.float64:
-            df[c] = df[c].astype(np.float32)
+    _downcast_value_columns(df, {id_col, 'charttime'})
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
 

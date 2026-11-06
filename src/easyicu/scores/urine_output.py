@@ -476,7 +476,9 @@ def daily_volume_batch(
     elapsed = rec.groupby(id_col, sort=False)["_chart_time"].diff().fillna(time_step).to_numpy()
     if '_urine_gap_h' in df:
         elapsed = rec['_urine_gap_h'].fillna(time_step).to_numpy()
-    rejected = (gap > cap_steps) | (elapsed > cap_steps * time_step)
+    # Same limit as collection_intervals: an exact 12 h gap is kept even when
+    # float clocks put it 1e-15 h above (lead-r13 MIIV renal perf vs twin).
+    rejected = (gap > cap_steps) | (elapsed > cap_steps * time_step + GAP_TOLERANCE_H)
     placed = ~rejected
     reps = gap[placed]
     within = np.arange(int(reps.sum())) - np.repeat(np.cumsum(reps) - reps, reps)
