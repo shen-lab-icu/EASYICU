@@ -2798,11 +2798,14 @@ class ICUDataSource:
             import pyarrow.dataset as ds
             
             # 🚀 使用PyArrow Dataset - 最快的方式
+            # Every resolved file is read: a corrupt or unreadable shard fails
+            # the scan and the per-file read below names it with a typed
+            # refusal (table_scan_file_unreadable). It is never excluded.
             dataset = ds.dataset(
                 [str(p) for p in resolved_files],
                 format='parquet',
                 partitioning=None,
-                exclude_invalid_files=True
+                exclude_invalid_files=False,
             )
             schema_names = list(dataset.schema.names)
             schema_by_lower = {
@@ -2964,14 +2967,20 @@ class ICUDataSource:
                 
                 # 快速读取+过滤
                 chunks = []
+                unreadable = storage_layout.unreadable_file_errors()
                 for file_path in parquet_files:
-                    if columns:
-                        wanted = list(columns)
-                        if storage_layout.ORDINAL in storage_layout.parquet_columns(file_path):
-                            wanted.append(storage_layout.ORDINAL)
-                        df_chunk = pd.read_parquet(file_path, columns=wanted)
-                    else:
-                        df_chunk = pd.read_parquet(file_path)
+                    try:
+                        if columns:
+                            wanted = list(columns)
+                            if storage_layout.ORDINAL in storage_layout.parquet_columns(file_path):
+                                wanted.append(storage_layout.ORDINAL)
+                            df_chunk = pd.read_parquet(file_path, columns=wanted)
+                        else:
+                            df_chunk = pd.read_parquet(file_path)
+                    except unreadable as exc:
+                        raise storage_layout.unreadable_file(
+                            table_name or directory.name, file_path, exc
+                        ) from exc
                     
                     # 立即应用过滤（减少内存占用）
                     if filter_ids and id_column and id_column in df_chunk.columns:

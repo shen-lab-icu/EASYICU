@@ -15,6 +15,8 @@ import multiprocessing as mp
 import pandas as pd
 import pyarrow.dataset as ds
 
+from easyicu.storage_layout import unreadable_file, unreadable_file_errors
+
 logger = logging.getLogger(__name__)
 
 class TablePreloader:
@@ -62,66 +64,72 @@ class TablePreloader:
         for table_name, columns in tables.items():
             start_time = time.perf_counter()
             
+            table_path = self.data_path / f"{table_name}.parquet"
+
+            # 如果是单文件不存在，尝试分区目录
+            if not table_path.exists():
+                table_path = self.data_path / table_name
+            if not table_path.exists():
+                logger.warning(f"  ⚠️  {table_name} 跳过: not installed under {self.data_path}")
+                self.cache[table_name] = None
+                continue
+
+            # 读取数据. Every Parquet file of a partitioned table is read: a
+            # corrupt or unreadable shard is a typed refusal, never excluded.
             try:
-                table_path = self.data_path / f"{table_name}.parquet"
-                
-                # 如果是单文件不存在，尝试分区目录
-                if not table_path.exists():
-                    table_path = self.data_path / table_name
-                
-                # 读取数据
                 if table_path.is_dir():
-                    # 分区表 - 使用pyarrow dataset读取（忽略.fst文件）
+                    files = sorted(
+                        p for p in table_path.iterdir()
+                        if p.is_file() and p.suffix == ".parquet" and not p.name.startswith(".")
+                    )
                     dataset = ds.dataset(
-                        table_path,
+                        [str(p) for p in files],
                         format='parquet',
                         partitioning=None,
-                        exclude_invalid_files=True
+                        exclude_invalid_files=False,
                     )
                     df = dataset.to_table(columns=columns).to_pandas()
                 else:
                     # 单文件表
                     df = pd.read_parquet(table_path, columns=columns)
-                
-                # 如果表有stay_id列，只保留目标患者
-                if 'stay_id' in df.columns:
-                    original_rows = len(df)
-                    df = df[df['stay_id'].isin(patient_set)]
-                    filtered_rows = len(df)
-                    filter_ratio = (1 - filtered_rows/original_rows) * 100 if original_rows > 0 else 0
-                else:
-                    filtered_rows = len(df)
-                    filter_ratio = 0
-                
-                # 缓存数据
-                self.cache[table_name] = df
-                
-                elapsed = time.perf_counter() - start_time
-                memory_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
-                
-                self.stats[table_name] = {
-                    'rows': filtered_rows,
-                    'columns': len(df.columns),
-                    'memory_mb': memory_mb,
-                    'load_time': elapsed,
-                    'filter_ratio': filter_ratio
-                }
-                
-                if filter_ratio > 0:
-                    logger.info(
-                        f"  ✅ {table_name}: {filtered_rows:,}行 "
-                        f"({filter_ratio:.1f}% 过滤), {memory_mb:.1f}MB, {elapsed:.2f}s"
-                    )
-                else:
-                    logger.info(
-                        f"  ✅ {table_name}: {filtered_rows:,}行, "
-                        f"{memory_mb:.1f}MB, {elapsed:.2f}s"
-                    )
-                
-            except Exception as e:
-                logger.warning(f"  ⚠️  {table_name} 跳过: {e}")
-                self.cache[table_name] = None
-        
+            except unreadable_file_errors() as exc:
+                raise unreadable_file(table_name, table_path, exc) from exc
+
+            # 如果表有stay_id列，只保留目标患者
+            if 'stay_id' in df.columns:
+                original_rows = len(df)
+                df = df[df['stay_id'].isin(patient_set)]
+                filtered_rows = len(df)
+                filter_ratio = (1 - filtered_rows/original_rows) * 100 if original_rows > 0 else 0
+            else:
+                filtered_rows = len(df)
+                filter_ratio = 0
+
+            # 缓存数据
+            self.cache[table_name] = df
+
+            elapsed = time.perf_counter() - start_time
+            memory_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
+
+            self.stats[table_name] = {
+                'rows': filtered_rows,
+                'columns': len(df.columns),
+                'memory_mb': memory_mb,
+                'load_time': elapsed,
+                'filter_ratio': filter_ratio
+            }
+
+            if filter_ratio > 0:
+                logger.info(
+                    f"  ✅ {table_name}: {filtered_rows:,}行 "
+                    f"({filter_ratio:.1f}% 过滤), {memory_mb:.1f}MB, {elapsed:.2f}s"
+                )
+            else:
+                logger.info(
+                    f"  ✅ {table_name}: {filtered_rows:,}行, "
+                    f"{memory_mb:.1f}MB, {elapsed:.2f}s"
+                )
+
         total_time = time.perf_counter() - total_start
         total_memory = sum(s['memory_mb'] for s in self.stats.values())
         total_rows = sum(s['rows'] for s in self.stats.values())

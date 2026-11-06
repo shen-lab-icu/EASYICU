@@ -909,6 +909,17 @@ def _merge_buffered_batches(
     return pd.concat(frames, ignore_index=True, sort=False, copy=False)
 
 
+def _read_spilled_batch(path: Path) -> pd.DataFrame:
+    import pyarrow as pa
+
+    try:
+        return pd.read_parquet(path, engine='pyarrow')
+    except (OSError, pa.ArrowException) as exc:
+        raise RuntimeError(
+            f"batch_spill_unreadable: {path.name} ({type(exc).__name__}: {exc})"
+        ) from exc
+
+
 def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """Merge parquet shards produced by batch loading."""
     from collections import defaultdict
@@ -921,13 +932,10 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
     )
     dict_files = sorted(temp_path.glob('batch_*.*.parquet'))
 
+    # A spilled batch is this run's own output: one that cannot be read back
+    # fails the load (batch_spill_unreadable) instead of dropping its rows.
     if flat_files:
-        frames = []
-        for f in flat_files:
-            try:
-                frames.append(pd.read_parquet(f, engine='pyarrow'))
-            except Exception as e:
-                logger.warning(f"⚠️ 读取 {f} 失败: {e}")
+        frames = [_read_spilled_batch(f) for f in flat_files]
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True, sort=False, copy=False)
@@ -945,12 +953,7 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
 
     merged: Dict[str, pd.DataFrame] = {}
     for concept, files in grouped.items():
-        frames = []
-        for f in files:
-            try:
-                frames.append(pd.read_parquet(f, engine='pyarrow'))
-            except Exception as e:
-                logger.warning(f"⚠️ 读取 {f} 失败: {e}")
+        frames = [_read_spilled_batch(f) for f in files]
         if frames:
             merged[concept] = pd.concat(frames, ignore_index=True, sort=False, copy=False)
             del frames

@@ -9051,10 +9051,19 @@ class ConceptResolver:
                     if raw_path.is_file():
                         # Bound to (and validated as) the table's file set.
                         (raw_path,) = data_source.resolve_target_files(id_cfg.table, loader=raw_path)
-                        schema = pq.read_schema(str(raw_path))
-                        if column_name in schema.names:
+                        from ..storage_layout import unreadable_file, unreadable_file_errors
+
+                        try:
+                            schema = pq.read_schema(str(raw_path))
+                            raw_tbl = (
+                                pq.read_table(str(raw_path), columns=[id_cfg.id, column_name])
+                                if column_name in schema.names else None
+                            )
+                        except unreadable_file_errors() as exc:
+                            # A corrupt stay table is refused, not a column left unsynthesized.
+                            raise unreadable_file(id_cfg.table, raw_path, exc) from exc
+                        if raw_tbl is not None:
                             id_col = id_cfg.id
-                            raw_tbl = pq.read_table(str(raw_path), columns=[id_col, column_name])
                             raw_df = raw_tbl.to_pandas()
                             merged = frame[[id_col]].reset_index().merge(
                                 raw_df, on=id_col, how='left'

@@ -121,6 +121,7 @@ def test_partitioned_read_failure_raises_instead_of_empty(tmp_path, monkeypatch)
 
     from easyicu.config import DataSourceConfig
     from easyicu.datasource import ICUDataSource
+    from easyicu.storage_layout import StorageIntegrityError
 
     table = tmp_path / "tbl"
     table.mkdir()
@@ -132,7 +133,8 @@ def test_partitioned_read_failure_raises_instead_of_empty(tmp_path, monkeypatch)
 
     monkeypatch.setattr(pads, "dataset", boom)
     monkeypatch.setattr(pd, "read_parquet", boom)
-    with pytest.raises(RuntimeError, match="partitioned_read_failed: tbl"):
+    # An unreadable shard is the storage owner's typed refusal (delta17c).
+    with pytest.raises(StorageIntegrityError, match="table_scan_file_unreadable: tbl"):
         source._read_partitioned_data_optimized(table, ["a"], None)
 
 

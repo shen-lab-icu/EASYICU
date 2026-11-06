@@ -19,13 +19,9 @@ def test_patient_id_read_failure_is_not_reported_as_an_empty_cohort(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (tmp_path / "icustays.parquet").touch()
-    monkeypatch.setattr(
-        pd,
-        "read_parquet",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("private path")),
-    )
-
+    # No stay-table file: discovery falls to the loader, whose failure must
+    # surface without its message. (A present but unreadable stay table is a
+    # typed refusal before this point: test_d17c_strict_csv_and_stay_discovery.)
     class FailingLoader:
         def __init__(self, **_kwargs):
             raise PermissionError("patient 123")

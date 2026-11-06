@@ -830,15 +830,40 @@ class TableScanError(StorageIntegrityError):
         super().__init__(f"{reason}: {table}: {detail}")
 
 
+FILE_UNREADABLE = "table_scan_file_unreadable"
+
+
+def unreadable_file_errors() -> tuple[type[BaseException], ...]:
+    """What opening or decoding a raw Parquet file raises when the file is bad.
+
+    ``OSError`` covers a missing or unreadable file; ``pyarrow.ArrowException``
+    covers a truncated or corrupt footer, page or schema.
+    """
+    import pyarrow as pa
+
+    return (OSError, pa.ArrowException)
+
+
+def unreadable_file(table: str, path, exc: BaseException) -> TableScanError:
+    """A raw file the storage owner cannot read: a typed refusal, never an exclusion.
+
+    Raise it ``from exc`` so the reader's own error stays the cause.
+    """
+    return TableScanError(FILE_UNREADABLE, str(table), f"{path}: {type(exc).__name__}: {exc}")
+
+
 _FOOTER_ROWS: dict[tuple[str, int, int], int] = {}
 
 
-def _footer_rows(path: Path) -> int:
-    stat = path.stat()
-    key = (str(path), stat.st_size, stat.st_mtime_ns)
-    rows = _FOOTER_ROWS.get(key)
-    if rows is None:
-        rows = _FOOTER_ROWS[key] = pq.ParquetFile(path).metadata.num_rows
+def _footer_rows(path: Path, table: str) -> int:
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_size, stat.st_mtime_ns)
+        rows = _FOOTER_ROWS.get(key)
+        if rows is None:
+            rows = _FOOTER_ROWS[key] = pq.ParquetFile(path).metadata.num_rows
+    except unreadable_file_errors() as exc:
+        raise unreadable_file(table, path, exc) from exc
     return rows
 
 
@@ -1657,7 +1682,7 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     parents = {p.parent for p in files}
     if len(parents) != 1:
         raise TableScanError("table_scan_mixed_roots", table, f"{len(parents)} directories")
-    scanned_rows = sum(_footer_rows(p) for p in files)
+    scanned_rows = sum(_footer_rows(p, table) for p in files)
     relatives = {_relative(base, p) for p in files}
     owners = {index.get(r) for r in relatives} if index is not None and None not in relatives else {None}
     if None not in owners and len(owners) == 1:
@@ -1686,7 +1711,7 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     names = {table.lower(), f"{table.lower()}_bucket"}
     single = len(files) == 1 and parent.name.lower() not in names
     inventory = set(files) if single else _visible_parquet(parent)
-    inventory_rows = sum(_footer_rows(p) for p in inventory)
+    inventory_rows = sum(_footer_rows(p, table) for p in inventory)
     if set(files) != inventory or scanned_rows != inventory_rows:
         raise TableScanError(
             "table_scan_incomplete", table,
