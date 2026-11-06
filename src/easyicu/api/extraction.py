@@ -2963,6 +2963,41 @@ class StreamBatchWorkerKilled(StreamBatchFailure):
     """An isolated batch worker died without memory evidence."""
 
 
+def _isolated_batch_retry_history(module: str, events: Sequence[Mapping]) -> List[Dict]:
+    """``stream_retry_history`` entries for a module's batch-level retries.
+
+    The stream ledger's ``resume_events`` are the one event source for both
+    layers (lead-r13 D3-LEDGER): a batch-level retry (an isolated batch's
+    memory retry or unverified-kill retry) is recorded there by the stream
+    writer and copied here by the collector. A module-worker retry is
+    written into the same ledger by the parent, which already appended its
+    own history entry, so it is not repeated.
+    """
+
+    entries = []
+    for event in events:
+        kind = event.get("kind")
+        if kind not in _STREAM_RETRY_EVENT_KINDS or event.get("level") == "module_worker":
+            continue
+        entry = {
+            "modules": [module],
+            "level": "isolated_batch",
+            "event_source": "stream_ledger.resume_events",
+            "policy": kind,
+            "worker_exit_code": event.get("worker_exit_code"),
+            "batch_index": event.get("batch_index"),
+            "start_offset": event.get("start_offset"),
+            "previous_batch_size": event.get("previous_batch_size"),
+            "retry_batch_size": event.get("batch_size"),
+            "memory_evidence": event.get("evidence"),
+        }
+        for key in ("oom_kill_counter", "process_tree_peak_rss_mb", "host_total_memory_mb"):
+            if key in event:
+                entry[key] = event[key]
+        entries.append(entry)
+    return entries
+
+
 def _stream_ids_digest(id_col: str, ids) -> str:
     import hashlib
 
@@ -7787,6 +7822,11 @@ def _publish_native_export_v2(
         "module_peak_rss_mb": module_peak_rss_mb,
         "module_peak_working_set_mb": module_peak_working_set_mb,
         "stream_retry_history": list(result.get("stream_retry_history", [])),
+        "stream_resume_events": {
+            module: list(result["modules"][module]["stream_resume_events"])
+            for module in modules
+            if (result.get("modules", {}).get(module) or {}).get("stream_resume_events")
+        },
         "resource_plan": result.get("resource_plan"),
         "module_resource_plans": result.get("module_resource_plans"),
         "resource_budget_mb": result.get("resource_budget_mb"),
@@ -8314,6 +8354,15 @@ def extract_database(
             False,
         )
         mod_result["deferred_batch_merge"] = manifest.get("deferred_batch_merge", False)
+        # The worker's resume events and typed stream failure travel to the
+        # module result, its published manifest and the release receipt; the
+        # batch-level retries join the run's retry history (D3-LEDGER).
+        mod_result["stream_resume_events"] = list(manifest.get("stream_resume_events") or [])
+        if manifest.get("stream_failure") is not None:
+            mod_result["stream_failure"] = dict(manifest["stream_failure"])
+        result["stream_retry_history"].extend(
+            _isolated_batch_retry_history(mod_name, mod_result["stream_resume_events"])
+        )
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -8331,6 +8380,11 @@ def extract_database(
             "stream_batches": mod_result["stream_batches"],
             "batch_process_isolation": mod_result["batch_process_isolation"],
             "deferred_batch_merge": mod_result["deferred_batch_merge"],
+            "stream_resume_events": mod_result["stream_resume_events"],
+            **(
+                {"stream_failure": mod_result["stream_failure"]}
+                if "stream_failure" in mod_result else {}
+            ),
             "initial_batch_size": manifest.get("initial_batch_size"),
             "final_planned_batch_size": manifest.get("final_planned_batch_size"),
             "adaptive_batch_growth": manifest.get(
@@ -8699,6 +8753,7 @@ def extract_database(
             result["stream_retry_history"].append(
                 {
                     "modules": retry_modules + retry_special,
+                    "level": "module_worker",
                     "worker_exit_code": proc.exitcode,
                     "attempt": stream_retry_attempt + 1,
                     "previous_batch_size": group_batch_size,
