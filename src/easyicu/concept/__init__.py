@@ -9599,15 +9599,23 @@ class ConceptResolver:
                 # The raw key carries no grid: a sub-concept cached on its parent's
                 # grid (vaso_ind loads other_vaso per minute) must not answer a
                 # request on another grid, or the result depends on request order.
-                cached_interval = getattr(raw_cached, "interval", None)
-                if (
-                    raw_cached is not None
-                    and interval is not None
-                    and cached_interval is not None
-                    and not pd.isna(cached_interval)
-                    and pd.Timedelta(cached_interval) != pd.Timedelta(interval)
-                ):
-                    raw_cached = None
+                # A time-indexed entry with no declared grid (a native WinTbl,
+                # or the ungridded legacy load) is a mismatch too: the cold path
+                # expands and aggregates it on the requested grid, so returning
+                # it would make the rows depend on whether the cache was warm
+                # (Codex delta4 D4-NATIVE-CACHE). Tables without a time index
+                # (id tables) carry no grid and are reused.
+                if raw_cached is not None and interval is not None:
+                    cached_interval = getattr(raw_cached, "interval", None)
+                    time_indexed = bool(
+                        getattr(raw_cached, "index_column", None)
+                        or getattr(raw_cached, "index_var", None)
+                    )
+                    if cached_interval is None or pd.isna(cached_interval):
+                        if time_indexed:
+                            raw_cached = None
+                    elif pd.Timedelta(cached_interval) != pd.Timedelta(interval):
+                        raw_cached = None
                 if raw_cached is not None:
                     if hasattr(raw_cached, 'copy'):
                         raw_cached = raw_cached.copy()
