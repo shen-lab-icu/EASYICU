@@ -40,6 +40,8 @@ def test_eicu_ett_gcs_loads_alone_and_opens_a_six_hour_window(tmp_path):
         ["ett_gcs"], database="eicu", data_path=str(tmp_path), merge=True, verbose=False,
     )
 
-    # RASS <= -3 at minute 5 opens a 360-minute window on its hour: hours 0-5.
-    assert frame["charttime"].tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-    assert frame["ett_gcs"].astype(bool).all()
+    # RASS <= -3 at minute 5 opens a 360-minute window on its hour; as in ricu
+    # expand(), it covers hour 0 through floor(0 + 6 h) inclusive. RASS -1 at
+    # minute 605 is a FALSE window of the same length (r13gcs).
+    assert frame["charttime"].tolist() == [float(h) for h in [*range(7), *range(10, 17)]]
+    assert frame["ett_gcs"].tolist() == [True] * 7 + [False] * 7
