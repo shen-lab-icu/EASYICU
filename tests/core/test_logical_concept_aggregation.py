@@ -110,7 +110,8 @@ def test_r_style_merge_preserves_empty_producer_value_types(tmp_path, consume_so
         tables, ["hr", "derived"], consume_sources=consume_sources,
     )
     assert result["derived"].isna().all()
-    assert result["derived"].dtype == ("float32" if dtype == "float64" else dtype)
+    # Values are no longer cast to float32 (lead-r13 float64): every producer type is kept.
+    assert result["derived"].dtype == dtype
     assert result[["stay_id", "charttime"]].equals(observed[["stay_id", "charttime"]])
     assert bool(tables) is not consume_sources
     path = tmp_path / "typed.parquet"

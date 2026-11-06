@@ -172,7 +172,7 @@ def test_r8_h3_noon_reset_survives_float_hours_and_matches_the_raw_ledger(tmp_pa
                                        check_names=False, check_dtype=False, atol=1e-9, rtol=0)
     native = hirid_native(root, names, tmp_path / "native", monkeypatch, "fluids")
     for name in names:
-        # Native storage narrows values to float32 before the final wide merge.
+        # Native storage keeps float64 values (lead-r13): the raw ledger exactly.
         pd.testing.assert_series_equal(native.set_index("charttime")[name].dropna(),
-                                       expected[name].astype("float32"),
+                                       expected[name],
                                        check_names=False, check_dtype=False, atol=1e-9, rtol=0)
