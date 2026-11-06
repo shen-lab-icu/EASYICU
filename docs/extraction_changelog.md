@@ -108,6 +108,21 @@ too; no value changes). Across releases, on the cases common to 1.0.6 and
 stay end; the assumption flags differ on 22,229/22,229/8,335 cases, because
 every 1.0.8 survivor's category is rebuilt.
 
+## 2026-11-06 — conversion follows symlinked source folders and never converts nothing silently [lead-r13, `316bceeca` and its follow-up]
+
+Conversion only; extracted values do not change. Source folders linked from
+another drive (`hosp -> /Volumes/drive/hosp`) were not walked, so the
+converter found no CSV, wrote an empty manifest and reported success. Links
+are now followed, and each real folder is visited once, so a link cycle ends.
+A folder with no CSV and no converted Parquet raises
+`conversion_no_source_files` (usually a broken link, an unmounted drive or the
+wrong folder). A converted folder whose CSVs were removed is left alone, and
+its conversion manifest is kept. An empty manifest would disown every
+converted table. If that folder also has no manifest, the converter warns
+`conversion_manifest_missing_rebuild_required`: restore or link the CSVs and
+convert again to write it. Until then the loader reads the tables with its
+recorded `table_scan_unmanifested` fallback.
+
 ## 2026-11-06 — urine receipt hours sit on the millisecond grid [lead-r13, `0cf09721d`]
 
 **What changed.** Urine availability, chart and first-record hours are rounded

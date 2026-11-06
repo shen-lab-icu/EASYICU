@@ -8,13 +8,22 @@ and reported success.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 
 import pytest
 
-from easyicu.io.data_converter import ConversionNoSourceFiles, DataConverter
+from easyicu.datasource import ICUDataSource
+from easyicu.io.data_converter import (
+    MANIFEST_MISSING_REBUILD_REQUIRED,
+    ConversionNoSourceFiles,
+    DataConverter,
+)
+from easyicu.resources import load_data_sources
+from easyicu.storage_layout import scan_fallbacks
 
 
 def _csv(path: Path, rows: int = 3) -> Path:
@@ -88,14 +97,56 @@ def test_a_dangling_source_link_refuses_conversion(tmp_path):
         _converter(root).convert_all()
 
 
-def test_a_converted_folder_without_csvs_stays_valid(tmp_path):
+def _admissions(root: Path) -> Path:
+    path = root / "hosp" / "admissions.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "subject_id,hadm_id,admittime\n10,100,2150-01-01 08:00:00\n20,200,2150-02-01 08:00:00\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _load_admissions(root: Path):
+    source = ICUDataSource(config=load_data_sources().get("miiv"), base_path=root)
+    return source.load_table("admissions").data
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_a_converted_folder_without_csvs_keeps_its_manifest_and_loads(tmp_path):
     root = tmp_path / "miiv"
-    source = _csv(root / "hosp" / "admissions.csv")
+    source = _admissions(root)
     _converter(root).convert_all()
     manifest = root / "conversion_manifest.json"
-    written = manifest.read_bytes()
+    before = _sha(manifest)
     source.unlink()
 
-    assert _converter(root).convert_all() == {}
+    converter = _converter(root)
+    assert converter.convert_all() == {}
+    assert converter.conversion_warnings == []
     # The conversion's inventory is kept; an empty manifest would disown it.
-    assert manifest.read_bytes() == written
+    assert _sha(manifest) == before
+    assert sorted(_load_admissions(root)["hadm_id"]) == [100, 200]
+
+
+def test_a_missing_manifest_without_sources_asks_for_a_rebuild(tmp_path, caplog):
+    root = tmp_path / "miiv"
+    source = _admissions(root)
+    _converter(root).convert_all()
+    (root / "conversion_manifest.json").unlink()
+    source.unlink()
+
+    converter = _converter(root)
+    with caplog.at_level(logging.WARNING, logger="easyicu.io.data_converter"):
+        assert converter.convert_all() == {}
+    assert not (root / "conversion_manifest.json").exists()
+    assert [w["code"] for w in converter.conversion_warnings] == [MANIFEST_MISSING_REBUILD_REQUIRED]
+    assert MANIFEST_MISSING_REBUILD_REQUIRED in caplog.text
+    assert "convert_all()" in converter.conversion_warnings[0]["message"]
+    # The loader still reads the table, through its recorded no-manifest fallback.
+    assert sorted(_load_admissions(root)["hadm_id"]) == [100, 200]
+    assert {"reason": "table_scan_unmanifested", "root": str(root),
+            "table": "admissions"} in scan_fallbacks()

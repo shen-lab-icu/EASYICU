@@ -607,6 +607,7 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
             "total_files": len(results),
             "nothing_to_do": nothing,
             **quality,
+            "warnings": list(getattr(converter, "conversion_warnings", None) or ()),
         }
 
     return runner

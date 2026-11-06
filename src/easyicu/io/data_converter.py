@@ -217,6 +217,9 @@ class ConversionStopped(Exception):
         self.results = results
 
 
+MANIFEST_MISSING_REBUILD_REQUIRED = "conversion_manifest_missing_rebuild_required"
+
+
 class ConversionNoSourceFiles(Exception):
     """No CSV source and no converted output: the folder cannot be prepared.
 
@@ -315,6 +318,8 @@ class DataConverter:
                 pass
         self.parallel_workers = parallel_workers
         self.verbose = verbose
+        # Warnings of the last convert_all(), each {"code", "path", "message"}.
+        self.conversion_warnings: List[Dict[str, str]] = []
 
         # Parquet output codec. zstd produces ~20-25% smaller files than
         # snappy at similar speed; on a slow mount fewer bytes means faster
@@ -3391,6 +3396,7 @@ class DataConverter:
                 "EASYICU_CLUSTER_BY_PATIENT", ""
             ).strip().lower() in ("1", "true", "yes", "on")
         self._effective_cluster_by_patient = bool(cluster_by_patient)
+        self.conversion_warnings = []
         extracted_community_archives: List[str] = []
         if self.database in COMMUNITY_DATABASES:
             extracted_community_archives = prepare_community_archives(
@@ -3425,11 +3431,25 @@ class DataConverter:
             # manifest would disown every converted table, so the existing
             # manifest stays as written by the conversion.
             manifest_path = self.data_path / self.CONVERSION_MANIFEST_FILE
-            if write_manifest and not manifest_path.exists():
-                logger.warning(
-                    "No CSV sources and no %s under %s; the converted tables "
-                    "carry no inventory", self.CONVERSION_MANIFEST_FILE, self.data_path,
-                )
+            if not manifest_path.exists():
+                # Without a manifest the tables still load, but only through
+                # the loader's recorded directory-only fallback
+                # (table_scan_unmanifested), so a missing chunk goes unseen.
+                warning = {
+                    "code": MANIFEST_MISSING_REBUILD_REQUIRED,
+                    "path": str(self.data_path),
+                    "message": (
+                        f"{MANIFEST_MISSING_REBUILD_REQUIRED}: {self.data_path} holds "
+                        f"converted Parquet tables but no {self.CONVERSION_MANIFEST_FILE} "
+                        "and no CSV sources. Restore or link the CSV sources and run "
+                        "the conversion again (DataConverter(path).convert_all() or the "
+                        "web data preparation step); converted tables are skipped and "
+                        "the manifest is written. Until then every table load is "
+                        "recorded as table_scan_unmanifested."
+                    ),
+                }
+                self.conversion_warnings.append(warning)
+                logger.warning(warning["message"])
             return {}
         
         # Filter files that need conversion
