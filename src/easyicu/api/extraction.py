@@ -2706,10 +2706,45 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
         # so the id-level flag retains its own grain and nullable meaning.
         dictionary = load_dictionary(source_name=kwargs["database"])
         mapped = [name for name in concepts if kwargs["database"] in dictionary[name].sources]
+        sink = kwargs.get("availability_sink")
+        if sink is not None:
+            # The excluded concepts are not loaded, so record them as the
+            # resolver records any unmapped concept/database pair; the export
+            # owner publishes its typed placeholder from that record.
+            from ..concept.availability_signal import ConceptAvailabilityRecord
+
+            for name in concepts:
+                if name not in mapped:
+                    sink[name] = ConceptAvailabilityRecord(
+                        concept=name, database=kwargs["database"], reason="unmapped",
+                        n_rows=0, note="No source is defined for this concept/database pair.",
+                    )
         if not mapped:
             return pd.DataFrame()
         result = load_concepts_fn(**{**kwargs, "concepts": mapped, "r_compatible": False})
-        return result.dropna(subset=mapped, how="all")
+        result = result.dropna(subset=mapped, how="all")
+        if result.empty:
+            # Zero-row concept frames are placed side by side rather than
+            # merged on their keys: each keeps its own time column (MIMIC-III)
+            # and its source's unit/sub-item column (eICU lab:
+            # labmeasurenameinterface), so those names repeat. Publish keys
+            # and concept values only, as a load with rows does; the dropped
+            # columns hold no values.
+            helpers = {
+                column
+                for name in mapped
+                for source in dictionary[name].sources.get(kwargs["database"], [])
+                for column in (getattr(source, "unit_var", None), getattr(source, "sub_var", None))
+                if column and column not in mapped
+            }
+            result = result.loc[:, [c for c in result.columns if c not in helpers]]
+            result = result.loc[:, ~result.columns.duplicated()]
+            if "charttime" in result.columns:
+                # The empty frames skipped time alignment, so charttime is
+                # still a datetime. The published axis is ICU-relative hours;
+                # an empty column has no value to convert.
+                result = result.assign(charttime=pd.Series(dtype="float64"))
+        return result
     score, components = {
         "sofa1_score": ("sofa", _SOFA1_COMPONENT_NAMES),
         "sofa2_score": ("sofa2", SOFA2_COMPONENT_NAMES),

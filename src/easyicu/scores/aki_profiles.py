@@ -532,6 +532,10 @@ def build_renal_aki_bundle(
         "uo_rt_24hr_covered_h": "uo_rt_24hr_covered_h",
         "aki_stage_uo_available_at": "aki_stage_uo_reference_available_at",
     }
+    if quality.empty and not {resolved_id, resolved_time} <= set(quality.columns):
+        # No component rows: kdigo_stages has no frame to key. The quality
+        # layer adds nothing, and the bundle keeps the reference's keys.
+        quality = reference[[resolved_id, resolved_time]].iloc[0:0]
     available_quality = [
         column for column in quality_columns if column in quality.columns
     ]
@@ -1061,6 +1065,26 @@ def apply_aki_profile(
     elif profile.database == "aumc":
         result = _aumc_profile(**kwargs)
     elif profile.database == "eicu":
+        if (urine_df is None or urine_df.empty) and not strict_prerequisites:
+            # The eICU component profile is a urine-output definition: a batch
+            # without urine rows is not evaluable, not a failed extraction.
+            result = _unavailable_profile_frame(
+                crea_df,
+                urine_df,
+                rrt_df,
+                id_col=id_col,
+                time_col=time_col,
+                reason="eicu_component_urine_rows_absent",
+            )
+            # The profile's declared mode publishes no source-native columns
+            # (urine_components_only); the status stamp carries the reason.
+            result = result.drop(columns=[f"{_PROFILE_PREFIX}_reason"])
+            return _stamp_profile(
+                result,
+                profile,
+                status="not_evaluable_required_source_missing",
+                ascertainment="indeterminate",
+            )
         result = _eicu_components_profile(**kwargs)
     elif profile.database == "hirid":
         if native_endpoint_df is None or native_endpoint_df.empty:
@@ -1216,6 +1240,19 @@ def _component_keys(
         ),
         None,
     )
+    if anchor is None:
+        # A batch whose stays have no creatinine, urine or RRT rows has no AKI
+        # evidence: its keys come from the components' schema and the profile
+        # publishes no rows. Only a call without any component frame lacks
+        # the prerequisite.
+        anchor = next(
+            (
+                frame
+                for frame in frames
+                if isinstance(frame, pd.DataFrame) and len(frame.columns)
+            ),
+            None,
+        )
     if anchor is None:
         raise AKIProfilePrerequisiteError(
             "At least one non-empty component is required"

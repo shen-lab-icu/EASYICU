@@ -4496,9 +4496,24 @@ def load_bucketed_table_multi_aggregated(
                 ORDER BY {stay_col}, 2
                 """
         else:
-            # Direct join (stay_id in parquet, e.g. chartevents)
+            # Direct join (stay_id in parquet, e.g. chartevents). A source
+            # converted with text clocks binds the event time as VARCHAR,
+            # which the episode-window predicate cannot subtract; parse it
+            # strictly (an unparseable clock raises) and leave typed clocks
+            # exactly as they were.
+            _time_types = {
+                str(row[0]).lower(): str(row[1]).upper()
+                for row in conn.execute(
+                    f"DESCRIBE SELECT {time_col} FROM {target_relation}"
+                ).fetchall()
+            }
+            if _time_types.get(str(time_col).lower()) == "VARCHAR":
+                _event_time = f"CAST(o.{time_col} AS TIMESTAMP)"
+                time_round_expr = time_round_expr.replace(f"o.{time_col}", _event_time)
+            else:
+                _event_time = f"o.{time_col}"
             _direct_window = _window_sql.condition(
-                f"EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 60.0 / 60.0", f"a.{stay_col}",
+                f"EPOCH({_event_time} - CAST(a.intime AS TIMESTAMP)) / 60.0 / 60.0", f"a.{stay_col}",
             )
             join_pred = f"o.{join_left_col} = a.{join_left_col}"
             query = f"""

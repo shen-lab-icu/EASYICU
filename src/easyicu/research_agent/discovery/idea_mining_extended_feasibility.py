@@ -547,6 +547,15 @@ class ExtendedFeasibilityIndex:
                 for required in raw.rule.require_tokens
             ):
                 continue
+            # Likewise an explicit multi-token derivation over primitives the
+            # export already holds (urea-to-creatinine ratio = BUN / creatinine)
+            # outranks a one-token collision with another concept (urine urea).
+            derived = self.propose_derived_construct(term)
+            if derived is not None and any(
+                len(required) > 1 and all(token in term_tokens for token in required)
+                for required in derived.rule.require_tokens
+            ):
+                continue
             hit = self.resolve_construct_cross_db(term)
             if hit is not None:
                 cross_hits.append(hit)

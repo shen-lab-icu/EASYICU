@@ -94,6 +94,14 @@ def test_derived_ucr_downgrades_to_hold(index) -> None:
     assert set(verdict.metadata["needs"]) == {"bun", "crea"}
 
 
+def test_a_named_dictionary_concept_still_outranks_no_derivation(index) -> None:
+    # The derivation precedence needs the full multi-token phrase: urine urea
+    # itself is a dictionary concept to re-extract, not a UCR derivation.
+    verdict = index.reconsider(idea=_FakeIdea(exposure_or_predictor="urine urea"), candidate=None)
+    assert verdict is not None and verdict.case == "reextract_current_db"
+    assert verdict.metadata["concepts"] == "urine_urea"
+
+
 def test_derived_persistent_critical_illness(index) -> None:
     verdict = index.reconsider(
         idea=_FakeIdea(outcome="persistent critical illness"), candidate=None
