@@ -215,7 +215,7 @@ def check_high_risk_units() -> list[dict[str, Any]]:
             if "percent_as_numeric" not in callback:
                 detail = "FiO2 chart/respiratory source lacks percent_as_numeric callback"
         elif concept == "crea" and dataset in {"aumc", "hirid"}:
-            if "0.011309" not in callback and "0.011312" not in callback:
+            if "0.011312217194570135" not in callback:
                 detail = f"{dataset} creatinine source lacks umol/L to mg/dL conversion"
         elif concept == "tidal_vol" and dataset == "aumc" and ({8871, 9669} & ids):
             if "convert_unit" not in callback or "1000" not in callback:
