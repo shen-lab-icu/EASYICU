@@ -31,8 +31,21 @@ their native operators (SICdb strict `>`, AUMC ratio `> 3`); SOFA-1 and
 SOFA-2 respiratory, liver, cardiovascular and renal components; circEWS drug
 levels; urine coverage windows and the 12 h record gap; the ventilation
 episode gap (8 h); outcome horizons (days); CVP plausibility; persistent
-critical illness (`los_icu ≥ 10`); SIRS `pco2 < 32`. Full site list:
-lead-r13 threshold audit (groups A–G).
+critical illness (`los_icu ≥ 10`); SIRS `pco2 < 32`; the RRT creatinine
+gate (`> 1.2`), the public `sofa2_liver` callback, the MIMIC-III AKI-profile
+creatinine window (−6 h to 162 h) and the AUMC death-after-discharge window
+(< 72 h) (`e04b63235`). The SOFA-2 gap grid, which carried the source
+assessment time in float32, is float64 too (`9aed79a4b`). Full site list:
+lead-r13 threshold audit (groups A–G and I).
+
+**Zero comparisons now carry the tolerance.** Four "no urine" tests compared
+a derived value with zero: the MIMIC-III native urine staging and the SOFA-2
+renal component (`== 0`), and SOFA-2 and KDIGO anuria (KDIGO was
+`<= 1e-9`). They now use `le(x, 0)`, which counts a derived value up to 1e-6
+as zero. Below 1e-6 mL/kg/h a rate can only be float noise: charted urine has
+at least 1 mL resolution, so the smallest real rate (one 1 mL record over
+24 h at 300 kg) is 1.4e-4 mL/kg/h. This is a definition change at the zero
+boundary, recorded here and in the threshold audit (D1).
 
 **Errata.** Float64 with the tolerance is the correct value. Stays whose
 KDIGO stage, AKI occurrence, SOFA components or Sepsis-3 changed versus
@@ -70,12 +83,30 @@ any other or missing year: unknown, so every horizon and the follow-up are
 NA, flagged and warned), flagged assumption-based; `TimeOfStay` is taken as published. RASS (3123)
 and O₂ flow (3144) are mapped for SICdb.
 
+Survival is a whitelist of `d_references` labels (`443b7a233`): a discharge
+type whose label is neither a known death nor a known survival label (empty,
+renamed or unknown) is unknown, warned (`sic_discharge_label_unknown`), and
+gets no follow-up or horizon. A case with an empty discharge type is not
+"unknown label"; when it has no recorded death its follow-up category is
+rebuilt like a survivor's (1.0.8: 49 such cases), disclosed here. A recorded
+death with an empty follow-up category also gets the category bound from its
+admission year (`b0c995204`), so its 365-day horizon stays capped as in
+1.0.6. The official-source registry default moved from `/2` to `/3` (the
+1.0.8 DOI); receipts record `registry_version` accordingly.
+
 **Why.** 1.0.8 renumbered the discharge types and left ESOT empty for
 survivors; with the 1.0.6 codes every 1.0.8 outcome was unknown. Details and
 evidence: deviation table, "SICdb 1.0.8".
 
-**Errata.** On cases common to both releases, 28/90/365-day mortality and
-follow-up equal 1.0.6: FILL.
+**Errata.** On the same 1.0.6 data, baseline and lead-r13 agree on 28/90/365-day
+mortality, follow-up and assumption flags (1.0.6 empty categories are rebuilt
+too; no value changes). Across releases, on the cases common to 1.0.6 and
+1.0.8 the values are not all equal: `mort_28d`/`mort_90d` do not differ,
+`mort_365d` differs on FILL (<10 before `b0c995204`); `followup_days` for
+28/90/365 days differs on 25/25/26 cases, because 1.0.8 changed
+`TimeOfStay` (taken as published) and a case without a death time ends at its
+stay end; the assumption flags differ on 22,229/22,229/8,335 cases, because
+every 1.0.8 survivor's category is rebuilt.
 
 ## 2026-11-06 — urine receipt hours sit on the millisecond grid [lead-r13, `0cf09721d`]
 
@@ -109,7 +140,7 @@ exact 12 h gap was a break or not by float noise. The DuckDB aggregation path
 also stored the urine lag receipts as float32, which moved
 `*_available_at` by up to 3e-5 h against the raw path and decided one such gap
 the other way. Both paths now keep the receipts in float64 and use the
-same 1e-6 h limit. Source clocks are whole seconds, so a real excess (≥ 1 s)
+threshold helper, whose tolerance at 12 h is 12e-6 h (1e-6 × 12). Source clocks are whole seconds, so a real excess (≥ 1 s)
 is still a break.
 
 Hand check (MIMIC-IV sample, one stay, from raw `outputevents`): records
@@ -343,7 +374,10 @@ Codes: `hirid_rate_kg_weight_load_failed`, `sic_rate_kg_weight_load_failed`,
 `special_concept_merge_failed`, `sepsis_dependency_load_failed`,
 `hospital_table_hadm_mapping_failed`, `hospital_table_stay_id_fill_failed`,
 `mimic3_chartevents_csv_read_failed`, `partitioned_read_failed`. The sepsis
-dependency load no longer retries SOFA-2 after a failure.
+dependency load no longer retries SOFA-2 after a failure. This layer does not
+re-raise: a failed SOFA-2 dependency is written to the structured failure
+ledger (`sepsis_dependency_load_failed`) and the module returns an empty
+result.
 
 - `circ_failure` asked for `levo_rate` and `theo_rate`, which are not in the
   dictionary; the old per-concept fallback hid that. Optional drugs absent
