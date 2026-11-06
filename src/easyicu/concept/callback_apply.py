@@ -4387,7 +4387,13 @@ def _apply_callback(
             return work
         # A component re-entered at the same time (HiRID charts most of these
         # two to seven times with one value) is one measurement, not a summand.
+        # EasyICU rule (audit F-18), no ricu counterpart. The kept entry is
+        # chosen by a total order (latest entry time, then value), never by
+        # the order the batch or thread layout delivered the rows in.
         if source.sub_var and source.sub_var in work.columns:
+            order = [id_column, index_column, source.sub_var]
+            order += [c for c in ("entertime",) if c in work.columns]
+            work = work.sort_values([*order, concept_name], kind="mergesort")
             work = work.drop_duplicates([id_column, index_column, source.sub_var], keep="last")
         from ..utils.exact_sum import exact_groupby_sum
 

@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 #: Outcome status concepts recorded after ICU discharge by definition (an
 #: in-hospital death); the loader keeps them past the post-discharge allowance.
 POST_DISCHARGE_OUTCOME_CONCEPTS = frozenset({"death"})
+# Rows of an SQL hourly SUM whose terms were bounded per value in SQL. ricu
+# bounds each value, then aggregates; the hourly total is not bounded again.
+_SQL_ROW_BOUNDED_COLUMN = "__easyicu_sql_row_bounded"
 
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
@@ -274,6 +277,64 @@ def _eicu_episode_upper_by_stay(
          "upper": upper.loc[valid_stay]}
     )
     return keyed.groupby("stay", sort=False)["upper"].max()
+
+
+def _aumc_admittedat_scale(admittedat: pd.Series) -> float:
+    """AUMC clock units per hour: minutes as loaded, raw milliseconds otherwise."""
+
+    median = pd.to_numeric(admittedat, errors="coerce").abs().median(skipna=True)
+    return 3_600_000.0 if median > 1_000_000_000 else 60.0
+
+
+def _aumc_episode_upper_hours(
+    admittedat: pd.Series,
+    dischargedat: pd.Series,
+    *,
+    scale: float,
+    post_discharge_hours: float,
+    fallback_hours: float,
+) -> pd.Series:
+    """Return each AUMC admission's last plausible ICU-relative event hour."""
+
+    discharge_hours = (
+        pd.to_numeric(dischargedat, errors="coerce")
+        - pd.to_numeric(admittedat, errors="coerce")
+    ) / scale
+    return discharge_hours.add(float(post_discharge_hours)).fillna(
+        float(fallback_hours)
+    )
+
+
+def _sic_episode_upper_by_stay(
+    bounds: pd.DataFrame,
+    *,
+    stay_column: str,
+    post_discharge_hours: float,
+    fallback_hours: float,
+) -> pd.Series:
+    """Return each SICdb case's last plausible ICU-relative event hour.
+
+    ``bounds`` carries ``cases.ICUOffset`` and ``cases.TimeOfStay`` seconds on
+    the PDMS clock; conflicting rows for one case are refused.
+    """
+
+    if bounds.duplicated(subset=[stay_column], keep=False).any():
+        conflicting = bounds.drop_duplicates().duplicated(
+            subset=[stay_column], keep=False
+        )
+        if conflicting.any():
+            raise ValueError(
+                "SICdb cases contains conflicting ICU episode bounds"
+            )
+    bounds = bounds.drop_duplicates(subset=[stay_column], keep="last")
+    upper = (
+        pd.to_numeric(bounds["TimeOfStay"], errors="coerce")
+        - pd.to_numeric(bounds["ICUOffset"], errors="coerce")
+    ) / 3600.0 + float(post_discharge_hours)
+    return pd.Series(
+        upper.fillna(float(fallback_hours)).to_numpy(),
+        index=bounds[stay_column].to_numpy(),
+    )
 
 
 _WINDOW_DURATION_COLUMNS = frozenset(
@@ -513,6 +574,7 @@ from .errors import (  # noqa: F401
     ConceptExtractionUnavailable,
 )
 from .relative_time import coerce_mixed_time_column
+from .aggregation_route import duckdb_aggregation_enabled, note_duckdb_route
 
 
 
@@ -1565,7 +1627,13 @@ class ConceptResolver:
                         cache_scope=raw_cache_scope,
                     ) is None
                 ]
-            if shared_table in WIDE_TABLES and len(concepts_info_filtered) >= 1:
+            if (
+                shared_table in WIDE_TABLES
+                and len(concepts_info_filtered) >= 1
+                and duckdb_aggregation_enabled()
+                # An absent table is the per-concept path's to report.
+                and bool(data_source.resolve_target_files(shared_table))
+            ):
                 all_have_value_var = all(val_var is not None for _, val_var in concepts_info_filtered)
                 
                 if all_have_value_var:
@@ -1615,7 +1683,15 @@ class ConceptResolver:
                             patient_ids=patient_ids_list,
                             agg_func='median',
                             column_bounds=column_bounds,
+                            icu_window=(
+                                self._icu_episode_window(
+                                    data_source,
+                                    pre_admission_hours=self._pre_admission_hours_from_kwargs(kwargs),
+                                )
+                                if align_to_admission else None
+                            ),
                         )
+                        note_duckdb_route("wide_table_batch")
                         
                         # 确定ID列和时间列
                         table_cfg = data_source.config.get_table(shared_table)
@@ -1644,6 +1720,12 @@ class ConceptResolver:
                             if vv not in _concept_names and vv in batch_df.columns:
                                 batch_df = batch_df.drop(columns=[vv])
                         
+                        # A batch hour with no value for any requested concept
+                        # is not a row on the per-concept path (MEDIAN over an
+                        # all-NULL column still makes a group).
+                        _present = [c for c in _concept_names if c in batch_df.columns]
+                        if _present:
+                            batch_df = batch_df.dropna(subset=_present, how="all").reset_index(drop=True)
                         # 🚀 保存合并后的DataFrame
                         table_batch_df = batch_df
                         table_covered_names = _concept_names
@@ -1674,14 +1756,32 @@ class ConceptResolver:
                         
                     except (DuckDBQueryInterrupted, StorageIntegrityError):
                         raise
+                    except ConceptError:
+                        raise
                     except Exception as e:
-                        logger.warning(f"宽表批量加载失败，回退到普通加载: {e}")
-                        table_batch_results = {}
-                        table_batch_df = None
-                        table_covered_names = set()
+                        # The per-concept path is not a fallback for a failed
+                        # batch read; a failure here has no value to publish.
+                        from .errors import ConceptTableReadError
+
+                        raise ConceptTableReadError(
+                            database=getattr(data_source.config, "name", ""),
+                            table=shared_table,
+                            stage="wide_table_batch_aggregation",
+                            detail=f"{type(e).__name__}: {e}",
+                            cause=e,
+                        ) from e
 
             # 🚀 长表多概念批量加载：同一 itemid/sub_var 表的一次扫描多列聚合
-            elif shared_table in _MULTI_BATCH_TABLES and len(concepts_info) >= 2:
+            elif (
+                shared_table in _MULTI_BATCH_TABLES
+                and len(concepts_info) >= 2
+                and duckdb_aggregation_enabled()
+                and bool(data_source.resolve_target_files(shared_table))
+                # Route only databases the batch loader implements; a failed
+                # batch read is a failure, not a cue to re-read per concept.
+                and str(getattr(data_source.config, "name", "")).replace("_demo", "")
+                in {"miiv", "mimic", "nwicu", "hirid", "aumc", "sic", "eicu"}
+            ):
                 try:
                     from ..datasource import load_bucketed_table_multi_aggregated
 
@@ -1789,7 +1889,15 @@ class ConceptResolver:
                             itemid_col=batch_sub_var,
                             concept_bounds=batch_bounds,
                             time_col=_time_col,
+                            icu_window=(
+                                self._icu_episode_window(
+                                    data_source,
+                                    pre_admission_hours=self._pre_admission_hours_from_kwargs(kwargs),
+                                )
+                                if align_to_admission else None
+                            ),
                         )
+                        note_duckdb_route("long_table_batch")
 
                         id_col = _detect_batch_id_col(batch_df, 'stay_id')
 
@@ -1805,7 +1913,7 @@ class ConceptResolver:
                         # bare minutes->hours conversion leaves repeat
                         # admissions shifted by tens of thousands of hours.
                         _db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                        if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes':
+                        if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes' and not batch_df.empty:
                             batch_df = batch_df.copy()
                             batch_df = self._align_time_to_admission(
                                 batch_df,
@@ -1874,6 +1982,10 @@ class ConceptResolver:
                                 if list(batch_df.columns) == keep_cols
                                 else batch_df.loc[:, keep_cols]
                             )
+                            # Hours whose only rows were bounded away have no value.
+                            table_batch_df = table_batch_df.dropna(
+                                subset=keep_cols[2:], how="all"
+                            ).reset_index(drop=True)
                             table_covered_names = set(covered_names)
 
                         if verbose and covered_names:
@@ -1885,10 +1997,20 @@ class ConceptResolver:
                             )
                 except DuckDBQueryInterrupted:
                     raise
+                except ConceptError:
+                    raise
                 except Exception as e:
-                    logger.warning(f"长表批量加载失败，回退到普通加载: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
+                    # Same contract as the wide batch: no silent per-concept
+                    # re-read after a failed batch read.
+                    from .errors import ConceptTableReadError
+
+                    raise ConceptTableReadError(
+                        database=getattr(data_source.config, "name", ""),
+                        table=shared_table,
+                        stage="long_table_batch_aggregation",
+                        detail=f"{type(e).__name__}: {e}",
+                        cause=e,
+                    ) from e
 
             if table_batch_results:
                 wide_table_batch_results.update(table_batch_results)
@@ -2309,6 +2431,20 @@ class ConceptResolver:
 
         definition = source_definition(self.dictionary[concept_name], data_source.config.name)
 
+        _icu_window_memo: list = []
+
+        def _duckdb_icu_window():
+            """The episode window this concept's pandas clip applies, or None."""
+            if not align_to_admission:
+                return None
+            if not _icu_window_memo:
+                _icu_window_memo.append(self._icu_episode_window(
+                    data_source,
+                    pre_admission_hours=self._pre_admission_hours_from_kwargs(kwargs),
+                    keep_post_discharge=concept_name in POST_DISCHARGE_OUTCOME_CONCEPTS,
+                ))
+            return _icu_window_memo[0]
+
         # 🔧 FIX 2025-02-14: vent_ind 是特殊的 rec_cncpt - 它有 callback 且需要正确的 win_tbl 格式
         # 其他有 callback 的概念（如 gcs, sofa_*）可能有直接的数据源，应该优先使用直接加载
         use_recursive = False
@@ -2497,6 +2633,7 @@ class ConceptResolver:
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
             use_duckdb_aggregation = False  # 每个 source 重置
+            _sql_row_bounded_sum = False  # 每个 source 重置
             if source.class_name == "fun_itm":
                 return self._load_fun_item(
                     concept_name,
@@ -2990,7 +3127,7 @@ class ConceptResolver:
                         # of the table's val_var and took MEDIAN before the concept bounds, so a
                         # stay's weight/height depended on the storage layout (lead-r13, class a).
                         # Raw audit observations must reach QC before SQL aggregation.
-                        if aggregator is not False and has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
+                        if aggregator is not False and has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb and duckdb_aggregation_enabled():
                             itemids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
                             use_duckdb_aggregation = len(itemids) > 0
                             if is_convert_unit and use_duckdb_aggregation:
@@ -3165,7 +3302,11 @@ class ConceptResolver:
                             value_transform=_duckdb_value_transform,
                             itemid_col=source.sub_var,
                             retain_source_time=concept_name == "urine",
+                            # Clip on the raw event hour before the floor,
+                            # with the same window the pandas path applies.
+                            icu_window=_duckdb_icu_window(),
                         )
+                        note_duckdb_route("bucketed_single")
                         
                         if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:
                             print(f"   🔧 convert_unit DuckDB内联完成: {len(frame):,} 行")
@@ -3214,6 +3355,11 @@ class ConceptResolver:
                         # 🚀 标记为 DuckDB 预聚合，change_interval 可跳过冗余 groupby
                         table._pre_aggregated = True
                         _duckdb_source_count += 1
+                        _sql_row_bounded_sum = (
+                            _duckdb_agg == 'sum'
+                            and not signed_sum_bounds
+                            and (definition.minimum is not None or definition.maximum is not None)
+                        )
                         
                         if verbose:
                             print(f"   ✅ DuckDB聚合完成: {len(frame):,} 行")
@@ -3388,6 +3534,7 @@ class ConceptResolver:
                         _convert_unit_callback_for_duckdb = True
                     elif (
                         _has_bucket_dir
+                        and duckdb_aggregation_enabled()
                         and aggregator is not False
                         and interval is not None
                         and not has_sub_var
@@ -3467,25 +3614,50 @@ class ConceptResolver:
                                        {_wt_time_expr} AS {_wt_time_col},
                                        {_wt_agg_sql} AS {_wt_val_var}
                                 FROM read_parquet({_wt_read}, union_by_name=true)
-                                WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_bounds}
+                                WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_bounds} {{__easyicu_window__}}
                                 GROUP BY {_wt_id_col}, {_wt_time_expr}
                                 ORDER BY {_wt_id_col}, 2
                             """
 
-                            _wt_conn = _get_duckdb_connection()
-                            try:
-                                frame = _wt_conn.execute(_wt_query).fetchdf() if _wt_files else None
-                            except Exception:
-                                # Fallback to raw loading
-                                frame = None
-                            if frame is not None and _wt_exact and _wt_val_var in frame.columns:
-                                from ..utils.exact_sum import exact_terms_to_values
+                            if _wt_files:
+                                _wt_conn = _get_duckdb_connection()
+                                from ..utils.icu_window import IcuWindowSql
 
-                                frame[_wt_val_var] = exact_terms_to_values(
-                                    frame[_wt_val_var], 'mean' if _wt_agg_func == 'AVG' else 'sum'
+                                _wt_window = _duckdb_icu_window()
+                                if _wt_window is not None and db_name not in {"eicu", "eicu_demo"}:
+                                    raise ConceptError(
+                                        f"no ICU-relative clock for an episode window on {source.table!r} ({db_name!r})"
+                                    )
+                                _wt_window_sql = IcuWindowSql(_wt_conn, _wt_window)
+                                # eICU offsets are minutes; the raw path divides by 60.
+                                _wt_query = _wt_query.replace(
+                                    "{__easyicu_window__}",
+                                    _wt_window_sql.condition(f"{_wt_time_col} / 60.0", _wt_id_col),
                                 )
+                                try:
+                                    frame = _wt_conn.execute(_wt_query).fetchdf()
+                                except Exception as exc:
+                                    # Raw loading is not the same definition (window
+                                    # clip, bounds); a failed query is a failure.
+                                    from .errors import ConceptTableReadError
 
-                            if frame is not None and len(frame) > 0:
+                                    raise ConceptTableReadError(
+                                        database=db_name, table=source.table,
+                                        stage="wide_table_duckdb_aggregation",
+                                        detail=f"{type(exc).__name__}: {exc}", cause=exc,
+                                    ) from exc
+                                finally:
+                                    _wt_window_sql.close()
+                                note_duckdb_route("wide_single_column")
+                                if _wt_exact and _wt_val_var in frame.columns:
+                                    from ..utils.exact_sum import exact_terms_to_values
+
+                                    frame[_wt_val_var] = exact_terms_to_values(
+                                        frame[_wt_val_var], 'mean' if _wt_agg_func == 'AVG' else 'sum'
+                                    )
+
+                                # An empty result is these patients' answer on this
+                                # path; re-reading raw would switch the definition.
                                 table = ICUTable(
                                     data=frame,
                                     id_columns=[_wt_id_col],
@@ -3493,10 +3665,13 @@ class ConceptResolver:
                                     value_column=_wt_val_var,
                                 )
                                 table._pre_aggregated = True
+                                _sql_row_bounded_sum = _wt_agg_func == 'SUM' and bool(_wt_bounds)
                                 if verbose:
                                     logger.info(f"   🚀 宽表单列DuckDB聚合: {source.table}.{_wt_val_var} -> {len(frame):,} 行")
                             else:
-                                # Fallback
+                                # No top-level Parquet set (a bucket root or a CSV):
+                                # this table is routed to the raw path, which
+                                # applies the same bounds and window.
                                 table = data_source.load_table(
                                     source.table,
                                     columns=extra_columns if extra_columns else None,
@@ -4864,6 +5039,8 @@ class ConceptResolver:
                 from .source_channel import stamp_rank
 
                 frame_subset = stamp_rank(frame_subset, definition, source)
+            if _sql_row_bounded_sum:
+                frame_subset = frame_subset.assign(**{_SQL_ROW_BOUNDED_COLUMN: True})
             frames.append(frame_subset)
 
         combined_dur_unit = None
@@ -5359,7 +5536,14 @@ class ConceptResolver:
         
         # Apply interval alignment and aggregation if interval is specified
         # BUT skip for win_tbl/id_tbl target concepts
-        if interval is not None and index_column and index_column in combined.columns and not is_win_tbl_target and not is_id_tbl_target:
+        _hourly_branch = bool(
+            interval is not None and index_column and index_column in combined.columns
+            and not is_win_tbl_target and not is_id_tbl_target
+        )
+        if not _hourly_branch:
+            # The SQL row-bounded marker only informs the hourly bound step.
+            combined = combined.drop(columns=[_SQL_ROW_BOUNDED_COLUMN], errors="ignore")
+        if _hourly_branch:
             # DEBUG
             from ..io.ts_utils import change_interval
             
@@ -5733,21 +5917,29 @@ class ConceptResolver:
             # easyicu's change_interval DOES aggregate, so filter_bounds must go BEFORE it.
             # Previously filter_bounds was incorrectly placed AFTER change_interval, causing
             # outlier values to participate in median aggregation (e.g. SIC epi_rate 1.9% error).
+            # An SQL hourly sum was bounded per value; bounding its total again
+            # drops in-range hours (eICU urine 3 x 2000 mL), unlike raw and ricu.
+            _sql_bounded_rows = (
+                combined[_SQL_ROW_BOUNDED_COLUMN].eq(True)
+                if _SQL_ROW_BOUNDED_COLUMN in combined.columns
+                else pd.Series(False, index=combined.index)
+            )
             if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
                 if definition.minimum is not None:
                     before_len = len(combined)
-                    combined = combined[combined[concept_name] >= definition.minimum]
+                    combined = combined[_sql_bounded_rows.reindex(combined.index) | (combined[concept_name] >= definition.minimum)]
                     if DEBUG_MODE and len(combined) < before_len:
                         print(f"   🔍 DEBUG: filter_bounds(pre-agg) min={definition.minimum}: {before_len} -> {len(combined)}")
                 if definition.maximum is not None:
                     before_len = len(combined)
-                    combined = combined[combined[concept_name] <= definition.maximum]
+                    combined = combined[_sql_bounded_rows.reindex(combined.index) | (combined[concept_name] <= definition.maximum)]
                     if DEBUG_MODE and len(combined) < before_len:
                         print(f"   🔍 DEBUG: filter_bounds(pre-agg) max={definition.maximum}: {before_len} -> {len(combined)}")
                 if definition.minimum is not None or definition.maximum is not None:
                     combined = combined.dropna(subset=[concept_name])
+            combined = combined.drop(columns=[_SQL_ROW_BOUNDED_COLUMN], errors="ignore")
 
             if _select_channels:
                 from .source_channel import select_preferred_channel
@@ -6005,6 +6197,164 @@ class ConceptResolver:
                 )
             raise exc
     
+    def _icu_episode_bounds(
+        self,
+        data_source: ICUDataSource,
+        table: str,
+        columns: List[str],
+        *,
+        unique_on: Optional[str] = None,
+        optional: tuple = (),
+    ) -> pd.DataFrame:
+        """Load and cache the stay-level table one episode window reads.
+
+        ``optional`` columns are kept when the table has them (a MIMIC
+        ``icustays`` without ``los`` still bounds by ``outtime``).
+
+        A failed read is a typed failure: an unclipped frame would publish
+        rows outside the episode (lead-r13; the former eICU/MIMIC warmups
+        swallowed this and returned the frame unclipped).
+        """
+
+        db_name = getattr(getattr(data_source, "config", None), "name", "")
+        key = (db_name, str(getattr(data_source, "base_path", "")), table, tuple(columns), tuple(optional))
+        cache = self.__dict__.setdefault("_icu_window_bounds", {})
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            loaded = data_source.load_table(
+                table, columns=None if optional else list(columns), verbose=False
+            )
+            frame = loaded.data if hasattr(loaded, "data") else loaded
+            keep = list(columns) + [c for c in optional if c in frame.columns and c not in columns]
+            frame = frame[keep].copy()
+        except StorageIntegrityError:
+            raise
+        except Exception as exc:
+            from .errors import ConceptTableReadError
+
+            raise ConceptTableReadError(
+                database=db_name,
+                table=table,
+                stage="icu_episode_window",
+                detail=f"{type(exc).__name__}: {exc}",
+                cause=exc,
+            ) from exc
+        if unique_on is not None:
+            frame = frame.drop_duplicates(subset=[unique_on], keep="last")
+        cache[key] = frame
+        return frame
+
+    def _icu_episode_window(
+        self,
+        data_source: ICUDataSource,
+        *,
+        stay_column: Optional[str] = None,
+        pre_admission_hours: Optional[float] = None,
+        keep_post_discharge: bool = False,
+    ):
+        """Return the ICU episode window both extraction paths clip with.
+
+        This is the single owner of the per-database window: the pandas path
+        (``_align_time_to_admission``) and every DuckDB aggregation entry
+        point (which filters raw event hours before the hour floor) take
+        their bounds from here.  ``None`` means the database has no episode
+        clip (community releases publish origin-subtracted hours only).
+        """
+
+        from ..utils.icu_window import IcuEpisodeWindow
+        from ..utils.time_units import (
+            ICU_TIME_FALLBACK_LIMIT_HOURS,
+            ICU_TIME_POST_DISCHARGE_HOURS,
+            ICU_TIME_PRE_ADMISSION_HOURS,
+        )
+
+        db_name = getattr(getattr(data_source, "config", None), "name", "") or ""
+        pre = (
+            float(pre_admission_hours)
+            if pre_admission_hours is not None
+            else float(ICU_TIME_PRE_ADMISSION_HOURS)
+        )
+        post = float(ICU_TIME_POST_DISCHARGE_HOURS)
+        fallback = float(ICU_TIME_FALLBACK_LIMIT_HOURS)
+        icustay_cfg = getattr(data_source.config, "id_configs", {}).get("icustay")
+        if stay_column is None:
+            stay_column = icustay_cfg.id if icustay_cfg is not None else None
+
+        def window(upper_by_stay, keep_post=keep_post_discharge):
+            if upper_by_stay is not None:
+                upper_by_stay = upper_by_stay.loc[upper_by_stay.index.notna()]
+                upper_by_stay.index = pd.Index(
+                    pd.to_numeric(upper_by_stay.index).astype(np.int64)
+                )
+                upper_by_stay = upper_by_stay.groupby(level=0, sort=False).max()
+            return IcuEpisodeWindow(
+                pre_admission_hours=pre,
+                default_upper_hours=fallback,
+                upper_by_stay=upper_by_stay,
+                keep_post_discharge=keep_post,
+            )
+
+        if db_name in {"eicu", "eicu_demo"}:
+            if stay_column is None:
+                raise ConceptError("eICU episode window requires a stay identifier")
+            bounds = self._icu_episode_bounds(
+                data_source, "patient", [stay_column, "unitdischargeoffset"],
+                unique_on=stay_column,
+            )
+            return window(_eicu_episode_upper_by_stay(
+                bounds, stay_column=stay_column,
+                post_discharge_hours=post, fallback_hours=fallback,
+            ))
+        if db_name in ("mimic", "miiv") or db_name.startswith("mimic"):
+            if stay_column is None:
+                raise ConceptError("MIMIC episode window requires a stay identifier")
+            table = icustay_cfg.table if icustay_cfg is not None and icustay_cfg.table else "icustays"
+            shared = getattr(self, "_icustays_cache", None)
+            if (
+                shared is not None
+                and stay_column in shared.columns
+                and ("los" in shared.columns or {"intime", "outtime"} <= set(shared.columns))
+            ):
+                # A shared icustays cache that carries the episode end is the
+                # same table; one holding only intime is not used.
+                bounds = shared
+            else:
+                bounds = self._icu_episode_bounds(
+                    data_source, table, [stay_column], optional=("intime", "outtime", "los"),
+                )
+            return window(_mimic_episode_upper_by_stay(
+                bounds, stay_column=stay_column,
+                post_discharge_hours=post, fallback_hours=fallback,
+            ))
+        if db_name == "aumc":
+            stay_column = stay_column or "admissionid"
+            bounds = self._icu_episode_bounds(
+                data_source, "admissions", [stay_column, "admittedat", "dischargedat"],
+                unique_on=stay_column,
+            )
+            upper = _aumc_episode_upper_hours(
+                bounds["admittedat"], bounds["dischargedat"],
+                scale=_aumc_admittedat_scale(bounds["admittedat"]),
+                post_discharge_hours=post, fallback_hours=fallback,
+            )
+            return window(pd.Series(upper.to_numpy(), index=bounds[stay_column].to_numpy()))
+        if db_name in {"sic", "sic_demo"}:
+            stay_column = stay_column or "CaseID"
+            bounds = self._icu_episode_bounds(
+                data_source, "cases", [stay_column, "ICUOffset", "TimeOfStay"],
+            )
+            return window(_sic_episode_upper_by_stay(
+                bounds, stay_column=stay_column,
+                post_discharge_hours=post, fallback_hours=fallback,
+            ))
+        if db_name == "hirid":
+            # HiRID has no discharge clock; the 366-day sanity bound applies
+            # to every row, outcomes included.
+            return window(None, keep_post=False)
+        return None
+
     def _align_time_to_admission(
         self,
         data: pd.DataFrame,
@@ -6207,67 +6557,28 @@ class ConceptResolver:
                 if stay_col is None and "patientunitstayid" in data.columns:
                     stay_col = "patientunitstayid"
                 if stay_col is not None:
-                    try:
-                        cache = getattr(self, "_eicu_patient_cache", None)
-                        if (
-                            cache is None
-                            or stay_col not in cache.columns
-                            or "unitdischargeoffset" not in cache.columns
-                        ):
-                            patient_table = data_source.load_table(
-                                "patient",
-                                columns=[stay_col, "unitdischargeoffset"],
-                                verbose=False,
-                            )
-                            cache_df = (
-                                patient_table.data
-                                if hasattr(patient_table, "data")
-                                else patient_table
-                            )
-                            cache_df = cache_df[
-                                [stay_col, "unitdischargeoffset"]
-                            ].drop_duplicates(
-                                subset=[stay_col], keep="last"
-                            ).copy()
-                            self._eicu_patient_cache = cache_df
-                            cache = cache_df
-                        upper_by_stay = _eicu_episode_upper_by_stay(
-                            cache,
-                            stay_column=stay_col,
-                            post_discharge_hours=float(
-                                ICU_TIME_POST_DISCHARGE_HOURS
-                            ),
-                            fallback_hours=float(
-                                ICU_TIME_FALLBACK_LIMIT_HOURS
-                            ),
-                        )
-                        event_hours = pd.to_numeric(
-                            data[index_column], errors="coerce"
-                        )
-                        event_hours.index = data.index
-                        stay_keys = pd.to_numeric(
-                            data[stay_col], errors="coerce"
-                        ).astype("Int64")
-                        upper_hours = stay_keys.map(upper_by_stay).fillna(
-                            float(ICU_TIME_FALLBACK_LIMIT_HOURS)
-                        )
-                        upper_hours.index = data.index
-                        data = data if not clip_icu_episode else _quarantine_rows_outside_icu_episode(
-                            data,
-                            event_hours=event_hours,
-                            upper_hours=upper_hours,
-                            allowed_pre_hours=allowed_pre_hours,
-                            db_label="eICU",
-                            keep_post_discharge=keep_post_discharge,
-                        )
-                    except ValueError:
-                        raise
-                    except StorageIntegrityError:
-                        raise
-                    except Exception:
-                        # Cache warmup failed; leave the frame untouched
-                        # rather than returning unaligned times.
-                        pass
+                    # One window owner for this clip and the DuckDB pre-floor
+                    # filter. A failed patient read raises: the former
+                    # ``except Exception: pass`` published unclipped rows.
+                    window = self._icu_episode_window(
+                        data_source,
+                        stay_column=stay_col,
+                        pre_admission_hours=allowed_pre_hours,
+                        keep_post_discharge=keep_post_discharge,
+                    )
+                    event_hours = pd.to_numeric(
+                        data[index_column], errors="coerce"
+                    )
+                    event_hours.index = data.index
+                    upper_hours = window.upper_for(data[stay_col])
+                    data = data if not clip_icu_episode else _quarantine_rows_outside_icu_episode(
+                        data,
+                        event_hours=event_hours,
+                        upper_hours=upper_hours,
+                        allowed_pre_hours=allowed_pre_hours,
+                        db_label="eICU",
+                        keep_post_discharge=keep_post_discharge,
+                    )
             return data
 
         if db_name == 'aumc':
@@ -6358,17 +6669,7 @@ class ConceptResolver:
             # ICUDataSource normalises AUMC timestamp columns from raw
             # milliseconds to minutes.  Accept raw milliseconds as a defensive
             # fallback for custom datasource implementations.
-            admittedat_scale = (
-                3_600_000.0
-                if admittedat.abs().median(skipna=True) > 1_000_000_000
-                else 60.0
-            )
-            discharge_hours = None
-            if "dischargedat" in frame.columns:
-                discharge_hours = (
-                    pd.to_numeric(frame["dischargedat"], errors="coerce")
-                    - admittedat
-                ) / admittedat_scale
+            admittedat_scale = _aumc_admittedat_scale(admittedat)
             for col in cols_to_convert:
                 if col in frame.columns and pd.api.types.is_numeric_dtype(frame[col]):
                     # Source columns reach this layer as absolute minutes.
@@ -6393,16 +6694,15 @@ class ConceptResolver:
                 event_hours = pd.to_numeric(
                     frame[index_column], errors="coerce"
                 )
-                if discharge_hours is None:
-                    upper_hours = pd.Series(
-                        ICU_TIME_FALLBACK_LIMIT_HOURS,
-                        index=frame.index,
-                        dtype="float64",
-                    )
-                else:
-                    upper_hours = discharge_hours.add(
-                        ICU_TIME_POST_DISCHARGE_HOURS
-                    ).fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                upper_hours = _aumc_episode_upper_hours(
+                    admittedat,
+                    frame["dischargedat"]
+                    if "dischargedat" in frame.columns
+                    else pd.Series(np.nan, index=frame.index),
+                    scale=admittedat_scale,
+                    post_discharge_hours=ICU_TIME_POST_DISCHARGE_HOURS,
+                    fallback_hours=ICU_TIME_FALLBACK_LIMIT_HOURS,
+                )
                 allowed_pre_hours = (
                     float(pre_admission_hours)
                     if pre_admission_hours is not None
@@ -6565,21 +6865,11 @@ class ConceptResolver:
                             "SICdb episode-bound validation requires "
                             "cases.ICUOffset and cases.TimeOfStay"
                         ) from exc
-                if bounds.duplicated(subset=[primary_id], keep=False).any():
-                    conflicting = bounds.drop_duplicates().duplicated(
-                        subset=[primary_id], keep=False
-                    )
-                    if conflicting.any():
-                        raise ValueError(
-                            "SICdb cases contains conflicting ICU episode bounds"
-                        )
-                bounds = bounds.drop_duplicates(subset=[primary_id], keep="last")
-                upper = (
-                    pd.to_numeric(bounds["TimeOfStay"], errors="coerce")
-                    - pd.to_numeric(bounds["ICUOffset"], errors="coerce")
-                ) / 3600.0 + float(ICU_TIME_POST_DISCHARGE_HOURS)
-                upper_by_id = pd.Series(
-                    upper.to_numpy(), index=bounds[primary_id]
+                upper_by_id = _sic_episode_upper_by_stay(
+                    bounds,
+                    stay_column=primary_id,
+                    post_discharge_hours=ICU_TIME_POST_DISCHARGE_HOURS,
+                    fallback_hours=ICU_TIME_FALLBACK_LIMIT_HOURS,
                 )
                 upper_hours = data[primary_id].map(upper_by_id).fillna(
                     ICU_TIME_FALLBACK_LIMIT_HOURS
@@ -6864,15 +7154,17 @@ class ConceptResolver:
                     or pd.api.types.is_timedelta64_dtype(data[index_column])
                 ):
                     # The index already carries relative time (hours or a
-                    # duration); the optional admission-time merge is not
-                    # required to keep it that way.
-                    return data
-                raise ConceptError(
-                    "time alignment to ICU admission failed while loading or "
-                    "merging admission times for index column "
-                    f"{index_column!r}: {exc!r}; refusing to return "
-                    "unaligned absolute timestamps"
-                ) from exc
+                    # duration); the admission-time merge is not needed, but
+                    # the episode clip below still is: it reads its own stay
+                    # bounds and fails typed when they cannot be read.
+                    pass
+                else:
+                    raise ConceptError(
+                        "time alignment to ICU admission failed while loading or "
+                        "merging admission times for index column "
+                        f"{index_column!r}: {exc!r}; refusing to return "
+                        "unaligned absolute timestamps"
+                    ) from exc
         
         # Durations already describe a relative axis. Converting them through
         # pd.to_datetime destroys valid values; join identifiers as above, then
@@ -6914,39 +7206,10 @@ class ConceptResolver:
         #       (the result was computed and immediately discarded).
         # Profiling miiv full-cohort SOFA showed pd.to_datetime alone
         # eating 28s, with cumulative `_align_time_to_admission` at 27s,
-        # so a no-op fast path is a big win. We keep the original code
-        # path only for the case where outtime hadn't been materialised
-        # yet (we still want the cache populated for the next caller).
+        # so a no-op fast path is a big win. The episode clip below reads
+        # its stay bounds from the window owner's own cache.
         if pd.api.types.is_numeric_dtype(data[index_column]):
             _normalize_duration_to_hours(data)
-            cache = self._icustays_cache
-            need_warm_cache = (
-                cache is None
-                or 'intime' not in cache.columns
-                or primary_id not in cache.columns
-            )
-            if need_warm_cache:
-                try:
-                    icu_cols = [primary_id, 'intime', 'outtime', 'los']
-                    icustays_table = data_source.load_table(stay_origin_table, columns=icu_cols, verbose=False)
-                    icu_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
-                    icu_df = icu_df.copy()
-                    icu_df['intime'] = pd.to_datetime(icu_df['intime'], errors='coerce', utc=True).dt.tz_localize(None)
-                    if 'outtime' in icu_df.columns:
-                        icu_df['outtime'] = pd.to_datetime(icu_df['outtime'], errors='coerce', utc=True).dt.tz_localize(None)
-                    if 'los' in icu_df.columns:
-                        los_hours = pd.to_numeric(icu_df['los'], errors='coerce') * 24.0
-                        outtime_fb = icu_df['intime'] + pd.to_timedelta(los_hours, unit='h')
-                        if 'outtime' in icu_df.columns:
-                            icu_df['outtime'] = icu_df['outtime'].fillna(outtime_fb)
-                        else:
-                            icu_df['outtime'] = outtime_fb
-                    self._icustays_cache = icu_df
-                except StorageIntegrityError:
-                    raise
-                except Exception:
-                    # cache warmup failed; leave the frame untouched
-                    pass
             # 2026-09-18 v6: restore the MIMIC-family ICU-episode bound at
             # the producer layer (AUMC precedent in this same function). The
             # numeric fast path used to return here with no window check at
@@ -6980,31 +7243,21 @@ class ConceptResolver:
                     if db_stay_id_col in data.columns
                     else (primary_id if primary_id in data.columns else None)
                 )
-                cache = self._icustays_cache
-                if (
-                    stay_col is not None
-                    and cache is not None
-                    and stay_col in cache.columns
-                ):
-                    upper_by_stay = _mimic_episode_upper_by_stay(
-                        cache,
+                if stay_col is not None:
+                    # The window owner reads the stay bounds itself; the
+                    # shared icustays cache may hold only intime, which
+                    # silently widened this clip to the 366-day fallback.
+                    window = self._icu_episode_window(
+                        data_source,
                         stay_column=stay_col,
-                        post_discharge_hours=float(
-                            ICU_TIME_POST_DISCHARGE_HOURS
-                        ),
-                        fallback_hours=float(ICU_TIME_FALLBACK_LIMIT_HOURS),
+                        pre_admission_hours=allowed_pre_hours,
+                        keep_post_discharge=keep_post_discharge,
                     )
                     event_hours = pd.to_numeric(
                         data[index_column], errors="coerce"
                     )
                     event_hours.index = data.index
-                    stay_keys = pd.to_numeric(
-                        data[stay_col], errors="coerce"
-                    ).astype("Int64")
-                    upper_hours = stay_keys.map(upper_by_stay).fillna(
-                        float(ICU_TIME_FALLBACK_LIMIT_HOURS)
-                    )
-                    upper_hours.index = data.index
+                    upper_hours = window.upper_for(data[stay_col])
                     data = data if not clip_icu_episode else _quarantine_rows_outside_icu_episode(
                         data,
                         event_hours=event_hours,

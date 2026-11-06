@@ -83,8 +83,14 @@ def _codes_from_ngroup(grouped) -> tuple[np.ndarray, int]:
     return codes, int(grouped.ngroups)
 
 
-def _is_plain_float(series: pd.Series) -> bool:
-    return isinstance(series.dtype, np.dtype) and series.dtype.kind == "f"
+def _is_summable(series: pd.Series) -> bool:
+    """Float or integer (not bool) column: its sum or mean publishes float64.
+
+    The SQL path returns DOUBLE for SUM/AVG; an integer source column summed
+    on the pandas path must publish the same float64 dtype.
+    """
+
+    return isinstance(series.dtype, np.dtype) and series.dtype.kind in "fiu"
 
 
 def apply_exact_columns(
@@ -106,7 +112,7 @@ def apply_exact_columns(
     for column, how in agg_dict.items():
         if how not in ORDER_SENSITIVE_AGGREGATES or column not in frame.columns:
             continue
-        if column not in result.columns or not _is_plain_float(frame[column]):
+        if column not in result.columns or not _is_summable(frame[column]):
             continue
         totals, counts = exact_group_totals(
             codes, frame[column].to_numpy(dtype=np.float64), n_groups
@@ -153,7 +159,7 @@ def exact_groupby_sum(
     keys_list: List[Hashable] = list(keys)
     grouped = frame.groupby(keys_list, sort=sort, as_index=False, dropna=dropna)
     result = grouped[column].sum(min_count=min_count)
-    if not _is_plain_float(frame[column]):
+    if not _is_summable(frame[column]):
         return result
     codes, n_groups = _codes_from_ngroup(grouped)
     totals, counts = exact_group_totals(

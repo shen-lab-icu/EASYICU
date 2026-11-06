@@ -1582,14 +1582,15 @@ def test_align_time_warm_cache_matches_cold_cache_after_numeric_warmup():
     ``hasattr(icustays_table, 'data')`` check ran on both branches.  The
     resulting UnboundLocalError was swallowed by ``except Exception: pass``
     and the frame came back with absolute timestamps, which downstream code
-    reads as relative hours.  The cache is warmed through the real numeric
-    fast path first, matching the production order.
+    reads as relative hours.  The numeric fast path no longer warms the
+    shared cache (the episode window reads its own stay bounds, lead-r13),
+    so the warm cache is set directly after a numeric load.
     """
 
     source = SimpleNamespace(
         config=SimpleNamespace(name="miiv"),
         load_table=lambda *_args, **_kwargs: SimpleNamespace(
-            data=_admission_time_frame()
+            data=_admission_time_frame().assign(stay_id=[10, 20])
         ),
     )
 
@@ -1598,10 +1599,10 @@ def test_align_time_warm_cache_matches_cold_cache_after_numeric_warmup():
     numeric = pd.DataFrame(
         {"subject_id": [1], "stay_id": [10], "charttime": [3.0]}
     )
-    warm_resolver._align_time_to_admission(
+    assert warm_resolver._align_time_to_admission(
         numeric, source, ["subject_id"], "charttime"
-    )
-    assert warm_resolver._icustays_cache is not None
+    )["charttime"].tolist() == [3.0]
+    warm_resolver._icustays_cache = _admission_time_frame()
 
     out_warm = warm_resolver._align_time_to_admission(
         _datetime_chart_frame(), source, ["subject_id"], "charttime"
@@ -1749,17 +1750,27 @@ def test_align_time_prefix_failures_fail_closed(
 def test_align_time_prefix_failure_keeps_relative_index(
     layout, frame_factory, id_columns
 ):
-    """An index already in relative time must survive optional mapping failures.
+    """An index already in relative time needs no admission-time merge.
 
-    Only inputs that still need conversion (absolute datetimes) fail closed;
-    a frame whose index already carries hours or durations, and whose
-    stay-level mapping or cache warmup fails, is returned unchanged.
+    A frame without a stay key cannot be clipped to its episode and is
+    returned unchanged.  A frame with a stay key still needs the episode
+    bound; when the stay bounds cannot be read that is a typed failure, not
+    an unclipped frame (lead-r13: the former warmup swallow published rows
+    outside the episode).
     """
+    from easyicu.concept.errors import ConceptTableReadError
 
     resolver = ConceptResolver.__new__(ConceptResolver)
     resolver._icustays_cache = None
 
     frame = frame_factory()
+    if "stay_id" in frame.columns:
+        with pytest.raises(ConceptTableReadError) as caught:
+            resolver._align_time_to_admission(
+                frame, _failing_source("load_raises"), id_columns, "charttime"
+            )
+        assert caught.value.stage == "icu_episode_window"
+        return
     out = resolver._align_time_to_admission(
         frame, _failing_source("load_raises"), id_columns, "charttime"
     )

@@ -301,14 +301,12 @@ def test_r6_f006_wide_path_respects_raw_requests_and_requested_grid(tmp_path, mo
     fast = load()
     monkeypatch.setattr(source, "resolve_bucket_directory", lambda _: None)
     monkeypatch.setattr(source, "resolve_flat_parquet_directory", lambda _: None)
-    # Batch-wide scanning is a separate optimization from the per-source seam.
-    from easyicu import datasource
+    # Batch-wide scanning is a separate optimization from the per-source
+    # seam; a failed batch read is now a typed failure, so route around it.
+    from easyicu.concept.aggregation_route import force_raw_aggregation
 
-    def force_ordinary(*args, **kwargs):
-        raise NotImplementedError("force ordinary loading for comparison")
-
-    monkeypatch.setattr(datasource, "load_wide_table_aggregated", force_ordinary)
-    ordinary = load()
+    with force_raw_aggregation():
+        ordinary = load()
     pd.testing.assert_frame_equal(fast, ordinary, check_dtype=False)
     if aggregate is False or (interval is None and entry == "single"):
         assert len(ordinary) == 7

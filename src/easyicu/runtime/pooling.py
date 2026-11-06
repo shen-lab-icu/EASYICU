@@ -56,7 +56,7 @@ class PoolingDecision:
     block_value_transform: bool
     #: 2+ 个源指向同一张表 → 禁止 DuckDB 预聚合，交给 change_interval 池化。
     block_same_table: bool
-    #: ≥2 个普通数值源（含简单字符串回调，排除 rgx_itm）→ 禁止 DuckDB 预聚合。
+    #: ≥2 个普通数值源（含简单字符串回调与 rgx_itm）→ 禁止 DuckDB 预聚合。
     block_multi_numeric: bool
 
     @property
@@ -75,7 +75,7 @@ def compute_pooling_decision(sources: Iterable[object]) -> PoolingDecision:
     源对象需暴露（duck-typed）以下属性，缺失时按 ``None`` 处理：
     - ``callback``: 源回调（``None`` / 字符串表达式 / 可调用对象）
     - ``table``: 源所在原始表名
-    - ``class_name``: 源类别（如 ``"num_itm"`` / ``"rgx_itm"`` / ``"fun_itm"``）
+    - ``class_name``: 源类别（不影响决策；rgx_itm 与其他数值源同等计数）
     """
     sources = list(sources)
 
@@ -86,7 +86,6 @@ def compute_pooling_decision(sources: Iterable[object]) -> PoolingDecision:
     for src in sources:
         callback = getattr(src, "callback", None)
         table = getattr(src, "table", None)
-        class_name = getattr(src, "class_name", None)
 
         if _is_value_transform_callback(callback):
             n_value_transform += 1
@@ -94,8 +93,11 @@ def compute_pooling_decision(sources: Iterable[object]) -> PoolingDecision:
         if table:
             table_counts[table] = table_counts.get(table, 0) + 1
 
-        # 普通数值源：无回调或简单字符串回调，且非 rgx_itm（正则常量源较稀疏）。
-        if class_name != "rgx_itm" and (callback is None or isinstance(callback, str)):
+        # 普通数值源：无回调或简单字符串回调。rgx_itm 源同样计入：它与另一数值源
+        # 同一小时并存时，per-source median 再取 median 不等于 ricu 的池化
+        # median（lead-r13 parity census: eICU etco2 respiratorycharting +
+        # vitalperiodic, 25 hourly values differed on the demo）。
+        if callback is None or isinstance(callback, str):
             n_plain_numeric += 1
 
     return PoolingDecision(

@@ -102,14 +102,15 @@ class TestPoolingDecision:
         d = compute_pooling_decision(sources)
         assert d.block_value_transform is False
 
-    def test_rgx_itm_sources_excluded_from_plain_numeric(self):
-        # rgx_itm 源不计入 plain numeric 计数
+    def test_rgx_itm_sources_count_as_plain_numeric(self):
+        # rgx_itm 源计入 plain numeric：与另一数值源同小时并存时必须池化
+        # （lead-r13 parity census, eICU etco2）。
         sources = [
             FakeSource(table="t1", class_name="rgx_itm"),
-            FakeSource(table="t2", class_name="rgx_itm"),
+            FakeSource(table="t2", class_name="num_itm"),
         ]
         d = compute_pooling_decision(sources)
-        assert d.block_multi_numeric is False
+        assert d.block_multi_numeric is True
 
     def test_callable_callback_excluded_from_plain_numeric(self):
         # 可调用对象回调（非 None、非 str）不计入 plain numeric
@@ -155,8 +156,6 @@ class TestPoolingDecision:
             block_st = any(c > 1 for c in counts.values())
             n_plain = 0
             for s in sources:
-                if s.class_name == "rgx_itm":
-                    continue
                 if s.callback is None or isinstance(s.callback, str):
                     n_plain += 1
             block_mn = n_plain >= 2

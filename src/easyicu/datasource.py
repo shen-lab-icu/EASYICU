@@ -10,11 +10,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 import logging
 import re
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .utils.icu_window import IcuEpisodeWindow
 
 
 class MissingTableSourceError(KeyError):
@@ -3066,9 +3069,14 @@ def load_bucketed_table_aggregated(
     value_transform: Optional[str] = None,  # 🚀 通用SQL值转换表达式（如 percent_as_numeric, set_val_na）
     itemid_col: Optional[str] = None,
     retain_source_time: bool = False,
+    icu_window: Optional["IcuEpisodeWindow"] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
+
+    ``icu_window`` (from ``ConceptResolver._icu_episode_window``) keeps only
+    rows whose raw ICU-relative hour lies in the episode, before the hour
+    floor, exactly as the pandas path clips before ``change_interval``.
 
     针对AUMC numericitems、HiRID observations等分桶表优化。
     直接在DuckDB中完成小时聚合，避免加载3700万行到Python再降采样。
@@ -3196,6 +3204,9 @@ def load_bucketed_table_aggregated(
     
     # 计算目标桶
     conn = _get_duckdb_connection()
+    from .utils.icu_window import IcuWindowSql
+
+    _window_sql = IcuWindowSql(conn, icu_window)
     
     target_files = data_source.resolve_target_files(table_name, itemid_col, itemids)
     if not target_files:
@@ -3469,7 +3480,11 @@ def load_bucketed_table_aggregated(
             aumc_where_conditions.append(
                 f"o.{patient_filter_col} IN ({patient_str})"
             )
-        aumc_where_clause = "WHERE " + " AND ".join(aumc_where_conditions)
+        # Raw path clock: measuredat and admittedat each become minutes
+        # (ms / 60000), then their difference is divided by 60.
+        aumc_where_clause = "WHERE " + " AND ".join(aumc_where_conditions) + _window_sql.condition(
+            f"((o.{time_col} / 60000.0) - (a.admittedat / 60000.0)) / 60.0", f"o.{id_col}",
+        )
         query = f"""
         SELECT 
             o.{id_col} AS {id_col},
@@ -3511,6 +3526,8 @@ def load_bucketed_table_aggregated(
         hirid_where_clause = where_clause.replace(f"{itemid_col}", f"o.{itemid_col}")
         hirid_where_clause = hirid_where_clause.replace(
             f"{id_col} IN", f"o.{id_col} IN"
+        ) + _window_sql.condition(
+            f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0", f"o.{id_col}",
         )
 
         # 🚀 HiRID 内联 convert_unit
@@ -3646,6 +3663,9 @@ def load_bucketed_table_aggregated(
                 ', '.join(str(int(i)) for i in itemids), patient_ids, _interval_hours,
                 _mimic_agg_expr, time_col, value_column,
                 source_columns=raw_columns_lower,
+                window_sql=_window_sql.condition(
+                    f"EPOCH(o.{time_col} - o.intime) / 60.0 / 60.0", "o.stay_id",
+                ),
             )
         elif join_left_col == "hadm_id":
             # Hospital tables (labevents, prescriptions, etc.): need rolling join
@@ -3669,6 +3689,10 @@ def load_bucketed_table_aggregated(
 
             # Time expression without table alias (for outer query on events_joined CTE)
             _outer_time_expr = f"FLOOR(EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+            # The episode window applies to the assigned stay's raw hour.
+            _outer_window = _window_sql.condition(
+                f"EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 60.0 / 60.0", stay_col,
+            )
             # Value agg expression without table alias
             _outer_agg_expr = _mimic_agg_expr.replace("o.", "")
             _query_bounded_agg = _query_bounded_agg.replace("o.", "")
@@ -3741,7 +3765,7 @@ def load_bucketed_table_aggregated(
                        {_outer_time_expr} as charttime,
                        {_outer_agg_expr}
                 FROM events_joined
-                WHERE _rn = 1 {_final_stay_filter}
+                WHERE _rn = 1 {_final_stay_filter}{_outer_window}
                 GROUP BY {stay_col}, {_outer_time_expr}
                 ORDER BY {stay_col}, 2
                 """
@@ -3770,13 +3794,17 @@ def load_bucketed_table_aggregated(
                        {_outer_time_expr} as charttime,
                        {_outer_agg_expr}
                 FROM events_joined
-                WHERE _rn = 1
+                WHERE _rn = 1{_outer_window}
                 GROUP BY {stay_col}, {_outer_time_expr}
                 ORDER BY {stay_col}, 2
                 """
         else:
             # ICU tables (chartevents, etc.): direct JOIN on stay_id
             join_predicate = f"o.{join_left_col} = a.{join_left_col}"
+            _mimic_where += _window_sql.condition(
+                f"EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 60.0 / 60.0",
+                f"a.{stay_col}",
+            )
 
             query = f"""
             WITH adm AS (
@@ -3910,7 +3938,7 @@ def load_bucketed_table_aggregated(
         )
         sic_where_clause = sic_where_clause.replace(
             f"{value_column} IS NOT NULL", f"o.{value_column} IS NOT NULL"
-        )
+        ) + _window_sql.condition('(o."Offset" - c.ICUOffset) / 3600.0', f"o.{id_col}")
         query = f"""
         SELECT
             o.{id_col} AS {id_col},
@@ -3940,17 +3968,22 @@ def load_bucketed_table_aggregated(
 
             eicu_read = io_relation_sql(conn, eicu_read, where_clause)
             io_audit = io_audit_select()
+        eicu_where = where_clause + _window_sql.condition(f"{time_col} / 60.0", id_col)
         query = f"""
         SELECT 
             {id_col},
             {output_time_expr}{_select_itemid},
             {_agg_value_expr}{default_unit_select}{io_audit}{receipt_select}
         FROM {eicu_read}
-        {where_clause}
+        {eicu_where}
         GROUP BY {id_col}, {time_round_expr}{_group_itemid}
         ORDER BY {id_col}, 2{_order_itemid}
         """
     else:
+        if _window_sql.active:
+            raise ValueError(
+                f"no ICU-relative clock for an episode window on {db_name!r}"
+            )
         # Generic fallback: assume time_col is numeric in minutes
         time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
         output_time_expr = f"{time_round_expr} as charttime"
@@ -4054,6 +4087,8 @@ def load_bucketed_table_aggregated(
     except Exception as e:
         logger.warning("DuckDB aggregation failed: %s", e)
         raise
+    finally:
+        _window_sql.close()
 
 
 def load_bucketed_table_multi_aggregated(
@@ -4069,6 +4104,7 @@ def load_bucketed_table_multi_aggregated(
     time_col: Optional[str] = None,
     itemid_col: Optional[str] = None,
     concept_bounds: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
+    icu_window: Optional["IcuEpisodeWindow"] = None,
 ) -> pd.DataFrame:
     """
     Batch-load multiple concepts from the same long table in one DuckDB scan.
@@ -4117,6 +4153,9 @@ def load_bucketed_table_multi_aggregated(
         raise ValueError(f"Cannot find parquet source for {table_name}")
 
     conn = _get_duckdb_connection()
+    from .utils.icu_window import IcuWindowSql
+
+    _window_sql = IcuWindowSql(conn, icu_window)
 
     target_files = data_source.resolve_target_files(table_name, itemid_col, all_itemids)
     if not target_files:
@@ -4127,6 +4166,11 @@ def load_bucketed_table_multi_aggregated(
     # ── Aggregation ────────────────────────────────────────
     agg_map = {'median': 'MEDIAN', 'mean': 'AVG', 'max': 'MAX', 'min': 'MIN', 'first': 'FIRST', 'sum': 'SUM'}
     duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
+    # Sum and mean return each group's terms (order-independent exact collapse).
+    _multi_exact = duckdb_agg in ("SUM", "AVG")
+
+    def _multi_agg(expr: str) -> str:
+        return f"LIST({expr})" if _multi_exact else f"{duckdb_agg}({expr})"
 
     _interval_hours = interval_minutes / 60.0
     _interval_seconds = interval_minutes * 60.0
@@ -4146,7 +4190,7 @@ def load_bucketed_table_multi_aggregated(
             value_conditions.append(f"o.{value_column} <= {bounds['max']}")
         case_when = " AND ".join(value_conditions)
         select_exprs.append(
-            f"{duckdb_agg}(CASE WHEN {case_when} THEN o.{value_column} END) AS {concept_name}"
+            f"{_multi_agg(f'CASE WHEN {case_when} THEN o.{value_column} END')} AS {concept_name}"
         )
     select_sql = ",\n            ".join(select_exprs)
 
@@ -4224,6 +4268,9 @@ def load_bucketed_table_multi_aggregated(
                 f"SELECT * FROM {_read_func}('{_duckdb_path(icustays_path)}')",
                 all_ids_sql, patient_ids, _interval_hours, select_sql, time_col, value_column,
                 source_columns=raw_columns_lower,
+                window_sql=_window_sql.condition(
+                    f"EPOCH(o.{time_col} - o.intime) / 60.0 / 60.0", "o.stay_id",
+                ),
             )
         elif join_left_col == 'hadm_id':
             # Hospital tables (labevents): need rolling join to assign events to correct ICU stay
@@ -4231,6 +4278,9 @@ def load_bucketed_table_multi_aggregated(
 
             # Outer time expression without table alias (for outer query on events_joined CTE)
             _outer_time_expr = f"FLOOR(EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+            _outer_window = _window_sql.condition(
+                f"EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 60.0 / 60.0", stay_col,
+            )
             # Outer select expressions without table alias
             _outer_select_exprs = []
             for concept_name, ids in concept_itemids.items():
@@ -4246,7 +4296,7 @@ def load_bucketed_table_multi_aggregated(
                     value_conditions.append(f"{value_column} <= {bounds['max']}")
                 case_when = " AND ".join(value_conditions)
                 _outer_select_exprs.append(
-                    f"{duckdb_agg}(CASE WHEN {case_when} THEN {value_column} END) AS {concept_name}"
+                    f"{_multi_agg(f'CASE WHEN {case_when} THEN {value_column} END')} AS {concept_name}"
                 )
             _outer_select_sql = ",\n                ".join(_outer_select_exprs)
 
@@ -4282,7 +4332,7 @@ def load_bucketed_table_multi_aggregated(
                        {_outer_time_expr} AS charttime,
                        {_outer_select_sql}
                 FROM events_joined
-                WHERE _rn = 1 AND {stay_col} IN ({_target_stay_ids_str})
+                WHERE _rn = 1 AND {stay_col} IN ({_target_stay_ids_str}){_outer_window}
                 GROUP BY {stay_col}, {_outer_time_expr}
                 ORDER BY {stay_col}, 2
                 """
@@ -4311,12 +4361,15 @@ def load_bucketed_table_multi_aggregated(
                        {_outer_time_expr} AS charttime,
                        {_outer_select_sql}
                 FROM events_joined
-                WHERE _rn = 1
+                WHERE _rn = 1{_outer_window}
                 GROUP BY {stay_col}, {_outer_time_expr}
                 ORDER BY {stay_col}, 2
                 """
         else:
             # Direct join (stay_id in parquet, e.g. chartevents)
+            _direct_window = _window_sql.condition(
+                f"EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 60.0 / 60.0", f"a.{stay_col}",
+            )
             join_pred = f"o.{join_left_col} = a.{join_left_col}"
             query = f"""
             WITH adm AS (
@@ -4327,7 +4380,7 @@ def load_bucketed_table_multi_aggregated(
                 {select_sql}
             FROM {target_relation} o
             JOIN adm a ON {join_pred}
-            WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
+            WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}{_direct_window}
             GROUP BY a.{output_id_col}, {time_round_expr}
             ORDER BY a.{output_id_col}, 2
             """
@@ -4344,7 +4397,9 @@ def load_bucketed_table_multi_aggregated(
                 if general_csv.exists():
                     general_path = general_csv
                     gen_read = 'read_csv'
-        p_clause = _patient_clause(id_col, patient_ids)
+        p_clause = _patient_clause(id_col, patient_ids) + _window_sql.condition(
+            f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0", f"o.{id_col}",
+        )
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
         query = f"""
         WITH adm AS (
@@ -4361,7 +4416,9 @@ def load_bucketed_table_multi_aggregated(
         """
 
     elif _base_db == 'aumc':
-        p_clause = _patient_clause(id_col, patient_ids)
+        p_clause = _patient_clause(id_col, patient_ids) + _window_sql.condition(
+            f"((o.{time_col} / 60000.0) - (a.admittedat / 60000.0)) / 60.0", f"o.{id_col}",
+        )
         admissions_relation = _aumc_admissions_relation_sql(data_source)
         relative_bucket_minutes = (
             f"FLOOR(((o.{time_col} - a.admittedat) / 60000.0) / "
@@ -4387,6 +4444,7 @@ def load_bucketed_table_multi_aggregated(
     elif _base_db == 'sic':
         p_clause = _patient_clause(id_col, patient_ids)
         _time_ref = f'o."{time_col}"' if time_col == 'Offset' else f'o.{time_col}'
+        p_clause += _window_sql.condition(f"({_time_ref} - c.ICUOffset) / 3600.0", f"o.{id_col}")
         cases_relation = _sic_cases_relation_sql(data_source)
         time_round_expr = (
             f"FLOOR(({_time_ref} - c.ICUOffset) / {_interval_seconds})"
@@ -4416,11 +4474,12 @@ def load_bucketed_table_multi_aggregated(
             raw_filter = f"WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}"
             eicu_read = io_relation_sql(conn, eicu_read + " o", raw_filter)
             io_audit = io_audit_select()
+        eicu_window = _window_sql.condition(f"o.{time_col} / 60.0", f"o.{id_col}")
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}{io_audit}
         FROM {eicu_read} o
-        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}{eicu_window}
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
@@ -4433,18 +4492,29 @@ def load_bucketed_table_multi_aggregated(
         _miiv_lab_admissions(data_source, conn, patient_ids)
         if _base_db == "miiv" and table_name == "labevents" else nullcontext()
     )
-    with lab_admissions:
-        try:
-            arrow_table = conn.execute(query).fetch_arrow_table()
-            df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-            del arrow_table
-        except Exception as error:
-            _raise_if_duckdb_interrupted(error)
+    try:
+        with lab_admissions:
             try:
-                df = conn.execute(query).fetchdf()
-            except Exception as fallback_error:
-                _raise_if_duckdb_interrupted(fallback_error)
-                raise
+                arrow_table = conn.execute(query).fetch_arrow_table()
+                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+                del arrow_table
+            except Exception as error:
+                _raise_if_duckdb_interrupted(error)
+                try:
+                    df = conn.execute(query).fetchdf()
+                except Exception as fallback_error:
+                    _raise_if_duckdb_interrupted(fallback_error)
+                    raise
+    finally:
+        _window_sql.close()
+    if _multi_exact:
+        from .utils.exact_sum import exact_terms_to_values
+
+        for _concept in concept_itemids:
+            if _concept in df.columns:
+                df[_concept] = exact_terms_to_values(
+                    df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
+                )
     df = finish_miiv_lab_frame(df)
     logger.info(
         "Bucketed multi-concept DuckDB aggregation complete: %s concepts=%d itemids=%d -> %d rows",
@@ -4516,6 +4586,7 @@ def load_wide_table_aggregated(
     patient_ids: Optional[List] = None,
     agg_func: str = 'median',  # 'median' (default, matches R ricu), 'first', 'mean', 'max', 'min'
     column_bounds: Optional[dict] = None,  # {col_name: (min_val, max_val)} for pre-aggregation filtering
+    icu_window: Optional["IcuEpisodeWindow"] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
@@ -4577,6 +4648,7 @@ def load_wide_table_aggregated(
                 patient_ids=patient_ids,
                 agg_func=agg_func,
                 column_bounds=column_bounds,
+                icu_window=icu_window,
             )
             chunk = chunk.sort_values(
                 key_columns,
@@ -4622,19 +4694,37 @@ def load_wide_table_aggregated(
         'mean': 'AVG',
         'max': 'MAX', 
         'min': 'MIN',
+        'sum': 'SUM',
     }
     duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
+    # Sum and mean return each group's terms (order-independent exact collapse).
+    _wide_exact = duckdb_agg in ("SUM", "AVG")
+
+    def _wide_agg(expr: str) -> str:
+        return f"LIST({expr})" if _wide_exact else f"{duckdb_agg}({expr})"
     
     # 🚀 perf: register patient_ids as a DuckDB view rather than embedding
     # tens of thousands of literals into a SQL IN list (which inflates plan
     # time and breaks the parquet predicate pushdown path).
     conn = _get_duckdb_connection()
+    from .utils.icu_window import IcuWindowSql
+
+    _window_sql = IcuWindowSql(conn, icu_window)
+    db_name = getattr(data_source.config, "name", "")
+    if _window_sql.active and db_name not in {"eicu", "eicu_demo"}:
+        raise ValueError(
+            f"no ICU-relative clock for an episode window on wide table {table_name!r} ({db_name!r})"
+        )
     where_clause = ""
     _wide_pid_view = None
     if patient_ids:
         _wide_pid_view = "_easyicu_wide_pids"
         conn.register(_wide_pid_view, pd.DataFrame({id_col: list(patient_ids)}))
         where_clause = f"WHERE {id_col} IN (SELECT {id_col} FROM {_wide_pid_view})"
+    # eICU offsets are minutes from unit admission; the raw path divides by 60.
+    _wide_window = _window_sql.condition(f"{time_col} / 60.0", id_col)
+    if _wide_window:
+        where_clause = (where_clause or "WHERE TRUE") + _wide_window
 
     # 🚀 优化：单个 GROUP BY 替代 per-column CTE + FULL OUTER JOIN
     # MEDIAN() 自动忽略 NULL，不需要 WHERE col IS NOT NULL 分支
@@ -4653,12 +4743,12 @@ def load_wide_table_aggregated(
                 if vmax is not None:
                     conditions.append(f"{col} <= {vmax}")
                 filter_expr = " AND ".join(conditions)
-                agg_parts.append(f"{duckdb_agg}(CASE WHEN {filter_expr} THEN {col} END) as {col}")
+                agg_parts.append(f"{_wide_agg(f'CASE WHEN {filter_expr} THEN {col} END')} as {col}")
             else:
-                agg_parts.append(f"{duckdb_agg}({col}) as {col}")
+                agg_parts.append(f"{_wide_agg(col)} as {col}")
         agg_exprs = ", ".join(agg_parts)
     else:
-        agg_exprs = ", ".join(f"{duckdb_agg}({col}) as {col}" for col in value_columns)
+        agg_exprs = ", ".join(f"{_wide_agg(col)} as {col}" for col in value_columns)
 
     # 🚀 perf B1: same-directory bucket parquets share schema (the bucket
     # converter writes them in one pass). Drop union_by_name=true so DuckDB
@@ -4667,7 +4757,6 @@ def load_wide_table_aggregated(
     # union_by_name=true if the fast path raises a schema-mismatch error.
     # The direct wide-result path publishes these rows without another sort.
     # Match the chunked path's key order, regardless of GROUP BY scheduling.
-    db_name = getattr(data_source.config, "name", "")
     if db_name in {"zhejiang_eicu", "jinhua", "zigong"}:
         source_scale = {
             "zhejiang_eicu": 24.0,
@@ -4697,12 +4786,12 @@ def load_wide_table_aggregated(
                     conditions.append(f"{numeric_column} <= {upper}")
                 condition = " AND ".join(conditions)
                 community_agg_parts.append(
-                    f"{duckdb_agg}(CASE WHEN {condition} THEN {numeric_column} END) "
+                    f"{_wide_agg(f'CASE WHEN {condition} THEN {numeric_column} END')} "
                     f"AS {quoted_column}"
                 )
             else:
                 community_agg_parts.append(
-                    f"{duckdb_agg}({numeric_column}) AS {quoted_column}"
+                    f"{_wide_agg(numeric_column)} AS {quoted_column}"
                 )
         community_agg_exprs = ", ".join(community_agg_parts)
         _wide_query_tpl = (
@@ -4751,11 +4840,20 @@ def load_wide_table_aggregated(
         )
         df = _exec_wide(_wide_read_safe)
     finally:
+        _window_sql.close()
         if _wide_pid_view is not None:
             try:
                 conn.unregister(_wide_pid_view)
             except Exception:
                 pass
+    if _wide_exact:
+        from .utils.exact_sum import exact_terms_to_values
+
+        for _column in list(df.columns):
+            if _column in value_columns or _column.strip('"') in value_columns:
+                df[_column] = exact_terms_to_values(
+                    df[_column], "mean" if duckdb_agg == "AVG" else "sum"
+                )
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
 
@@ -4981,13 +5079,18 @@ def finish_miiv_lab_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def miiv_lab_aggregation_sql(parquet_sql, stays_sql, itemids_sql, patient_ids, interval_hours,
-                             aggregate_sql, time_col="charttime", value_col="valuenum", *, source_columns) -> str:
+                             aggregate_sql, time_col="charttime", value_col="valuenum", *, source_columns,
+                             window_sql: str = "") -> str:
     subjects = ""
     targets = ""
     if patient_ids is not None:
         literals = ", ".join(_duckdb_sql_literal(x) for x in patient_ids) or "NULL"
         subjects = f" AND subject_id IN (SELECT subject_id FROM ({stays_sql}) WHERE stay_id IN ({literals}))"
         targets = f"WHERE o.stay_id IN ({literals})"
+    if window_sql:
+        # ``window_sql`` is an IcuWindowSql condition (" AND (...)") on the
+        # assigned stay's raw hour, applied before the hour floor.
+        targets = (targets or "WHERE TRUE") + window_sql
     optional = "".join(f", NULL AS {c}" for c in LAB_OPTIONAL_COLUMNS if c not in source_columns)
     events = f"SELECT *{optional} FROM read_parquet({parquet_sql}, union_by_name=true) WHERE itemid IN ({itemids_sql}){subjects} AND {value_col} IS NOT NULL"
     # Group on the ICU clock only after rolling attribution and channel deduplication.

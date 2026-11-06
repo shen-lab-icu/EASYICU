@@ -27,6 +27,26 @@ except ImportError:
 
 from ..table import ICUTable
 
+
+class IntervalAggregationError(RuntimeError):
+    """The hourly aggregation of a concept failed; there is no value to publish.
+
+    Reason code ``interval_aggregation_failed``. Replaces a silent fallback to
+    keep-first de-duplication, which published one arbitrary record per hour
+    in place of the concept's sum, median or extreme.
+    """
+
+    reason = "interval_aggregation_failed"
+
+    def __init__(self, *, group_columns, aggregations, cause: BaseException) -> None:
+        self.group_columns = list(group_columns)
+        self.aggregations = dict(aggregations)
+        super().__init__(
+            f"{self.reason}: aggregating {sorted(map(str, self.aggregations))} by "
+            f"{self.group_columns} failed ({type(cause).__name__}: {cause})"
+        )
+        self.__cause__ = cause
+
 def _safe_group_apply(grouped, func):
     """Call groupby.apply without group keys in function (pandas 3.0 compatible)."""
     import warnings
@@ -234,11 +254,15 @@ def change_interval(
                 col: aggregation for col in numeric_cols if col not in group_cols
             }
             if agg_dict:
+                from ..utils.exact_sum import exact_groupby_agg
+
                 try:
-                    df = df.groupby(group_cols, as_index=False, dropna=False).agg(agg_dict)
-                except Exception:
-                    # 聚合失败时退化为按患者/时间去重，仍不得跨患者合并。
-                    df = df.drop_duplicates(subset=group_cols, keep="first")
+                    df = exact_groupby_agg(df, group_cols, agg_dict, dropna=False, sort=True)
+                except Exception as exc:
+                    # Keep-first de-duplication is not the concept's aggregate.
+                    raise IntervalAggregationError(
+                        group_columns=group_cols, aggregations=agg_dict, cause=exc
+                    ) from exc
             else:
                 # 无可聚合的数值列，退化为按患者/时间去重。
                 df = df.drop_duplicates(subset=group_cols, keep="first")
@@ -377,9 +401,11 @@ def change_interval(
                         # Benchmark: 24M rows groupby median: 4.25s with strings → 1.18s without.
                         numeric_keep = group_cols + list(agg_dict.keys())
                         df = _fast_groupby_agg(df[numeric_keep], group_cols, agg_dict)
-                    except Exception:
-                        # 聚合失败时退化为去重，避免抛错
-                        df = df.drop_duplicates(subset=group_cols, keep="first")
+                    except Exception as exc:
+                        # Keep-first de-duplication is not the concept's aggregate.
+                        raise IntervalAggregationError(
+                            group_columns=group_cols, aggregations=agg_dict, cause=exc
+                        ) from exc
         else:
             # 无可聚合列，退化为去重
             _pre_agg = getattr(table, '_pre_aggregated', False) if not isinstance(table, pd.DataFrame) else False
