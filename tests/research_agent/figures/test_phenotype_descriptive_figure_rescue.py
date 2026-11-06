@@ -292,3 +292,48 @@ def test_router_does_not_steal_association_or_survival_figure(tmp_path: Path):
     # association renderer id, NOT a phenotype/descriptive id
     assert rid is not None
     assert "phenotype" not in str(rid) and "descriptive" not in str(rid)
+
+
+def test_a_percent_rate_column_reaches_the_outcome_panel_unscaled(tmp_path: Path, monkeypatch):
+    # Codex delta4v C16: the panel's rate whitelist held proportion names only,
+    # so a declared percent column (rare-event rates, all <= 1) never reached
+    # the outcome panel. Its name declares percent: plotted at scale 1.
+    parent = _write_phenotype_parent(tmp_path)
+    pd.DataFrame(
+        {
+            "cluster": [0, 1, 2],
+            "n": [412, 233, 155],
+            "mortality_pct": [0.4, 0.9, 0.6],
+            "ci_low": [0.1, 0.5, 0.2],
+            "ci_high": [0.9, 1.4, 1.1],
+        }
+    ).to_csv(parent / "outcome_by_cluster.csv", index=False)
+
+    import matplotlib.axes
+
+    heights = []
+    real_bar = matplotlib.axes.Axes.bar
+
+    def recording_bar(self, x, height, *args, **kwargs):
+        heights.append([float(h) for h in height])
+        return real_bar(self, x, height, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "bar", recording_bar)
+    fig_out = tmp_path / "steps" / "05_trajectory_clustering_figure" / "outputs"
+    rid = phenotype_rescue(
+        run_dir=tmp_path,
+        current_step_id="05_trajectory_clustering_figure",
+        out_dir=fig_out,
+    )
+    assert rid == "phenotype_publication_bundle_from_parent_outputs_v1"
+    source = pd.read_csv(fig_out / "phenotype_cluster_panel_source_data.csv")
+    # The source keeps the declared percent name; nothing relabels it a proportion.
+    assert "mortality_pct" in source.columns and "mortality_rate" not in source.columns
+    assert source["mortality_pct"].tolist() == [0.4, 0.9, 0.6]
+    assert heights[-1] == [0.4, 0.9, 0.6]  # percent, not x100
+    clean = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=fig_out / "phenotype_cluster_panel_source_data.csv",
+        upstream_path=parent / "outcome_by_cluster.csv",
+    )
+    assert clean["ok"] is True, clean

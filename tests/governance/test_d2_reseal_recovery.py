@@ -106,7 +106,8 @@ def test_every_restore_failure_is_reported_and_the_journal_recovers(root, monkey
     assert caught.value.reason == "reseal_rollback_incomplete"
     # Every file was attempted and every failure is listed, not just the first.
     assert sorted(f.split(":")[0] for f in caught.value.failures) == sorted(FILES)
-    assert (root / tool.RECOVERY_JOURNAL).exists() and (root / tool.RESEAL_LOCK).exists()
+    # The journal marks the unfinished reseal; the lifecycle lock was released.
+    assert (root / tool.RECOVERY_JOURNAL).exists() and not (root / tool.RESEAL_LOCK).exists()
     with pytest.raises(tool.ResealError) as blocked:
         tool.apply(root, **APPLY)
     assert blocked.value.reason == "reseal_recovery_pending"
@@ -146,12 +147,14 @@ def test_a_crash_between_files_is_recovered_from_the_journal(root, monkeypatch):
 
 
 def test_a_held_lock_refuses_a_second_reseal(root):
+    # D4-RESEAL-RACE replaced the marker file with an OS lock; a lock file
+    # alone no longer refuses (tests/governance/test_d4_reseal_lifecycle.py).
     tool = _tool()
-    (root / tool.RESEAL_LOCK).write_text("{}")
     before = _digests(root)
-    with pytest.raises(tool.ResealError) as caught:
-        tool.apply(root, **APPLY)
-    assert caught.value.reason == "reseal_locked"
+    with tool._Lifecycle(root):
+        with pytest.raises(tool.ResealError) as caught:
+            tool.apply(root, **APPLY)
+    assert caught.value.reason == "reseal_active"
     assert _digests(root) == before
 
 

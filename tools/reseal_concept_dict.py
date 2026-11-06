@@ -21,18 +21,24 @@ only, never dictionary content). ``--apply`` needs the user's consent text.
 The three files live in different source directories, so they cannot be
 switched in one atomic step. Instead ``--apply``:
 
-1. takes an exclusive lock (``.reseal.lock`` under ``--root``);
+1. takes the lifecycle lock (an OS advisory lock on ``.reseal.lock`` under
+   ``--root``), which ``--recover`` also takes: at most one apply or recover
+   runs at a time, and the kernel releases the lock of a process that died, so
+   a lock file left by a crash is never mistaken for a running reseal;
 2. writes a recovery journal (``.reseal-recovery.json``) holding every
    original file and its digest, before touching any of them;
 3. replaces the files one by one (each replacement is atomic) and verifies the
    pins in a fresh interpreter;
 4. on any failure restores every file, attempting each one and reporting every
-   restore that failed; lock and journal are removed only when all files are
-   back to their journalled originals (or after a verified success).
+   restore that failed. The journal is removed only by the transaction that
+   owns it, and only when all files are back to their journalled originals
+   (or after a verified success).
 
-If a run is interrupted, or a restore failed, the lock and journal remain and
-any later ``--apply`` refuses; ``--recover`` restores every journalled file,
-checks each digest and then removes them.
+The journal, not the lock file, marks an unfinished reseal: while it exists any
+``--apply`` refuses, and ``--recover`` (holding the same lock, so never beside
+a running apply) restores every journalled file, checks each digest and removes
+the journal. Ordinary readers of the three files do not take the lock: run the
+tool while no extraction or server reads them.
 
 Usage::
 
@@ -50,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -89,9 +96,10 @@ class ResealError(RuntimeError):
     """A reseal precondition failed or the reseal was rolled back.
 
     ``reason`` is a stable code. After ``reseal_rolled_back`` every file is
-    its journalled original; after ``reseal_rollback_incomplete`` the lock and
-    journal remain for ``--recover`` and ``failures`` lists every file that
-    could not be restored.
+    its journalled original; after ``reseal_rollback_incomplete`` the journal
+    remains for ``--recover`` and ``failures`` lists every file that could not
+    be restored. ``reseal_active`` means another apply or recover holds the
+    lifecycle lock.
     """
 
     def __init__(self, message: str, *, reason: str = "reseal_refused", failures: tuple = ()) -> None:
@@ -271,15 +279,20 @@ def verify_pins(root: Path) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+# A directory fsync some filesystems do not support; any other error (EIO,
+# ENOSPC, ...) means the rename may not be durable and fails the step.
+_DIR_FSYNC_UNSUPPORTED = {errno.EINVAL, errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}
+
+
 def _fsync_dir(path: Path) -> None:
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return  # platforms without directory handles (Windows)
+    if os.name == "nt":
+        return  # Windows has no directory handles to fsync
+    fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno not in _DIR_FSYNC_UNSUPPORTED:
+            raise
     finally:
         os.close(fd)
 
@@ -294,24 +307,87 @@ def _write_atomic(path: Path, raw: bytes) -> None:
     _fsync_dir(path.parent)
 
 
-def _acquire_lock(root: Path) -> Path:
-    lock = root / RESEAL_LOCK
-    journal = root / RECOVERY_JOURNAL
-    if journal.exists():
+class _Lifecycle:
+    """The one lock every apply and recover holds for its whole transaction.
+
+    An OS advisory lock (``flock``; ``msvcrt.locking`` on Windows) on
+    ``RESEAL_LOCK``: a second apply or recover fails at once with
+    ``reseal_active``, and a holder that dies releases it, so a lock file a
+    crash left behind is stale by construction. The holder unlinks the file
+    while it still holds the lock; a process that opened the old file then
+    sees a different inode and retries, so two holders never coexist.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.path = root / RESEAL_LOCK
+        self.fd: int | None = None
+
+    def __enter__(self) -> "_Lifecycle":
+        for _attempt in range(5):
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                _os_lock(fd)
+            except BlockingIOError as exc:
+                os.close(fd)
+                raise ResealError(
+                    f"another reseal or recovery is running (it holds {RESEAL_LOCK})",
+                    reason="reseal_active",
+                ) from exc
+            except BaseException:
+                os.close(fd)
+                raise
+            try:
+                same = os.fstat(fd).st_ino == os.stat(self.path).st_ino
+            except FileNotFoundError:
+                same = False
+            if same:
+                os.ftruncate(fd, 0)
+                os.write(fd, json.dumps({"pid": os.getpid(),
+                                         "started_at": datetime.now().isoformat()}).encode("utf-8"))
+                self.fd = fd
+                return self
+            os.close(fd)  # the holder we waited behind removed it: take the new file
+        raise ResealError(f"{RESEAL_LOCK} kept changing; retry", reason="reseal_active")
+
+    def __exit__(self, *exc_info) -> None:
+        deferred = False
+        try:
+            self.path.unlink(missing_ok=True)  # still held: nobody can take the old inode
+        except PermissionError:
+            if os.name != "nt":
+                raise
+            deferred = True  # Windows cannot unlink an open file
+        finally:
+            if self.fd is not None:
+                os.close(self.fd)  # closing releases the OS lock
+                self.fd = None
+        if deferred:
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                pass  # a stale file is harmless: the OS lock decides
+
+
+def _os_lock(fd: int) -> None:
+    try:
+        import fcntl
+    except ImportError:  # Windows
+        import msvcrt
+
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise BlockingIOError(str(exc)) from exc
+        return
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _refuse_pending_journal(root: Path) -> None:
+    if (root / RECOVERY_JOURNAL).exists():
         raise ResealError(
             f"an interrupted reseal left {RECOVERY_JOURNAL}; run --recover first",
             reason="reseal_recovery_pending",
         )
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        raise ResealError(
-            f"another reseal holds {RESEAL_LOCK} (remove it only if no reseal is running)",
-            reason="reseal_locked",
-        ) from exc
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps({"pid": os.getpid(), "started_at": datetime.now().isoformat()}))
-    return lock
 
 
 def _write_journal(root: Path, originals: dict[str, bytes], targets: dict[str, bytes]) -> Path:
@@ -352,36 +428,38 @@ def _restore(root: Path, entries: list[dict]) -> list[str]:
 
 
 def recover(root: Path) -> dict:
-    """Restore the files an interrupted reseal journalled, then drop lock and journal."""
-    journal = root / RECOVERY_JOURNAL
-    if not journal.exists():
-        raise ResealError(f"no {RECOVERY_JOURNAL} under {root}; nothing to recover",
-                          reason="reseal_nothing_to_recover")
-    entries = json.loads(journal.read_text(encoding="utf-8"))["files"]
-    failures = _restore(root, entries)
-    if failures:
-        raise ResealError("recovery incomplete: " + "; ".join(failures),
-                          reason="reseal_rollback_incomplete", failures=failures)
-    journal.unlink()
-    (root / RESEAL_LOCK).unlink(missing_ok=True)
-    _fsync_dir(root)
-    return {"restored": [entry["path"] for entry in entries]}
+    """Restore the files an interrupted reseal journalled, then remove the journal.
+
+    Holds the lifecycle lock for the whole recovery: while an apply is running
+    this refuses with ``reseal_active`` and touches nothing.
+    """
+    with _Lifecycle(root):
+        journal = root / RECOVERY_JOURNAL
+        if not journal.exists():
+            raise ResealError(f"no {RECOVERY_JOURNAL} under {root}; nothing to recover",
+                              reason="reseal_nothing_to_recover")
+        entries = json.loads(journal.read_text(encoding="utf-8"))["files"]
+        failures = _restore(root, entries)
+        if failures:
+            raise ResealError("recovery incomplete: " + "; ".join(failures),
+                              reason="reseal_rollback_incomplete", failures=failures)
+        journal.unlink()
+        _fsync_dir(root)
+        return {"restored": [entry["path"] for entry in entries]}
 
 
 def apply(root: Path, *, consent: str, label: str, locked_at: str, source_commit: str) -> dict:
     if not consent.strip():
         raise ResealError("--consent with the user's own words is required")
-    # Lock first: a pending journal or a running reseal refuses before anything is read.
-    lock = _acquire_lock(root)
-    try:
-        return _apply_locked(root, lock, consent=consent, label=label, locked_at=locked_at,
+    # Lock first: a running apply or recover, or a pending journal, refuses
+    # before anything is read. The lock is released only when this returns.
+    with _Lifecycle(root):
+        _refuse_pending_journal(root)
+        return _apply_locked(root, consent=consent, label=label, locked_at=locked_at,
                              source_commit=source_commit)
-    finally:
-        if not (root / RECOVERY_JOURNAL).exists():
-            lock.unlink(missing_ok=True)
 
 
-def _apply_locked(root: Path, lock: Path, *, consent: str, label: str, locked_at: str,
+def _apply_locked(root: Path, *, consent: str, label: str, locked_at: str,
                   source_commit: str) -> dict:
     state = plan(root)
     concept, sofa2 = state["digests"]["concept_dict_sha256"], state["digests"]["sofa2_dict_sha256"]
@@ -416,20 +494,25 @@ def _apply_locked(root: Path, lock: Path, *, consent: str, label: str, locked_at
                               reason="reseal_pins_disagree")
     except BaseException as exc:
         if journal is None:
-            # Nothing was written; the journal never existed.
-            lock.unlink(missing_ok=True)
-            raise
+            # No dictionary file was touched. A journal whose own write failed
+            # after the rename is this transaction's: remove it.
+            (root / RECOVERY_JOURNAL).unlink(missing_ok=True)
+            if not isinstance(exc, Exception):
+                raise
+            raise ResealError(
+                f"reseal stopped before any file changed ({type(exc).__name__}: {exc})",
+                reason="reseal_not_started",
+            ) from exc
         entries = json.loads(journal.read_text(encoding="utf-8"))["files"]
         failures = _restore(root, entries)
         if failures:
             raise ResealError(
                 f"reseal failed ({type(exc).__name__}: {exc}) and {len(failures)} file(s) could "
-                f"not be restored; {RECOVERY_JOURNAL} and {RESEAL_LOCK} remain for --recover: "
+                f"not be restored; {RECOVERY_JOURNAL} remains for --recover: "
                 + "; ".join(failures),
                 reason="reseal_rollback_incomplete", failures=failures,
             ) from exc
         journal.unlink()
-        lock.unlink(missing_ok=True)
         if not isinstance(exc, Exception):
             raise  # an interrupt stays an interrupt, after the restore
         cause = getattr(exc, "reason", type(exc).__name__)
@@ -438,7 +521,6 @@ def _apply_locked(root: Path, lock: Path, *, consent: str, label: str, locked_at
             reason="reseal_rolled_back",
         ) from exc
     journal.unlink()
-    lock.unlink(missing_ok=True)
     _fsync_dir(root)
     return {"generation": gen, "changed": state["changed"], "verify": result}
 
