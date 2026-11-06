@@ -1046,7 +1046,9 @@ class ConceptResolver:
                 aggregator=None,
                 allow_aggregated=False,
             )
-            if cached is not None:
+            # Raw rows only: an entry a gridded load or the recursive
+            # pre-cache stored on a grid is a miss (B-CACHE-REVERSE).
+            if self._raw_entry_serves(cached, None):
                 return cached.copy() if hasattr(cached, 'copy') else cached
         
         # 加载原始数据（interval=None）
@@ -1072,6 +1074,7 @@ class ConceptResolver:
                         result,
                         aggregator=None,
                         store_legacy=True,
+                        grid=None,
                     )
                 return result.copy() if hasattr(result, 'copy') else result
         except Exception as exc:
@@ -1124,6 +1127,40 @@ class ConceptResolver:
         hours = cls._pre_admission_hours_from_kwargs(kwargs)
         return None if hours is None else ("pre_admission_hours", hours)
 
+    # The grid a raw-cache entry was loaded on, set on the stored table by
+    # ``_store_raw_concept_cache``: None means an ungridded load, a Timedelta
+    # the load (or recursive pre-cache) grid. An entry without the marker
+    # falls back to the table's own declared ``interval``.
+    _RAW_GRID_ATTR = "_easyicu_raw_cache_grid"
+    _RAW_GRID_UNKNOWN = object()
+
+    @classmethod
+    def _raw_entry_serves(cls, entry: object, interval: object) -> bool:
+        """Whether a raw-cache entry answers a request on ``interval`` exactly.
+
+        Both directions are refused (Codex delta4 D4-NATIVE-CACHE and
+        B-CACHE-REVERSE): an ungridded entry never answers a gridded request,
+        and a gridded entry never answers an ungridded one (``get_raw_concept``
+        or ``interval=None``), whose cold path returns the raw rows. A table
+        without a time index carries no grid and answers any request. A miss
+        loads cold; the cache only ever saves work.
+        """
+        if entry is None:
+            return False
+        if not (getattr(entry, "index_column", None) or getattr(entry, "index_var", None)):
+            return True
+        declared = getattr(entry, "interval", None)
+        declared = None if declared is None or pd.isna(declared) else pd.Timedelta(declared)
+        grid = getattr(entry, cls._RAW_GRID_ATTR, cls._RAW_GRID_UNKNOWN)
+        if grid is cls._RAW_GRID_UNKNOWN:
+            grid = declared
+        elif grid is not None:
+            grid = pd.Timedelta(grid)
+        if interval is None:
+            return grid is None and declared is None
+        # A gridded request needs the declared grid and the load grid to agree.
+        return declared is not None and declared == pd.Timedelta(interval) and grid == declared
+
     def _get_raw_concept_from_cache(
         self,
         concept_name: str,
@@ -1175,8 +1212,19 @@ class ConceptResolver:
         aggregator: object,
         store_legacy: bool = False,
         cache_scope: object = None,
+        grid: object = _RAW_GRID_UNKNOWN,
     ) -> None:
-        """Store raw cache entries without duplicating table objects."""
+        """Store raw cache entries without duplicating table objects.
+
+        ``grid`` is the interval the table was loaded on (None: ungridded).
+        It is recorded on the table so every reader can refuse an entry from
+        the other grid (``_raw_entry_serves``).
+        """
+        if grid is not self._RAW_GRID_UNKNOWN:
+            try:
+                setattr(table, self._RAW_GRID_ATTR, grid)
+            except AttributeError:
+                pass  # unmarked: readers fall back to the declared interval
         stored = self._bounded_cache_store(
             'raw',
             self._raw_cache_key(
@@ -1646,12 +1694,13 @@ class ConceptResolver:
                 _pid_hash = _compute_patient_ids_hash(patient_ids)
                 concepts_info_filtered = [
                     (name, val_var) for name, val_var in concepts_info_filtered
-                    if self._get_raw_concept_from_cache(
+                    # Skip only when the entry will be reused on this grid.
+                    if not self._raw_entry_serves(self._get_raw_concept_from_cache(
                         name, _pid_hash,
                         aggregator=aggregators.get(name, "auto"),
                         allow_aggregated=True,
                         cache_scope=raw_cache_scope,
-                    ) is None
+                    ), interval)
                 ]
             if (
                 shared_table in WIDE_TABLES
@@ -1832,12 +1881,12 @@ class ConceptResolver:
                         _pid_hash = _compute_patient_ids_hash(patient_ids)
                         _concepts_for_batch = [
                             (name, val_var) for name, val_var in _concepts_for_batch
-                            if self._get_raw_concept_from_cache(
+                            if not self._raw_entry_serves(self._get_raw_concept_from_cache(
                                 name, _pid_hash,
                                 aggregator=aggregators.get(name, "auto"),
                                 allow_aggregated=True,
                                 cache_scope=raw_cache_scope,
-                            ) is None
+                            ), interval)
                         ]
 
                     batch_itemids = {}
@@ -7963,6 +8012,9 @@ class ConceptResolver:
                         aggregator=sub_agg,
                         store_legacy=False,
                         cache_scope=self._raw_cache_scope(sub_kwargs),
+                        # The sub-table is on the grid it was loaded for; a
+                        # raw request (get_raw_concept) must not take it.
+                        grid=sub_interval,
                     )
         
         ctx = ConceptCallbackContext(
@@ -9687,19 +9739,12 @@ class ConceptResolver:
                 # or the ungridded legacy load) is a mismatch too: the cold path
                 # expands and aggregates it on the requested grid, so returning
                 # it would make the rows depend on whether the cache was warm
-                # (Codex delta4 D4-NATIVE-CACHE). Tables without a time index
-                # (id tables) carry no grid and are reused.
-                if raw_cached is not None and interval is not None:
-                    cached_interval = getattr(raw_cached, "interval", None)
-                    time_indexed = bool(
-                        getattr(raw_cached, "index_column", None)
-                        or getattr(raw_cached, "index_var", None)
-                    )
-                    if cached_interval is None or pd.isna(cached_interval):
-                        if time_indexed:
-                            raw_cached = None
-                    elif pd.Timedelta(cached_interval) != pd.Timedelta(interval):
-                        raw_cached = None
+                # (Codex delta4 D4-NATIVE-CACHE). The reverse holds too: an
+                # ungridded request is not answered by a gridded entry
+                # (B-CACHE-REVERSE). Tables without a time index (id tables)
+                # carry no grid and are reused.
+                if not self._raw_entry_serves(raw_cached, interval):
+                    raw_cached = None
                 if raw_cached is not None:
                     if hasattr(raw_cached, 'copy'):
                         raw_cached = raw_cached.copy()
@@ -9992,6 +10037,7 @@ class ConceptResolver:
                         and agg_value in (None, False, "auto")
                     ),
                     cache_scope=raw_cache_scope,
+                    grid=interval,
                 )
                 
                 self._get_inflight().discard(concept_name)
