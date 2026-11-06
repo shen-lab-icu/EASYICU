@@ -89,7 +89,7 @@ def test_a_horizon_without_followup_for_any_survivor_is_refused(monkeypatch) -> 
         outcomes.load_outcomes("sic")
 
 
-def test_a_survivor_with_followup_keeps_the_horizon(monkeypatch) -> None:
+def test_only_a_known_followup_category_reaches_a_horizon(monkeypatch) -> None:
     monkeypatch.setattr(
         outcomes, "_raw_table", sic_raw_tables(_sic_cases([3077, None, None]))
     )

@@ -643,9 +643,11 @@ those stays. Survivors with an unregistered or unknown-label code
 (`followup_disposition_unknown`, new stay column) are NA and now flagged too,
 and they never make the outcome module refuse, even when they are every
 survivor in the extraction (`385abf174`). The pinned test
-`tests/core/test_a_mortality_horizon_needs_its_survivors_followed.py::test_a_survivor_with_followup_keeps_the_horizon`
-changed its expectation: its day-5 death with an unknown category was 28-day
-mortality True and is now NA, flagged. Impact: 0 of the 3,000 sample stays,
+`tests/core/test_a_mortality_horizon_needs_its_survivors_followed.py`
+`::test_a_survivor_with_followup_keeps_the_horizon` is renamed
+`::test_only_a_known_followup_category_reaches_a_horizon`, and its expectation
+changed: its day-5 death with an unknown category was 28-day mortality True
+and is now NA, flagged. Impact: 0 of the 3,000 sample stays,
 0 of 27,350 (SICdb 1.0.8 full) and 0 of 27,386 (SICdb 1.0.6 full) stays
 change.
 
