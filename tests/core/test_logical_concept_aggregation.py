@@ -606,12 +606,18 @@ def test_eicu_rrt_coalesces_treatment_and_intake_output_offsets() -> None:
                         "time_vars": ["intakeoutputoffset"],
                     }
                 },
+                # The ICU episode window reads the stay's discharge offset and
+                # fails closed without it (0d3a03f94).
+                "patient": {"defaults": {"id_var": "patientunitstayid"}},
             },
         )
         base_path = None
 
         def __init__(self) -> None:
             self.frames = {
+                "patient": pd.DataFrame(
+                    {"patientunitstayid": [1], "unitdischargeoffset": [600]}
+                ),
                 "treatment": pd.DataFrame(
                     {
                         "patientunitstayid": [1],
