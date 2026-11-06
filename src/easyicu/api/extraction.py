@@ -7571,14 +7571,12 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
     import hashlib
     import importlib.metadata
     import platform
-    import subprocess
     import sys
 
     import duckdb
     import pyarrow
 
     package_root = Path(__file__).resolve().parents[1]
-    repository_root = package_root.parents[1]
     foundation_files = {
         "concept_dictionary_sha256": package_root / "data" / "concept-dict.json",
         "sofa2_dictionary_sha256": package_root / "data" / "sofa2-dict.json",
@@ -7598,38 +7596,12 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         if path.is_file():
             digest.update(path.name.encode("utf-8"))
             digest.update(path.read_bytes())
-    try:
-        git_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-    except Exception:
-        git_commit = None
-    try:
-        git_status = subprocess.run(
-            ["git", "status", "--short", "--untracked-files=all"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-        git_diff = subprocess.run(
-            ["git", "diff", "--binary", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-            timeout=10,
-        ).stdout
-        git_dirty = bool(git_status.strip())
-        git_diff_sha256 = hashlib.sha256(git_diff).hexdigest() if git_dirty else None
-    except Exception:
-        git_dirty = None
-        git_diff_sha256 = None
+    from ..code_identity import SOURCE_UNKNOWN, resolve_code_identity
+
+    # The code identity owner never borrows a commit from a repository that
+    # merely contains this package, and says ``unknown`` (with a reason) when
+    # neither a checkout nor a build stamp identifies the code.
+    code_identity = resolve_code_identity(package_root)
     try:
         package_version = importlib.metadata.version("easyicu")
     except importlib.metadata.PackageNotFoundError:
@@ -7647,9 +7619,15 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         overlay_metadata = {"sic_case_overlay_sha256": hashlib.sha256(overlay_bytes).hexdigest()}
     return {
         "easyicu_version": package_version,
-        "easyicu_git_commit": git_commit,
-        "easyicu_git_dirty": git_dirty,
-        "easyicu_git_diff_sha256": git_diff_sha256,
+        "easyicu_git_commit": code_identity["commit"],
+        "easyicu_git_dirty": code_identity["dirty"],
+        "easyicu_git_diff_sha256": code_identity["diff_sha256"],
+        "easyicu_code_identity_source": code_identity["source"],
+        **(
+            {"easyicu_code_identity_reason": code_identity["reason_code"]}
+            if code_identity["source"] == SOURCE_UNKNOWN
+            else {}
+        ),
         "easyicu_import_path": str(package_root),
         "concept_catalog_sha256": digest.hexdigest(),
         **foundation_sha256,

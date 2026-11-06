@@ -365,6 +365,39 @@ def test_native_package_validation_rejects_wrong_database_and_extra_parquet(
         launcher._validate_export_package(export, COMMIT, "miiv")
 
 
+def test_native_package_validation_refuses_code_identity_that_is_not_this_checkout(
+    tmp_path: Path,
+) -> None:
+    # lead-r13 provenance: a manifest written by code copied out of Git (or by a
+    # stamped install) is not this checkout, even when no commit field is set.
+    for source, reason in (("unknown", "code_identity_unavailable"), ("build_stamp", None)):
+        export = tmp_path / source
+        manifest = _build_native_export(export)
+        manifest["runtime_provenance"]["easyicu_code_identity_source"] = source
+        if reason:
+            manifest["runtime_provenance"]["easyicu_code_identity_reason"] = reason
+        (export / "_manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        with pytest.raises(launcher.ExtractionRunError, match="code identity is not this checkout"):
+            launcher._validate_export_package(export, COMMIT, "miiv")
+
+
+def test_native_package_validation_requires_a_full_commit(tmp_path: Path) -> None:
+    export = tmp_path / "export"
+    manifest = _build_native_export(export)
+    manifest["runtime_provenance"]["easyicu_git_commit"] = None
+    (export / "_manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    with pytest.raises(launcher.ExtractionRunError, match="lacks a full code commit"):
+        launcher._validate_export_package(export, None, "miiv")
+
+
+def test_native_package_validation_accepts_this_checkout_identity(tmp_path: Path) -> None:
+    export = tmp_path / "export"
+    manifest = _build_native_export(export)
+    manifest["runtime_provenance"]["easyicu_code_identity_source"] = "git_checkout"
+    (export / "_manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    assert launcher._validate_export_package(export, COMMIT, "miiv")["module_count"] == 20
+
+
 def test_timing_csv_is_sealer_compatible_and_replaced_atomically(tmp_path: Path) -> None:
     path = tmp_path / "database_extraction_timing.csv"
     source = {

@@ -249,3 +249,6 @@ baselines/_checkouts/
 /src/easyicu/RESEARCH_AGENT_UX_CHANGELOG.md
 /src/easyicu/research_agent/ROADMAP.md
 /src/easyicu/research_agent/authority/REVIEW_evidence_signature.md
+
+# Build-time code identity stamp: written into build outputs only (setup.py)
+/src/easyicu/_build_identity.json

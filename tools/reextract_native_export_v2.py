@@ -806,6 +806,18 @@ def _validate_export_package(
     provenance = manifest.get("runtime_provenance")
     if not isinstance(provenance, dict):
         raise ExtractionRunError("native manifest lacks runtime_provenance")
+    identity_source = provenance.get("easyicu_code_identity_source")
+    if identity_source is not None and identity_source != "git_checkout":
+        # A formal extraction runs from this clean checkout; unknown or
+        # stamped code identity is not that checkout.
+        raise ExtractionRunError(
+            "native manifest code identity is not this checkout: "
+            f"{identity_source!r} "
+            f"({provenance.get('easyicu_code_identity_reason') or 'no reason recorded'})"
+        )
+    commit = provenance.get("easyicu_git_commit")
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise ExtractionRunError("native manifest lacks a full code commit")
     if provenance.get("easyicu_git_commit") != expected_commit:
         raise ExtractionRunError("native manifest was produced by a different commit")
     if provenance.get("easyicu_git_dirty") is not False:
