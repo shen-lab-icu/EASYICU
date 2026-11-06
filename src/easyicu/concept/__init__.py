@@ -755,19 +755,55 @@ def _in_binding_unit(method):
         from ..storage_binding import active_unit, binding_unit
         from .stay_tables import StayTableUnbound
 
-        if getattr(self, "_load_depth", 0):
+        inside = _RESOLVER_CALLS.get()
+        if id(self) in inside:
+            # Nested: recursion, or a concept worker run in the call's copied
+            # context. It must find the outer call's live unit.
             if active_unit() is None:
                 raise StayTableUnbound("load_concepts")
             return method(self, *args, **kwargs)
-        with binding_unit():
+        # A top-level call in this context. The resolver's per-call state
+        # (depth, batch scope, request caches) is per instance, so another
+        # context's top-level call on the same resolver (a concurrent
+        # request on a shared loader) waits for this one instead of being
+        # taken for a nested call (B-STAY-SCOPE).
+        with _top_level_call_lock(self):
+            if getattr(self, "_load_depth", 0):
+                # No call of this resolver is live (this context holds its
+                # lock), yet it looks nested: the outer call and its unit are
+                # gone. Refuse rather than run unbound (D8C-RECOVERY-OWNER).
+                raise StayTableUnbound("load_concepts")
+            token = _RESOLVER_CALLS.set(inside | {id(self)})
             try:
-                return method(self, *args, **kwargs)
+                with binding_unit():
+                    try:
+                        return method(self, *args, **kwargs)
+                    finally:
+                        if self._load_depth:  # left before its own finally ran
+                            self._load_depth = 0
+                            self._end_top_level_load()
             finally:
-                if self._load_depth:  # left before its own finally ran
-                    self._load_depth = 0
-                    self._end_top_level_load()
+                _RESOLVER_CALLS.reset(token)
 
     return wrapper
+
+
+_CALL_LOCKS_GUARD = RLock()
+
+
+def _top_level_call_lock(resolver) -> RLock:
+    lock = resolver.__dict__.get("_top_level_call_lock")
+    if lock is None:  # a resolver built without __init__ (copies, test doubles)
+        with _CALL_LOCKS_GUARD:
+            lock = resolver.__dict__.setdefault("_top_level_call_lock", RLock())
+    return lock
+
+
+# The resolvers whose ``load_concepts`` is running in this context. Threads
+# a call starts in a copied context see it, so their calls are nested.
+_RESOLVER_CALLS: contextvars.ContextVar = contextvars.ContextVar(
+    "easyicu_resolver_calls", default=frozenset()
+)
 
 
 class ConceptResolver:
@@ -805,6 +841,8 @@ class ConceptResolver:
         self._thread_local = thread_local()
         # 🔧 嵌套调用深度跟踪：防止递归概念的内部调用清除缓存
         self._load_depth = 0
+        # One top-level ``load_concepts`` at a time per resolver (_in_binding_unit).
+        self._top_level_call_lock = RLock()
         # ⚡ PERF: 跨模块缓存复用模式 — 保留 raw/table 缓存在 top-level 调用间
         self._keep_cache_between_calls = False
         # 💾 PC safety: byte budget + LRU accounting shared by the caches above.
