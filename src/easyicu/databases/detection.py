@@ -204,6 +204,37 @@ def _path_candidate(path: Path) -> Optional[str]:
     return None
 
 
+#: SICdb 1.0.7 added these case columns; 1.0.8 added LOINC columns to d_references.
+SIC_1_0_8_CASE_COLUMNS = frozenset({"hospitaldischargeday", "hospitalstaydays"})
+SIC_1_0_8_REFERENCE_COLUMNS = frozenset({"loinc_code"})
+
+
+def detect_sic_release(path: Union[str, Path]) -> Optional[str]:
+    """Return "1.0.8" or "1.0.6" from a prepared SICdb schema, without rows.
+
+    1.0.8 is the case table with ``HospitalDischargeDay``/``HospitalStayDays``
+    and d_references with ``LOINC_code``; 1.0.6 has neither. A mixed or
+    unreadable schema is ``None``: the release is not established.
+    """
+    root = Path(path)
+    if not root.is_dir():
+        return None
+    try:
+        cases = peek_table_columns(root, "cases")
+        references = peek_table_columns(root, "d_references")
+    except DatabaseDetectionError:
+        return None
+    if not cases or not references:
+        return None
+    new_cases = SIC_1_0_8_CASE_COLUMNS <= cases
+    new_references = SIC_1_0_8_REFERENCE_COLUMNS <= references
+    if new_cases and new_references:
+        return "1.0.8"
+    if not (cases & SIC_1_0_8_CASE_COLUMNS) and not (references & SIC_1_0_8_REFERENCE_COLUMNS):
+        return "1.0.6"
+    return None
+
+
 def _content_candidates(path: Path) -> set[str]:
     try:
         entries = {entry.name.casefold() for entry in path.iterdir()}

@@ -198,7 +198,7 @@ class BaseICULoader:
                 # eICU 特殊处理：通常在 eicu/2.0.1/ 子目录
                 # HiRID 特殊处理：通常在 hirid/1.1.1/ 子目录
                 # MIMIC-III 特殊处理：通常在 mimiciii/1.4/ 子目录
-                # SICdb 特殊处理：通常在 sicdb/1.0.6/ 子目录
+                # SICdb 特殊处理：通常在 sicdb/1.0.8/ 子目录（兼容 1.0.6）
                 # 先尝试精确版本匹配，再尝试通用目录
                 possible_subpaths = [
                     user_path / database,  # /base/aumc
@@ -213,6 +213,8 @@ class BaseICULoader:
                     user_path / 'mimiciii' / '1.4',
                     user_path / 'mimic' / '1.4',
                     # SICdb 支持
+                    user_path / 'sicdb' / '1.0.8',
+                    user_path / 'sic' / '1.0.8',
                     user_path / 'sicdb' / '1.0.6',
                     user_path / 'sic' / '1.0.6',
                 ]
@@ -272,7 +274,7 @@ class BaseICULoader:
                 'eicu_demo': ['eicu_demo'],
                 'aumc': ['aumc/1.0.2', 'aumc'],
                 'hirid': ['hirid/1.1.1', 'hirid'],
-                'sic': ['sicdb/1.0.6', 'sic/1.0.6', 'sicdb', 'sic'],
+                'sic': ['sicdb/1.0.8', 'sic/1.0.8', 'sicdb/1.0.6', 'sic/1.0.6', 'sicdb', 'sic'],
             }
             
             for subdir in db_dir_mapping.get(database, [database]):

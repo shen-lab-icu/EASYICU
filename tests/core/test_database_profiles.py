@@ -108,7 +108,7 @@ def test_packaged_registry_has_ten_typed_public_profiles_and_two_demo_profiles()
         ("aumc", "AmsterdamUMCdb", None, 30, "admissions", "admissionid"),
         ("hirid", "HiRID", "1.1.1", 40, "general", "patientid"),
         ("mimic", "MIMIC-III", "1.4", 50, "icustays", "icustay_id"),
-        ("sic", "SICdb", "1.0.6", 60, "cases", "CaseID"),
+        ("sic", "SICdb", "1.0.8", 60, "cases", "CaseID"),
         ("nwicu", "NWICU", "0.1.0", 70, "icustays", "stay_id"),
         (
             "zhejiang_eicu",

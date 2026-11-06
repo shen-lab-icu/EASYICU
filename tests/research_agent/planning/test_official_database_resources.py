@@ -106,7 +106,7 @@ def test_historical_registry_keeps_previous_sic_identity_without_promoting_new_e
     old = match_official_source_identity("sic", ref(), registry_version="easyicu.official_source_identity/1")
     current = match_official_source_identity("sic", ref())
     assert old.registry_version == "easyicu.official_source_identity/1"
-    assert current.registry_version == "easyicu.official_source_identity/2"
+    assert current.registry_version == "easyicu.official_source_identity/3"
     assert old.doi == current.doi and old.dataset_version == current.dataset_version
     assert match_official_source_identity(
         "miiv", ref(title="MIMIC-IV", pmid=None, doi="10.13026/kpb9-mt58"),

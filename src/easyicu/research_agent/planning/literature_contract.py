@@ -99,7 +99,8 @@ class SourceResourceIdentity(BaseModel):
     doi: str
     dataset_version: str | None = None
     registry_reference: str
-    registry_version: Literal["easyicu.official_source_identity/1", "easyicu.official_source_identity/2"] = "easyicu.official_source_identity/2"
+    registry_version: Literal["easyicu.official_source_identity/1", "easyicu.official_source_identity/2",
+                              "easyicu.official_source_identity/3"] = "easyicu.official_source_identity/3"
     content_status: Literal["not_verified"] = "not_verified"
     registered_dataset_version_status: Literal["not_assessed"] = "not_assessed"
 
@@ -161,6 +162,7 @@ class OfficialResourceEntry:
 
 # Registry versions are immutable: /1 remains available to replay old receipts.
 _SICDB_REFERENCE = "https://physionet.org/content/sicdb/1.0.6/"
+_SICDB_108_REFERENCE = "https://physionet.org/content/sicdb/1.0.8/"
 _MIMIC_31_REFERENCE = "https://physionet.org/content/mimiciv/3.1/"
 _MIMIC_22_REFERENCE = "https://physionet.org/content/mimiciv/2.2/"
 _VERSION_1: tuple[OfficialResourceEntry, ...] = (
@@ -180,11 +182,19 @@ _VERSION_2: tuple[OfficialResourceEntry, ...] = _VERSION_1 + (
     OfficialResourceEntry("miiv", "dataset_release", "MIMIC-IV",
                           "10.13026/6mm1-ek67", None, "2.2", _MIMIC_22_REFERENCE),
 )
+# /3: SICdb 1.0.8 is EasyICU's default release (2026-11-06); the 1.0.6
+# release stays registered for replay and backward-compatible sources.
+_VERSION_3: tuple[OfficialResourceEntry, ...] = _VERSION_2 + (
+    OfficialResourceEntry("sic", "dataset_release",
+                          "Salzburg Intensive Care database (SICdb), a freely accessible intensive care database",
+                          "10.13026/8m72-6j83", None, "1.0.8", _SICDB_108_REFERENCE),
+)
 OFFICIAL_RESOURCE_REGISTRIES = MappingProxyType({
     "easyicu.official_source_identity/1": _VERSION_1,
     "easyicu.official_source_identity/2": _VERSION_2,
+    "easyicu.official_source_identity/3": _VERSION_3,
 })
-CURRENT_OFFICIAL_SOURCE_REGISTRY_VERSION = "easyicu.official_source_identity/2"
+CURRENT_OFFICIAL_SOURCE_REGISTRY_VERSION = "easyicu.official_source_identity/3"
 
 
 def _words(value: str) -> str:

@@ -10666,11 +10666,11 @@
     "name": "sic",
     "profile": {
       "display_name": "SICdb",
-      "reference_release": "1.0.6",
+      "reference_release": "1.0.8",
       "aliases": ["sicdb", "sic", "sic-db"],
       "display_order": 60
     },
-    "url": "https://physionet.org/files/sicdb/1.0.6",
+    "url": "https://physionet.org/files/sicdb/1.0.8",
     "id_cfg": {
       "patient": {
         "id": "PatientID",
