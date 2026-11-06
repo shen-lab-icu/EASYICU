@@ -362,18 +362,29 @@ def _consumed(db: str, input_dir: str, consumed: Any,
                                "what the run read", database=db, table=item["table"],
                                path=item["path"])
         held = hashed.get(item["realpath"])
+        identity_note = None
         if held is None:
+            # Only the very same file qualifies: same device and inode as a
+            # snapshotted entry (a different file never does, whatever its name).
             try:
                 stat = os.stat(item["realpath"])
             except OSError:
                 stat = None
             if stat is not None:
                 held = by_identity.get((stat.st_dev, stat.st_ino))
+            if held is not None:
+                identity_note = (
+                    "matched by (device, inode): the reader named this file "
+                    f"{item['realpath']}, the snapshot {held['realpath']}"
+                )
         if held is None:
             raise ReceiptError("storage_consumed_outside_snapshot",
                                f"{db} {item['table']} consumed a file outside the input "
                                "snapshot", database=db, table=item["table"], path=item["path"])
         entry = {**item, "sha256": held["sha256"], "size": held["size"]}
+        if identity_note is not None:
+            entry["snapshot_realpath"] = held["realpath"]
+            entry["note"] = identity_note
         if item["format"] in {"csv", "parquet"}:
             try:
                 admission = _admit_consumed(input_dir, item["table"], item["path"])

@@ -491,8 +491,14 @@ def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, m
     pre = formal_inputs.take_snapshot([f"mimic:{root}"])
     entry = receipt._consumed("mimic", str(root), consumed, pre["databases"]["mimic"])
     (named,) = entry["files"]
-    # The reader may name it SERVICES.csv.gz (case-insensitive file systems).
+    # The reader may name it SERVICES.csv.gz (case-insensitive file systems);
+    # then the receipt says it matched the snapshot by (device, inode).
     assert os.path.samefile(named["realpath"], root / "services.csv.gz")
+    if named["realpath"] != os.path.realpath(root / "services.csv.gz"):
+        assert named["snapshot_realpath"] == os.path.realpath(root / "services.csv.gz")
+        assert named["note"].startswith("matched by (device, inode)")
+    else:
+        assert "note" not in named
     assert named["admitted_by"] == "data_root"
     assert named["sha256"] == receipt.sha256_file(root / "services.csv.gz")
 
@@ -622,3 +628,31 @@ def test_a_native_manifest_without_the_run_binding_digest_stops_the_receipt(
         receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
                                   scratch=tmp_path / "scratch")
     assert error.value.code == "storage_binding_missing"
+
+
+def test_a_different_file_with_the_same_contents_is_never_matched_by_identity(
+        tmp_path, monkeypatch):
+    # The (device, inode) fallback admits only the very same file: a copy with
+    # identical bytes elsewhere is outside the snapshot.
+    prepared = _prepared(tmp_path / "prepared")
+    copy = tmp_path / "copy" / "CASES.parquet"
+    copy.parent.mkdir()
+    copy.write_bytes((prepared / "cases.parquet").read_bytes())
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, consumed=[_consumed(copy)])
+    assert error.value.code == "storage_consumed_outside_snapshot"
+
+
+def test_a_hard_link_to_a_snapshotted_file_is_matched_with_a_note(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    alias = prepared / "cases_alias.parquet"
+    os.link(prepared / "cases.parquet", alias)
+
+    sic = _sic_receipt(tmp_path, prepared, None, monkeypatch,
+                       consumed=[_consumed(alias)])["databases"]["sic"]
+
+    (entry,) = sic["storage_consumed"]["files"]
+    assert entry["snapshot_realpath"] == os.path.realpath(prepared / "cases.parquet")
+    assert "matched by (device, inode)" in entry["note"]
+    assert entry["sha256"] == receipt.sha256_file(prepared / "cases.parquet")
