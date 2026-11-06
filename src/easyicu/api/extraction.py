@@ -1576,47 +1576,145 @@ def _next_oom_retry_batch_size(current_batch_size: int) -> int:
     return max(1, int(current_batch_size) // 2)
 
 
-_MEMORY_EXIT_CODES = frozenset({-9, 9, 137, -1073740791, 3221226505})
-_MEMORY_FAILURE_MARKERS = (
-    "memoryerror",
-    "out of memory",
-    "outofmemoryexception",
-    "cannot allocate memory",
-    "bad_alloc",
-    "exhausted memory",
-)
+def _exception_chain(exc: Optional[BaseException]) -> List[BaseException]:
+    seen: List[BaseException] = []
+    while exc is not None and all(exc is not other for other in seen):
+        seen.append(exc)
+        exc = exc.__cause__ or exc.__context__
+    return seen
 
 
-def _worker_failure_is_memory(exit_code: object, failures: object) -> bool:
-    """True when a killed module worker ran out of memory (not a code error).
+def _is_memory_exception(exc: Optional[BaseException]) -> bool:
+    """True when ``exc`` or its cause chain is an out-of-memory exception.
 
-    SIGKILL (the OOM killer, exit -9/137) and the Windows out-of-memory exit
-    codes count, as does a recorded MemoryError or DuckDB OutOfMemory.
+    By type only: Python's ``MemoryError`` or DuckDB's
+    ``OutOfMemoryException``. Message text is never read (a ``ValueError``
+    whose message mentions ``bad_alloc`` is not a memory failure).
     """
 
     try:
-        if int(exit_code) in _MEMORY_EXIT_CODES:
+        import duckdb
+
+        duckdb_oom = (duckdb.OutOfMemoryException,)
+    except (ImportError, AttributeError):
+        duckdb_oom = ()
+    for item in _exception_chain(exc):
+        if isinstance(item, (MemoryError, *duckdb_oom)):
             return True
+    return False
+
+
+def _cgroup_memory_events_path() -> Optional[str]:
+    """This process's cgroup v2 ``memory.events`` file, if there is one."""
+
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        hierarchy, _, path = line.partition("::")
+        if hierarchy == "0" and path:
+            candidate = os.path.join("/sys/fs/cgroup", path.lstrip("/"), "memory.events")
+            return candidate if os.path.exists(candidate) else None
+    return None
+
+
+def _cgroup_oom_kills() -> Optional[int]:
+    """The cgroup's ``oom_kill`` counter, or None where none is readable."""
+
+    path = _cgroup_memory_events_path()
+    if path is None:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.partition(" ")
+                if key == "oom_kill":
+                    return int(value)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _oom_kill_delta(before: Optional[int], after: Optional[int]) -> Optional[int]:
+    if before is None or after is None:
+        return None
+    return max(0, int(after) - int(before))
+
+
+# Exact recorded type names (``type(exc).__name__`` or a qualified name);
+# compared by equality, never searched for in text.
+_MEMORY_EXCEPTION_TYPE_NAMES = frozenset({
+    "MemoryError",
+    "OutOfMemoryException",
+    "duckdb.OutOfMemoryException",
+    "_duckdb.OutOfMemoryException",
+})
+
+
+def _worker_memory_evidence(
+    exit_code: object,
+    failures: object,
+    oom_kill_delta: Optional[int] = None,
+) -> Optional[str]:
+    """Why a failed worker counts as out of memory, or None.
+
+    Evidence only (lead-r13 B-RETRY):
+    - ``oom_kill_event``: the cgroup's ``oom_kill`` counter rose while the
+      worker ran and the worker died;
+    - ``memory_exception``: a failure record marks ``memory_exhausted`` (set
+      from the exception type and cause chain when it was captured), or its
+      recorded exception type is exactly a memory exception type.
+    An exit code alone (9, 137, a Windows status) and text in a traceback are
+    not evidence; such a kill is ``worker_killed_unknown`` (see
+    ``_worker_failure_class``) and is not retried as a memory failure.
+    """
+
+    try:
+        died = int(exit_code) != 0
     except (TypeError, ValueError):
-        pass
+        died = False
+    if died and oom_kill_delta:
+        return "oom_kill_event"
     for item in failures if isinstance(failures, list) else ():
         if not isinstance(item, Mapping):
             continue
-        detail = " ".join(
-            str(item.get(field) or "")
-            for field in ("failure_kind", "exception_type", "traceback")
-        ).lower()
-        if any(marker in detail for marker in _MEMORY_FAILURE_MARKERS):
-            return True
-    return False
+        if item.get("memory_exhausted") is True:
+            return "memory_exception"
+        if str(item.get("exception_type") or "") in _MEMORY_EXCEPTION_TYPE_NAMES:
+            return "memory_exception"
+    return None
+
+
+def _worker_failure_class(
+    exit_code: object,
+    failures: object,
+    oom_kill_delta: Optional[int] = None,
+) -> Optional[str]:
+    """``out_of_memory`` / ``worker_killed_unknown`` / ``worker_failed``."""
+
+    if _worker_memory_evidence(exit_code, failures, oom_kill_delta):
+        return "out_of_memory"
+    try:
+        code = int(exit_code)
+    except (TypeError, ValueError):
+        return None
+    if code == 0:
+        return None
+    # A signal kill (negative on POSIX, 128+N from a shell) without OOM
+    # evidence: the cause is unknown, so it is reported, not retried smaller.
+    if code < 0 or code in (137, 143):
+        return "worker_killed_unknown"
+    return "worker_failed"
 
 
 def _module_memory_errors(temp_root: str, modules: Sequence[str]) -> list[str]:
     """Modules whose worker finished but recorded an out-of-memory error.
 
-    DuckDB raises OutOfMemoryException inside the module when its buffer
-    limit cannot be met; the worker then exits normally with the error in
-    the module manifest.  Such a module is retried like a killed worker.
+    A module manifest carries ``memory_exhausted`` when a memory exception
+    (by type, see ``_is_memory_exception``) stopped it; such a module is
+    retried like a memory-killed worker. Error text is not read.
     """
 
     import json
@@ -1626,16 +1724,35 @@ def _module_memory_errors(temp_root: str, modules: Sequence[str]) -> list[str]:
         path = os.path.join(temp_root, module, "_manifest.json")
         try:
             with open(path, encoding="utf-8") as handle:
-                errors = json.load(handle).get("errors") or []
+                manifest = json.load(handle)
         except (OSError, ValueError):
             continue
-        if any(
-            marker in str(error).lower()
-            for error in errors
-            for marker in _MEMORY_FAILURE_MARKERS
-        ):
+        if manifest.get("memory_exhausted") is True:
             hits.append(module)
     return hits
+
+
+def _hold_resumable_module_dirs(tmp_root: str, modules: Sequence[str]) -> Dict[str, str]:
+    """Move module folders holding a stream ledger out of ``tmp_root``.
+
+    A memory-failed attempt's committed batches survive the removal of its
+    temporary tree; the retry moves them into its own tree and continues
+    after the last committed batch (``_stream_module_batches_to_parquet``).
+    """
+
+    import shutil
+    import tempfile
+
+    held: Dict[str, str] = {}
+    for module in modules:
+        folder = os.path.join(tmp_root, module)
+        if not os.path.exists(os.path.join(folder, f".{module}.stream_ledger.json")):
+            continue
+        holder = tempfile.mkdtemp(prefix="easyicu_resume_")
+        target = os.path.join(holder, module)
+        shutil.move(folder, target)
+        held[module] = target
+    return held
 
 
 def _crash_retry_batch_size(
@@ -2582,6 +2699,17 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
+    except BaseException as exc:
+        # The parent classifies the exit from evidence, not from text: say
+        # whether a memory exception (by type) stopped this child.
+        _write_json_atomic(
+            target.with_name(f".{target.name}.failure.json"),
+            {
+                "exception_type": type(exc).__name__,
+                "memory_exhausted": _is_memory_exception(exc),
+            },
+        )
+        raise
     finally:
         partial.unlink(missing_ok=True)
         del table, frame, batch
@@ -2622,6 +2750,44 @@ def _append_isolated_stream_batch(
     return output_rows
 
 
+_STREAM_LEDGER_SCHEMA = "easyicu.stream_batch_ledger/1"
+
+
+class StreamBatchMemoryExhausted(RuntimeError):
+    """A one-stay streamed batch still ran out of memory."""
+
+
+def _stream_ids_digest(id_col: str, ids) -> str:
+    import hashlib
+
+    digest = hashlib.sha256(str(id_col).encode("utf-8"))
+    for value in sorted((repr(v) for v in ids)):
+        digest.update(b"\0")
+        digest.update(value.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _write_json_atomic(path, payload) -> None:
+    import json
+    from pathlib import Path
+
+    target = Path(path)
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, target)
+
+
+def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_digest) -> dict:
+    return {
+        "schema": _STREAM_LEDGER_SCHEMA,
+        "module": str(module_name),
+        "concepts": list(concepts),
+        "database": str(load_kwargs.get("database") or ""),
+        "id_col": str(id_col),
+        "ids_sha256": ids_digest,
+    }
+
+
 def _stream_module_batches_to_parquet(
     module_name: str,
     concepts: List[str],
@@ -2632,16 +2798,30 @@ def _stream_module_batches_to_parquet(
     *,
     loader=None,
     adaptive_batch_growth: bool = False,
+    replay_boundaries: Optional[Sequence[int]] = None,
 ) -> Optional[Dict]:
-    """Append bounded patient batches directly to one module parquet file.
+    """Write bounded patient batches as committed parts, then one module file.
 
-    This is the constrained-host export path.  It deliberately trades repeated
-    source scans for a hard resident-memory boundary: no full module DataFrame
-    and no final ``concat`` are materialised in the worker.  The temporary
-    partial file lives beside the eventual module output, so callers that put
-    their output on an external disk never use the system volume for it.
+    This is the constrained-host export path: no full module DataFrame and no
+    final ``concat`` are materialised in the worker.
+
+    Resumable (lead-r13 #13): every batch is committed as its own part file
+    and recorded in a ledger (``.<module>.stream_ledger.json``) with the
+    patient order fixed when the run was planned. A run that finds a ledger
+    of the same module, concepts, database and cohort continues after its
+    last committed batch at the given ``batch_size``; it never restarts from
+    batch 1. The module file is assembled from the parts in batch order only
+    after every batch is committed: an isolated batch part is appended in
+    64k-row record batches, an in-process part as one table (the layouts the
+    writer used before), so the bytes depend only on the batch boundaries.
+    The boundaries are recorded in ``stream_batches`` (``start_offset`` and
+    ``stays``); ``replay_boundaries`` re-runs them exactly.
+
+    An isolated batch whose child ran out of memory (evidence, see
+    ``_worker_memory_evidence``) is retried from the same offset at half the
+    size, down to one stay.
     """
-    import os
+    import json
     import multiprocessing as mp
     from pathlib import Path
 
@@ -2651,28 +2831,80 @@ def _stream_module_batches_to_parquet(
 
     if not patient_ids_filter or len(patient_ids_filter) != 1:
         raise ValueError("streamed module export requires one patient-id filter")
-    id_col, all_ids = next(iter(patient_ids_filter.items()))
+    id_col, cohort_ids = next(iter(patient_ids_filter.items()))
     if batch_size < 1:
         raise ValueError("streamed module export batch_size must be positive")
-    all_ids, planned_partition_count, patient_partition_strategy = (
-        _order_stream_patient_ids(
-        list(all_ids),
-        int(batch_size),
-        str(load_kwargs.get("database") or ""),
-        )
-    )
+    cohort_ids = list(cohort_ids)
 
     destination = Path(output_dir) / f"{module_name}.parquet"
     partial = destination.with_name(f".{module_name}.partial.parquet")
-    if partial.exists() or partial.is_symlink():
-        raise ValueError(f"refusing stale streamed module partial: {partial}")
+    ledger_path = destination.with_name(f".{module_name}.stream_ledger.json")
+    order_path = destination.with_name(f".{module_name}.stream_order.parquet")
+    identity = _stream_ledger_identity(
+        module_name, concepts, load_kwargs, id_col,
+        _stream_ids_digest(id_col, cohort_ids),
+    )
 
-    writer = None
-    schema = None
-    rows = 0
-    produced_concepts = set()
-    batch_telemetry = []
+    resume_events: list = []
+    ledger = None
+    if ledger_path.exists():
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        if {k: ledger.get(k) for k in identity} != identity:
+            raise ValueError(
+                f"{module_name}: stream ledger does not match this request "
+                f"({ledger_path.name}); refusing to resume"
+            )
+        all_ids = pq.read_table(order_path).column("id").to_pylist()
+        if _stream_ids_digest(id_col, all_ids) != identity["ids_sha256"]:
+            raise ValueError(f"{module_name}: stream order file does not match its ledger")
+        # An assembly interrupted by the kill is redone from the parts.
+        partial.unlink(missing_ok=True)
+        batch_telemetry = list(ledger["batches"])
+        resume_events = list(ledger.get("resume_events") or [])
+        start = sum(int(b["stays"]) for b in batch_telemetry)
+        resume_events.append({
+            "kind": "resume_after_worker_retry",
+            "next_batch_index": len(batch_telemetry) + 1,
+            "start_offset": start,
+            "previous_batch_size": ledger.get("current_batch_size"),
+            "batch_size": int(batch_size),
+            "reason": ledger.get("pending_reason"),
+        })
+        planned_partition_count = ledger["initial_planned_partition_count"]
+        patient_partition_strategy = ledger["patient_partition_strategy"]
+        initial_batch_size = ledger["initial_batch_size"]
+    else:
+        if partial.exists() or partial.is_symlink():
+            raise ValueError(f"refusing stale streamed module partial: {partial}")
+        all_ids, planned_partition_count, patient_partition_strategy = (
+            _order_stream_patient_ids(
+                cohort_ids, int(batch_size), str(load_kwargs.get("database") or "")
+            )
+        )
+        batch_telemetry = []
+        start = 0
+        initial_batch_size = int(batch_size)
+        pq.write_table(pa.table({"id": pa.array(all_ids)}), order_path)
+        ledger = {
+            **identity,
+            "initial_batch_size": initial_batch_size,
+            "initial_planned_partition_count": planned_partition_count,
+            "patient_partition_strategy": patient_partition_strategy,
+            "batches": [],
+            "resume_events": [],
+        }
+
+    def commit_ledger(current, pending_reason=None):
+        ledger.update({
+            "batches": batch_telemetry,
+            "resume_events": resume_events,
+            "current_batch_size": int(current),
+            "pending_reason": pending_reason,
+        })
+        _write_json_atomic(ledger_path, ledger)
+
     current_batch_size = int(batch_size)
+    commit_ledger(current_batch_size)
     batch_load_kwargs = dict(load_kwargs)
     batch_load_kwargs.pop("patient_ids", None)
     isolate_batch_process = _requires_isolated_stream_batch(
@@ -2684,36 +2916,82 @@ def _stream_module_batches_to_parquet(
         module_name,
     ) in _DEFERRED_STREAM_MERGE_TARGETS
     batch_process_context = _get_extraction_mp_context(mp) if isolate_batch_process else None
-    part_files: list[Path] = []
+    writer = None
+    keep_parts = False
+    # The module schema: the first batch's (a resumed run reads it back from
+    # the first committed part).
+    first_part = batch_telemetry_first_part(batch_telemetry)
+    schema = pq.read_schema(destination.with_name(first_part)) if first_part else None
+    produced_concepts: set = set()
+    appended_parts = 0
+
+    def append_committed_parts(current_table=None) -> None:
+        """Append committed parts not yet in the output, in batch order.
+
+        A part file stays on disk until the module is published, so a retry
+        can resume from it; the output writer is rebuilt from the parts.
+        ``current_table`` is the in-memory table of the newest in-process
+        part, written directly instead of being read back.
+        """
+        nonlocal writer, appended_parts
+        parts_now = [b for b in batch_telemetry if b.get("part")]
+        for position in range(appended_parts, len(parts_now)):
+            entry = parts_now[position]
+            part_file = destination.with_name(entry["part"])
+            part_schema = pq.read_schema(part_file)
+            produced_concepts.update(c for c in concepts if c in part_schema.names)
+            if writer is None:
+                writer = pq.ParquetWriter(partial, schema, compression="snappy")
+            if entry["batch_process_isolation"]:
+                appended_rows = _append_isolated_stream_batch(
+                    part_file,
+                    writer=writer,
+                    schema=schema,
+                    pyarrow_module=pa,
+                    parquet_module=pq,
+                )
+            elif current_table is not None and position == len(parts_now) - 1:
+                writer.write_table(current_table)
+                appended_rows = current_table.num_rows
+            else:
+                part_table = pq.read_table(part_file)
+                writer.write_table(part_table)
+                appended_rows = part_table.num_rows
+                del part_table
+            if appended_rows != int(entry["output_rows"]):
+                raise RuntimeError(
+                    f"{module_name}: batch row count changed during assembly: "
+                    f"{part_file.name}"
+                )
+            appended_parts = position + 1
+            _release_stream_batch_memory(pa)
+
     try:
-        start = 0
         while start < len(all_ids):
             table = None
             batch = None
+            index = len(batch_telemetry) + 1
+            if replay_boundaries is not None:
+                current_batch_size = int(replay_boundaries[index - 1])
             batch_ids = all_ids[start : start + current_batch_size]
             # Keep the inner ``load_concepts`` boundary identical to the outer
-            # writer boundary.  After first-batch adaptation, retaining the
-            # original value here made an apparent 40k -> 67k growth execute as
-            # hidden 40k + 27k inner loads and repeated the expensive source
-            # scans that the larger outer batch was meant to avoid.
+            # writer boundary.
             batch_load_kwargs["batch_size"] = len(batch_ids)
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
-            batch_part = destination.with_name(
-                f".{module_name}.batch-{len(batch_telemetry) + 1:05d}.parquet"
-            )
+            part_name = None
+            batch_part = destination.with_name(f".{module_name}.batch-{index:05d}.parquet")
+            if batch_part.exists() or batch_part.is_symlink():
+                # An uncommitted part of a killed attempt (the ledger did not
+                # record it): it is redone.
+                batch_part.unlink()
             try:
                 if isolate_batch_process:
                     assert batch_process_context is not None
-                    if batch_part.exists() or batch_part.is_symlink():
-                        raise ValueError(
-                            f"refusing stale isolated batch output: {batch_part}"
-                        )
-                    # Register the path before starting the child so every
-                    # failure path, including a non-zero child exit after an
-                    # atomic rename, removes it.
-                    part_files.append(batch_part)
+                    marker = batch_part.with_name(f".{batch_part.name}.failure.json")
+                    marker.unlink(missing_ok=True)
+                    kills_before = _cgroup_oom_kills()
                     process = batch_process_context.Process(
                         target=_write_isolated_stream_batch,
                         args=(
@@ -2728,46 +3006,45 @@ def _stream_module_batches_to_parquet(
                     process.start()
                     process.join()
                     if process.exitcode != 0:
-                        raise RuntimeError(
+                        record = (
+                            json.loads(marker.read_text(encoding="utf-8"))
+                            if marker.exists() else None
+                        )
+                        marker.unlink(missing_ok=True)
+                        batch_part.unlink(missing_ok=True)
+                        delta = _oom_kill_delta(kills_before, _cgroup_oom_kills())
+                        evidence = _worker_memory_evidence(
+                            process.exitcode, [record] if record else [], delta
+                        )
+                        if evidence and current_batch_size > 1:
+                            retry = _next_oom_retry_batch_size(current_batch_size)
+                            resume_events.append({
+                                "kind": "isolated_batch_memory_retry",
+                                "batch_index": index,
+                                "start_offset": start,
+                                "previous_batch_size": current_batch_size,
+                                "batch_size": retry,
+                                "evidence": evidence,
+                                "worker_exit_code": process.exitcode,
+                            })
+                            current_batch_size = retry
+                            commit_ledger(current_batch_size)
+                            continue
+                        failure_class = _worker_failure_class(
+                            process.exitcode, [record] if record else [], delta
+                        )
+                        message = (
                             f"{module_name}: isolated batch worker exited "
-                            f"with code {process.exitcode}"
+                            f"with code {process.exitcode} ({failure_class})"
                         )
+                        if evidence:
+                            raise StreamBatchMemoryExhausted(message)
+                        raise RuntimeError(message)
                     if batch_part.exists():
-                        part_schema = pq.read_schema(batch_part)
+                        part_name = batch_part.name
+                        output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
                         if schema is None:
-                            schema = part_schema
-                        produced_concepts.update(
-                            concept
-                            for concept in concepts
-                            if concept in part_schema.names
-                        )
-                        # Keep the atomic child output until every extraction
-                        # batch has exited. Appending here leaves Arrow writer
-                        # pages resident in this parent while the next heavy
-                        # child is alive; measured AUMC respiratory runs then
-                        # crossed the same RSS stop even at smaller batches.
-                        # Deferred append separates extraction and merge peaks.
-                        output_rows = int(
-                            pq.ParquetFile(batch_part).metadata.num_rows
-                        )
-                        rows += output_rows
-                        if not defer_merge:
-                            if writer is None:
-                                writer = pq.ParquetWriter(
-                                    partial, schema, compression="snappy"
-                                )
-                            _append_isolated_stream_batch(
-                                batch_part,
-                                writer=writer,
-                                schema=schema,
-                                pyarrow_module=pa,
-                                parquet_module=pq,
-                            )
-                            batch_part.unlink()
-                            part_files.remove(batch_part)
-                    else:
-                        # An empty source batch intentionally produces no part.
-                        part_files.remove(batch_part)
+                            schema = pq.read_schema(batch_part)
                 else:
                     batch = _load_stream_module_batch(
                         _lc,
@@ -2797,9 +3074,6 @@ def _stream_module_batches_to_parquet(
                                     f"{outside_count} {id_col} values outside the "
                                     "requested patient partition"
                                 )
-                        produced_concepts.update(
-                            concept for concept in concepts if concept in frame.columns
-                        )
                         table = _module_arrow_table(
                             frame,
                             concepts,
@@ -2807,30 +3081,33 @@ def _stream_module_batches_to_parquet(
                             module=module_name,
                             schema=schema,
                         )
-                        if writer is None:
+                        if schema is None:
                             schema = table.schema
-                            writer = pq.ParquetWriter(
-                                partial,
-                                schema,
-                                compression="snappy",
-                            )
-                        writer.write_table(table)
+                        temporary = batch_part.with_name(f".{batch_part.name}.tmp")
+                        pq.write_table(table, temporary, compression="snappy")
+                        os.replace(temporary, batch_part)
+                        part_name = batch_part.name
                         output_rows = len(frame)
-                        rows += output_rows
             finally:
                 batch_memory = batch_sampler.stop()
 
             batch_telemetry.append(
                 {
-                    "batch_index": len(batch_telemetry) + 1,
+                    "batch_index": index,
                     "start_offset": start,
                     "stays": len(batch_ids),
                     "inner_load_batch_size": int(batch_load_kwargs["batch_size"]),
                     "output_rows": output_rows,
                     "batch_process_isolation": isolate_batch_process,
+                    "part": part_name,
                     **batch_memory,
                 }
             )
+            commit_ledger(current_batch_size)
+            if not defer_merge:
+                # Established schedule: append after each batch (a deferred
+                # target merges once every batch is committed).
+                append_committed_parts(table)
             del table
             del batch, frame
             _clear_stream_loader_caches(loader)
@@ -2838,6 +3115,7 @@ def _stream_module_batches_to_parquet(
             start += len(batch_ids)
             if (
                 adaptive_batch_growth
+                and replay_boundaries is None
                 and len(batch_telemetry) == 1
                 and start < len(all_ids)
             ):
@@ -2847,46 +3125,47 @@ def _stream_module_batches_to_parquet(
                     available_memory_mb=batch_memory["available_memory_mb_at_start"],
                     remaining_patients=len(all_ids) - start,
                 )
-        if defer_merge:
-            if not part_files:
-                return None
-            assert schema is not None
-            writer = pq.ParquetWriter(partial, schema, compression="snappy")
-            for part_file in list(part_files):
-                appended_rows = _append_isolated_stream_batch(
-                    part_file,
-                    writer=writer,
-                    schema=schema,
-                    pyarrow_module=pa,
-                    parquet_module=pq,
-                )
-                if appended_rows != int(pq.ParquetFile(part_file).metadata.num_rows):
-                    raise RuntimeError(
-                        f"{module_name}: isolated batch row count changed during "
-                        f"deferred merge: {part_file.name}"
-                    )
-                part_file.unlink()
-                part_files.remove(part_file)
-                _release_stream_batch_memory(pa)
-        elif writer is None:
-            return None
-        writer.close()
-        writer = None
-        os.replace(partial, destination)
-    except BaseException:
+                commit_ledger(current_batch_size)
+
+        parts = [b for b in batch_telemetry if b.get("part")]
+        rows = sum(int(b["output_rows"]) for b in batch_telemetry)
+        append_committed_parts()
         if writer is not None:
             writer.close()
-        for part_file in part_files:
-            part_file.unlink(missing_ok=True)
+            writer = None
+            os.replace(partial, destination)
+        for entry in parts:
+            destination.with_name(entry["part"]).unlink(missing_ok=True)
+        ledger_path.unlink(missing_ok=True)
+        order_path.unlink(missing_ok=True)
+        if not parts:
+            return None
+    except BaseException as exc:
+        if writer is not None:
+            writer.close()
         partial.unlink(missing_ok=True)
+        if _is_memory_exception(exc):
+            # Committed parts and the ledger stay for the retry, which
+            # continues after the last committed batch.
+            keep_parts = True
+            commit_ledger(current_batch_size, pending_reason="memory_exception")
+        if not keep_parts:
+            for entry in batch_telemetry:
+                if entry.get("part"):
+                    destination.with_name(entry["part"]).unlink(missing_ok=True)
+            ledger_path.unlink(missing_ok=True)
+            order_path.unlink(missing_ok=True)
         raise
 
     return {
         "path": str(destination),
         "rows": rows,
         "concepts": [name for name in concepts if name in produced_concepts],
-        "stream_batches": batch_telemetry,
-        "initial_batch_size": int(batch_size),
+        "stream_batches": [
+            {k: v for k, v in b.items() if k != "part"} for b in batch_telemetry
+        ],
+        "stream_resume_events": resume_events,
+        "initial_batch_size": int(initial_batch_size),
         "final_planned_batch_size": current_batch_size,
         "adaptive_batch_growth": bool(adaptive_batch_growth),
         "patient_partition_strategy": patient_partition_strategy,
@@ -2894,6 +3173,15 @@ def _stream_module_batches_to_parquet(
         "deferred_batch_merge": defer_merge,
         "initial_planned_partition_count": planned_partition_count,
     }
+
+
+def batch_telemetry_first_part(batch_telemetry) -> Optional[str]:
+    """The first committed part (its schema is the module's), if any."""
+
+    for entry in batch_telemetry:
+        if entry.get("part"):
+            return entry["part"]
+    return None
 
 
 def _run_module_extraction(
@@ -2956,6 +3244,7 @@ def _run_module_extraction(
 
     streamed = False
     result = None
+    memory_exhausted = False
     try:
         if stream_output_batches:
             if not patient_ids_filter or not batch_size:
@@ -2981,6 +3270,7 @@ def _run_module_extraction(
         traceback.print_exc()
         if streamed:
             errors.append(f"streamed module export exhausted memory: {module_name}")
+            memory_exhausted = True
             result = {}
         else:
             if loader is not None:
@@ -3018,6 +3308,9 @@ def _run_module_extraction(
         errors.append(
             f"{'streamed export' if streamed else 'load_concepts'}({module_name}): {e}"
         )
+        # A DuckDB OutOfMemoryException (by type, through the cause chain)
+        # is retried like a memory-killed worker; message text is not read.
+        memory_exhausted = _is_memory_exception(e)
         result = {}
 
     # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
@@ -3067,6 +3360,7 @@ def _run_module_extraction(
         "saved": saved,
         "errors": errors,
         "warnings": warnings,
+        "memory_exhausted": bool(memory_exhausted),
         "elapsed_sec": round(elapsed, 1),
         **memory_stats,
     }
@@ -3091,6 +3385,7 @@ def _run_module_extraction(
             False,
         )
         manifest["deferred_batch_merge"] = stream_info.get("deferred_batch_merge", False)
+        manifest["stream_resume_events"] = stream_info.get("stream_resume_events", [])
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
@@ -3988,6 +4283,7 @@ def _capture_worker_failure(
         "retry_attempt": int(retry_attempt),
         "worker_pid": os.getpid(),
         "exception_type": exception_type.__name__ if exception_type else None,
+        "memory_exhausted": _is_memory_exception(sys.exc_info()[1]),
         "traceback": traceback_text,
         "traceback_sha256": _sha256_bytes(traceback_text.encode("utf-8")),
         "partial_outputs": partial_outputs,
@@ -4135,6 +4431,7 @@ def _persist_worker_failures(
             "special_modules": record.get("special_modules", []),
             "worker_exit_code": worker_exit_code,
             "exception_type": record.get("exception_type"),
+            "memory_exhausted": record.get("memory_exhausted") is True,
             "traceback_sha256": record.get("traceback_sha256"),
             "partial_outputs_sha256": partial_outputs_sha256,
             "file": None,
@@ -7950,6 +8247,10 @@ def extract_database(
         )
 
         tmp_root = tempfile.mkdtemp(prefix="easyicu_grp_")
+        # Committed batches of a memory-failed attempt continue here.
+        for resumed_module, held in dict(group.get("_resume_dirs") or {}).items():
+            shutil.move(held, os.path.join(tmp_root, resumed_module))
+            shutil.rmtree(os.path.dirname(held), ignore_errors=True)
         if verbose:
             rss = get_rss_mb()
             label = " + ".join(group_mods + group_special)
@@ -7983,8 +8284,10 @@ def extract_database(
             # patient batch so the OS, not allocator heuristics, owns teardown.
             daemon=not requires_batch_process_isolation,
         )
+        oom_kills_before = _cgroup_oom_kills()
         proc.start()
         proc.join()
+        oom_kill_delta = _oom_kill_delta(oom_kills_before, _cgroup_oom_kills())
 
         # 组 worker 硬崩溃（如 OOM kill）：已完成模块正常读回；未完成的
         # 模块拆成单模块组重试一次，避免一个组的失败拖垮整组输出。
@@ -8025,13 +8328,21 @@ def extract_database(
         memory_error_modules = (
             [] if crashed else _module_memory_errors(tmp_root, group_mods)
         )
-        crash_retry = _crash_retry_batch_size(
-            crashed=(
-                crashed
-                and incomplete
-                and _worker_failure_is_memory(proc.exitcode, attempt_failures)
+        memory_evidence = (
+            _worker_memory_evidence(proc.exitcode, attempt_failures, oom_kill_delta)
+            if crashed and incomplete
+            else None
+        )
+        if crashed and incomplete:
+            failure_class = _worker_failure_class(
+                proc.exitcode, attempt_failures, oom_kill_delta
             )
-            or bool(memory_error_modules),
+            for summary in attempt_failures:
+                summary["failure_class"] = failure_class
+                summary["memory_evidence"] = memory_evidence
+                summary["oom_kill_delta"] = oom_kill_delta
+        crash_retry = _crash_retry_batch_size(
+            crashed=bool(memory_evidence) or bool(memory_error_modules),
             stream_output_batches=group_may_stream,
             adaptive=group_adaptive_stream_batches,
             attempt=stream_retry_attempt,
@@ -8053,6 +8364,10 @@ def extract_database(
                     "policy": "adaptive" if adaptive_retry else "halve_on_oom",
                     "from_one_shot": not group_stream_output_batches,
                     "memory_error_in_module": bool(memory_error_modules),
+                    "memory_evidence": memory_evidence or (
+                        "memory_exception" if memory_error_modules else None
+                    ),
+                    "oom_kill_delta": oom_kill_delta,
                 }
             )
             logger.warning(
@@ -8078,6 +8393,8 @@ def extract_database(
                     "_stream_output_batches": True,
                     "_adaptive_stream_batches": group_adaptive_stream_batches,
                     "_stream_retry_attempt": stream_retry_attempt + 1,
+                    # The retry continues after the last committed batch.
+                    "_resume_dirs": _hold_resumable_module_dirs(tmp_root, retry_modules),
                 }
             )
             # Do not publish an error result from the killed attempt.  Its
@@ -8097,6 +8414,7 @@ def extract_database(
                         "_stream_output_batches": group_stream_output_batches,
                         "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
+                        "_resume_dirs": _hold_resumable_module_dirs(tmp_root, [m]),
                     }
                 )
             group_mods = [m for m in group_mods if m not in memory_error_modules]
@@ -8130,6 +8448,12 @@ def extract_database(
                         "_stream_output_batches": group_stream_output_batches,
                         "_adaptive_stream_batches": group_adaptive_stream_batches,
                         "_stream_retry_attempt": stream_retry_attempt,
+                        # Only a memory failure keeps committed batches; an
+                        # unknown kill starts the module again.
+                        "_resume_dirs": (
+                            _hold_resumable_module_dirs(tmp_root, [m])
+                            if memory_evidence else {}
+                        ),
                     }
                 )
             group_mods = [m for m in group_mods if m not in incomplete_mods]
