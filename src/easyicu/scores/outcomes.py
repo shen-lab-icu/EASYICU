@@ -343,9 +343,16 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
         cases[cmap["dischargestate"]] if "dischargestate" in cmap else pd.Series(np.nan, index=cases.index),
         codes,
     )
-    # A discharge code whose d_references label is blank or unknown cannot be
-    # read as alive: without a recorded death such a case has no follow-up.
-    unknown_disposition = pd.to_numeric(disposition, errors="coerce").isin(codes.unknown) & ~recorded
+    # A discharge code that is not a known death or survival code cannot be
+    # read as alive: a code whose d_references label is blank or unknown, and
+    # a non-empty code with no reference row at all (lead-r13 delta2 D2-SIC).
+    # Without a recorded death such a case has no follow-up.
+    disposition_text = disposition.astype("string").str.strip()
+    disposition_present = disposition.notna() & disposition_text.ne("").fillna(False)
+    disposition_code = pd.to_numeric(disposition, errors="coerce")
+    unknown_disposition = (
+        disposition_present & ~disposition_code.isin(codes.known) & ~recorded
+    ).astype(bool)
     untimed = recorded & off_death.isna() & ~unusable_death & np.isfinite(time_of_stay)
     off_death = off_death.where(~untimed, time_of_stay)
     days_to_death = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
@@ -373,13 +380,19 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
         rebuilt = sic_followup_from_admission_year(years, policy=followup_policy)
         followup_days = followup_days.where(~empty, rebuilt)
         df["followup_assumed"] = (empty & ~recorded).to_numpy()
-        unknown = empty & rebuilt.isna() & ~recorded
+        # An empty category whose admission year is outside 2013-2021 has no
+        # year-dependent ceiling. Every horizon and follow-up time is then NA
+        # and flagged, for recorded deaths as for survivors: the fact and time
+        # of a death are kept (days_to_death), but without the category
+        # ceiling no fixed-horizon endpoint is defined (lead-r13 delta2 D2-SIC).
+        unknown = empty & rebuilt.isna()
         df["followup_category_unknown"] = unknown.to_numpy()
         if unknown.any():
             LOGGER.warning(
-                "sicdb_followup_category_unknown: %d survivors have an empty follow-up "
-                "category and an admission year outside 2013-2021; their 28/90/365-day "
-                "mortality and follow-up are NA", int(unknown.sum()),
+                "sicdb_followup_category_unknown: %d stays (%d with a recorded death) have "
+                "an empty follow-up category and an admission year outside 2013-2021; "
+                "their 28/90/365-day mortality and follow-up are NA",
+                int(unknown.sum()), int((unknown & (recorded | days_to_death.notna())).sum()),
             )
         # Source (round-12 citations): d_references labels "6 Months" and
         # "1 Year" (ReferenceName EstimatedSurvivalObservationTime); the
@@ -521,14 +534,17 @@ def _load_followup_outcomes(
         base.get("followup_assumed", pd.Series(False, index=base.index))
         .astype("boolean").fillna(False).to_numpy(dtype=bool)
     )
-    # SICdb survivors whose follow-up category could not be rebuilt: every
-    # horizon stays NA and is flagged as resting on that unknown assumption.
+    # SICdb stays whose follow-up category could not be rebuilt, recorded
+    # deaths included: every horizon stays NA and is flagged as resting on
+    # that unknown assumption; days_to_death is unchanged (lead-r13 D2-SIC).
     category_unknown = (
         base.get("followup_category_unknown", pd.Series(False, index=base.index))
         .astype("boolean").fillna(False).to_numpy(dtype=bool)
-    ) & ~has_death
+    )
     for name, horizon in _HORIZONS.items():
-        unreachable = np.isfinite(source_bound) & lt(source_bound + grace_days, horizon)
+        unreachable = (
+            np.isfinite(source_bound) & lt(source_bound + grace_days, horizon)
+        ) | category_unknown
         died_by = has_death & le(dtd, horizon) & (dtd >= 0) & ~unreachable
         known_alive = ((has_death & gt(dtd, horizon)) | (
             ~has_death & ge(followup_days + grace_days, horizon)

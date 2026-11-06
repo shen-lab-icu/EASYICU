@@ -10,6 +10,15 @@ hour floor.  Flooring first and clipping the bin afterwards kept rows up to
 59 minutes past the bound (lead-r13 parity census), so both paths take the
 window from this one object.
 
+Both bounds are inclusive decimal thresholds decided with
+:mod:`easyicu.utils.thresholds`: the event hour and the bound are both
+derived (an offset divided by 60 or 3,600; a discharge hour plus 24 h), so an
+event exactly on a bound must not fall a float ulp to either side. pandas uses
+the helpers (:func:`outside_episode`); SQL compares with the same limits,
+computed once in Python by the same IEEE operations (lead-r13 delta2
+THRESHOLD_MISSED). The tolerance is ``1e-6 * max(1, |bound|)`` hours: 0.09 s
+at the 24 h pre-admission bound and 3.6 s at a 1,000 h upper bound.
+
 The per-database upper definitions stay with their owner in
 ``easyicu.concept`` (``ConceptResolver._icu_episode_window``); this module
 only carries the resolved bounds and renders them for pandas or SQL.
@@ -25,7 +34,9 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-__all__ = ["IcuEpisodeWindow", "IcuWindowSql"]
+from .thresholds import gt, lower_limit, lt, upper_limit
+
+__all__ = ["IcuEpisodeWindow", "IcuWindowSql", "outside_episode"]
 
 _VIEW_COUNTER = itertools.count()
 
@@ -34,6 +45,28 @@ def _sql_double(value: float) -> str:
     # A string cast parses the shortest round-trip repr exactly; a bare
     # decimal literal would pass through DuckDB's DECIMAL type first.
     return f"CAST('{float(value)!r}' AS DOUBLE)"
+
+
+def outside_episode(
+    event_hours: pd.Series,
+    *,
+    lower_hours: float,
+    upper_hours: Any,
+    keep_post_discharge: bool = False,
+) -> pd.Series:
+    """Rows strictly outside ``[lower_hours, upper_hours]`` (missing hours kept).
+
+    The single pandas rule for the ICU episode window: both bounds inclusive,
+    decided with the decimal-threshold helpers. :meth:`IcuWindowSql.condition`
+    renders the same rule in SQL.
+    """
+
+    hours = pd.to_numeric(event_hours, errors="coerce")
+    outside = lt(hours, float(lower_hours))
+    if not keep_post_discharge:
+        upper = pd.to_numeric(pd.Series(upper_hours, index=hours.index), errors="coerce")
+        outside = outside | gt(hours, upper.to_numpy(dtype="float64"))
+    return (outside & hours.notna()).astype(bool)
 
 
 @dataclass(frozen=True)
@@ -81,11 +114,14 @@ class IcuEpisodeWindow:
     def outside(self, event_hours: pd.Series, stay_keys: pd.Series) -> pd.Series:
         """Boolean mask of rows outside the window (missing hours are kept)."""
 
-        hours = pd.to_numeric(event_hours, errors="coerce")
-        outside = hours < self.lower_hours
-        if not self.keep_post_discharge:
-            outside = outside | (hours > self.upper_for(stay_keys).to_numpy())
-        return (outside & hours.notna()).astype(bool)
+        return outside_episode(
+            event_hours,
+            lower_hours=self.lower_hours,
+            upper_hours=(
+                None if self.keep_post_discharge else self.upper_for(stay_keys).to_numpy()
+            ),
+            keep_post_discharge=self.keep_post_discharge,
+        )
 
 
 class IcuWindowSql:
@@ -116,7 +152,9 @@ class IcuWindowSql:
                     "stay": pd.to_numeric(upper.index, errors="coerce").astype(
                         np.int64
                     ),
-                    "upper_hours": upper.to_numpy(dtype="float64"),
+                    # The inclusive limit of ``le(hours, upper)``, computed by
+                    # the helpers' own arithmetic (see ``condition``).
+                    "upper_limit": upper_limit(upper.to_numpy(dtype="float64")),
                 }
             )
             name = f"__easyicu_icu_window_{next(_VIEW_COUNTER)}"
@@ -131,15 +169,18 @@ class IcuWindowSql:
         if window is None:
             return ""
         hours = f"({hours_expr})"
-        parts = [f"{hours} >= {_sql_double(window.lower_hours)}"]
+        # ``ge(hours, lower)`` and ``le(hours, upper)`` as plain comparisons
+        # with limits computed by the helpers: the same bits as pandas.
+        lower = _sql_double(lower_limit(float(window.lower_hours)))
+        parts = [f"{hours} >= {lower}"]
         if not window.keep_post_discharge:
-            default = _sql_double(window.default_upper_hours)
+            default = _sql_double(upper_limit(float(window.default_upper_hours)))
             relation = self._relation()
             upper = (
                 default
                 if relation is None
                 else (
-                    f"COALESCE((SELECT __w.upper_hours FROM {relation} __w "
+                    f"COALESCE((SELECT __w.upper_limit FROM {relation} __w "
                     f"WHERE __w.stay = {stay_expr}), {default})"
                 )
             )

@@ -168,3 +168,54 @@ def test_a_recorded_death_with_an_empty_category_keeps_its_year_bound(monkeypatc
     result = outcomes.load_outcomes("sic").set_index("CaseID")
     assert bool(result.loc[7, "mort_28d"]) is True
     assert bool(result.loc[7, "mort_28d_assumption_based"]) is False
+
+
+def test_a_non_empty_code_with_no_reference_row_is_an_unknown_disposition(monkeypatch):
+    """lead-r13 delta2 D2-SIC: a code absent from d_references is not alive."""
+    cases = _cases_108()
+    cases.loc[cases["CaseID"] == 1, "HospitalDischargeType"] = 9999  # no reference row
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert pd.isna(base.loc[1, "followup_days"])
+    assert base.loc[2, "followup_days"] == 180.0  # a known survival code keeps its bound
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+    for horizon in ("mort_28d", "mort_90d", "mort_365d"):
+        assert pd.isna(result.loc[1, horizon])
+
+
+@pytest.mark.parametrize("blank", [None, np.nan])
+def test_an_empty_discharge_code_is_not_an_unknown_disposition(monkeypatch, blank):
+    cases = _cases_108()
+    cases["HospitalDischargeType"] = cases["HospitalDischargeType"].astype("float64")
+    cases.loc[cases["CaseID"] == 1, "HospitalDischargeType"] = blank
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert base.loc[1, "followup_days"] == 365.0
+
+
+def test_a_recorded_death_with_an_unknown_category_year_is_na_and_flagged(monkeypatch, caplog):
+    """lead-r13 delta2 D2-SIC: the "all NA + flag" contract covers deaths too.
+
+    The death and its time are kept; without the year-dependent category
+    ceiling no fixed-horizon endpoint or follow-up time is published.
+    """
+    cases = pd.concat([_cases_108(), pd.DataFrame({
+        "CaseID": [7], "ICUOffset": [0], "TimeOfStay": [86_400], "OffsetOfDeath": [None],
+        "HospitalDischargeType": [3130], "DischargeState": [2202], "AdmissionYear": [2030],
+        "EstimatedSurvivalObservationTime": [None],
+    })], ignore_index=True)
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases, "1.0.8"))
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert bool(base.loc[7, "followup_category_unknown"]) is True
+    assert np.isfinite(base.loc[7, "days_to_death"])  # the death fact is unchanged
+    assert pd.isna(base.loc[7, "source_bound_days"])
+    with caplog.at_level("WARNING", logger=outcomes.__name__):
+        result = outcomes.load_outcomes("sic").set_index("CaseID")
+    assert "1 with a recorded death" in caplog.text
+    for horizon in ("mort_28d", "mort_90d", "mort_365d"):
+        assert pd.isna(result.loc[7, horizon])
+        assert bool(result.loc[7, f"{horizon}_assumption_based"]) is True
+        followup = outcomes.FIXED_HORIZON_MORTALITY_ENDPOINTS[horizon].followup_concept
+        assert pd.isna(result.loc[7, followup])
+    # A recorded death with a known year keeps its endpoint (case 5, 2021).
+    assert bool(result.loc[5, "mort_28d"]) is True
