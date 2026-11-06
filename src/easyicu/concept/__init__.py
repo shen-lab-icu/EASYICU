@@ -5536,6 +5536,15 @@ class ConceptResolver:
             from .source_channel import drop_rank
 
             combined = drop_rank(combined)
+            # A mapped logical concept whose sources matched nothing keeps
+            # its declared boolean value type; zero rows carry no values.
+            _empty_cls = getattr(definition, 'class_name', '')
+            if (
+                concept_name in combined.columns
+                and 'lgl_cncpt' in (_empty_cls if isinstance(_empty_cls, list) else [_empty_cls])
+                and combined[concept_name].dtype == object
+            ):
+                combined[concept_name] = combined[concept_name].astype(bool)
             return ICUTable(
                 data=combined,
                 id_columns=id_columns,
