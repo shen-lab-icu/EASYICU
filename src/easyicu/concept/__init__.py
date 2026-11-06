@@ -2248,6 +2248,11 @@ class ConceptResolver:
                     return self._to_r_format(tables[concept_name], concept_name, interval_hours=interval_hours)
                 return tables
 
+            # A merged output publishes ett_gcs on the ricu hourly grid, the
+            # same cells the GCS callback reads (window_expansion owns it), so
+            # a concept loaded alone and a module export carry one column.
+            self._publish_inclusive_any_windows(tables, names, interval)
+
             # 🚀 如果有宽表批量加载的合并结果，直接使用（避免重复合并）
             # A partial numeric batch must still merge callback concepts in
             # every database (rates, windows, specimen-dependent measurements).
@@ -2300,10 +2305,15 @@ class ConceptResolver:
                                     if cand in df.columns:
                                         result_cols.append(cand)
                                         break
-                                time_col = None
+                                # The table's declared index wins: a name list
+                                # alone dropped SICdb's ``Offset`` and published
+                                # the window concept without a time (r13gcs).
+                                time_col = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
+                                if time_col not in df.columns:
+                                    time_col = None
                                 for cand in ['nursingchartoffset', 'nursingchartentryoffset', 'observationoffset',
                                              'charttime', 'measuredat', 'datetime', 'givenat', 'starttime', 'start']:
-                                    if cand in df.columns:
+                                    if time_col is None and cand in df.columns:
                                         time_col = cand
                                         break
                                 if time_col:
@@ -9045,17 +9055,20 @@ class ConceptResolver:
                     id_cols = list(base_table.id_columns) if base_table.id_columns else default_id_cols
                 idx_col = base_idx_col if base_idx_col else 'charttime'  # 默认时间列
                 # 创建空 DataFrame 并设置正确的 dtype
-                empty_win_df = pd.DataFrame(columns=id_cols + [idx_col, concept_name + "_dur", concept_name])
+                empty_win_df = pd.DataFrame(columns=id_cols + [idx_col, "dur_var", concept_name])
                 # 设置 index 列为 datetime 类型（即使为空）
                 empty_win_df[idx_col] = pd.to_datetime(empty_win_df[idx_col])
-                # dur_var 应该是 float（小时），而不是 timedelta
-                empty_win_df[concept_name + "_dur"] = empty_win_df[concept_name + "_dur"].astype(float)
+                # The same column and unit as the non-empty branch below.
+                empty_win_df["dur_var"] = empty_win_df["dur_var"].astype(float)
                 empty_win_df[concept_name] = empty_win_df[concept_name].astype(bool)
+                from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+                set_dur_var_unit(empty_win_df, UNIT_MINUTES)
                 return WinTbl(
                     data=empty_win_df,
                     id_vars=id_cols,
                     index_var=idx_col,
-                    dur_var=concept_name + "_dur",
+                    dur_var="dur_var",
                 )
             # 使用非贪婪匹配，并支持嵌套括号（如 mins(360L)）
             dur_match = re.search(r"ts_to_win_tbl\(([^)]+\))\)", callback, flags=re.DOTALL)
@@ -9070,8 +9083,10 @@ class ConceptResolver:
             else:
                 duration_mins = float(duration)
             
-            # FIX: 为所有行创建 WinTbl，True 行有窗口持续时间，False 行持续时间为 0
-            # 这样在 downsampling 时，True 的窗口会扩展，False 的只保留原始时间点
+            # ricu ts_to_win_tbl sets ``dur_var := win_dur`` on every row, TRUE
+            # and FALSE alike (r13gcs: the 2025-02 zero duration for FALSE rows
+            # is reverted; the published grid is built by
+            # window_expansion.expand_windows_inclusive_any).
             # 🔧 FIX 2025-02-14: Handle WinTbl which uses id_vars/index_var instead of id_columns/index_column
             base_id_cols = list(base_table.id_vars) if isinstance(base_table, WinTbl) else list(base_table.id_columns)
             base_idx_col = base_table.index_var if isinstance(base_table, WinTbl) else base_table.index_column
@@ -9081,9 +9096,8 @@ class ConceptResolver:
             # ett_gcs rows were off the hour).
             if pd.api.types.is_numeric_dtype(win_df[base_idx_col]):
                 win_df[base_idx_col] = np.floor(win_df[base_idx_col])
-            # True 行使用完整窗口持续时间（分钟），False 行使用 0（只表示该时间点存在）
             # 🔧 FIX 2025-02-13: Use 'dur_var' as column name to match R ricu output format
-            win_df["dur_var"] = np.where(mask.values, duration_mins, 0.0)
+            win_df["dur_var"] = float(duration_mins)
             win_df[concept_name] = mask.values
             # The producer declares its unit: a numeric dur_var without one is
             # refused when the public API expands the windows (eICU ett_gcs,
@@ -10249,6 +10263,29 @@ class ConceptResolver:
             # 不强制重命名为charttime，让验证工具识别原始列名
 
             return result
+
+    @staticmethod
+    def _publish_inclusive_any_windows(
+        tables: MutableMapping[str, object],
+        names: Iterable[str],
+        interval: Optional[pd.Timedelta],
+    ) -> None:
+        """Replace requested ricu-grid window concepts by their hourly table."""
+
+        from .window_expansion import (
+            INCLUSIVE_ANY_WINDOW_CONCEPTS,
+            publish_inclusive_any_window,
+        )
+
+        interval_hours = 1.0
+        if interval is not None and hasattr(interval, "total_seconds"):
+            interval_hours = interval.total_seconds() / 3600.0
+        elif isinstance(interval, (int, float)) and interval > 0:
+            interval_hours = float(interval)
+        for name in names:
+            table = tables.get(name)
+            if name in INCLUSIVE_ANY_WINDOW_CONCEPTS and table is not None:
+                tables[name] = publish_inclusive_any_window(table, name, interval_hours)
 
     def _to_r_format_merged(self, merged_df: pd.DataFrame, concept_names: List[str]) -> pd.DataFrame:
         """

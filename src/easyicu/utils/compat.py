@@ -145,7 +145,9 @@ WINDOW_CONCEPTS = {
     # 注意: "dex" 不应该在这里！它的 target: "win_tbl" 意味着返回原始格式，不展开
     # ett_gcs windows are recorded airway intervals in SICdb (median 16.9 h) and
     # HiRID (median 4 h); as in ricu, a merged export expands them over their
-    # duration (2026-11-04 audit round 3, F-31).
+    # duration (2026-11-04 audit round 3, F-31). The resolver now publishes
+    # ett_gcs on ricu's inclusive grid before the merge
+    # (window_expansion.INCLUSIVE_ANY_WINDOW_CONCEPTS, r13gcs).
     "ett_gcs",
 }
 

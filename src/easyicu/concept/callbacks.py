@@ -7057,138 +7057,37 @@ def _callback_gcs(
     if vgcs is not None and not isinstance(vgcs, pd.Series):
         vgcs = pd.Series(np.repeat(vgcs, len(data.index)), index=data.index, dtype=float)
     
-    # 🔧 FIX: Get ett_gcs from the separated table, not from merged data
-    # R ricu: sed <- res[[cnc[5L]]] - ett_gcs is kept separate
-    def _time_to_hours(frame: pd.DataFrame, column: str) -> pd.Series:
-        series = frame[column]
-        if pd.api.types.is_numeric_dtype(series):
-            return pd.to_numeric(series, errors="coerce")
-        if pd.api.types.is_timedelta64_dtype(series):
-            return series.dt.total_seconds() / 3600.0
-        if pd.api.types.is_datetime64_any_dtype(series):
-            if id_columns:
-                return frame.groupby(list(id_columns), dropna=False)[column].transform(
-                    lambda x: (pd.to_datetime(x, errors="coerce") - pd.to_datetime(x, errors="coerce").min()).dt.total_seconds() / 3600.0
-                )
-            dt = pd.to_datetime(series, errors="coerce")
-            return (dt - dt.min()).dt.total_seconds() / 3600.0
-        coerced = pd.to_numeric(series, errors="coerce")
-        if coerced.notna().any():
-            return coerced
-        dt = pd.to_datetime(series, errors="coerce")
-        if id_columns:
-            return frame.groupby(list(id_columns), dropna=False)[column].transform(
-                lambda x: (pd.to_datetime(x, errors="coerce") - pd.to_datetime(x, errors="coerce").min()).dt.total_seconds() / 3600.0
-            )
-        return (dt - dt.min()).dt.total_seconds() / 3600.0
-
-    def _window_match_indicator(base_df: pd.DataFrame, window_df: pd.DataFrame, *, time_col: str, window_time_col: str, dur_col: str) -> pd.Series:
-        # 2026-05-20 perf fix: replaced the per-patient Python loop
-        # `for s, e in zip(fs, fe): coverage |= (times >= s) & (times <= e)`
-        # with a single numpy interval-coverage scan over sorted
-        # (start, +1) / (end, -1) breakpoints. Previously this loop was
-        # 22s/SOFA call on full MIMIC-IV — now O((T + W) log(T + W)) total.
-        matched = pd.Series(False, index=base_df.index, dtype=bool)
-        base_hours = _time_to_hours(base_df, time_col)
-        window_hours = _time_to_hours(window_df, window_time_col)
-        dur_hours = pd.to_numeric(window_df[dur_col], errors="coerce")
-
-        def _coverage_scan(times: np.ndarray, fs: np.ndarray, fe: np.ndarray) -> np.ndarray:
-            """Mark times[i] true iff it falls inside [fs[k], fe[k]] for any k."""
-            if times.size == 0 or fs.size == 0:
-                return np.zeros(times.shape, dtype=bool)
-            # build event stream: (+1 at start, -1 just after end)
-            events = np.empty(2 * fs.size, dtype=np.float64)
-            deltas = np.empty(2 * fs.size, dtype=np.int32)
-            events[0::2] = fs
-            events[1::2] = fe + 1e-9  # close interval treats fe as inside
-            deltas[0::2] = 1
-            deltas[1::2] = -1
-            order = np.argsort(events, kind='mergesort')
-            events = events[order]
-            deltas = deltas[order]
-            cum = np.cumsum(deltas)
-            # For each time, count of open intervals = searchsorted in event stream
-            # `cum` is the open-interval count strictly after each event point.
-            # times t lies inside if at the largest event <= t, cum > 0.
-            pos = np.searchsorted(events, times, side='right') - 1
-            inside = np.zeros(times.shape, dtype=bool)
-            valid = pos >= 0
-            if valid.any():
-                inside[valid] = cum[pos[valid]] > 0
-            return inside
-
-        if id_columns:
-            grouped = base_df.groupby(list(id_columns), dropna=False, sort=False).groups
-            win_grouped = window_df.groupby(list(id_columns), dropna=False, sort=False).groups
-            for key, idx in grouped.items():
-                win_idx = win_grouped.get(key)
-                if win_idx is None or len(win_idx) == 0:
-                    continue
-                starts = window_hours.loc[win_idx].to_numpy(dtype=float)
-                durs = dur_hours.loc[win_idx].to_numpy(dtype=float)
-                times = base_hours.loc[idx].to_numpy(dtype=float)
-                valid = ~(np.isnan(starts) | np.isnan(durs))
-                if not valid.any():
-                    continue
-                fs = np.floor(starts[valid])
-                fe = np.floor(fs + durs[valid])
-                matched.loc[idx] = _coverage_scan(times, fs, fe)
-            return matched
-
-        starts = window_hours.to_numpy(dtype=float)
-        durs = dur_hours.to_numpy(dtype=float)
-        times = base_hours.to_numpy(dtype=float)
-        valid = ~(np.isnan(starts) | np.isnan(durs))
-        if not valid.any():
-            return pd.Series(False, index=base_df.index, dtype=bool)
-        fs = np.floor(starts[valid])
-        fe = np.floor(fs + durs[valid])
-        coverage = _coverage_scan(times, fs, fe)
-        return pd.Series(coverage, index=base_df.index, dtype=bool)
-
+    # ricu gcs: ``sed <- sed[is_true(ett_gcs), ]``, ``expand(sed, aggregate =
+    # "any")`` onto the hourly grid (start through re_time(start + dur)
+    # inclusive), then ``merge(res, sed, all.x = TRUE)``: only the component
+    # rows' own hours are marked, no row is added. The window owner reads the
+    # declared dur_var unit; reading eICU's 360 minutes as hours marked GCS
+    # rows up to 15 days later as sedated (r13gcs).
     ett_gcs = None
-    if ett_gcs_table is not None:
-        if hasattr(ett_gcs_table, 'data'):
-            ett_df = ett_gcs_table.data
-        else:
-            ett_df = ett_gcs_table
-        if 'ett_gcs' in ett_df.columns and not ett_df.empty:
-            merge_cols = list(id_columns) + ([index_column] if index_column else [])
-            ett_time_col = _get_index_column(ett_gcs_table) if hasattr(ett_gcs_table, 'data') else None
-            if not ett_time_col or ett_time_col not in ett_df.columns:
-                # Detect actual time column in ett_df
-                for cand in [index_column, 'datetime', 'charttime', 'starttime', 'time']:
-                    if cand in ett_df.columns:
-                        ett_time_col = cand
-                        break
-            dur_col = getattr(ett_gcs_table, 'dur_var', None) if hasattr(ett_gcs_table, 'dur_var') else None
-            
-            # 🔧 FIX: Handle time column name mismatch between ett_gcs and GCS data
-            if ett_time_col and ett_time_col != index_column and ett_time_col in ett_df.columns:
-                ett_df = ett_df.rename(columns={ett_time_col: index_column})
-                ett_time_col = index_column
-            
-            if dur_col and ett_time_col and dur_col in ett_df.columns and ett_time_col in ett_df.columns and index_column in data.columns:
-                ett_true = ett_df[ett_df['ett_gcs'].fillna(False)].copy()
-                if not ett_true.empty:
-                    ett_gcs = _window_match_indicator(
-                        data,
-                        ett_true,
-                        time_col=index_column,
-                        window_time_col=ett_time_col,
-                        dur_col=dur_col,
-                    )
-                    data['ett_gcs'] = ett_gcs
-            elif all(c in ett_df.columns for c in merge_cols):
-                ett_subset = ett_df[merge_cols + ['ett_gcs']].copy()
-                # R ricu: sed <- sed[is_true(get(cnc[5L])), ] - only keep TRUE rows
-                # Then inner join with data to find intubated time points
-                ett_true = ett_subset[ett_subset['ett_gcs'].fillna(False)]
-                if not ett_true.empty:
-                    # Mark which rows in data are intubated
-                    data = data.merge(ett_true[merge_cols + ['ett_gcs']], on=merge_cols, how='left')
-                    ett_gcs = data.get("ett_gcs")
+    if ett_gcs_table is not None and index_column and index_column in data.columns:
+        from .window_expansion import publish_inclusive_any_window
+
+        interval_hours = 1.0
+        if ctx is not None and ctx.interval is not None and hasattr(ctx.interval, "total_seconds"):
+            interval_hours = ctx.interval.total_seconds() / 3600.0 or 1.0
+        published = publish_inclusive_any_window(ett_gcs_table, "ett_gcs", interval_hours)
+        cells = getattr(published, "data", published)
+        cell_time = getattr(published, "index_column", None)
+        keys = [column for column in id_columns if column in cells.columns]
+        if (
+            "ett_gcs" in cells.columns
+            and cell_time in cells.columns
+            and keys == list(id_columns)
+        ):
+            cells = cells.loc[cells["ett_gcs"].astype(bool), [*keys, cell_time]]
+            cells = cells.rename(columns={cell_time: index_column})
+            if pd.api.types.is_numeric_dtype(data[index_column]):
+                cells[index_column] = cells[index_column].astype(data[index_column].dtype)
+            cells = cells.drop_duplicates()
+            cells["ett_gcs"] = True
+            data = data.merge(cells, on=[*keys, index_column], how="left")
+            data["ett_gcs"] = data["ett_gcs"].astype("boolean").fillna(False).astype(bool)
+            ett_gcs = data["ett_gcs"]
 
     # CRITICAL FIX: Replicate R ricu's sed_impute logic
     # If sed_impute="max" (default) and patient is intubated, set tgcs=15
