@@ -98,7 +98,15 @@ def test_a_survivor_with_followup_keeps_the_horizon(monkeypatch) -> None:
 
     assert bool(result.loc[1, "mort_28d"]) is False
     assert result.loc[1, "followup_days_28d"] == 28.0
-    assert bool(result.loc[2, "mort_28d"]) is True
+    # The day-5 death has an empty category and no admission year as well.
+    # Every horizon is NA and flagged for it too (lead-r13 delta2 D2-SIC):
+    # keeping deaths while survivors of the same unknown category go NA would
+    # inflate mortality among them. The death itself is kept.
+    assert pd.isna(result.loc[2, "mort_28d"])
+    assert bool(result.loc[2, "mort_28d_assumption_based"]) is True
+    base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
+    assert base.loc[2, "days_to_death"] == pytest.approx(5.0)
+    assert bool(base.loc[2, "followup_category_unknown"]) is True
     # A survivor with an empty follow-up category and no admission year has
     # an unknown category (SICdb 1.0.8 policy): no horizon is reached.
     assert pd.isna(result.loc[3, "mort_28d"])
