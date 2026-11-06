@@ -26,6 +26,7 @@ from easyicu.storage_layout import (
     SCHEMA,
     VARIABLE_SCHEME,
     arrow_key_type,
+    bucket_source_files,
 )
 
 RECEIPT_SCHEMA = "easyicu_itemid_bucket_cache_v1"
@@ -175,10 +176,8 @@ def _derived_from(data_path: Path, table: str, source_files) -> dict:
 
 
 def _source_files(data_path, table):
-    directory = data_path / table
-    files = sorted(p for p in directory.glob("*.parquet") if not p.name.startswith("."))
-    if not files and (data_path / f"{table}.parquet").is_file():
-        files = [data_path / f"{table}.parquet"]
+    # The reader checks a layout's derived_from against this same rule.
+    files = list(bucket_source_files(data_path, table))
     if not files:
         raise FileNotFoundError(f"No flat Parquet source for {table} under {data_path}")
     return files

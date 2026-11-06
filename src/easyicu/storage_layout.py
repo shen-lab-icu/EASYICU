@@ -443,7 +443,13 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
         return
     derived = manifest["derived_from"]
     files = derived.get("files") if isinstance(derived, dict) else None
-    if not isinstance(derived, dict) or not isinstance(derived.get("table"), str):
+    table = derived.get("table") if isinstance(derived, dict) else None
+    if (
+        not isinstance(table, str)
+        or PurePosixPath(table).parts != (table,)
+        or table in {".", ".."}
+        or "\\" in table
+    ):
         raise BucketLayoutError("bucket_derived_from_invalid", root)
     if not isinstance(files, list) or not files:
         raise BucketLayoutError("bucket_derived_from_invalid", root)
@@ -463,20 +469,42 @@ def _check_bucket_derived_from(root: Path, manifest: dict) -> None:
             raise BucketLayoutError("bucket_derived_from_invalid", root)
 
 
+def bucket_source_files(data_path: Path, table: str) -> tuple[Path, ...]:
+    """The flat source files a bucket installation of ``table`` is built from.
+
+    The single discovery rule shared by the builder (what it binds in
+    ``derived_from``) and the reader (which requires the current set to be
+    exactly that set): the non-hidden ``*.parquet`` files directly in
+    ``<data_path>/<table>/``, else the single file ``<data_path>/<table>.parquet``;
+    empty when neither exists.
+    """
+    data_path = Path(data_path)
+    files = sorted(
+        p for p in (data_path / table).glob("*.parquet") if not p.name.startswith(".")
+    )
+    if not files and (data_path / f"{table}.parquet").is_file():
+        files = [data_path / f"{table}.parquet"]
+    return tuple(files)
+
+
 def _verify_bucket_sources(root: Path, manifest: dict) -> None:
-    """The source files ``derived_from`` binds still are the files it recorded.
+    """The flat source ``derived_from`` binds is still exactly what it recorded.
 
     Checked on every open, after the layout's own structure, so structural
     defects keep their reasons. Each recorded path is relative to the
     installation root (the bucket directory's parent), where the builder's
     data path and the flat source live; a symlinked source is compared
-    through its link, as the builder stat'ed it. Size and mtime must equal
-    the recorded values (no bytes are read; the recorded sha256 stays the
-    builder's binding):
+    through its link, as the builder stat'ed it. No bytes are read; the
+    recorded sha256 stays the builder's binding:
     - a recorded source that no longer exists is
       ``bucket_derived_from_source_missing``: the layout claims a provenance
       it can no longer show, so it is not served (rebuild the layout or
       restore the source);
+    - a current source set (:func:`bucket_source_files`, the builder's own
+      discovery rule) that is not exactly the recorded set, e.g. a shard
+      added beside the recorded ones, is
+      ``bucket_derived_from_source_set_changed``: the layout no longer holds
+      every source row;
     - a changed size or mtime is ``bucket_derived_from_source_changed``.
     A manifest without ``derived_from`` (layouts built before the binding)
     is not checked here, as before.
@@ -485,15 +513,29 @@ def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     if derived is None:
         return
     base = root.parent
+    recorded: dict[str, tuple[Path, dict]] = {}
     for entry in derived["files"]:
         relative = PurePosixPath(entry["path"])
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise BucketLayoutError("bucket_derived_from_invalid", root)
-        source = base.joinpath(*relative.parts)
+        recorded[relative.as_posix()] = (base.joinpath(*relative.parts), entry)
+    stats = {}
+    for name, (source, _entry) in recorded.items():
         try:
-            stat = source.stat()
+            stats[name] = source.stat()
         except OSError as exc:
             raise BucketLayoutError("bucket_derived_from_source_missing", root) from exc
+    try:
+        current = {
+            PurePosixPath(*p.relative_to(base).parts).as_posix()
+            for p in bucket_source_files(base, derived["table"])
+        }
+    except (OSError, ValueError) as exc:
+        raise BucketLayoutError("bucket_derived_from_source_set_changed", root) from exc
+    if current != set(recorded):
+        raise BucketLayoutError("bucket_derived_from_source_set_changed", root)
+    for name, (_source, entry) in recorded.items():
+        stat = stats[name]
         if stat.st_size != entry["size"] or stat.st_mtime_ns != entry["mtime_ns"]:
             raise BucketLayoutError("bucket_derived_from_source_changed", root)
 
