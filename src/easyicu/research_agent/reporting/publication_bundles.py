@@ -1486,6 +1486,28 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     return "cohort_flow_publication_bundle_from_parent_outputs_v1"
 
 
+def _declared_rate_scale(column: str, values, *, site: str) -> float:
+    """Percent display scale from the column's declared unit (its name)."""
+    import numpy as np
+
+    from ...utils.declared_units import UndeclaredUnitError
+
+    name = str(column).lower()
+    if "pct" in name or "percent" in name:
+        return 1.0
+    finite = np.asarray(values, dtype="float64")
+    finite = finite[np.isfinite(finite)]
+    if finite.size and float(finite.max()) > 1.0:
+        raise UndeclaredUnitError(
+            reason="rate_unit_contradiction", quantity=str(column), site=site,
+            detail=(
+                f"a proportion column holds {int((finite > 1.0).sum())} values above 1; "
+                "name a percent column with a _pct suffix"
+            ),
+        )
+    return 100.0
+
+
 def _render_phenotype_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -1630,9 +1652,12 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     if has_outcome:
         ax_out = fig.add_subplot(grid[0, col])
         rate = pd.to_numeric(plot_df[rate_col], errors="coerce").fillna(0).to_numpy()
-        # Scale a 0-1 proportion to percent for display; leave an already-percent
-        # column untouched.
-        scale = 100.0 if float(np.nanmax(rate)) <= 1.0 else 1.0
+        # The column name declares the unit: the rate names this panel accepts
+        # are proportions (0-1); a ``_pct``/``percent`` name is percent. The
+        # former "max <= 1 means proportion" rule showed a table of rare-event
+        # rates stored as percent (all <= 1) as 100x too high (lead-r13
+        # magnitude/format sweep #16).
+        scale = _declared_rate_scale(rate_col, rate, site="publication_bundles.cluster_outcome")
         rate_pct = rate * scale
         yerr = None
         if ci_low_col is not None and ci_high_col is not None:

@@ -153,17 +153,34 @@ def _sepsis_delta_fun(value: object) -> Callable[[pd.Series], pd.Series]:
     }
     return aliases.get(str(value or "delta_cummin").strip(), delta_cummin)
 
-def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str) -> pd.DataFrame:
+def _standardize_fio2_units(
+    fio2_df: pd.DataFrame, fio2_col: str, database: str, fio2_unit=None,
+) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
+
+    The fio2 concept is declared in percent and its [21, 100] bounds apply at
+    load, so a whole batch of fractions contradicts the declaration. The former
+    per-database branches multiplied the *whole frame* by 100 when its max,
+    median or share of values below 1 looked fractional, which is a decision
+    that depends on which rows share the batch. They now refuse instead
+    (``UndeclaredUnitError``). With a declared ``fio2_unit`` there is nothing
+    to guess, and the caller applies the declaration. The per-row guard below
+    is unchanged (lead-r13 magnitude/format sweep #6; it never fired on the
+    six-database sample).
 
     Args:
         fio2_df: FiO2数据DataFrame
         fio2_col: FiO2列名
         database: 数据库名称
+        fio2_unit: declared unit (``"fraction"``/``"percentage"``) or None
 
     Returns:
         标准化后的DataFrame
     """
+    from ..utils.declared_units import UndeclaredUnitError, declared_fio2_unit
+
+    if declared_fio2_unit(fio2_unit, site="concept.callbacks._standardize_fio2_units") is not None:
+        return fio2_df
     if fio2_df.empty or fio2_col not in fio2_df.columns:
         return fio2_df
 
@@ -180,21 +197,26 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str)
     min_val = fio2_values.min()
 
     # 数据库特定的单位转换逻辑
+    def _refuse(rule: str) -> None:
+        raise UndeclaredUnitError(
+            reason="fio2_unit_undeclared", quantity="fio2",
+            site="concept.callbacks._standardize_fio2_units",
+            detail=(
+                f"{database}: {int(fio2_values.le(1.0).sum())} of {len(fio2_values)} values "
+                f"are at most 1 ({rule}); the batch contradicts the declared percent unit"
+            ),
+        )
+
     if database.lower() == 'miiv':
-        # MIMIC-IV: 如果最大值<=1.0且中位数>0.1，认为是分数形式，需要转换为百分比
+        # MIMIC-IV: a frame of fractions used to be rescaled as a whole.
         if max_val <= 1.0 and min_val >= 0.0 and fio2_values.median() > 0.1:
-            result_df[fio2_col] = result_df[fio2_col] * 100
-            logger.debug(f"MIMIC-IV FiO2从分数形式转换为百分比形式 (max_val: {max_val}, median: {fio2_values.median()})")
-        # 如果值在0-1之间但有些异常值，检查大部分数据
+            _refuse("max <= 1 and median > 0.1")
         elif max_val <= 1.5 and (fio2_values.quantile(0.95) <= 1.0) and fio2_values.median() > 0.1:
-            result_df[fio2_col] = result_df[fio2_col] * 100
-            logger.debug(f"MIMIC-IV FiO2从分数形式转换为百分比形式 (95%分位数: {fio2_values.quantile(0.95)}, median: {fio2_values.median()})")
+            _refuse("max <= 1.5, q95 <= 1 and median > 0.1")
 
     elif database.lower() == 'eicu':
-        # eICU: 通常已经是百分比形式，但进行验证
         if max_val <= 1.0 and min_val >= 0.0 and fio2_values.median() > 0.1:
-            result_df[fio2_col] = result_df[fio2_col] * 100
-            logger.debug(f"eICU FiO2从分数形式转换为百分比形式 (max_val: {max_val}, median: {fio2_values.median()})")
+            _refuse("max <= 1 and median > 0.1")
 
     elif database.lower() == 'aumc':
         # AUMC: 特殊处理 - 已知大部分是百分比形式，只有少数itemid可能是分数
@@ -202,11 +224,10 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str)
         fraction_like_values = fio2_values[(fio2_values > 0.1) & (fio2_values < 1.0)]
 
         if len(fraction_like_values) > 0:
-            # 如果有>20%的值看起来像分数形式，则全部转换
+            # More than 20% fraction-like values used to rescale the whole frame.
             fraction_ratio = len(fraction_like_values) / len(fio2_values)
             if fraction_ratio > 0.2:
-                result_df[fio2_col] = result_df[fio2_col] * 100
-                logger.debug(f"AUMC FiO2从分数形式转换为百分比形式 (fraction_ratio: {fraction_ratio:.2f})")
+                _refuse(f"{fraction_ratio:.0%} of values in (0.1, 1)")
             else:
                 # 否则只转换明显是分数的值，保留已经是百分比的值
                 mask = (result_df[fio2_col] > 0.1) & (result_df[fio2_col] < 1.0)
@@ -4445,7 +4466,10 @@ def _match_fio2(
 
         # FiO2 unit standardization
         if database is not None and not fio2_subset.empty and fio2_col in fio2_subset.columns:
-            fio2_subset = _standardize_fio2_units(fio2_subset, fio2_col, database)
+            fio2_subset = _standardize_fio2_units(
+                fio2_subset, fio2_col, database,
+                fio2_unit=((getattr(ctx, "kwargs", None) or {}).get("fio2_unit") if ctx is not None else None),
+            )
 
         # dropna + sort
         o2_subset = o2_subset.dropna(subset=[unified_time_col]) if not o2_subset.empty else o2_subset
@@ -4749,18 +4773,28 @@ def _callback_pafi(
     
     # CRITICAL FIX: Normalize FiO2 unit if provided as fraction (0–1)
     # This prevents PaFi from being inflated by 100x when FiO2 is stored as decimal
-    fio2_unit = (ctx.kwargs or {}).get("fio2_unit")
+    from ..utils.declared_units import UndeclaredUnitError, declared_fio2_unit
+
+    fio2_unit = declared_fio2_unit((ctx.kwargs or {}).get("fio2_unit"), site=f"concept.callbacks.{output_col}")
     if fio2_unit == "fraction":
         # Explicitly specified as fraction, convert to percentage
         fio2 = fio2 * 100.0
-    elif fio2_unit == "percentage":
-        # Already percentage, no conversion needed
-        pass
     elif fio2_unit is None:
-        # Auto-detect: if majority of non-null values are <= 1.0, treat as fraction
+        # Undeclared: a batch whose values are mostly at most 1 used to be
+        # rescaled as a whole. That share depends on which rows share the
+        # batch, so it now refuses; the per-row guard below still converts an
+        # isolated fraction (lead-r13 magnitude/format sweep #7; it never fired
+        # on the six-database sample).
         non_null = fio2.dropna()
         if len(non_null) > 0 and (non_null.le(1.0).mean() > 0.5):
-            fio2 = fio2 * 100.0
+            raise UndeclaredUnitError(
+                reason="fio2_unit_undeclared", quantity="fio2",
+                site=f"concept.callbacks.{output_col}",
+                detail=(
+                    f"{int(non_null.le(1.0).sum())} of {len(non_null)} FiO2 values are at most 1; "
+                    "pass fio2_unit='fraction' or 'percentage'"
+                ),
+            )
     
     # Physiological guards (2026-07): make P/F (and S/F) robust to per-database
     # FiO2 unit inconsistencies (AUMC/SIC/HiRID raw or mixed values) and PaO2

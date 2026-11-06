@@ -28,6 +28,25 @@ class MissingTableSourceError(KeyError):
     """
 
 
+class SourceTimeFormatError(storage_layout.StorageIntegrityError):
+    """A declared relative-offset time column mixes numeric and other tokens.
+
+    Which reading applies cannot be decided from the values: the column would
+    become numbers or calendar datetimes depending on which rows a batch holds.
+    Not a ``ValueError``, so readers cannot mistake it for an absent source.
+    """
+
+    def __init__(self, table: str, column: str, *, numeric: int, other: int):
+        self.reason = "mixed_time_tokens"
+        self.table = table
+        self.column = column
+        super().__init__(
+            f"mixed_time_tokens: {table}.{column} holds {numeric} numeric and "
+            f"{other} non-numeric non-blank values; the source declares relative "
+            "offsets, so this column cannot be read as either"
+        )
+
+
 def _duckdb_path(p) -> str:
     """Convert a Path or string to a DuckDB-safe path string.
 
@@ -1097,6 +1116,16 @@ class ICUDataSource:
                     if populated.any() and numeric.loc[populated].notna().all():
                         frame[column] = numeric
                         continue
+                    numeric_count = int(numeric.loc[populated].notna().sum())
+                    if numeric_count:
+                        # Some rows parse as offsets and others do not: refuse
+                        # rather than let the batch's rows pick the reading.
+                        raise SourceTimeFormatError(
+                            table_name,
+                            column,
+                            numeric=numeric_count,
+                            other=int(populated.sum()) - numeric_count,
+                        )
                 frame[column] = _coerce_datetime(values)
 
         # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
@@ -4121,17 +4150,25 @@ def load_bucketed_table_aggregated(
             )
             unbounded_retry = False
             if unit_suspect:
-                unbounded_query = query.replace(
-                    _query_bounded_agg,
-                    _query_unbounded_agg,
-                    1,
+                # At least 100 values in this batch and none within the
+                # declared bounds. This used to retry without bounds and keep
+                # them as "probably another unit", a decision that depended on
+                # the batch: 99 values, or a single in-range one, dropped them
+                # all. The bounds are declared, and the values contradict them
+                # in this batch; refuse rather than guess (lead-r13
+                # magnitude/format sweep #14; it never fired on the
+                # six-database sample at batch 50 or one-shot).
+                from .utils.declared_units import UndeclaredUnitError
+
+                raise UndeclaredUnitError(
+                    reason="bounds_unit_suspect",
+                    quantity=str(value_column),
+                    site=f"datasource.load_bucketed_table_aggregated[{db_name}.{table_name}]",
+                    detail=(
+                        f"{raw_non_null} values in this batch and none within the declared "
+                        f"bounds [{value_min}, {value_max}]"
+                    ),
                 )
-                if unbounded_query == query:
-                    raise RuntimeError(
-                        "Could not construct unbounded retry for unit-suspect values"
-                    )
-                df = finish_miiv_lab_frame(_execute_aggregation(unbounded_query))
-                unbounded_retry = True
             df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
             bounds_diagnostics = {
                 "bounds_raw_transformed_non_null": raw_non_null,

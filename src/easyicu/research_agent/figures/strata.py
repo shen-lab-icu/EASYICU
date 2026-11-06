@@ -26,6 +26,11 @@ _GROUP_SUFFIXES = (
 )
 
 
+def _rate_column_is_percent(column) -> bool:
+    name = str(column).lower()
+    return "pct" in name or "percent" in name
+
+
 def normalise_strata_frame(
     frame: pd.DataFrame,
     *,
@@ -140,8 +145,23 @@ def normalise_strata_frame(
         result["n"] = pd.to_numeric(
             working.loc[result.index, count_column], errors="coerce"
         )
-    if not result.empty and result["rate"].max() > 1.0:
+    # The rate column's name declares its unit: a ``pct``/``percent`` name is
+    # percent, every other accepted name is a proportion. The former "max > 1
+    # means percent" rule left a percent column of small rates (all <= 1)
+    # 100x too high (lead-r13 magnitude/format sweep #16).
+    if _rate_column_is_percent(rate_column):
         result["rate"] = result["rate"] / 100.0
+    elif not result.empty and result["rate"].max() > 1.0:
+        from ...utils.declared_units import UndeclaredUnitError
+
+        raise UndeclaredUnitError(
+            reason="rate_unit_contradiction", quantity=str(rate_column),
+            site="figures.strata.normalise_strata_frame",
+            detail=(
+                f"a proportion column holds {int((result['rate'] > 1.0).sum())} values above 1; "
+                "name a percent column with a _pct suffix"
+            ),
+        )
     result = (
         result.sort_values("score")
         .drop(columns=["_score_order"])

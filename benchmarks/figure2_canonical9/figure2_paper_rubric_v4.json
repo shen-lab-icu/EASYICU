@@ -1202,6 +1202,7 @@
     "src/easyicu/utils/common_utils.py",
     "src/easyicu/utils/compat.py",
     "src/easyicu/utils/death_time_semantics.py",
+    "src/easyicu/utils/declared_units.py",
     "src/easyicu/utils/df_utils.py",
     "src/easyicu/utils/exact_sum.py",
     "src/easyicu/utils/file_utils.py",
@@ -1548,7 +1549,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "1622d779daa19f39718cb1cc19985fb04c0a17e07c1e943a5410c6208c137b08",
+  "scorer_tree_sha256": "9428343967868bfa67f408f4c85cea6fb5a5f3f74fada5b9cd22d93037b48420",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

@@ -27,46 +27,38 @@ class UnsupportedClinicalScoreError(RuntimeError):
 
 
 # Import missing callbacks
-def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFrame:
-    """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
+def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str = None, fio2_unit=None) -> pd.DataFrame:
+    """Return FiO2 in percent from a declared unit, never from the values.
 
-    Args:
-        fio2_df: FiO2数据DataFrame，包含fio2列
-        database: 数据库名称（'miiv', 'eicu', 'aumc'等）
-
-    Returns:
-        标准化后的DataFrame
+    ``fio2_unit="fraction"`` multiplies by 100 and ``"percentage"`` keeps the
+    values. Undeclared input with any value in (0, 1] cannot be read safely.
+    The former rule ("max <= 1 means fractions") converted a pure-fraction
+    table but left the fractions of a mixed table in place, so P/F came out
+    100x too high. It now raises ``UndeclaredUnitError``. ``database`` is kept
+    for callers; it no longer changes the reading (lead-r13 magnitude/format
+    sweep #8).
     """
+    from .utils.declared_units import UndeclaredUnitError, declared_fio2_unit
+
+    unit = declared_fio2_unit(fio2_unit, site="easyicu.callbacks.pafi/safi")
     if 'fio2' not in fio2_df.columns or fio2_df.empty:
         return fio2_df
-
-    # 获取非空值进行分析
-    values = fio2_df['fio2'].dropna()
-    if len(values) == 0:
+    if unit == "fraction":
+        fio2_df = fio2_df.copy()
+        fio2_df['fio2'] = pd.to_numeric(fio2_df['fio2'], errors='coerce') * 100
         return fio2_df
-
-    # 基于分析结果的数据库特定转换
-    if database == 'miiv':
-        # MIMIC-IV分析显示pafi计算准确，推断不需要转换
-        # 但为了安全起见，添加自动检测
-        max_val = values.max()
-        if max_val <= 1.0:  # 分数形式
-            fio2_df['fio2'] = fio2_df['fio2'] * 100
-
-    elif database == 'eicu':
-        # eICU已确认为百分比形式（21-100），不需要转换
-        # 但保持一致性检查
-        max_val = values.max()
-        if max_val <= 1.0:  # 如果意外发现是分数形式
-            fio2_df['fio2'] = fio2_df['fio2'] * 100
-
-    elif database == 'aumc':
-        # AUMC有percent_as_numeric转换机制，基本确认为百分比形式
-        # 但同样添加安全检查
-        max_val = values.max()
-        if max_val <= 1.0:  # 如果意外发现是分数形式
-            fio2_df['fio2'] = fio2_df['fio2'] * 100
-
+    if unit is None:
+        values = pd.to_numeric(fio2_df['fio2'], errors='coerce')
+        ambiguous = values.gt(0) & values.le(1.0)
+        if ambiguous.any():
+            raise UndeclaredUnitError(
+                reason="fio2_unit_undeclared", quantity="fio2",
+                site="easyicu.callbacks.pafi/safi",
+                detail=(
+                    f"{int(ambiguous.sum())} of {int(values.notna().sum())} FiO2 values lie in (0, 1]; "
+                    "pass fio2_unit='fraction' or 'percentage'"
+                ),
+            )
     return fio2_df
 
 def _is_true_safe(series: pd.Series) -> pd.Series:
@@ -1378,6 +1370,7 @@ def pafi(
     mode: str = "match_vals",
     fix_na_fio2: bool = False,
     database: str = None,
+    fio2_unit: str = None,
 ) -> pd.DataFrame:
     """Calculate PaO2/FiO2 ratio (P/F ratio) from oxygen partial pressure and FiO2.
     
@@ -1391,6 +1384,8 @@ def pafi(
         match_win: Time window for matching PaO2 and FiO2 (default: 2 hours)
         mode: Matching mode ('match_vals', 'extreme_vals', or 'fill_gaps')
         fix_na_fio2: If True, assume FiO2=21% (room air) when missing
+        fio2_unit: ``"fraction"`` or ``"percentage"``. Required when any FiO2
+            value lies in (0, 1]; the unit is not inferred from the values.
         
     Returns:
         DataFrame with pafi column (PaO2/FiO2 * 100)
@@ -1421,9 +1416,8 @@ def pafi(
     po2_df = po2_df.rename(columns={po2_val_col: 'po2'})
     fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
 
-    # 新增：数据库自适应的FiO2单位标准化
-    if database is not None:
-        fio2_df = _standardize_fio2_units(fio2_df, database)
+    # FiO2 in percent from the declared unit (no value-based guess).
+    fio2_df = _standardize_fio2_units(fio2_df, database, fio2_unit)
 
     # Merge based on mode
     if mode == "match_vals":
@@ -1494,6 +1488,7 @@ def safi(
     mode: str = "match_vals",
     fix_na_fio2: bool = False,
     database: str = None,
+    fio2_unit: str = None,
 ) -> pd.DataFrame:
     """Calculate SaO2/FiO2 ratio (S/F ratio) from oxygen saturation and FiO2.
     
@@ -1506,6 +1501,8 @@ def safi(
         match_win: Time window for matching O2sat and FiO2 (default: 2 hours)
         mode: Matching mode ('match_vals', 'extreme_vals', or 'fill_gaps')
         fix_na_fio2: If True, assume FiO2=21% (room air) when missing
+        fio2_unit: ``"fraction"`` or ``"percentage"``. Required when any FiO2
+            value lies in (0, 1]; the unit is not inferred from the values.
         
     Returns:
         DataFrame with safi column (SaO2/FiO2 * 100)
@@ -1536,9 +1533,8 @@ def safi(
     o2sat_df = o2sat_df.rename(columns={o2sat_val_col: 'o2sat'})
     fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
 
-    # 新增：数据库自适应的FiO2单位标准化
-    if database is not None:
-        fio2_df = _standardize_fio2_units(fio2_df, database)
+    # FiO2 in percent from the declared unit (no value-based guess).
+    fio2_df = _standardize_fio2_units(fio2_df, database, fio2_unit)
 
     # Merge based on mode
     if mode == "match_vals":

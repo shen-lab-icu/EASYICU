@@ -861,7 +861,8 @@ def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
     assert result.loc[result["valuenum"].notna(), "valuenum"].tolist() == [100.0]
 
 
-def test_transformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(tmp_path):
+def test_transformed_bounds_refuse_when_all_values_are_unit_suspect(tmp_path):
+    # lead-r13 sweep #14: no unbounded retry; the batch contradicts the bounds.
     pd.DataFrame(
         {
             "patientunitstayid": [1] * 100,
@@ -891,28 +892,24 @@ def test_transformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(tmp
         },
     )
 
-    result = load_bucketed_table_aggregated(
-        source,
-        "labs",
-        "value",
-        ["x"],
-        patient_ids=[1],
-        value_min=32,
-        value_max=42,
-        value_transform='TRY_CAST("value" AS DOUBLE)',
-    )
+    from easyicu.utils.declared_units import UndeclaredUnitError
 
-    assert result["value"].tolist() == pytest.approx([98.6])
-    assert result.attrs["easyicu_bounds_loader"] == {
-        "bounds_raw_transformed_non_null": 100,
-        "bounds_bounded_transformed_non_null": 0,
-        "bounds_bounded_aggregate_non_null": 0,
-        "bounds_unit_suspect": True,
-        "bounds_unbounded_retry": True,
-    }
+    with pytest.raises(UndeclaredUnitError) as caught:
+        load_bucketed_table_aggregated(
+            source,
+            "labs",
+            "value",
+            ["x"],
+            patient_ids=[1],
+            value_min=32,
+            value_max=42,
+            value_transform='TRY_CAST("value" AS DOUBLE)',
+        )
+    assert caught.value.reason == "bounds_unit_suspect"
+    assert "100 values in this batch" in str(caught.value)
 
 
-def test_untransformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(
+def test_untransformed_bounds_refuse_when_all_values_are_unit_suspect(
     tmp_path,
 ):
     pd.DataFrame(
@@ -944,24 +941,19 @@ def test_untransformed_bounds_retry_unbounded_when_all_values_are_unit_suspect(
         },
     )
 
-    result = load_bucketed_table_aggregated(
-        source,
-        "labs",
-        "value",
-        ["x"],
-        patient_ids=[1],
-        value_min=32,
-        value_max=42,
-    )
+    from easyicu.utils.declared_units import UndeclaredUnitError
 
-    assert result["value"].tolist() == pytest.approx([98.6])
-    assert result.attrs["easyicu_bounds_loader"] == {
-        "bounds_raw_transformed_non_null": 100,
-        "bounds_bounded_transformed_non_null": 0,
-        "bounds_bounded_aggregate_non_null": 0,
-        "bounds_unit_suspect": True,
-        "bounds_unbounded_retry": True,
-    }
+    with pytest.raises(UndeclaredUnitError) as caught:
+        load_bucketed_table_aggregated(
+            source,
+            "labs",
+            "value",
+            ["x"],
+            patient_ids=[1],
+            value_min=32,
+            value_max=42,
+        )
+    assert caught.value.reason == "bounds_unit_suspect"
 
 
 def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):

@@ -76,14 +76,21 @@ def test_enforce_concept_bounds_preserves_unbounded_concepts(monkeypatch):
     assert filtered.equals(df)
 
 
-def test_enforce_concept_bounds_skips_unit_suspect_batch(monkeypatch):
+def test_enforce_concept_bounds_refuses_a_unit_suspect_batch(monkeypatch):
+    # lead-r13 sweep #14: a median outside the bounds no longer skips
+    # enforcement as "probably another unit"; it refuses typed.
+    from easyicu.utils.declared_units import UndeclaredUnitError
+
     monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", {"temperature": (32.0, 42.0)})
     df = pd.DataFrame({"temperature": [98.6] * 100})
 
-    filtered, dropped = api._enforce_concept_bounds(df, "temperature")
+    with pytest.raises(UndeclaredUnitError) as caught:
+        api._enforce_concept_bounds(df, "temperature")
+    assert caught.value.reason == "bounds_unit_suspect"
 
-    assert dropped == -1
-    assert filtered.equals(df)
+    # 99 values are below the evidence floor: ordinary enforcement drops them.
+    filtered, dropped = api._enforce_concept_bounds(df.iloc[:99], "temperature")
+    assert dropped == 99 and filtered.empty
 
 
 def test_load_concept_bounds_map_warns_when_dictionary_cannot_be_read(monkeypatch):
