@@ -19,6 +19,7 @@ import easyicu
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 from easyicu.resources import load_data_sources
 from easyicu.storage_layout import StorageIntegrityError
+from tests.support.mimic_chartevents import chart
 
 T = pd.Timestamp("2150-01-01 08:00")
 
@@ -36,17 +37,7 @@ def _icustays(root):
 
 
 def _chart(rows):
-    return pd.DataFrame(
-        {
-            "row_id": [r[0] for r in rows], "subject_id": [r[1] for r in rows],
-            "hadm_id": [r[2] for r in rows], "icustay_id": [r[3] for r in rows],
-            "itemid": [580] * len(rows), "charttime": [T + pd.Timedelta(hours=r[0]) for r in rows],
-            "storetime": [T] * len(rows), "cgid": [1] * len(rows), "value": [None] * len(rows),
-            "valuenum": [r[4] for r in rows], "valueuom": ["kg"] * len(rows),
-            "warning": [0] * len(rows), "error": [0] * len(rows),
-            "resultstatus": [None] * len(rows), "stopped": [None] * len(rows),
-        }
-    )
+    return chart(rows, T)
 
 
 def _install(root, layout):
