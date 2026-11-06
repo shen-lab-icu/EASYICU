@@ -50,3 +50,37 @@ def test_repeated_keys_are_matched_one_to_one():
                          "mech_vent": ["invasive", "noninvasive", "invasive"]})
     report = compare_frames(left, left.iloc[[1, 0, 2]].copy())
     assert report["equal"] and report["value_cells_differ"] == 0
+
+
+def test_load_errors_fail_the_census_and_matched_routes_are_still_compared(tmp_path, monkeypatch):
+    import json
+
+    import tools.duckdb_raw_parity_census as census
+
+    frame = _frame([1.0, 2.0, 3.0])
+
+    def fake_worker(argv, worker, concepts):
+        out = tmp_path / worker
+        out.mkdir(parents=True, exist_ok=True)
+        if worker == "duckdb":
+            status = {"urine": {"routes": {"itemid": 1}}, "broken": {"error": "StorageIntegrityError"}}
+        else:
+            assert concepts == ["urine"]
+            status = {"urine": {"routes": {}}}
+        frame.to_parquet(out / "urine.parquet")
+        (out / "status.json").write_text(json.dumps(status))
+
+    monkeypatch.setattr(census, "_run_worker", fake_worker)
+    code = census.main(["--database", "miiv", "--data-path", str(tmp_path), "--out", str(tmp_path)])
+    report = json.loads((tmp_path / "parity_report.json").read_text())
+    assert report["load_errors"] == ["broken"]
+    assert report["concepts"]["urine"]["equal"] and report["equal"] == 1
+    assert code == 1
+
+
+def test_census_exit_code_contract():
+    from tools.duckdb_raw_parity_census import census_exit_code
+
+    assert census_exit_code({"mismatched": [], "load_errors": []}) == 0
+    assert census_exit_code({"mismatched": ["x"], "load_errors": []}) == 1
+    assert census_exit_code({"mismatched": [], "load_errors": ["y"]}) == 1
