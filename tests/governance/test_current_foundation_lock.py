@@ -68,3 +68,45 @@ def test_all_current_e1_profiles_bind_the_current_foundation_resources():
         profile = get_submission_profile(profile_ref)
         assert profile.expected_concept_dict_sha == lock["concept_dict_sha256"]
         assert profile.expected_sofa2_dict_sha == lock["sofa2_dict_sha256"]
+
+
+def test_every_current_profile_generation_pins_the_lock():
+    """The LOCK and the current profile generation must name the same dictionaries.
+
+    A reseal moves both (tools/reseal_concept_dict.py). The current generation is
+    every registered profile at the newest ``<date>-auditN`` or
+    ``<date>-sic-overlay-vM`` version. All of them, every CURRENT_E1*/CURRENT_WEB_E1* ref and the
+    acceptance ref must pin the LOCK digests, so one pin cannot move alone.
+    """
+    import re
+
+    from easyicu.research_agent.orchestration import profiles
+    from easyicu.research_agent.providers import client_trust
+
+    lock = json.loads((ROOT / "src/easyicu/data/concept-dict.LOCK.json").read_text())
+    registry = profiles.SUBMISSION_PROFILE_REGISTRY.values()
+
+    def newest(pattern):
+        numbers = [int(m.group(1)) for p in registry if (m := re.fullmatch(pattern, p.version))]
+        assert numbers, pattern
+        return max(numbers)
+
+    audit, overlay = newest(r"\d{8}-audit(\d+)"), newest(r"\d{8}-sic-overlay-v(\d+)")
+    current = [
+        p for p in registry
+        if re.fullmatch(rf"\d{{8}}-audit{audit}", p.version)
+        or re.fullmatch(rf"\d{{8}}-sic-overlay-v{overlay}", p.version)
+    ]
+    # Canary, reviewed and their live pairs; desktop, live desktop and acceptance;
+    # six SICdb overlays.
+    assert len(current) >= 13
+    for profile in current:
+        assert profile.expected_concept_dict_sha == lock["concept_dict_sha256"], profile.ref
+        assert profile.expected_sofa2_dict_sha == lock["sofa2_dict_sha256"], profile.ref
+    refs = [getattr(profiles, n) for n in dir(profiles) if n.startswith(("CURRENT_E1", "CURRENT_WEB_E1")) and n.endswith("_REF")]
+    assert len(refs) == 8
+    for ref in refs:
+        assert profiles.get_submission_profile(ref) in current, ref
+    for name in ("DESKTOP_FIRST_RESULT", "DESKTOP_FIRST_RESULT_LIVE_PUBMED", "PUBLIC_DEMO_ACCEPTANCE"):
+        assert getattr(profiles, name) in current, name
+    assert client_trust.ACCEPTANCE_PROFILE_REF == profiles.PUBLIC_DEMO_ACCEPTANCE.ref

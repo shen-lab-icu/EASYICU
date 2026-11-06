@@ -724,6 +724,15 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
         )
 
 
+def _newest_audit_version() -> str:
+    import re
+
+    from easyicu.research_agent.orchestration.profiles import SUBMISSION_PROFILE_REGISTRY
+
+    versions = [p.version for p in SUBMISSION_PROFILE_REGISTRY.values() if re.fullmatch(r"\d{8}-audit\d+", p.version)]
+    return max(versions, key=lambda v: int(v.rsplit("audit", 1)[1]))
+
+
 def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> None:
     from easyicu.research_agent import (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19 as archival_public_profile,
@@ -799,7 +808,8 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         (CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF, current_live_profile),
         (CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF, current_live_reviewed_profile),
     ):
-        assert ref == f"{frozen.name}/20261105-audit11"
+        # The newest reseal generation (tools/reseal_concept_dict.py moves all four).
+        assert ref == f"{frozen.name}/{_newest_audit_version()}"
     assert prior_public_profile.expected_concept_dict_sha == (
         FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260903"]
     )

@@ -660,12 +660,32 @@ def _assert_sic_overlay_profile_keeps_history(profile):
         "version", "locked_at", "expected_concept_dict_sha"
     }
     # And the eleventh (auditor round-7 fixes; both dictionaries).
-    assert profile.version == "20261105-sic-overlay-v13"
-    assert profile.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_05_AUDIT11.expected_concept_dict_sha
-    assert profile.expected_sofa2_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_05_AUDIT11.expected_sofa2_dict_sha
-    assert {key for key, value in asdict(profile).items() if value != asdict(v12)[key]} == {
+    v13 = profiles.get_submission_profile(f"{profile.name}/20261105-sic-overlay-v13")
+    assert v13.expected_concept_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_05_AUDIT11.expected_concept_dict_sha
+    assert v13.expected_sofa2_dict_sha == profiles.E1_PROGRESSIVE_PLANNER_CANARY_2026_11_05_AUDIT11.expected_sofa2_dict_sha
+    assert {key for key, value in asdict(v13).items() if value != asdict(v12)[key]} == {
         "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
     }
+    # Later reseals (tools/reseal_concept_dict.py) each add one overlay version that
+    # moves only version, locked_at and the dictionary digests; the current one is
+    # the newest and pins the current canary's digests.
+    number = int(profile.version.rsplit("-v", 1)[1])
+    assert number >= 13
+    previous = v13
+    for n in range(14, number + 1):
+        step = next(
+            p for p in profiles.SUBMISSION_PROFILE_REGISTRY.values()
+            if p.name == profile.name and p.version.endswith(f"-sic-overlay-v{n}")
+        )
+        changed = {key for key, value in asdict(step).items() if value != asdict(previous)[key]}
+        assert {"version", "locked_at"} <= changed <= {
+            "version", "locked_at", "expected_concept_dict_sha", "expected_sofa2_dict_sha"
+        }
+        previous = step
+    assert previous == profile
+    current_canary = profiles.get_submission_profile(profiles.CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF)
+    assert profile.expected_concept_dict_sha == current_canary.expected_concept_dict_sha
+    assert profile.expected_sofa2_dict_sha == current_canary.expected_sofa2_dict_sha
 
 
 def test_sic_metadata_candidate_uses_new_profile_without_rewriting_historical_or_execution():
