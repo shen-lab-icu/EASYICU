@@ -8751,7 +8751,10 @@ def _derive_rowwise(
     out = merged[keep].copy()
     out[value_name] = compute(merged)
     out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=[value_name])
-    out = out[(out[value_name] >= lo) & (out[value_name] <= hi)]
+    # The value is computed, so the window bounds are decimal thresholds on a
+    # derived quantity: inclusive, decided with the helpers (lead-r13 delta2
+    # THRESHOLD_MISSED; the same rule as the eGFR bounds).
+    out = out[ge(out[value_name], lo) & le(out[value_name], hi)]
     return _as_icutbl(
         out.reset_index(drop=True),
         id_columns=id_columns,
@@ -8922,7 +8925,10 @@ def _callback_egfr(tables, ctx):
     out = base[keep].copy()
     out["egfr"] = egfr
     out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["egfr"])
-    out = out[(out["egfr"] >= 1.0) & (out["egfr"] <= 200.0)]
+    # eGFR is derived (CKD-EPI 2021), so its plausibility bounds are decimal
+    # thresholds on a computed value: both inclusive, decided with the helpers
+    # (lead-r13 delta2 THRESHOLD_MISSED).
+    out = out[ge(out["egfr"], 1.0) & le(out["egfr"], 200.0)]
     return _as_icutbl(
         out.reset_index(drop=True), id_columns=id_cols, index_column=idx, value_column="egfr"
     )

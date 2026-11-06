@@ -411,11 +411,17 @@ def _quarantine_rows_outside_icu_episode(
                                        lower=-allowed_pre_hours, keep_post_discharge=keep_post_discharge)
         if windows is not None:
             return windows
-    invalid = event_hours.notna() & (
-        (event_hours < -allowed_pre_hours)
-        | ((event_hours > upper_hours) & (not keep_post_discharge))
-    )
-    excluded = int(pd.Series(invalid, index=frame.index).fillna(False).sum())
+    # The one window rule shared with the DuckDB pre-floor filter: both
+    # bounds inclusive, decided with the decimal-threshold helpers.
+    from ..utils.icu_window import outside_episode
+
+    invalid = outside_episode(
+        event_hours,
+        lower_hours=-float(allowed_pre_hours),
+        upper_hours=upper_hours.to_numpy(dtype="float64"),
+        keep_post_discharge=keep_post_discharge,
+    ).to_numpy()
+    excluded = int(invalid.sum())
     if excluded:
         logger.warning(
             "dropping %d %s row(s) outside the ICU episode "
@@ -424,8 +430,7 @@ def _quarantine_rows_outside_icu_episode(
             db_label,
             allowed_pre_hours,
         )
-        keep = (~pd.Series(invalid, index=frame.index).fillna(False)).to_numpy()
-        return frame.loc[keep].copy()
+        return frame.loc[~invalid].copy()
     return frame
 
 

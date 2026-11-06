@@ -42,21 +42,35 @@ def _eps(threshold):
     return REL_EPS * np.maximum(1.0, np.abs(threshold))
 
 
+def lower_limit(threshold):
+    """The value ``ge`` and ``lt`` compare against: ``threshold - eps``.
+
+    For a renderer outside numpy (a SQL predicate) that must decide exactly
+    as the helpers do: ``ge(x, t)`` is ``x >= lower_limit(t)``.
+    """
+    return threshold - _eps(threshold)
+
+
+def upper_limit(threshold):
+    """The value ``le`` and ``gt`` compare against: ``threshold + eps``."""
+    return threshold + _eps(threshold)
+
+
 def ge(x, threshold):
     """``x >= threshold`` with an exact decimal boundary included."""
-    return x >= threshold - _eps(threshold)
+    return x >= lower_limit(threshold)
 
 
 def gt(x, threshold):
     """``x > threshold`` with an exact decimal boundary excluded."""
-    return x > threshold + _eps(threshold)
+    return x > upper_limit(threshold)
 
 
 def le(x, threshold):
     """``x <= threshold`` with an exact decimal boundary included."""
-    return x <= threshold + _eps(threshold)
+    return x <= upper_limit(threshold)
 
 
 def lt(x, threshold):
     """``x < threshold`` with an exact decimal boundary excluded."""
-    return x < threshold - _eps(threshold)
+    return x < lower_limit(threshold)

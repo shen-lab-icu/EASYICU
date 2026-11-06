@@ -7,6 +7,8 @@ from typing import Dict, List, Literal
 import numpy as np
 import pandas as pd
 
+from ..utils.thresholds import ge, le
+
 WinTblEndMode = Literal["raw", "floored_clamped"]
 
 __all__ = ["WinTblEndMode", "expand_wintbl_vectorized"]
@@ -36,9 +38,10 @@ def clip_episode_windows(
         valid &= start.lt(upper)
     # Empty neighbouring sources can contribute an all-null endpoint column
     # during concat. Actual point rows retain the ordinary quarantine rule.
-    points = ~window & np.isfinite(start) & start.ge(lower)
+    # Point rows take the shared episode rule (inclusive, decimal helpers).
+    points = ~window & np.isfinite(start) & ge(start, lower)
     if not keep_post_discharge:
-        points &= start.le(upper)
+        points &= le(start, upper)
     valid |= points
     out = frame.loc[valid].copy()
     clipped_start = start.loc[valid].clip(lower=lower)
