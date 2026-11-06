@@ -40,6 +40,11 @@ from easyicu.research_agent.authority.filesystem import (
     AnchoredDirectory,
     AuthorityFilesystemError,
 )
+from easyicu.export_publication import (
+    REASON_IN_PROGRESS,
+    UNPUBLISHED_CODE,
+    unpublished_reason,
+)
 from easyicu.webserver import state_paths
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -974,6 +979,12 @@ def _read_export_manifest(export_root: Path) -> Optional[tuple[str, str, dict]]:
     replacement during the read.
     """
 
+    if unpublished_reason(export_root) == REASON_IN_PROGRESS:
+        # An interrupted extraction; a present marker fails closed.
+        raise RawSourceAuthorityError(
+            UNPUBLISHED_CODE,
+            "The registered export is unpublished (an extraction was interrupted).",
+        )
     for name in _EXPORT_MANIFEST_NAMES:
         candidate = export_root / name
         if candidate.is_symlink() or not candidate.is_file():

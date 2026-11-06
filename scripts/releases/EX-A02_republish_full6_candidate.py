@@ -32,6 +32,10 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from easyicu.api import extraction as extraction_api  # noqa: E402
+from easyicu.export_publication import (  # noqa: E402
+    NativeExportUnpublishedError,
+    require_published_native_export,
+)
 
 
 DATABASES = ("aumc", "eicu", "hirid", "mimic", "miiv", "sic")
@@ -187,6 +191,12 @@ def _validate_source(source_run_root: Path) -> dict[str, Any]:
     for database in DATABASES:
         database_root = export_root / database
         native_manifest = database_root / "_manifest.json"
+        try:
+            require_published_native_export(database_root)
+        except NativeExportUnpublishedError as exc:
+            raise RepublicationError(
+                f"{database}: {exc.code} ({exc.reason})"
+            ) from exc
         if not native_manifest.is_file() or native_manifest.is_symlink():
             raise RepublicationError(f"Missing native manifest: {native_manifest}")
         for module in MODULES:
@@ -225,7 +235,10 @@ def _clone_source(source: Path, destination: Path) -> None:
 
 
 def _source_database_receipt(database_root: Path) -> dict[str, Any]:
-    manifest_path = database_root / "_manifest.json"
+    try:
+        manifest_path = require_published_native_export(database_root)
+    except NativeExportUnpublishedError as exc:
+        raise RepublicationError(f"{exc.code} ({exc.reason}): {database_root}") from exc
     manifest = _read_json(manifest_path)
     runtime = manifest.get("runtime_provenance") or {}
     return {

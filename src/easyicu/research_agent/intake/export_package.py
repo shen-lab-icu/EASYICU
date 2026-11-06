@@ -73,6 +73,10 @@ from easyicu.concept.metadata_sidecar import (
     SidecarRef,
     read_content_addressed_sidecar,
 )
+from easyicu.export_publication import (
+    NativeExportUnpublishedError,
+    require_no_in_progress_marker,
+)
 from easyicu.database_config import ID_COLUMNS as HOST_DATABASE_ID_COLUMNS
 from easyicu.database_config import END_TIME_COLUMNS as HOST_DATABASE_END_TIME_COLUMNS
 from easyicu.database_config import (
@@ -1291,6 +1295,13 @@ def _marker_present(path: Path) -> bool:
 
 
 def _select_manifest(root: Path) -> tuple[Path, str]:
+    try:
+        require_no_in_progress_marker(root)
+    except NativeExportUnpublishedError as exc:
+        # An interrupted extraction leaves raw, uncanonicalised module files.
+        raise ExportPackageError(
+            str(exc), code=exc.code, manifest_path=root / NATIVE_MANIFEST
+        ) from exc
     native_path = root / NATIVE_MANIFEST
     legacy_path = root / LEGACY_MANIFEST
     if _marker_present(native_path):

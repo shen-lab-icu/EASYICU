@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from easyicu.export_publication import (
+    UNPUBLISHED_CODE,
+    NativeExportUnpublishedError,
+    require_published_native_export,
+)
 from easyicu.webserver import sources, state_paths
 from easyicu.webserver.hosted import require_instance_path, require_path
 
@@ -143,6 +148,14 @@ def prepare_registered_export_bundle(
     require_path(root, instance_owned=True)
     manifest_path = root / "_manifest.json"
     require_path(manifest_path, instance_owned=True)
+    try:
+        require_published_native_export(root)
+    except NativeExportUnpublishedError as exc:
+        raise ExportDownloadError(
+            UNPUBLISHED_CODE,
+            "The registered export is unpublished (an extraction was interrupted).",
+            status_code=409,
+        ) from exc
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

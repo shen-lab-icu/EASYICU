@@ -43,6 +43,11 @@ from easyicu.concept_output_sources import (
     compile_concept_load_plan,
 )
 from easyicu.databases import normalize_database_key
+from easyicu.export_publication import (
+    REASON_IN_PROGRESS,
+    UNPUBLISHED_CODE,
+    unpublished_reason,
+)
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
 from easyicu.webserver import entity_ids as entity_id_contract
@@ -287,6 +292,24 @@ def _shortcuts(home: Path) -> List[Dict[str, str]]:
     return out
 
 
+def _unpublished_export_error(path: Path) -> Optional[Dict[str, Any]]:
+    """Refuse a folder an interrupted native extraction left behind.
+
+    Its module files are raw, unpublished outputs (native ids, raw dtypes,
+    rows outside the episode window), so no screen may treat it as data.
+    """
+    if unpublished_reason(path) != REASON_IN_PROGRESS:
+        return None
+    return {
+        "ok": False,
+        "error": UNPUBLISHED_CODE,
+        "reason": REASON_IN_PROGRESS,
+        "path": str(path),
+        "ready": False,
+        "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
+    }
+
+
 def _has_glob(path: Path, pattern: str) -> bool:
     try:
         return next(path.glob(pattern), None) is not None
@@ -400,6 +423,9 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
 
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     try:
         db_key = _detect_database(path)
@@ -3127,6 +3153,9 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     manifest_path = path / "_manifest.json"
     require_path(manifest_path, instance_owned=True)
@@ -3538,6 +3567,9 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     from easyicu.synthetic_source_provenance import source_description, source_fields
     synthetic = source_description(path)
@@ -3595,6 +3627,9 @@ def describe_source_tables(raw_path: str, *, planning_metadata_only: bool = Fals
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     # Native planning needs only the manifest and its digest-bound column
     # sidecar. Do not inspect Parquet footers or snapshot patient-bearing files.
@@ -3863,6 +3898,8 @@ def _read_export_manifest(path: Path) -> Dict[str, Any]:
     import json
     from easyicu.webserver.hosted import require_path
 
+    if unpublished_reason(path) == REASON_IN_PROGRESS:
+        return {}  # an interrupted extraction: never a readable manifest
     for name in ("_manifest.json", "easyicu_export_manifest.json"):
         manifest_path = path / name
         require_path(manifest_path, instance_owned=True)

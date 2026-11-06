@@ -727,6 +727,10 @@ def validate_release(run_root: Path) -> dict[str, Any]:
     total_rows = 0
     total_bytes = 0
 
+    from easyicu.export_publication import (
+        NativeExportUnpublishedError,
+        require_published_native_export,
+    )
     from easyicu.runtime import duckdb_spill
 
     with duckdb_spill.connection(
@@ -736,6 +740,12 @@ def validate_release(run_root: Path) -> dict[str, Any]:
             for database in DATABASES:
                 database_root = export_root / database
                 manifest_path = database_root / "_manifest.json"
+                try:
+                    require_published_native_export(database_root)
+                except NativeExportUnpublishedError as exc:
+                    raise ReleaseValidationError(
+                        f"{database}: {exc.code} ({exc.reason})"
+                    ) from exc
                 if manifest_path.is_symlink():
                     raise ReleaseValidationError(
                         f"{database}: _manifest.json must be a regular file"

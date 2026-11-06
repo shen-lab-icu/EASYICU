@@ -1002,6 +1002,17 @@ def _validate_existing_staging_native_manifest(
 ) -> None:
     """Reject a stale or unrelated root manifest before staged promotion."""
 
+    from easyicu.export_publication import (
+        NativeExportUnpublishedError,
+        require_published_native_export,
+    )
+
+    try:
+        require_published_native_export(staging_root)
+    except NativeExportUnpublishedError as exc:
+        raise ModuleRefreshError(
+            f"Staged refresh is unpublished: {exc.code} ({exc.reason})"
+        ) from exc
     manifest_path = staging_root / "_manifest.json"
     _require_regular_file(manifest_path, label="staged native-v2 manifest")
     manifest = _read_json(manifest_path, label="staged native-v2 manifest")
