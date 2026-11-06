@@ -7,6 +7,32 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-06 — HiRID values no longer depend on the batch (no hourly pre-aggregation) [lead-r13, `20c71d62e`]
+
+**What changed.** The raw loader no longer pre-aggregates HiRID frames to
+hourly medians. The old step ran when a loaded frame held more than 1,000 rows
+and the median time gap across all patients' rows was under half the
+interval. Whether it ran therefore depended on which stays shared a batch: a
+stay loaded alone kept its raw rows, but in a full batch it was collapsed. It
+also applied to raw (`aggregator=False`) and static (`id_tbl`) loads, and it
+aggregated before the concept bounds. Values are now aggregated once, after
+bounds, in the shared hourly owner, as in ricu.
+
+**Why.** ricu takes a stay's weight as the median of all in-bound raw
+measurements. The collapsed frame moved that median: on the p9b sample, 7
+weight rows of 2 stays became 5, and their weight moved by up to 2.4%. Every
+per-kg drug rate derived from it moved too. The formal v6 and `2786ea872`
+HiRID extractions ran one batch over all stays, so they carry the collapsed
+values.
+
+**Affected (HiRID only).** `dobu_rate`, `epi_rate`, `norepi_rate`,
+`propofol_rate` (`hirid_rate_kg`); `norepi_equiv` and the `*60` concepts;
+`weight`, `height` and `bmi`; SOFA cardiovascular and the scores and
+sepsis definitions derived from it.
+
+**Errata.** Changed cells and stays per concept versus `2786ea872` (counts of
+10 or more rounded to tens): FILL.
+
 ## 2026-11-06 — values stay float64; decimal thresholds are decided with a tolerance [lead-r13, `206439895`, `eae58e67b`]
 
 **What changed.** Concept values are no longer down-cast to float32 on load
