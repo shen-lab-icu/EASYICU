@@ -11,7 +11,13 @@ import pyarrow.parquet as pq
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu.storage_layout import MANIFEST, SCHEMA, arrow_key_type
-from scripts.build_itemid_bucket_cache import TABLE_CONFIGS, build_bucket_cache
+from scripts.build_itemid_bucket_cache import (
+    STAY_KEYS,
+    TABLE_CONFIGS,
+    VARIABLE_PROFILES,
+    build_bucket_cache,
+    build_variable_cache,
+)
 
 
 def write_contract(
@@ -155,7 +161,31 @@ def b6_source(root: Path, database: str):
     return ICUDataSource(load_src_cfg(database), base_path=root, enable_cache=False)
 
 
+def install_variable_layout(source, *, bucket_count=4, rows_per_bucket=1):
+    """Variable × stay-range layout of the fixture's long table.
+
+    ``rows_per_bucket=1`` gives every partition as many stay buckets as its
+    rows allow (up to ``bucket_count``), so stay narrowing is exercised.
+    """
+    database = source.config.name
+    table, key, stay, _ = TABLE_CONFIGS[database]
+    variable, secondary = VARIABLE_PROFILES.get((database, table), (key, []))
+    return build_variable_cache(
+        source.base_path,
+        table=table,
+        key=variable,
+        stay_key=STAY_KEYS.get(database, stay),
+        bucket_count=bucket_count,
+        rows_per_bucket=rows_per_bucket,
+        secondary_keys=secondary,
+        memory_limit="256MB",
+        threads=2,
+    )
+
+
 def install_layout(source, scheme):
+    if scheme == "variable":
+        return install_variable_layout(source)
     table, key, _, _ = TABLE_CONFIGS[source.config.name]
     key_schema = source.resolve_target_files(table)
     sample = pd.read_parquet(key_schema[0], columns=[key])[key].dropna().tolist()

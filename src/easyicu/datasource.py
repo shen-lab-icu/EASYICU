@@ -507,6 +507,37 @@ class FilterSpec:
             return frame.loc[mask]
         raise ValueError(f"Unsupported filter operation: {self.op}")
 
+def _narrow_to_stays(data_source, table_name, selector_column, selector_values, target_files, stay_column, stay_values):
+    """Re-resolve a loader's file set with its own direct stay predicate.
+
+    Only a variable × stay layout narrows; any other layout returns the same
+    files. Returns ``(files, glob_pattern, relation)`` for the loader to use.
+    """
+    if stay_values:
+        narrowed = data_source.resolve_target_files(
+            table_name, selector_column, selector_values,
+            stay_column=stay_column, stay_values=stay_values,
+        )
+        if narrowed:
+            target_files = narrowed
+    glob_pattern = "[" + ", ".join(_duckdb_sql_literal(_duckdb_path(f)) for f in target_files) + "]"
+    return target_files, glob_pattern, storage_layout.parquet_relation(target_files)
+
+
+def _direct_stay_predicate(patient_ids_filter) -> Tuple[Optional[str], Optional[list]]:
+    """The (column, values) of a direct ``column IN values`` / ``= value`` filter."""
+    if patient_ids_filter is None or patient_ids_filter.op not in (FilterOp.IN, FilterOp.EQ):
+        return None, None
+    values = patient_ids_filter.value
+    if values is None:
+        return None, None
+    if isinstance(values, pd.Series):
+        values = values.tolist()
+    elif isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
+        values = [values]
+    return str(patient_ids_filter.column), list(values)
+
+
 class ICUDataSource:
     """Lightweight facade that loads tables for a concrete dataset instance."""
 
@@ -1664,10 +1695,17 @@ class ICUDataSource:
         self, table_name: str, selector_column: Optional[str] = None,
         selector_values: Optional[Iterable[object]] = None,
         *, loader: Optional[Path] = None,
+        stay_column: Optional[str] = None,
+        stay_values: Optional[Iterable[object]] = None,
     ) -> Tuple[Path, ...]:
-        """Resolve table + selector through the single storage policy owner."""
+        """Resolve table + selector through the single storage policy owner.
+
+        ``stay_column``/``stay_values`` are the caller's direct stay predicate
+        (``column IN values``), used to narrow a variable × stay layout.
+        """
         return storage_layout.resolve_table_files(
-            self, table_name, selector_column, selector_values, loader=loader
+            self, table_name, selector_column, selector_values, loader=loader,
+            stay_column=stay_column, stay_values=stay_values,
         )
 
     def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
@@ -2429,7 +2467,18 @@ class ICUDataSource:
             )
         
         filter_col, filter_ids = itemid_filter_config or (None, None)
-        target_files = self.resolve_target_files(table_name, filter_col, filter_ids, loader=scan_loader) if table_name else storage_layout.files_for_directory(self, directory, filter_col, filter_ids)
+        stay_col, stay_ids = _direct_stay_predicate(patient_ids_filter)
+        target_files = (
+            self.resolve_target_files(
+                table_name, filter_col, filter_ids, loader=scan_loader,
+                stay_column=stay_col, stay_values=stay_ids,
+            )
+            if table_name
+            else storage_layout.files_for_directory(
+                self, directory, filter_col, filter_ids,
+                stay_column=stay_col, stay_values=stay_ids,
+            )
+        )
         if not target_files:
             return storage_layout.empty_frame(directory, columns)
         target_relation = storage_layout.parquet_relation(target_files)
@@ -2582,10 +2631,17 @@ class ICUDataSource:
             return pd.DataFrame(columns=list(columns) if columns else [])
 
         filter_col, filter_values = itemid_filter_config or (None, None)
+        stay_col, stay_ids = _direct_stay_predicate(patient_ids_filter)
         if table_name and scan_loader is not None:
-            resolved_files = self.resolve_target_files(table_name, filter_col, filter_values, loader=scan_loader)
+            resolved_files = self.resolve_target_files(
+                table_name, filter_col, filter_values, loader=scan_loader,
+                stay_column=stay_col, stay_values=stay_ids,
+            )
         else:
-            resolved_files = storage_layout.files_for_directory(self, directory, filter_col, filter_values)
+            resolved_files = storage_layout.files_for_directory(
+                self, directory, filter_col, filter_values,
+                stay_column=stay_col, stay_values=stay_ids,
+            )
         if not resolved_files:
             return storage_layout.empty_frame(directory, columns)
         try:
@@ -3284,6 +3340,14 @@ def load_bucketed_table_aggregated(
                 raise
             except Exception:
                 pass
+
+    # A direct filter on the table's own stay column may narrow a variable ×
+    # stay layout to the batch's stay buckets (the WHERE below still applies).
+    if patient_filter_values and patient_filter_col == id_col and join_left_col == id_col:
+        target_files, glob_pattern, target_relation = _narrow_to_stays(
+            data_source, table_name, itemid_col, itemids, target_files,
+            id_col, patient_filter_values,
+        )
 
     # 构建WHERE条件
     _has_inline_convert = (
@@ -4209,6 +4273,12 @@ def load_bucketed_table_multi_aggregated(
     non_null_clause = f" AND o.{value_column} IS NOT NULL"
 
     # ── DB-specific query construction ─────────────────────
+    if _base_db in ('hirid', 'aumc', 'sic', 'eicu'):
+        # These branches filter ``o.{id_col} IN patient_ids`` directly.
+        target_files, glob_pattern, target_relation = _narrow_to_stays(
+            data_source, table_name, itemid_col, all_itemids, target_files,
+            id_col, patient_ids,
+        )
     if _base_db in ('miiv', 'mimic', 'nwicu'):
         stay_col = 'icustay_id' if _base_db == 'mimic' else 'stay_id'
         icustays_path = base_path / 'icustays.parquet'
@@ -4260,6 +4330,11 @@ def load_bucketed_table_multi_aggregated(
                     pass
 
         p_clause = _patient_clause(patient_filter_col, patient_filter_values)
+        if not _needs_hadm_join:
+            target_files, glob_pattern, target_relation = _narrow_to_stays(
+                data_source, table_name, itemid_col, all_itemids, target_files,
+                id_col, patient_ids,
+            )
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
 
         if _base_db == 'miiv' and table_name == 'labevents':
