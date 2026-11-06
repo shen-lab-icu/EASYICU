@@ -123,3 +123,30 @@ def test_a_2023_survivor_without_a_category_has_no_mortality_horizon(monkeypatch
     for horizon in ("mort_28d", "mort_90d", "mort_365d"):
         assert pd.isna(result.loc[survivor, horizon])
         assert bool(result.loc[survivor, f"{horizon}_assumption_based"]) is True
+
+
+@pytest.mark.parametrize("damaged", ["", "   ", "Unbekannt", None])
+def test_a_damaged_death_label_is_unknown_not_alive(damaged, caplog):
+    references = sic_references("1.0.8")
+    references.loc[references["ReferenceGlobalID"] == 3130, "ReferenceValue"] = damaged
+    with caplog.at_level("WARNING"):
+        codes = sic_discharge_codes(references)
+    assert 3130 in codes.unknown
+    assert 3130 not in codes.survived and 3130 not in codes.deceased
+    assert "sic_discharge_label_unknown" in caplog.text
+
+
+def test_an_unknown_disposition_has_no_mortality_horizon(monkeypatch):
+    references = sic_references("1.0.8")
+    references.loc[references["ReferenceGlobalID"] == 3130, "ReferenceValue"] = ""
+    cases = _cases_108()
+    cases.loc[cases["CaseID"] == 1, "HospitalDischargeType"] = 3130  # no OffsetOfDeath
+
+    def read(_database, _path, table="cases"):
+        return references if table == "d_references" else cases
+
+    monkeypatch.setattr(outcomes, "_raw_table", read)
+    result = outcomes.load_outcomes("sic").set_index("CaseID")
+    for horizon in ("mort_28d", "mort_90d", "mort_365d"):
+        assert pd.isna(result.loc[1, horizon])
+

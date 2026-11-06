@@ -335,11 +335,16 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
     # A recorded death in hospital or at ICU discharge without OffsetOfDeath is
     # timed at ICU discharge; one recorded a little before the ICU transfer
     # dies at its start (2026-11-04 audit round 3, R3-15).
+    disposition = (cases[cmap["hospitaldischargetype"]] if "hospitaldischargetype" in cmap
+                   else pd.Series(np.nan, index=cases.index))
     recorded = sic_recorded_death(
-        cases[cmap["hospitaldischargetype"]] if "hospitaldischargetype" in cmap else pd.Series(np.nan, index=cases.index),
+        disposition,
         cases[cmap["dischargestate"]] if "dischargestate" in cmap else pd.Series(np.nan, index=cases.index),
         codes,
     )
+    # A discharge code whose d_references label is blank or unknown cannot be
+    # read as alive: without a recorded death such a case has no follow-up.
+    unknown_disposition = pd.to_numeric(disposition, errors="coerce").isin(codes.unknown) & ~recorded
     untimed = recorded & off_death.isna() & ~unusable_death & np.isfinite(time_of_stay)
     off_death = off_death.where(~untimed, time_of_stay)
     days_to_death = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
@@ -389,7 +394,7 @@ def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLL
         # assumption, not proof of exact individual follow-up.
         source_bound = followup_days - icu_off / 86400.0
         df["followup_days"] = source_bound.where(
-            valid_origin & ~unusable_death & (source_bound >= 0)
+            valid_origin & ~unusable_death & (source_bound >= 0) & ~unknown_disposition
         ).to_numpy()
         df["source_bound_days"] = source_bound.where(valid_origin & (source_bound >= 0)).to_numpy()
     # Moving the bound to the ICU transfer leaves it a few hours short of a

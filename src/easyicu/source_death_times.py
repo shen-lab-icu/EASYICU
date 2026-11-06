@@ -8,7 +8,9 @@ disagree about whether, or when, a stay's patient died.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import re
+import unicodedata
 
 import numpy as np
 import pandas as pd
@@ -18,8 +20,24 @@ import pandas as pd
 # German discharge types (3129, 3131-3134). They are therefore read from
 # d_references by label, never assumed.
 SIC_DECEASED_DISCHARGE_LABELS = frozenset({"deceased", "sterbefall"})
+# Survival is a whitelist too: a blank, unknown or damaged label is an
+# unknown disposition (outcome NA), never "alive" by elimination. Labels are
+# the published d_references texts after whitespace folding and casefold;
+# 3134 is truncated in the source table and kept as published.
+SIC_SURVIVED_DISCHARGE_LABELS = frozenset({
+    "survived",  # 1.0.6 2026, kept in 1.0.8
+    "entlassung aus dem krankenhaus",  # 1.0.8 3129
+    "transfer in ein anderes krankenhaus",  # 3131
+    "entlassung gegen revers",  # 3132
+    "abschluss eines aufenthaltes im halbstationären bereich oder krankenhausinterne "
+    "verlegung in den halbstationären bereich",  # 3133
+    "krankenhausinterne verlegung vom bereich der rehabilitation und vom "
+    "ausschließlichen bereich der pflege in den allgemeinen stati",  # 3134
+})
 SIC_ICU_DECEASED_STATE_LABELS = frozenset({"verstorben"})
 SIC_REFERENCE_UNAVAILABLE = "sic_discharge_reference_unavailable"
+SIC_UNKNOWN_DISCHARGE_LABEL = "sic_discharge_label_unknown"
+LOGGER = logging.getLogger(__name__)
 
 
 class SicReferenceUnavailable(ValueError):
@@ -40,6 +58,7 @@ class SicDischargeCodes:
     survived: frozenset[int]
     icu_deceased: frozenset[int]
     followup_days: dict[int, float] = field(default_factory=dict)
+    unknown: frozenset[int] = frozenset()
 
     @property
     def known(self) -> frozenset[int]:
@@ -47,14 +66,19 @@ class SicDischargeCodes:
 
 
 def _label(value: object) -> str:
-    return re.sub(r"\s+", " ", str(value)).strip().casefold()
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    text = unicodedata.normalize("NFC", str(value))
+    return re.sub(r"\s+", " ", text).strip().casefold()
 
 
 def sic_discharge_codes(references: pd.DataFrame) -> SicDischargeCodes:
     """Resolve discharge, ICU-death and follow-up codes from d_references labels.
 
     ``DischargeType``: a "Deceased" (1.0.6) or "Sterbefall" (1.0.8) label is a
-    hospital death; every other discharge type is alive at hospital discharge.
+    hospital death; only the published survival labels are alive at hospital
+    discharge. Any other (blank, unknown, damaged) label is an unknown
+    disposition, warned and left to the consumers as NA.
     ``DischargeState`` "verstorben" is a death at ICU discharge.
     ``EstimatedSurvivalObservationTime`` "6 Months" / "1 Year" are 180 / 365
     days. A table that cannot name a death code and a survival code fails
@@ -77,14 +101,22 @@ def sic_discharge_codes(references: pd.DataFrame) -> SicDischargeCodes:
     discharge = rows("DischargeType")
     if discharge["id"].duplicated().any():
         raise SicReferenceUnavailable("a DischargeType code carries two labels")
-    dead = discharge["label"].isin(SIC_DECEASED_DISCHARGE_LABELS)
+    # Whitelists go through the same folding as the table ("ß" casefolds to "ss").
+    dead = discharge["label"].isin({_label(v) for v in SIC_DECEASED_DISCHARGE_LABELS})
+    alive = discharge["label"].isin({_label(v) for v in SIC_SURVIVED_DISCHARGE_LABELS})
     deceased = frozenset(int(v) for v in discharge.loc[dead, "id"])
-    survived = frozenset(int(v) for v in discharge.loc[~dead, "id"])
+    survived = frozenset(int(v) for v in discharge.loc[alive, "id"])
+    unknown = frozenset(int(v) for v in discharge.loc[~dead & ~alive, "id"])
     if not deceased or not survived:
         raise SicReferenceUnavailable("DischargeType has no deceased or no surviving label")
+    if unknown:
+        LOGGER.warning(
+            "%s: %d DischargeType code(s) carry no known label; their cases have an "
+            "unknown hospital disposition", SIC_UNKNOWN_DISCHARGE_LABEL, len(unknown),
+        )
     state = rows("DischargeState")
     icu_deceased = frozenset(
-        int(v) for v in state.loc[state["label"].isin(SIC_ICU_DECEASED_STATE_LABELS), "id"]
+        int(v) for v in state.loc[state["label"].isin({_label(v) for v in SIC_ICU_DECEASED_STATE_LABELS}), "id"]
     )
     if not icu_deceased:
         raise SicReferenceUnavailable("DischargeState has no 'verstorben' label")
@@ -94,7 +126,7 @@ def sic_discharge_codes(references: pd.DataFrame) -> SicDischargeCodes:
             followup[int(code)] = 180.0
         elif re.fullmatch(r"1 year", label):
             followup[int(code)] = 365.0
-    return SicDischargeCodes(deceased, survived, icu_deceased, followup)
+    return SicDischargeCodes(deceased, survived, icu_deceased, followup, unknown)
 
 
 def aumc_registry_death_after_discharge(dod: pd.Series, dis: pd.Series, *, day: float) -> pd.Series:
@@ -131,6 +163,8 @@ __all__ = [
     "SIC_DECEASED_DISCHARGE_LABELS",
     "SIC_ICU_DECEASED_STATE_LABELS",
     "SIC_REFERENCE_UNAVAILABLE",
+    "SIC_SURVIVED_DISCHARGE_LABELS",
+    "SIC_UNKNOWN_DISCHARGE_LABEL",
     "SicDischargeCodes",
     "SicReferenceUnavailable",
     "sic_discharge_codes",

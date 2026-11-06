@@ -26,8 +26,11 @@ _ADDED_108 = [
     (3130, "Sterbefall", "DischargeType"),
     (3131, "Transfer in ein anderes Krankenhaus", "DischargeType"),
     (3132, "Entlassung gegen Revers", "DischargeType"),
-    (3133, "Abschluss eines Aufenthaltes im halbstationären Bereich", "DischargeType"),
-    (3134, "Krankenhausinterne Verlegung vom Bereich der Rehabilitation", "DischargeType"),
+    (3133, "Abschluss eines Aufenthaltes im halbstationären Bereich oder krankenhausinterne "
+           "Verlegung in den halbstationären Bereich", "DischargeType"),
+    # Truncated in the published table; kept as published.
+    (3134, "Krankenhausinterne Verlegung vom Bereich der Rehabilitation und vom "
+           "ausschließlichen Bereich der Pflege in den allgemeinen stati", "DischargeType"),
 ]
 
 
