@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import math
@@ -405,6 +406,42 @@ _CONVERSION_INDEX: dict[tuple[str, int, int], dict[str, tuple[str, frozenset, in
 _FALLBACK_WARNED: set[tuple[str, str]] = set()
 
 
+_DERIVED_FROM: dict[tuple[str, int, int], dict | None] = {}
+_SOURCE_SHA: dict[tuple[str, int, int], str] = {}
+
+
+def _check_derived_from(path: Path, derived: dict | None) -> None:
+    """A manifest derived from another (a symlink farm's) must match its source.
+
+    A rebuilt source view leaves the derived manifest stale even when row
+    counts happen to agree, so the source bytes are compared by SHA-256.
+    """
+    if not derived:
+        return
+    source = Path(str(derived.get("path", "")))
+    try:
+        stat = source.stat()
+    except OSError:
+        warned = (str(path), "derived_from")
+        if warned not in _FALLBACK_WARNED:
+            _FALLBACK_WARNED.add(warned)
+            logging.getLogger(__name__).warning(
+                "conversion_manifest_source_missing: %s was derived from %s, which "
+                "no longer exists; regenerate it if the source moved.", path, source,
+            )
+        return
+    key = (str(source), stat.st_size, stat.st_mtime_ns)
+    digest = _SOURCE_SHA.get(key)
+    if digest is None:
+        digest = _SOURCE_SHA[key] = hashlib.sha256(source.read_bytes()).hexdigest()
+    if digest != derived.get("sha256"):
+        raise TableScanError(
+            "table_scan_manifest_stale", path.name,
+            f"derived from {source} (sha256 {str(derived.get('sha256'))[:12]}), "
+            f"which is now {digest[:12]}; regenerate the derived manifest",
+        )
+
+
 def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]] | None:
     """Map each converted output (path relative to the root) to its table entry."""
     path = Path(base) / CONVERSION_MANIFEST
@@ -414,6 +451,8 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
         return None
     key = (str(path), stat.st_size, stat.st_mtime_ns)
     index = _CONVERSION_INDEX.get(key)
+    if index is not None:
+        _check_derived_from(path, _DERIVED_FROM.get(key))
     if index is None:
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -422,6 +461,9 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
             raise TableScanError(
                 "conversion_manifest_unreadable", path.name, str(exc)[:200]
             ) from exc
+        derived = manifest.get("derived_from") if isinstance(manifest.get("derived_from"), dict) else None
+        _check_derived_from(path, derived)
+        _DERIVED_FROM[key] = derived
         # One table may span several entries (HiRID converts each CSV part
         # separately); its inventory is the union, its rows the sum.
         tables: dict[str, tuple[set, int | None]] = {}

@@ -191,3 +191,54 @@ def test_a_table_converted_part_by_part_is_one_inventory(tmp_path):
     (tmp_path / "labevents" / "2.parquet").unlink()
     with pytest.raises(TableScanError):
         verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+
+
+def _farm_with_derived_manifest(tmp_path):
+    import hashlib
+    import json
+
+    view = tmp_path / "view"
+    view.mkdir()
+    pq.write_table(pa.table({"itemid": [1, 2]}), view / "labevents.parquet")
+    source = view / "conversion_manifest.json"
+    source.write_text(json.dumps({"tables": [{
+        "table": "labevents", "row_count": 2, "outputs": [{"relative_path": "labevents.parquet"}],
+    }]}))
+    farm = tmp_path / "farm"
+    (farm / "labevents").mkdir(parents=True)
+    (farm / "labevents" / "1.parquet").symlink_to(view / "labevents.parquet")
+    (farm / "conversion_manifest.json").write_text(json.dumps({
+        "tables": [{"table": "labevents", "row_count": 2,
+                    "outputs": [{"relative_path": "labevents/1.parquet"}]}],
+        "derived_from": {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
+    }))
+    return view, farm, source
+
+
+def test_derived_manifest_passes_while_its_source_is_unchanged(tmp_path):
+    _view, farm, _source_manifest = _farm_with_derived_manifest(tmp_path)
+    source = _source(farm, "labevents.parquet")
+    assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 1
+
+
+def test_derived_manifest_is_stale_once_its_source_changes(tmp_path):
+    import json
+
+    _view, farm, source_manifest = _farm_with_derived_manifest(tmp_path)
+    source = _source(farm, "labevents.parquet")
+    verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))  # cached
+    payload = json.loads(source_manifest.read_text())
+    payload["rebuilt"] = True  # same rows, rebuilt view
+    source_manifest.write_text(json.dumps(payload))
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+    assert caught.value.reason == "table_scan_manifest_stale"
+
+
+def test_derived_manifest_with_a_missing_source_only_warns(tmp_path, caplog):
+    _view, farm, source_manifest = _farm_with_derived_manifest(tmp_path)
+    source_manifest.unlink()
+    source = _source(farm, "labevents.parquet")
+    with caplog.at_level("WARNING", logger="easyicu.storage_layout"):
+        assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 1
+    assert "conversion_manifest_source_missing" in caplog.text
