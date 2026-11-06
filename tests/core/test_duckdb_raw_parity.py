@@ -254,3 +254,38 @@ def test_eicu_wide_batch_publishes_only_hours_with_a_value(tmp_path):
 
     hours = _hours(_both_paths(source, "co", patient_ids={"patientunitstayid": [1]}), "co")
     assert hours == {3.0: 5.5}
+
+
+
+def test_mimic3_chart_batch_reads_a_text_clock_like_a_typed_one(tmp_path):
+    # A converted source may keep chartevents clocks as text. The shared
+    # chartevents batch (two single-source chart concepts) must parse them
+    # inside the episode window, not refuse the query (BinderException), and
+    # publish what a typed clock publishes.
+    origin = pd.Timestamp("2150-01-01 00:00")
+    stamps = origin + pd.to_timedelta([2.0, 2.0, 119.5, 119.5, 120.5, 120.5], unit="h")
+
+    def source(clock, name):
+        return _source(
+            tmp_path / name, "mimic", layout="bucket",
+            icustays=pd.DataFrame({"icustay_id": [1], "subject_id": [1], "hadm_id": [1], "intime": [origin],
+                                   "outtime": [origin + pd.Timedelta(hours=96)], "los": [4.0]}),
+            chartevents=pd.DataFrame({"icustay_id": 1, "subject_id": 1, "hadm_id": 1,
+                                      "itemid": [220045, 220210] * 3, "charttime": clock,
+                                      "valuenum": [80.0, 16.0, 90.0, 18.0, 100.0, 20.0],
+                                      "value": ["80", "16", "90", "18", "100", "20"], "valueuom": "x"}),
+        )
+
+    def published(src):
+        with record_duckdb_routes() as routes:
+            frame = ConceptResolver(load_dictionary(include_sofa2=True)).load_concepts(
+                ["hr", "resp"], src, merge=True, interval=pd.Timedelta(hours=1),
+                r_compatible=True, verbose=False, concept_workers=1, patient_ids={"icustay_id": [1]},
+            )
+        assert routes
+        return frame.sort_values(["icustay_id", "charttime"]).reset_index(drop=True)
+
+    typed = published(source(stamps, "typed"))
+    text = published(source(stamps.strftime("%Y-%m-%d %H:%M:%S"), "text"))
+    pd.testing.assert_frame_equal(text, typed, check_exact=True)
+    assert _hours(typed[["icustay_id", "charttime", "hr"]], "hr") == {2.0: 80.0, 119.0: 90.0}
