@@ -101,7 +101,15 @@ _STREAM_RETRY_FACTOR = 0.75
 
 
 class ExtractionRunError(RuntimeError):
-    """Raised when the full-run contract cannot be satisfied safely."""
+    """Raised when the full-run contract cannot be satisfied safely.
+
+    ``memory_exhausted`` is set only from the package's typed module result
+    (``modules[name]["memory_exhausted"]``), never from error text.
+    """
+
+    def __init__(self, message: str, *, memory_exhausted: bool = False) -> None:
+        super().__init__(message)
+        self.memory_exhausted = bool(memory_exhausted)
 
 
 def _utc_now() -> str:
@@ -906,23 +914,25 @@ def _batch_label(
     )
 
 
-def _nested_worker_memory_failure(failures: object) -> bool:
-    if not isinstance(failures, list):
-        return False
-    for item in failures:
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            exit_code = int(item.get("worker_exit_code") or 0)
-        except (TypeError, ValueError):
-            exit_code = 0
-        detail = " ".join(
-            str(item.get(field) or "")
-            for field in ("failure_kind", "exception_type", "traceback")
-        )
-        if _looks_like_memory_failure(exit_code, detail):
-            return True
-    return False
+def _worker_memory_classification(
+    exc: BaseException, failures: Sequence[Mapping[str, Any]]
+) -> tuple[bool, bool]:
+    """(failure is a memory exception, a nested worker recorded memory evidence).
+
+    Decided in the worker, by the package's typed owner
+    (``easyicu.api.extraction``): an exit status or traceback text is never
+    memory evidence (lead-r13 B-RETRY). Without an importable package there
+    is no evidence.
+    """
+
+    try:
+        from easyicu.api.extraction import is_memory_exception, worker_failure_is_memory
+    except ImportError:
+        return False, False
+    return (
+        bool(is_memory_exception(exc)) or getattr(exc, "memory_exhausted", False) is True,
+        any(worker_failure_is_memory(item) for item in failures),
+    )
 
 
 def _recover_nested_worker_failures(output_root: Path) -> list[dict[str, Any]]:
@@ -953,6 +963,11 @@ def _recover_nested_worker_failures(output_root: Path) -> list[dict[str, Any]]:
                 "exception_type": record.get("exception_type"),
                 "traceback_sha256": record.get("traceback_sha256"),
                 "partial_outputs_sha256": record.get("partial_outputs_sha256"),
+                # The package's own classification travels with the record.
+                "memory_exhausted": record.get("memory_exhausted"),
+                "failure_class": record.get("failure_class"),
+                "memory_evidence": record.get("memory_evidence"),
+                "oom_kill_delta": record.get("oom_kill_delta"),
                 "file": path.relative_to(output_root).as_posix(),
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "bytes": len(raw),
@@ -1087,7 +1102,13 @@ def _worker_main(spec_path: Path) -> int:
             if (extraction["modules"].get(module) or {}).get("errors")
         }
         if errors:
-            raise ExtractionRunError(f"module extraction errors: {errors}")
+            raise ExtractionRunError(
+                f"module extraction errors: {errors}",
+                memory_exhausted=any(
+                    (extraction["modules"].get(module) or {}).get("memory_exhausted") is True
+                    for module in errors
+                ),
+            )
         receipt = _validate_export_package(
             output_root, identity["commit"], database
         )
@@ -1124,15 +1145,17 @@ def _worker_main(spec_path: Path) -> int:
     except BaseException as exc:
         if not nested_worker_failures:
             nested_worker_failures = _recover_nested_worker_failures(output_root)
+        memory_exhausted, nested_memory = _worker_memory_classification(
+            exc, nested_worker_failures
+        )
         payload = {
             "status": "failed",
             "database": spec.get("database"),
             "error": f"{type(exc).__name__}: {exc}",
             "traceback": traceback.format_exc(),
             "worker_failures": nested_worker_failures,
-            "nested_memory_failure": _nested_worker_memory_failure(
-                nested_worker_failures
-            ),
+            "memory_exhausted": memory_exhausted,
+            "nested_memory_failure": nested_memory,
         }
         try:
             _atomic_write_json(result_path, payload)
@@ -1149,24 +1172,6 @@ def _next_retry_batch_size(current_batch_size: int) -> int:
     if proposed >= current:
         proposed = current - _STREAM_BATCH_QUANTUM
     return max(_STREAM_BATCH_MIN, proposed)
-
-
-def _looks_like_memory_failure(exit_code: int, error: str) -> bool:
-    if exit_code in {-9, 9, 137, -1073740791, 3221226505}:
-        return True
-    lowered = error.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "memoryerror",
-            "out of memory",
-            "cannot allocate memory",
-            "bad_alloc",
-            "oom",
-            "killed",
-            "streamed module export exhausted memory",
-        )
-    )
 
 
 def _attempt_number(run_root: Path, database: str) -> int:
@@ -1370,12 +1375,11 @@ def _execute_database(
             final_error = "strict process-tree RSS/PSS evidence was not captured"
             retryable = False
         else:
+            # Only the worker's typed evidence earns a smaller retry; a bare
+            # exit status (a kill with no record) is reported, not retried.
             retryable = (
-                _looks_like_memory_failure(final_exit_code, final_error)
+                worker_result.get("memory_exhausted") is True
                 or worker_result.get("nested_memory_failure") is True
-                or _nested_worker_memory_failure(
-                    worker_result.get("worker_failures")
-                )
             )
         planned = worker_plan.get("planned_initial_batch_size")
         can_downbatch = (

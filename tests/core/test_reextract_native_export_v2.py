@@ -520,9 +520,14 @@ def test_worker_preserves_module_plans_and_enforces_assigned_budget(
     assert result["batch_strategy"]["aggregate_plan_is_summary"] is (requested_batch_size is None)
 
 
+@pytest.mark.parametrize(
+    ("evidence", "is_memory"),
+    [({}, False), ({"memory_exhausted": True, "exception_type": "MemoryError"}, True)],
+)
 def test_worker_recovers_nested_oom_when_native_publication_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, evidence, is_memory
 ) -> None:
+    """A recorded memory exception is evidence; a bare -9 alone is not (B-RETRY)."""
     import easyicu.api as public_api
     import easyicu.api.extraction as extraction
 
@@ -562,6 +567,7 @@ def test_worker_recovers_nested_oom_when_native_publication_raises(
             "exception_type": None,
             "traceback_sha256": None,
             "partial_outputs_sha256": "c" * 64,
+            **evidence,
         }
         (failure_root / "worker-failure-parent-oom.json").write_text(
             json.dumps(record), encoding="utf-8"
@@ -593,7 +599,8 @@ def test_worker_recovers_nested_oom_when_native_publication_raises(
     assert launcher._worker_main(spec_path) == 1
 
     result = json.loads((attempt_root / "worker_result.json").read_text())
-    assert result["nested_memory_failure"] is True
+    assert result["nested_memory_failure"] is is_memory
+    assert result["memory_exhausted"] is False
     assert result["worker_failures"] == [
         {
             "failure_id": "parent-oom",
@@ -602,9 +609,13 @@ def test_worker_recovers_nested_oom_when_native_publication_raises(
             "special_modules": [],
             "worker_exit_code": -9,
             "failure_kind": "worker_exit_without_failure_record",
-            "exception_type": None,
+            "exception_type": evidence.get("exception_type"),
             "traceback_sha256": None,
             "partial_outputs_sha256": "c" * 64,
+            "memory_exhausted": evidence.get("memory_exhausted"),
+            "failure_class": None,
+            "memory_evidence": None,
+            "oom_kill_delta": None,
             "file": ".easyicu-failures/worker-failure-parent-oom.json",
             "sha256": _sha256(
                 attempt_root
@@ -749,6 +760,7 @@ def test_process_oom_downbatches_only_failed_staging_attempt(
                             "ExtractionRunError: module extraction errors: "
                             "streamed module export exhausted memory: other_scores"
                         ),
+                        "memory_exhausted": True,
                     }
                 ),
                 encoding="utf-8",
@@ -910,11 +922,17 @@ def test_nested_module_worker_oom_downbatches_the_database_attempt(
     assert first_attempt["peak_process_tree_pss_mb"] == 7600.0
 
 
-def test_streamed_python_memory_error_is_retryable() -> None:
-    assert launcher._looks_like_memory_failure(
-        1,
-        "streamed module export exhausted memory: sofa1_score",
-    )
+def test_worker_memory_classification_is_typed_never_textual() -> None:
+    classify = launcher._worker_memory_classification
+    assert classify(MemoryError(), []) == (True, False)
+    # Memory words in a message are not evidence.
+    assert classify(ValueError("out of memory: bad_alloc, Killed"), []) == (False, False)
+    assert classify(
+        launcher.ExtractionRunError("module extraction errors", memory_exhausted=True), []
+    ) == (True, False)
+    assert classify(
+        launcher.ExtractionRunError("streamed module export exhausted memory: sofa1_score"), []
+    ) == (False, False)
 
 
 def test_module_batch_cli_parsing_is_typed_and_scoped() -> None:
@@ -928,28 +946,77 @@ def test_module_batch_cli_parsing_is_typed_and_scoped() -> None:
         launcher._resolve_module_batch_overrides(["miiv/medications=0"])
 
 
-def test_nested_worker_exit_minus_nine_is_a_memory_failure() -> None:
-    assert launcher._nested_worker_memory_failure(
-        [
-            {
-                "failure_kind": "worker_exit_without_failure_record",
-                "worker_exit_code": -9,
-                "phase": "medications",
-            }
-        ]
-    )
+def test_nested_worker_exit_status_alone_is_not_memory_evidence() -> None:
+    classify = launcher._worker_memory_classification
+    for code in (-9, 9, 137, -1073740791, 3221226505):
+        record = {
+            "failure_kind": "worker_exit_without_failure_record",
+            "worker_exit_code": code,
+            "phase": "medications",
+            "traceback": "MemoryError: out of memory (bad_alloc)",
+        }
+        assert classify(RuntimeError("x"), [record]) == (False, False), code
 
 
-def test_nested_non_memory_failure_does_not_trigger_memory_retry() -> None:
-    assert not launcher._nested_worker_memory_failure(
-        [
-            {
-                "failure_kind": "structured_exception",
-                "worker_exit_code": 1,
-                "exception_type": "ValueError",
-            }
-        ]
+def test_nested_worker_memory_evidence_is_the_package_classification() -> None:
+    classify = launcher._worker_memory_classification
+    assert classify(RuntimeError("x"), [{"failure_class": "out_of_memory"}])[1] is True
+    assert classify(RuntimeError("x"), [{"memory_exhausted": True}])[1] is True
+    assert classify(RuntimeError("x"), [{"exception_type": "MemoryError"}])[1] is True
+    assert classify(
+        RuntimeError("x"), [{"worker_exit_code": -9, "oom_kill_delta": 1}]
+    )[1] is True
+    assert classify(
+        RuntimeError("x"),
+        [{"failure_kind": "structured_exception", "worker_exit_code": 1, "exception_type": "ValueError"}],
+    )[1] is False
+
+
+def test_process_exit_or_error_text_alone_does_not_downbatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_root = tmp_path / "run"
+    (run_root / "exports").mkdir(parents=True)
+    observed = []
+
+    def killed_worker(**kwargs):
+        spec = json.loads(Path(kwargs["spec_path"]).read_text(encoding="utf-8"))
+        attempt = Path(spec["attempt_root"])
+        observed.append(spec.get("requested_batch_size"))
+        (attempt / "worker_plan.json").write_text(
+            json.dumps({"planned_initial_batch_size": 40_000, "planned_batch_count": 6}),
+            encoding="utf-8",
+        )
+        (attempt / "worker_result.json").write_text(
+            json.dumps({"status": "failed", "error": "MemoryError: out of memory, Killed"}),
+            encoding="utf-8",
+        )
+        return {
+            "process_exit_code": -9,
+            "elapsed_seconds": 1.0,
+            "peak_process_tree_rss_mb": 7000.0,
+            "peak_process_tree_pss_mb": 6500.0,
+            "monitor_errors": [],
+        }
+
+    monkeypatch.setattr(launcher, "_run_monitored_worker", killed_worker)
+    source = launcher._execute_database(
+        database="eicu",
+        run_root=run_root,
+        data_path="/data/eicu",
+        git_commit=COMMIT,
+        assigned_memory_mb=8 * 1024,
+        adaptive_core=True,
+        requested_batch_size=None,
+        max_memory_retries=2,
+        sample_interval_seconds=0.1,
+        psutil_module=None,
+        monitoring={"release_sealable": False},
+        prior_source=None,
     )
+    assert observed == [None]
+    assert source["status"] == "failed"
+    assert source["process_exit_code"] == -9
 
 
 def test_resume_recovers_completed_database_and_returns_only_missing(

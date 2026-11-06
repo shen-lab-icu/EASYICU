@@ -1777,6 +1777,31 @@ def _worker_memory_evidence(
     return None
 
 
+def is_memory_exception(exc: Optional[BaseException]) -> bool:
+    """Public form of the by-type memory test, for out-of-process drivers."""
+
+    return _is_memory_exception(exc)
+
+
+def worker_failure_is_memory(record: object) -> bool:
+    """Whether a persisted worker failure record carries memory evidence.
+
+    Reads the classification this module wrote (``failure_class``,
+    ``memory_exhausted``, the exact exception type, an ``oom_kill_delta``);
+    an exit status or traceback text alone is never evidence (B-RETRY).
+    """
+
+    if not isinstance(record, Mapping):
+        return False
+    if record.get("failure_class") == "out_of_memory":
+        return True
+    try:
+        delta = int(record["oom_kill_delta"]) if record.get("oom_kill_delta") is not None else None
+    except (TypeError, ValueError):
+        delta = None
+    return _worker_memory_evidence(record.get("worker_exit_code"), [record], delta) is not None
+
+
 def _worker_failure_class(
     exit_code: object,
     failures: object,
@@ -8129,6 +8154,8 @@ def extract_database(
         with open(manifest_path) as f:
             manifest = json.load(f)
         mod_result["errors"] = manifest.get("errors", [])
+        # Typed (set from the exception type), for drivers that retry smaller.
+        mod_result["memory_exhausted"] = manifest.get("memory_exhausted") is True
         mod_result["warnings"] = manifest.get("warnings", [])
         mod_result["elapsed"] = manifest.get("elapsed_sec", 0.0)
         mod_result["peak_rss_mb"] = manifest.get("peak_rss_mb", 0.0)
