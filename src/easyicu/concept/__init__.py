@@ -8985,6 +8985,12 @@ class ConceptResolver:
             # 🔧 FIX 2025-02-13: Use 'dur_var' as column name to match R ricu output format
             win_df["dur_var"] = np.where(mask.values, duration_mins, 0.0)
             win_df[concept_name] = mask.values
+            # The producer declares its unit: a numeric dur_var without one is
+            # refused when the public API expands the windows (eICU ett_gcs,
+            # lead-r13 G2 public-API sweep).
+            from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+            set_dur_var_unit(win_df, UNIT_MINUTES)
             return WinTbl(
                 data=win_df,  # No rename needed since we use 'dur_var' directly
                 id_vars=base_id_cols,
