@@ -2789,8 +2789,8 @@ def _write_isolated_stream_batch(
     concepts: List[str],
     load_kwargs: Dict,
     patient_ids: Dict,
+    stay_binding: Optional[Dict],
     destination: str,
-    stay_binding: Optional[Dict] = None,
 ) -> None:
     """Extract one patient batch and atomically write it from a fresh process.
 
@@ -3363,8 +3363,8 @@ def _stream_module_batches_to_parquet(
                             concepts,
                             batch_load_kwargs,
                             {id_col: batch_ids},
-                            str(batch_part),
                             stay_binding,
+                            str(batch_part),
                         ),
                         daemon=False,
                     )

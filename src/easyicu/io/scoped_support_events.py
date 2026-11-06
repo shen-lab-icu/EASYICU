@@ -233,6 +233,7 @@ def extract_miiv_support_events(
     ]
     if len(clock_files) != 1:
         raise scoped.SourceEventContractError("one_icustays_parquet_required")
+    scoped._consumed_clock(data_source, clock_files[0])
     event_files = _procedure_files(data_source)
     required = {
         "subject_id",

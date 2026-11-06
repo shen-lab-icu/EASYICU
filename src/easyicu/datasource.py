@@ -47,6 +47,25 @@ class SourceTimeFormatError(storage_layout.StorageIntegrityError):
         )
 
 
+def _consumed_clock_table(data_source: Any, table: str, path) -> Path:
+    """Record a clock/identity table a DuckDB query opens by name as consumed.
+
+    These relations (AUMC ``admissions``, SICdb ``cases``, HiRID ``general``,
+    MIMIC ``icustays``, community ``stays``) are joined in SQL beside the
+    resolved event files. The file actually read is bound and logged through
+    the one consumed-files source (``storage_layout.record_consumed``).
+    """
+    path = Path(path)
+    if path.is_file():
+        fmt = (
+            storage_layout.FORMAT_CSV
+            if path.name.lower().endswith((".csv", ".csv.gz"))
+            else storage_layout.FORMAT_PARQUET
+        )
+        storage_layout.record_consumed(data_source, table, (path,), fmt)
+    return path
+
+
 def _duckdb_path(p) -> str:
     """Convert a Path or string to a DuckDB-safe path string.
 
@@ -115,8 +134,10 @@ def _aumc_admissions_relation_sql(data_source: Any) -> str:
             continue
         sql_path = _duckdb_path(candidate).replace("'", "''")
         if candidate.suffix.lower() in {".parquet", ".pq"}:
+            _consumed_clock_table(data_source, "admissions", candidate)
             return f"read_parquet('{sql_path}')"
         if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            _consumed_clock_table(data_source, "admissions", candidate)
             return f"read_csv_auto('{sql_path}', header=true)"
 
     raise FileNotFoundError(
@@ -159,8 +180,10 @@ def _sic_cases_relation_sql(data_source: Any) -> str:
             continue
         sql_path = _duckdb_path(candidate).replace("'", "''")
         if candidate.suffix.lower() in {".parquet", ".pq"}:
+            _consumed_clock_table(data_source, "cases", candidate)
             return f"read_parquet('{sql_path}')"
         if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            _consumed_clock_table(data_source, "cases", candidate)
             return f"read_csv_auto('{sql_path}', header=true)"
 
     raise FileNotFoundError(
@@ -1710,6 +1733,14 @@ class ICUDataSource:
                         root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
                     )
                 except storage_layout.BucketLayoutError as exc:
+                    from .storage_binding import StorageSourceChanged, is_bound
+
+                    if is_bound(root / storage_layout.MANIFEST):
+                        # This run already read the layout: a change under it is
+                        # a changed source, never a fallback (D9B-LAYOUT-DOWNGRADE).
+                        raise StorageSourceChanged(
+                            "storage_source_changed", table_name, str(root / storage_layout.MANIFEST)
+                        ) from exc
                     failure = exc
                     continue
                 self._bucket_dir_cache[str(table_name).lower()] = root
@@ -1727,15 +1758,18 @@ class ICUDataSource:
         *, loader: Optional[Path] = None,
         stay_column: Optional[str] = None,
         stay_values: Optional[Iterable[object]] = None,
+        consume: bool = True,
     ) -> Tuple[Path, ...]:
         """Resolve table + selector through the single storage policy owner.
 
         ``stay_column``/``stay_values`` are the caller's direct stay predicate
-        (``column IN values``), used to narrow a variable × stay layout.
+        (``column IN values``), used to narrow a variable × stay layout. The
+        result is recorded as consumed; a precheck or probe passes
+        ``consume=False``.
         """
         return storage_layout.resolve_table_files(
             self, table_name, selector_column, selector_values, loader=loader,
-            stay_column=stay_column, stay_values=stay_values,
+            stay_column=stay_column, stay_values=stay_values, consume=consume,
         )
 
     def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
@@ -2247,6 +2281,9 @@ class ICUDataSource:
             Path(bucket_dir), allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
         )
         targets, files = layout.select(self, selector_column, itemids)
+        storage_layout.record_bucket_consumed(
+            self, Path(bucket_dir).name.removesuffix("_bucket"), layout, files
+        )
         return targets, layout.modulus, files
 
     def _get_parquet_columns_for_files(self, files: Iterable[Path]) -> set:
@@ -3209,7 +3246,7 @@ def load_bucketed_table_aggregated(
     db_name = data_source.config.name if hasattr(data_source.config, 'name') else 'unknown'
     
     base_path = data_source.base_path
-    if not data_source.resolve_target_files(table_name):
+    if not data_source.resolve_target_files(table_name, consume=False):  # existence probe
         raise ValueError(f"Cannot find parquet source for {table_name}")
 
     table_cfg = None
@@ -3622,6 +3659,7 @@ def load_bucketed_table_aggregated(
                 if general_csv.exists():
                     general_path = general_csv
                     general_read_func = "read_csv"
+        _consumed_clock_table(data_source, "general", general_path)
 
         # HiRID: 使用 general 表的 admissiontime 计算相对小时数
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
@@ -3702,6 +3740,7 @@ def load_bucketed_table_aggregated(
             icustays_csv = base_path / "icustays.csv.gz"
             if icustays_csv.exists():
                 icustays_path = icustays_csv
+        _consumed_clock_table(data_source, "icustays", icustays_path)
 
         stay_col = "icustay_id" if db_name in ("mimic", "mimic_demo") else "stay_id"
 
@@ -3935,7 +3974,7 @@ def load_bucketed_table_aggregated(
         # calendar timestamps: Zhejiang uses days, Jinhua minutes, and Zigong
         # hours. Convert to hours, subtract the generated stay origin, and
         # preserve the native encounter key.
-        stays_path = base_path / "stays.parquet"
+        stays_path = _consumed_clock_table(data_source, "stays", base_path / "stays.parquet")
         _interval_hours = interval_minutes / 60.0
         source_scale = {
             "zhejiang_eicu": 24.0,
@@ -4268,7 +4307,7 @@ def load_bucketed_table_multi_aggregated(
     else:
         all_itemids = sorted({int(x) for ids in concept_itemids.values() for x in ids})
 
-    if not data_source.resolve_target_files(table_name):
+    if not data_source.resolve_target_files(table_name, consume=False):  # existence probe
         raise ValueError(f"Cannot find parquet source for {table_name}")
 
     conn = _get_duckdb_connection()
@@ -4341,6 +4380,7 @@ def load_bucketed_table_multi_aggregated(
             icustays_path = base_path / 'icu' / 'icustays.parquet'
         if not icustays_path.exists() and (base_path / 'icustays.csv.gz').exists():
             icustays_path = base_path / 'icustays.csv.gz'
+        _consumed_clock_table(data_source, 'icustays', icustays_path)
         _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
 
         # hadm_id mapping for hospital tables (labevents etc.)
@@ -4527,6 +4567,7 @@ def load_bucketed_table_multi_aggregated(
                 if general_csv.exists():
                     general_path = general_csv
                     gen_read = 'read_csv'
+        _consumed_clock_table(data_source, 'general', general_path)
         p_clause = _patient_clause(id_col, patient_ids) + _window_sql.condition(
             f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0", f"o.{id_col}",
         )
@@ -4932,7 +4973,7 @@ def load_wide_table_aggregated(
             f"    {time_expression} AS charttime,\n"
             f"    {community_agg_exprs}\n"
             "FROM {read_expr} o\n"
-            f"JOIN read_parquet('{_duckdb_path(data_source.base_path / 'stays.parquet')}') a "
+            f"JOIN read_parquet('{_duckdb_path(_consumed_clock_table(data_source, 'stays', data_source.base_path / 'stays.parquet'))}') a "
             f"ON o.{quoted_id} = a.{quoted_id}\n"
             f"{community_where}\n"
             f"GROUP BY o.{quoted_id}, {time_expression}\n"

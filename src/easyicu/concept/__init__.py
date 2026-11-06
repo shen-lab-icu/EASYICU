@@ -1690,7 +1690,7 @@ class ConceptResolver:
                 and len(concepts_info_filtered) >= 1
                 and duckdb_aggregation_enabled()
                 # An absent table is the per-concept path's to report.
-                and bool(data_source.resolve_target_files(shared_table))
+                and bool(data_source.resolve_target_files(shared_table, consume=False))
             ):
                 all_have_value_var = all(val_var is not None for _, val_var in concepts_info_filtered)
                 
@@ -1834,7 +1834,7 @@ class ConceptResolver:
                 shared_table in _MULTI_BATCH_TABLES
                 and len(concepts_info) >= 2
                 and duckdb_aggregation_enabled()
-                and bool(data_source.resolve_target_files(shared_table))
+                and bool(data_source.resolve_target_files(shared_table, consume=False))
                 # Route only databases the batch loader implements; a failed
                 # batch read is a failure, not a cue to re-read per concept.
                 and str(getattr(data_source.config, "name", "")).replace("_demo", "")
@@ -8901,6 +8901,11 @@ class ConceptResolver:
                     read_expr = None
                     index_path = base_path / 'observation_tables' / 'observation_tables_index.csv'
                     if index_path.is_file() and obs_path.is_dir():
+                        from ..storage_layout import FORMAT_CSV, record_consumed
+
+                        record_consumed(
+                            data_source, 'observation_tables_index', (index_path,), FORMAT_CSV
+                        )
                         try:
                             obs_index = pd.read_csv(index_path, usecols=['patientid', 'part'])
                             target_set = set(target_patients)

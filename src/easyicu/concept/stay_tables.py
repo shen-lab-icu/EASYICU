@@ -58,6 +58,9 @@ class StayTableUnbound(StorageIntegrityError):
             "extraction run, so there is no source binding to verify against"
         )
 
+    def __reduce__(self):
+        return (type(self), (self.table,))
+
 
 _LOCK = threading.RLock()
 _READS = {"count": 0}

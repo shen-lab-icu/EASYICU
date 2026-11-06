@@ -119,3 +119,61 @@ def test_a_child_verifies_the_parents_bucket_binding(bucket):
     _rewrite(root / MANIFEST)
     with binding_unit(snapshot), pytest.raises(StorageSourceChanged):
         _read(source)  # the child's first read meets the parent's binding
+
+
+def test_a_bound_bucket_whose_source_changes_never_falls_back_to_flat(bucket):
+    """D9B-LAYOUT-DOWNGRADE: the bound layout refuses; no silent flat read."""
+    source, root = bucket
+    with binding_unit():
+        _read(source)
+        (shard,) = (root.parent / TABLE).glob("*.parquet")
+        _rewrite(shard)  # the layout's derived_from source
+        with pytest.raises(StorageSourceChanged) as error:
+            _read(source)
+    assert error.value.path == str(root / MANIFEST)
+
+
+def test_a_table_read_flat_never_switches_to_a_bucket_mid_run(tmp_path):
+    source = b6_source(tmp_path / "miiv", "miiv")
+    with binding_unit():
+        source.resolve_target_files(TABLE)
+        install_layout(source, "hash")
+        with pytest.raises(StorageSourceChanged) as error:
+            _read(source)
+    assert error.value.reason == "storage_source_changed"
+
+
+def test_a_bound_table_that_vanishes_is_refused_not_read_as_empty(tmp_path):
+    """D9B-EMPTY-RESOLVE: an installation without a manifest loses the table."""
+    source = b6_source(tmp_path / "miiv", "miiv")
+    (tmp_path / "miiv" / "conversion_manifest.json").unlink(missing_ok=True)
+    with binding_unit():
+        (shard,) = source.resolve_target_files(TABLE)
+        Path(shard).unlink()
+        with pytest.raises(StorageSourceChanged) as error:
+            source.resolve_target_files(TABLE)
+    assert error.value.reason == "storage_source_missing"
+
+
+def test_a_deleted_bound_build_receipt_is_missing(bucket):
+    source, root = bucket
+    with binding_unit():
+        _read(source)
+        (root / BUILD_RECEIPT).unlink()
+        with pytest.raises(StorageSourceChanged) as error:
+            _read(source)
+    assert error.value.reason == "storage_source_missing"
+
+
+def test_binding_refusals_cross_process_boundaries():
+    import pickle
+
+    from easyicu.concept.stay_tables import StayTableSourceChanged, StayTableUnbound
+
+    for error in (StorageSourceChanged("storage_source_changed", "t", "/x/p.parquet"),
+                  StayTableSourceChanged("stay_table_source_missing", "patient", "/x/q")):
+        again = pickle.loads(pickle.dumps(error))
+        assert (type(again), again.reason, again.table, again.path, str(again)) == (
+            type(error), error.reason, error.table, error.path, str(error))
+    again = pickle.loads(pickle.dumps(StayTableUnbound("patient")))
+    assert (again.table, again.reason) == ("patient", "stay_table_unbound")

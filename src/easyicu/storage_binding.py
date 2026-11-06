@@ -5,14 +5,18 @@ outermost unit owns the binding; nested units, and threads run in a copied
 context, join it. Isolated child processes receive ``child_binding(...)``
 and open their unit from it.
 
-What the storage owner (``storage_layout``) binds, at the first resolve of
-each table in the unit:
-- a flat table's validated file set, plus each file's
-  (size, mtime_ns, ino);
-- the selected part files of a bucket read, each by (size, mtime_ns, ino);
-- a bucket installation's manifest and build receipt, each by
-  (size, mtime_ns, ino) plus a sha256.
-Every later resolve verifies against the binding. Any other file set, or
+What is bound is what the run consumes: the files a reader actually reads,
+captured at the point of reading through the one consumed-files source,
+``storage_layout.record_consumed`` → :func:`consume`. Integrity prechecks of
+other candidates bind nothing (B9P-CSV-BINDING). That covers:
+- a flat table's validated file set, plus each file's (size, mtime_ns, ino);
+- a CSV file that was read instead of the Parquet beside it;
+- the part files a bucket read selected;
+- the installation's manifest and build receipt, each with a sha256;
+- a stay-origin or clock table that a reader opens by name.
+Each consumed file is recorded with its realpath and format, in the unit
+(:func:`consumed_files`) and as a ``table_consumed`` event in the run log.
+Every later read verifies against the binding. Any other file set, or
 any other version of a file, raises ``storage_source_changed``; a vanished
 file raises ``storage_source_missing``. Both are ``StorageSourceChanged``,
 a ``StorageIntegrityError``. Outside any unit a read is not part of a run,
@@ -50,6 +54,9 @@ class StorageSourceChanged(StorageIntegrityError):
             "was bound to it; rerun on a stable installation"
         )
 
+    def __reduce__(self):  # crosses process boundaries with its fields
+        return (type(self), (self.reason, self.table, self.path))
+
 
 class _Unit:
     def __init__(self, snapshot: Optional[dict]):
@@ -57,6 +64,7 @@ class _Unit:
         self.files: dict = dict(snapshot.get("files", {}))  # (database, base, table) -> paths
         self.versions: dict = dict(snapshot.get("versions", {}))  # path -> (size, mtime_ns, ino)
         self.sha256: dict = dict(snapshot.get("sha256", {}))  # path -> hex (manifests, receipts)
+        self.consumed: dict = {}  # (table, path) -> {table, path, realpath, format}
         self.caches: dict = {}  # payload owners' caches, dropped with the unit
 
 
@@ -151,6 +159,53 @@ def bind_files(
                     raise StorageSourceChanged("storage_source_changed", table, path)
 
 
+def bound_set(key: Optional[tuple]) -> tuple:
+    """The file set the active unit bound under ``key``; () if none."""
+    unit = _UNIT.get()
+    if unit is None or key is None:
+        return ()
+    with _LOCK:
+        return tuple(unit.files.get(key, ()))
+
+
+def is_bound(path) -> bool:
+    """Whether the active unit has bound ``path``."""
+    unit = _UNIT.get()
+    return unit is not None and str(path) in unit.versions
+
+
+def consume(
+    table: str, paths: Iterable, fmt: str, *, key: Optional[tuple] = None, sha256: bool = False
+) -> tuple[dict, ...]:
+    """Bind files a reader is about to read and record them as consumed.
+
+    Returns the consumed entries (``table``, ``path``, ``realpath``,
+    ``format``). Outside a unit nothing is bound, but the entries are still
+    returned for the run log.
+    """
+    paths = tuple(sorted(str(p) for p in paths))
+    bind_files(table, paths, key=key, sha256=sha256)
+    entries = tuple(
+        {"table": table, "path": path, "realpath": os.path.realpath(path), "format": fmt}
+        for path in paths
+    )
+    unit = _UNIT.get()
+    if unit is not None:
+        with _LOCK:
+            for entry in entries:
+                unit.consumed[(table, entry["path"])] = entry
+    return entries
+
+
+def consumed_files() -> tuple[dict, ...]:
+    """What the active unit has consumed, sorted by table and path."""
+    unit = _UNIT.get()
+    if unit is None:
+        return ()
+    with _LOCK:
+        return tuple(dict(unit.consumed[k]) for k in sorted(unit.consumed))
+
+
 def source_key(source, table: str) -> Optional[tuple]:
     """The binding key of ``table`` in ``source``; None without an installation path."""
     base = getattr(source, "base_path", None)
@@ -203,6 +258,9 @@ def binding_summary() -> Optional[BindingSummary]:
             "files": sorted([list(key), list(paths)] for key, paths in unit.files.items()),
             "versions": sorted([path, list(v)] for path, v in unit.versions.items()),
             "sha256": sorted([path, digest] for path, digest in unit.sha256.items()),
+            "consumed": sorted(
+                [e["table"], e["path"], e["realpath"], e["format"]] for e in unit.consumed.values()
+            ),
         }
         count = len(unit.versions)
     payload = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()

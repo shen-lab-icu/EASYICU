@@ -115,15 +115,9 @@ class BucketLayout:
 
         ``stay_column``/``stay_values`` narrow only a variable layout whose
         stay key is that column; single-key layouts select exactly as before.
-        The selected part files are bound to the run (``storage_binding``).
+        Selecting is not consuming: a reader that reads the selection records
+        it (:func:`record_bucket_consumed`).
         """
-        from .storage_binding import bind_files
-
-        targets, files = self._select(source, column, values, stay_column, stay_values)
-        bind_files(self.root.name, files)
-        return targets, files
-
-    def _select(self, source, column, values, stay_column, stay_values):
         values = None if values is None else tuple(values)
         if self.scheme == VARIABLE_SCHEME:
             return self._select_variable(source, column, values, stay_column, stay_values)
@@ -295,22 +289,10 @@ def read_bucket_contract(
 
     Only footer validation is cached; file sizes and directory membership are
     checked on every open, including for an already resolved data source.
-    The manifest and the build receipt are bound to the run, with their
-    sha256 (``storage_binding``).
+    Opening is not consuming: the manifest and build receipt are bound with
+    the parts a reader reads (:func:`record_bucket_consumed`).
     """
-    from .storage_binding import bind_files
-
-    layout = _read_bucket_contract(Path(root), allow_legacy=allow_legacy, cache=cache)
-    receipt = layout.root / BUILD_RECEIPT
-    bind_files(
-        layout.root.name,
-        (layout.root / MANIFEST, *((receipt,) if receipt.is_file() else ())),
-        sha256=True,
-    )
-    return layout
-
-
-def _read_bucket_contract(root: Path, *, allow_legacy: bool, cache: dict | None) -> BucketLayout:
+    root = Path(root)
     if not (root / MANIFEST).is_file():
         raise BucketLayoutError("bucket_manifest_missing", root)
     if not (root / "_COMPLETE").is_file():
@@ -1069,8 +1051,157 @@ def _log_fallback(entry: dict[str, str]) -> None:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+CONSUMED_EVENT = "table_consumed"
+FORMAT_PARQUET, FORMAT_CSV = "parquet", "csv"
+FORMAT_BUCKET_PART, FORMAT_BUCKET_METADATA = "bucket_part", "bucket_metadata"
+_VIEW_TARGETS: dict[tuple, dict[str, tuple[str, int]]] = {}
+
+
+def _declared_view(manifest: Path) -> dict[str, tuple[str, int]]:
+    """Link targets a declared view admits: realpath -> (table, size_bytes).
+
+    A symlink farm declares its view with ``derived_from`` = {path, sha256}
+    of the source installation's conversion manifest. A farm output is
+    admitted when the source manifest still has that sha256 and the link
+    resolves to an output of the same table there with the same size_bytes.
+    Anything else admits nothing.
+    """
+    stat = manifest.stat()
+    key = (str(manifest), stat.st_mtime_ns, stat.st_size, stat.st_ino)
+    if key in _VIEW_TARGETS:
+        return _VIEW_TARGETS[key]
+    targets: dict[str, tuple[str, int]] = {}
+    try:
+        own = json.loads(manifest.read_text(encoding="utf-8"))
+        derived = own.get("derived_from")
+        if isinstance(derived, dict) and derived.get("path") and derived.get("sha256"):
+            source = Path(derived["path"])
+            raw = source.read_bytes()
+            if hashlib.sha256(raw).hexdigest() == derived["sha256"]:
+                declared = {
+                    (str(entry["table"]), os.path.realpath(source.parent / out["relative_path"])):
+                        out.get("size_bytes")
+                    for entry in json.loads(raw).get("tables", ())
+                    for out in entry.get("outputs") or ()
+                }
+                for entry in own.get("tables", ()):
+                    for out in entry.get("outputs") or ():
+                        real = os.path.realpath(manifest.parent / out["relative_path"])
+                        size = out.get("size_bytes")
+                        if declared.get((str(entry["table"]), real), object()) == size:
+                            targets[real] = (str(entry["table"]), size)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        targets = {}
+    _VIEW_TARGETS[key] = targets
+    return targets
+
+
+def declared_view_chain(base) -> dict[str, str] | None:
+    """The chain a declared view is admitted by, for the run receipt.
+
+    {farm_manifest_sha256, source_manifest_path, source_manifest_sha256}
+    when ``base``'s conversion manifest declares ``derived_from`` {path,
+    sha256} and the source manifest still has that sha256; None otherwise.
+    """
+    manifest = Path(base) / CONVERSION_MANIFEST
+    try:
+        raw = manifest.read_bytes()
+        derived = json.loads(raw).get("derived_from")
+        if not (isinstance(derived, dict) and derived.get("path") and derived.get("sha256")):
+            return None
+        source = hashlib.sha256(Path(derived["path"]).read_bytes()).hexdigest()
+    except (OSError, ValueError, AttributeError):
+        return None
+    if source != derived["sha256"]:
+        return None
+    return {
+        "farm_manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_manifest_path": str(derived["path"]),
+        "source_manifest_sha256": source,
+    }
+
+
+def admit_consumed_realpath(base, table: str, path) -> dict[str, Any]:
+    """Admit the file a reader consumes for ``table`` by where it really lives.
+
+    It must resolve under the data root: the real directory of the
+    installation's ``conversion_manifest.json`` (a manifest linked in from
+    the prepared installation names that installation), or ``realpath(base)``
+    without a manifest. Otherwise a declared view must list it
+    (:func:`_declared_view`). Anything else is
+    ``storage_read_outside_data_root``.
+    """
+    real = os.path.realpath(path)
+    manifest = Path(base) / CONVERSION_MANIFEST
+    root = (
+        os.path.dirname(os.path.realpath(manifest)) if manifest.is_file()
+        else os.path.realpath(base)
+    )
+    if os.path.commonpath([real, root]) == root:
+        return {"target_realpath": real, "admitted_by": "data_root", "size": None, "sha256": None}
+    declared = _declared_view(manifest).get(real) if manifest.is_file() else None
+    if declared is not None:
+        return {"target_realpath": real, "admitted_by": "declared_view",
+                "size": declared[1], "sha256": None}
+    raise TableScanError(
+        "storage_read_outside_data_root", table,
+        f"{Path(path).name} resolves outside the data root and no declared view lists it",
+    )
+
+
+def record_consumed(
+    where, table: str, files, fmt: str, *, key: tuple | None = None, sha256: bool = False
+) -> tuple[dict[str, str], ...]:
+    """The one consumed-files source: record what a reader actually reads.
+
+    ``where`` is the data source (or its base path). A CSV or flat Parquet
+    file must be admitted (:func:`admit_consumed_realpath`). The files are
+    bound to the run (``storage_binding.consume``; ``key`` also binds a
+    flat table's whole set) and logged as ``table_consumed`` events, so
+    worker processes report into one receipt (:func:`read_consumed_log`).
+    Integrity prechecks of other candidates never call this.
+    """
+    from .storage_binding import consume
+
+    base = getattr(where, "base_path", where)
+    files = tuple(Path(p) for p in files)
+    if base is not None and fmt in (FORMAT_PARQUET, FORMAT_CSV):
+        for path in files:
+            admit_consumed_realpath(base, table, path)
+    entries = consume(table, files, fmt, key=key, sha256=sha256)
+    for entry in entries:
+        _log_fallback({"event": CONSUMED_EVENT, "root": str(base), **entry})
+    return entries
+
+
+def record_bucket_consumed(source, table: str, layout: BucketLayout, files) -> None:
+    """A bucket read consumes its selected parts, its manifest and build receipt."""
+    from .storage_binding import is_bound
+
+    receipt = layout.root / BUILD_RECEIPT
+    # A receipt bound earlier must still be there (a deleted one is missing).
+    has_receipt = receipt.is_file() or is_bound(receipt)
+    metadata = (layout.root / MANIFEST, *((receipt,) if has_receipt else ()))
+    record_consumed(source, table, metadata, FORMAT_BUCKET_METADATA, sha256=True)
+    record_consumed(source, table, files, FORMAT_BUCKET_PART)
+
+
+def read_consumed_log(path) -> tuple[dict[str, str], ...]:
+    """The ``table_consumed`` events of a run log (every worker's reads)."""
+    return tuple(e for e in _read_run_log(path) if e.get("event") == CONSUMED_EVENT)
+
+
 def read_scan_fallback_log(path) -> tuple[dict[str, str], ...]:
-    """The distinct fallbacks a run logged (see ``EASYICU_SCAN_FALLBACK_LOG``)."""
+    """The distinct fallbacks a run logged (see ``EASYICU_SCAN_FALLBACK_LOG``).
+
+    The same log carries read events (``table_consumed``); those are not
+    fallbacks (:func:`read_consumed_log`).
+    """
+    return tuple(e for e in _read_run_log(path) if "event" not in e)
+
+
+def _read_run_log(path) -> tuple[dict[str, str], ...]:
+    """Every distinct entry of a run log, fallbacks and read events."""
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -1109,20 +1240,6 @@ def _registered_outputs(index: dict, table: str) -> frozenset:
 
 def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
     """Fail closed unless a flat scan covers its table's whole inventory.
-
-    A verified non-empty set is bound to the run, as a set and per file
-    (``storage_binding``); see :func:`_verify_flat_inventory`.
-    """
-    from .storage_binding import bind_files, source_key
-
-    files = _verify_flat_inventory(source, table, files)
-    if files:
-        bind_files(table, files, key=source_key(source, table))
-    return files
-
-
-def _verify_flat_inventory(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
-    """The inventory check of :func:`verify_flat_scan`.
 
     The conversion manifest written when the installation was converted
     (``conversion_manifest.json``: each table's output files and total rows)
@@ -1233,9 +1350,14 @@ def flat_table_scan(source, table: str, loader: Path) -> tuple[Path, ...]:
     cache sits beside it (a patient-partitioned subset, for example); the
     flat set is still bound to the policy's location and to the manifest.
     """
-    return verify_flat_scan(
+    from .storage_binding import source_key
+
+    files = verify_flat_scan(
         source, table, _loader_scan(table, Path(loader), flat_table_files(source, table))
     )
+    if files:
+        record_consumed(source, table, files, FORMAT_PARQUET, key=source_key(source, table))
+    return files
 
 
 def csv_table_scan(source, table: str, path: Path) -> None:
@@ -1251,19 +1373,21 @@ def csv_table_scan(source, table: str, path: Path) -> None:
     index = _conversion_index(base) if base is not None else None
     if index is None:
         _record_fallback("table_read_csv_unmanifested", base, table)
-        return
-    if _registered_outputs(index, table):
-        resolve_table_files(source, table)
+    elif _registered_outputs(index, table):
+        # An integrity precheck of the Parquet candidate: it is not what is
+        # read, so it is not consumed (B9P-CSV-BINDING).
+        resolve_table_files(source, table, consume=False)
         _record_fallback("table_read_csv_beside_manifest", base, table)
-        return
-    if os.environ.get(ALLOW_UNREGISTERED_SCAN_ENV) == "1":
+    elif os.environ.get(ALLOW_UNREGISTERED_SCAN_ENV) == "1":
         _record_fallback("table_scan_unregistered", base, table)
-        return
-    raise TableScanError(
-        "table_scan_unregistered", table,
-        f"{Path(path).name} is not an output of any {CONVERSION_MANIFEST} entry; "
-        f"regenerate the manifest (or set {ALLOW_UNREGISTERED_SCAN_ENV}=1)",
-    )
+    else:
+        raise TableScanError(
+            "table_scan_unregistered", table,
+            f"{Path(path).name} is not an output of any {CONVERSION_MANIFEST} entry; "
+            f"regenerate the manifest (or set {ALLOW_UNREGISTERED_SCAN_ENV}=1)",
+        )
+    # The CSV is what is read: it is the consumed file (B9P-CSV-BINDING).
+    record_consumed(source, table, (path,), FORMAT_CSV)
 
 
 def resolve_table_files(
@@ -1275,6 +1399,7 @@ def resolve_table_files(
     loader: Path | None = None,
     stay_column: str | None = None,
     stay_values: Iterable | None = None,
+    consume: bool = True,
 ) -> tuple[Path, ...]:
     """The sole table + selector → files policy, shared by all read paths.
 
@@ -1282,13 +1407,29 @@ def resolve_table_files(
     set is what it must read (see :func:`_loader_scan`). ``stay_column`` and
     ``stay_values`` are the reader's own direct stay predicate
     (``column IN values``); a variable layout narrows its stay buckets with it.
+    The returned files are what the caller reads, so they are recorded as
+    consumed (:func:`record_consumed`). An integrity precheck or existence
+    probe passes ``consume=False``.
     """
+    from .storage_binding import StorageSourceChanged, bound_set, source_key
+
+    key = source_key(source, table)
     root = source.resolve_bucket_directory(table)
+    held = bound_set(key) if consume else ()
     if root is None:
         files = flat_table_files(source, table)
         if loader is not None:
             files = _loader_scan(table, Path(loader), files)
-        return verify_flat_scan(source, table, files)
+        files = verify_flat_scan(source, table, files)
+        if consume and files:
+            record_consumed(source, table, files, FORMAT_PARQUET, key=key)
+        elif held:
+            # Bound non-empty earlier in this run, gone now (D9B-EMPTY-RESOLVE).
+            raise StorageSourceChanged("storage_source_missing", table, held[0])
+        return files
+    if held:
+        # The run read this table flat; it never switches layout mid-run.
+        raise StorageSourceChanged("storage_source_changed", table, str(root))
     if loader is not None and Path(loader) != root:
         raise TableScanError(
             "table_scan_loader_mismatch", table,
@@ -1300,10 +1441,13 @@ def resolve_table_files(
         allow_legacy=source.config.name == "aumc",
         cache=source._bucket_layout_cache,
     )
-    return layout.select(
+    selected = layout.select(
         source, selector_column, selector_values,
         stay_column=stay_column, stay_values=stay_values,
     )[1]
+    if consume:
+        record_bucket_consumed(source, table, layout, selected)
+    return selected
 
 
 def validate_concept_layouts(source, dictionary, names: Iterable[str]) -> None:
@@ -1366,10 +1510,15 @@ def files_for_directory(
             allow_legacy=source.config.name == "aumc",
             cache=source._bucket_layout_cache,
         )
-        return layout.select(
+        files = layout.select(
             source, column, values, stay_column=stay_column, stay_values=stay_values
         )[1]
-    return tuple(Path(p) for p in enumerate_parquet_files(root))
+        record_bucket_consumed(source, root.name.removesuffix("_bucket"), layout, files)
+        return files
+    files = tuple(Path(p) for p in enumerate_parquet_files(root))
+    if files:
+        record_consumed(source, root.name, files, FORMAT_PARQUET)
+    return files
 
 
 def parquet_columns(path):

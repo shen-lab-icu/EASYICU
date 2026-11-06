@@ -336,8 +336,10 @@ def test_isolated_batch_children_receive_the_run_binding(tmp_path, monkeypatch):
     class Context:
         @staticmethod
         def Process(*, target, args, daemon):
-            kind = "batch" if target is api._write_isolated_stream_batch else "group"
-            bindings[kind].append(args[-1])
+            if target is api._write_isolated_stream_batch:
+                bindings["batch"].append(args[-2])  # the destination stays last
+            else:
+                bindings["group"].append(args[-1])
             return _Run(target=target, args=args, daemon=daemon)
 
     monkeypatch.setattr(api, "_get_extraction_mp_context", lambda _mp: Context())
