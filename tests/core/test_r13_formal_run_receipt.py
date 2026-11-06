@@ -143,7 +143,8 @@ def _snapshots(run: Path, input_root: Path) -> None:
 
 
 def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
-              version: str = CODE["version"], consumed=None) -> Path:
+              version: str = CODE["version"], consumed=None,
+              installed: str | None = "9.9.9") -> Path:
     run = tmp_path / "run"
     export = run / "sic" / "export"
     export.mkdir(parents=True)
@@ -158,7 +159,7 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
         "runtime_provenance": {
             "easyicu_git_commit": commit, "easyicu_git_dirty": False,
             "easyicu_code_identity_source": "git_checkout",
-            "easyicu_version": version, "easyicu_installed_dist_version": "9.9.9",
+            "easyicu_version": version, "easyicu_installed_dist_version": installed,
         },
         "storage_reads": reads if reads is not None else [_flat(prepared, "cases", prepared)],
         "storage_binding": {"digest": "b" * 64, "files": 3, "scope": "parent_run_binding"},
@@ -505,6 +506,26 @@ def test_a_native_manifest_naming_another_version_stops_the_receipt(tmp_path, mo
         receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
                                   scratch=tmp_path / "scratch")
     assert error.value.code == "native_manifest_version_mismatch"
+    assert error.value.details == {"database": "sic", "manifest_version": "9.9.9",
+                                   "sealed_version": CODE["version"]}
+
+
+@pytest.mark.parametrize("installed", ["0.0.1", None])
+def test_an_installed_dist_version_that_differs_never_stops_the_receipt(
+        tmp_path, monkeypatch, installed):
+    # Supervisor ruling: easyicu_installed_dist_version is diagnostic only; the
+    # commit (and the code identity's own version) is authoritative.
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"], installed=installed)
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    built = receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                      scratch=tmp_path / "scratch")
+
+    native = built["databases"]["sic"]["native_manifest"]
+    assert native["easyicu_version"] == CODE["version"] == built["easyicu_version"]
+    assert native["easyicu_installed_dist_version"] == installed
+    assert built["code_identity"]["installed_dist_version"] == "9.9.9"
 
 
 # delta9p NB9P-SCRATCH-CONTAINMENT: nothing the receipt writes may sit in an input.
