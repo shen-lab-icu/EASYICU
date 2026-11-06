@@ -7952,7 +7952,11 @@ def _callback_kdigo_aki(
         rrt_modalities_complete,
         rrt_sources_resolved,
     )
-    from easyicu.scores.kdigo_aki import detect_id_col, detect_time_col
+    from easyicu.scores.kdigo_aki import (
+        detect_id_col,
+        detect_time_col,
+        kdigo_component_sources,
+    )
     
     # Extract DataFrames from tables
     crea_tbl = tables.get('kdigo_creatinine_input')
@@ -8053,6 +8057,9 @@ def _callback_kdigo_aki(
             getattr(ctx.data_source, "base_path", None),
             patient_ids=_normalize_patient_ids(ctx.patient_ids, id_col),
         ),
+        # Source-level, not batch-level: which component sources this
+        # installation provides decides source_absent vs patient_data_absent.
+        component_sources=kdigo_component_sources(ctx.data_source),
     )
     
     if result.empty:

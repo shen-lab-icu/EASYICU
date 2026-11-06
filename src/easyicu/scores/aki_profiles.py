@@ -24,6 +24,8 @@ from ..utils.thresholds import ge, gt, le, lt
 
 from .kdigo_aki import (
     KDIGOComponentSchemaError,
+    KDIGOComponentSources,
+    kdigo_component_sources_for_path,
     detect_id_col,
     detect_time_col,
     detect_value_col,
@@ -452,6 +454,7 @@ def build_renal_aki_bundle(
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
     rrt_source_complete: bool = False,
     native_case_labels: Optional[pd.DataFrame] = None,
+    component_sources: Optional[KDIGOComponentSources] = None,
 ) -> pd.DataFrame:
     """Build the renal export's reference, quality, and native AKI layers.
 
@@ -463,6 +466,11 @@ def build_renal_aki_bundle(
     ``native_case_labels`` carries SICdb's own ``KDIGO_AKI_168`` field
     (:mod:`easyicu.scores.sicdb_native_aki`): each case's stage is published
     once, on the hour its 168-hour window closes, and nowhere earlier.
+
+    ``component_sources`` is the installation's source receipt
+    (:class:`~easyicu.scores.kdigo_aki.KDIGOComponentSources`).  Extraction
+    batches pass it so that evidence reasons and the source-native status
+    never depend on which stays share a batch.
     """
 
     normalized_database = _normalize_database(database)
@@ -510,6 +518,7 @@ def build_renal_aki_bundle(
         interval=interval,
         observation_window_coverage=observation_window_coverage,
         rrt_source_complete=rrt_source_complete,
+        component_sources=component_sources,
     )
     quality_columns = {
         "observation_window_coverage": "kidney_observation_window_coverage",
@@ -584,7 +593,7 @@ def build_renal_aki_bundle(
                 result, native_case_labels, resolved_id, resolved_time
             )
     else:
-        native_kwargs = dict(common_kwargs)
+        native_kwargs = dict(common_kwargs, component_sources=component_sources)
         if normalized_database == "miiv":
             native_kwargs["rrt_df"] = crrt_df
             if crrt_df is None:
@@ -610,6 +619,7 @@ def build_renal_aki_bundle(
             native = apply_source_native_aki(
                 normalized_database, **native_kwargs
             )
+        stamp = _native_stamp_of(native, native_profile)
         result = result.merge(
             native,
             on=[resolved_id, resolved_time],
@@ -618,15 +628,13 @@ def build_renal_aki_bundle(
             sort=False,
         )
         del native
-        for column in (
-            "aki_source_native_profile",
-            "aki_source_native_status",
-            "aki_source_native_authority",
-            "aki_source_native_reliability_grade",
-            "aki_source_native_fidelity",
-        ):
-            if column in result:
-                result[column] = result[column].ffill().bfill()
+        # The stamp describes the profile run on this installation, so every
+        # row carries it.  It is assigned, never filled from a neighbouring
+        # row: a forward/backward fill across the outer-joined keys carried
+        # one stay's status onto another and made it depend on which stays
+        # shared a batch (delta7k NB-AKI-STATUS, ruled B 2026-11-06).
+        for column, value in stamp.items():
+            result[column] = value
 
     result["aki_source_native_time_scale"] = native_profile.output_kind
     result["aki_source_native_uses_future"] = bool(
@@ -951,6 +959,7 @@ def load_renal_aki_bundle(
         interval=pd.Timedelta(hours=1),
         rrt_source_complete=rrt_source_complete,
         native_case_labels=native_case_labels,
+        component_sources=kdigo_component_sources_for_path(database, data_path),
     )
 
 
@@ -973,6 +982,7 @@ def apply_aki_profile(
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
     rrt_source_complete: bool = False,
     strict_prerequisites: bool = False,
+    component_sources: Optional[KDIGOComponentSources] = None,
 ) -> pd.DataFrame:
     """Apply a frozen canonical or source-native AKI profile.
 
@@ -1046,6 +1056,7 @@ def apply_aki_profile(
             interval=interval,
             observation_window_coverage=observation_window_coverage,
             rrt_source_complete=rrt_source_complete,
+            component_sources=component_sources,
         )
         result = result.copy()
         result["aki_stage_canonical"] = result["aki_stage"]
@@ -1065,7 +1076,15 @@ def apply_aki_profile(
     elif profile.database == "aumc":
         result = _aumc_profile(**kwargs)
     elif profile.database == "eicu":
-        if (urine_df is None or urine_df.empty) and not strict_prerequisites:
+        urine_rows = urine_df is not None and not urine_df.empty
+        if not urine_rows and component_sources is not None and component_sources.urine:
+            # The urine source exists; these stays have no urine rows.  A
+            # whole-cohort run gives such stays no component row, so neither
+            # does a batch in which no stay has one.
+            result = _eicu_components_frame_without_rows(
+                (crea_df, rrt_df), id_col=id_col, time_col=time_col
+            )
+        elif not urine_rows and not strict_prerequisites:
             # The eICU component profile is a urine-output definition: a batch
             # without urine rows is not evaluable, not a failed extraction.
             result = _unavailable_profile_frame(
@@ -1085,7 +1104,8 @@ def apply_aki_profile(
                 status="not_evaluable_required_source_missing",
                 ascertainment="indeterminate",
             )
-        result = _eicu_components_profile(**kwargs)
+        else:
+            result = _eicu_components_profile(**kwargs)
     elif profile.database == "hirid":
         if native_endpoint_df is None or native_endpoint_df.empty:
             if strict_prerequisites:
@@ -1113,8 +1133,48 @@ def apply_aki_profile(
     else:
         raise AKIProfileError(f"No implementation is registered for {profile_id}")
 
-    status = "components_only" if profile.database == "eicu" else "evaluated"
-    return _stamp_profile(result, profile, status=status)
+    return _stamp_profile(result, profile, status=_evaluated_status(profile))
+
+
+def _native_stamp_of(native: pd.DataFrame, profile: AKIProfile) -> dict[str, str]:
+    """The single profile stamp one source-native call wrote.
+
+    One call stamps every row it returns with one value per column.  A call
+    that returns no rows can only be the evaluated path (the unavailable
+    receipts span every component row), whose stamp is the profile's.
+    """
+
+    expected = _profile_stamp_values(profile, status=_evaluated_status(profile))
+    if native.empty:
+        return expected
+    stamp: dict[str, str] = {}
+    for column in expected:
+        values = native[column].dropna().unique() if column in native else ()
+        if len(values) != 1:
+            raise AKIProfileError(
+                f"source-native output must carry exactly one {column} value; "
+                f"found {len(values)}"
+            )
+        stamp[column] = values[0]
+    return stamp
+
+
+def _evaluated_status(profile: AKIProfile) -> str:
+    """The status stamp of a profile that was evaluated on its inputs."""
+
+    return "components_only" if profile.database == "eicu" else "evaluated"
+
+
+def _profile_stamp_values(profile: AKIProfile, *, status: str) -> dict[str, str]:
+    """The profile-level stamp columns :func:`_stamp_profile` writes."""
+
+    return {
+        f"{_PROFILE_PREFIX}_profile": profile.profile_id,
+        f"{_PROFILE_PREFIX}_status": status,
+        f"{_PROFILE_PREFIX}_authority": profile.authority_level,
+        f"{_PROFILE_PREFIX}_reliability_grade": profile.reliability_grade,
+        f"{_PROFILE_PREFIX}_fidelity": profile.fidelity,
+    }
 
 
 def compare_aki_profiles(
@@ -1213,11 +1273,8 @@ def _stamp_profile(
             "aki_stage_crrt": "aki_stage_crrt_source_native",
         }
     )
-    result[f"{_PROFILE_PREFIX}_profile"] = profile.profile_id
-    result[f"{_PROFILE_PREFIX}_status"] = status
-    result[f"{_PROFILE_PREFIX}_authority"] = profile.authority_level
-    result[f"{_PROFILE_PREFIX}_reliability_grade"] = profile.reliability_grade
-    result[f"{_PROFILE_PREFIX}_fidelity"] = profile.fidelity
+    for column, value in _profile_stamp_values(profile, status=status).items():
+        result[column] = value
     if ascertainment_column and ascertainment_column in result:
         result[f"{_PROFILE_PREFIX}_ascertainment"] = result[ascertainment_column]
     elif f"{_PROFILE_PREFIX}_ascertainment" not in result:
@@ -1460,12 +1517,10 @@ def _mimic_iii_profile(
     else:
         result["aki_stage_creat"] = pd.NA
     uo = pd.DataFrame()
-    if (
-        urine_df is not None
-        and not urine_df.empty
-        and weight_df is not None
-        and not weight_df.empty
-    ):
+    # The port stages a urine row without a usable weight as 0, so it must
+    # run whenever urine rows exist: gating it on this batch's weight rows
+    # made such a stay 0 beside weighed stays and <NA> in a batch without.
+    if urine_df is not None and not urine_df.empty:
         uo = _mimic_iii_uo(
             urine_df,
             weight_df,
@@ -1496,7 +1551,7 @@ def _mimic_iii_profile(
 
 def _mimic_iii_uo(
     urine_df: pd.DataFrame,
-    weight_df: pd.DataFrame,
+    weight_df: Optional[pd.DataFrame],
     *,
     id_col: str,
     time_col: str,
@@ -1512,7 +1567,15 @@ def _mimic_iii_uo(
         field_name="urine",
     )
     frame = frame.dropna().sort_values([id_col, time_col]).reset_index(drop=True)
-    weights = _one_weight_per_entity(weight_df, id_col, weight_col)
+    if isinstance(weight_df, pd.DataFrame) and not weight_df.empty:
+        weights = _one_weight_per_entity(weight_df, id_col, weight_col)
+    else:
+        weights = pd.DataFrame(
+            {
+                id_col: pd.Series(dtype=frame[id_col].dtype),
+                weight_col: pd.Series(dtype="float64"),
+            }
+        )
     frame = frame.merge(weights, on=id_col, how="left")
     output = []
     for _, group in frame.groupby(id_col, sort=False):
@@ -1885,6 +1948,35 @@ def _eicu_components_profile(
         f"{_PROFILE_PREFIX}_ascertainment",
     ]
     return result[keep].reset_index(drop=True)
+
+
+def _eicu_components_frame_without_rows(
+    frames: Iterable[Optional[pd.DataFrame]],
+    *,
+    id_col: Optional[str],
+    time_col: Optional[str],
+) -> pd.DataFrame:
+    """The eICU component frame for stays that have no urine rows: no rows.
+
+    Columns and key dtypes match :func:`_eicu_components_profile`, so merging
+    it adds the same all-missing cells a whole-cohort run gives these stays.
+    """
+
+    frames = tuple(frames)
+    resolved_id, resolved_time = _component_keys(frames, id_col, time_col)
+    keys = next(
+        (
+            frame[[resolved_id, resolved_time]].iloc[0:0].reset_index(drop=True)
+            for frame in frames
+            if isinstance(frame, pd.DataFrame)
+            and {resolved_id, resolved_time} <= set(frame.columns)
+        ),
+        pd.DataFrame(columns=[resolved_id, resolved_time]),
+    )
+    keys["urine_output_source_native"] = pd.Series(dtype="float64")
+    keys["aki_stage_source_native"] = pd.Series(dtype="Int64")
+    keys[f"{_PROFILE_PREFIX}_ascertainment"] = pd.Series(dtype="object")
+    return keys
 
 
 def _hirid_author_endpoint_profile(
