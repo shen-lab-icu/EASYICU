@@ -187,8 +187,14 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
     export = run / "sic" / "export"
     export.mkdir(parents=True)
     _snapshots(run, prepared)
-    reads = reads if reads is not None else [_flat(prepared, "cases", prepared)]
     consumed = consumed if consumed is not None else [_consumed(prepared / "cases.parquet")]
+    if reads is None:
+        # What the storage owner logs: the directory of the files really read.
+        reads = [_flat(prepared, "cases", prepared)]
+        parquet = [os.path.dirname(c["realpath"]) for c in consumed
+                   if c["table"] == "cases" and c["format"] == "parquet"]
+        if parquet:
+            reads[0]["layout_realpath"] = os.path.commonpath(parquet)
     # The storage owner's run-log keys: every entry was consumed under this input.
     consumed = [{"event": "table_consumed", "root": str(prepared), **e} for e in consumed]
     if tables is None:
@@ -367,17 +373,80 @@ def test_a_read_without_its_layout_directory_stops_the_receipt(tmp_path, monkeyp
 # delta9b ruling: the run's inputs are hashed before and after; every consumed
 # file is a snapshotted file.
 
+def _rewrite_post(run, change):
+    """Edit the post-run snapshot's file list and keep it self-consistent."""
+    from easyicu.formal_inputs import snapshot_digest
+
+    post = json.loads((run / "INPUT_SNAPSHOT_POST.json").read_text())
+    entry = post["databases"]["sic"]
+    change(entry)
+    entry["digest"] = snapshot_digest(entry["files"])
+    entry["file_count"] = len(entry["files"])
+    entry["bytes"] = sum(f["size"] for f in entry["files"])
+    (run / "INPUT_SNAPSHOT_POST.json").write_text(json.dumps(post))
+
+
 def test_inputs_that_differ_before_and_after_the_run_stop_the_receipt(tmp_path, monkeypatch):
     prepared = _prepared(tmp_path / "prepared")
 
     def tamper(run):
-        post = json.loads((run / "INPUT_SNAPSHOT_POST.json").read_text())
-        post["databases"]["sic"]["digest"] = "0" * 64
-        (run / "INPUT_SNAPSHOT_POST.json").write_text(json.dumps(post))
+        _rewrite_post(run, lambda e: e["files"][0].update(sha256="0" * 64))
 
     with pytest.raises(receipt.ReceiptError) as error:
         _sic_receipt(tmp_path, prepared, None, monkeypatch, after_run=tamper)
     assert error.value.code == "input_changed_during_run"
+
+
+# delta14v B-SNAPSHOT: the consumer recomputes both snapshots from their files.
+
+def _forge_post(change):
+    def forge(run):
+        post = json.loads((run / "INPUT_SNAPSHOT_POST.json").read_text())
+        change(post["databases"]["sic"])
+        (run / "INPUT_SNAPSHOT_POST.json").write_text(json.dumps(post))
+    return forge
+
+
+@pytest.mark.parametrize(("forge", "code"), [
+    # The reviewer's case: same self-reported digest, emptied file list.
+    (_forge_post(lambda e: e.update(files=[])), "input_snapshot_inconsistent"),
+    (_forge_post(lambda e: e["files"].pop()), "input_snapshot_inconsistent"),
+    (_forge_post(lambda e: e.update(file_count=e["file_count"] + 1)),
+     "input_snapshot_inconsistent"),
+    (_forge_post(lambda e: e.update(bytes=e["bytes"] + 1)), "input_snapshot_inconsistent"),
+    (_forge_post(lambda e: e["files"][0].update(sha256="0" * 64)),
+     "input_snapshot_inconsistent"),
+    (_forge_post(lambda e: e.update(data_path="/elsewhere", data_path_realpath="/elsewhere")),
+     "input_snapshot_other_input"),
+    (_forge_post(lambda e: e.update(database="eicu")), "input_snapshot_other_input"),
+    # Self-consistent but a different set: a file dropped, or another file named.
+    (lambda run: _rewrite_post(run, lambda e: e["files"].pop()), "input_changed_during_run"),
+    (lambda run: _rewrite_post(run, lambda e: e["files"][0].update(realpath="/x/other")),
+     "input_changed_during_run"),
+    (lambda run: _rewrite_post(run, lambda e: e.update(buckets=[{"table": "x"}])),
+     "input_changed_during_run"),
+])
+def test_a_forged_or_changed_post_run_snapshot_stops_the_receipt(
+        tmp_path, monkeypatch, forge, code):
+    prepared = _prepared(tmp_path / "prepared")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, after_run=forge)
+    assert error.value.code == code
+
+
+def test_a_forged_pre_run_snapshot_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    def forge(run):
+        for name in ("INPUT_SNAPSHOT.json", "INPUT_SNAPSHOT_POST.json"):
+            payload = json.loads((run / name).read_text())
+            payload["databases"]["sic"]["files"] = payload["databases"]["sic"]["files"][:1]
+            (run / name).write_text(json.dumps(payload))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, after_run=forge)
+    assert error.value.code == "input_snapshot_inconsistent"
 
 
 def test_a_run_without_its_post_run_snapshot_has_no_receipt(tmp_path, monkeypatch):
@@ -1108,3 +1177,270 @@ def test_a_missing_incomplete_or_malformed_required_layout_stops_the_receipt(
         receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
                                   scratch=tmp_path / "scratch")
     assert error.value.code == code
+
+
+# delta14v B-CSV: a CSV the conversion manifest lists as the table's input is
+# a read type of its own ("csv"), not a fallback; any other CSV read stays one.
+
+def _mimic_services(tmp_path: Path, *, listed: bool) -> Path:
+    root = tmp_path / "mimic"
+    root.mkdir()
+    frame = pd.DataFrame({"row_id": [1], "subject_id": [10], "hadm_id": [100],
+                          "transfertime": ["2150-01-01 00:00:00"], "prev_service": [None],
+                          "curr_service": ["MED"]})
+    frame.to_csv(root / "services.csv.gz", index=False)
+    frame.to_parquet(root / "services.parquet", index=False)
+    pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
+                  "intime": pd.to_datetime(["2150-01-01"]),
+                  "outtime": pd.to_datetime(["2150-01-03"])}).to_parquet(
+        root / "icustays.parquet", index=False)
+    services = {"table": "services", "status": "completed",
+                "outputs": [{"relative_path": "services.parquet"}]}
+    if listed:
+        services["input"] = {"relative_path": "services.csv.gz"}
+    (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
+        services, {"table": "icustays", "status": "completed",
+                   "outputs": [{"relative_path": "icustays.parquet"}]}]}))
+    return root
+
+
+def _services_run(tmp_path: Path, monkeypatch, *, listed: bool):
+    """Load MIMIC-III services through the real reader; return the run's storage record."""
+    from easyicu import formal_inputs
+    from easyicu.datasource import ICUDataSource
+    from easyicu.resources import load_data_sources
+    from easyicu.storage_binding import binding_unit
+    from easyicu.storage_layout import (
+        SCAN_FALLBACK_LOG_ENV, consumed_table_layouts, read_consumed_log, read_layout_log,
+        read_scan_fallback_log, read_table_read_log, table_layout_receipt,
+    )
+
+    root = _mimic_services(tmp_path, listed=listed)
+    log = tmp_path / "run_storage_log.jsonl"
+    monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
+    with binding_unit(None):
+        ICUDataSource(config=load_data_sources().get("mimic"), base_path=root).load_table(
+            "services")
+    consumed = [dict(e) for e in read_consumed_log(log)]
+    fallbacks = list(read_scan_fallback_log(log))
+    reads = table_layout_receipt(read_table_read_log(log), fallbacks)
+    tables = consumed_table_layouts(consumed, read_layout_log(log))
+    snapshot = formal_inputs.take_snapshot([f"mimic:{root}"])["databases"]["mimic"]
+    return root, consumed, fallbacks, reads, tables, snapshot
+
+
+def test_a_listed_input_csv_read_is_a_csv_read_not_a_fallback(tmp_path, monkeypatch, real_admission):
+    root, consumed, fallbacks, reads, tables, snapshot = _services_run(
+        tmp_path, monkeypatch, listed=True)
+
+    assert fallbacks == []
+    assert [r["layout"] for r in reads if r["table"] == "services"] == ["csv"]
+    assert tables["services"]["layout"] == "csv"
+    verified = receipt._consumed("mimic", str(root), consumed, snapshot)
+    (entry,) = [f for f in verified["files"] if f["table"] == "services"]
+    assert entry["format"] == "csv" and entry["admitted_by"] == "data_root"
+    observed = receipt._layout_tables("mimic", str(root), {"tables": tables},
+                                      verified["files"], reads, snapshot)
+    assert observed["services"] == [{"layout": "csv", "root_realpath": os.path.realpath(root)}]
+    receipt._refuse_fallbacks("mimic", fallbacks)
+    required = {"services": {"layout": "csv"}, "icustays": {"layout": "flat"}}
+    check = receipt._layout_requirement("mimic", str(root), required, observed)
+    assert check["observed"] == observed
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._layout_requirement("mimic", str(root), {**required, "services": {
+            "layout": "flat"}}, observed)
+    assert error.value.code == "layout_deviation"
+
+
+def test_an_unlisted_csv_read_beside_the_manifest_stays_a_refused_fallback(
+        tmp_path, monkeypatch, real_admission):
+    root, consumed, fallbacks, _reads, _tables, snapshot = _services_run(
+        tmp_path, monkeypatch, listed=False)
+
+    assert [f["reason"] for f in fallbacks] == ["table_read_csv_beside_manifest"]
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._refuse_fallbacks("mimic", fallbacks)
+    assert error.value.code == "storage_fallback_in_formal_run"
+    # An unlisted CSV is not an input of the installation: not snapshotted.
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._consumed("mimic", str(root), consumed, snapshot)
+    assert error.value.code == "storage_consumed_outside_snapshot"
+
+
+def test_a_consumed_csv_the_manifest_no_longer_lists_is_refused(
+        tmp_path, monkeypatch, real_admission):
+    root, consumed, _fallbacks, _reads, _tables, snapshot = _services_run(
+        tmp_path, monkeypatch, listed=True)
+    manifest = json.loads((root / "conversion_manifest.json").read_text())
+    for entry in manifest["tables"]:
+        entry.pop("input", None)
+    (root / "conversion_manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._consumed("mimic", str(root), consumed, snapshot)
+    assert error.value.code == "storage_consumed_csv_unlisted"
+
+
+# delta14v B-NESTED: the snapshot enumerates buckets through the reader's own
+# resolver (root, icu/, hosp/), so a nested installation is snapshotted.
+
+def _nested_layout_root(tmp_path: Path, prepared: Path, where: str) -> Path:
+    from scripts.build_itemid_bucket_cache import build_bucket_cache
+
+    root = _sic_layout_root(tmp_path, prepared)
+    shutil.rmtree(root / "laboratory_bucket")
+    (root / where).mkdir()
+    build_bucket_cache(root, table="laboratory", key="LaboratoryID", bucket_count=4,
+                       memory_limit="256MB", threads=1,
+                       output_root=root / where / "laboratory_bucket")
+    return root
+
+
+@pytest.mark.parametrize("where", ["icu", "hosp"])
+def test_a_nested_bucket_is_snapshotted_and_receipted(tmp_path, monkeypatch, where):
+    from easyicu import formal_inputs
+
+    prepared = _prepared(tmp_path / "prepared")
+    root = _nested_layout_root(tmp_path, prepared, where)
+    nested = root / where / "laboratory_bucket"
+
+    planned = formal_inputs.plan_input_files("sic", root)
+    assert [b["layout_realpath"] for b in planned["buckets"]] == [os.path.realpath(nested)]
+    read = {"root": str(root), "table": "laboratory", "layout": "bucket_hash",
+            "layout_path": str(nested), "layout_realpath": os.path.realpath(nested)}
+    cases = _flat(root, "cases", root)
+    cases["layout_realpath"] = os.path.realpath(prepared)
+    sic = _sic_receipt(tmp_path, root, [cases, read], monkeypatch)["databases"]["sic"]
+    assert sic["layout_requirement"]["observed"]["laboratory"] == [
+        {"layout": "bucket", "root_realpath": os.path.realpath(nested)}]
+
+
+# delta14v B-TABLE-SOURCE: a bucket of table X must be built from X's own
+# sources, exactly the outputs its conversion manifest lists for X.
+
+@pytest.mark.parametrize("how", ["copy", "link"])
+def test_a_bucket_built_from_another_tables_sources_is_refused_by_the_snapshot(
+        tmp_path, how):
+    from easyicu import formal_inputs
+
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    if how == "copy":
+        shutil.copytree(root / "laboratory_bucket", root / "medication_bucket")
+    else:
+        (root / "medication_bucket").symlink_to(root / "laboratory_bucket",
+                                                target_is_directory=True)
+
+    with pytest.raises(formal_inputs.InputSnapshotError) as error:
+        formal_inputs.plan_input_files("sic", root)
+    assert error.value.code == "bucket_derived_from_other_table"
+
+
+def test_bucket_sources_that_are_not_the_owner_manifests_outputs_are_refused(tmp_path):
+    from easyicu import formal_inputs
+
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    extra = prepared / "laboratory_extra.parquet"
+    extra.write_bytes((prepared / "laboratory" / "1.parquet").read_bytes())
+    (root / "laboratory_extra.parquet").symlink_to(extra)
+    manifest = json.loads((prepared / "conversion_manifest.json").read_text())
+    for entry in manifest["tables"]:
+        if entry["table"] == "laboratory":
+            entry["outputs"].append({"relative_path": "laboratory_extra.parquet",
+                                     "size_bytes": extra.stat().st_size})
+    (prepared / "conversion_manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(formal_inputs.InputSnapshotError) as error:
+        formal_inputs.plan_input_files("sic", root)
+    assert error.value.code == "bucket_derived_from_not_owner_outputs"
+
+
+def _other_snapshotted_source(t, prepared):
+    import hashlib
+
+    path = prepared / "cases.parquet"
+    t["laboratory"]["reads"][0]["derived_from"]["files"] = [{
+        "path": "cases.parquet", "realpath": os.path.realpath(path), "size": path.stat().st_size,
+        "mtime_ns": 0, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}]
+
+
+@pytest.mark.parametrize(("mutate", "code"), [
+    (lambda t, p: t["laboratory"]["reads"][0]["derived_from"].update(table="cases"),
+     "bucket_derived_from_other_table"),
+    (lambda t, p: t["laboratory"]["reads"][0]["derived_from"].update(files=[]),
+     "bucket_derived_from_empty"),
+    (_other_snapshotted_source, "bucket_derived_from_not_snapshot"),
+])
+def test_a_bucket_read_must_name_its_own_tables_snapshotted_sources(
+        tmp_path, monkeypatch, mutate, code):
+    prepared, root, reads = _layout_root_reads(tmp_path)
+    tables = _tables(root, reads)
+    mutate(tables, prepared)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, tables=tables)
+    assert error.value.code == code
+
+
+def test_a_snapshot_binding_the_installation_to_another_table_stops_the_receipt(
+        tmp_path, monkeypatch):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+
+    def rebind(run):
+        for name in ("INPUT_SNAPSHOT.json", "INPUT_SNAPSHOT_POST.json"):
+            payload = json.loads((run / name).read_text())
+            for bucket in payload["databases"]["sic"]["buckets"]:
+                bucket["table"] = bucket["derived_table"] = "medication"
+            (run / name).write_text(json.dumps(payload))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, after_run=rebind)
+    assert error.value.code == "bucket_derived_from_other_table"
+
+
+# delta14v NBs.
+
+def test_consumed_tables_without_any_storage_read_stop_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    tables = _tables(prepared, [_flat(prepared, "cases", prepared)])
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, [], monkeypatch, tables=tables,
+                     required=_schema2({"cases": {"layout": "flat"}}))
+    assert error.value.code == "storage_reads_missing"
+
+
+def test_a_flat_read_naming_a_directory_it_did_not_read_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, [_flat(prepared, "cases", elsewhere)], monkeypatch)
+    assert error.value.code == "storage_layout_disagrees"
+
+
+def test_a_declared_view_read_without_its_chain_stops_the_receipt(
+        tmp_path, monkeypatch, real_admission):
+    prepared = _prepared(tmp_path / "prepared")
+    farm = _view(tmp_path, prepared)
+    tables = _tables(farm, [_flat(farm, "cases", farm)])
+    tables["cases"]["derived_from"] = tables["cases"]["reads"][0]["derived_from"] = None
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, farm, None, monkeypatch, tables=tables,
+                     consumed=[_consumed(farm / "cases.parquet")])
+    assert error.value.code == "declared_view_chain_mismatch"
+
+
+def test_extra_top_level_keys_in_the_required_layout_are_malformed(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"],
+                    required={**_schema2(_FLAT), "note": "x"})
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == "receipt_input_malformed"

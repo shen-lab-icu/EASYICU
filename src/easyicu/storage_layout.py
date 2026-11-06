@@ -571,6 +571,9 @@ def bucket_source_receipt(root) -> dict[str, Any]:
     derived = manifest["derived_from"]
     receipt["derived_from"] = {
         "table": derived["table"],
+        # The directory the sources are relative to (its conversion manifest
+        # owns them): the formal snapshot binds the table to that owner.
+        "source_root": str(_derived_from_base(root, derived)),
         "files": [
             {
                 "path": entry["path"],
@@ -1689,7 +1692,8 @@ def record_consumed(
     for entry in entries:
         _log_fallback({"event": CONSUMED_EVENT, "root": str(base), **entry})
     if fmt in (FORMAT_PARQUET, FORMAT_CSV) and files:
-        _log_table_layout(base, table, "flat", base, lambda: _flat_derived_from(base, files))
+        layout = LAYOUT_CSV if fmt == FORMAT_CSV else LAYOUT_FLAT
+        _log_table_layout(base, table, layout, base, lambda: _flat_derived_from(base, files))
     return entries
 
 
@@ -1764,7 +1768,7 @@ def _log_table_layout(base, table: str, layout: str, layout_root, details) -> No
     if seen is not None and marker in seen:
         return
     extra = details()
-    if layout == "flat":
+    if layout in (LAYOUT_FLAT, LAYOUT_CSV):
         extra = {"derived_from": extra}
     _log_fallback({"event": LAYOUT_EVENT, "root": str(base), "table": table,
                    "layout": layout, "layout_root": str(layout_root), **extra})
@@ -2078,6 +2082,7 @@ def read_scan_fallback_log(path) -> tuple[dict[str, str], ...]:
 
 TABLE_READ_EVENT = "table_read"
 LAYOUT_FLAT = "flat"
+LAYOUT_CSV = "csv"
 
 
 def _read_run_log(path) -> tuple[dict[str, str], ...]:
@@ -2107,7 +2112,7 @@ def _layout_paths(base, layout: str, paths: Iterable[Path]) -> tuple[str, str]:
     path, so a linked data root names the files it really reads).
     """
     paths = [Path(p) for p in paths]
-    if layout != LAYOUT_FLAT:
+    if layout not in (LAYOUT_FLAT, LAYOUT_CSV):
         (root,) = paths
         return str(root), os.path.realpath(root)
     if not paths:
@@ -2313,6 +2318,35 @@ def flat_table_scan(source, table: str, loader: Path) -> tuple[Path, ...]:
     return files
 
 
+def listed_csv_input(base, table: str, path) -> bool:
+    """Whether ``base``'s conversion manifest lists ``path`` as ``table``'s input CSV.
+
+    Same file by (device, inode), so a reader that names it with other
+    letter case on a case-insensitive file system still matches.
+    """
+    manifest = Path(base) / CONVERSION_MANIFEST
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8")).get("tables")
+        target = os.stat(path)
+    except (OSError, ValueError, AttributeError):
+        return False
+    for entry in entries if isinstance(entries, list) else ():
+        source = entry.get("input") if isinstance(entry, dict) else None
+        relative = source.get("relative_path") if isinstance(source, dict) else None
+        if str(entry.get("table")).lower() != table.lower() or not isinstance(relative, str):
+            continue
+        parts = PurePosixPath(relative)
+        if parts.is_absolute() or ".." in parts.parts or not parts.parts:
+            continue
+        try:
+            listed = os.stat(Path(base).joinpath(*parts.parts))
+        except OSError:
+            continue
+        if (listed.st_dev, listed.st_ino) == (target.st_dev, target.st_ino):
+            return True
+    return False
+
+
 def csv_table_scan(source, table: str, path: Path) -> None:
     """Admit a CSV read of ``table``; the conversion manifest lists Parquet only.
 
@@ -2332,7 +2366,13 @@ def csv_table_scan(source, table: str, path: Path) -> None:
         # An integrity precheck of the Parquet candidate: it is not what is
         # read, so it is not consumed (B9P-CSV-BINDING).
         resolve_table_files(source, table, consume=False)
-        _record_fallback("table_read_csv_beside_manifest", base, table)
+        if listed_csv_input(base, table, path):
+            # The manifest names this CSV as the table's converted input (a
+            # reader that prefers its raw CSV, e.g. MIMIC-III services): a
+            # read type of its own, not a fallback (delta14v B-CSV).
+            record_table_read(source, table, LAYOUT_CSV, (path,))
+        else:
+            _record_fallback("table_read_csv_beside_manifest", base, table)
     elif os.environ.get(ALLOW_UNREGISTERED_SCAN_ENV) == "1":
         _record_fallback("table_scan_unregistered", base, table)
     else:

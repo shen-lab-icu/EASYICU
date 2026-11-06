@@ -13,9 +13,13 @@ exited. It binds the run to the sealed code and to its inputs:
   any fallback reason (``storage_reads``, from the storage owner's run log);
 * the inputs did not change: ``INPUT_SNAPSHOT.json`` (taken before any job,
   ``easyicu.formal_inputs``) and ``INPUT_SNAPSHOT_POST.json`` (the same set
-  hashed after every job exited) must exist and agree per database; the
+  hashed after every job exited) must exist and agree per database: each is
+  recomputed from its own file list (digest, file count, bytes, database and
+  input root) and the full (real path, size, sha256) sets must be equal; the
   receipt records both digests, the files, bytes and hash seconds, and a
   declared view's chain;
+* a CSV read is allowed only as the table's input CSV listed in the
+  conversion manifest (its own read type ``csv``, consumed and snapshotted);
 * every file the run consumed (``storage_consumed``, the storage owner's
   ``table_consumed`` events from every worker) is in the snapshot by real
   path, its link still resolves to that real path, and it carries the
@@ -37,7 +41,7 @@ exited. It binds the run to the sealed code and to its inputs:
 * no storage fallback: a formal run that read through one is
   ``storage_fallback_in_formal_run`` (with counts per reason);
 * ``REQUIRED_LAYOUT.json`` in the run root (``complete: true``, per database
-  {table: {layout: flat|bucket, root_realpath}}, schema /2): its sha256 is
+  {table: {layout: flat|csv|bucket, root_realpath}}, schema /2): its sha256 is
   recorded and every read of every table must have been served from the
   required layout at the required root (a flat table defaults to this input),
   else ``layout_deviation``;
@@ -76,7 +80,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 RECEIPT_FILE = "RUN_RECEIPT.json"
 REQUIRED_LAYOUT_FILE = "REQUIRED_LAYOUT.json"
 REQUIRED_LAYOUT_SCHEMA = "easyicu.required_layout/2"
-LAYOUT_KINDS = ("flat", "bucket")
+LAYOUT_KINDS = ("flat", "csv", "bucket")
+FLAT_KINDS = ("flat", "csv")  # served under the input root (a listed CSV is its own kind)
 # A consumed entry in the receipt: the storage owner's table_consumed event
 # without the log's own keys (``event``, ``root``), which are checked and dropped.
 CONSUMED_KEYS = ("table", "path", "realpath", "format")
@@ -331,7 +336,9 @@ def _within(path: str, root: Path) -> bool:
 def _storage_reads(db: str, reads: List[Dict[str, Any]],
                    snapshot: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Each table read with where it was served from; bucket reads with their binding."""
-    from easyicu.storage_layout import LAYOUT_FLAT, StorageIntegrityError, bucket_source_receipt
+    from easyicu.storage_layout import (
+        LAYOUT_CSV, LAYOUT_FLAT, StorageIntegrityError, bucket_source_receipt,
+    )
 
     snapshotted = {b["layout_realpath"] for b in snapshot.get("buckets") or ()}
     receipt = []
@@ -342,7 +349,7 @@ def _storage_reads(db: str, reads: List[Dict[str, Any]],
             raise ReceiptError("storage_read_layout_missing",
                                f"{db} {entry.get('table')} read names no layout directory",
                                database=db, table=entry.get("table"))
-        if entry.get("layout") != LAYOUT_FLAT:
+        if entry.get("layout") not in (LAYOUT_FLAT, LAYOUT_CSV):
             try:
                 binding = bucket_source_receipt(entry["layout_path"])
             except (StorageIntegrityError, OSError) as exc:
@@ -364,6 +371,14 @@ def _admit_consumed(base: str, table: str, path: str) -> Dict[str, Any]:
     from easyicu.storage_layout import admit_consumed_realpath
 
     return admit_consumed_realpath(base, table, path)
+
+
+def _listed_csv(base: str, table: str, path: str) -> bool:
+    """Whether the input's conversion manifest lists this CSV as the table's input
+    (the storage owner's rule; a listed CSV read is a read type, not a fallback)."""
+    from easyicu.storage_layout import listed_csv_input
+
+    return listed_csv_input(base, table, path)
 
 
 def _consumed(db: str, input_dir: str, consumed: Any,
@@ -439,6 +454,11 @@ def _consumed(db: str, input_dir: str, consumed: Any,
                                    f"{db} {item['table']} admission names another file",
                                    database=db, table=item["table"], path=item["path"])
             entry["admitted_by"] = admission["admitted_by"]
+            if item["format"] == "csv" and not _listed_csv(input_dir, item["table"], item["path"]):
+                raise ReceiptError("storage_consumed_csv_unlisted",
+                                   f"{db} {item['table']} consumed a CSV its conversion manifest "
+                                   "does not list as the table's input", database=db,
+                                   table=item["table"], path=item["path"])
             declared = declared or admission["admitted_by"] == "declared_view"
         files.append(entry)
     result: Dict[str, Any] = {
@@ -457,23 +477,31 @@ def _consumed(db: str, input_dir: str, consumed: Any,
 
 
 def _read_kind(layout: Any) -> str:
-    """``flat`` or ``bucket`` for a storage_reads layout (``flat``, ``bucket_<scheme>``)."""
-    return "flat" if layout == "flat" else "bucket"
+    """``flat``, ``csv`` or ``bucket`` for a storage_reads layout (``bucket_<scheme>``)."""
+    return layout if layout in FLAT_KINDS else "bucket"
 
 
 def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
                    consumed: List[Dict[str, Any]], reads: List[Dict[str, Any]],
-                   snapshot: Mapping[str, Any]) -> Dict[str, str]:
+                   snapshot: Mapping[str, Any]) -> Dict[str, List[Dict[str, str]]]:
     """G2: every consumed or read table has a layout record, and every record is checked.
 
     Keyed on ``storage_binding["tables"]`` (the storage owner's per-table
     record of what served each consumed table). Each of a table's ``reads`` is
-    checked, not only the primary one: a flat read must be served under this
-    database's input (with the snapshot's declared-view chain if it names
-    one); a bucket read must be an installation the snapshot covers, record
-    its ``derived_from``, and name a manifest and sources whose sha256 are the
-    snapshot's. Returns {table: [{layout, root_realpath}, ...]}: every distinct
-    read of the table, for the layout requirement.
+    checked, not only the primary one:
+
+    * a flat or listed-CSV read must be served under this database's input;
+      its declared-view chain must be the snapshot's, and present whenever a
+      file of the table was admitted through the declared view;
+    * a bucket read must be an installation the snapshot covers that the
+      snapshot bound to this very table, record its ``derived_from`` for this
+      table, and name a manifest and a non-empty source set equal to the
+      snapshot's (real path and sha256).
+
+    Every consumed table has a ``storage_reads`` entry, and each entry agrees
+    with the record (a flat or CSV entry by the directory of the files it
+    consumed). Returns {table: [{layout, root_realpath}, ...]}: every
+    distinct read of the table, for the layout requirement.
     """
     tables = binding.get("tables")
     if not isinstance(tables, dict):
@@ -484,10 +512,17 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
             raise ReceiptError("storage_layout_unrecorded",
                                f"{db} {table} was read but no layout record names what served it",
                                database=db, table=table)
+    read_tables = {r["table"] for r in reads}
+    for table in sorted(tables):
+        if table not in read_tables:
+            raise ReceiptError("storage_reads_missing",
+                               f"{db} {table} was consumed but the run log has no read of it",
+                               database=db, table=table)
     hashed = {f["realpath"]: f for f in snapshot["files"]}
-    buckets = {b["layout_realpath"] for b in snapshot.get("buckets") or ()}
+    buckets = {b["layout_realpath"]: b for b in snapshot.get("buckets") or ()}
     input_real = os.path.realpath(input_dir)
     chain = snapshot.get("declared_view_chain")
+    through_view = {e["table"] for e in consumed if e.get("admitted_by") == "declared_view"}
     observed: Dict[str, List[Dict[str, str]]] = {}
     for table, record in tables.items():
         records = record.get("reads") if isinstance(record, dict) else None
@@ -502,61 +537,99 @@ def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
                                    f"{db} {table} has a read without a layout and root",
                                    database=db, table=table)
             real = os.path.realpath(read["root"])
-            if kind == "flat":
+            if kind in FLAT_KINDS:
                 if real != input_real:
                     raise ReceiptError("storage_read_other_root",
-                                       f"{db} {table} flat read was served under another root",
+                                       f"{db} {table} {kind} read was served under another root",
                                        database=db, table=table)
-                if read.get("derived_from") is not None and read["derived_from"] != chain:
+                named = read.get("derived_from")
+                if (named is not None and named != chain) or (
+                        named is None and table in through_view):
                     raise ReceiptError("declared_view_chain_mismatch",
-                                       f"{db} {table} flat read names a declared-view chain "
-                                       "the snapshot does not hold", database=db, table=table)
+                                       f"{db} {table} {kind} read does not name the snapshot's "
+                                       "declared-view chain", database=db, table=table)
                 continue
-            if real not in buckets:
-                raise ReceiptError("storage_read_outside_snapshot",
-                                   f"{db} {table} bucket is not one the input snapshot covers",
-                                   database=db, table=table)
-            derived, manifest = read.get("derived_from"), read.get("manifest")
-            if read.get("derived_from_recorded") is not True or not isinstance(derived, dict):
-                raise ReceiptError("bucket_derived_from_unrecorded",
-                                   f"{db} {table} bucket read records no derived_from",
-                                   database=db, table=table)
-            held = hashed.get(os.path.realpath(manifest["path"])) if isinstance(
-                manifest, dict) and isinstance(manifest.get("path"), str) else None
-            if held is None or held["sha256"] != manifest.get("sha256"):
-                raise ReceiptError("bucket_manifest_not_snapshotted",
-                                   f"{db} {table} bucket manifest the run read is not the "
-                                   "snapshotted one", database=db, table=table)
-            for source in derived.get("files") or ():
-                held = hashed.get(source.get("realpath"))
-                if held is None:
-                    raise ReceiptError("bucket_derived_from_outside_snapshot",
-                                       f"{db} {table} bucket source is not in the snapshot",
-                                       database=db, table=table)
-                if held["sha256"] != source.get("sha256"):
-                    raise ReceiptError("bucket_derived_from_sha_mismatch",
-                                       f"{db} {table} bucket source differs from the snapshot",
-                                       database=db, table=table)
+            _check_bucket_read(db, table, read, real, buckets, hashed)
         primary = record.get("layout")
         if primary not in LAYOUT_KINDS or not any(r["layout"] == primary for r in records):
             raise ReceiptError("storage_layout_unrecorded",
                                f"{db} {table} layout record names no primary layout",
                                database=db, table=table)
-        observed[table] = sorted(
-            {(r["layout"], os.path.realpath(r["root"])) for r in records})
-        observed[table] = [{"layout": k, "root_realpath": r} for k, r in observed[table]]
+        distinct = sorted({(r["layout"], os.path.realpath(r["root"])) for r in records})
+        observed[table] = [{"layout": k, "root_realpath": r} for k, r in distinct]
     # The run log's per-read layout (storage_reads) agrees with the record.
     for read in reads:
         kind = _read_kind(read.get("layout"))
         if not any(
             r["layout"] == kind
-            and (kind == "flat" or os.path.realpath(r["root"]) == read.get("layout_realpath"))
+            and (kind in FLAT_KINDS or os.path.realpath(r["root"]) == read.get("layout_realpath"))
             for r in tables[read["table"]]["reads"]
         ):
             raise ReceiptError("storage_layout_disagrees",
                                f"{db} {read['table']} read as {read.get('layout')} has no "
                                "matching layout record", database=db, table=read["table"])
+        if kind in FLAT_KINDS:
+            fmt = "csv" if kind == "csv" else "parquet"
+            directory = read.get("layout_realpath")
+            dirs = [os.path.dirname(e["realpath"]) for e in consumed
+                    if e["table"] == read["table"] and e["format"] == fmt]
+            if not isinstance(directory, str) or not dirs or any(
+                    os.path.commonpath([d, directory]) != directory for d in dirs):
+                raise ReceiptError("storage_layout_disagrees",
+                                   f"{db} {read['table']} {kind} read names a directory the "
+                                   "files it consumed are not in", database=db,
+                                   table=read["table"])
     return observed
+
+
+def _check_bucket_read(db: str, table: str, read: Mapping[str, Any], real: str,
+                       buckets: Mapping[str, Any], hashed: Mapping[str, Any]) -> None:
+    """A bucket read: the snapshot's installation of THIS table, its manifest and sources."""
+    bucket = buckets.get(real)
+    if bucket is None:
+        raise ReceiptError("storage_read_outside_snapshot",
+                           f"{db} {table} bucket is not one the input snapshot covers",
+                           database=db, table=table)
+    derived, manifest = read.get("derived_from"), read.get("manifest")
+    if read.get("derived_from_recorded") is not True or not isinstance(derived, dict):
+        raise ReceiptError("bucket_derived_from_unrecorded",
+                           f"{db} {table} bucket read records no derived_from",
+                           database=db, table=table)
+    # B-TABLE-SOURCE: the requested table, the snapshot's binding of the
+    # installation, and the manifest's source table are one and the same.
+    names = {str(table).lower(), str(bucket.get("table")).lower(),
+             str(bucket.get("derived_table", bucket.get("table"))).lower(),
+             str(derived.get("table")).lower()}
+    if len(names) != 1:
+        raise ReceiptError("bucket_derived_from_other_table",
+                           f"{db} {table} bucket read is bound to another table's sources",
+                           database=db, table=table)
+    held = hashed.get(os.path.realpath(manifest["path"])) if isinstance(
+        manifest, dict) and isinstance(manifest.get("path"), str) else None
+    if held is None or held["sha256"] != manifest.get("sha256"):
+        raise ReceiptError("bucket_manifest_not_snapshotted",
+                           f"{db} {table} bucket manifest the run read is not the "
+                           "snapshotted one", database=db, table=table)
+    files = derived.get("files")
+    if not isinstance(files, list) or not files:
+        raise ReceiptError("bucket_derived_from_empty",
+                           f"{db} {table} bucket read lists no sources", database=db, table=table)
+    for source in files:
+        held = hashed.get(source.get("realpath"))
+        if held is None:
+            raise ReceiptError("bucket_derived_from_outside_snapshot",
+                               f"{db} {table} bucket source is not in the snapshot",
+                               database=db, table=table)
+        if held["sha256"] != source.get("sha256"):
+            raise ReceiptError("bucket_derived_from_sha_mismatch",
+                               f"{db} {table} bucket source differs from the snapshot",
+                               database=db, table=table)
+    run = sorted((s.get("realpath"), s.get("sha256")) for s in files)
+    snapped = sorted((s["realpath"], s["builder_sha256"]) for s in bucket["derived_from"])
+    if run != snapped:
+        raise ReceiptError("bucket_derived_from_not_snapshot",
+                           f"{db} {table} bucket read names other sources than the snapshot "
+                           "bound for the installation", database=db, table=table)
 
 
 def _refuse_fallbacks(db: str, fallbacks: Any) -> None:
@@ -576,7 +649,7 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
     """G4: the run's REQUIRED_LAYOUT.json and its sha256.
 
     {"schema": "easyicu.required_layout/2", "complete": true, "databases":
-    {db: {table: {"layout": "flat" | "bucket", "root_realpath": "<abs>"}}}}.
+    {db: {table: {"layout": "flat" | "csv" | "bucket", "root_realpath": "<abs>"}}}}.
     ``root_realpath`` is required for a bucket (the installation it must be
     served from) and optional for a flat table (default: the database's
     input). ``complete`` states the list names every table the run may read.
@@ -589,7 +662,8 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
                            f"the run root has no {REQUIRED_LAYOUT_FILE}", path=str(path))
     payload = load_json_object(path, REQUIRED_LAYOUT_FILE)
     listed = payload.get("databases")
-    if payload.get("schema") != REQUIRED_LAYOUT_SCHEMA or not isinstance(listed, dict):
+    if payload.get("schema") != REQUIRED_LAYOUT_SCHEMA or not isinstance(listed, dict) or (
+            set(payload) - {"schema", "complete", "databases"}):
         raise ReceiptError("receipt_input_malformed",
                            f"{REQUIRED_LAYOUT_FILE} is not a {REQUIRED_LAYOUT_SCHEMA} list",
                            input=REQUIRED_LAYOUT_FILE)
@@ -606,7 +680,7 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
                 _required_entry_valid(v) for v in tables.values()):
             raise ReceiptError("receipt_input_malformed",
                                f"{REQUIRED_LAYOUT_FILE} {db}: each table once, as "
-                               "{layout: flat|bucket, root_realpath} (required for a bucket)",
+                               "{layout: flat|csv|bucket, root_realpath} (required for a bucket)",
                                input=REQUIRED_LAYOUT_FILE, database=db)
     return payload, sha256_file(path)
 
@@ -617,7 +691,7 @@ def _required_entry_valid(entry: Any) -> bool:
     root = entry.get("root_realpath")
     if entry.get("layout") == "bucket":
         return isinstance(root, str) and os.path.isabs(root)
-    return entry.get("layout") == "flat" and (
+    return entry.get("layout") in FLAT_KINDS and (
         root is None and "root_realpath" not in entry
         or isinstance(root, str) and os.path.isabs(root))
 
@@ -670,18 +744,56 @@ def _snapshots(run_root: Path) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str
     return pre, post, {"sha256": sha256_file(pre_path), "post_sha256": sha256_file(post_path)}
 
 
+def _checked_snapshot(db: str, input_dir: str, name: str, snap: Mapping[str, Any]) -> set:
+    """One database snapshot, recomputed from its own file list (B-SNAPSHOT).
+
+    The self-reported digest, file count and bytes must be what the files
+    say, the snapshot must be of this database and input, and it must list
+    files. Returns the (real path, size, sha256) set.
+    """
+    from easyicu.formal_inputs import snapshot_digest
+
+    input_real = os.path.realpath(input_dir)
+    if snap.get("database", db) != db or os.path.realpath(str(snap.get("data_path", ""))) != (
+            input_real) or snap.get("data_path_realpath") != input_real:
+        raise ReceiptError("input_snapshot_other_input",
+                           f"{db} {name}-run snapshot is of another input", database=db)
+    files = snap.get("files")
+    if not isinstance(files, list) or not files or not all(
+        isinstance(f, dict) and isinstance(f.get("realpath"), str)
+        and isinstance(f.get("size"), int) and isinstance(f.get("sha256"), str)
+        for f in files
+    ):
+        raise ReceiptError("input_snapshot_inconsistent",
+                           f"{db} {name}-run snapshot lists no well-formed files", database=db)
+    triples = {(f["realpath"], f["size"], f["sha256"]) for f in files}
+    if (
+        len(triples) != len(files)
+        or snapshot_digest(files) != snap.get("digest")
+        or snap.get("file_count") != len(files)
+        or snap.get("bytes") != sum(f["size"] for f in files)
+    ):
+        raise ReceiptError("input_snapshot_inconsistent",
+                           f"{db} {name}-run snapshot's digest, count or bytes are not what "
+                           "its files say", database=db)
+    return triples
+
+
 def _snapshot_section(db: str, input_dir: str, pre: Mapping[str, Any],
                       post: Mapping[str, Any]) -> Dict[str, Any]:
     before, after = pre["databases"].get(db), post["databases"].get(db)
     if not isinstance(before, dict) or not isinstance(after, dict):
         raise ReceiptError("input_snapshot_missing",
                            f"{db} has no pre- and post-run input snapshot", database=db)
-    if os.path.realpath(before.get("data_path", "")) != os.path.realpath(input_dir):
-        raise ReceiptError("input_snapshot_other_input",
-                           f"{db} snapshot is of another input", database=db)
-    if before.get("digest") != after.get("digest"):
+    sets = {}
+    for name, snap in (("pre", before), ("post", after)):
+        sets[name] = _checked_snapshot(db, input_dir, name, snap)
+    if sets["pre"] != sets["post"] or any(
+            before.get(k) != after.get(k) for k in ("declared_view_chain", "buckets")):
+        changed = len(sets["pre"] ^ sets["post"])
         raise ReceiptError("input_changed_during_run",
-                           f"{db} inputs differ before and after the run", database=db)
+                           f"{db} inputs differ before and after the run", database=db,
+                           changed_count=changed)
     return {
         "digest": before["digest"],
         "post_digest": after["digest"],

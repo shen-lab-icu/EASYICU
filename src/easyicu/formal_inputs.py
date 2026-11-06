@@ -144,16 +144,56 @@ def _declared_view_chain(base: Path) -> Optional[Dict[str, str]]:
     return chain
 
 
+def _bucket_tables(source, base: Path) -> List[str]:
+    """Every table name the storage owner could resolve a bucket for (B-NESTED).
+
+    The configured table set, plus every ``<name>_bucket`` directory under the
+    roots the resolver searches (``base``, ``base/icu``, ``base/hosp``), so an
+    installation on disk is never missed by the snapshot.
+    """
+    names = {str(t) for t in source.config.tables}
+    for root in (base, base / "icu", base / "hosp"):
+        if root.is_dir():
+            names.update(c.name[: -len(BUCKET_SUFFIX)] for c in root.glob(f"*{BUCKET_SUFFIX}"))
+    return sorted(names)
+
+
+def _bucket_owner_outputs(table: str, source_root: Path) -> set:
+    """Real paths of the outputs the source installation's conversion manifest
+    lists for ``table`` (B-TABLE-SOURCE: the owner of a bucket's sources)."""
+    manifest_path = source_root / CONVERSION_MANIFEST
+    if not manifest_path.is_file():
+        raise InputSnapshotError("bucket_source_unmanifested",
+                                 f"{table} bucket sources have no conversion manifest",
+                                 table=table, source_root=str(source_root))
+    manifest = _load_manifest(manifest_path)
+    outputs = set()
+    for entry in manifest["tables"]:
+        if isinstance(entry, dict) and str(entry.get("table")).lower() == table.lower():
+            for output in entry.get("outputs") or ():
+                path = _relative(source_root, (output or {}).get("relative_path"), manifest_path)
+                outputs.add(os.path.realpath(path))
+    return outputs
+
+
 def _bucket_files(database: str, base: Path) -> tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
-    """Every file of each bucket installation the storage owner chooses, and its sources."""
+    """Every file of each bucket installation the storage owner chooses, and its sources.
+
+    Installations are enumerated through the reader's own resolver (root,
+    ``icu/`` and ``hosp/``) over every table it could serve, once per real
+    path. Each must be a bucket OF that table: its manifest's
+    ``derived_from.table`` is the table, and its sources are exactly the
+    outputs the source installation's conversion manifest lists for it
+    (non-empty, complete, nothing else).
+    """
     from .datasource import storage_source
     from .storage_layout import StorageIntegrityError, bucket_source_receipt
 
     source = storage_source(database, str(base))
     files: List[Dict[str, str]] = []
     buckets: List[Dict[str, Any]] = []
-    for candidate in sorted(base.glob(f"*{BUCKET_SUFFIX}")):
-        table = candidate.name[: -len(BUCKET_SUFFIX)]
+    seen: Dict[str, str] = {}
+    for table in _bucket_tables(source, base):
         try:
             chosen = source.resolve_bucket_directory(table)
         except StorageIntegrityError as exc:
@@ -163,23 +203,48 @@ def _bucket_files(database: str, base: Path) -> tuple[List[Dict[str, str]], List
             continue
         chosen = Path(chosen)
         real = Path(os.path.realpath(chosen))
-        for directory, _dirs, names in os.walk(real):
-            for name in names:
-                files.append({"role": "bucket_file", "path": str(Path(directory) / name)})
+        if str(real) in seen:
+            if seen[str(real)].lower() != table.lower():
+                raise InputSnapshotError(
+                    "bucket_derived_from_other_table",
+                    f"one bucket installation is resolved for {seen[str(real)]} and {table}",
+                    table=table)
+            continue
+        seen[str(real)] = table
         try:
             receipt = bucket_source_receipt(chosen)
         except StorageIntegrityError as exc:
             raise InputSnapshotError("input_bucket_invalid", f"{table}: {exc}",
                                      table=table, reason=getattr(exc, "reason", None)) from exc
+        derived = receipt["derived_from"]
+        if str(derived.get("table")).lower() != table.lower():
+            raise InputSnapshotError(
+                "bucket_derived_from_other_table",
+                f"{table} bucket was built from another table's sources",
+                table=table, derived_table=derived.get("table"))
+        sources = {f["realpath"] for f in derived["files"]}
+        owned = _bucket_owner_outputs(table, Path(derived["source_root"]))
+        if not sources or len(sources) != len(derived["files"]) or sources != owned:
+            raise InputSnapshotError(
+                "bucket_derived_from_not_owner_outputs",
+                f"{table} bucket sources are not exactly the conversion manifest's outputs "
+                "for the table", table=table, sources=len(sources), owned=len(owned))
+        for directory, _dirs, names in os.walk(real):
+            for name in names:
+                files.append({"role": "bucket_file", "path": str(Path(directory) / name)})
         buckets.append({
             "table": table,
+            "derived_table": derived["table"],
             "layout_path": str(chosen),
             "layout_realpath": str(real),
+            "source_manifest": str(Path(derived["source_root"]) / CONVERSION_MANIFEST),
             "derived_from": [
                 {"path": f["path"], "realpath": f["realpath"], "builder_sha256": f["sha256"]}
-                for f in receipt["derived_from"]["files"]
+                for f in derived["files"]
             ],
         })
+        files.append({"role": "bucket_source_manifest",
+                      "path": str(Path(derived["source_root"]) / CONVERSION_MANIFEST)})
     return files, buckets
 
 
