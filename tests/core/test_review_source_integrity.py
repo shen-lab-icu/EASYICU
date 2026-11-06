@@ -12,10 +12,14 @@ from easyicu.resources import load_data_sources
 
 
 def test_all_sixty_patient_shards_are_read(tmp_path):
-    bucket = tmp_path / "patient_bucket"
-    bucket.mkdir()
+    from tests.support.bucket_storage import write_contract
+
+    # A bucket installation is read through its declared contract.
+    bucket = tmp_path / "patient_bucket" / "bucket_id=0"
+    bucket.mkdir(parents=True)
     for i in range(60):
         pd.DataFrame({"patientunitstayid": [i]}).to_parquet(bucket / f"{i:03}.parquet")
+    write_contract(tmp_path / "patient_bucket", key="patientunitstayid")
     result = PatientFilter("eicu", data_path=tmp_path)._read_table("patient")
     assert result.patientunitstayid.tolist() == list(range(60))
 

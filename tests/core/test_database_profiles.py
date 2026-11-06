@@ -236,12 +236,8 @@ def test_api_mimic_demo_normalize_sample_batch_count_and_public_scan(
     assert api._get_total_patient_count(loader) == 123
     assert count_calls == [("icustays", "icustay_id")]
 
-    (tmp_path / "icustays.parquet").touch()
-    monkeypatch.setattr(
-        pd,
-        "read_parquet",
-        lambda *_args, **_kwargs: pd.DataFrame({"icustay_id": [7, 8]}),
-    )
+    # A real file: discovery reads the storage policy's validated set.
+    pd.DataFrame({"icustay_id": [7, 8]}).to_parquet(tmp_path / "icustays.parquet")
     assert api.get_all_patient_ids(tmp_path, database="mimic_demo") == (
         [7, 8],
         "icustay_id",

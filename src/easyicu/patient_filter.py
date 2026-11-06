@@ -35,6 +35,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .databases.profiles import normalize_database_key
+from .storage_layout import StorageIntegrityError
 from .hospital_mortality import hospital_mortality_status_from_flag
 
 logger = logging.getLogger(__name__)
@@ -667,6 +668,21 @@ class PatientFilter:
         
         return cases
     
+    def _validated(self, table_name: str, loader: Path):
+        """The storage policy's validated file set for the location chosen here."""
+        if getattr(self, "_storage", None) is None:
+            from .datasource import storage_source
+
+            self._storage = storage_source(self.database, self.data_path)
+        return self._storage.resolve_target_files(table_name, loader=loader)
+
+    def _read_csv(self, table_name: str, path: Path) -> pd.DataFrame:
+        from .datasource import storage_source
+        from .storage_layout import csv_table_scan
+
+        csv_table_scan(storage_source(self.database, self.data_path), table_name, path)
+        return pd.read_csv(path)
+
     def _read_table(self, table_name: str) -> pd.DataFrame:
         """读取数据表，支持多种目录结构"""
         if self.data_path is None:
@@ -685,14 +701,15 @@ class PatientFilter:
                 path = search_dir / f"{table_name}{ext}"
                 if path.exists():
                     if ext == '.parquet':
+                        (path,) = self._validated(table_name, path)
                         return pd.read_parquet(path)
                     else:
-                        return pd.read_csv(path)
+                        return self._read_csv(table_name, path)
             
             # 尝试目录格式（分片parquet）
             dir_path = search_dir / table_name
             if dir_path.is_dir():
-                parquet_files = sorted(dir_path.glob('*.parquet'))
+                parquet_files = self._validated(table_name, dir_path)
                 if parquet_files:
                     dfs = [pd.read_parquet(f) for f in parquet_files]
                     return pd.concat(dfs, ignore_index=True)
@@ -700,7 +717,8 @@ class PatientFilter:
             # 尝试分桶目录
             bucket_dir = search_dir / f"{table_name}_bucket"
             if bucket_dir.is_dir():
-                parquet_files = sorted(bucket_dir.rglob('*.parquet'))
+                # Bucket files in sorted path order, as the former listing.
+                parquet_files = sorted(self._validated(table_name, bucket_dir))
                 if parquet_files:
                     dfs = [pd.read_parquet(f) for f in parquet_files]
                     return pd.concat(dfs, ignore_index=True)
@@ -711,9 +729,10 @@ class PatientFilter:
             if found:
                 path = found[0]
                 if ext == '.parquet':
+                    (path,) = self._validated(table_name, path)
                     return pd.read_parquet(path)
                 else:
-                    return pd.read_csv(path)
+                    return self._read_csv(table_name, path)
         
         raise FileNotFoundError(f"找不到表 {table_name} (路径: {self.data_path})")
     
@@ -943,6 +962,8 @@ class PatientFilter:
         try:
             from easyicu.api import load_sepsis3
             sep3 = load_sepsis3(database=self.database, data_path=self.data_path)
+        except StorageIntegrityError:
+            raise
         except Exception as e:
             raise PatientFilterCriterionError(
                 'patient_filter_sepsis_unascertainable',

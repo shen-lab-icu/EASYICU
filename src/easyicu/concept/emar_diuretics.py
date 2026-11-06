@@ -193,7 +193,7 @@ def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd
     first (above 4 GB resident for emar_detail).  The lookup therefore filters
     inside DuckDB against a registered key list.
     """
-    from ..datasource import _get_duckdb_connection, enumerate_bucket_parquet_files
+    from ..datasource import _get_duckdb_connection
 
     values = values.dropna()
     if pd.api.types.is_numeric_dtype(values):
@@ -201,13 +201,15 @@ def _lookup(data_source: Any, table: str, columns: list, column: str, values: pd
     keys = pd.DataFrame({"key": pd.unique(values.astype(str))})
     if keys.empty:
         return pd.DataFrame(columns=columns)
+    # The storage policy's validated set for the location chosen here (bucket,
+    # flat directory, or the demo's single file), in the former listing order.
     directory = data_source.resolve_bucket_directory(table) or data_source.resolve_flat_parquet_directory(table)
-    files = enumerate_bucket_parquet_files(directory) if directory is not None else []
+    files = list(data_source.resolve_target_files(table, loader=directory)) if directory is not None else []
     if not files:
         # The MIMIC-IV demo converts each table to one parquet file.
         resolved = data_source.resolve_loader_from_disk(table)
         if isinstance(resolved, Path) and resolved.is_file() and resolved.suffix.lower() in {".parquet", ".pq"}:
-            files = [resolved]
+            files = list(data_source.resolve_target_files(table, loader=resolved))
     if not files:
         raise ValueError(f"emar_diuretic_table_unavailable:{table}")
     paths = ", ".join("'" + str(path).replace("'", "''") + "'" for path in files)

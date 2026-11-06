@@ -8,6 +8,7 @@ from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Unio
 import pandas as pd
 
 from ..patient_filter import PatientFilter
+from ..storage_layout import StorageIntegrityError
 from ..patient_filter import get_cohort_stats as _get_cohort_stats
 
 
@@ -84,6 +85,17 @@ def get_all_patient_ids_impl(
     try:
         all_ids: Optional[List] = None
         parquet_file = None
+        storage = None
+
+        def _validated(table: str, loader: Path):
+            # The storage policy's validated set for the location chosen here.
+            nonlocal storage
+            if storage is None:
+                from ..datasource import storage_source
+
+                storage = storage_source(resolved_database, root)
+            return storage.resolve_target_files(table, loader=loader)
+
         for name in name_candidates:
             flat = root / f"{name}.parquet"
             if flat.exists():
@@ -95,8 +107,11 @@ def get_all_patient_ids_impl(
                 break
         if parquet_file is not None:
             try:
+                (parquet_file,) = _validated(parquet_file.stem, parquet_file)
                 frame = pd.read_parquet(parquet_file, columns=[id_col])
                 all_ids = frame[id_col].dropna().unique().tolist()
+            except StorageIntegrityError:
+                raise
             except Exception:
                 # A present but unreadable Parquet file may have a CSV sibling.
                 all_ids = None
@@ -106,6 +121,10 @@ def get_all_patient_ids_impl(
                 csv_file = root / f"{table_name}{suffix}"
                 if not csv_file.exists():
                     continue
+                from ..datasource import storage_source
+                from ..storage_layout import csv_table_scan
+
+                csv_table_scan(storage_source(resolved_database, root), table_name, csv_file)
                 try:
                     frame = pd.read_csv(csv_file, usecols=[id_col])
                     all_ids = frame[id_col].dropna().unique().tolist()
@@ -117,7 +136,7 @@ def get_all_patient_ids_impl(
             shard_dir = root / table_name
             if shard_dir.is_dir():
                 all_ids = []
-                for shard in sorted(shard_dir.glob("*.parquet")):
+                for shard in _validated(table_name, shard_dir):
                     frame = pd.read_parquet(shard, columns=[id_col])
                     all_ids.extend(frame[id_col].dropna().unique().tolist())
                 all_ids = list(dict.fromkeys(all_ids))
@@ -143,6 +162,8 @@ def get_all_patient_ids_impl(
         if max_patients and len(all_ids) > max_patients:
             all_ids = all_ids[:max_patients]
         return all_ids, id_col
+    except StorageIntegrityError:
+        raise
     except Exception as exc:
         raise PatientIdDiscoveryError(
             "Unable to establish the patient ID universe "

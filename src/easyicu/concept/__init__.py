@@ -1672,7 +1672,7 @@ class ConceptResolver:
                         if verbose:
                             logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
                         
-                    except DuckDBQueryInterrupted:
+                    except (DuckDBQueryInterrupted, StorageIntegrityError):
                         raise
                     except Exception as e:
                         logger.warning(f"宽表批量加载失败，回退到普通加载: {e}")
@@ -2544,16 +2544,20 @@ class ConceptResolver:
                         _all_vals = self._rgx_distinct_cache[_distinct_cache_key]
                     else:
                         _table_path = storage.resolve_loader_from_disk(source.table)
-                        if _table_path is not None and isinstance(_table_path, Path):
+                        # The pre-match reads the policy's validated set (a set of
+                        # DISTINCT values: the file order does not matter).
+                        _rgx_files = (
+                            storage.resolve_target_files(source.table, loader=_table_path)
+                            if isinstance(_table_path, Path) and _table_path.suffix.lower() not in {'.csv', '.gz'}
+                            else ()
+                        )
+                        if _rgx_files:
                             import duckdb as _ddb
                             _con = duckdb_spill.connect()
-                            if _table_path.is_dir():
-                                _glob = _duckdb_path(_table_path / '**' / '*.parquet')
-                            else:
-                                _glob = _duckdb_path(_table_path)
+                            _rgx_list = ", ".join(f"'{_duckdb_path(_f)}'" for _f in _rgx_files)
                             _sub_var_col = source.sub_var
                             _distinct_vals = _con.execute(
-                                f"SELECT DISTINCT \"{_sub_var_col}\" FROM read_parquet('{_glob}', hive_partitioning=true) WHERE \"{_sub_var_col}\" IS NOT NULL"
+                                f"SELECT DISTINCT \"{_sub_var_col}\" FROM read_parquet([{_rgx_list}], hive_partitioning=true) WHERE \"{_sub_var_col}\" IS NOT NULL"
                             ).fetchdf()
                             _con.close()
                             _all_vals = _distinct_vals[_sub_var_col].astype(str).tolist() if len(_distinct_vals) > 0 else []
@@ -3415,7 +3419,17 @@ class ConceptResolver:
                         _wt_table_path = storage.resolve_loader_from_disk(source.table)
                         if _wt_table_path is not None:
                             _wt_dir = Path(_wt_table_path) if not isinstance(_wt_table_path, Path) else _wt_table_path
-                            _wt_glob = _duckdb_path(_wt_dir / '*.parquet') if _wt_dir.is_dir() else _duckdb_path(_wt_dir)
+                            # The policy's validated set, in the former glob's order.
+                            # A bucket root has no top-level Parquet (the glob matched
+                            # nothing) and a CSV is not Parquet: both keep the raw path.
+                            _wt_files = (
+                                storage.resolve_target_files(source.table, loader=_wt_dir)
+                                if _wt_dir.is_dir() or _wt_dir.suffix.lower() in {'.parquet', '.pq'}
+                                else ()
+                            )
+                            if any(_f.parent.name.startswith('bucket_id=') for _f in _wt_files):
+                                _wt_files = ()
+                            _wt_read = "[" + ", ".join(f"'{_duckdb_path(_f)}'" for _f in _wt_files) + "]"
 
                             # Patient ID filter
                             if patient_ids is None:
@@ -3452,7 +3466,7 @@ class ConceptResolver:
                                 SELECT {_wt_id_col},
                                        {_wt_time_expr} AS {_wt_time_col},
                                        {_wt_agg_sql} AS {_wt_val_var}
-                                FROM read_parquet('{_wt_glob}', union_by_name=true)
+                                FROM read_parquet({_wt_read}, union_by_name=true)
                                 WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter} {_wt_bounds}
                                 GROUP BY {_wt_id_col}, {_wt_time_expr}
                                 ORDER BY {_wt_id_col}, 2
@@ -3460,7 +3474,7 @@ class ConceptResolver:
 
                             _wt_conn = _get_duckdb_connection()
                             try:
-                                frame = _wt_conn.execute(_wt_query).fetchdf()
+                                frame = _wt_conn.execute(_wt_query).fetchdf() if _wt_files else None
                             except Exception:
                                 # Fallback to raw loading
                                 frame = None
@@ -8687,12 +8701,25 @@ class ConceptResolver:
                                         seen_files.add(candidate)
                                         break
                             if target_files:
+                                # The part subset must belong to the validated flat
+                                # installation it is taken from.
+                                from ..storage_layout import TableScanError, flat_table_scan
+
+                                validated = set(flat_table_scan(data_source, "observations", obs_path))
+                                stray = [file for file in target_files if file not in validated]
+                                if stray:
+                                    raise TableScanError(
+                                        "table_scan_loader_mismatch", "observations",
+                                        f"{len(stray)} indexed parts are not in the validated scan",
+                                    )
                                 file_list = ", ".join(f"'{_duckdb_path(file)}'" for file in target_files)
                                 # 🚀 perf B1 (hirid LOS): targeted file list out of the
                                 # same observation_tables converter run → shared schema.
                                 # Drop union_by_name=true so DuckDB does not sweep file
                                 # metadata for reconciliation.
                                 read_expr = f"read_parquet([{file_list}])"
+                        except StorageIntegrityError:
+                            raise
                         except Exception as index_error:
                             logger.debug("HiRID observation part index lookup failed: %s", index_error)
 
@@ -8705,9 +8732,11 @@ class ConceptResolver:
                                 ordered=False,
                             )
                         elif obs_path.is_dir():
-                            glob_pattern = _duckdb_path(obs_path / '*.parquet')
+                            obs_files = data_source.resolve_target_files("observations", loader=obs_path)
                             # 🚀 perf B1 (hirid LOS): same-dir parquets share schema.
-                            read_expr = f"read_parquet('{glob_pattern}')"
+                            if obs_files:
+                                obs_list = ", ".join(f"'{_duckdb_path(file)}'" for file in obs_files)
+                                read_expr = f"read_parquet([{obs_list}])"
 
                     if read_expr:
                         con = duckdb_spill.connect()
@@ -8764,6 +8793,8 @@ class ConceptResolver:
                 if id_cfg and id_cfg.table:
                     raw_path = Path(data_source.base_path) / f"{id_cfg.table}.parquet"
                     if raw_path.is_file():
+                        # Bound to (and validated as) the table's file set.
+                        (raw_path,) = data_source.resolve_target_files(id_cfg.table, loader=raw_path)
                         schema = pq.read_schema(str(raw_path))
                         if column_name in schema.names:
                             id_col = id_cfg.id
@@ -8775,6 +8806,8 @@ class ConceptResolver:
                             if column_name in merged.columns:
                                 logger.info(f"Synthesized '{column_name}' from raw parquet for '{ds_name}'")
                                 return merged[column_name]
+            except StorageIntegrityError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to synthesize column '{column_name}' from raw parquet: {e}")
         

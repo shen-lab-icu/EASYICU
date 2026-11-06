@@ -40,6 +40,7 @@ import logging
 
 from ..base import BaseICULoader
 from ..concept.data_source_contract import ConceptDataSourceStorage
+from ..storage_layout import StorageIntegrityError
 from ..databases.profiles import get_database_profile, public_database_keys
 from ..table.duration import (
     get_dur_var_unit,
@@ -317,37 +318,21 @@ def _build_fast_scan_expr(loader: "BaseICULoader", table_name: str) -> Optional[
     def _escape(path: str) -> str:
         return path.replace("'", "''").replace("\\", "/")
 
-    if source.is_dir():
-        # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource.enumerate_bucket_parquet_files
-        try:
-            from ..datasource import enumerate_bucket_parquet_files as _enum
-        except Exception:
-            _enum = None
-        if _enum is not None:
-            files = _enum(source)
-            if files:
-                files_sql = "[" + ", ".join(f"'{_escape(f)}'" for f in files) + "]"
-                return f"read_parquet({files_sql}, union_by_name=true)"
-        # Fallback: 旧的 glob 路径（仅在 helper 不可用或空目录时）
-        bucket_dirs = list(source.glob("bucket_id=*"))
-        if bucket_dirs:
-            pattern = str(source / "bucket_id=*" / "*.parquet").replace("\\", "/")
-        else:
-            parquet_files = list(source.glob("*.parquet")) + list(source.glob("*.pq"))
-            if not parquet_files:
-                return None
-            pattern = (
-                str(source / "*.parquet")
-                if list(source.glob("*.parquet"))
-                else str(source / "*.pq")
-            ).replace("\\", "/")
-        return f"read_parquet('{_escape(pattern)}', union_by_name=true)"
+    if source.is_dir() or source.suffix.lower() in {".parquet", ".pq"}:
+        # The storage policy's validated set (bucket contract or flat scan) for
+        # the location the loader chose; a DISTINCT/COUNT scan is order-free.
+        files = storage.resolve_target_files(table_name, loader=source)
+        if not files:
+            return None
+        files_sql = "[" + ", ".join(f"'{_escape(str(f))}'" for f in files) + "]"
+        return f"read_parquet({files_sql}, union_by_name=true)"
 
     suffixes = [s.lower() for s in source.suffixes]
     source_str = _escape(str(source))
-    if source.suffix.lower() in {".parquet", ".pq"}:
-        return f"read_parquet('{source_str}', union_by_name=true)"
     if ".csv" in suffixes or source.suffix.lower() == ".csv":
+        from ..storage_layout import csv_table_scan
+
+        csv_table_scan(data_source, table_name, source)
         return f"read_csv_auto('{source_str}')"
     return None
 
@@ -580,6 +565,8 @@ def _sample_patient_ids(
             )
 
         return sampled_ids
+    except StorageIntegrityError:
+        raise
     except Exception as e:
         if verbose:
             print(f"⚠️ 采样患者ID失败: {e}，将加载所有患者")
@@ -653,6 +640,8 @@ def _get_total_patient_count(loader: "BaseICULoader") -> Optional[int]:
             table_name, columns=[id_col], verbose=False
         )
         return id_table.data[id_col].nunique()
+    except StorageIntegrityError:
+        raise
     except Exception:
         return None
 
