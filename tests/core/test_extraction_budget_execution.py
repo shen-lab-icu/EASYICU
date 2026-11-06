@@ -144,3 +144,66 @@ def test_each_database_module_dispatch_preserves_its_own_plan(
     assert captured["stream_output_batches"] is (plan.mode == "patient_batches")
     assert captured["adaptive_stream_batches"] is False
     assert captured["resource_budget_mb"] == 8192
+
+
+@pytest.mark.parametrize("stream", [None, True])
+def test_memory_killed_one_shot_retries_streamed_at_half_the_cohort(
+    monkeypatch, tmp_path, stream
+):
+    calls = []
+
+    class KilledThenCaptured:
+        def __init__(self, *, target, args, daemon):
+            calls.append(inspect.signature(target).bind(*args).arguments)
+            if len(calls) > 1:
+                raise DispatchCaptured
+            self.exitcode = None
+
+        def start(self):
+            self.exitcode = -9  # SIGKILL from the OOM killer
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(
+        api, "_get_extraction_mp_context",
+        lambda _: SimpleNamespace(Process=KilledThenCaptured),
+    )
+    with pytest.raises(DispatchCaptured):
+        api.extract_database(
+            "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
+            modules=["demographics"], patient_ids={"admissionid": list(range(23106))},
+            resource_budget_mb=8192, stream_output_batches=stream, verbose=False,
+        )
+    assert [call["stream_output_batches"] for call in calls] == [False, True]
+    assert [call["batch_size"] for call in calls] == [23106, 11553]
+
+
+def test_memory_killed_one_shot_does_not_stream_when_the_caller_forbids_it(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    class Killed:
+        def __init__(self, *, target, args, daemon):
+            calls.append(inspect.signature(target).bind(*args).arguments)
+            self.exitcode = None
+
+        def start(self):
+            self.exitcode = -9
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(
+        api, "_get_extraction_mp_context", lambda _: SimpleNamespace(Process=Killed)
+    )
+    with pytest.raises(
+        api.NativeExportPublicationError, match=r"failures=\['demographics'\]"
+    ):
+        api.extract_database(
+            "aumc", data_path=tmp_path, output_dir=tmp_path / "output",
+            modules=["demographics"], patient_ids={"admissionid": list(range(23106))},
+            resource_budget_mb=8192, stream_output_batches=False, verbose=False,
+        )
+    assert len(calls) == 1

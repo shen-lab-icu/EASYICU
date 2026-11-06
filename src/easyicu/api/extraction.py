@@ -1569,6 +1569,77 @@ def _next_stream_retry_batch_size(current_batch_size: int) -> int:
     return max(_STREAM_BATCH_MIN, proposed)
 
 
+def _next_oom_retry_batch_size(current_batch_size: int) -> int:
+    """Half the batch after a killed worker, down to a single stay."""
+
+    return max(1, int(current_batch_size) // 2)
+
+
+_MEMORY_EXIT_CODES = frozenset({-9, 9, 137, -1073740791, 3221226505})
+_MEMORY_FAILURE_MARKERS = (
+    "memoryerror",
+    "out of memory",
+    "outofmemoryexception",
+    "cannot allocate memory",
+    "bad_alloc",
+    "exhausted memory",
+)
+
+
+def _worker_failure_is_memory(exit_code: object, failures: object) -> bool:
+    """True when a killed module worker ran out of memory (not a code error).
+
+    SIGKILL (the OOM killer, exit -9/137) and the Windows out-of-memory exit
+    codes count, as does a recorded MemoryError or DuckDB OutOfMemory.
+    """
+
+    try:
+        if int(exit_code) in _MEMORY_EXIT_CODES:
+            return True
+    except (TypeError, ValueError):
+        pass
+    for item in failures if isinstance(failures, list) else ():
+        if not isinstance(item, Mapping):
+            continue
+        detail = " ".join(
+            str(item.get(field) or "")
+            for field in ("failure_kind", "exception_type", "traceback")
+        ).lower()
+        if any(marker in detail for marker in _MEMORY_FAILURE_MARKERS):
+            return True
+    return False
+
+
+def _crash_retry_batch_size(
+    *,
+    crashed: bool,
+    stream_output_batches: bool,
+    adaptive: bool,
+    attempt: int,
+    batch_size: int,
+) -> Optional[tuple[int, str]]:
+    """Next batch size after a killed module worker, or None to give up.
+
+    A memory-killed worker that may stream (a streamed group, or a one-shot
+    whose caller allowed streamed output) is retried with half the batch, down
+    to a single stay, whatever the resource plan: the plan only sets the
+    starting size, and published rows do not depend on the batch size.
+    Adaptive runs keep their gentler step first and then halve.
+    """
+
+    if not (crashed and stream_output_batches):
+        return None
+    if (
+        adaptive
+        and attempt < _STREAM_BATCH_MAX_RETRIES
+        and batch_size > _STREAM_BATCH_MIN
+    ):
+        return _next_stream_retry_batch_size(batch_size), "adaptive"
+    if batch_size > 1:
+        return _next_oom_retry_batch_size(batch_size), "halve_on_oom"
+    return None
+
+
 def _interleave_stream_patient_ids(
     patient_ids: List,
     batch_size: int,
@@ -7339,6 +7410,11 @@ def extract_database(
     has_patient_batches = any(
         plan.mode != "one_shot" for plan in module_resource_plans.values()
     )
+    # A memory-killed one-shot may fall back to streamed batches unless the
+    # caller asked for in-memory output or forbade streaming outright.
+    oom_stream_fallback_allowed = (
+        output_dir is not None and stream_output_batches is not False
+    )
     if stream_output_batches is None:
         stream_output_batches = output_dir is not None and has_patient_batches
     if adaptive_stream_batches and not stream_output_batches:
@@ -7815,6 +7891,7 @@ def extract_database(
         worker_failure_path = os.path.join(
             tmp_root, _EXTRACTION_WORKER_FAILURE_DIRNAME
         )
+        attempt_failures: list = []
         if os.path.isdir(worker_failure_path) or incomplete:
             persisted_worker_failures = _persist_worker_failures(
                 output_dir=output_dir,
@@ -7830,16 +7907,23 @@ def extract_database(
                 retry_attempt=stream_retry_attempt,
             )
             result["worker_failures"].extend(persisted_worker_failures)
-        can_retry_smaller = (
-            crashed
+            attempt_failures = list(persisted_worker_failures)
+        # A one-shot the planner chose from a stale or optimistic profile may
+        # be streamed instead whenever the caller allowed streamed output.
+        group_may_stream = group_stream_output_batches or oom_stream_fallback_allowed
+        crash_retry = _crash_retry_batch_size(
+            crashed=crashed
             and incomplete
-            and group_adaptive_stream_batches
-            and group_stream_output_batches
-            and stream_retry_attempt < _STREAM_BATCH_MAX_RETRIES
-            and group_batch_size > _STREAM_BATCH_MIN
+            and _worker_failure_is_memory(proc.exitcode, attempt_failures),
+            stream_output_batches=group_may_stream,
+            adaptive=group_adaptive_stream_batches,
+            attempt=stream_retry_attempt,
+            batch_size=group_batch_size,
         )
+        can_retry_smaller = crash_retry is not None
         if can_retry_smaller and not can_split:
-            retry_batch_size = _next_stream_retry_batch_size(group_batch_size)
+            retry_batch_size, retry_policy = crash_retry
+            adaptive_retry = retry_policy == "adaptive"
             retry_modules = list(group_mods)
             retry_special = list(group_special)
             result["stream_retry_history"].append(
@@ -7849,22 +7933,31 @@ def extract_database(
                     "attempt": stream_retry_attempt + 1,
                     "previous_batch_size": group_batch_size,
                     "retry_batch_size": retry_batch_size,
+                    "policy": "adaptive" if adaptive_retry else "halve_on_oom",
+                    "from_one_shot": not group_stream_output_batches,
                 }
+            )
+            logger.warning(
+                "stream_batch_oom_retry: %s worker exit=%s; batch_size %s -> %s "
+                "(attempt %s, %s)",
+                retry_modules + retry_special, proc.exitcode, group_batch_size,
+                retry_batch_size, stream_retry_attempt + 1,
+                "adaptive" if adaptive_retry else "halve_on_oom",
             )
             if verbose:
                 print(
                     f"   ⚠️ worker exit={proc.exitcode}; adaptive memory retry "
                     f"{retry_modules + retry_special}: "
                     f"batch_size {group_batch_size} -> {retry_batch_size} "
-                    f"(attempt {stream_retry_attempt + 1}/"
-                    f"{_STREAM_BATCH_MAX_RETRIES})"
+                    f"(attempt {stream_retry_attempt + 1}, "
+                    f"{'adaptive' if adaptive_retry else 'halve_on_oom'})"
                 )
             pending_groups.appendleft(
                 {
                     "modules": retry_modules,
                     "special": retry_special,
                     "_batch_size": retry_batch_size,
-                    "_stream_output_batches": group_stream_output_batches,
+                    "_stream_output_batches": True,
                     "_adaptive_stream_batches": group_adaptive_stream_batches,
                     "_stream_retry_attempt": stream_retry_attempt + 1,
                 }

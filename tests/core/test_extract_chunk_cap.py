@@ -23,12 +23,14 @@ from easyicu.api.extraction import (
     _MEASURED_BATCH_PROFILES,
     _MEASURED_ONESHOT_PROFILES,
     _adapt_stream_batch_size_from_first_batch,
+    _crash_retry_batch_size,
     _interleave_stream_patient_ids,
     _order_stream_patient_ids,
     _next_stream_retry_batch_size,
     _extract_worker_env_setup,
     _resource_budget_execution_limits,
     _resolve_stream_batch_size,
+    _worker_failure_is_memory,
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
@@ -211,6 +213,58 @@ def test_adaptive_worker_crash_retry_reduces_only_the_failed_module(
     initial, expected
 ):
     assert _next_stream_retry_batch_size(initial) == expected
+
+
+def _crash_retry(batch_size, *, adaptive=False, attempt=0, crashed=True, streamed=True):
+    return _crash_retry_batch_size(
+        crashed=crashed,
+        stream_output_batches=streamed,
+        adaptive=adaptive,
+        attempt=attempt,
+        batch_size=batch_size,
+    )
+
+
+def test_oom_crash_halves_the_batch_down_to_one_stay():
+    sizes, size = [], 20_000
+    while (step := _crash_retry(size)) is not None:
+        size, policy = step
+        assert policy == "halve_on_oom"
+        sizes.append(size)
+    assert sizes[:3] == [10_000, 5_000, 2_500]
+    assert sizes[-1] == 1
+    assert _crash_retry(1) is None
+
+
+def test_adaptive_crash_keeps_its_step_then_halves():
+    assert _crash_retry(67_000, adaptive=True, attempt=0) == (50_000, "adaptive")
+    # Adaptive retries exhausted or at the adaptive floor: halving takes over.
+    assert _crash_retry(30_000, adaptive=True, attempt=3) == (15_000, "halve_on_oom")
+    assert _crash_retry(5_000, adaptive=True, attempt=1) == (2_500, "halve_on_oom")
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"crashed": False}, {"streamed": False}]
+)
+def test_no_crash_retry_without_a_memory_crash_in_a_streamed_export(kwargs):
+    assert _crash_retry(20_000, **kwargs) is None
+
+
+@pytest.mark.parametrize("exit_code", [-9, 137, 3221226505])
+def test_killed_worker_exit_codes_count_as_memory(exit_code):
+    assert _worker_failure_is_memory(exit_code, [])
+
+
+@pytest.mark.parametrize(
+    "exception_type", ["MemoryError", "duckdb.OutOfMemoryException", "_duckdb.OutOfMemoryException"]
+)
+def test_recorded_out_of_memory_exceptions_count_as_memory(exception_type):
+    assert _worker_failure_is_memory(1, [{"exception_type": exception_type}])
+
+
+def test_code_errors_do_not_trigger_the_oom_retry():
+    assert not _worker_failure_is_memory(1, [{"exception_type": "ValueError"}])
+    assert not _worker_failure_is_memory(None, None)
 
 
 def test_explicit_stream_batch_size_always_wins():
