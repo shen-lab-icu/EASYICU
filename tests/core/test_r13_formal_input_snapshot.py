@@ -210,3 +210,23 @@ def test_the_extract_cli_opt_in_proves_the_inputs_did_not_change(tmp_path, monke
     assert (out / "INPUT_SNAPSHOT.json").is_file()
     assert code == (3 if change else 0)
     assert (out / "INPUT_SNAPSHOT_POST.json").is_file() is (not change)
+
+
+def test_a_built_layout_records_the_code_and_engine_that_wrote_it(tmp_path):
+    import duckdb
+
+    from easyicu import code_identity
+
+    root = _installation(tmp_path)
+    table = TABLE_CONFIGS["hirid"][0]
+    manifest = json.loads((root / f"{table}_bucket" / "_BUCKET_MANIFEST.json").read_text())
+
+    package = Path(formal_inputs.__file__).resolve().parent
+    identity = code_identity.resolve_code_identity(package)
+    assert manifest["builder_code"]["source"] == identity["source"]
+    assert manifest["builder_code"]["commit"] == identity["commit"]
+    assert manifest["builder_code"]["version"] == identity["version"]
+    assert manifest["duckdb_version"] == duckdb.__version__
+    assert manifest["builder_version"].startswith("easyicu.bucket_builder/")
+    # The layout with its extra metadata still opens.
+    assert formal_inputs.take_snapshot([f"hirid:{root}"])["databases"]["hirid"]["buckets"]

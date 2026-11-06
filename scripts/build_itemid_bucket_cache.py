@@ -606,6 +606,19 @@ def _inventory(root: Path) -> list[dict]:
     ]
 
 
+def _builder_code() -> dict:
+    """The code that built the layout (``easyicu.code_identity``): source, commit, version."""
+    import easyicu
+    from easyicu.code_identity import resolve_code_identity
+
+    identity = resolve_code_identity(Path(easyicu.__file__).resolve().parent)
+    return {
+        key: identity.get(key)
+        for key in ("source", "commit", "dirty", "version", "reason_code")
+        if key != "reason_code" or identity.get(key) is not None
+    }
+
+
 def _manifest(
     root,
     *,
@@ -628,6 +641,10 @@ def _manifest(
         source_order=source_order,
         row_group_target=row_group_target,
         builder_version=BUILDER_VERSION,
+        # Which code wrote this layout; its duckdb version is ``hash``'s (hash
+        # layouts) or the build receipt's.
+        builder_code=_builder_code(),
+        duckdb_version=duckdb.__version__,
         inventory=_inventory(root),
     )
     if derived_from is not None:
