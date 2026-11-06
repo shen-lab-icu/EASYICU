@@ -7,6 +7,40 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-06 — Sepsis-3 counts unscored SOFA-2 hours as 0 in every execution mode [lead-r13, `c58852fb9`]
+
+**What changed.** The Sepsis-3 modules (`sepsis3_sofa2`, `sepsis3_sofa1`)
+always derive from the published SOFA score modules. They read the
+published files first, then the group's own outputs; otherwise the module
+owner extracts the score modules into a private staging folder. They are never
+recomputed. A missing or failed dependency raises `SpecialDependencyError`
+(`sepsis_dependency_module_failed`, `sepsis_dependency_output_missing`,
+`sepsis_dependency_manifest_missing`, `sepsis_special_cohort_missing`).
+One rule, `sofa2_total_for_sepsis_delta`, sets the SOFA-2 total for both the
+extraction path and the concept callback.
+
+**Why.** The one-shot path, used whenever outputs were not streamed and the
+score modules were not yet published (the in-process scoring group),
+recomputed SOFA-2 through `load_concepts`. The merged frame had no row at all
+for hours where no SOFA-2 component had a value, so those hours were missing
+instead of scored 0 as in ricu. That raised the baseline before suspected
+infection, and onsets moved later or disappeared. `8c948c740` had fixed hours
+that were present but empty, not hours that were absent. On the p9b MIMIC-III
+CareVue sample, `sepsis3_sofa2` had 928 rows in this mode and 929 when
+streamed. A hand check of the two stays involved confirmed the streamed result.
+`sepsis3_sofa1` showed no difference on that sample.
+
+**SICdb.** The concept callback used to keep SICdb's partial SOFA-2 total and
+could produce Sepsis-3 rows. It now gives an empty total and no rows, matching
+extraction; the formal SICdb export already had 0 rows.
+
+**Formal exports.** The formal v6 exports ran this one-shot path for every
+database: `sepsis3_sofa2` rows AUMC 5,178, MIIV 42,368, eICU 24,569, HiRID 0,
+SICdb 0. No `2786ea872` receipts were found; its code selects the same path.
+
+**Errata.** `sepsis3_sofa2` and `sepsis3_sofa1` rows changed versus
+`2786ea872`, per database (counts of 10 or more rounded to tens): FILL.
+
 ## 2026-11-06 — HiRID values no longer depend on the batch (no hourly pre-aggregation) [lead-r13, `20c71d62e`]
 
 **What changed.** The raw loader no longer pre-aggregates HiRID frames to
