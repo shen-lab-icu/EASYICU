@@ -297,6 +297,15 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
+def _fsync_file(path: Path) -> None:
+    # Windows commits a file only through a handle opened for writing.
+    fd = os.open(path, os.O_RDWR if os.name == "nt" else os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _write_atomic(path: Path, raw: bytes) -> None:
     tmp = path.with_name(f"{path.name}.reseal-tmp")
     with open(tmp, "wb") as handle:
@@ -420,6 +429,13 @@ def _restore(root: Path, entries: list[dict]) -> list[str]:
             path = root / rel
             if not path.exists() or sha256_file(path) != entry["original_sha256"]:
                 _write_atomic(path, raw)
+            else:
+                # Already the original bytes (e.g. a rollback that wrote them
+                # but could not sync their directory): visible bytes are not
+                # durable bytes, so sync the file and its directory entry now.
+                # A failure keeps the journal, as for a rewrite.
+                _fsync_file(path)
+                _fsync_dir(path.parent)
             if sha256_file(path) != entry["original_sha256"]:
                 raise ValueError("restored file does not match the journalled digest")
         except Exception as exc:  # every file is attempted; each failure is reported
