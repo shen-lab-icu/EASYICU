@@ -28,8 +28,8 @@ receipt = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = receipt
 SPEC.loader.exec_module(receipt)
 
-CODE = {"source": "git_checkout", "commit": "c" * 40, "dirty": False, "version": "0.1.2",
-        "installed_dist_version": "9.9.9", "import_path": "/x"}
+CODE = {"source": "git_checkout", "commit": "c" * 40, "dirty": False, "diff_sha256": None,
+        "version": "0.1.2", "installed_dist_version": "9.9.9", "import_path": "/x"}
 
 
 def _prepared(root: Path) -> Path:
@@ -142,13 +142,57 @@ def _snapshots(run: Path, input_root: Path) -> None:
                                  formal_inputs.verify_snapshot(pre))
 
 
+def _binding_read(input_root: Path, read: dict) -> dict:
+    """The storage owner's layout record of one read (``storage_binding["tables"]``)."""
+    from easyicu.storage_layout import bucket_source_receipt, declared_view_chain
+
+    if read["layout"] == "flat":
+        return {"layout": "flat", "root": str(input_root),
+                "derived_from": declared_view_chain(input_root)}
+    held = bucket_source_receipt(read["layout_path"])
+    return {"layout": "bucket", "root": read["layout_path"], "manifest": held["manifest"],
+            "derived_from": held["derived_from"], "derived_from_recorded": True}
+
+
+def _tables(input_root: Path, reads: list) -> dict:
+    """What d5fixB's consumed_table_layouts publishes for these reads."""
+    tables: dict = {}
+    for read in reads:
+        tables.setdefault(read["table"], []).append(_binding_read(input_root, read))
+    out = {}
+    for table, records in tables.items():
+        primary = next((r for r in records if r["layout"] == "bucket"), records[0])
+        out[table] = {**primary, "reads": records}
+    return out
+
+
+def _required(reads: list) -> dict:
+    tables = {}
+    for read in reads:
+        kind = "flat" if read["layout"] == "flat" else "bucket"
+        if tables.get(read["table"]) != "bucket":
+            tables[read["table"]] = kind
+    return {"schema": "easyicu.required_layout/1", "complete": True,
+            "databases": {"sic": tables}}
+
+
 def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
               version: str = CODE["version"], consumed=None,
-              installed: str | None = "9.9.9") -> Path:
+              installed: str | None = "9.9.9", tables=None, required=None,
+              fallbacks=None) -> Path:
     run = tmp_path / "run"
     export = run / "sic" / "export"
     export.mkdir(parents=True)
     _snapshots(run, prepared)
+    reads = reads if reads is not None else [_flat(prepared, "cases", prepared)]
+    consumed = consumed if consumed is not None else [_consumed(prepared / "cases.parquet")]
+    # The storage owner's run-log keys: every entry was consumed under this input.
+    consumed = [{"event": "table_consumed", "root": str(prepared), **e} for e in consumed]
+    if tables is None:
+        tables = _tables(prepared, [r for r in reads if r.get("layout_path") or
+                                    r["layout"] == "flat"])
+    (run / "REQUIRED_LAYOUT.json").write_text(json.dumps(
+        required if required is not None else _required(reads)))
     (run / "status").write_text("tag=t sha=x\nsic exit=0\nDONE\n")
     (run / "sic" / "summary.json").write_text(json.dumps({
         "secs": 12.5, "cgroup_peak_gib": 1.5, "peak_tree_rss_gib": 1.2,
@@ -159,12 +203,14 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
         "runtime_provenance": {
             "easyicu_git_commit": commit, "easyicu_git_dirty": False,
             "easyicu_code_identity_source": "git_checkout",
+            "easyicu_git_diff_sha256": None,
             "easyicu_version": version, "easyicu_installed_dist_version": installed,
         },
-        "storage_reads": reads if reads is not None else [_flat(prepared, "cases", prepared)],
-        "storage_binding": {"digest": "b" * 64, "files": 3, "scope": "parent_run_binding"},
-        "storage_consumed": (consumed if consumed is not None
-                             else [_consumed(prepared / "cases.parquet")]),
+        "storage_reads": reads,
+        "storage_binding": {"digest": "b" * 64, "files": 3, "scope": "parent_run_binding",
+                            "tables": tables},
+        "storage_consumed": consumed,
+        **({"storage_fallbacks": fallbacks} if fallbacks is not None else {}),
     }))
     return run
 
@@ -253,8 +299,10 @@ def _bucket_read(root: Path, table: str) -> dict:
             "layout_path": str(bucket), "layout_realpath": os.path.realpath(bucket)}
 
 
-def _sic_receipt(tmp_path, root, reads, monkeypatch, *, consumed=None, after_run=None):
-    run = _run_root(tmp_path, root, commit=CODE["commit"], reads=reads, consumed=consumed)
+def _sic_receipt(tmp_path, root, reads, monkeypatch, *, consumed=None, after_run=None,
+                 **options):
+    run = _run_root(tmp_path, root, commit=CODE["commit"], reads=reads, consumed=consumed,
+                    **options)
     if after_run is not None:
         after_run(run)
     monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
@@ -480,8 +528,7 @@ def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, m
     log = tmp_path / "run_storage_log.jsonl"
     monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
     ICUDataSource(config=load_data_sources().get("mimic"), base_path=root).load_table("services")
-    consumed = [{k: e[k] for k in ("table", "path", "realpath", "format")}
-                for e in read_consumed_log(log) if e["table"] == "services"]
+    consumed = [dict(e) for e in read_consumed_log(log) if e["table"] == "services"]
 
     assert [c["format"] for c in consumed] == ["csv"]
     run = tmp_path / "run"
@@ -697,4 +744,280 @@ def test_a_real_extraction_delivers_every_consumed_file_to_the_receipt(tmp_path)
     assert verified["count"] == len(consumed)
     assert all(f["admitted_by"] == "data_root" for f in verified["files"]
                if f["format"] in {"csv", "parquet"})
+    assert all(set(f) >= {"table", "path", "realpath", "format"} and not set(f) & {"event", "root"}
+               for f in verified["files"])
     assert published["storage_binding"]["digest"] == result["storage_binding"]["digest"]
+    # G2 on the real record: every consumed and read table has a layout
+    # record, every read in it is checked, and the run used no fallback.
+    observed = receipt._layout_tables("hirid", str(root), published["storage_binding"],
+                                      verified["files"], published["storage_reads"], snapshot)
+    assert set(observed) == {e["table"] for e in consumed}
+    assert not published.get("storage_fallbacks")
+
+
+# G1: the code that ran carries no working-tree diff.
+
+@pytest.mark.parametrize("diff", ["a" * 64, "<absent>"])
+def test_a_sealed_checkout_with_a_diff_or_no_diff_field_is_refused(monkeypatch, diff):
+    import easyicu.code_identity as code_identity
+
+    identity = {"source": "git_checkout", "commit": "c" * 40, "dirty": False, "version": "0.1.2"}
+    if diff != "<absent>":
+        identity["diff_sha256"] = diff
+    monkeypatch.setattr(code_identity, "resolve_code_identity", lambda root: dict(identity))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.sealed_code_identity("c" * 40)
+    assert error.value.code == "code_identity_diff_present"
+
+
+def test_a_clean_sealed_checkout_records_its_null_diff(monkeypatch):
+    import easyicu.code_identity as code_identity
+
+    monkeypatch.setattr(code_identity, "resolve_code_identity", lambda root: {
+        "source": "git_checkout", "commit": "c" * 40, "dirty": False, "diff_sha256": None,
+        "version": "0.1.2"})
+
+    assert receipt.sealed_code_identity("c" * 40)["diff_sha256"] is None
+
+
+@pytest.mark.parametrize("diff", ["a" * 64, "<absent>"])
+def test_a_native_manifest_with_a_diff_or_no_diff_field_stops_the_receipt(
+        tmp_path, monkeypatch, diff):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"])
+    path = run / "sic" / "export" / "_manifest.json"
+    manifest = json.loads(path.read_text())
+    if diff == "<absent>":
+        del manifest["runtime_provenance"]["easyicu_git_diff_sha256"]
+    else:
+        manifest["runtime_provenance"]["easyicu_git_diff_sha256"] = diff
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == "native_manifest_diff_present"
+
+
+def test_the_receipt_copies_both_null_diffs(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    built = _sic_receipt(tmp_path, prepared, None, monkeypatch)
+
+    assert built["code_identity"]["diff_sha256"] is None
+    assert built["databases"]["sic"]["native_manifest"]["easyicu_git_diff_sha256"] is None
+
+
+# G5: the run log's event/root keys are checked and dropped.
+
+def test_consumed_entries_carry_no_run_log_keys(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    sic = _sic_receipt(tmp_path, prepared, None, monkeypatch)["databases"]["sic"]
+
+    (entry,) = sic["storage_consumed"]["files"]
+    assert not {"event", "root"} & set(entry)
+
+
+@pytest.mark.parametrize(("change", "code"), [
+    ({"root": "/elsewhere"}, "storage_consumed_other_root"),
+    ({"event": "table_layout"}, "receipt_input_malformed"),
+])
+def test_a_consumed_event_of_another_root_or_kind_stops_the_receipt(
+        tmp_path, monkeypatch, change, code):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"])
+    path = run / "sic" / "export" / "_manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["storage_consumed"][0].update(change)
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == code
+
+
+# G2: storage_layout_unrecorded keyed on storage_binding["tables"]; every read checked.
+
+def _layout_root_reads(tmp_path):
+    prepared = _prepared(tmp_path / "prepared")
+    root = _sic_layout_root(tmp_path, prepared)
+    reads = [_flat(root, "cases", root), _bucket_read(root, "laboratory")]
+    reads[0]["layout_realpath"] = os.path.realpath(prepared)
+    return prepared, root, reads
+
+
+def test_a_layout_root_receipt_checks_every_layout_record(tmp_path, monkeypatch):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+
+    sic = _sic_receipt(tmp_path, root, reads, monkeypatch)["databases"]["sic"]
+
+    assert sic["layout_requirement"]["observed"] == {"cases": "flat", "laboratory": "bucket"}
+    assert sic["storage_binding"]["tables"]["laboratory"]["derived_from_recorded"] is True
+
+
+@pytest.mark.parametrize("drop", ["consumed_table", "read_table", "all"])
+def test_a_table_without_a_layout_record_stops_the_receipt(tmp_path, monkeypatch, drop):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    tables = _tables(root, reads)
+    if drop == "consumed_table":
+        del tables["cases"]
+    elif drop == "read_table":
+        del tables["laboratory"]
+    else:
+        tables = None
+
+    run = _run_root(tmp_path, root, commit=CODE["commit"], reads=reads, tables={})
+    path = run / "sic" / "export" / "_manifest.json"
+    manifest = json.loads(path.read_text())
+    if tables is None:
+        del manifest["storage_binding"]["tables"]
+    else:
+        manifest["storage_binding"]["tables"] = tables
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{root}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == "storage_layout_unrecorded"
+
+
+def _tampered_tables(root, reads, mutate):
+    tables = _tables(root, reads)
+    mutate(tables)
+    return tables
+
+
+def _second_flat_read_elsewhere(tables):
+    # Not the primary record: every read is checked, not only the first.
+    tables["laboratory"]["reads"].append({"layout": "flat", "root": "/elsewhere",
+                                          "derived_from": None})
+
+
+@pytest.mark.parametrize(("mutate", "code"), [
+    (_second_flat_read_elsewhere, "storage_read_other_root"),
+    (lambda t: t["laboratory"]["reads"][0].update(derived_from_recorded=False),
+     "bucket_derived_from_unrecorded"),
+    (lambda t: t["laboratory"]["reads"][0]["manifest"].update(sha256="0" * 64),
+     "bucket_manifest_not_snapshotted"),
+    (lambda t: t["laboratory"]["reads"][0]["derived_from"]["files"][0].update(sha256="0" * 64),
+     "bucket_derived_from_sha_mismatch"),
+    (lambda t: t["laboratory"]["reads"][0]["derived_from"]["files"][0].update(
+        realpath="/elsewhere/1.parquet"), "bucket_derived_from_outside_snapshot"),
+    (lambda t: t["cases"]["reads"][0].update(derived_from={"farm_manifest_sha256": "0" * 64}),
+     "declared_view_chain_mismatch"),
+    (lambda t: t["laboratory"]["reads"][0].update(layout="flat", root="x") or
+     t["laboratory"].update(layout="flat"), "storage_read_other_root"),
+])
+def test_every_layout_record_read_is_checked_against_the_snapshot(
+        tmp_path, monkeypatch, mutate, code):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    tables = _tampered_tables(root, reads, mutate)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, tables=tables)
+    assert error.value.code == code
+
+
+def test_a_read_whose_layout_disagrees_with_the_record_stops_the_receipt(tmp_path, monkeypatch):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    tables = _tables(root, reads)
+    tables["laboratory"] = {"layout": "flat", "root": str(root), "derived_from": None,
+                            "reads": [{"layout": "flat", "root": str(root), "derived_from": None}]}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, tables=tables)
+    assert error.value.code == "storage_layout_disagrees"
+
+
+# G3: a storage fallback in a formal run is a stop, with counts per reason.
+
+def test_a_storage_fallback_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    fallbacks = [{"reason": "bucket_cache_invalid", "root": str(prepared), "table": "a"},
+                 {"reason": "bucket_cache_invalid", "root": str(prepared), "table": "b"},
+                 {"reason": "unmanifested", "root": str(prepared), "table": "c"}]
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, fallbacks=fallbacks)
+    assert error.value.code == "storage_fallback_in_formal_run"
+    assert error.value.details["count"] == 3
+    assert error.value.details["kinds"] == {"bucket_cache_invalid": 2, "unmanifested": 1}
+
+
+def test_a_run_without_fallbacks_records_none(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    sic = _sic_receipt(tmp_path, prepared, None, monkeypatch, fallbacks=[])["databases"]["sic"]
+
+    assert sic["storage_fallbacks"] == []
+
+
+# G4: REQUIRED_LAYOUT.json, complete, with its sha256; any deviation is a stop.
+
+def test_the_required_layout_is_recorded_with_its_sha256(tmp_path, monkeypatch):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    required = {"schema": "easyicu.required_layout/1", "complete": True,
+                "databases": {"sic": {"cases": "flat", "laboratory": "bucket",
+                                      "medication": "bucket"}}}
+
+    built = _sic_receipt(tmp_path, root, reads, monkeypatch, required=required)
+
+    run = tmp_path / "run"
+    assert built["required_layout"]["sha256"] == receipt.sha256_file(run / "REQUIRED_LAYOUT.json")
+    assert built["required_layout"]["complete"] is True
+    check = built["databases"]["sic"]["layout_requirement"]
+    assert check["not_read"] == ["medication"]
+    assert check["observed"] == {"cases": "flat", "laboratory": "bucket"}
+
+
+@pytest.mark.parametrize(("tables", "deviation"), [
+    ({"cases": "flat", "laboratory": "flat"},
+     {"table": "laboratory", "required": "flat", "observed": "bucket"}),
+    ({"cases": "bucket", "laboratory": "bucket"},
+     {"table": "cases", "required": "bucket", "observed": "flat"}),
+    ({"cases": "flat"}, {"table": "laboratory", "required": None, "observed": "bucket"}),
+])
+def test_a_table_served_from_another_layout_is_a_layout_deviation(
+        tmp_path, monkeypatch, tables, deviation):
+    _prepared_root, root, reads = _layout_root_reads(tmp_path)
+    required = {"schema": "easyicu.required_layout/1", "complete": True,
+                "databases": {"sic": tables}}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, root, reads, monkeypatch, required=required)
+    assert error.value.code == "layout_deviation"
+    assert error.value.details["deviations"] == [deviation]
+
+
+@pytest.mark.parametrize(("payload", "code"), [
+    (None, "required_layout_missing"),
+    ({"schema": "easyicu.required_layout/1", "complete": False,
+      "databases": {"sic": {"cases": "flat"}}}, "required_layout_incomplete"),
+    ({"schema": "easyicu.required_layout/1", "complete": True,
+      "databases": {"eicu": {"cases": "flat"}}}, "required_layout_missing"),
+    ({"schema": "easyicu.required_layout/1", "complete": True,
+      "databases": {"sic": {"cases": "parquet"}}}, "receipt_input_malformed"),
+    ({"schema": "easyicu.required_layout/1", "complete": True,
+      "databases": {"sic": {"cases": "flat", "CASES": "flat"}}}, "receipt_input_malformed"),
+    ({"complete": True, "databases": {"sic": {"cases": "flat"}}}, "receipt_input_malformed"),
+])
+def test_a_missing_incomplete_or_malformed_required_layout_stops_the_receipt(
+        tmp_path, monkeypatch, payload, code):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"])
+    if payload is None:
+        (run / "REQUIRED_LAYOUT.json").unlink()
+    else:
+        (run / "REQUIRED_LAYOUT.json").write_text(json.dumps(payload))
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                                  scratch=tmp_path / "scratch")
+    assert error.value.code == code

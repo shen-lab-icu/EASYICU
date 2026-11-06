@@ -20,14 +20,27 @@ exited. It binds the run to the sealed code and to its inputs:
   ``table_consumed`` events from every worker) is in the snapshot by real
   path, its link still resolves to that real path, and it carries the
   snapshot's sha256 and how it was admitted (``admitted_by``: ``data_root``
-  or ``declared_view``, from the storage owner). An empty set is refused;
+  or ``declared_view``, from the storage owner). An empty set is refused.
+  The log's own keys (``event``, ``root``) are checked (the event is
+  ``table_consumed``, the root is this database's input) and not carried;
 * per table read, the directory it was served from and its real path; for a
   bucketed table, ``bucket_receipt`` (the storage owner's
   ``bucket_source_receipt``: manifest and build-receipt sha256, the
   ``derived_from`` sources by real path); the installation must be one the
   snapshot covers, where the builder's sha256 were compared with the hashes;
 * the parent run binding's digest from the native manifest
-  (``storage_binding``, see its ``note``);
+  (``storage_binding``, see its ``note``) and its per-table layout record
+  (``storage_binding["tables"]``): every consumed or read table must have one
+  (``storage_layout_unrecorded``) and every read in it is checked against the
+  snapshot (flat under this input; bucket installations, manifests and
+  ``derived_from`` sources as snapshotted);
+* no storage fallback: a formal run that read through one is
+  ``storage_fallback_in_formal_run`` (with counts per reason);
+* ``REQUIRED_LAYOUT.json`` in the run root (``complete: true``, per database
+  {table: flat|bucket}): its sha256 is recorded and every table read must
+  have been served from the required layout, else ``layout_deviation``;
+* the code carries no working-tree diff: the code identity's and the native
+  manifest's ``diff_sha256`` are copied and must be null;
 * for SICdb, ``cases_binding``: the prepared conversion manifest records
   ``cases.parquet`` from ``cases.csv.gz`` without content digests and without
   a converter commit, so the receipt carries both sha256s, the manifest record
@@ -59,6 +72,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 RECEIPT_FILE = "RUN_RECEIPT.json"
+REQUIRED_LAYOUT_FILE = "REQUIRED_LAYOUT.json"
+REQUIRED_LAYOUT_SCHEMA = "easyicu.required_layout/1"
+LAYOUT_KINDS = ("flat", "bucket")
+# A consumed entry in the receipt: the storage owner's table_consumed event
+# without the log's own keys (``event``, ``root``), which are checked and dropped.
+CONSUMED_KEYS = ("table", "path", "realpath", "format")
+CONSUMED_LOG_KEYS = ("event", "root")
 RECEIPT_SCHEMA = "easyicu.formal_run_receipt/1"
 SIC_DATABASES = {"sic", "sicdb"}
 _COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -121,10 +141,19 @@ def sealed_code_identity(sealed_sha: str) -> Dict[str, Any]:
             source=identity.get("source"), commit=identity.get("commit"),
             dirty=identity.get("dirty"), reason=identity.get("reason_code"),
         )
+    # G1: a sealed checkout carries no working-tree diff; the field is
+    # copied, and anything but an explicit null is a stop.
+    if "diff_sha256" not in identity or identity["diff_sha256"] is not None:
+        raise ReceiptError(
+            "code_identity_diff_present",
+            "the imported EasyICU checkout records a working-tree diff (or none at all)",
+            diff_sha256=identity.get("diff_sha256", "<unrecorded>"),
+        )
     return {
         "source": identity["source"],
         "commit": identity["commit"],
         "dirty": identity["dirty"],
+        "diff_sha256": identity["diff_sha256"],
         "version": identity.get("version"),
         "installed_dist_version": installed_dist_version(),
         "import_path": str(Path(easyicu.__file__).resolve().parent),
@@ -348,14 +377,24 @@ def _consumed(db: str, input_dir: str, consumed: Any,
     # file system) is the same (device, inode).
     by_identity = {(f.get("dev"), f.get("ino")): f for f in snapshot["files"]
                    if f.get("dev") is not None}
+    from easyicu.storage_layout import CONSUMED_EVENT
+
     files, declared = [], False
-    for item in consumed:
-        if not isinstance(item, dict) or not all(
-            isinstance(item.get(k), str) for k in ("table", "path", "realpath", "format")
-        ):
+    input_real = os.path.realpath(input_dir)
+    for raw in consumed:
+        if not isinstance(raw, dict) or not all(
+            isinstance(raw.get(k), str) for k in CONSUMED_LOG_KEYS + CONSUMED_KEYS
+        ) or raw["event"] != CONSUMED_EVENT:
             raise ReceiptError("receipt_input_malformed",
-                               f"{db} consumed entry is not {{table, path, realpath, format}}",
-                               database=db)
+                               f"{db} consumed entry is not a {CONSUMED_EVENT} event "
+                               "{event, root, table, path, realpath, format}", database=db)
+        # G5: the log's own keys are checked here and not carried into the
+        # receipt: every entry was read under this database's input.
+        if os.path.realpath(raw["root"]) != input_real:
+            raise ReceiptError("storage_consumed_other_root",
+                               f"{db} {raw['table']} was consumed under another data root",
+                               database=db, table=raw["table"], root=raw["root"])
+        item = {k: raw[k] for k in CONSUMED_KEYS}
         if os.path.realpath(item["path"]) != item["realpath"]:
             raise ReceiptError("storage_consumed_realpath_changed",
                                f"{db} {item['table']} consumed file no longer resolves to "
@@ -415,6 +454,177 @@ def _consumed(db: str, input_dir: str, consumed: Any,
     return result
 
 
+def _read_kind(layout: Any) -> str:
+    """``flat`` or ``bucket`` for a storage_reads layout (``flat``, ``bucket_<scheme>``)."""
+    return "flat" if layout == "flat" else "bucket"
+
+
+def _layout_tables(db: str, input_dir: str, binding: Mapping[str, Any],
+                   consumed: List[Dict[str, Any]], reads: List[Dict[str, Any]],
+                   snapshot: Mapping[str, Any]) -> Dict[str, str]:
+    """G2: every consumed or read table has a layout record, and every record is checked.
+
+    Keyed on ``storage_binding["tables"]`` (the storage owner's per-table
+    record of what served each consumed table). Each of a table's ``reads`` is
+    checked, not only the primary one: a flat read must be served under this
+    database's input (with the snapshot's declared-view chain if it names
+    one); a bucket read must be an installation the snapshot covers, record
+    its ``derived_from``, and name a manifest and sources whose sha256 are the
+    snapshot's. Returns {table: primary layout} for the layout requirement.
+    """
+    tables = binding.get("tables")
+    if not isinstance(tables, dict):
+        raise ReceiptError("storage_layout_unrecorded",
+                           f"{db} native manifest records no per-table layouts", database=db)
+    for table in sorted({e["table"] for e in consumed} | {r["table"] for r in reads}):
+        if table not in tables:
+            raise ReceiptError("storage_layout_unrecorded",
+                               f"{db} {table} was read but no layout record names what served it",
+                               database=db, table=table)
+    hashed = {f["realpath"]: f for f in snapshot["files"]}
+    buckets = {b["layout_realpath"] for b in snapshot.get("buckets") or ()}
+    input_real = os.path.realpath(input_dir)
+    chain = snapshot.get("declared_view_chain")
+    observed: Dict[str, str] = {}
+    for table, record in tables.items():
+        records = record.get("reads") if isinstance(record, dict) else None
+        if not isinstance(records, list) or not records:
+            raise ReceiptError("storage_layout_unrecorded",
+                               f"{db} {table} layout record lists no reads",
+                               database=db, table=table)
+        for read in records:
+            kind = read.get("layout") if isinstance(read, dict) else None
+            if kind not in LAYOUT_KINDS or not isinstance(read.get("root"), str):
+                raise ReceiptError("storage_layout_unrecorded",
+                                   f"{db} {table} has a read without a layout and root",
+                                   database=db, table=table)
+            real = os.path.realpath(read["root"])
+            if kind == "flat":
+                if real != input_real:
+                    raise ReceiptError("storage_read_other_root",
+                                       f"{db} {table} flat read was served under another root",
+                                       database=db, table=table)
+                if read.get("derived_from") is not None and read["derived_from"] != chain:
+                    raise ReceiptError("declared_view_chain_mismatch",
+                                       f"{db} {table} flat read names a declared-view chain "
+                                       "the snapshot does not hold", database=db, table=table)
+                continue
+            if real not in buckets:
+                raise ReceiptError("storage_read_outside_snapshot",
+                                   f"{db} {table} bucket is not one the input snapshot covers",
+                                   database=db, table=table)
+            derived, manifest = read.get("derived_from"), read.get("manifest")
+            if read.get("derived_from_recorded") is not True or not isinstance(derived, dict):
+                raise ReceiptError("bucket_derived_from_unrecorded",
+                                   f"{db} {table} bucket read records no derived_from",
+                                   database=db, table=table)
+            held = hashed.get(os.path.realpath(manifest["path"])) if isinstance(
+                manifest, dict) and isinstance(manifest.get("path"), str) else None
+            if held is None or held["sha256"] != manifest.get("sha256"):
+                raise ReceiptError("bucket_manifest_not_snapshotted",
+                                   f"{db} {table} bucket manifest the run read is not the "
+                                   "snapshotted one", database=db, table=table)
+            for source in derived.get("files") or ():
+                held = hashed.get(source.get("realpath"))
+                if held is None:
+                    raise ReceiptError("bucket_derived_from_outside_snapshot",
+                                       f"{db} {table} bucket source is not in the snapshot",
+                                       database=db, table=table)
+                if held["sha256"] != source.get("sha256"):
+                    raise ReceiptError("bucket_derived_from_sha_mismatch",
+                                       f"{db} {table} bucket source differs from the snapshot",
+                                       database=db, table=table)
+        primary = record.get("layout")
+        if primary not in LAYOUT_KINDS or not any(r["layout"] == primary for r in records):
+            raise ReceiptError("storage_layout_unrecorded",
+                               f"{db} {table} layout record names no primary layout",
+                               database=db, table=table)
+        observed[table] = primary
+    # The run log's per-read layout (storage_reads) agrees with the record.
+    for read in reads:
+        kind = _read_kind(read.get("layout"))
+        if not any(
+            r["layout"] == kind
+            and (kind == "flat" or os.path.realpath(r["root"]) == read.get("layout_realpath"))
+            for r in tables[read["table"]]["reads"]
+        ):
+            raise ReceiptError("storage_layout_disagrees",
+                               f"{db} {read['table']} read as {read.get('layout')} has no "
+                               "matching layout record", database=db, table=read["table"])
+    return observed
+
+
+def _refuse_fallbacks(db: str, fallbacks: Any) -> None:
+    """G3: a formal run reads only what its layout says; any storage fallback is a stop."""
+    if not fallbacks:
+        return
+    kinds: Dict[str, int] = {}
+    for entry in fallbacks if isinstance(fallbacks, list) else [fallbacks]:
+        reason = entry.get("reason") if isinstance(entry, dict) else None
+        kinds[str(reason)] = kinds.get(str(reason), 0) + 1
+    raise ReceiptError("storage_fallback_in_formal_run",
+                       f"{db} read through {sum(kinds.values())} storage fallback(s)",
+                       database=db, count=sum(kinds.values()), kinds=dict(sorted(kinds.items())))
+
+
+def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict[str, Any], str]:
+    """G4: the run's REQUIRED_LAYOUT.json and its sha256.
+
+    {"schema": "easyicu.required_layout/1", "complete": true,
+    "databases": {db: {table: "flat" | "bucket"}}}. ``complete`` states the
+    list names every table the run may read; anything else, or a database the
+    run extracts without an entry, is a stop.
+    """
+    path = Path(run_root) / REQUIRED_LAYOUT_FILE
+    if not path.is_file():
+        raise ReceiptError("required_layout_missing",
+                           f"the run root has no {REQUIRED_LAYOUT_FILE}", path=str(path))
+    payload = load_json_object(path, REQUIRED_LAYOUT_FILE)
+    listed = payload.get("databases")
+    if payload.get("schema") != REQUIRED_LAYOUT_SCHEMA or not isinstance(listed, dict):
+        raise ReceiptError("receipt_input_malformed",
+                           f"{REQUIRED_LAYOUT_FILE} is not a required-layout list",
+                           input=REQUIRED_LAYOUT_FILE)
+    if payload.get("complete") is not True:
+        raise ReceiptError("required_layout_incomplete",
+                           f"{REQUIRED_LAYOUT_FILE} does not state complete: true")
+    for db in databases:
+        tables = listed.get(db)
+        if not isinstance(tables, dict) or not tables:
+            raise ReceiptError("required_layout_missing",
+                               f"{REQUIRED_LAYOUT_FILE} lists no layout for {db}", database=db)
+        names = [str(t).lower() for t in tables]
+        if len(set(names)) != len(names) or any(v not in LAYOUT_KINDS for v in tables.values()):
+            raise ReceiptError("receipt_input_malformed",
+                               f"{REQUIRED_LAYOUT_FILE} {db}: each table once, flat or bucket",
+                               input=REQUIRED_LAYOUT_FILE, database=db)
+    return payload, sha256_file(path)
+
+
+def _layout_requirement(db: str, required: Optional[Mapping[str, str]],
+                        observed: Mapping[str, str]) -> Dict[str, Any]:
+    """G4: every table the run read was served from the layout the run required."""
+    if not isinstance(required, Mapping):
+        raise ReceiptError("required_layout_missing",
+                           f"{REQUIRED_LAYOUT_FILE} lists no layout for {db}", database=db)
+    wanted = {str(t).lower(): v for t, v in required.items()}
+    deviations = []
+    for table, layout in sorted(observed.items()):
+        need = wanted.get(table.lower())
+        if need != layout:
+            deviations.append({"table": table, "required": need, "observed": layout})
+    if deviations:
+        raise ReceiptError("layout_deviation",
+                           f"{db}: {len(deviations)} table(s) not served from the required layout",
+                           database=db, deviations=deviations)
+    read = {t.lower() for t in observed}
+    return {
+        "required": dict(sorted(required.items())),
+        "observed": dict(sorted(observed.items())),
+        "not_read": sorted(t for t in required if str(t).lower() not in read),
+    }
+
+
 def _snapshots(run_root: Path) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """The pre- and post-run input snapshots, and their file digests."""
     from easyicu.formal_inputs import SNAPSHOT_SCHEMA
@@ -463,7 +673,8 @@ def _snapshot_section(db: str, input_dir: str, pre: Mapping[str, Any],
 def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                       exit_status: Any, sealed_sha: str,
                       version: Optional[str] = None,
-                      snapshots: Optional[tuple] = None) -> Dict[str, Any]:
+                      snapshots: Optional[tuple] = None,
+                      required: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     out = run_root / db
     input_real = Path(input_dir).resolve()
     input_manifest = input_real / "conversion_manifest.json"
@@ -503,6 +714,13 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
         raise ReceiptError("native_manifest_not_sealed",
                            f"{db} native manifest was not produced by the sealed checkout",
                            database=db)
+    if "easyicu_git_diff_sha256" not in provenance or (
+        provenance["easyicu_git_diff_sha256"] is not None
+    ):
+        raise ReceiptError("native_manifest_diff_present",
+                           f"{db} native manifest records a working-tree diff (or none at all)",
+                           database=db,
+                           diff_sha256=provenance.get("easyicu_git_diff_sha256", "<unrecorded>"))
     if provenance.get("easyicu_version") != version:
         raise ReceiptError("native_manifest_version_mismatch",
                            f"{db} native manifest names another EasyICU version than the "
@@ -513,6 +731,7 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
         "sha256": sha256_file(manifest_path),
         "easyicu_git_commit": provenance.get("easyicu_git_commit"),
         "easyicu_git_dirty": provenance.get("easyicu_git_dirty"),
+        "easyicu_git_diff_sha256": provenance["easyicu_git_diff_sha256"],
         "easyicu_version": provenance.get("easyicu_version"),
         # Diagnostic only: the environment's installed distribution.
         "easyicu_installed_dist_version": provenance.get("easyicu_installed_dist_version"),
@@ -536,7 +755,11 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                 "workers and isolated children verify against it and extend it in their "
                 "own processes (not merged into this digest)",
     }
-    section["storage_fallbacks"] = manifest.get("storage_fallbacks") or []
+    observed = _layout_tables(db, input_dir, binding, section["storage_consumed"]["files"],
+                              section["storage_reads"], before)
+    _refuse_fallbacks(db, manifest.get("storage_fallbacks"))
+    section["storage_fallbacks"] = []
+    section["layout_requirement"] = _layout_requirement(db, required, observed)
     return section
 
 
@@ -577,13 +800,16 @@ def build_run_receipt(
     _refuse_paths_inside_inputs({"scratch": Path(scratch), "run_root": run_root}, specs)
     code = sealed_code_identity(sealed_sha)
     pre, post, snapshot_files = _snapshots(run_root)
+    required, required_sha = load_required_layout(
+        run_root, [spec.split(":", 2)[0] for spec in specs])
     exits = _status_exits(run_root)
     databases: Dict[str, Any] = {}
     for spec in specs:
         db, input_dir, cores = spec.split(":", 2)
         try:
             section = _database_section(run_root, db, input_dir, cores, exits.get(db),
-                                        sealed_sha, code.get("version"), (pre, post))
+                                        sealed_sha, code.get("version"), (pre, post),
+                                        required["databases"][db])
             if db in SIC_DATABASES:
                 section["cases_binding"] = sic_cases_binding(Path(input_dir), Path(scratch), code)
         except (KeyError, TypeError, AttributeError) as exc:
@@ -599,6 +825,8 @@ def build_run_receipt(
         "easyicu_version": code.get("version"),
         "code_identity": code,
         "input_snapshot": snapshot_files,
+        "required_layout": {"path": str((run_root / REQUIRED_LAYOUT_FILE).resolve()),
+                            "sha256": required_sha, "complete": True},
         "parameters": dict(parameters or {}),
         "run_root": str(run_root.resolve()),
         "wall_seconds": None if started_at is None else round(finished - float(started_at), 1),
