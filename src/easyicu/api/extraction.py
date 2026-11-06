@@ -1647,6 +1647,10 @@ def _oom_kill_delta(before: Optional[int], after: Optional[int]) -> Optional[int
 # multiprocessing, 137 from a shell) and Windows STATUS_NO_MEMORY
 # (0xC0000017). A crash status such as 0xC0000409 (fail-fast) is not a kill.
 _UNVERIFIED_KILL_EXIT_CODES = frozenset({-9, 137, 0xC0000017})
+# SIGKILL as multiprocessing (-9) and a shell (137) report it: the only way
+# the kernel OOM killer stops a process, so the only death a cgroup
+# ``oom_kill`` increment can explain.
+_SIGKILL_EXIT_CODES = frozenset({-9, 137})
 
 
 def _host_reports_oom_kills() -> bool:
@@ -1751,29 +1755,38 @@ def _worker_memory_evidence(
     """Why a failed worker counts as out of memory, or None.
 
     Evidence only (lead-r13 B-RETRY):
-    - ``oom_kill_event``: the cgroup's ``oom_kill`` counter rose while the
-      worker ran and the worker died;
     - ``memory_exception``: a failure record marks ``memory_exhausted`` (set
       from the exception type and cause chain when it was captured), or its
-      recorded exception type is exactly a memory exception type.
+      recorded exception type is exactly a memory exception type;
+    - ``oom_kill_event``: the worker was stopped by SIGKILL with no exception
+      record, and the cgroup's ``oom_kill`` counter rose while it ran.
+    A recorded non-memory exception always wins (lead-r13 D3-OOM-EVIDENCE):
+    the counter belongs to the whole cgroup, so its increment may be another
+    process's kill and never overrides what the worker itself recorded. The
+    counter is read only for a death the OOM killer can cause (SIGKILL, the
+    only signal it sends) that left no record of its own.
     An exit code alone (9, 137, a Windows status) and text in a traceback are
     not evidence; such a kill is ``worker_killed_unknown`` (see
     ``_worker_failure_class``) and is not retried as a memory failure.
     """
 
-    try:
-        died = int(exit_code) != 0
-    except (TypeError, ValueError):
-        died = False
-    if died and oom_kill_delta:
-        return "oom_kill_event"
-    for item in failures if isinstance(failures, list) else ():
-        if not isinstance(item, Mapping):
-            continue
+    records = [
+        item for item in (failures if isinstance(failures, list) else ())
+        if isinstance(item, Mapping)
+    ]
+    for item in records:
         if item.get("memory_exhausted") is True:
             return "memory_exception"
         if str(item.get("exception_type") or "") in _MEMORY_EXCEPTION_TYPE_NAMES:
             return "memory_exception"
+    if any(item.get("exception_type") for item in records):
+        return None
+    try:
+        sigkilled = int(exit_code) in _SIGKILL_EXIT_CODES
+    except (TypeError, ValueError):
+        sigkilled = False
+    if sigkilled and oom_kill_delta:
+        return "oom_kill_event"
     return None
 
 
