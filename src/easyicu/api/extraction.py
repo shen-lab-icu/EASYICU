@@ -3622,6 +3622,61 @@ class SpecialDependencyError(RuntimeError):
         self.reason_code = reason_code
 
 
+# A Sepsis-3 request without a batch size must not stage its score modules
+# with an unbatched in-process load: a lone sepsis3_sofa2 on the 3000-stay
+# CareVue sample was OOM-killed at 24 GiB that way (lead-r13).  The owner stages
+# through its streamed module path.  The resource planner's batch (from
+# cgroup-aware available memory and measured module profiles) is an upper
+# bound, capped at this batch: the planner never goes below 5000 stays or the
+# whole cohort, and its 3000-stay one-shot for that sample was OOM-killed at a
+# 12 GiB cap while batch 1000 completed.  The cap is also the fixed batch when
+# the planner cannot plan.  The derivation itself reads per-batch stay
+# shards and writes one row group per batch, so its output bytes follow its
+# batch; without a requested batch it uses this same fixed batch, which makes
+# the output byte-identical to an explicit batch_size=1000 request.
+_SPECIAL_DEFAULT_BATCH_SIZE = 1000
+
+
+def _special_dependency_batch_policy(
+    database: str,
+    modules: Sequence[str],
+    num_patients: int,
+    requested_batch_size: Optional[int],
+) -> Dict[str, object]:
+    """Batch sizes for staging Sepsis-3 dependencies and deriving from them."""
+
+    total = int(num_patients)
+    if requested_batch_size:
+        requested = min(int(requested_batch_size), total)
+        return {
+            "staging_batch_size": requested,
+            "staging_reason_code": "explicit_batch_size",
+            "derivation_batch_size": requested,
+            "derivation_reason_code": "explicit_batch_size",
+        }
+    derivation = min(_SPECIAL_DEFAULT_BATCH_SIZE, total)
+    try:
+        plan = plan_extraction_resources(database, modules, total)
+    except (ValueError, KeyError, OSError) as exc:
+        return {
+            "staging_batch_size": derivation,
+            "staging_reason_code": "special_staging_fixed_batch",
+            "staging_planner_error": type(exc).__name__,
+            "derivation_batch_size": derivation,
+            "derivation_reason_code": "special_derivation_fixed_batch",
+        }
+    capped = int(plan.batch_size) > derivation
+    return {
+        "staging_batch_size": derivation if capped else int(plan.batch_size),
+        "staging_reason_code": (
+            "special_staging_batch_cap" if capped else plan.reason_code
+        ),
+        "staging_resource_plan": plan.to_dict(),
+        "derivation_batch_size": derivation,
+        "derivation_reason_code": "special_derivation_fixed_batch",
+    }
+
+
 def _stage_special_dependencies(
     modules: Sequence[str],
     *,
@@ -3629,17 +3684,19 @@ def _stage_special_dependencies(
     published_output_dir: Optional[str],
     group_output_root: Optional[str],
     produce: Callable[[str, Path], None],
-) -> None:
+) -> Dict[str, str]:
     """Lay out each dependency module the way the streamed Sepsis-3 path reads it.
 
     ``<module>.parquet`` (or the empty-module manifest) comes from, in order:
     the published output, this worker group's own module output, or a private
     extraction by the module owner.  A failed or missing module raises.
+    Returns where each module came from.
     """
     import json
 
     staging = Path(staging_dir)
     staging.mkdir(parents=True, exist_ok=True)
+    sources: Dict[str, str] = {}
 
     def _link(source: Path, target: Path) -> None:
         if target.exists() or target.is_symlink():
@@ -3653,6 +3710,7 @@ def _stage_special_dependencies(
             published = Path(published_output_dir) / f"{module}.parquet"
             if published.exists():
                 _link(published, target)
+                sources[module] = "published"
                 continue
             published_manifest = Path(published_output_dir) / f"{module}.manifest.json"
             try:
@@ -3669,12 +3727,15 @@ def _stage_special_dependencies(
                     json.dumps({"module": module, "saved": {}, "errors": []}),
                     encoding="utf-8",
                 )
+                sources[module] = "published"
                 continue
         source_dir = Path(group_output_root) / module if group_output_root else None
+        sources[module] = "group_output"
         if source_dir is None or not (source_dir / "_manifest.json").is_file():
             source_dir = staging / "_produced" / module
             source_dir.mkdir(parents=True, exist_ok=True)
             produce(module, source_dir)
+            sources[module] = "produced"
         try:
             manifest = json.loads((source_dir / "_manifest.json").read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
@@ -3699,6 +3760,7 @@ def _stage_special_dependencies(
                 json.dumps({"module": module, "saved": {}, "errors": []}),
                 encoding="utf-8",
             )
+    return sources
 
 
 def _run_special_extraction(
@@ -3721,6 +3783,7 @@ def _run_special_extraction(
     derivation, whatever the execution mode: published files, this group's own
     module outputs, or a private extraction by the module owner.
     """
+    import json
     import shutil
 
     if failure_context is not None:
@@ -3773,29 +3836,46 @@ def _run_special_extraction(
             "Sepsis-3 export needs the explicit patient cohort",
         )
     staging = Path(output_dir) / _SPECIAL_DEPENDENCY_DIRNAME
-    try:
-        _stage_special_dependencies(
-            required_dependency_modules,
-            staging_dir=staging,
-            published_output_dir=published_output_dir,
-            group_output_root=group_output_root,
-            produce=lambda module, target: _run_module_extraction(
+    policy = _special_dependency_batch_policy(
+        database, required_dependency_modules, len(cohort), batch_size
+    )
+
+    def _produce(module: str, target: Path) -> None:
+        # The module owner's streamed path: bounded patient batches appended
+        # to one module parquet, the path the planner's measured profiles
+        # describe.  The shared loader cache is released after each module so
+        # staged modules do not accumulate source tables in this process.
+        from .concepts import clear_global_loader
+
+        try:
+            _run_module_extraction(
                 module,
                 EXTRACT_MODULES[module],
                 database,
                 data_path,
                 patient_ids_filter,
-                batch_size,
+                int(policy["staging_batch_size"]),
                 str(target),
                 use_sofa2=use_sofa2,
-            ),
+                stream_output_batches=True,
+            )
+        finally:
+            clear_global_loader()
+
+    try:
+        sources = _stage_special_dependencies(
+            required_dependency_modules,
+            staging_dir=staging,
+            published_output_dir=published_output_dir,
+            group_output_root=group_output_root,
+            produce=_produce,
         )
         _stream_special_extraction_batches(
             special_modules,
             database,
             data_path,
             patient_ids_filter,
-            int(batch_size or len(cohort)),
+            int(policy["derivation_batch_size"]),
             output_dir,
             use_sofa2=use_sofa2,
             published_output_dir=str(staging),
@@ -3803,6 +3883,13 @@ def _run_special_extraction(
         )
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+    manifest_path = Path(output_dir) / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dependency_staging"] = {
+        **policy,
+        "dependency_sources": sources,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
 _EXTRACTION_WORKER_FAILURE_SCHEMA = "easyicu.extraction_worker_failure/1"
@@ -7786,6 +7873,9 @@ def extract_database(
                     "resource_plan": module_resource_plans[mod_name].to_dict(),
                     "resource_execution_limits": resource_execution_limits,
                 }
+                if manifest.get("dependency_staging"):
+                    mod_result["dependency_staging"] = manifest["dependency_staging"]
+                    output_manifest["dependency_staging"] = manifest["dependency_staging"]
                 for c_name in concepts:
                     info = manifest.get("saved", {}).get(c_name)
                     if info and os.path.exists(info["path"]):

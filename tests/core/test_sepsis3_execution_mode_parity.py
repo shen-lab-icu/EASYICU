@@ -181,3 +181,121 @@ def test_one_sofa2_delta_total_rule_for_every_path():
     # SICdb has no structural SOFA-2 total: no hour is imputed, so no Sepsis-3.
     unsupported = sofa2_total_for_sepsis_delta([None, 2.0], "sic")
     assert unsupported.isna().all()
+
+
+# --- A lone Sepsis-3 request without a batch size stages with a bounded batch.
+# lead-r13: the owner staged sofa2_score one-shot and was OOM-killed at 24 GiB.
+
+COHORT = 2500
+
+
+def _cohort_frames():
+    import numpy as np
+
+    hours = 30
+    ids = np.repeat(np.arange(1, COHORT + 1), hours)
+    times = np.tile(np.arange(hours, dtype=float), COHORT)
+    shared = pd.DataFrame({"stay_id": ids, "charttime": times, "susp_inf": times == 12.0})
+    rng = np.random.default_rng(20261106)
+    score = {"stay_id": ids, "charttime": times}
+    for component in SOFA2_COMPONENT_NAMES:
+        available = rng.random(len(ids)) > 0.2
+        score[component] = np.where(available, rng.integers(0, 3, len(ids)).astype(float), np.nan)
+        score[f"{component}_available"] = available
+    return {"sepsis_shared": shared, "sofa2_score": pd.DataFrame(score)}
+
+
+def _recording_owner(frames, received):
+    def owner(module_name, concepts, database, data_path, ids, batch_size, output_dir,
+              use_sofa2=False, stream_output_batches=False, **_kwargs):
+        from pathlib import Path
+
+        received[module_name] = (batch_size, stream_output_batches)
+        target = Path(output_dir) / f"{module_name}.parquet"
+        frames[module_name].to_parquet(target, index=False)
+        (Path(output_dir) / "_manifest.json").write_text(json.dumps({
+            "module": module_name,
+            "saved": {module_name: {"path": str(target)}},
+            "errors": [],
+        }))
+
+    return owner
+
+
+def _lone_request(tmp_path, name, batch_size):
+    out = tmp_path / name
+    out.mkdir()
+    ex._run_special_extraction(
+        ["sepsis3_sofa2"], "mimic", str(tmp_path / "unused-data"),
+        {"icustay_id": list(range(1, COHORT + 1))}, batch_size, str(out), use_sofa2=True,
+    )
+    return out
+
+
+def test_a_lone_request_without_batch_stages_bounded_and_matches_batch_1000(tmp_path, monkeypatch):
+    frames = _cohort_frames()
+    received = {}
+    monkeypatch.setattr(ex, "_run_module_extraction", _recording_owner(frames, received))
+    monkeypatch.setattr(ex, "_available_memory_mb", lambda: 4096.0)  # a constrained laptop
+
+    auto = _lone_request(tmp_path, "auto", None)
+    staging = json.loads((auto / "_manifest.json").read_text())["dependency_staging"]
+    plan = ex.plan_extraction_resources(
+        "mimic", ["sepsis_shared", "sofa2_score"], COHORT, available_memory_mb=4096.0
+    )
+    # The owner stages through its streamed (bounded-batch) path, never an
+    # unbatched one-shot load.  The planner's batch is the upper bound (here
+    # the whole cohort), capped at the special batch of 1000.
+    assert plan.batch_size == COHORT
+    assert staging["staging_batch_size"] == 1000
+    assert set(received.values()) == {(1000, True)}
+    assert staging["staging_reason_code"] == "special_staging_batch_cap"
+    assert staging["staging_resource_plan"]["batch_size"] == plan.batch_size
+    assert staging["staging_resource_plan"]["reason_code"] == plan.reason_code
+    assert staging["derivation_batch_size"] == 1000
+    assert staging["derivation_reason_code"] == "special_derivation_fixed_batch"
+    assert staging["dependency_sources"] == {
+        "sepsis_shared": "produced", "sofa2_score": "produced",
+    }
+
+    received.clear()
+    explicit = _lone_request(tmp_path, "explicit", 1000)
+    explicit_staging = json.loads((explicit / "_manifest.json").read_text())["dependency_staging"]
+    assert set(received.values()) == {(1000, True)}
+    assert explicit_staging["staging_reason_code"] == "explicit_batch_size"
+    assert (auto / "sep3_sofa2.parquet").read_bytes() == (
+        explicit / "sep3_sofa2.parquet"
+    ).read_bytes()
+    assert len(pd.read_parquet(auto / "sep3_sofa2.parquet")) > 0
+
+
+def test_staging_uses_the_fixed_batch_when_the_planner_cannot_plan(tmp_path, monkeypatch):
+    frames = _cohort_frames()
+    received = {}
+    monkeypatch.setattr(ex, "_run_module_extraction", _recording_owner(frames, received))
+
+    def no_plan(*_args, **_kwargs):
+        raise ValueError("no plan")
+
+    monkeypatch.setattr(ex, "plan_extraction_resources", no_plan)
+    out = _lone_request(tmp_path, "fixed", None)
+    staging = json.loads((out / "_manifest.json").read_text())["dependency_staging"]
+    assert set(received.values()) == {(1000, True)}
+    assert staging["staging_reason_code"] == "special_staging_fixed_batch"
+    assert staging["staging_planner_error"] == "ValueError"
+
+
+@pytest.mark.parametrize("cohort,expected,reason", [
+    (30000, 1000, "special_staging_batch_cap"),
+    (600, 600, None),  # a cohort below the cap stages whole, with the planner's reason
+])
+def test_the_staging_batch_is_the_planner_bound_capped_at_1000(monkeypatch, cohort, expected, reason):
+    monkeypatch.setattr(ex, "_available_memory_mb", lambda: 4096.0)
+    policy = ex._special_dependency_batch_policy(
+        "mimic", ["sepsis_shared", "sofa2_score"], cohort, None
+    )
+    assert policy["staging_batch_size"] == expected
+    assert policy["staging_reason_code"] == (
+        reason or policy["staging_resource_plan"]["reason_code"]
+    )
+    assert policy["derivation_batch_size"] == min(cohort, 1000)
