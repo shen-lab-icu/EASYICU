@@ -8433,6 +8433,8 @@ def _publish_native_export_v2(
     manifest.update(source_value_publication(
         result.get("modules") or {}, modules, database=database, dictionary=dictionary
     ))
+    if result.get("storage_reads"):
+        manifest["storage_reads"] = list(result["storage_reads"])
     if result.get("storage_binding"):
         manifest["storage_binding"] = dict(result["storage_binding"])
     if "storage_consumed" in result:
@@ -8695,7 +8697,12 @@ def extract_database(
     import shutil
 
     from ..runtime.memory_manager import get_rss_mb
-    from ..storage_layout import SCAN_FALLBACK_LOG_ENV, read_scan_fallback_log
+    from ..storage_layout import (
+        SCAN_FALLBACK_LOG_ENV,
+        read_scan_fallback_log,
+        read_table_read_log,
+        table_layout_receipt,
+    )
 
     t_start = time.time()
     # The primary gate precedes cohort discovery, workers and ledger acceptance.
@@ -9593,6 +9600,11 @@ def extract_database(
         shutil.rmtree(tmp_root, ignore_errors=True)
 
     result["storage_fallbacks"] = list(read_scan_fallback_log(scan_fallback_log))
+    # Per table actually read: the layout the storage policy used, with the
+    # fallback reason when a bucket cache was bypassed (formal-run receipt F2).
+    result["storage_reads"] = table_layout_receipt(
+        read_table_read_log(scan_fallback_log), result["storage_fallbacks"]
+    )
     # Every file any worker consumed, from the storage owner's table_consumed
     # events in the shared run log (formal-run receipt, delta9p B9P-CSV-BINDING).
     from ..storage_layout import read_consumed_log

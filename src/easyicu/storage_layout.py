@@ -2022,6 +2022,10 @@ def read_scan_fallback_log(path) -> tuple[dict[str, str], ...]:
     return tuple(e for e in _read_run_log(path) if "event" not in e)
 
 
+TABLE_READ_EVENT = "table_read"
+LAYOUT_FLAT = "flat"
+
+
 def _read_run_log(path) -> tuple[dict[str, str], ...]:
     """Every distinct entry of a run log, fallbacks and read events."""
     try:
@@ -2034,6 +2038,48 @@ def _read_run_log(path) -> tuple[dict[str, str], ...]:
             entry = json.loads(line)
             entries.setdefault(json.dumps(entry, sort_keys=True), entry)
     return tuple(entries.values())
+
+
+def read_table_read_log(path) -> tuple[dict[str, str], ...]:
+    """The distinct table reads a run logged: which layout served each table."""
+    return tuple(e for e in _read_run_log(path) if e.get("event") == TABLE_READ_EVENT)
+
+
+def record_table_read(source, table: str, layout: str) -> None:
+    """Record which physical layout the storage policy resolved for ``table``.
+
+    ``layout`` is ``flat`` or ``bucket_<scheme>`` (``bucket_hash``,
+    ``bucket_range``, ``bucket_variable_stay_range``). It goes to the same run
+    log as the fallbacks, so worker processes report into one receipt.
+    """
+    base = None if source.base_path is None else Path(source.base_path)
+    _log_fallback({"event": TABLE_READ_EVENT, "root": str(base), "table": table,
+                   "layout": layout})
+
+
+def table_layout_receipt(reads, fallbacks) -> list[dict[str, str]]:
+    """Per table actually read: the layout used, and any fallback reason.
+
+    One entry per (root, table, layout), sorted. A flat read of a table whose
+    bucket cache was bypassed carries that fallback's ``reason`` and
+    ``bucket_reason``; any other fallback for the table (an unmanifested or CSV
+    read) carries its ``reason``.
+    """
+    fallback_by_table: dict[tuple[str, str], dict[str, str]] = {}
+    for entry in fallbacks:
+        key = (str(entry.get("root")), str(entry.get("table")))
+        fallback_by_table.setdefault(key, entry)
+    receipt = {}
+    for entry in reads:
+        root, table, layout = str(entry["root"]), str(entry["table"]), str(entry["layout"])
+        item = {"root": root, "table": table, "layout": layout}
+        fallback = fallback_by_table.get((root, table))
+        if fallback is not None and layout == LAYOUT_FLAT:
+            item["fallback_reason"] = str(fallback["reason"])
+            if fallback.get("bucket_reason"):
+                item["bucket_reason"] = str(fallback["bucket_reason"])
+        receipt[(root, table, layout)] = item
+    return [receipt[key] for key in sorted(receipt)]
 
 
 def _record_fallback(reason: str, base: Path, table: str, **extra: str) -> None:
@@ -2270,6 +2316,7 @@ def resolve_table_files(
         if consume and files:
             record_consumed(source, table, files, FORMAT_PARQUET, key=key)
             bind_layout(key, table, "flat", None)
+            record_table_read(source, table, LAYOUT_FLAT)
         elif not files and chosen is not None:
             # Read non-empty earlier in this run, gone now (D9B-EMPTY-RESOLVE).
             held = bound_set(key)
@@ -2290,6 +2337,7 @@ def resolve_table_files(
     )[1]
     if consume:
         record_bucket_consumed(source, table, layout, selected)
+        record_table_read(source, table, f"bucket_{layout.scheme}")
     return selected
 
 
