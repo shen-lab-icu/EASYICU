@@ -223,6 +223,8 @@ def _legacy_manifest(root: Path, manifest: dict, marker, allow: bool) -> dict:
         if not (manifest["complete_size"] == marker.st_size):
             raise ValueError("legacy receipt mismatch")
         inventory = []
+        if not isinstance(manifest["files_by_bucket"], dict):
+            raise ValueError("files_by_bucket must be an object")
         for bid, paths in manifest["files_by_bucket"].items():
             for relative in paths:
                 path = _inventory_path(root, relative, count)
@@ -250,7 +252,7 @@ def _legacy_manifest(root: Path, manifest: dict, marker, allow: bool) -> dict:
             builder_version="legacy-aumc-v1",
             inventory=inventory,
         )
-    except (OSError, KeyError, TypeError, ValueError) as exc:
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
         raise BucketLayoutError("bucket_legacy_unverifiable", root) from exc
 
 
@@ -348,6 +350,8 @@ def read_bucket_contract(
         by_bucket: dict[int, list[Path]] = {i: [] for i in range(count)}
         seen = set()
         for entry in inventory:
+            if not isinstance(entry, dict):
+                raise BucketLayoutError("bucket_inventory_mismatch", root)
             path = _inventory_path(root, entry["relative_path"], count)
             if any(
                 not isinstance(entry[k], int)
@@ -406,7 +410,9 @@ def read_bucket_contract(
         )
     except BucketLayoutError:
         raise
-    except (OSError, KeyError, TypeError, ValueError) as exc:
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        # AttributeError: a field of the wrong JSON type (``[]`` where an
+        # object belongs) is the manifest's defect, not an untyped crash.
         raise BucketLayoutError("bucket_manifest_invalid", root) from exc
 
 
@@ -501,6 +507,8 @@ def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> B
         raise ValueError("missing partitions")
     partitions, seen_values = [], set()
     for index, entry in enumerate(raw_partitions):
+        if not isinstance(entry, dict):
+            raise BucketLayoutError("bucket_partition_invalid", root)
         if entry["id"] != index or not _is_power_of_two(entry["modulus"]):
             raise BucketLayoutError("bucket_partition_invalid", root)
         if count % entry["modulus"]:
@@ -511,8 +519,16 @@ def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> B
             raise BucketLayoutError("bucket_partition_invalid", root)
         seen_values.add(marker)
         secondary = entry.get("secondary", {})
-        if set(secondary) != set(secondary_columns) or any(
-            not isinstance(v, list) for v in secondary.values()
+        # Types first: ``secondary`` is an object of selector column -> list
+        # of scalar values ([] or a string has no ``values()``).
+        if (
+            not isinstance(secondary, dict)
+            or set(secondary) != set(secondary_columns)
+            or any(
+                not isinstance(v, list)
+                or any(isinstance(x, (list, dict)) for x in v)
+                for v in secondary.values()
+            )
         ):
             raise BucketLayoutError("bucket_partition_invalid", root)
         partitions.append(
@@ -542,6 +558,8 @@ def _read_variable_contract(root: Path, manifest: dict, cache: dict | None) -> B
     by_partition: dict[tuple[int, int], list[Path]] = {}
     seen: set[Path] = set()
     for entry in inventory:
+        if not isinstance(entry, dict):
+            raise BucketLayoutError("bucket_inventory_mismatch", root)
         relative = entry["relative_path"]
         parts = PurePosixPath(relative).parts if isinstance(relative, str) else ()
         if (
@@ -819,6 +837,16 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
         # separately); its inventory is the union, its rows the sum.
         tables: dict[str, tuple[set, int | None]] = {}
         for entry in entries:
+            outputs_list = entry.get("outputs") if isinstance(entry, dict) else None
+            if not isinstance(entry, dict) or not (
+                outputs_list is None
+                or (isinstance(outputs_list, list)
+                    and all(isinstance(o, dict) for o in outputs_list))
+            ):
+                raise TableScanError(
+                    "conversion_manifest_unreadable", path.name,
+                    "each table entry must be an object whose outputs are objects",
+                )
             name = str(entry.get("table"))
             outputs, rows = tables.setdefault(name, (set(), 0))
             outputs.update(
