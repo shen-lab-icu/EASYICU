@@ -44,7 +44,7 @@ def test_explicit_signed_preparation_only_never_grants_analysis(tmp_path, monkey
     assert grant.checkpoint_sha256 == checkpoint.checkpoint_sha256
     assert not (tmp_path / "approved_executable_plan.json").exists()
     assert not (tmp_path / "human_review_checkpoint.json").exists()
-    assert sorted(path.name for path in source.iterdir()) == ["cases.parquet", "laboratory"]
+    assert sorted(path.name for path in source.iterdir()) == ["cases.parquet", "d_references.parquet", "laboratory"]
 
 
 def test_client_self_signed_approval_is_not_a_host_review(tmp_path, monkeypatch):
@@ -73,7 +73,7 @@ def test_pending_or_expired_review_is_never_a_grant(tmp_path, monkeypatch):
 
 def test_scope_or_source_changed_after_review_is_rejected(tmp_path, monkeypatch):
     result, source, scope, _ = _case(tmp_path, monkeypatch)
-    changed = scope.model_copy(update={"files": ("cases.parquet", "laboratory/2.parquet")})
+    changed = scope.model_copy(update={"files": ("cases.parquet", "d_references.parquet", "laboratory/2.parquet")})
     with pytest.raises(ValueError, match="scope_binding_mismatch"):
         verify_sic_raw_preparation_grant(plan_result=result, run_dir=tmp_path, source_path=source, requested_scope=changed)
     monkeypatch.setattr(sources, "registered_source_identity", lambda _path: None)
@@ -138,7 +138,9 @@ def test_symlinked_approved_file_is_never_accepted(tmp_path, monkeypatch):
 @pytest.mark.parametrize("overrides", [
     {"analysis_authorized": True}, {"window_end_hours": 48},
     {"files": ("cases.parquet", "../secret.parquet")},
-    {"files": ("cases.parquet", "laboratory/1.parquet", "medication.parquet")},
+    {"files": ("cases.parquet", "d_references.parquet", "laboratory/1.parquet", "medication.parquet")},
+    # Discharge types cannot be read without the release's reference labels.
+    {"files": ("cases.parquet", "laboratory/1.parquet")},
     {"case_columns": ("CaseID", "ICUOffset", "TimeOfStay", "AgeOnAdmission")},
 ])
 def test_invalid_or_broadened_scope_is_refused(tmp_path, monkeypatch, overrides):

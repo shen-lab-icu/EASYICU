@@ -1767,7 +1767,7 @@ def _callback_sic_death(
 
     NOTE (2026-07-16): the live `death` extraction dispatches through
     ``callback_apply._apply_callback`` (``if expr == "sic_death"``), which now reads
-    `HospitalDischargeType == 2028` (Deceased) for in-hospital mortality. Flagging any
+    a HospitalDischargeType labelled Deceased/Sterbefall for in-hospital mortality. Flagging any
     non-null OffsetOfDeath (below) captures registry deaths up to ~1yr of follow-up
     (~annual mortality, not in-hospital) and must not be reused.
 

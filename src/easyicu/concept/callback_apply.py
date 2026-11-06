@@ -1608,7 +1608,8 @@ def _apply_callback(
     # 🔧 SICdb death callback — in-hospital mortality via HospitalDischargeType.
     if expr == "sic_death":
         df = frame.copy()
-        # In-hospital mortality: HospitalDischargeType == 2028 (Deceased).
+        # In-hospital mortality: a HospitalDischargeType labelled Deceased
+        # (1.0.6) or Sterbefall (1.0.8) in d_references.
         #
         # PREVIOUS BUG (fixed 2026-07-16): death was flagged whenever OffsetOfDeath was
         # non-null. OffsetOfDeath carries registry deaths up to ~1yr of follow-up (median
@@ -1633,18 +1634,28 @@ def _apply_callback(
                 "sic_death requires HospitalDischargeType; OffsetOfDeath alone "
                 "cannot identify in-hospital mortality"
             )
-        from ..source_death_times import SIC_HOSPITAL_SURVIVED, sic_recorded_death
+        from ..source_death_times import (
+            SicReferenceUnavailable, sic_discharge_codes, sic_recorded_death,
+        )
 
+        if data_source is None:
+            raise SicReferenceUnavailable("sic_death needs d_references to read discharge types")
+        references = data_source.load_table(
+            "d_references", columns=["ReferenceGlobalID", "ReferenceValue", "ReferenceName"],
+            verbose=False,
+        )
+        codes = sic_discharge_codes(references.data if hasattr(references, "data") else references)
         disp = pd.to_numeric(df[disp_col], errors='coerce')
         state = next(
             (df[c] for c in ('DischargeState', 'dischargestate') if c in df.columns),
             pd.Series(np.nan, index=df.index),
         )
-        # 2028 = Deceased in hospital; 2215 = deceased at ICU discharge.
-        died = sic_recorded_death(disp, state)
-        # 2026-11-03 audit round 2 (R2-03): 2026 = Survived is False, timed at
-        # ICU discharge (cases.TimeOfStay); an unrecorded disposition stays NA.
-        survived = (disp == SIC_HOSPITAL_SURVIVED) & ~died
+        # Deceased / Sterbefall in hospital, or verstorben at ICU discharge.
+        died = sic_recorded_death(disp, state, codes)
+        # 2026-11-03 audit round 2 (R2-03): any surviving discharge type is
+        # False, timed at ICU discharge (cases.TimeOfStay); an unrecorded
+        # disposition stays NA.
+        survived = disp.isin(codes.survived) & ~died
         death_values = pd.Series(index=df.index, dtype=object)
         death_values[died] = True
         death_values[survived] = False

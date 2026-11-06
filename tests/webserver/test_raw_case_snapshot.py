@@ -96,6 +96,7 @@ def test_real_sic_case_export_can_consume_a_staged_synthetic_source(tmp_path):
     from easyicu.webserver.dataio import make_export_runner
     from easyicu.webserver.time_origin_source_authority import case_duration_source_provenance
     from tests.support.data_provenance import ExportJob
+    from tests.support.sic_references import write_sic_references
 
     source, stage, out = tmp_path / "source", tmp_path / "stage", tmp_path / "export"
     source.mkdir()
@@ -107,8 +108,10 @@ def test_real_sic_case_export_can_consume_a_staged_synthetic_source(tmp_path):
         "CaseID": [1, 1, 2], "Offset": [3600, 86400, 7200],
         "LaboratoryID": [657, 657, 657], "LaboratoryValue": [1.0, 9.0, 2.0],
     }).to_parquet(source / "laboratory.parquet", index=False)
+    write_sic_references(source)
     receipt = stage_reviewed_source_files(
-        source_root=source, staging_root=stage, relative_files=["cases.parquet", "laboratory.parquet"],
+        source_root=source, staging_root=stage,
+        relative_files=["cases.parquet", "d_references.parquet", "laboratory.parquet"],
         source_identity_sha256="a" * 64,
     )
     # Synthetic original becomes unavailable: actual exporter must use the

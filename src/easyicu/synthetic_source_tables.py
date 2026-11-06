@@ -173,6 +173,13 @@ def _events(database, config, concepts, p):
         rows["d_references"].append(pd.DataFrame({
             "ReferenceGlobalID": [90001, 90002], "ReferenceValue": ["Yes", "No"],
         }))
+        # Discharge and follow-up types are read by label (SICdb 1.0.6 labels).
+        rows["d_references"].append(pd.DataFrame({
+            "ReferenceGlobalID": [2026, 2028, 2202, 2215, 3076, 3077],
+            "ReferenceValue": ["Survived", "Deceased", "lebend", "verstorben", "6 Months", "1 Year"],
+            "ReferenceName": ["DischargeType", "DischargeType", "DischargeState", "DischargeState",
+                              "EstimatedSurvivalObservationTime", "EstimatedSurvivalObservationTime"],
+        }))
         # R5-SIC-012: invented reference units make glucose rates auditable.
         rows["d_references"].append(pd.DataFrame({
             "ReferenceGlobalID": [2043, 2044, 2045, 2148],

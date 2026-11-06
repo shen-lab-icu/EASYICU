@@ -67,7 +67,9 @@ from ..utils.thresholds import ge, gt, le, lt
 from .comorbidity import lower_cols
 from ..databases.profiles import get_database_profile, normalize_database_key
 from ..io.identity import require_unique_keys
-from ..source_death_times import aumc_registry_death_after_discharge, sic_recorded_death
+from ..source_death_times import (
+    aumc_registry_death_after_discharge, sic_discharge_codes, sic_recorded_death,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -126,6 +128,11 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
     for path in candidates:
         if os.path.exists(path):
             return pd.read_parquet(path)
+    # A partitioned or bucketed layout stores the table as a parquet set.
+    for directory in (os.path.join(root, table), os.path.join(root, f"{table}_bucket")):
+        parts = sorted(glob.glob(os.path.join(directory, "**", "*.parquet"), recursive=True))
+        if os.path.isdir(directory) and parts:
+            return pd.concat([pd.read_parquet(part) for part in parts], ignore_index=True)
     raise FileNotFoundError(f"{table}.parquet not found under {root}")
 
 
@@ -273,8 +280,40 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     ]
 
 
-def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
+#: How a SICdb survivor's follow-up category is set when
+#: ``EstimatedSurvivalObservationTime`` (ESOT) is empty. SICdb 1.0.8 records
+#: ESOT for deaths only. ``reconstruct_by_admission_year`` (default) uses the
+#: regularity that decides every recorded ESOT in 1.0.6 and every death's in
+#: 1.0.8 (2026-11-06 SIC 1.0.8 review, report section 9.3): admission year
+#: 2021 is "6 Months", 2013-2020 "1 Year"; any other or missing year is
+#: unknown and keeps only the 6-month minimum both categories share.
+#: ``six_month_minimum`` gives every empty ESOT that minimum. Both flag such
+#: survivors ``mort_<h>_assumption_based``; neither is documented by SICdb
+#: (Documentation p.4: "either 1-year or 6-month").
+SIC_FOLLOWUP_POLICIES = ("reconstruct_by_admission_year", "six_month_minimum")
+SIC_FOLLOWUP_POLICY = "reconstruct_by_admission_year"
+SIC_SIX_MONTH_ADMISSION_YEARS = frozenset({2021})
+SIC_ONE_YEAR_ADMISSION_YEARS = frozenset(range(2013, 2021))
+
+
+def sic_followup_from_admission_year(admission_year: pd.Series, *, policy: str = SIC_FOLLOWUP_POLICY) -> pd.Series:
+    """Follow-up days for SICdb cases whose ESOT is empty.
+
+    Every case has at least the 180 days both categories share, so 28- and
+    90-day mortality stay defined; only a reconstructed "1 Year" reaches 365.
+    """
+    if policy not in SIC_FOLLOWUP_POLICIES:
+        raise ValueError(f"unknown SICdb follow-up policy {policy!r}")
+    days = pd.Series(180.0, index=admission_year.index, dtype="float64")
+    if policy == "reconstruct_by_admission_year":
+        year = pd.to_numeric(admission_year, errors="coerce")
+        days.loc[year.isin(SIC_ONE_YEAR_ADMISSION_YEARS)] = 365.0
+    return days
+
+
+def _sic_stay_death_days(database, data_path, *, followup_policy: str = SIC_FOLLOWUP_POLICY) -> pd.DataFrame:
     cases = _raw_table(database, data_path, "cases").reset_index(drop=True)
+    codes = sic_discharge_codes(_raw_table(database, data_path, "d_references"))
     cmap = {c.lower(): c for c in cases.columns}
     cid = cmap["caseid"]
     df = pd.DataFrame({"_stay": cases[cid].values})
@@ -295,6 +334,7 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     recorded = sic_recorded_death(
         cases[cmap["hospitaldischargetype"]] if "hospitaldischargetype" in cmap else pd.Series(np.nan, index=cases.index),
         cases[cmap["dischargestate"]] if "dischargestate" in cmap else pd.Series(np.nan, index=cases.index),
+        codes,
     )
     untimed = recorded & off_death.isna() & ~unusable_death & np.isfinite(time_of_stay)
     off_death = off_death.where(~untimed, time_of_stay)
@@ -303,18 +343,25 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     los_seconds = time_of_stay.where(np.isfinite(time_of_stay)) - icu_off
     df["los_days"] = los_seconds.where(los_seconds >= 0) / 86400.0
     df["followup_days"] = np.nan
+    df["followup_assumed"] = False
     followup_column = cmap.get("estimatedsurvivalobservationtime")
     if followup_column is not None:
         followup = cases[followup_column]
         numeric = pd.to_numeric(followup, errors="coerce")
-        followup_days = pd.Series(np.nan, index=cases.index, dtype="float64")
-        followup_days.loc[numeric.eq(3076)] = 180.0
-        followup_days.loc[numeric.eq(3077)] = 365.0
+        followup_days = numeric.map(codes.followup_days).astype("float64")
         text = followup.astype(str).str.strip().str.lower()
         followup_days.loc[text.str.contains("6 month", na=False)] = 180.0
         followup_days.loc[text.str.contains("1 year", na=False)] = 365.0
-        # Source (round-12 citations): d_references labels 3076 "6 Months" and
-        # 3077 "1 Year" (ReferenceName EstimatedSurvivalObservationTime); the
+        # SICdb 1.0.8 leaves ESOT empty for survivors: set the category by the
+        # follow-up policy and flag every survivor it decides.
+        empty = followup.isna() & ~recorded
+        year_column = cmap.get("admissionyear")
+        years = cases[year_column] if year_column is not None else pd.Series(np.nan, index=cases.index)
+        rebuilt = sic_followup_from_admission_year(years, policy=followup_policy)
+        followup_days = followup_days.where(~empty, rebuilt)
+        df["followup_assumed"] = empty.to_numpy()
+        # Source (round-12 citations): d_references labels "6 Months" and
+        # "1 Year" (ReferenceName EstimatedSurvivalObservationTime); the
         # SICdb wiki says "For technical reasons observation time is only 6
         # month for some patients" (sicdb.com, Mortality) and PhysioNet that
         # OffsetOfDeath "is capped at one year" from admission and includes

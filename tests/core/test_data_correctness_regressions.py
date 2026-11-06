@@ -1337,7 +1337,9 @@ def test_sic_outcomes_use_icu_origin_and_censor_incomplete_365d_followup(
             "EstimatedSurvivalObservationTime": [3077, 3076, 3076],
         }
     )
-    monkeypatch.setattr(outcomes, "_raw_table", lambda *_args: cases)
+    from tests.support.sic_references import sic_raw_tables
+
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases))
 
     result = outcomes.load_outcomes("sic").set_index("CaseID")
 

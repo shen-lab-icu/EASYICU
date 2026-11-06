@@ -2,7 +2,11 @@ import pandas as pd
 import pytest
 
 from easyicu.concept.sic_landmark import sic_case_landmark_fields
+from easyicu.source_death_times import sic_discharge_codes
+from tests.support.sic_references import sic_references
 from easyicu.research_agent.authority.care_unit_landmark import case_duration_landmark_risk_set
+
+CODES = sic_discharge_codes(sic_references())
 
 
 def test_sic_case_fields_are_nullable_and_bind_same_case_event_horizon():
@@ -16,7 +20,7 @@ def test_sic_case_fields_are_nullable_and_bind_same_case_event_horizon():
                           3600 + 12 * 3600, None, float("inf")],
         "HospitalDischargeType": [2026, 2026, 2028, 2028, 2028, 2026, 2026, 2026],
     })
-    result = sic_case_landmark_fields(cases)
+    result = sic_case_landmark_fields(cases, CODES)
     assert result["care_unit_to_case_closure_days"].iloc[:3].tolist() == [2, 1, 2]
     assert result["death_during_case"].iloc[:5].tolist() == [False, False, True, pd.NA, False]
     assert result["death_time_during_case_hours"].iloc[2] == 12
@@ -33,11 +37,11 @@ def test_sic_case_fields_are_nullable_and_bind_same_case_event_horizon():
 
 def test_sic_case_fields_refuse_missing_or_ambiguous_case_identity():
     with pytest.raises(ValueError, match="source fields missing"):
-        sic_case_landmark_fields(pd.DataFrame({"CaseID": [1]}))
+        sic_case_landmark_fields(pd.DataFrame({"CaseID": [1]}), CODES)
     cases = pd.DataFrame({"CaseID": [1, 1], "ICUOffset": [0, 0], "TimeOfStay": [1, 1],
                           "OffsetOfDeath": [None, None], "HospitalDischargeType": [2026, 2026]})
     with pytest.raises(ValueError, match="unique non-null CaseID"):
-        sic_case_landmark_fields(cases)
+        sic_case_landmark_fields(cases, CODES)
 
 
 def test_invalid_negative_origin_never_identifies_case_duration_or_survival():
@@ -47,7 +51,7 @@ def test_invalid_negative_origin_never_identifies_case_duration_or_survival():
         "TimeOfStay": [172800] * 6, "OffsetOfDeath": [None] * 6,
         "HospitalDischargeType": [2026] * 6,
     })
-    result = sic_case_landmark_fields(cases)
+    result = sic_case_landmark_fields(cases, CODES)
     assert result.loc[[0, 3, 4, 5], "care_unit_to_case_closure_days"].isna().all()
     assert result.loc[[0, 3, 4, 5], "death_during_case"].isna().all()
     assert result.loc[1, "care_unit_to_case_closure_days"] == 2.0
@@ -67,7 +71,7 @@ def test_datetime_nat_death_offsets_remain_missing_not_integer_sentinel():
         "CaseID": [1, 2], "ICUOffset": [0, 0], "TimeOfStay": [172800, 172800],
         "OffsetOfDeath": pd.to_datetime([None, None]), "HospitalDischargeType": [2026, 2028],
     })
-    result = sic_case_landmark_fields(cases)
+    result = sic_case_landmark_fields(cases, CODES)
     assert result["death_during_case"].tolist() == [False, pd.NA]
     assert result["death_time_during_case_hours"].isna().all()
 
@@ -83,7 +87,9 @@ def test_registered_native_callback_uses_only_sic_and_retains_nullable_status():
                           "OffsetOfDeath": [None, None], "HospitalDischargeType": [2026, 2028]})
     class DataSource:
         config = SimpleNamespace(name="sic")
-        def load_table(self, name, *, columns, filters):
+        def load_table(self, name, *, columns, filters=None):
+            if name == "d_references":
+                return SimpleNamespace(data=sic_references())
             assert name == "cases"
             assert filters and list(filters[0].value) == [1, 2]
             return SimpleNamespace(data=cases[columns])
@@ -210,3 +216,11 @@ def test_explicit_landmark_module_runs_through_web_export_and_records_source(tmp
     assert result["manifest"]
     with open_export_package(out) as package:
         assert case_duration_source_provenance(package).source_config_sha256
+
+
+def test_sic_case_fields_read_the_1_0_8_discharge_types():
+    codes = sic_discharge_codes(sic_references("1.0.8"))
+    cases = pd.DataFrame({"CaseID": [1, 2, 3], "ICUOffset": [0] * 3, "TimeOfStay": [172800] * 3,
+                          "OffsetOfDeath": [None, 3600.0, None], "HospitalDischargeType": [3131, 3130, 2999]})
+    result = sic_case_landmark_fields(cases, codes)
+    assert result["death_during_case"].tolist() == [False, True, pd.NA]

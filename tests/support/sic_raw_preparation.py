@@ -15,6 +15,7 @@ from easyicu.webserver import sources
 from easyicu.webserver.sic_raw_preparation_grant import SICRawPreparationCheckpoint, SICRawPreparationScope, render_sic_raw_preparation_scope, sic_preparation_schema_sha256
 from easyicu.webserver.raw_preparation_decisions import RawPreparationHostBinding, record_host_review
 from easyicu.webserver.time_origin_source_authority import prepare_case_duration_metadata_plan
+from tests.support.sic_references import write_sic_references
 from tests.support.source_substitutions import _review
 from tests.support.signed_case_duration import signed_case_duration_case
 
@@ -32,6 +33,7 @@ def _case(tmp_path, monkeypatch, *, approved=True, summary_override=None):
     pd.DataFrame({name: pd.Series(dtype="int64") for name in (
         "CaseID", "ICUOffset", "TimeOfStay", "OffsetOfDeath", "HospitalDischargeType",
     )}).to_parquet(source_path / "cases.parquet", index=False)
+    write_sic_references(source_path)
     (source_path / "laboratory").mkdir()
     pd.DataFrame({name: pd.Series(dtype="int64") for name in (
         "CaseID", "Offset", "LaboratoryID", "LaboratoryValue",
@@ -56,10 +58,10 @@ def _case(tmp_path, monkeypatch, *, approved=True, summary_override=None):
         context_sha256=canonical_sha256(context.model_dump(mode="json")),
         metadata_receipt_sha256=canonical_sha256(receipt.to_dict()),
         source_schema_sha256=sic_preparation_schema_sha256(
-            source_path, ("cases.parquet", "laboratory/1.parquet"),
+            source_path, ("cases.parquet", "d_references.parquet", "laboratory/1.parquet"),
         ),
         output_concepts=("care_unit_to_case_closure_days", "death_during_case", "death_time_during_case_hours", "lact"),
-        files=("cases.parquet", "laboratory/1.parquet"),
+        files=("cases.parquet", "d_references.parquet", "laboratory/1.parquet"),
         case_columns=("CaseID", "HospitalDischargeType", "ICUOffset", "OffsetOfDeath", "TimeOfStay"),
         laboratory_columns=("CaseID", "LaboratoryID", "LaboratoryValue", "Offset"),
     )

@@ -17,6 +17,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from tests.support.sic_references import sic_raw_tables
+
 from easyicu.outcome_availability import (
     FIXED_HORIZON_MORTALITY_ENDPOINTS,
     structural_outcome_unavailability,
@@ -81,7 +83,7 @@ def _sic_cases(followup_codes=None) -> pd.DataFrame:
 
 
 def test_a_horizon_without_followup_for_any_survivor_is_refused(monkeypatch) -> None:
-    monkeypatch.setattr(outcomes, "_raw_table", lambda *_args: _sic_cases())
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(_sic_cases()))
 
     with pytest.raises(ValueError, match="no follow-up"):
         outcomes.load_outcomes("sic")
@@ -89,7 +91,7 @@ def test_a_horizon_without_followup_for_any_survivor_is_refused(monkeypatch) -> 
 
 def test_a_survivor_with_followup_keeps_the_horizon(monkeypatch) -> None:
     monkeypatch.setattr(
-        outcomes, "_raw_table", lambda *_args: _sic_cases([3077, None, None])
+        outcomes, "_raw_table", sic_raw_tables(_sic_cases([3077, None, None]))
     )
 
     result = outcomes.load_outcomes("sic").set_index("CaseID")
@@ -97,8 +99,12 @@ def test_a_survivor_with_followup_keeps_the_horizon(monkeypatch) -> None:
     assert bool(result.loc[1, "mort_28d"]) is False
     assert result.loc[1, "followup_days_28d"] == 28.0
     assert bool(result.loc[2, "mort_28d"]) is True
-    # A survivor without follow-up stays unknown; the others keep the horizon.
-    assert pd.isna(result.loc[3, "mort_28d"])
+    # A survivor with an empty follow-up category and no admission year keeps
+    # the 6-month minimum both categories share (SICdb 1.0.8 policy): 28 days
+    # are reached on that assumption, one year is not.
+    assert bool(result.loc[3, "mort_28d"]) is False
+    assert bool(result.loc[3, "mort_28d_assumption_based"]) is True
+    assert pd.isna(result.loc[3, "mort_365d"])
 
 
 @pytest.mark.parametrize("origin", [None, float("nan"), float("inf"), -1])
@@ -110,7 +116,7 @@ def test_sic_unknown_care_transfer_origin_never_becomes_an_event_or_survivor(mon
         "OffsetOfDeath": [5 * 86400, None, None, float("inf"), 5 * 86400],
         "EstimatedSurvivalObservationTime": [3077] * 5,
     }, index=[11, 12, 13, 14, 15])
-    monkeypatch.setattr(outcomes, "_raw_table", lambda *_: cases)
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases))
     base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
     assert base.loc[[1, 2], ["days_to_death", "los_days", "followup_days"]].isna().all().all()
     assert pd.isna(base.loc[4, "days_to_death"])
@@ -131,7 +137,7 @@ def test_sic_followup_uses_conservative_admission_clock_bound(monkeypatch) -> No
         "OffsetOfDeath": [None] * 5,
         "EstimatedSurvivalObservationTime": [3077, 3077, 3076, 3076, 3076],
     })
-    monkeypatch.setattr(outcomes, "_raw_table", lambda *_: cases)
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases))
     base = outcomes._sic_stay_death_days("sic", None).set_index("_stay")
     assert base.loc[1, "followup_days"] == 365
     assert base.loc[2, "followup_days"] == pytest.approx(365 - 1 / 24)

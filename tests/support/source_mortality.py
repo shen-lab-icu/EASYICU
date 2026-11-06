@@ -30,7 +30,11 @@ def source(root, database, *, upper=False):
             "AgeOnAdmission": [45, 65, 75, 90],
             "ICUOffset": [3600] * 4, "TimeOfStay": [90000] * 4,
             "OffsetOfDeath": [90000., 90001., None, None],
-            "HospitalDischargeType": [2028, 2028, 2026, None]}}
+            "HospitalDischargeType": [2028, 2028, 2026, None]},
+            # Discharge types are read by label (SICdb 1.0.6 d_references).
+            "d_references": {"ReferenceGlobalID": [2026, 2028, 2202, 2215],
+                "ReferenceValue": ["Survived", "Deceased", "lebend", "verstorben"],
+                "ReferenceName": ["DischargeType", "DischargeType", "DischargeState", "DischargeState"]}}
     elif database == "eicu":
         tables = {"patient": {"patientunitstayid": [1, 2, 3, 4],
             "age": ["45", "65", "75", "> 89"],

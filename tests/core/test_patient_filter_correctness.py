@@ -4,6 +4,8 @@ from inspect import signature
 from pathlib import Path
 
 import pandas as pd
+
+from tests.support.sic_references import sic_references
 import pytest
 
 from easyicu.base import (
@@ -827,7 +829,7 @@ def test_sicdb_demographics_use_official_age_los_and_hospital_survival(
     monkeypatch.setattr(
         patient_filter,
         "_read_table",
-        lambda _name: pd.DataFrame(
+        lambda name: sic_references() if name == "d_references" else pd.DataFrame(
             {
                 "CaseID": [1, 2, 3],
                 "PatientID": [10, 10, 20],

@@ -103,8 +103,12 @@ def test_signed_synthetic_landmark_materializes_reuses_and_publishes(tmp_path, m
     pd.DataFrame({"CaseID": list(range(1, 11)) + [1], "Offset": [3600]*10 + [86400],
                   "LaboratoryID": [657]*11, "LaboratoryValue": lact + [999.0]}).to_parquet(
         raw / "laboratory.parquet", index=False)
+    from tests.support.sic_references import write_sic_references
+
+    write_sic_references(raw)
     stage_reviewed_source_files(source_root=raw, staging_root=stage,
-        relative_files=["cases.parquet", "laboratory.parquet"], source_identity_sha256="a" * 64)
+        relative_files=["cases.parquet", "d_references.parquet", "laboratory.parquet"],
+        source_identity_sha256="a" * 64)
     (raw / "cases.parquet").unlink()
     (raw / "laboratory.parquet").unlink()
     make_export_runner(data_path=str(stage), database="sic", modules=["outcome", "blood_gas", "sic_case_landmark"],

@@ -22,7 +22,7 @@ from easyicu.research_agent.authority.raw_preparation import RawPreparationCheck
 def _require_sic_file_roster(files: tuple[str, ...]) -> None:
     if (not isinstance(files, tuple) or not files or any(not isinstance(item, str) for item in files)
             or len(files) > 8 or tuple(sorted(set(files))) != files
-            or "cases.parquet" not in files):
+            or "cases.parquet" not in files or "d_references.parquet" not in files):
         raise ValueError("sic_raw_preparation_scope_roster_invalid")
     labs = []
     for raw in files:
@@ -32,7 +32,7 @@ def _require_sic_file_roster(files: tuple[str, ...]) -> None:
         if (not raw or "\\" in raw or "\x00" in raw or path.is_absolute()
                 or path.as_posix() != raw or not path.parts or ".." in path.parts):
             raise ValueError("sic_raw_preparation_scope_roster_invalid")
-        if raw == "cases.parquet":
+        if raw in {"cases.parquet", "d_references.parquet"}:
             continue
         valid_lab = (raw == "laboratory.parquet" or (
             path.parts[0] in {"laboratory", "laboratory_bucket"} and path.suffix == ".parquet"
@@ -60,7 +60,7 @@ class SICRawPreparationScope(BaseModel):
     selected_origin: Literal["first_intensive_or_intermediate_care_transfer"] = SIC_CARE_UNIT_ORIGIN
     output_concepts: tuple[Literal["lact", "care_unit_to_case_closure_days", "death_during_case",
                                    "death_time_during_case_hours"], ...]
-    files: tuple[str, ...] = Field(min_length=2, max_length=8)
+    files: tuple[str, ...] = Field(min_length=3, max_length=8)
     case_columns: tuple[Literal["CaseID", "ICUOffset", "TimeOfStay", "OffsetOfDeath", "HospitalDischargeType"], ...]
     laboratory_columns: tuple[Literal["CaseID", "Offset", "LaboratoryID", "LaboratoryValue"], ...]
     laboratory_ids: tuple[Literal[657, 454, 465], ...] = (454, 465, 657)
@@ -90,7 +90,7 @@ def render_sic_raw_preparation_scope(scope: SICRawPreparationScope) -> str:
         f"源字段结构摘要 {scope.source_schema_sha256}；"
         f"病例字段：{', '.join(scope.case_columns)}；乳酸字段：{', '.join(scope.laboratory_columns)}；"
         f"输出概念：{', '.join(scope.output_concepts)}；"
-        "乳酸 ID：454、465、657；乳酸分析窗：ICU 或中间监护首次转入后 [0,24) 小时；"
+        "出院类型按 d_references 的标签读取（各版本编码不同）；乳酸 ID：454、465、657；乳酸分析窗：ICU 或中间监护首次转入后 [0,24) 小时；"
         "人群为所有病例，未应用成人或其他筛选；病例持续时长和死亡状态覆盖整个病例；"
         "病例闭合不代表纯 ICU 出科。"
     )
@@ -121,12 +121,15 @@ def sic_preparation_schema_sha256(source_path: Path, files: tuple[str, ...]) -> 
     fields = {
         "cases": ("CaseID", "HospitalDischargeType", "ICUOffset", "OffsetOfDeath", "TimeOfStay"),
         "laboratory": ("CaseID", "LaboratoryID", "LaboratoryValue", "Offset"),
+        # Discharge-type labels: SICdb codes differ between releases.
+        "d_references": ("ReferenceGlobalID", "ReferenceName", "ReferenceValue"),
     }
     entries = []
     with AnchoredDirectory.open(root_path) as root:
         for raw_file in files:
             relative = PurePosixPath(raw_file)
-            expected = fields["cases" if raw_file == "cases.parquet" else "laboratory"]
+            expected = fields[{"cases.parquet": "cases", "d_references.parquet": "d_references"}.get(
+                raw_file, "laboratory")]
             with AnchoredDirectory.open(root_path.joinpath(*relative.parts[:-1])) as directory:
                 with directory.open_regular(relative.name) as handle:
                     schema = pq.read_schema(handle)

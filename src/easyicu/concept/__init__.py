@@ -8204,7 +8204,12 @@ class ConceptResolver:
             cases = data_source.load_table("cases", columns=list(SIC_CASE_SOURCE_COLUMNS), filters=filters).data
             if selected_ids is not None:
                 cases = cases.loc[cases["CaseID"].isin(selected_ids)]
-            derived = sic_case_landmark_fields(cases)
+            from ..source_death_times import sic_discharge_codes
+
+            references = data_source.load_table(
+                "d_references", columns=["ReferenceGlobalID", "ReferenceValue", "ReferenceName"],
+            ).data
+            derived = sic_case_landmark_fields(cases, sic_discharge_codes(references))
             raw = ICUTable(
                 data=derived[["CaseID", concept_name]], id_columns=["CaseID"],
                 index_column=None, value_column=concept_name,

@@ -8,14 +8,19 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..source_death_times import SicDischargeCodes
+
 SIC_CASE_LANDMARK_COLUMNS = frozenset({
     "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
 })
 SIC_CASE_SOURCE_COLUMNS = ("CaseID", "ICUOffset", "TimeOfStay", "OffsetOfDeath", "HospitalDischargeType")
 
 
-def sic_case_landmark_fields(cases: pd.DataFrame) -> pd.DataFrame:
-    """Derive three nullable fields without interpreting unknown as survival."""
+def sic_case_landmark_fields(cases: pd.DataFrame, codes: SicDischargeCodes) -> pd.DataFrame:
+    """Derive three nullable fields without interpreting unknown as survival.
+
+    ``codes`` are the release's discharge types read from d_references.
+    """
     missing = set(SIC_CASE_SOURCE_COLUMNS) - set(cases.columns)
     if missing:
         raise ValueError(f"SIC case landmark source fields missing: {sorted(missing)}")
@@ -32,9 +37,10 @@ def sic_case_landmark_fields(cases: pd.DataFrame) -> pd.DataFrame:
     duration = ((end - origin) / 86400).where(valid_case)
     valid_event = pd.Series(np.isfinite(event), index=cases.index)
     inside = valid_case & valid_event & (event >= origin) & (event <= end)
-    contradiction = (valid_event & (event < origin)) | (inside & (disposition == 2026))
-    known_status = valid_case & disposition.isin([2026, 2028]) & ~contradiction
-    known_status &= valid_event | (event_absent & (disposition == 2026))
+    survived = disposition.isin(codes.survived)
+    contradiction = (valid_event & (event < origin)) | (inside & survived)
+    known_status = valid_case & disposition.isin(codes.known) & ~contradiction
+    known_status &= valid_event | (event_absent & survived)
     status = inside.astype("boolean").where(known_status, pd.NA)
     death_time = ((event - origin) / 3600).where(status.fillna(False))
     return pd.DataFrame({

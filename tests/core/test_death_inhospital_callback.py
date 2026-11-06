@@ -11,6 +11,7 @@ from easyicu.concept import ConceptResolver
 from easyicu.concept.callback_apply import _apply_callback
 from easyicu.concept.schema import ConceptDictionary
 from easyicu.table import ICUTable
+from tests.support.sic_references import SicReferenceSource, sic_references
 
 
 def _src(callback, index_var=None, value_var=None):
@@ -93,6 +94,7 @@ def test_sic_death_uses_hospital_discharge_type_not_offset():
         frame,
         _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"),
         "death",
+        data_source=SicReferenceSource(),
     )
 
     assert int((out["death"] == True).sum()) == 2  # noqa: E712
@@ -120,6 +122,7 @@ def test_sic_death_without_icu_offset_fails_closed():
             frame,
             _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"),
             "death",
+            data_source=SicReferenceSource(),
         )
 
 
@@ -129,13 +132,15 @@ def test_sic_death_with_unusable_care_transfer_origin_fails_closed(origin):
                           "HospitalDischargeType": [2028, 2026], "ICUOffset": [origin, 0],
                           "TimeOfStay": [36_000, 36_000]})
     with pytest.raises(ValueError, match="ICUOffset"):
-        _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
+        _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death",
+                          data_source=SicReferenceSource())
 
 
 def test_sic_death_nonfinite_death_offset_stays_untimed():
     frame = pd.DataFrame({"CaseID": [1, 2], "death": [float("inf"), 7200],
                           "HospitalDischargeType": [2028, 2028], "ICUOffset": [3600, 3600]})
-    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
+    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death",
+                          data_source=SicReferenceSource())
     assert bool(out.loc[0, "death"])
     assert pd.isna(out.loc[0, "charttime"])
     assert out.loc[1, "charttime"] == 1.0
@@ -153,6 +158,8 @@ def test_sic_death_loads_icu_offset_from_cases_when_absent():
 
     class SicCasesSource:
         def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            if table_name == "d_references":
+                return types.SimpleNamespace(data=sic_references())
             assert table_name == "cases"
             assert columns == ["CaseID", "ICUOffset"]
             return types.SimpleNamespace(
@@ -179,6 +186,7 @@ def test_sic_death_missing_disposition_fails_closed():
             frame,
             _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"),
             "death",
+            data_source=SicReferenceSource(),
         )
 
 
@@ -202,6 +210,8 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
             )
 
         def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            if table_name == "d_references":
+                return types.SimpleNamespace(data=sic_references())
             del table_name, filters, verbose
             for column in columns or []:
                 if column not in self.requested_columns:
@@ -274,7 +284,8 @@ def test_sic_death_hours_are_not_realigned_when_a_batch_holds_a_late_death():
             "TimeOfStay": [icu_offset[0] + 20 * 3600, icu_offset[1] + 20 * 3600],
         }
     )
-    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")
+    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death",
+                          data_source=SicReferenceSource())
     assert out.set_index("CaseID")["charttime"].tolist() == [10.0, 6000.0]
     assert out.attrs["easyicu_time_columns"]["charttime"] == "icu_relative_hours"
 
@@ -296,3 +307,25 @@ def test_sic_death_hours_are_not_realigned_when_a_batch_holds_a_late_death():
         clip_icu_episode=False,
     )
     assert aligned.set_index("CaseID")["charttime"].tolist() == [10.0, 6000.0]
+
+
+@pytest.mark.parametrize("release, dead, alive", [("1.0.6", 2028, 2026), ("1.0.8", 3130, 3131)])
+def test_sic_death_reads_discharge_types_by_label_in_either_release(release, dead, alive):
+    frame = pd.DataFrame({"CaseID": [1, 2, 3], "death": [7200, None, None],
+                          "HospitalDischargeType": [dead, alive, 9999],
+                          "ICUOffset": [3600, 0, 0], "TimeOfStay": [36_000] * 3})
+    out = _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death",
+                          data_source=SicReferenceSource(release)).set_index("CaseID")
+    assert out.loc[1, "death"] == True  # noqa: E712
+    assert out.loc[2, "death"] == False  # noqa: E712
+    # A code the release does not name stays unknown.
+    assert 3 not in out.index
+
+
+def test_sic_death_without_reference_labels_fails_closed():
+    from easyicu.source_death_times import SIC_REFERENCE_UNAVAILABLE
+
+    frame = pd.DataFrame({"CaseID": [1], "death": [7200], "HospitalDischargeType": [2028],
+                          "ICUOffset": [3600], "TimeOfStay": [36_000]})
+    with pytest.raises(ValueError, match=SIC_REFERENCE_UNAVAILABLE):
+        _apply_callback(frame, _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death")

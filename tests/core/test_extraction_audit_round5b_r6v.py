@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+
+from tests.support.sic_references import sic_references
 import pytest
 
 from easyicu.concept import ConceptDictionary, ConceptResolver, callbacks
@@ -764,7 +766,8 @@ def _sofa2_source(tmp_path, database, layout):
             cases=pd.DataFrame({"CaseID": [1], "PatientID": [1], "ICUOffset": [0.],
                 "TimeOfStay": [36000.], "WeightOnAdmission": [70000.], "AdmissionYear": [2018],
                 "HospitalDischargeType": [2027], "OffsetOfDeath": [np.nan],
-                "EstimatedSurvivalObservationTime": [3077]}))
+                "EstimatedSurvivalObservationTime": [3077]}),
+            d_references=sic_references())
     return source
 
 

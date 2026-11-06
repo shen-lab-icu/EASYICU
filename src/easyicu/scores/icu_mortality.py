@@ -111,11 +111,15 @@ def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
         event, start, end = (pd.to_numeric(frame[c], errors="coerce")
                              for c in ("OffsetOfDeath", "ICUOffset", "TimeOfStay"))
         status = ((event >= start) & (event <= end)).astype("boolean")
-        # SICdb d_references: 2026 = Survived, 2028 = Deceased. A deceased
-        # disposition without a death time cannot locate the death in the ICU.
+        # Discharge types are read from d_references by label (1.0.6 2026/2028,
+        # 1.0.8 3129-3134). A deceased disposition without a death time
+        # cannot locate the death in the ICU.
+        from ..source_death_times import sic_discharge_codes
+
+        codes = sic_discharge_codes(read("d_references"))
         disposition = pd.to_numeric(frame.HospitalDischargeType, errors="coerce")
-        known_survivor = disposition == 2026
-        status = status.mask(~disposition.isin([2026, 2028]) | (event.isna() & ~known_survivor)
+        known_survivor = disposition.isin(codes.survived)
+        status = status.mask(~disposition.isin(codes.known) | (event.isna() & ~known_survivor)
                              | start.isna() | end.isna() | (end < start))
         times, kind = (event - start) / 3600, "recorded"
     else:

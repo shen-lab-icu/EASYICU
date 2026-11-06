@@ -238,11 +238,14 @@ def test_r3_15_sic_recorded_death_without_offset_is_a_death_at_icu_discharge(mon
         "EstimatedSurvivalObservationTime": [3077] * 4,
     })
     frame = cases.rename(columns={"OffsetOfDeath": "death"})
-    out = _apply_callback(frame, _death_src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death").set_index("CaseID")
+    from tests.support.sic_references import SicReferenceSource, sic_raw_tables
+
+    out = _apply_callback(frame, _death_src("sic_death", "OffsetOfDeath", "OffsetOfDeath"), "death",
+                          data_source=SicReferenceSource()).set_index("CaseID")
     assert out["death"].to_dict() == {1: True, 2: True, 3: False, 4: True}
     assert out["charttime"].to_dict() == {1: 5.0, 2: 5.0, 3: 5.0, 4: 0.0}
 
-    monkeypatch.setattr(outcomes, "_raw_table", lambda *_: cases)
+    monkeypatch.setattr(outcomes, "_raw_table", sic_raw_tables(cases))
     result = outcomes.load_outcomes("sic").set_index("CaseID")
     assert [bool(result.loc[i, "mort_28d"]) for i in (1, 2, 3, 4)] == [True, True, False, True]
 

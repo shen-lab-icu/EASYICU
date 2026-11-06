@@ -645,11 +645,19 @@ class PatientFilter:
             discharge = cases[discharge_column]
             numeric = pd.to_numeric(discharge, errors='coerce')
             survived = pd.Series(pd.NA, index=cases.index, dtype='boolean')
-            survived.loc[numeric.eq(2026)] = True
-            survived.loc[numeric.eq(2028)] = False
+            # Discharge types are release-specific codes, read by label from
+            # d_references. Without that table the status stays unknown.
+            from .source_death_times import SicReferenceUnavailable, sic_discharge_codes
+            try:
+                codes = sic_discharge_codes(self._read_table('d_references'))
+            except (FileNotFoundError, SicReferenceUnavailable) as exc:
+                logger.warning("SICdb survival unavailable: %s", exc)
+            else:
+                survived.loc[numeric.isin(codes.survived)] = True
+                survived.loc[numeric.isin(codes.deceased)] = False
             text = discharge.astype(str).str.strip().str.lower()
             survived.loc[text.eq('survived')] = True
-            survived.loc[text.eq('deceased')] = False
+            survived.loc[text.isin(['deceased', 'sterbefall'])] = False
             cases['survived'] = survived
         
         # ID列标准化 - SICdb 使用 CaseID
