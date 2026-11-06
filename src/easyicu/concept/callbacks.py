@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
 
 from ..utils.unit_conversion import convert_vaso_rate
-from ..utils.thresholds import ge, le, lt
+from ..utils.thresholds import ge, gt, le, lt
 from .errors import ConceptTableReadError
 from .availability_signal import (
     ConceptAvailabilityRecord,
@@ -7438,7 +7438,8 @@ def _callback_rrt_criteria(
         rrt_active = pd.Series(False, index=data.index, dtype=bool)
     
     # Creatinine and urine are independent alternatives for base injury.
-    aki_crea = (crea > 1.2).fillna(False)
+    # Converted creatinine (AUMC/HiRID umol/L) sits on decimal boundaries (lead-r13 A8).
+    aki_crea = gt(crea, 1.2).fillna(False)
     aki_oligo = data.get("uo_6h_oliguria_gt6h", pd.Series(False, index=data.index)).eq(True).fillna(False)
     base_injury = aki_crea | aki_oligo
     

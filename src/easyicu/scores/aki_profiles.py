@@ -1401,7 +1401,8 @@ def _mimic_iii_profile(
         filtered_crea = crea_df.copy()
         hours = _time_hours(filtered_crea[resolved_time], resolved_time, time_unit)
         if not pd.api.types.is_datetime64_any_dtype(filtered_crea[resolved_time]):
-            filtered_crea = filtered_crea.loc[hours.between(-6.0, 162.0)].copy()
+            # Inclusive window on derived hours (MIMIC-III kdigo_creatinine.sql, lead-r13 A8).
+            filtered_crea = filtered_crea.loc[ge(hours, -6.0) & le(hours, 162.0)].copy()
     spine = _native_spine((filtered_crea, urine_df), resolved_id, resolved_time)
     result = spine.copy()
     creat = pd.DataFrame()

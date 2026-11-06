@@ -673,11 +673,12 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     score = pd.Series(0, index=b.index, dtype=int)
     
     valid = b.notna()
-    # Use findInterval-like logic: check thresholds in order
-    score[valid & (b > 1.2)] = 1  # Relaxed threshold (was 1.9 in SOFA-1)
-    score[valid & (b > 3.0)] = 2  # SOFA-2 new intermediate threshold
-    score[valid & (b > 6.0)] = 3  # Fixed: should be > 6.0, not >= 6.0
-    score[valid & (b > 12.0)] = 4
+    # Use findInterval-like logic: check thresholds in order. Same decimal
+    # boundaries as the scoring owner scores.sofa2.sofa2_liver (lead-r13 A8).
+    score[valid & gt(b, 1.2)] = 1  # Relaxed threshold (was 1.9 in SOFA-1)
+    score[valid & gt(b, 3.0)] = 2  # SOFA-2 new intermediate threshold
+    score[valid & gt(b, 6.0)] = 3  # Fixed: should be > 6.0, not >= 6.0
+    score[valid & gt(b, 12.0)] = 4
     
     return score
 

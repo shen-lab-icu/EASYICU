@@ -56,7 +56,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from ..utils.thresholds import gt
+from ..utils.thresholds import gt, lt
 from .schema import ConceptSource
 from .blood_gas_specimen import (
     parse_arterial_specimen_callback,
@@ -1577,7 +1577,8 @@ def _apply_callback(
         from ..source_death_times import aumc_registry_death_after_discharge
 
         dod = aumc_registry_death_after_discharge(dod, dis, day=24 * 60)
-        died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)
+        # Minute offsets from ms clocks: a difference of exactly 72 h is not < 72 h (lead-r13 A8).
+        died = (dod.notna() & lt(dod - dis, 72 * 60)).fillna(False)
         # 2026-11-03 audit round 2 (R2-03): an ICU discharge to 'Overleden'
         # is a death in the ICU, also without a dateofdeath (57 stays), and
         # its time is the ICU discharge: dateofdeath is a date and fell
