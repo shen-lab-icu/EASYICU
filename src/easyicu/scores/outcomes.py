@@ -80,7 +80,6 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
     second/millisecond offsets that ``ICUDataSource.load_table`` rebases
     to 0 — we need the untouched values for horizon mortality.
     """
-    import glob
     import os
 
     root = data_path
@@ -121,19 +120,21 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
             str(root),
             type(exc).__name__,
         )
-    candidates = [
-        os.path.join(root, f"{table}.parquet"),
-        *glob.glob(os.path.join(root, "*", f"{table}.parquet")),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return pd.read_parquet(path)
-    # A partitioned or bucketed layout stores the table as a parquet set.
-    for directory in (os.path.join(root, table), os.path.join(root, f"{table}_bucket")):
-        parts = sorted(glob.glob(os.path.join(directory, "**", "*.parquet"), recursive=True))
-        if os.path.isdir(directory) and parts:
-            return pd.concat([pd.read_parquet(part) for part in parts], ignore_index=True)
-    raise FileNotFoundError(f"{table}.parquet not found under {root}")
+    # The table's file set comes from the storage policy owner, validated
+    # against the installation inventory (single file, flat directory or
+    # bucket contract); a recursive listing here once read hidden staging
+    # files and bucket shards in physical order (final review U01).
+    from ..storage_layout import restore_frame_order
+    from .comorbidity import _build_datasource
+
+    files = _build_datasource(database, root).resolve_target_files(table) if root else ()
+    if not files:
+        raise FileNotFoundError(f"{table}.parquet not found under {root}")
+    if len(files) == 1:
+        return pd.read_parquet(files[0])
+    return restore_frame_order(
+        pd.concat([pd.read_parquet(part) for part in files], ignore_index=True)
+    )
 
 
 # The event/follow-up pairing is owned by ``easyicu.outcome_availability`` so
