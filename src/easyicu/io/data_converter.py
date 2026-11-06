@@ -25,7 +25,7 @@ import tarfile
 import logging
 import hashlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, Callable, TYPE_CHECKING
+from typing import Optional, List, Dict, Any, Set, Tuple, Callable, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import threading
@@ -215,6 +215,26 @@ class ConversionStopped(Exception):
     def __init__(self, results: Dict[str, Dict[str, Any]]) -> None:
         super().__init__("conversion_stopped")
         self.results = results
+
+
+class ConversionNoSourceFiles(Exception):
+    """No CSV source and no converted output: the folder cannot be prepared.
+
+    ``reason`` is the stable code ``conversion_no_source_files``. Source
+    directories reached through symlinks are followed, so this usually means
+    a broken link, an unmounted drive or the wrong folder.
+    """
+
+    reason = "conversion_no_source_files"
+
+    def __init__(self, data_path: Path) -> None:
+        self.data_path = Path(data_path)
+        super().__init__(
+            f"{self.reason}: no CSV/CSV.GZ source files and no converted Parquet "
+            f"output under {self.data_path}. Symlinked source directories are "
+            "followed; check for a broken link, an unmounted drive or the wrong "
+            "folder."
+        )
 
 
 class DataConverter:
@@ -785,8 +805,23 @@ class DataConverter:
         # the reason `mimic-iii "All N files are already converted"`
         # printed instantly but the process kept running for minutes.
         csv_suffixes = ('.csv', '.csv.gz')
+        # Source folders are often symlinks (raw data on another drive), so
+        # links are followed; each real directory is visited once, by
+        # (st_dev, st_ino), so a link cycle or two links to one folder cannot
+        # loop or list a file twice.
+        visited_dirs: Set[Tuple[int, int]] = set()
         for search_path in search_paths:
-            for root, dirs, files in os.walk(search_path, topdown=True):
+            for root, dirs, files in os.walk(search_path, topdown=True, followlinks=True):
+                try:
+                    root_stat = os.stat(root)
+                except OSError:
+                    dirs[:] = []
+                    continue
+                root_id = (root_stat.st_dev, root_stat.st_ino)
+                if root_id in visited_dirs:
+                    dirs[:] = []
+                    continue
+                visited_dirs.add(root_id)
                 # Prune excluded subtrees in place (os.walk respects this
                 # only when topdown=True).
                 pruned: List[str] = []
@@ -3070,6 +3105,34 @@ class DataConverter:
     # ------------------------------------------------------------------
     # Opt-in patient-clustering pass (scattered-cohort row-group pruning)
     # ------------------------------------------------------------------
+    def _has_converted_outputs(self) -> bool:
+        """True when the folder already holds converted Parquet tables.
+
+        Looks at ``<table>.parquet`` files at the root and numbered shards in
+        ``<table>/`` (one level, links followed), the layouts this converter
+        writes.
+        """
+        try:
+            entries = list(self.data_path.iterdir())
+        except OSError:
+            return False
+        for entry in entries:
+            name = entry.name
+            if name.startswith('.'):
+                continue
+            if name.lower().endswith('.parquet') and entry.is_file():
+                return True
+            if entry.is_dir():
+                try:
+                    if any(
+                        child.suffix.lower() == '.parquet' and not child.name.startswith('.')
+                        for child in entry.iterdir()
+                    ):
+                        return True
+                except OSError:
+                    continue
+        return False
+
     def _find_table_shards(self, table_name: str) -> List[Path]:
         """Locate a converted table's flat/shard parquet files.
 
@@ -3356,10 +3419,16 @@ class DataConverter:
                     extracted_archives=extracted_community_archives,
                     force=force,
                 )
-            if write_manifest:
-                self.write_conversion_manifest(
-                    {}, evidence_root=evidence_root,
-                    register_manifest=register_manifest,
+            if not self._has_converted_outputs():
+                raise ConversionNoSourceFiles(self.data_path)
+            # Already converted and the CSVs are gone: nothing to do. An empty
+            # manifest would disown every converted table, so the existing
+            # manifest stays as written by the conversion.
+            manifest_path = self.data_path / self.CONVERSION_MANIFEST_FILE
+            if write_manifest and not manifest_path.exists():
+                logger.warning(
+                    "No CSV sources and no %s under %s; the converted tables "
+                    "carry no inventory", self.CONVERSION_MANIFEST_FILE, self.data_path,
                 )
             return {}
         

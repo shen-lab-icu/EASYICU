@@ -142,6 +142,8 @@ def test_manifest_effective_cluster_switch_includes_explicit_api_override(
     tmp_path, monkeypatch
 ):
     monkeypatch.delenv("EASYICU_CLUSTER_BY_PATIENT", raising=False)
+    # One source table: an empty folder is refused (conversion_no_source_files).
+    (tmp_path / "admissions.csv").write_text("subject_id,hadm_id\n1,11\n", encoding="utf-8")
     converter = DataConverter(
         tmp_path, database="miiv", parallel_workers=1, verbose=False
     )
