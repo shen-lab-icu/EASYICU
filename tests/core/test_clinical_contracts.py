@@ -161,11 +161,16 @@ _SOFA2_COMPONENT_EXECUTORS = [
 ]
 
 
-def _clinical_context(name: str, **kwargs) -> ConceptCallbackContext:
+def _clinical_context(name: str, interval=None, **kwargs) -> ConceptCallbackContext:
+    # The SOFA-2 aggregate scores on the requested grid (ctx.interval), as
+    # load_concepts passes it (1 h by default); the grid is never inferred
+    # from the row spacing (lead-r13 sweep #12).
+    if interval is None and name == "sofa2":
+        interval = pd.Timedelta(hours=1)
     return ConceptCallbackContext(
         concept_name=name,
         target=None,
-        interval=None,
+        interval=interval,
         resolver=None,
         data_source=None,
         patient_ids=None,
