@@ -1647,6 +1647,10 @@ def _oom_kill_delta(before: Optional[int], after: Optional[int]) -> Optional[int
 # multiprocessing, 137 from a shell) and Windows STATUS_NO_MEMORY
 # (0xC0000017). A crash status such as 0xC0000409 (fail-fast) is not a kill.
 _UNVERIFIED_KILL_EXIT_CODES = frozenset({-9, 137, 0xC0000017})
+# SIGKILL as multiprocessing (-9) and a shell (137) report it: the only way
+# the kernel OOM killer stops a process, so the only death a cgroup
+# ``oom_kill`` increment can explain.
+_SIGKILL_EXIT_CODES = frozenset({-9, 137})
 
 
 def _host_reports_oom_kills() -> bool:
@@ -1698,8 +1702,15 @@ def _unverified_kill_retry_eligible(
     return not _host_reports_oom_kills()
 
 
-def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bool:
-    """Whether a module's stream ledger already used its unverified-kill retry."""
+def _unverified_kill_ledger_state(tmp_root: str, modules: Sequence[str]) -> Optional[str]:
+    """What the modules' stream ledgers say about the unverified-kill retry.
+
+    ``None``: no ledger used it (a ledger that does not exist has not);
+    ``"used"``: a ledger records it; ``"stream_ledger_unreadable"``: a
+    ledger exists but cannot be read or is not a ledger. The audit state is
+    never swallowed into "unused" (lead-r13 D3 ledger reject policy): only
+    ``FileNotFoundError`` means no ledger.
+    """
 
     import json
 
@@ -1707,12 +1718,26 @@ def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bo
         path = os.path.join(tmp_root, module, f".{module}.stream_ledger.json")
         try:
             with open(path, encoding="utf-8") as handle:
-                events = json.load(handle).get("resume_events") or []
-        except (OSError, ValueError):
+                ledger = json.load(handle)
+        except FileNotFoundError:
             continue
-        if any(event.get("kind") == "unverified_kill_retry" for event in events):
-            return True
-    return False
+        except (OSError, ValueError):
+            return "stream_ledger_unreadable"
+        events = ledger.get("resume_events") if isinstance(ledger, dict) else None
+        if not isinstance(ledger, dict) or not isinstance(events or [], list):
+            return "stream_ledger_unreadable"
+        for event in events or []:
+            if not isinstance(event, dict):
+                return "stream_ledger_unreadable"
+            if event.get("kind") == "unverified_kill_retry":
+                return "used"
+    return None
+
+
+def _ledgers_record_unverified_kill(tmp_root: str, modules: Sequence[str]) -> bool:
+    """Whether the unverified-kill retry is spent: used, or unprovable."""
+
+    return _unverified_kill_ledger_state(tmp_root, modules) is not None
 
 
 def _record_unverified_kill_in_ledgers(held: Mapping[str, str], event: Mapping) -> None:
@@ -1751,29 +1776,38 @@ def _worker_memory_evidence(
     """Why a failed worker counts as out of memory, or None.
 
     Evidence only (lead-r13 B-RETRY):
-    - ``oom_kill_event``: the cgroup's ``oom_kill`` counter rose while the
-      worker ran and the worker died;
     - ``memory_exception``: a failure record marks ``memory_exhausted`` (set
       from the exception type and cause chain when it was captured), or its
-      recorded exception type is exactly a memory exception type.
+      recorded exception type is exactly a memory exception type;
+    - ``oom_kill_event``: the worker was stopped by SIGKILL with no exception
+      record, and the cgroup's ``oom_kill`` counter rose while it ran.
+    A recorded non-memory exception always wins (lead-r13 D3-OOM-EVIDENCE):
+    the counter belongs to the whole cgroup, so its increment may be another
+    process's kill and never overrides what the worker itself recorded. The
+    counter is read only for a death the OOM killer can cause (SIGKILL, the
+    only signal it sends) that left no record of its own.
     An exit code alone (9, 137, a Windows status) and text in a traceback are
     not evidence; such a kill is ``worker_killed_unknown`` (see
     ``_worker_failure_class``) and is not retried as a memory failure.
     """
 
-    try:
-        died = int(exit_code) != 0
-    except (TypeError, ValueError):
-        died = False
-    if died and oom_kill_delta:
-        return "oom_kill_event"
-    for item in failures if isinstance(failures, list) else ():
-        if not isinstance(item, Mapping):
-            continue
+    records = [
+        item for item in (failures if isinstance(failures, list) else ())
+        if isinstance(item, Mapping)
+    ]
+    for item in records:
         if item.get("memory_exhausted") is True:
             return "memory_exception"
         if str(item.get("exception_type") or "") in _MEMORY_EXCEPTION_TYPE_NAMES:
             return "memory_exception"
+    if any(item.get("exception_type") for item in records):
+        return None
+    try:
+        sigkilled = int(exit_code) in _SIGKILL_EXIT_CODES
+    except (TypeError, ValueError):
+        sigkilled = False
+    if sigkilled and oom_kill_delta:
+        return "oom_kill_event"
     return None
 
 
@@ -1789,17 +1823,23 @@ def worker_failure_is_memory(record: object) -> bool:
     Reads the classification this module wrote (``failure_class``,
     ``memory_exhausted``, the exact exception type, an ``oom_kill_delta``);
     an exit status or traceback text alone is never evidence (B-RETRY).
+    The rule is ``_worker_memory_evidence``'s, for every consumer (the
+    re-extraction driver included; lead-r13 D4-DRIVER-OOM): a record's own
+    non-memory exception wins over a stored ``out_of_memory`` class and over
+    the shared cgroup counter, which classifies only an unrecorded SIGKILL.
     """
 
     if not isinstance(record, Mapping):
         return False
-    if record.get("failure_class") == "out_of_memory":
-        return True
     try:
         delta = int(record["oom_kill_delta"]) if record.get("oom_kill_delta") is not None else None
     except (TypeError, ValueError):
         delta = None
-    return _worker_memory_evidence(record.get("worker_exit_code"), [record], delta) is not None
+    if _worker_memory_evidence(record.get("worker_exit_code"), [record], delta) is not None:
+        return True
+    if record.get("exception_type"):
+        return False
+    return record.get("failure_class") == "out_of_memory"
 
 
 def _worker_failure_class(
@@ -2858,16 +2898,102 @@ def _append_isolated_stream_batch(
 _STREAM_LEDGER_SCHEMA = "easyicu.stream_batch_ledger/1"
 
 
-class StreamBatchMemoryExhausted(RuntimeError):
+# Resume events that spend the streamed module's retry budget.
+_STREAM_RETRY_EVENT_KINDS = frozenset({"isolated_batch_memory_retry", "unverified_kill_retry"})
+
+
+class StreamBatchFailure(RuntimeError):
+    """A streamed module stopped at one batch, with its typed evidence.
+
+    Carries the failure class, the memory evidence (if any), the batch it
+    stopped at and the resume events so far, so the module boundary records
+    them instead of a string (lead-r13 D3-EXCEPT).
+    """
+
+    default_failure_class: Optional[str] = None
+
+    def __init__(
+        self,
+        message: str,
+        failure_class: Optional[str] = None,
+        *,
+        memory_evidence: Optional[str] = None,
+        worker_exit_code: object = None,
+        batch_index: Optional[int] = None,
+        start_offset: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        resume_events: Sequence[Mapping] = (),
+    ):
+        super().__init__(message)
+        self.failure_class = failure_class or self.default_failure_class
+        self.memory_evidence = memory_evidence
+        self.worker_exit_code = worker_exit_code
+        self.batch_index = batch_index
+        self.start_offset = start_offset
+        self.batch_size = batch_size
+        self.resume_events = [dict(event) for event in resume_events]
+
+    @property
+    def retries_used(self) -> int:
+        return sum(1 for e in self.resume_events if e.get("kind") in _STREAM_RETRY_EVENT_KINDS)
+
+    def to_record(self) -> Dict[str, object]:
+        return {
+            "exception_type": type(self).__name__,
+            "failure_class": self.failure_class,
+            "memory_evidence": self.memory_evidence,
+            "worker_exit_code": self.worker_exit_code,
+            "batch_index": self.batch_index,
+            "start_offset": self.start_offset,
+            "batch_size": self.batch_size,
+            "retries_used": self.retries_used,
+            "message": str(self),
+        }
+
+
+class StreamBatchMemoryExhausted(StreamBatchFailure):
     """A one-stay streamed batch still ran out of memory."""
 
+    default_failure_class = "out_of_memory"
 
-class StreamBatchWorkerKilled(RuntimeError):
+
+class StreamBatchWorkerKilled(StreamBatchFailure):
     """An isolated batch worker died without memory evidence."""
 
-    def __init__(self, message: str, failure_class: Optional[str]):
-        super().__init__(message)
-        self.failure_class = failure_class
+
+def _isolated_batch_retry_history(module: str, events: Sequence[Mapping]) -> List[Dict]:
+    """``stream_retry_history`` entries for a module's batch-level retries.
+
+    The stream ledger's ``resume_events`` are the one event source for both
+    layers (lead-r13 D3-LEDGER): a batch-level retry (an isolated batch's
+    memory retry or unverified-kill retry) is recorded there by the stream
+    writer and copied here by the collector. A module-worker retry is
+    written into the same ledger by the parent, which already appended its
+    own history entry, so it is not repeated.
+    """
+
+    entries = []
+    for event in events:
+        kind = event.get("kind")
+        if kind not in _STREAM_RETRY_EVENT_KINDS or event.get("level") == "module_worker":
+            continue
+        entry = {
+            "modules": [module],
+            "level": "isolated_batch",
+            "event_source": "stream_ledger.resume_events",
+            "policy": kind,
+            "worker_exit_code": event.get("worker_exit_code"),
+            "batch_index": event.get("batch_index"),
+            "start_offset": event.get("start_offset"),
+            "previous_batch_size": event.get("previous_batch_size"),
+            "retry_batch_size": event.get("batch_size"),
+            "memory_evidence": event.get("evidence"),
+        }
+        for key in ("oom_kill_counter", "process_tree_peak_rss_mb", "host_total_memory_mb"):
+            if key in event:
+                entry[key] = event[key]
+        entries.append(entry)
+    return entries
 
 
 def _stream_ids_digest(id_col: str, ids) -> str:
@@ -2890,15 +3016,111 @@ def _write_json_atomic(path, payload) -> None:
     os.replace(temporary, target)
 
 
+# Load parameters that change how a run executes, never what it computes:
+# the batch size and worker count may differ between an attempt and its
+# resume (the patient set is bound by ``ids_sha256``).
+_STREAM_EXECUTION_PARAMS = frozenset({"batch_size", "patient_ids", "concept_workers", "verbose"})
+
+
+def _canonical_sha256(payload) -> str:
+    import hashlib
+    import json
+
+    text = json.dumps(payload, sort_keys=True, default=repr, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stream_load_params_sha256(load_kwargs: Mapping) -> str:
+    """The value-affecting load parameters (all but the execution ones)."""
+
+    return _canonical_sha256({
+        str(k): v for k, v in load_kwargs.items() if k not in _STREAM_EXECUTION_PARAMS
+    })
+
+
+def _stream_source_identity_sha256(data_path) -> str:
+    """The installation a streamed module reads: its path and file signature.
+
+    Every file under ``data_path`` (its ``conversion_manifest.json``
+    included; symlinked directories followed once) contributes its relative
+    path, size and modification time. A source replaced, rebuilt or edited
+    between an attempt and its resume changes the identity.
+    """
+
+    if not data_path:
+        return _canonical_sha256({"data_path": None})
+    root = os.path.abspath(str(data_path))
+    if not os.path.isdir(root):
+        try:
+            stat = os.stat(root)
+            return _canonical_sha256({"data_path": root, "file": [stat.st_size, stat.st_mtime_ns]})
+        except OSError as exc:
+            return _canonical_sha256({"data_path": root, "unreadable": type(exc).__name__})
+    rows = []
+    seen = set()
+    for directory, subdirs, files in os.walk(root, followlinks=True):
+        real = os.path.realpath(directory)
+        if real in seen:
+            subdirs[:] = []
+            continue
+        seen.add(real)
+        subdirs.sort()
+        relative = os.path.relpath(directory, root)
+        for name in sorted(files):
+            try:
+                stat = os.stat(os.path.join(directory, name))
+            except OSError as exc:
+                rows.append([relative, name, type(exc).__name__])
+                continue
+            rows.append([relative, name, stat.st_size, stat.st_mtime_ns])
+    return _canonical_sha256({"data_path": root, "files": rows})
+
+
+@lru_cache(maxsize=8)
+def _stream_code_identity_sha256(database: str) -> str:
+    """The code and dictionaries a run computes with, from the provenance owner.
+
+    Fixed for a process (imported code does not change under it); a resume
+    in a new worker recomputes it.
+    """
+
+    provenance = _native_export_runtime_provenance(source_name=database or None)
+    excluded = {"python_executable", "platform"}
+    return _canonical_sha256({k: v for k, v in provenance.items() if k not in excluded})
+
+
 def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_digest) -> dict:
+    """What a stream ledger must match to be resumed (lead-r13 D3-RESUME-IDENTITY).
+
+    The module, concepts, database and cohort, plus the source installation,
+    the code and dictionary digests and every value-affecting load parameter.
+    Only the execution parameters (batch size, workers) may differ.
+    """
+
+    database = str(load_kwargs.get("database") or "")
     return {
         "schema": _STREAM_LEDGER_SCHEMA,
         "module": str(module_name),
         "concepts": list(concepts),
-        "database": str(load_kwargs.get("database") or ""),
+        "database": database,
         "id_col": str(id_col),
         "ids_sha256": ids_digest,
+        "load_params_sha256": _stream_load_params_sha256(load_kwargs),
+        "source_identity_sha256": _stream_source_identity_sha256(load_kwargs.get("data_path")),
+        "code_identity_sha256": _stream_code_identity_sha256(database),
     }
+
+
+def _discard_stream_attempt(ledger: Mapping, destination: Path, *paths: Path) -> int:
+    """Remove an earlier attempt's committed parts and files; count its batches."""
+
+    batches = [b for b in (ledger.get("batches") or []) if isinstance(b, Mapping)]
+    for entry in batches:
+        if entry.get("part"):
+            destination.with_name(str(entry["part"])).unlink(missing_ok=True)
+    for path in paths:
+        path.unlink(missing_ok=True)
+    return len(batches)
 
 
 def _stream_module_batches_to_parquet(
@@ -2962,11 +3184,23 @@ def _stream_module_batches_to_parquet(
     ledger = None
     if ledger_path.exists():
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-        if {k: ledger.get(k) for k in identity} != identity:
-            raise ValueError(
-                f"{module_name}: stream ledger does not match this request "
-                f"({ledger_path.name}); refusing to resume"
+        if not isinstance(ledger, dict):
+            raise ValueError(f"{module_name}: stream ledger is not a ledger ({ledger_path.name})")
+        changed = sorted(k for k in identity if ledger.get(k) != identity[k])
+        if changed:
+            # A different source, code, dictionary, load parameter or request:
+            # the committed batches are not this run's, so it starts fresh and
+            # says why (D3-RESUME-IDENTITY).
+            discarded = _discard_stream_attempt(
+                ledger, destination, ledger_path, order_path, partial
             )
+            resume_events.append({
+                "kind": "resume_refused_identity_changed",
+                "changed": changed,
+                "discarded_batches": discarded,
+            })
+            ledger = None
+    if ledger is not None:
         all_ids = pq.read_table(order_path).column("id").to_pylist()
         if _stream_ids_digest(id_col, all_ids) != identity["ids_sha256"]:
             raise ValueError(f"{module_name}: stream order file does not match its ledger")
@@ -3181,9 +3415,17 @@ def _stream_module_batches_to_parquet(
                             f"{module_name}: isolated batch worker exited "
                             f"with code {process.exitcode} ({failure_class})"
                         )
+                        failure = dict(
+                            memory_evidence=evidence,
+                            worker_exit_code=process.exitcode,
+                            batch_index=index,
+                            start_offset=start,
+                            batch_size=current_batch_size,
+                            resume_events=resume_events,
+                        )
                         if evidence:
-                            raise StreamBatchMemoryExhausted(message)
-                        raise StreamBatchWorkerKilled(message, failure_class)
+                            raise StreamBatchMemoryExhausted(message, **failure)
+                        raise StreamBatchWorkerKilled(message, failure_class, **failure)
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
@@ -3293,6 +3535,12 @@ def _stream_module_batches_to_parquet(
             # continues after the last committed batch.
             keep_parts = True
             commit_ledger(current_batch_size, pending_reason="memory_exception")
+        elif isinstance(exc, StreamBatchFailure):
+            # A terminated module keeps its failure ledger (D3-EXCEPT): the
+            # committed parts, the resume events and why it stopped.
+            keep_parts = True
+            ledger["termination"] = exc.to_record()
+            commit_ledger(current_batch_size, pending_reason=exc.failure_class)
         if not keep_parts:
             for entry in batch_telemetry:
                 if entry.get("part"):
@@ -3389,6 +3637,7 @@ def _run_module_extraction(
     streamed = False
     result = None
     memory_exhausted = False
+    stream_failure = None
     try:
         if stream_output_batches:
             if not patient_ids_filter or not batch_size:
@@ -3447,6 +3696,17 @@ def _run_module_extraction(
                 traceback.print_exc()
                 errors.append(f"load_concepts({module_name}) batched: {e}")
                 result = {}
+    except StreamBatchFailure as e:
+        # Typed at the module boundary (D3-EXCEPT): the failure class, its
+        # memory evidence, the retry budget used and the resume events are
+        # recorded, not flattened to text. The batch-level retries are spent
+        # (a one-stay batch or a refused kill), so the module is not marked
+        # for a smaller retry; it fails, and publication refuses it.
+        traceback.print_exc()
+        errors.append(f"streamed export({module_name}): {e}")
+        stream_failure = e.to_record()
+        stream_failure["resume_events"] = list(e.resume_events)
+        result = {}
     except Exception as e:
         traceback.print_exc()
         errors.append(
@@ -3530,6 +3790,11 @@ def _run_module_extraction(
         )
         manifest["deferred_batch_merge"] = stream_info.get("deferred_batch_merge", False)
         manifest["stream_resume_events"] = stream_info.get("stream_resume_events", [])
+    if stream_failure is not None:
+        manifest["stream_failure"] = {
+            k: v for k, v in stream_failure.items() if k != "resume_events"
+        }
+        manifest["stream_resume_events"] = stream_failure["resume_events"]
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
@@ -7663,6 +7928,11 @@ def _publish_native_export_v2(
         "module_peak_rss_mb": module_peak_rss_mb,
         "module_peak_working_set_mb": module_peak_working_set_mb,
         "stream_retry_history": list(result.get("stream_retry_history", [])),
+        "stream_resume_events": {
+            module: list(result["modules"][module]["stream_resume_events"])
+            for module in modules
+            if (result.get("modules", {}).get(module) or {}).get("stream_resume_events")
+        },
         "resource_plan": result.get("resource_plan"),
         "module_resource_plans": result.get("module_resource_plans"),
         "resource_budget_mb": result.get("resource_budget_mb"),
@@ -8190,6 +8460,15 @@ def extract_database(
             False,
         )
         mod_result["deferred_batch_merge"] = manifest.get("deferred_batch_merge", False)
+        # The worker's resume events and typed stream failure travel to the
+        # module result, its published manifest and the release receipt; the
+        # batch-level retries join the run's retry history (D3-LEDGER).
+        mod_result["stream_resume_events"] = list(manifest.get("stream_resume_events") or [])
+        if manifest.get("stream_failure") is not None:
+            mod_result["stream_failure"] = dict(manifest["stream_failure"])
+        result["stream_retry_history"].extend(
+            _isolated_batch_retry_history(mod_name, mod_result["stream_resume_events"])
+        )
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -8207,6 +8486,11 @@ def extract_database(
             "stream_batches": mod_result["stream_batches"],
             "batch_process_isolation": mod_result["batch_process_isolation"],
             "deferred_batch_merge": mod_result["deferred_batch_merge"],
+            "stream_resume_events": mod_result["stream_resume_events"],
+            **(
+                {"stream_failure": mod_result["stream_failure"]}
+                if "stream_failure" in mod_result else {}
+            ),
             "initial_batch_size": manifest.get("initial_batch_size"),
             "final_planned_batch_size": manifest.get("final_planned_batch_size"),
             "adaptive_batch_growth": manifest.get(
@@ -8529,7 +8813,7 @@ def extract_database(
         )
         unverified_kill = None
         unverified_kill_retried = bool(group.get("_unverified_kill_retried"))
-        if (
+        unverified_kill_candidate = (
             crash_retry is None
             and crashed
             and incomplete
@@ -8537,11 +8821,19 @@ def extract_database(
             and group_may_stream
             and group_batch_size > 1
             and not unverified_kill_retried
-            and not _ledgers_record_unverified_kill(tmp_root, group_mods)
             and _unverified_kill_retry_eligible(
                 proc.exitcode, attempt_failures, oom_kill_delta
             )
-        ):
+        )
+        ledger_state = (
+            _unverified_kill_ledger_state(tmp_root, group_mods)
+            if unverified_kill_candidate else None
+        )
+        if ledger_state == "stream_ledger_unreadable":
+            # The retry budget cannot be proven unspent: refuse, and say why.
+            for summary in attempt_failures:
+                summary["unverified_kill_retry_refused"] = ledger_state
+        if unverified_kill_candidate and ledger_state is None:
             # No OOM counter on this host (macOS/Windows): one retry at half
             # the batch, resuming from the committed batches (#13 C).
             unverified_kill = {
@@ -8567,6 +8859,7 @@ def extract_database(
             result["stream_retry_history"].append(
                 {
                     "modules": retry_modules + retry_special,
+                    "level": "module_worker",
                     "worker_exit_code": proc.exitcode,
                     "attempt": stream_retry_attempt + 1,
                     "previous_batch_size": group_batch_size,

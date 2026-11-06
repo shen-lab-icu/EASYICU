@@ -156,15 +156,21 @@ def test_a_memory_failure_keeps_committed_batches_and_resumes(tmp_path, monkeypa
     assert _sha(replayed["path"]) == _sha(info["path"])
 
 
-def test_a_ledger_for_another_request_is_refused(tmp_path, monkeypatch):
+def test_a_ledger_for_another_request_is_not_resumed(tmp_path, monkeypatch):
+    """lead-r13 D3-RESUME-IDENTITY: another request starts fresh, and says why."""
     with pytest.raises(MemoryError):
         _run(tmp_path, monkeypatch, 4, fail_on_call=2)
     ledger_path = tmp_path / ".test_module.stream_ledger.json"
     ledger = json.loads(ledger_path.read_text())
     ledger["concepts"] = ["another_concept"]
     ledger_path.write_text(json.dumps(ledger))
-    with pytest.raises(ValueError, match="does not match"):
-        _run(tmp_path, monkeypatch, 2)
+    calls: list = []
+    info = _run(tmp_path, monkeypatch, 2, calls=calls)
+    assert sorted(v for ids in calls for v in ids) == STAYS  # batch 1 redone
+    [event] = info["stream_resume_events"]
+    assert event == {
+        "kind": "resume_refused_identity_changed", "changed": ["concepts"], "discarded_batches": 1,
+    }
 
 
 def test_a_non_memory_failure_cleans_up(tmp_path, monkeypatch):
@@ -447,7 +453,14 @@ def test_a_second_bare_kill_in_the_module_fails_typed(tmp_path, monkeypatch):
     with pytest.raises(api.StreamBatchWorkerKilled) as caught:
         _isolated_kills(monkeypatch, tmp_path, {1, 3})
     assert caught.value.failure_class == "worker_killed_unknown"
-    assert list(tmp_path.iterdir()) == []
+    assert caught.value.retries_used == 1
+    # The terminated module keeps its failure ledger (lead-r13 D3-EXCEPT);
+    # nothing is published.
+    ledger = json.loads((tmp_path / ".test_module.stream_ledger.json").read_text())
+    assert ledger["pending_reason"] == "worker_killed_unknown"
+    assert ledger["termination"]["failure_class"] == "worker_killed_unknown"
+    assert [e["kind"] for e in ledger["resume_events"]] == ["unverified_kill_retry"]
+    assert not (tmp_path / "test_module.parquet").exists()
 
 
 def test_a_bare_kill_with_a_counter_is_not_retried(tmp_path, monkeypatch):
