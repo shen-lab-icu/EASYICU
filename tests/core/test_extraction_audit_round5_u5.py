@@ -289,7 +289,9 @@ def test_all_databases_kdigo_requires_complete_window_before_publishing_stage(da
 
 
 @pytest.mark.parametrize("database", DATABASES)
-@pytest.mark.parametrize("rate,stage", [(1e-10, 3), (2e-9, 2)])
+# Anuria is le(rate, 0): a derived rate up to 1e-6 mL/kg/h is float noise
+# (lead-r13 D1); the smallest real rate is ~1.4e-4.
+@pytest.mark.parametrize("rate,stage", [(1e-10, 3), (2e-9, 3), (9e-7, 3), (2e-6, 2)])
 def test_all_databases_preserve_anuria_tolerance(database, rate, stage):
     amount = rate * 50 * (1 if database == "hirid" else 12)
     result = kdigo_uo(
