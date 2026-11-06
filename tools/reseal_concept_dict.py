@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -278,15 +279,20 @@ def verify_pins(root: Path) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+# A directory fsync some filesystems do not support; any other error (EIO,
+# ENOSPC, ...) means the rename may not be durable and fails the step.
+_DIR_FSYNC_UNSUPPORTED = {errno.EINVAL, errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}
+
+
 def _fsync_dir(path: Path) -> None:
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return  # platforms without directory handles (Windows)
+    if os.name == "nt":
+        return  # Windows has no directory handles to fsync
+    fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno not in _DIR_FSYNC_UNSUPPORTED:
+            raise
     finally:
         os.close(fd)
 
@@ -488,7 +494,15 @@ def _apply_locked(root: Path, *, consent: str, label: str, locked_at: str,
                               reason="reseal_pins_disagree")
     except BaseException as exc:
         if journal is None:
-            raise  # nothing was written; the journal never existed
+            # No dictionary file was touched. A journal whose own write failed
+            # after the rename is this transaction's: remove it.
+            (root / RECOVERY_JOURNAL).unlink(missing_ok=True)
+            if not isinstance(exc, Exception):
+                raise
+            raise ResealError(
+                f"reseal stopped before any file changed ({type(exc).__name__}: {exc})",
+                reason="reseal_not_started",
+            ) from exc
         entries = json.loads(journal.read_text(encoding="utf-8"))["files"]
         failures = _restore(root, entries)
         if failures:

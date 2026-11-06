@@ -198,3 +198,60 @@ def test_the_lock_file_is_removed_while_still_held(root):
         inode = os.fstat(held.fd).st_ino
         assert os.stat(root / tool.RESEAL_LOCK).st_ino == inode
     assert not (root / tool.RESEAL_LOCK).exists()
+
+
+def _dir_fsync_fault(monkeypatch, tool, code, *, skip_journal_dir_calls=0):
+    """Make os.fsync on a directory raise ``code``; file fsyncs are untouched."""
+    import stat
+
+    real = os.fsync
+    state = {"dir_calls": 0}
+
+    def fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            state["dir_calls"] += 1
+            if state["dir_calls"] > skip_journal_dir_calls:
+                raise OSError(code, os.strerror(code))
+        return real(fd)
+
+    monkeypatch.setattr(tool.os, "fsync", fsync)
+    return state
+
+
+def test_an_eio_on_a_directory_fsync_fails_the_reseal_and_restores(root, monkeypatch):
+    import errno
+
+    tool = _tool()
+    before = _digests(root)
+    # The journal's own directory fsync succeeds; the first file's fails, and
+    # so does every later one (the restore reports them and keeps the journal).
+    _dir_fsync_fault(monkeypatch, tool, errno.EIO, skip_journal_dir_calls=1)
+    with pytest.raises(tool.ResealError) as caught:
+        tool.apply(root, **APPLY)
+    assert caught.value.reason == "reseal_rollback_incomplete"
+    assert (root / tool.RECOVERY_JOURNAL).exists()
+    monkeypatch.undo()
+    tool = _tool()
+    tool.recover(root)
+    assert _digests(root) == before
+
+
+def test_an_unsupported_directory_fsync_is_tolerated(root, monkeypatch):
+    import errno
+
+    tool = _tool()
+    _dir_fsync_fault(monkeypatch, tool, errno.EINVAL)
+    assert tool.apply(root, **APPLY)["verify"]["problems"] == []
+
+
+def test_a_journal_that_could_not_be_made_durable_is_removed(root, monkeypatch):
+    import errno
+
+    tool = _tool()
+    before = _digests(root)
+    _dir_fsync_fault(monkeypatch, tool, errno.EIO)
+    with pytest.raises(tool.ResealError) as caught:
+        tool.apply(root, **APPLY)
+    assert caught.value.reason == "reseal_not_started"
+    assert _digests(root) == before
+    assert not (root / tool.RECOVERY_JOURNAL).exists() and not (root / tool.RESEAL_LOCK).exists()
