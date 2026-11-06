@@ -656,3 +656,45 @@ def test_a_hard_link_to_a_snapshotted_file_is_matched_with_a_note(tmp_path, monk
     assert entry["snapshot_realpath"] == os.path.realpath(prepared / "cases.parquet")
     assert "matched by (device, inode)" in entry["note"]
     assert entry["sha256"] == receipt.sha256_file(prepared / "cases.parquet")
+
+
+def test_a_real_extraction_delivers_every_consumed_file_to_the_receipt(tmp_path):
+    # End to end (D10D-CONSUMED-DELIVERY): extract_database's workers log
+    # table_consumed into the run log; the parent reads it before deleting the
+    # log, the native manifest publishes it, and the receipt verifies it
+    # against a snapshot of the same input.
+    from easyicu import formal_inputs
+    from easyicu.api.concepts import clear_global_loader
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    root = tmp_path / "hirid"
+    generate_source(root, "hirid", stays=3)
+    outputs = {}
+    for path in sorted(root.rglob("*.parquet")):
+        relative = path.relative_to(root)
+        table = relative.parts[0] if len(relative.parts) > 1 else path.stem
+        outputs.setdefault(table, []).append({"relative_path": relative.as_posix()})
+    (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
+        {"table": t, "status": "completed", "outputs": o} for t, o in outputs.items()]}))
+    snapshot = formal_inputs.take_snapshot([f"hirid:{root}"])["databases"]["hirid"]
+
+    output = tmp_path / "export"
+    try:
+        result = extract_database(
+            "hirid", data_path=str(root), output_dir=str(output),
+            modules=["outcome", "vitals"], native_export_v2=True, verbose=False,
+        )
+    finally:
+        clear_global_loader()
+
+    published = json.loads((output / "_manifest.json").read_text())
+    consumed = published["storage_consumed"]
+    assert consumed == result["storage_consumed"] and consumed
+    # Every table any worker read is among the consumed files.
+    assert {e["table"] for e in published["storage_reads"]} <= {e["table"] for e in consumed}
+    verified = receipt._consumed("hirid", str(root), consumed, snapshot)
+    assert verified["count"] == len(consumed)
+    assert all(f["admitted_by"] == "data_root" for f in verified["files"]
+               if f["format"] in {"csv", "parquet"})
+    assert published["storage_binding"]["digest"] == result["storage_binding"]["digest"]
