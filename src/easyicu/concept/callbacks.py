@@ -6104,9 +6104,11 @@ def _evaluated_empty_result(
     incomplete = _incomplete_component(tables, components)
     if incomplete is not None:
         return _not_evaluable_from(incomplete, tables, ctx)
+    # The same table list as _with_evaluated_empty_receipt: one receipt for
+    # every empty event set, whichever path produced it.
     return _infection_empty_result(
         tables, ctx, reason_code="no_qualifying_events_observed",
-        evaluation_status="evaluated",
+        evaluation_status="evaluated", source=table_availability(tables.get("abx"), "abx"),
     )
 
 
@@ -6144,25 +6146,33 @@ def _with_evaluated_empty_receipt(
 
 
 def _sepsis_infection_disposition(
-    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    components: Iterable[str],
 ) -> Optional[ICUTable]:
+    """Inherit the suspected-infection receipt of an empty susp_inf.
+
+    A not-evaluable susp_inf passes through unchanged.  An evaluated one ("no
+    qualifying event") is inherited only when every other required component
+    is complete: an empty SOFA over a missing source table is not a searched
+    negative (delta10r).
+    """
     record = table_availability(tables.get("susp_inf"), "susp_inf")
-    if record is not None and record.evaluation_status is not None:
-        # An evaluated empty receipt names no tables, exactly like the one a
-        # sepsis owner writes for its own empty output in another batch.
+    if record is None or record.evaluation_status is None:
+        return None
+    if record.evaluation_status == "not_evaluable":
         return _infection_empty_result(
             tables, ctx, reason_code=record.reason_code,
-            evaluation_status=record.evaluation_status,
-            source=record if record.evaluation_status == "not_evaluable" else None,
+            evaluation_status="not_evaluable", source=record,
         )
-    return None
+    return _evaluated_empty_result(tables, ctx, components)
 
 
 def _callback_sep3(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    disposition = _sepsis_infection_disposition(tables, ctx)
+    disposition = _sepsis_infection_disposition(tables, ctx, ("sofa", "susp_inf"))
     if disposition is not None:
         return disposition
     # Check if required tables exist
@@ -6226,7 +6236,7 @@ def _callback_sep3_sofa2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    disposition = _sepsis_infection_disposition(tables, ctx)
+    disposition = _sepsis_infection_disposition(tables, ctx, ("sofa2", "susp_inf"))
     if disposition is not None:
         return disposition
     if "sofa2" not in tables or "susp_inf" not in tables:
@@ -6946,10 +6956,7 @@ def _callback_susp_inf(
                 evaluation_status="not_evaluable", source=record,
             )
     if si_mode in {"and", "abx", "icd_abx"} and tables["abx"].data.empty:
-        return _infection_empty_result(
-            tables, ctx, reason_code="no_qualifying_events_observed",
-            evaluation_status="evaluated", source=table_availability(tables["abx"], "abx"),
-        )
+        return _evaluated_empty_result(tables, ctx, required)
 
     unsupported_strict_si_dbs = {"hirid", "sic", "sicdb"}
     samp_data = getattr(tables.get("samp"), "data", None)

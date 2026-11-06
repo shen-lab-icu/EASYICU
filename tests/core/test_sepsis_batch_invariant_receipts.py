@@ -163,3 +163,65 @@ def test_the_export_projection_reports_a_blocked_score_as_structurally_unavailab
     assert statuses["blocked"]["missing_tables"] == ["chartevents"]
     assert statuses["complete"]["availability"] == "produced_all_null"
     assert statuses["complete"]["evaluation_status"] == "evaluated"
+
+
+@pytest.mark.parametrize(
+    ("concept", "module", "callback", "score"),
+    [
+        ("sep3_sofa1", "sepsis3_sofa1", _callback_sep3, "sofa"),
+        ("sep3_sofa2", "sepsis3_sofa2", _callback_sep3_sofa2, "sofa2"),
+    ],
+)
+def test_an_evaluated_empty_suspicion_never_hides_an_incomplete_score(concept, module, callback, score):
+    # delta10r: the susp_inf receipt is produced by its own callback (a complete
+    # antibiotic source with no antibiotic in this batch), then the sepsis
+    # owner meets a SOFA source the loader reports missing.
+    from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+    from easyicu.resources import load_dictionary
+    from easyicu.webserver import dataio
+
+    susp_inf = _callback_susp_inf(
+        {"abx": _event("abx", []), "samp": _event("samp", [(7, 1.0)])}, _ctx("susp_inf"),
+    )
+    assert _receipt(susp_inf, "susp_inf")[1:3] == ("evaluated", "no_qualifying_events_observed")
+    plan = dataio.compile_concept_load_plan(CONCEPT_GROUPS_INTERNAL[module])
+    source = next(
+        binding.source_concept for binding in plan.materializations
+        if binding.output_concept == concept
+    ) if concept not in plan.source_concepts else concept
+    statuses = {}
+    for label, scores in (
+        ("blocked", _blocked(_empty_score(score), score)),
+        ("complete", _empty_score(score)),
+    ):
+        result = callback({score: scores, "susp_inf": susp_inf}, _ctx(source))
+        _, projected = dataio._prepare_export_availability(
+            result.data.copy(), module=module, plan=plan,
+            records={source: table_availability(result, source)},
+            dictionary=load_dictionary(include_sofa2=True),
+        )
+        statuses[label] = projected[concept]
+    assert statuses["blocked"]["availability"] == "structurally_unavailable_placeholder"
+    assert statuses["blocked"]["evaluation_status"] == "not_evaluable"
+    assert statuses["blocked"]["reason_code"] == "required_source_table_missing"
+    assert statuses["blocked"]["missing_tables"] == ["chartevents"]
+    assert statuses["complete"]["availability"] == "produced_all_null"
+    assert statuses["complete"]["reason_code"] == "no_qualifying_events_observed"
+
+
+def test_the_empty_antibiotic_shortcut_checks_every_suspicion_input():
+    # NB-SUSP-INF-EARLY-GUARD: an empty antibiotic table beside a culture input
+    # whose own receipt is not evaluable (not blocked, so the entry check lets
+    # it through) is not "no qualifying event".
+    from easyicu.concept.availability_signal import (
+        ConceptAvailabilityRecord,
+        set_table_availability,
+    )
+
+    samp = _event("samp", [])
+    set_table_availability(samp, ConceptAvailabilityRecord(
+        concept="samp", database="miiv", reason="data_missing", n_rows=0,
+        evaluation_status="not_evaluable", reason_code="component_time_index_missing",
+    ))
+    result = _callback_susp_inf({"abx": _event("abx", []), "samp": samp}, _ctx("susp_inf"))
+    assert _receipt(result, "susp_inf")[1:3] == ("not_evaluable", "component_time_index_missing")
