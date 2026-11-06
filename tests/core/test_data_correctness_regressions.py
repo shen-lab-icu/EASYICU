@@ -741,6 +741,8 @@ def test_wide_table_column_chunks_reassemble_identical_grid(
             get_table=lambda name: SimpleNamespace(defaults=defaults),
         ),
         resolve_loader_from_disk=lambda name: parquet,
+        # The storage policy's validated set for that loader.
+        resolve_target_files=lambda name, loader=None: (parquet,),
     )
     monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", "2")
 
@@ -778,6 +780,8 @@ def test_wide_table_aggregation_orders_stays_and_hours(tmp_path, monkeypatch, co
             id_var="patientunitstayid", index_var="observationoffset",
         ))),
         resolve_loader_from_disk=lambda name: parquet,
+        # The storage policy's validated set for that loader.
+        resolve_target_files=lambda name, loader=None: (parquet,),
     )
     monkeypatch.setenv("EASYICU_WIDE_COLUMN_BATCH_SIZE", str(column_batch_size))
     result = load_wide_table_aggregated(source, "vitalperiodic", ["a", "b"], patient_ids=[102, 101])

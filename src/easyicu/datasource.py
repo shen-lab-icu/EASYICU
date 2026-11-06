@@ -1505,6 +1505,7 @@ class ICUDataSource:
             if loader is None and self.config.name == 'mimic' and table_name == 'chartevents':
                 csv_path = self._resolve_mimic3_chartevents_csv()
                 if csv_path is not None and concept_itemid_filter is not None:
+                    storage_layout.csv_table_scan(self, table_name, csv_path)
                     # Use CSV fallback only when we have itemid filter (for performance)
                     logger.info("MIMIC-III chartevents: bucket directory not found; using CSV fallback mode")
                     frame = self._read_mimic3_csv_fallback(
@@ -1653,6 +1654,7 @@ class ICUDataSource:
             if not storage_layout.flat_table_files(self, table_name):
                 raise failure
             logger.warning("Ignoring physical cache: %s", failure.reason)
+            storage_layout.record_bucket_fallback(self, table_name, failure)
         return None
 
     def resolve_target_files(
@@ -1970,6 +1972,8 @@ class ICUDataSource:
         columns = optional_availability_projection(path, columns, db_name, table_name)
 
         if suffix == ".csv" or lower_name.endswith(".csv.gz"):
+            if scan_loader is not None:
+                storage_layout.csv_table_scan(self, table_name, path)
             read_columns = list(columns) if columns else None
             filter_column = patient_ids_filter.column if patient_ids_filter else None
 
@@ -2786,15 +2790,14 @@ class ICUDataSource:
                     f"partitioned_read_failed: {directory.name} ({type(e).__name__}: {e})"
                 ) from e
     
-    def _read_partitioned_data_fallback(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
-        """Read partitioned data from a directory, respecting format priority."""
+    def _read_partitioned_data_fallback(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, *, table_name: str) -> pd.DataFrame:
+        """Read a table's partitioned data through the storage policy's validated set."""
         
         # 🔍 调试日志：显示分区加载请求的列
         if DEBUG_MODE and columns:
             logger.debug(f"分区表 {directory.name} 请求的列: {list(columns)}")
         
-        # 只支持 Parquet 格式
-        files = sorted(directory.glob("*.parquet")) + sorted(directory.glob("*.pq"))
+        files = list(self.resolve_target_files(table_name, loader=directory))
         if not files:
             # 没有找到 parquet 文件
             return pd.DataFrame()
@@ -4602,11 +4605,15 @@ def load_wide_table_aggregated(
     # table_path 返回 Path 对象
     directory = table_path if isinstance(table_path, Path) else Path(table_path)
     
-    # 构建glob pattern
-    if directory.is_dir():
-        glob_pattern = _duckdb_path(directory / "*.parquet")
-    else:
-        glob_pattern = _duckdb_path(directory)
+    # The storage policy's validated set, in the former glob's order.  A
+    # bucket root has no top-level Parquet (the glob matched nothing, and the
+    # caller fell back to per-concept loading); a CSV is not Parquet.
+    if not (directory.is_dir() or directory.suffix.lower() in {".parquet", ".pq"}):
+        raise ValueError(f"wide_table_not_parquet: {table_name}")
+    wide_files = data_source.resolve_target_files(table_name, loader=directory)
+    if not wide_files or any(f.parent.name.startswith("bucket_id=") for f in wide_files):
+        raise ValueError(f"wide_table_not_flat_parquet: {table_name}")
+    wide_list = "[" + ", ".join(f"'{_duckdb_path(f)}'" for f in wide_files) + "]"
     
     # 构建DuckDB聚合函数映射 (median为R ricu默认)
     agg_map = {
@@ -4721,8 +4728,8 @@ def load_wide_table_aggregated(
             f"GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})\n"
             f"ORDER BY {id_col}, charttime\n"
         )
-    _wide_read_fast = f"read_parquet('{glob_pattern}')"
-    _wide_read_safe = f"read_parquet('{glob_pattern}', union_by_name=true)"
+    _wide_read_fast = f"read_parquet({wide_list})"
+    _wide_read_safe = f"read_parquet({wide_list}, union_by_name=true)"
 
     def _exec_wide(read_expr: str) -> pd.DataFrame:
         q = _wide_query_tpl.format(read_expr=read_expr)
@@ -4753,6 +4760,20 @@ def load_wide_table_aggregated(
     return df
 
 
+def storage_source(database: str, base_path) -> "ICUDataSource":
+    """A data source for ``database`` at ``base_path``, to resolve validated files.
+
+    Readers outside the table loader (outcome, cohort and filter readers)
+    take their file sets from the storage policy through this source.
+    """
+    from .resources import load_data_sources
+
+    config = load_data_sources().get(database)
+    if config is None:
+        raise ValueError(f"Unknown database: {database}")
+    return ICUDataSource(config=config, base_path=Path(base_path))
+
+
 # --- Public cross-package alias (thin wrapper, no logic change) ---
 # Private name kept for backward compatibility; cross-package callers must
 # use the public name below.
@@ -4761,6 +4782,7 @@ enumerate_bucket_parquet_files = _enumerate_bucket_parquet_files
 
 __all__ = [
     "enumerate_bucket_parquet_files",
+    "storage_source",
 ]
 
 

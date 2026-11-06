@@ -7142,6 +7142,9 @@ def _publish_native_export_v2(
         "feature_definitions": {"included": False},
         "column_metadata": sidecar_ref.to_dict(),
     }
+    if result.get("storage_fallbacks"):
+        # Published (a corrupt cache falls back to its true source), but marked.
+        manifest["storage_fallbacks"] = list(result["storage_fallbacks"])
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -7341,8 +7344,18 @@ def extract_database(
     import shutil
 
     from ..runtime.memory_manager import get_rss_mb
+    from ..storage_layout import SCAN_FALLBACK_LOG_ENV, read_scan_fallback_log
 
     t_start = time.time()
+    # Storage fallbacks (a corrupt bucket cache bypassed for its flat source,
+    # an unmanifested or CSV read) from this process and its workers become
+    # receipt facts: result["storage_fallbacks"] and the publication record.
+    _fallback_handle, scan_fallback_log = tempfile.mkstemp(
+        prefix="easyicu_scan_fallbacks_", suffix=".jsonl"
+    )
+    os.close(_fallback_handle)
+    previous_fallback_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+    os.environ[SCAN_FALLBACK_LOG_ENV] = scan_fallback_log
 
     # 确定数据路径
     if data_path is None:
@@ -8082,6 +8095,13 @@ def extract_database(
 
         # 清理临时目录
         shutil.rmtree(tmp_root, ignore_errors=True)
+
+    result["storage_fallbacks"] = list(read_scan_fallback_log(scan_fallback_log))
+    if previous_fallback_log is None:
+        os.environ.pop(SCAN_FALLBACK_LOG_ENV, None)
+    else:
+        os.environ[SCAN_FALLBACK_LOG_ENV] = previous_fallback_log
+    os.unlink(scan_fallback_log)
 
     if native_export_v2:
         assert output_dir is not None

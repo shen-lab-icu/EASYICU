@@ -25,6 +25,7 @@ class ConceptDataSourceStorage(Protocol):
     def resolve_target_files(
         self, table_name: str, selector_column: Optional[str] = None,
         selector_values: Optional[Iterable[object]] = None,
+        *, loader: Optional[Path] = None,
     ) -> Tuple[Path, ...]: ...
 
     def get_bucket_files_for_ids(

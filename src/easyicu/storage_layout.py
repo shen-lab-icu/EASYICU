@@ -548,28 +548,86 @@ _SCAN_FALLBACKS: list[dict[str, str]] = []
 
 
 def scan_fallbacks() -> tuple[dict[str, str], ...]:
-    """Every flat scan accepted without a conversion-manifest entry, in order.
+    """Every read the storage policy admitted without full verification, in order.
 
     ``table_scan_unmanifested``: the installation has no manifest at all (the
     compatibility path for older or hand-made installations).
     ``table_scan_unregistered``: a manifest exists but does not own the scan,
     accepted only because ``EASYICU_ALLOW_UNREGISTERED_SCAN=1`` was set.
     Both were checked against the directory inventory only.
+    ``table_read_csv_unmanifested`` / ``table_read_csv_beside_manifest``: a
+    CSV read (see :func:`csv_table_scan`).
+    ``bucket_cache_ignored``: a bucket cache failed validation
+    (``bucket_reason``) and the flat source was read instead.
     """
     return tuple(dict(entry) for entry in _SCAN_FALLBACKS)
 
 
-def _record_fallback(reason: str, base: Path, table: str) -> None:
-    warned = (str(base), table)
+_FALLBACK_DETAIL = {
+    "table_read_csv_unmanifested": "is read from CSV in an installation without a "
+    "conversion manifest; nothing verifies it",
+    "table_read_csv_beside_manifest": "is read from CSV although its converted "
+    "Parquet is listed (and was verified complete); the CSV itself is not verified",
+    "bucket_cache_ignored": "has a bucket cache that failed validation; the "
+    "flat table, its true source, is read instead",
+}
+
+
+def record_bucket_fallback(source, table: str, failure: BucketLayoutError) -> None:
+    """Record that a corrupt bucket cache was bypassed for the flat source.
+
+    Policy: a corrupt cache falls back to its true source, so the read (and
+    publication) proceeds, but the fallback is a receipt fact, not a log line.
+    """
+    base = None if source.base_path is None else Path(source.base_path)
+    _record_fallback("bucket_cache_ignored", base, table, bucket_reason=failure.reason)
+
+
+SCAN_FALLBACK_LOG_ENV = "EASYICU_SCAN_FALLBACK_LOG"
+_FALLBACK_LOGGED: set[tuple[str, tuple]] = set()
+
+
+def _log_fallback(entry: dict[str, str]) -> None:
+    """Append ``entry`` to the run's fallback log, shared with worker processes."""
+    target = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+    if not target:
+        return
+    key = (target, tuple(sorted(entry.items())))
+    if key in _FALLBACK_LOGGED:
+        return
+    _FALLBACK_LOGGED.add(key)
+    with open(target, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def read_scan_fallback_log(path) -> tuple[dict[str, str], ...]:
+    """The distinct fallbacks a run logged (see ``EASYICU_SCAN_FALLBACK_LOG``)."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ()
+    entries = {}
+    for line in lines:
+        if line.strip():
+            entry = json.loads(line)
+            entries.setdefault(tuple(sorted(entry.items())), entry)
+    return tuple(entries.values())
+
+
+def _record_fallback(reason: str, base: Path, table: str, **extra: str) -> None:
+    entry = {"reason": reason, "root": str(base), "table": table, **extra}
+    _log_fallback(entry)
+    warned = (str(base), table, reason)
     if warned in _FALLBACK_WARNED:
         return
     _FALLBACK_WARNED.add(warned)
-    _SCAN_FALLBACKS.append({"reason": reason, "root": str(base), "table": table})
-    logging.getLogger(__name__).warning(
-        "%s: %s under %s has no conversion-manifest entry; checking the "
-        "directory only. Re-run or verify the conversion to detect a missing "
-        "chunk.", reason, table, base,
+    _SCAN_FALLBACKS.append(entry)
+    detail = _FALLBACK_DETAIL.get(
+        reason,
+        "has no conversion-manifest entry; checking the directory only. Re-run "
+        "or verify the conversion to detect a missing chunk",
     )
+    logging.getLogger(__name__).warning("%s: %s under %s %s.", reason, table, base, detail)
 
 
 def _registered_outputs(index: dict, table: str) -> frozenset:
@@ -669,10 +727,11 @@ def _loader_scan(table: str, loader: Path, files: tuple[Path, ...]) -> tuple[Pat
     """
     if loader.is_dir():
         own = tuple(sorted(p for p in loader.glob("*.parquet") if not p.name.startswith(".")))
-    elif loader.is_file() and loader.suffix.lower() in {".parquet", ".pq"}:
-        own = (loader,)
+    elif loader.suffix.lower() in {".parquet", ".pq"}:
+        own = (loader,) if loader.is_file() else ()
     else:
-        own = ()
+        # A CSV loader is admitted by csv_table_scan, never bound to Parquet.
+        raise TypeError(f"{loader.name} is not a Parquet file or directory")
     if not files:
         return own
     if {_file_identity(p) for p in own} != {_file_identity(p) for p in files}:
@@ -682,6 +741,46 @@ def _loader_scan(table: str, loader: Path, files: tuple[Path, ...]) -> tuple[Pat
             f"policy resolves {len(files)} files under {files[0].parent.name}",
         )
     return files
+
+
+def flat_table_scan(source, table: str, loader: Path) -> tuple[Path, ...]:
+    """The validated flat installation of ``table`` at ``loader``.
+
+    For readers that deliberately read the flat Parquet even when a bucket
+    cache sits beside it (a patient-partitioned subset, for example); the
+    flat set is still bound to the policy's location and to the manifest.
+    """
+    return verify_flat_scan(
+        source, table, _loader_scan(table, Path(loader), flat_table_files(source, table))
+    )
+
+
+def csv_table_scan(source, table: str, path: Path) -> None:
+    """Admit a CSV read of ``table``; the conversion manifest lists Parquet only.
+
+    Without a manifest the read is a legacy compatibility fallback and is
+    recorded.  In a converted installation the table's Parquet inventory must
+    still be complete (a listed table cannot fall back to CSV because its
+    outputs vanished) and the CSV read is recorded; a table the manifest does
+    not list is refused like an unregistered Parquet scan.
+    """
+    base = None if source.base_path is None else Path(source.base_path)
+    index = _conversion_index(base) if base is not None else None
+    if index is None:
+        _record_fallback("table_read_csv_unmanifested", base, table)
+        return
+    if _registered_outputs(index, table):
+        resolve_table_files(source, table)
+        _record_fallback("table_read_csv_beside_manifest", base, table)
+        return
+    if os.environ.get(ALLOW_UNREGISTERED_SCAN_ENV) == "1":
+        _record_fallback("table_scan_unregistered", base, table)
+        return
+    raise TableScanError(
+        "table_scan_unregistered", table,
+        f"{Path(path).name} is not an output of any {CONVERSION_MANIFEST} entry; "
+        f"regenerate the manifest (or set {ALLOW_UNREGISTERED_SCAN_ENV}=1)",
+    )
 
 
 def resolve_table_files(
