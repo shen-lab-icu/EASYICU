@@ -19,7 +19,12 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 import pandas as pd
 
 from ..base import BaseICULoader, detect_database_type, get_default_data_path
-from ..source_bounds import bounds_scope, bounds_totals, merge_bounds_drops
+from ..source_bounds import (
+    accounting as source_bounds_accounting,
+    bounds_scope,
+    bounds_totals,
+    merge_bounds_drops,
+)
 from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
@@ -2823,7 +2828,8 @@ def _write_isolated_stream_batch(
             reorder=False,
         )
         if frame is None:
-            _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
+            with source_bounds_accounting("isolated_batch_hand_off"):
+                _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
             return
         id_col, requested_ids = next(iter(patient_ids.items()))
         if id_col in frame.columns:
@@ -2843,7 +2849,8 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
-        _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
+        with source_bounds_accounting("isolated_batch_hand_off"):
+            _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
     except BaseException as exc:
         # The parent classifies the exit from evidence, not from text: say
         # whether a memory exception (by type) stopped this child.
@@ -3427,13 +3434,14 @@ def _stream_module_batches_to_parquet(
                         if evidence:
                             raise StreamBatchMemoryExhausted(message, **failure)
                         raise StreamBatchWorkerKilled(message, failure_class, **failure)
-                    bounds_sidecar = _stream_batch_bounds_sidecar(batch_part)
-                    if not bounds_sidecar.is_file():
-                        raise RuntimeError(
-                            f"{module_name}: isolated batch {index} left no bounds counts"
-                        )
-                    batch_bounds = json.loads(bounds_sidecar.read_text(encoding="utf-8"))
-                    bounds_sidecar.unlink()
+                    with source_bounds_accounting(f"isolated_batch_hand_back[{module_name}:{index}]"):
+                        bounds_sidecar = _stream_batch_bounds_sidecar(batch_part)
+                        if not bounds_sidecar.is_file():
+                            raise FileNotFoundError(
+                                f"isolated batch {index} left no bounds counts"
+                            )
+                        batch_bounds = json.loads(bounds_sidecar.read_text(encoding="utf-8"))
+                        bounds_sidecar.unlink()
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
@@ -3450,7 +3458,8 @@ def _stream_module_batches_to_parquet(
                             loader=loader,
                             pyarrow_module=pa,
                         )
-                    batch_bounds = bounds_totals(bounds_records)
+                    with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
+                        batch_bounds = bounds_totals(bounds_records)
                     frame = _normalise_module_frame_for_parquet(
                         batch,
                         concepts,

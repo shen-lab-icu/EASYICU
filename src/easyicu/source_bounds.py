@@ -34,6 +34,8 @@ from contextlib import contextmanager
 from typing import Iterable, Iterator, List, Mapping, Optional
 
 __all__ = [
+    "SourceBoundsAuditError",
+    "accounting",
     "stay_set_digest",
     "record_bounds_drops",
     "record_read_counts",
@@ -45,6 +47,32 @@ __all__ = [
 ]
 
 _FIELDS = ("dropped_values", "stays_all_out_of_bounds", "stays_read")
+
+
+class SourceBoundsAuditError(RuntimeError):
+    """Counting or committing the bounds counts failed.
+
+    Typed and in ``TYPED_VALUE_FAILURES``: no source-unavailable handler or
+    fallback may absorb it, since a failure of the accounting must never
+    read as an absent source (Codex delta7x B-AUDIT-CATCH). ``stage`` names
+    where it failed; the cause is chained.
+    """
+
+    def __init__(self, stage: str, detail: str):
+        self.stage = stage
+        self.detail = detail
+        super().__init__(f"source_bounds_audit_failed at {stage}: {detail}")
+
+
+@contextmanager
+def accounting(stage: str) -> Iterator[None]:
+    """Turn any failure of the block into ``SourceBoundsAuditError`` (cause chained)."""
+    try:
+        yield
+    except SourceBoundsAuditError:
+        raise
+    except Exception as exc:
+        raise SourceBoundsAuditError(stage, f"{type(exc).__name__}: {exc}") from exc
 _SCOPES: List[list] = []
 _LOCK = threading.Lock()
 
@@ -68,7 +96,7 @@ def record_bounds_drops(
     stays_read: int,
 ) -> None:
     """Add one read's counts to the innermost active scope; a no-op without one."""
-    with _LOCK:
+    with accounting("record"), _LOCK:
         if not _SCOPES:
             return
         _SCOPES[-1].append({
@@ -106,6 +134,14 @@ def record_read_counts(
     """
     if not scope_active() or frame is None:
         return
+    with accounting(f"count[{database}.{table}:{concept}]"):
+        _record_read_counts(
+            database=database, concept=concept, table=table, stays=stays, frame=frame,
+            id_column=id_column, raw_column=raw_column, bounded_column=bounded_column,
+        )
+
+
+def _record_read_counts(*, database, concept, table, stays, frame, id_column, raw_column, bounded_column):
     import pandas as pd
 
     if len(frame) == 0 or id_column not in frame.columns:
@@ -152,6 +188,11 @@ def bounds_scope() -> Iterator[list]:
 
 def bounds_totals(records: Iterable[Mapping]) -> dict:
     """Totals ``{concept: {table: counts}}`` of one scope's records, each read once."""
+    with accounting("totals"):
+        return _bounds_totals(records)
+
+
+def _bounds_totals(records: Iterable[Mapping]) -> dict:
     totals: dict = {}
     seen: set = set()
     for entry in records:
@@ -164,11 +205,16 @@ def bounds_totals(records: Iterable[Mapping]) -> dict:
         )
         for field in _FIELDS:
             counts[field] += int(entry[field])
-    return merge_bounds_drops(totals)
+    return _merge_bounds_drops(totals)
 
 
 def merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
     """Sum ``{concept: {table: counts}}`` mappings (sorted keys)."""
+    with accounting("merge"):
+        return _merge_bounds_drops(*parts)
+
+
+def _merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
     merged: dict = {}
     for part in parts:
         for concept, tables in (part or {}).items():

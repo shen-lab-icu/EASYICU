@@ -31,6 +31,7 @@ from ..datasource import (
 )
 from ..storage_layout import StorageIntegrityError
 from ..utils.declared_units import UndeclaredUnitError
+from ..source_bounds import SourceBoundsAuditError
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
 from .availability_signal import (
@@ -1783,7 +1784,10 @@ class ConceptResolver:
                         if verbose:
                             logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
                         
-                    except (DuckDBQueryInterrupted, StorageIntegrityError, UndeclaredUnitError):
+                    except (
+                        DuckDBQueryInterrupted, StorageIntegrityError, UndeclaredUnitError,
+                        SourceBoundsAuditError,
+                    ):
                         raise
                     except ConceptError:
                         raise
@@ -2024,7 +2028,7 @@ class ConceptResolver:
                                 len(covered_names),
                                 len(names),
                             )
-                except (DuckDBQueryInterrupted, UndeclaredUnitError):
+                except (DuckDBQueryInterrupted, UndeclaredUnitError, SourceBoundsAuditError):
                     # A declared-unit refusal (e.g. an invalid FiO2 unit)
                     # keeps its type and reason, as on the single-concept owner.
                     raise
@@ -3892,6 +3896,9 @@ class ConceptResolver:
                         self._bounded_cache_store('table', cache_key, patient_only_table)
                         if verbose:
                             if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
+                except SourceBoundsAuditError:
+                    # A failed count of the bounds drops is not an absent source.
+                    raise
                 except (KeyError, FileNotFoundError, ValueError) as e:
                     if availability_context is not None:
                         availability_context.record_source_unavailable(concept_name, source.table)
