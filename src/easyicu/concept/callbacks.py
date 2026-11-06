@@ -7110,13 +7110,27 @@ def _callback_gcs(
         ):
             cells = cells.loc[cells["ett_gcs"].astype(bool), [*keys, cell_time]]
             cells = cells.rename(columns={cell_time: index_column})
-            if pd.api.types.is_numeric_dtype(data[index_column]):
-                cells[index_column] = cells[index_column].astype(data[index_column].dtype)
-            cells = cells.drop_duplicates()
-            cells["ett_gcs"] = True
-            data = data.merge(cells, on=[*keys, index_column], how="left")
-            data["ett_gcs"] = data["ett_gcs"].astype("boolean").fillna(False).astype(bool)
-            ett_gcs = data["ett_gcs"]
+            if cells.empty:
+                # A batch without a TRUE window marks no hour. Its empty frame
+                # may carry a placeholder datetime index (the empty fwd_concept
+                # branch), which must not be cast onto the hour clock (r13gcsfix:
+                # streamed eICU batches failed with "Cannot cast DatetimeArray").
+                data["ett_gcs"] = False
+                ett_gcs = data["ett_gcs"]
+            else:
+                if pd.api.types.is_numeric_dtype(data[index_column]) != pd.api.types.is_numeric_dtype(cells[index_column]):
+                    raise ValueError(
+                        "gcs_ett_clock_mismatch: ett_gcs windows and GCS components "
+                        f"use different clocks ({cells[index_column].dtype} vs "
+                        f"{data[index_column].dtype})"
+                    )
+                if pd.api.types.is_numeric_dtype(data[index_column]):
+                    cells[index_column] = cells[index_column].astype(data[index_column].dtype)
+                cells = cells.drop_duplicates()
+                cells["ett_gcs"] = True
+                data = data.merge(cells, on=[*keys, index_column], how="left")
+                data["ett_gcs"] = data["ett_gcs"].astype("boolean").fillna(False).astype(bool)
+                ett_gcs = data["ett_gcs"]
 
     # CRITICAL FIX: Replicate R ricu's sed_impute logic
     # If sed_impute="max" (default) and patient is intubated, set tgcs=15
