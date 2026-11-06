@@ -100,6 +100,21 @@ def antibacterial_inputs(
     return frame.loc[selected & (amount.gt(0) | rate.gt(0))].assign(**{concept: True})
 
 
+def _concat_batch_invariant(
+    parts: list[pd.DataFrame], frame: pd.DataFrame, key_cols: list[str], concept: str,
+) -> pd.DataFrame:
+    """Concatenate per-stay evidence so its schema never depends on batch peers.
+
+    An empty expansion is untyped (object). Mixing it into the concat would
+    turn the time column into object Timestamps only in batches where no
+    other stay fills that part, so a stay's hours would depend on its batch.
+    """
+    parts = [part for part in parts if not part.empty]
+    if not parts:
+        return frame.loc[[], key_cols].assign(**{concept: pd.Series(dtype=bool)})
+    return pd.concat(parts, ignore_index=True)
+
+
 def other_vaso_points(
     frame: pd.DataFrame, source: ConceptSource, concept: str, *, icu_stays: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
@@ -153,8 +168,8 @@ def other_vaso_points(
     negative = rate.eq(0) & ~amount.gt(0)
     if negative.any():
         parts.append(frame.loc[negative, [id_col, time_col]].assign(**{concept: False}))
-    return (pd.concat(parts, ignore_index=True).drop_duplicates([id_col, time_col, concept])
-            if parts else pd.DataFrame(columns=[id_col, time_col, concept]))
+    out = _concat_batch_invariant(parts, frame, [id_col, time_col], concept)
+    return out.drop_duplicates([id_col, time_col, concept])
 
 
 def rrt_procedure_hours(
@@ -199,7 +214,7 @@ def rrt_procedure_hours(
     points["__end"] = points[time_col]
     parts.append(expand(points, start_var=time_col, end_var="__end", id_cols=[id_col],
                         step_size=pd.Timedelta(hours=1), keep_vars=[concept], admission_times=icu_stays))
-    return pd.concat(parts, ignore_index=True).drop_duplicates([id_col, time_col])
+    return _concat_batch_invariant(parts, frame, [id_col, time_col], concept).drop_duplicates([id_col, time_col])
 
 
 def fentanyl_cv_mass_rate(
