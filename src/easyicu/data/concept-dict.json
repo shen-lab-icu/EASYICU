@@ -2777,7 +2777,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')"
+     "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')"
     }
    ],
    "eicu": [
@@ -2799,7 +2799,7 @@
      "ids": 20004300,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
      "class_name": "hrd_itm"
     }
    ],
@@ -2857,8 +2857,8 @@
      "ids": 18361,
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
-     "_comment": "2026-11-03 extraction audit 2: 18361 'Gecon.Bili (bloed)' umol/l x 0.058467 (1/17.104) -> mg/dL; same-hour ratio to total bilirubin median 0.71. Removed 6812 'Bilirubine geconjugeerd': its same-hour ratio to total bilirubin (umol/l) is 0.018, i.e. it is not umol/l (mostly mg/dL with some umol/l rows), so no single conversion is correct."
+     "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
+     "_comment": "2026-11-03 extraction audit 2: 18361 'Gecon.Bili (bloed)' umol/l x 1/17.1 (exact SI factor since 2026-11-06 lead-r13 H; ricu used 0.058467) -> mg/dL; same-hour ratio to total bilirubin median 0.71. Removed 6812 'Bilirubine geconjugeerd': its same-hour ratio to total bilirubin (umol/l) is 0.018, i.e. it is not umol/l (mostly mg/dL with some umol/l rows), so no single conversion is correct."
     }
    ],
    "eicu": [
@@ -2880,7 +2880,7 @@
      "ids": 24000560,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
      "class_name": "hrd_itm"
     }
    ],
@@ -3028,7 +3028,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')"
+     "callback": "convert_unit(binary_op(`*`, 2.802), 'mg/dL')"
     }
    ],
    "eicu": [
@@ -3050,7 +3050,7 @@
      "ids": 20004100,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 2.802), 'mg/dL')",
      "class_name": "hrd_itm"
     }
    ],
@@ -3080,7 +3080,7 @@
      "ids": 355,
      "table": "laboratory",
      "sub_var": "LaboratoryID",
-     "callback": "transform_fun(binary_op(`*`, 0.467))"
+     "callback": "transform_fun(binary_op(`*`, 0.4665334665334665))"
     }
    ]
   }
@@ -4314,7 +4314,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')",
      "_comment": "2026-07-02 AUMC raw dictionary audit: added A_/RA_/MCA_Serum_Kreatinine channels, all umol/l."
     }
    ],
@@ -4337,7 +4337,7 @@
      "ids": 20000600,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 0.011312), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')",
      "class_name": "hrd_itm"
     }
    ],
@@ -37389,7 +37389,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')"
+     "callback": "convert_unit(binary_op(`*`, 2.802), 'mg/dL')"
     }
    ],
    "eicu": [
@@ -37411,7 +37411,7 @@
      "ids": 20004100,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 2.802), 'mg/dL')",
      "class_name": "hrd_itm"
     }
    ],
@@ -37441,7 +37441,7 @@
      "ids": 355,
      "table": "laboratory",
      "sub_var": "LaboratoryID",
-     "callback": "transform_fun(binary_op(`*`, 0.467))"
+     "callback": "transform_fun(binary_op(`*`, 0.4665334665334665))"
     }
    ]
   }
@@ -37486,7 +37486,7 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')",
      "_comment": "2026-07-02 AUMC raw dictionary audit: added A_/RA_/MCA_Serum_Kreatinine channels, all umol/l."
     }
    ],
@@ -37509,7 +37509,7 @@
      "ids": 20000600,
      "table": "observations",
      "sub_var": "variableid",
-     "callback": "convert_unit(binary_op(`*`, 0.011312), 'mg/dL')",
+     "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')",
      "class_name": "hrd_itm"
     }
    ],

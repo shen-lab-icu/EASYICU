@@ -711,7 +711,7 @@
     "sources": {
       "jinhua": [
         {
-          "callback": "transform_fun(binary_op(`*`, 0.058467))",
+          "callback": "transform_fun(binary_op(`*`, 0.05847953216374269))",
           "ids": "Total bilirubin (TBIL) - venous blood",
           "sub_var": "inspection_subproject_name_en",
           "table": "laboratory_test"
@@ -728,7 +728,7 @@
       ],
       "zhejiang_eicu": [
         {
-          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
           "ids": "total bilirubin",
           "sub_var": "Lab_itemName_Eng",
           "table": "lab"
@@ -736,7 +736,7 @@
       ],
       "zigong": [
         {
-          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
           "ids": "Total bilirubin (TBIL)",
           "sub_var": "Item",
           "table": "dtlab"
@@ -748,7 +748,7 @@
     "sources": {
       "jinhua": [
         {
-          "callback": "transform_fun(binary_op(`*`, 0.058467))",
+          "callback": "transform_fun(binary_op(`*`, 0.05847953216374269))",
           "ids": "Direct bilirubin (DBIL) - venous blood",
           "sub_var": "inspection_subproject_name_en",
           "table": "laboratory_test"
@@ -765,7 +765,7 @@
       ],
       "zhejiang_eicu": [
         {
-          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
           "ids": "Direct bilirubin",
           "sub_var": "Lab_itemName_Eng",
           "table": "lab"
@@ -773,7 +773,7 @@
       ],
       "zigong": [
         {
-          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.05847953216374269), 'mg/dL')",
           "ids": "Direct bilirubin (DBIL)",
           "sub_var": "Item",
           "table": "dtlab"
@@ -814,7 +814,7 @@
     "sources": {
       "jinhua": [
         {
-          "callback": "transform_fun(binary_op(`*`, 2.801))",
+          "callback": "transform_fun(binary_op(`*`, 2.802))",
           "ids": "Urea Nitrogen (BUN)-Unknown",
           "sub_var": "inspection_subproject_name_en",
           "table": "laboratory_test"
@@ -831,7 +831,7 @@
       ],
       "zhejiang_eicu": [
         {
-          "callback": "convert_unit(binary_op(`*`, 2.801), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 2.802), 'mg/dL')",
           "ids": "urea",
           "sub_var": "Lab_itemName_Eng",
           "table": "lab"
@@ -839,7 +839,7 @@
       ],
       "zigong": [
         {
-          "callback": "convert_unit(binary_op(`*`, 2.801), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 2.802), 'mg/dL')",
           "ids": "Urea (urea)",
           "sub_var": "Item",
           "table": "dtlab"
@@ -1228,7 +1228,7 @@
     "sources": {
       "jinhua": [
         {
-          "callback": "transform_fun(binary_op(`*`, 0.011309))",
+          "callback": "transform_fun(binary_op(`*`, 0.011312217194570135))",
           "ids": "Creatinine (Crea) - unknown",
           "sub_var": "inspection_subproject_name_en",
           "table": "laboratory_test"
@@ -1245,7 +1245,7 @@
       ],
       "zhejiang_eicu": [
         {
-          "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')",
           "ids": "creatinine",
           "sub_var": "Lab_itemName_Eng",
           "table": "lab"
@@ -1253,7 +1253,7 @@
       ],
       "zigong": [
         {
-          "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')",
           "ids": "Creatinine (enzymatic method) (CRE)",
           "sub_var": "Item",
           "table": "dtlab"
