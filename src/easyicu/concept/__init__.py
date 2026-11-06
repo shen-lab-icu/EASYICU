@@ -6495,6 +6495,41 @@ class ConceptResolver:
             return window(None, keep_post=False)
         return None
 
+    def _aumc_admission_times(
+        self, data_source: ICUDataSource, primary_id: str
+    ) -> pd.DataFrame:
+        """One row per AUMC admission: its admittedat and dischargedat clocks."""
+        try:
+            admission_times = getattr(self, "_aumc_admissions_cache", None)
+            if (
+                admission_times is None
+                or primary_id not in admission_times.columns
+                or "admittedat" not in admission_times.columns
+                or "dischargedat" not in admission_times.columns
+            ):
+                admissions = data_source.load_table(
+                    "admissions",
+                    columns=[primary_id, "admittedat", "dischargedat"],
+                    verbose=False,
+                )
+                admission_times = (
+                    admissions.data if hasattr(admissions, "data") else admissions
+                )
+                if "dischargedat" not in admission_times.columns:
+                    admission_times = admission_times.copy()
+                    admission_times["dischargedat"] = pd.NA
+                admission_times = (
+                    admission_times[[primary_id, "admittedat", "dischargedat"]]
+                    .drop_duplicates(subset=[primary_id], keep="last")
+                    .copy()
+                )
+                self._aumc_admissions_cache = admission_times
+            return admission_times
+        except Exception as exc:
+            raise ValueError(
+                "AUMC time alignment requires admissions.admittedat"
+            ) from exc
+
     def _align_time_to_admission(
         self,
         data: pd.DataFrame,
@@ -6755,51 +6790,55 @@ class ConceptResolver:
                     "AUMC time alignment requires an admission identifier"
                 )
             source_contains_admission_origin = "admittedat" in data.columns
+            if data.empty:
+                # No rows has nothing to align: an empty result, not a failed
+                # alignment (a one-stay weight load whose stay has no weight
+                # row is a genuine absence of evidence).
+                return data.drop(
+                    columns=["admittedat", "dischargedat"], errors="ignore"
+                )
             if source_contains_admission_origin:
                 # Admission/outcome concepts are loaded from the admissions
                 # table itself.  Re-merging the same column would create
                 # admittedat_x/admittedat_y and leave no canonical origin.
                 frame = data.copy()
-            else:
-                try:
-                    admission_times = getattr(self, "_aumc_admissions_cache", None)
-                    if (
-                        admission_times is None
-                        or primary_id not in admission_times.columns
-                        or "admittedat" not in admission_times.columns
-                        or "dischargedat" not in admission_times.columns
-                    ):
-                        admissions = data_source.load_table(
-                            "admissions",
-                            columns=[primary_id, "admittedat", "dischargedat"],
-                            verbose=False,
-                        )
-                        admission_times = (
-                            admissions.data
-                            if hasattr(admissions, "data")
-                            else admissions
-                        )
-                        if "dischargedat" not in admission_times.columns:
-                            admission_times = admission_times.copy()
-                            admission_times["dischargedat"] = pd.NA
-                        admission_times = (
-                            admission_times[
-                                [primary_id, "admittedat", "dischargedat"]
-                            ]
-                            .drop_duplicates(subset=[primary_id], keep="last")
-                            .copy()
-                        )
-                        self._aumc_admissions_cache = admission_times
-                    frame = data.merge(
-                        admission_times,
+                own_origin = pd.to_numeric(frame["admittedat"], errors="coerce")
+                if own_origin.isna().any():
+                    # A static concept concatenates admissions rows (which
+                    # carry admittedat) with timed rows of another table
+                    # (AUMC weight: weightgroup, then measured numericitems
+                    # weights).  The timed rows take their origin from the
+                    # admissions table like any timed source.  Inferring it
+                    # from the frame made the result depend on which stays
+                    # shared the frame: a stay alone in a per-kg rate batch
+                    # with measured weight only had no origin at all.
+                    origins = frame[[primary_id]].merge(
+                        self._aumc_admission_times(data_source, primary_id),
                         on=primary_id,
                         how="left",
                         validate="many_to_one",
                     )
-                except Exception as exc:
-                    raise ValueError(
-                        "AUMC time alignment requires admissions.admittedat"
-                    ) from exc
+                    frame["admittedat"] = own_origin.where(
+                        own_origin.notna(), origins["admittedat"].to_numpy()
+                    )
+                    own_discharge = (
+                        pd.to_numeric(frame["dischargedat"], errors="coerce")
+                        if "dischargedat" in frame.columns
+                        else pd.Series(np.nan, index=frame.index)
+                    )
+                    frame["dischargedat"] = own_discharge.where(
+                        own_origin.notna(),
+                        pd.to_numeric(
+                            origins["dischargedat"], errors="coerce"
+                        ).to_numpy(),
+                    )
+            else:
+                frame = data.merge(
+                    self._aumc_admission_times(data_source, primary_id),
+                    on=primary_id,
+                    how="left",
+                    validate="many_to_one",
+                )
 
             admittedat = pd.to_numeric(frame["admittedat"], errors="coerce")
             if admittedat.notna().sum() == 0:

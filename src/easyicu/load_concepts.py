@@ -1061,10 +1061,14 @@ class ConceptLoader:
             return None
         except TYPED_VALUE_FAILURES:
             raise
-        except Exception as e:
-            logger.debug(f"获取体重数据失败: {e}")
-            return None
-    
+        except Exception as exc:
+            # A failed weight load is not "no weight": returning None made
+            # every per-kg rate of the frame NA without a trace.
+            raise RuntimeError(
+                f"kg_rate_weight_load_failed: weight for the {self._src_name} "
+                f"per-kg rate could not be loaded ({type(exc).__name__}: {exc})"
+            ) from exc
+
     def _convert_time_column_to_hours(
         self,
         df: pd.DataFrame,
