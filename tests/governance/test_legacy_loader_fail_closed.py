@@ -2,7 +2,8 @@
 
 Every ``except`` in ``src/easyicu/load_concepts.py`` must raise.  An empty
 result is legitimate only for a table this database does not declare, and
-that decision is made before the read (``ConceptLoader._table_declared``),
+that decision is made before the read, on the source ``load_table`` selects
+(``ConceptLoader._declared_table_source``),
 never by catching an exception.  The one handler that may finish without
 raising is the documented missing-column projection retry, which reads the
 same table in full instead of returning nothing
@@ -75,7 +76,7 @@ def test_declared_absence_is_decided_before_the_read():
         node.name for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert {"_table_declared", "_read_declared_table"} <= names
+    assert {"_declared_table_source", "_read_declared_table", "_table_source"} <= names
     # MissingTableSourceError is never a reason to return data: it is only
     # caught to be re-raised as the typed declared-source failure.
     for owner, handler in _handlers(tree):

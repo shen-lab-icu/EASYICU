@@ -204,6 +204,9 @@ def _legacy_loader():
     loader = ConceptLoader.__new__(ConceptLoader)
     loader._src_name = "aumc"
     loader.src = SimpleNamespace(tables={"numericitems": object()})
+    loader.data_path = None
+    # The selected source registers the table: declared and present.
+    loader._table_source = lambda: SimpleNamespace(_table_sources={"numericitems": object()})
     loader._columns_for_source = lambda *_args, **_kwargs: None
     loader._preload_tables = lambda *_args, **_kwargs: None
     return loader
@@ -225,7 +228,7 @@ def test_legacy_source_read_failure_raises():
 
 def test_legacy_undeclared_table_is_empty_without_a_read():
     loader = _legacy_loader()
-    loader.src = SimpleNamespace(tables={})
+    loader._table_source = lambda: SimpleNamespace(config=SimpleNamespace(tables={}))
 
     def _no_read(*_args, **_kwargs):
         raise AssertionError("an undeclared table is never read")
@@ -309,3 +312,73 @@ def test_legacy_recursive_concept_with_a_failing_child_is_refused(workers, error
     with pytest.raises(type(error), match=pattern):
         loader.load_concepts(["hr", "cvp_qc"], verbose=False, concept_workers=workers)
     assert not any(key[0] == "cvp_qc" for key in getattr(loader, "_concept_cache", {}))
+
+
+def _miiv_without_files(tmp_path):
+    from easyicu.load_concepts import ConceptLoader
+
+    # MIIV declares labevents; the root has no file and no conversion
+    # manifest.  The datasource itself would return an empty frame here.
+    return ConceptLoader("miiv", data_path=str(tmp_path), low_memory=False)
+
+
+def test_miiv_declared_table_without_a_file_fails_typed_on_read(tmp_path):
+    from easyicu.storage_layout import StorageIntegrityError
+
+    loader = _miiv_without_files(tmp_path)
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
+        loader._load_concept_source(
+            source=ConceptSource(table="labevents", sub_var="itemid", ids=[50912]),
+            concept_name="crea", patient_ids=None, id_type="icustay", interval=None,
+        )
+    assert loader._table_cache == {}
+
+
+def test_miiv_declared_table_without_a_file_fails_typed_on_preload(tmp_path):
+    from easyicu.concept import load_dictionary
+    from easyicu.storage_layout import StorageIntegrityError
+
+    loader = _miiv_without_files(tmp_path)
+    crea = load_dictionary("miiv")["crea"]
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
+        loader._preload_tables([crea], None, "icustay")
+    assert loader._table_cache == {}
+
+
+def test_miiv_manifest_listed_table_without_files_keeps_the_scan_failure(tmp_path):
+    import json
+
+    from easyicu.storage_layout import StorageIntegrityError
+
+    # Listed in the conversion manifest, files gone: the storage owner's
+    # verify_flat_scan decides it, as in the datasource's own reader.
+    (tmp_path / "conversion_manifest.json").write_text(json.dumps({"tables": [{
+        "table": "labevents", "row_count": 1,
+        "outputs": [{"relative_path": "labevents.parquet"}],
+    }]}))
+    loader = _miiv_without_files(tmp_path)
+    with pytest.raises(StorageIntegrityError, match="table_scan_files_missing"):
+        loader._read_declared_table("labevents", None)
+    assert loader._table_cache == {}
+
+
+def test_attached_source_with_an_extended_config_is_read(tmp_path):
+    from easyicu.config import TableConfig
+    from easyicu.io.attach import data as attached
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    pd.DataFrame({"admissionid": [1, 2], "itemid": [7, 7], "value": [1.0, 2.0]}).to_parquet(
+        tmp_path / "site_extra.parquet"
+    )
+    config = load_src_cfg("aumc").model_copy(deep=True)
+    config.tables["site_extra"] = TableConfig(
+        name="site_extra", files=[{"path": "site_extra.parquet"}],
+    )
+    attached.attach_src(config, tmp_path, force=True)
+    try:
+        loader = ConceptLoader("aumc", data_path=str(tmp_path), low_memory=False)
+        out = loader._read_declared_table("site_extra", None)
+    finally:
+        attached.detach_src("aumc")
+    assert out is not None and len(out) == 2

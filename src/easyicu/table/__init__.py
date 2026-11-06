@@ -1588,6 +1588,67 @@ def rm_cols(
         raise TypeError(f"Unsupported type: {type(data)}")
 
 # 便捷函数用于加载表
+def select_table_source(src: str, kwargs: dict | None = None):
+    """The data source :func:`load_table` reads ``src`` from.
+
+    An attached source wins; otherwise a source is built from the packaged
+    configuration and the base path (``path`` popped from ``kwargs``, then
+    ``EASYICU_<SRC>_PATH``, then ``EASYICU_DATA_PATH``).  Returns
+    ``(data_source, resolved_from, resolved_base_path)``.  Callers that must
+    decide something about the table before reading it (the legacy
+    ``ConceptLoader``) use this same selection.
+    """
+    from pathlib import Path
+
+    from easyicu.io.attach import data
+
+    kwargs = {} if kwargs is None else kwargs
+    resolved_base_path: str | None = None
+    if data.is_attached(src):
+        data_source = data.get_source(src)
+        resolved_from = "attached_source"
+        try:
+            resolved_base_path = str(getattr(data_source, "base_path", None))
+        except Exception:
+            resolved_base_path = None
+        if 'path' in kwargs:
+            # The attached source owns its base path.  A matching (or empty)
+            # path names the same source; another one is a conflict, never a
+            # silently ignored argument.
+            path = kwargs.pop('path')
+            attached_base = getattr(data_source, "base_path", None)
+            if path is not None and (
+                attached_base is None or Path(path).resolve() != Path(attached_base).resolve()
+            ):
+                raise ValueError(
+                    f"load_table({src!r}): path {path!s} differs from the attached "
+                    f"source's base path {attached_base!s}"
+                )
+        return data_source, resolved_from, resolved_base_path
+
+    from easyicu.io.data_tools import load_src_cfg
+    import os
+    from easyicu.datasource import ICUDataSource
+
+    config = load_src_cfg(src)
+    base_path = kwargs.pop('path', None)
+    if base_path is not None:
+        resolved_from = "explicit_path_kwarg"
+    else:
+        env_var = f"EASYICU_{src.upper()}_PATH"
+        base_path = os.environ.get(env_var)
+        if base_path is not None:
+            resolved_from = f"env:{env_var}"
+        else:
+            base_path = os.environ.get("EASYICU_DATA_PATH")
+            resolved_from = (
+                "env:EASYICU_DATA_PATH" if base_path is not None else "unresolved"
+            )
+    resolved_base_path = str(base_path) if base_path else None
+    data_source = ICUDataSource(config, base_path=Path(base_path) if base_path else None)
+    return data_source, resolved_from, resolved_base_path
+
+
 def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
     """
     加载表 - 便捷函数
@@ -1605,50 +1666,7 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
         >>> df = load_table('mimic_demo', 'patients')
         >>> df = load_table('miiv', 'labevents', path='/data/mimic-iv/3.1')
     """
-    from easyicu.io.attach import data
-
-    resolved_from: str
-    resolved_base_path: str | None = None
-    # 首先尝试从全局附加的数据源获取
-    if data.is_attached(src):
-        data_source = data.get_source(src)
-        resolved_from = "attached_source"
-        try:
-            resolved_base_path = str(getattr(data_source, "base_path", None))
-        except Exception:
-            resolved_base_path = None
-    else:
-        # 如果没有附加，尝试从配置创建
-        from easyicu.io.data_tools import load_src_cfg
-        from pathlib import Path
-        import os
-        config = load_src_cfg(src)
-        from easyicu.datasource import ICUDataSource
-
-        # 提取 path 参数（如果提供）
-        base_path = kwargs.pop('path', None)
-
-        # 如果没有提供 path，尝试从环境变量获取
-        if base_path is not None:
-            resolved_from = "explicit_path_kwarg"
-        else:
-            env_var = f"EASYICU_{src.upper()}_PATH"
-            base_path = os.environ.get(env_var)
-            if base_path is not None:
-                resolved_from = f"env:{env_var}"
-            else:
-                # 尝试通用环境变量
-                base_path = os.environ.get("EASYICU_DATA_PATH")
-                resolved_from = (
-                    "env:EASYICU_DATA_PATH" if base_path is not None else "unresolved"
-                )
-
-        resolved_base_path = str(base_path) if base_path else None
-        # 创建数据源
-        data_source = ICUDataSource(
-            config,
-            base_path=Path(base_path) if base_path else None
-        )
+    data_source, resolved_from, resolved_base_path = select_table_source(src, kwargs)
 
     icu_table = data_source.load_table(table_name, **kwargs)
     result = icu_table.data

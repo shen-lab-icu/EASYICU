@@ -45,10 +45,16 @@ deferred to it are compared against `2786ea872` there.
 - Failure handling (deprecated `ConceptLoader`, every database): the loader
   fails closed.
   - An empty read comes only from a table the database does not declare. That
-    is decided before the read, from the configuration or an attached
-    source's registration.
+    is decided before the read, on the source `load_table` itself would read
+    (`easyicu.table.select_table_source`: an attached source first, with its
+    own configuration and registrations).
   - A declared table without a file raises `declared_table_source_missing`, a
-    `StorageIntegrityError`.
+    `StorageIntegrityError`, on every database. This includes MIIV, where the
+    datasource itself returns an empty frame. A table the conversion manifest
+    lists keeps `table_scan_files_missing`.
+  - `load_table` on an attached source accepts a `path` equal to the source's
+    base path and raises `ValueError` for a different one. It used to raise
+    `TypeError` for any `path`.
   - Any other read, ID-lookup, time-conversion, unit-conversion, preload or
     sub-concept failure propagates. A recursive concept is never built or
     cached from a healthy subset of its sub-concepts.

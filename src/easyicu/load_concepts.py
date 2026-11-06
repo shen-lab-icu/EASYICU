@@ -13,7 +13,7 @@ from .value_failures import TYPED_VALUE_FAILURES
 from .concept import Concept, load_dictionary
 from .config import DataSourceConfig, TableConfig, load_src_cfg
 from .datasource import ICUDataSource, MissingTableSourceError
-from .storage_layout import TableScanError
+from .storage_layout import TableScanError, flat_table_files, verify_flat_scan
 from .table import load_table
 from .io.ts_utils import change_interval
 
@@ -117,6 +117,30 @@ def _is_missing_column_projection_error(exc: Exception) -> bool:
     )
 
 
+def _declared_source_present(source, table_name: str) -> bool:
+    """Whether a declared table has a physical source the datasource reads.
+
+    No glob of its own: the datasource's own resolution, in the order its
+    reader uses it.  ``ICUDataSource.resolve_loader_from_disk`` (bucket
+    installation via ``storage_layout.read_bucket_contract``, configured
+    file, CSV), then ``storage_layout.flat_table_files`` (flat Parquet; a
+    table configured as several files is their directory), then the
+    MIMIC-III ``chartevents`` CSV export.  A table the conversion manifest
+    lists is left to ``storage_layout.verify_flat_scan`` by the caller.
+    """
+    if getattr(source, 'base_path', None) is None:
+        return False
+    if source.resolve_loader_from_disk(table_name) is not None:
+        return True
+    if flat_table_files(source, table_name):
+        return True
+    return bool(
+        getattr(source.config, 'name', None) == 'mimic'
+        and table_name == 'chartevents'
+        and source._resolve_mimic3_chartevents_csv() is not None
+    )
+
+
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
@@ -175,24 +199,39 @@ class ConceptLoader:
             return None
         return self.src.tables.get(table_name)
 
-    def _table_declared(self, table_name: str) -> bool:
-        """Whether this database declares ``table_name`` (its configuration,
-        or an attached source's own registration).
+    def _table_source(self):
+        """The source ``load_table`` reads this database from (the same selection)."""
+        from .table import select_table_source
 
-        The only allowed source of an empty read: an undeclared table is
-        absent by definition, decided before any read and without an
-        exception.  A declared table that cannot be read is a failure.
+        return select_table_source(self._src_name, {'path': self.data_path})[0]
+
+    def _declared_table_source(self, table_name: str, source=None) -> bool:
+        """Decide a table before any read, on the source that will be read.
+
+        ``False``: the selected source does not declare the table (not in its
+        configuration, not registered): absent, so the read is empty without
+        a read or an exception.  ``True``: declared, with a physical source.
+        A declared table without one raises ``declared_table_source_missing``
+        (a ``StorageIntegrityError``) on every database, whatever the
+        datasource itself would return for it (MIIV returns an empty frame).
         """
-        if table_name in (getattr(self.src, 'tables', None) or {}):
+        source = self._table_source() if source is None else source
+        registered = getattr(source, '_table_sources', None) or {}
+        datasets = getattr(source, '_dataset_sources', None) or {}
+        if table_name in registered or table_name in datasets:
             return True
-        from .io.attach import data as attached
-
-        if attached.is_attached(self._src_name):
-            source = attached.get_source(self._src_name)
-            registered = getattr(source, '_table_sources', None) or {}
-            datasets = getattr(source, '_dataset_sources', None) or {}
-            return table_name in registered or table_name in datasets
-        return False
+        tables = getattr(getattr(source, 'config', None), 'tables', None) or {}
+        if table_name not in tables:
+            return False
+        if _declared_source_present(source, table_name):
+            return True
+        # A table the conversion manifest lists keeps its own failure.
+        verify_flat_scan(source, table_name, ())
+        raise TableScanError(
+            "declared_table_source_missing", table_name,
+            f"declared for {self._src_name} but no file or registration "
+            "was found",
+        )
 
     def _read_declared_table(
         self, table_name: str, columns: Optional[Iterable[str]],
@@ -200,10 +239,10 @@ class ConceptLoader:
         """Rows of a declared table, or ``None`` when the table is undeclared.
 
         A declared table without a physical source fails typed
-        (``declared_table_source_missing``, a ``StorageIntegrityError``); it
-        is never "no data".
+        (``declared_table_source_missing``, a ``StorageIntegrityError``)
+        before anything is read or cached; it is never "no data".
         """
-        if not self._table_declared(table_name):
+        if not self._declared_table_source(table_name):
             return None
         try:
             return self._safe_load_table(table_name, columns)
@@ -1946,7 +1985,12 @@ class ConceptLoader:
             if cached is not None and set(columns).issubset(cached.columns):
                 continue
             
-            if not self._table_declared(table_name):
+            preload_source = (
+                self._data_source
+                if self._data_source is not None and patient_ids is not None
+                else None
+            )
+            if not self._declared_table_source(table_name, preload_source):
                 # Undeclared here: the concept read is empty without a read.
                 continue
 
