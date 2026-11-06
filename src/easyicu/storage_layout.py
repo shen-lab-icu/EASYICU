@@ -2318,13 +2318,33 @@ def flat_table_scan(source, table: str, loader: Path) -> tuple[Path, ...]:
     return files
 
 
+def _case_insensitive_at(path: str) -> bool:
+    """Whether the directory holding ``path`` resolves names case-insensitively.
+
+    Read-only probe (creates nothing): stat the same name with its letter case
+    swapped; the directory is case-insensitive only if that finds the very
+    same (device, inode). A name without cased letters proves nothing (False).
+    """
+    directory, name = os.path.split(path)
+    swapped = name.swapcase()
+    if swapped == name:
+        return False
+    try:
+        mine, other = os.stat(path), os.stat(os.path.join(directory, swapped))
+    except OSError:
+        return False
+    return (mine.st_dev, mine.st_ino) == (other.st_dev, other.st_ino)
+
+
 def listed_csv_input(base, table: str, path) -> bool:
     """Whether ``base``'s conversion manifest lists ``path`` as ``table``'s input CSV.
 
     The listed path itself, never another name for the file: the canonical
-    real paths must be equal (or differ only in letter case, for a reader on
-    a case-insensitive file system) AND name the same (device, inode). A hard
-    link under another name is not the listed input.
+    real paths must be equal, or differ only in letter case where the file
+    system is shown to be case-insensitive (:func:`_case_insensitive_at`), AND
+    name the same (device, inode). A hard link under another name, including
+    one that differs only in case on a case-sensitive file system, is not the
+    listed input.
     """
     manifest = Path(base) / CONVERSION_MANIFEST
     try:
@@ -2345,7 +2365,10 @@ def listed_csv_input(base, table: str, path) -> bool:
             listed = os.stat(listed_path)
         except OSError:
             continue
-        same_name = os.path.realpath(listed_path).casefold() == os.path.realpath(path).casefold()
+        listed_real, path_real = os.path.realpath(listed_path), os.path.realpath(path)
+        same_name = listed_real == path_real or (
+            listed_real.casefold() == path_real.casefold() and _case_insensitive_at(listed_real)
+        )
         if same_name and (listed.st_dev, listed.st_ino) == (target.st_dev, target.st_ino):
             return True
     return False

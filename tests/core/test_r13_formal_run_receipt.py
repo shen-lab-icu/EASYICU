@@ -1579,8 +1579,6 @@ def test_an_unlisted_hard_link_to_the_listed_csv_is_refused(tmp_path, monkeypatc
 
     assert listed_csv_input(root, "services", root / "services.csv.gz")
     assert not listed_csv_input(root, "services", alias)
-    if (root / "SERVICES.CSV.GZ").exists():  # case-insensitive file system
-        assert listed_csv_input(root, "services", root / "SERVICES.csv.gz")
     entry = next(e for e in consumed if e["format"] == "csv")
     forged = [{**e, "path": str(alias), "realpath": os.path.realpath(alias)}
               if e is entry else e for e in consumed]
@@ -1600,3 +1598,63 @@ def test_a_bucket_read_naming_another_snapshotted_json_as_its_manifest_is_refuse
     with pytest.raises(receipt.ReceiptError) as error:
         _sic_receipt(tmp_path, root, reads, monkeypatch, tables=tables)
     assert error.value.code == "bucket_manifest_not_snapshotted"
+
+
+# delta17v NB-CSV-CASEFOLD: letter case is folded only where the file system is
+# shown (read-only) to be case-insensitive.
+
+def test_the_case_probe_is_read_only_and_matches_the_file_system(tmp_path):
+    from easyicu import storage_layout
+
+    path = tmp_path / "services.csv.gz"
+    path.write_bytes(b"x")
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    insensitive = storage_layout._case_insensitive_at(str(path))
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert insensitive == (tmp_path / "SERVICES.CSV.GZ").exists()
+    assert storage_layout._case_insensitive_at(str(tmp_path / "1234.gz")) is False
+
+
+def _case_variant(root: Path) -> Path:
+    """SERVICES.csv.gz: the listed file itself on a case-insensitive file
+    system, an unlisted hard link to it on a case-sensitive one."""
+    upper = root / "SERVICES.csv.gz"
+    if not upper.exists():
+        os.link(root / "services.csv.gz", upper)
+    return upper
+
+
+def test_a_hard_link_differing_only_in_case_on_a_case_sensitive_fs_is_refused(
+        tmp_path, monkeypatch, real_admission):
+    from easyicu import storage_layout
+
+    root, consumed, _fallbacks, _reads, _tables, snapshot = _services_run(
+        tmp_path, monkeypatch, listed=True)
+    upper = _case_variant(root)
+    monkeypatch.setattr(storage_layout, "_case_insensitive_at", lambda path: False)
+
+    assert storage_layout.listed_csv_input(root, "services", root / "services.csv.gz")
+    assert not storage_layout.listed_csv_input(root, "services", upper)
+    entry = next(e for e in consumed if e["format"] == "csv")
+    forged = [{**e, "path": str(upper), "realpath": os.path.realpath(upper)}
+              if e is entry else e for e in consumed]
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._consumed("mimic", str(root), forged, snapshot)
+    assert error.value.code in {"storage_consumed_csv_unlisted",
+                                "storage_consumed_outside_snapshot"}
+
+
+def test_the_listed_csv_named_in_other_case_on_a_case_insensitive_fs_is_accepted(
+        tmp_path, monkeypatch, real_admission):
+    from easyicu import storage_layout
+
+    root, *_rest = _services_run(tmp_path, monkeypatch, listed=True)
+    upper = _case_variant(root)
+    if not (root / "SERVICES.CSV.GZ").exists() or not os.path.samefile(
+            root / "SERVICES.CSV.GZ", root / "services.csv.gz"):
+        # A case-sensitive test file system: stand in for the probe.
+        monkeypatch.setattr(storage_layout, "_case_insensitive_at", lambda path: True)
+
+    assert storage_layout.listed_csv_input(root, "services", upper)
