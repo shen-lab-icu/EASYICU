@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..storage_layout import StorageIntegrityError
 from ..utils.thresholds import gt, lt
 from .schema import ConceptSource
@@ -1861,6 +1862,8 @@ def _apply_callback(
                         except Exception:
                             pass
                     conn.close()
+                except TYPED_VALUE_FAILURES:
+                    raise
                 except Exception as exc:
                     # Kept as a fallback, not as a result: the in-memory frame
                     # below may still be able to answer. Remembered so that if
@@ -3243,6 +3246,8 @@ def _apply_callback(
                                     .rename('weight').reset_index()
                                 )
                                 frame = frame.merge(per_stay, on=id_col, how='left')
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception as e:
                 # 如果获取体重失败，使用默认值
                 if DEBUG_MODE:

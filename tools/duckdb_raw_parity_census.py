@@ -230,7 +230,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     }
     (out / "parity_report.json").write_text(json.dumps(summary, indent=1, sort_keys=True))
     print(json.dumps({k: v for k, v in summary.items() if k != "concepts"}, indent=1))
-    return 0 if not summary["mismatched"] else 1
+    return census_exit_code(summary)
+
+
+def census_exit_code(summary: Dict[str, object]) -> int:
+    """1 when any routed concept differs or any concept failed to load.
+
+    A concept that raised in the normal run was never compared, so the census
+    cannot vouch for it; the routes that did load are still compared and
+    reported.
+    """
+
+    return 1 if summary.get("mismatched") or summary.get("load_errors") else 0
 
 
 if __name__ == "__main__":

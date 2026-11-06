@@ -27,6 +27,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ..value_failures import TYPED_VALUE_FAILURES
 from .errors import ConceptExtractionUnavailable
 
 
@@ -86,6 +87,8 @@ def coerce_mixed_time_column(
                 icu_df = icu_tbl.data if hasattr(icu_tbl, "data") else icu_tbl
                 if pd.api.types.is_datetime64_any_dtype(icu_df["intime"]):
                     icu_df["intime"] = _naive(icu_df["intime"])
+            except TYPED_VALUE_FAILURES:
+                raise
             except Exception as exc:  # noqa: BLE001 - re-raised as a typed failure below
                 anchor_failure = (
                     f"the icustays table that anchors {key!r} to relative hours "

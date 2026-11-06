@@ -26,6 +26,7 @@ Drug Levels:
 import pandas as pd
 from typing import Optional, List, Dict, Any
 
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..concept_output_sources import COMPOSITE_LOADER_SUPPORT
 from ..utils.thresholds import ge, lt
 
@@ -442,6 +443,8 @@ def load_circ_failure(
                         # data (empty result), not a load failure. An empty
                         # optional stream stays outside the evidence.
                         loaded_dfs[c] = cdf
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception:
             # Fallback: load one by one
             for c in to_load:

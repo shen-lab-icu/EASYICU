@@ -1777,6 +1777,31 @@ def _worker_memory_evidence(
     return None
 
 
+def is_memory_exception(exc: Optional[BaseException]) -> bool:
+    """Public form of the by-type memory test, for out-of-process drivers."""
+
+    return _is_memory_exception(exc)
+
+
+def worker_failure_is_memory(record: object) -> bool:
+    """Whether a persisted worker failure record carries memory evidence.
+
+    Reads the classification this module wrote (``failure_class``,
+    ``memory_exhausted``, the exact exception type, an ``oom_kill_delta``);
+    an exit status or traceback text alone is never evidence (B-RETRY).
+    """
+
+    if not isinstance(record, Mapping):
+        return False
+    if record.get("failure_class") == "out_of_memory":
+        return True
+    try:
+        delta = int(record["oom_kill_delta"]) if record.get("oom_kill_delta") is not None else None
+    except (TypeError, ValueError):
+        delta = None
+    return _worker_memory_evidence(record.get("worker_exit_code"), [record], delta) is not None
+
+
 def _worker_failure_class(
     exit_code: object,
     failures: object,
@@ -3762,15 +3787,23 @@ def _stream_special_extraction_batches(
             manifest_path = source_root / f"{module_name}.manifest.json"
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+            except FileNotFoundError:
                 manifest = None
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+                raise SpecialDependencyError(
+                    "sepsis_dependency_manifest_unreadable",
+                    f"{module_name}: {type(exc).__name__}",
+                ) from exc
             if not (
                 isinstance(manifest, dict)
                 and manifest.get("module") == module_name
                 and not manifest.get("errors")
                 and not manifest.get("saved")
             ):
-                raise FileNotFoundError(f"missing streamed dependency module: {source}")
+                raise SpecialDependencyError(
+                    "sepsis_dependency_output_missing",
+                    f"{module_name}: no {source.name} and no empty-success manifest",
+                )
             return pd.DataFrame(columns=[id_col, *value_columns])
         dataset = ds.dataset(source, format="parquet")
         if module_name == "sofa1_score" and dataset.count_rows() > 0:
@@ -4141,8 +4174,15 @@ def _stage_special_dependencies(
             published_manifest = Path(published_output_dir) / f"{module}.manifest.json"
             try:
                 manifest = json.loads(published_manifest.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
+            except FileNotFoundError:
                 manifest = None
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+                # A published manifest that cannot be read is not "unpublished":
+                # re-deriving here would replace the published module silently.
+                raise SpecialDependencyError(
+                    "sepsis_dependency_manifest_unreadable",
+                    f"{module}: {type(exc).__name__}",
+                ) from exc
             if (
                 isinstance(manifest, dict)
                 and manifest.get("module") == module
@@ -4228,16 +4268,30 @@ def _run_special_extraction(
     if stream_output_batches or published_dependencies_ready:
         if failure_context is not None:
             failure_context["stage"] = "special_stream_dispatch"
-        if not patient_ids_filter or not batch_size:
-            raise ValueError(
-                "streamed special export requires patient_ids and batch_size"
+        cohort = list(next(iter(patient_ids_filter.values()))) if patient_ids_filter else []
+        if not cohort:
+            raise SpecialDependencyError(
+                "sepsis_special_cohort_missing",
+                "Sepsis-3 export needs the explicit patient cohort",
             )
+        # Published dependencies without a batch size (a one-shot run whose
+        # score modules were already published) derive in the owner's
+        # derivation batches; the rows do not depend on the batch size.
+        derivation_batch_size = (
+            int(batch_size)
+            if batch_size
+            else int(
+                _special_dependency_batch_policy(
+                    database, required_dependency_modules, len(cohort), None
+                )["derivation_batch_size"]
+            )
+        )
         _stream_special_extraction_batches(
             special_modules,
             database,
             data_path,
             patient_ids_filter,
-            int(batch_size),
+            derivation_batch_size,
             output_dir,
             use_sofa2=use_sofa2,
             published_output_dir=published_output_dir or output_dir,
@@ -8129,6 +8183,8 @@ def extract_database(
         with open(manifest_path) as f:
             manifest = json.load(f)
         mod_result["errors"] = manifest.get("errors", [])
+        # Typed (set from the exception type), for drivers that retry smaller.
+        mod_result["memory_exhausted"] = manifest.get("memory_exhausted") is True
         mod_result["warnings"] = manifest.get("warnings", [])
         mod_result["elapsed"] = manifest.get("elapsed_sec", 0.0)
         mod_result["peak_rss_mb"] = manifest.get("peak_rss_mb", 0.0)

@@ -13,6 +13,8 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
+from ..value_failures import TYPED_VALUE_FAILURES
+
 
 MEDICATION_GROUPS: Mapping[str, tuple[str, ...]] = {
     "vasopressors": (
@@ -241,6 +243,8 @@ def load_medications_impl(
                 loaded_concepts.append(concept)
             else:
                 failed_concepts[concept] = {"reason": "empty_result"}
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception as exc:
             failed_concepts[concept] = {
                 "reason": "load_error",

@@ -12,6 +12,7 @@ from typing import Dict, Optional, Union
 import numpy as np
 import pandas as pd
 
+from .value_failures import TYPED_VALUE_FAILURES
 from .utils.common_utils import SeriesUtils
 from .utils.thresholds import ge, gt, le, lt
 from .table import IdTbl
@@ -1878,6 +1879,8 @@ def miiv_icu_patients_filter(data: Union[IdTbl, pd.DataFrame], **kwargs) -> Unio
             # If expected columns not found, return original data
             return data
 
+    except TYPED_VALUE_FAILURES:
+        raise
     except Exception:
         # If any error occurs during filtering, return original data
         # This ensures the system doesn't break if icustays table is unavailable
