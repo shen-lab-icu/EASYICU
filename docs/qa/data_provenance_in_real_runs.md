@@ -60,6 +60,30 @@ blank-unit behavior are explicit. Existing row and browser disclosure scanners
 apply to preview, download and bundles. Historical/unbound inputs and unknown
 concepts yield typed `not_recorded`; no retrospective provenance is invented.
 
+### Warm raw-frame caches
+
+A raw table payload held in `ICUDataSource`'s cache is served again only after
+its owner revalidates the source on every hit
+(`storage_layout.revalidate_payload`):
+
+- the resolver's layout choice and file set, or the deliberate flat scan;
+- the bucket contract, with its full part inventory and sizes;
+- the CSV admission;
+- the conversion or bucket manifest sha256, read from its bytes.
+
+Within a binding unit that has bound the source, a mismatch raises
+`storage_source_changed` / `storage_source_missing`. Only a new unit may
+refresh the payload.
+
+Known limit: a data file rewritten in place, with the same inode and size and
+its mtime restored, keeps passing these checks. The cache does not hash a data
+file's content on each hit. A non-formal run reusing a warm cache can
+therefore return the bytes read before the rewrite. Formal runs get content
+identity from the formal input snapshot (`easyicu.formal_inputs`: sha256 of
+every input file before and after the run), not from this cache. The binding
+unit hashes only manifests and build receipts; data files are bound by size,
+mtime and inode.
+
 ## Renderer handoff
 
 The backend publishes these fields; the lead can use the existing renderers:

@@ -1330,14 +1330,6 @@ def replay_consumed(where, captured) -> None:
         record_consumed(where, table, paths, fmt, sha256=sha256)
 
 
-def _stat_signature(path) -> tuple | None:
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return None
-    return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
-
-
 def _file_sha256(path) -> str | None:
     try:
         with open(path, "rb") as handle:
@@ -1401,26 +1393,6 @@ def payload_identity(source, captured) -> tuple[dict, ...] | None:
     return tuple(identity)
 
 
-def _payload_signature(source, entry: dict) -> tuple:
-    """Cheap stats that change whenever the full revalidation could change."""
-    manifest = entry.get("manifest")
-    signature: list = [_stat_signature(manifest) if manifest else None]
-    if entry["kind"] == "flat":
-        listing = flat_table_files(source, entry["table"]) if entry["via"] != "paths" else entry["paths"]
-        signature.append(tuple((str(f), _stat_signature(f)) for f in sorted(map(str, listing))))
-    elif entry["kind"] == "csv":
-        signature.append(tuple((p, _stat_signature(p)) for p in entry["paths"]))
-    else:
-        root = Path(entry["root"])
-        try:
-            children = sorted(root.iterdir())
-        except OSError:
-            children = []
-        signature.append(_stat_signature(root))
-        signature.append(tuple((c.name, _stat_signature(c)) for c in children))
-    return tuple(signature)
-
-
 def _revalidate_entry(source, entry: dict) -> bool:
     """The owner's own check of one cached source; False = it no longer matches."""
     from .storage_binding import StorageSourceChanged
@@ -1457,11 +1429,12 @@ def revalidate_payload(source, identity, captured) -> bool:
     """Whether a cached raw payload may be served now; a hit records its sources.
 
     Every hit revalidates each source through its owner: the resolver (layout
-    choice, file set, empty resolve), the bucket contract, or the CSV
-    admission, plus the metadata sha256. The full check runs once per unit
-    per source while its cheap signature (manifest stat, the table's file
-    listing with stats, the bucket directory) is unchanged. In a unit that
-    has already bound the source, a mismatch raises
+    choice, file set, empty resolve), the bucket contract (full part
+    inventory with sizes), or the CSV admission, plus the metadata sha256
+    read from the bytes. No hit skips the owner: a stat signature cannot see
+    a bucket appearing beside a flat table, a nested bucket part changing,
+    or a manifest rewritten in place (delta17d). In a unit that has already
+    bound the source, a mismatch raises
     ``storage_source_changed`` / ``storage_source_missing``: never a miss
     that falls through to an empty table, and never a stale payload. Only a
     unit that has not bound it may refresh (False: read again).
@@ -1474,16 +1447,11 @@ def revalidate_payload(source, identity, captured) -> bool:
     if identity is None:
         return False
     unit = active_unit()
-    memo = None if unit is None else unit.caches.setdefault("payload_revalidated", {})
     for entry in identity:
         key = source_key(source, entry["table"])
         bound = unit is not None and (
             bound_layout(key) is not None or any(is_bound(p) for p in entry["paths"])
         )
-        marker = (entry["table"], entry["kind"], entry["paths"])
-        signature = _payload_signature(source, entry)
-        if memo is not None and memo.get(marker) == signature:
-            continue
         if not _revalidate_entry(source, entry):
             if bound:
                 missing = [p for p in entry["paths"] if not Path(p).exists()]
@@ -1492,8 +1460,6 @@ def revalidate_payload(source, identity, captured) -> bool:
                     entry["table"], missing[0] if missing else entry["paths"][0],
                 )
             return False
-        if memo is not None:
-            memo[marker] = signature
     if not captured_still_current(captured):
         if unit is not None and any(is_bound(c[1]) for c in captured):
             replay_consumed(source, captured)  # raises the bound file's change
