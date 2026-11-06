@@ -305,6 +305,11 @@ def _aumc_episode_upper_hours(
     )
 
 
+# SICdb raw time columns, in seconds from the PDMS admission (official schema).
+# Every other SIC time column reaching the concept layer is ICU-relative hours.
+_SIC_RAW_SECOND_COLUMNS = frozenset({"ICUOffset", "Offset", "OffsetEnd", "OffsetDrugEnd"})
+
+
 def _sic_episode_upper_by_stay(
     bounds: pd.DataFrame,
     *,
@@ -6759,12 +6764,14 @@ class ConceptResolver:
             for col in cols_to_convert:
                 if data.attrs.get("easyicu_time_columns", {}).get(col) == "icu_relative_hours":
                     continue
-                if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    max_abs = data[col].abs().max()
-                    # SIC's named raw offsets are seconds even near admission;
-                    # materialized ICU hours were explicitly skipped above.
-                    if col in {"ICUOffset", "Offset", "OffsetEnd", "OffsetDrugEnd"} or pd.notna(max_abs) and max_abs > 5000:
-                        second_valued_cols.append(col)
+                # Only SICdb's named raw offsets are seconds. The unit is
+                # declared by the column, never inferred from the values: a
+                # former ``|max| > 5000`` rule rescaled a whole frame of
+                # ICU-relative hours by 1/3600 when one record in the batch lay
+                # more than 5,000 h from admission, so the result depended on
+                # which stays shared the batch (lead-r13 G1 preflight, RASS).
+                if col in _SIC_RAW_SECOND_COLUMNS and pd.api.types.is_numeric_dtype(data[col]):
+                    second_valued_cols.append(col)
 
             if second_valued_cols:
                 primary_id = next(
