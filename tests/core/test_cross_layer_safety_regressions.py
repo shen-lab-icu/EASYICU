@@ -279,9 +279,11 @@ def test_sic_extreme_source_interval_is_quarantined_before_expansion():
     frame = pd.DataFrame(
         {
             "CaseID": [1, 1],
-            # Raw SIC offsets are seconds; these correspond to -31,138 h and
-            # +2 h respectively.
-            "charttime": [-31_138.0 * 3_600.0, 2.0 * 3_600.0],
+            # Raw SIC offsets are seconds in the declared raw column
+            # ``Offset``; these correspond to -31,138 h and +2 h. The unit is
+            # declared by the column name, never inferred from the values
+            # (lead-r13: test_sic_time_unit_declared.py).
+            "Offset": [-31_138.0 * 3_600.0, 2.0 * 3_600.0],
             "dur_var": [7_200.0, 7_200.0],
             # The raw SIC contract anchors offsets to cases.ICUOffset. Keep
             # this regression focused on extreme-interval quarantine while
@@ -294,11 +296,29 @@ def test_sic_extreme_source_interval_is_quarantined_before_expansion():
         frame,
         source,
         ["CaseID"],
-        "charttime",
+        "Offset",
     )
 
-    assert out["charttime"].tolist() == [2.0]
+    assert out["Offset"].tolist() == [2.0]
     assert out["dur_var"].tolist() == [2.0]
+
+
+def test_sic_unmarked_hour_column_is_never_rescaled_by_magnitude():
+    # An ICU-relative hour column that is not a named raw offset keeps its
+    # values, however far one record lies from admission; the episode clip
+    # then removes the out-of-window record instead of rescaling the frame.
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="sic"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {"CaseID": [1], "ICUOffset": [0.0], "TimeOfStay": [86_400.0]}
+        ),
+    )
+    frame = pd.DataFrame({"CaseID": [1, 1, 1], "charttime": [-31_138.0, 2.0, 5.0]})
+
+    out = resolver._align_time_to_admission(frame, source, ["CaseID"], "charttime")
+
+    assert out["charttime"].tolist() == [2.0, 5.0]
 
 
 def test_sic_rows_after_episode_allowance_are_quarantined():

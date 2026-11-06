@@ -3050,6 +3050,19 @@ def _coerce_datetime(series: pd.Series) -> pd.Series:
         return series
 
 
+def _mark_icu_relative_charttime(df: pd.DataFrame) -> None:
+    """Declare that ``charttime`` already holds ICU-relative hours.
+
+    The SICdb SQL computes ``(Offset - ICUOffset) / 3600`` itself; the concept
+    layer must not treat that column as raw seconds again.
+    """
+    if "charttime" in df.columns:
+        df.attrs["easyicu_time_columns"] = {
+            **df.attrs.get("easyicu_time_columns", {}),
+            "charttime": "icu_relative_hours",
+        }
+
+
 def load_bucketed_table_aggregated(
     data_source: "ICUDataSource",
     table_name: str,
@@ -4077,6 +4090,8 @@ def load_bucketed_table_aggregated(
             df = df.loc[df[value_column].notna()].reset_index(drop=True)
         if bounds_diagnostics is not None:
             df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
+        if db_name in ("sic", "sic_demo"):
+            _mark_icu_relative_charttime(df)
         logger.info(
             "Bucketed DuckDB aggregation complete: %s itemids=%d -> %d rows",
             table_name,
@@ -4516,6 +4531,8 @@ def load_bucketed_table_multi_aggregated(
                     df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
                 )
     df = finish_miiv_lab_frame(df)
+    if _base_db == "sic":
+        _mark_icu_relative_charttime(df)
     logger.info(
         "Bucketed multi-concept DuckDB aggregation complete: %s concepts=%d itemids=%d -> %d rows",
         table_name,
