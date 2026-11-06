@@ -108,7 +108,7 @@ too; no value changes). Across releases, on the cases common to 1.0.6 and
 stay end; the assumption flags differ on 22,229/22,229/8,335 cases, because
 every 1.0.8 survivor's category is rebuilt.
 
-## 2026-11-06 — conversion follows symlinked source folders and never converts nothing silently [lead-r13, `316bceeca` and its follow-up]
+## 2026-11-06 — conversion follows symlinked source folders and never converts nothing silently [lead-r13, `316bceeca`, `53064634a`]
 
 Conversion only; extracted values do not change. Source folders linked from
 another drive (`hosp -> /Volumes/drive/hosp`) were not walked, so the
