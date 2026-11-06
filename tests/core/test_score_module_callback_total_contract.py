@@ -148,6 +148,11 @@ def synthetic_loader(monkeypatch, tmp_path):
                     "id_var": "stay_id", "index_var": "charttime", "val_var": "value",
                 }}
                 for name in observations.columns if name not in {"stay_id", "charttime"}
+            } | {
+                # The ICU episode window reads the stay table and fails closed
+                # without it (0d3a03f94). Every stay's episode covers all its
+                # synthetic observations.
+                "icustays": {"defaults": {"id_var": "stay_id"}},
             },
         )
 
@@ -155,6 +160,10 @@ def synthetic_loader(monkeypatch, tmp_path):
             self.ids = next(iter(patients.values())) if isinstance(patients, dict) else patients
 
         def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            if table_name == "icustays":
+                stays = pd.DataFrame({"stay_id": sorted(observations.stay_id.unique())})
+                stays["los"] = (float(observations.charttime.max()) + 48.0) / 24.0
+                return ICUTable(stays, id_columns=["stay_id"])
             assert table_name in observations, "Synthetic fixture forbids raw IO"
             frame = observations[["stay_id", "charttime", table_name]].rename(
                 columns={table_name: "value"}
