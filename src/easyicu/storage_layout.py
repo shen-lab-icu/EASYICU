@@ -9,6 +9,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from dataclasses import dataclass
 import json
+import logging
 import math
 import numbers
 from pathlib import Path, PurePosixPath
@@ -399,26 +400,107 @@ def _visible_parquet(directory: Path) -> set[Path]:
     }
 
 
+CONVERSION_MANIFEST = "conversion_manifest.json"  # written by io.data_converter
+_CONVERSION_INDEX: dict[tuple[str, int, int], dict[str, tuple[str, frozenset, int | None]]] = {}
+_FALLBACK_WARNED: set[tuple[str, str]] = set()
+
+
+def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]] | None:
+    """Map each converted output (path relative to the root) to its table entry."""
+    path = Path(base) / CONVERSION_MANIFEST
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    index = _CONVERSION_INDEX.get(key)
+    if index is None:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            entries = manifest["tables"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise TableScanError(
+                "conversion_manifest_unreadable", path.name, str(exc)[:200]
+            ) from exc
+        # One table may span several entries (HiRID converts each CSV part
+        # separately); its inventory is the union, its rows the sum.
+        tables: dict[str, tuple[set, int | None]] = {}
+        for entry in entries:
+            name = str(entry.get("table"))
+            outputs, rows = tables.setdefault(name, (set(), 0))
+            outputs.update(
+                PurePosixPath(o["relative_path"]).as_posix()
+                for o in entry.get("outputs") or ()
+                if str(o.get("relative_path", "")).lower().endswith((".parquet", ".pq"))
+            )
+            count = entry.get("row_count")
+            valid = isinstance(count, int) and not isinstance(count, bool)
+            tables[name] = (outputs, rows + count if valid and rows is not None else None)
+        index = {}
+        for name, (outputs, rows) in tables.items():
+            frozen = frozenset(outputs)
+            for relative in frozen:
+                index[relative] = (name, frozen, rows)
+        _CONVERSION_INDEX[key] = index
+    return index
+
+
+def _relative(base: Path, path: Path) -> str | None:
+    try:
+        return Path(path).relative_to(base).as_posix()
+    except ValueError:
+        return None
+
+
 def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path, ...]:
     """Fail closed unless a flat scan covers its table's whole inventory.
 
-    The inventory is every visible Parquet file under the directory that holds
-    the scan, or the single file itself.  Files and footer row counts must
-    agree, so a reader cannot silently see a subset (lead-r13: MIIV labevents
-    read 1 of 10 files).  The registry's file list names ricu's CSV-era chunks
-    and is not an installation manifest, so it is not checked here.  Bucket
-    layouts carry their own manifest inventory, validated on open.
+    The conversion manifest written when the installation was converted
+    (``conversion_manifest.json``: each table's output files and total rows)
+    is the inventory: the scan must be exactly the outputs of the table entry
+    that owns its files, and the Parquet footer rows must equal the entry's
+    row count, so a missing or truncated chunk fails the load.  Without a
+    manifest, or for files no entry owns (older installations, hand-made
+    views), the inventory is every visible Parquet file under the directory
+    holding the scan, or the single file itself, and a warning asks for the
+    conversion to be re-run or verified.  The registry's file list names
+    ricu's CSV-era chunks and is not an installation manifest.  Bucket layouts
+    carry their own manifest inventory, validated on open (lead-r13: MIIV
+    labevents read 1 of 10 files).
     """
     if not files:
         return files
     parents = {p.parent for p in files}
     if len(parents) != 1:
         raise TableScanError("table_scan_mixed_roots", table, f"{len(parents)} directories")
+    base = Path(source.base_path)
+    scanned_rows = sum(_footer_rows(p) for p in files)
+    relatives = {_relative(base, p) for p in files}
+    index = _conversion_index(base)
+    owners = {index.get(r) for r in relatives} if index is not None and None not in relatives else {None}
+    if None not in owners and len(owners) == 1:
+        owner, outputs, rows = next(iter(owners))
+        if relatives != set(outputs) or (rows is not None and scanned_rows != rows):
+            raise TableScanError(
+                "table_scan_manifest_mismatch", table,
+                f"scanned {len(relatives)} files/{scanned_rows} rows; conversion "
+                f"manifest {owner!r} lists {len(outputs)} files/{rows} rows",
+            )
+        return files
+    if None not in owners:
+        raise TableScanError("table_scan_mixed_roots", table, f"{len(owners)} manifest tables")
+    warned = (str(base), table)
+    if warned not in _FALLBACK_WARNED:
+        _FALLBACK_WARNED.add(warned)
+        logging.getLogger(__name__).warning(
+            "table_scan_unmanifested: %s under %s has no conversion-manifest entry; "
+            "checking the directory only. Re-run or verify the conversion to "
+            "detect a missing chunk.", table, base,
+        )
     parent = next(iter(parents))
     names = {table.lower(), f"{table.lower()}_bucket"}
     single = len(files) == 1 and parent.name.lower() not in names
     inventory = set(files) if single else _visible_parquet(parent)
-    scanned_rows = sum(_footer_rows(p) for p in files)
     inventory_rows = sum(_footer_rows(p) for p in inventory)
     if set(files) != inventory or scanned_rows != inventory_rows:
         raise TableScanError(

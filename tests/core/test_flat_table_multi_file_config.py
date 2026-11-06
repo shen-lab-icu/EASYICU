@@ -120,3 +120,74 @@ def test_single_file_table_beside_other_tables_is_complete(tmp_path):
     assert verify_flat_scan(source, "labevents", flat_table_files(source, "labevents")) == (
         tmp_path / "labevents.parquet",
     )
+
+
+# --- the conversion manifest is the inventory when present ------------------
+
+
+def _write_manifest(base, chunks, rows):
+    import json
+
+    entry = {
+        "table": "labevents",
+        "row_count": rows,
+        "outputs": [{"relative_path": f"labevents/{name}"} for name in chunks],
+    }
+    (base / "conversion_manifest.json").write_text(json.dumps({"tables": [entry]}))
+
+
+def test_missing_converted_chunk_fails_against_the_conversion_manifest(tmp_path):
+    files = _write_chunks(tmp_path, 10)
+    _write_manifest(tmp_path, [f"{i}.parquet" for i in range(1, 11)], 10)
+    (tmp_path / "labevents" / "7.parquet").unlink()  # interrupted conversion
+    source = _source(tmp_path, files)
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+    assert caught.value.reason == "table_scan_manifest_mismatch"
+    assert "scanned 9 files/9 rows" in str(caught.value)
+
+
+def test_truncated_converted_chunk_fails_on_rows(tmp_path):
+    files = _write_chunks(tmp_path, 3)
+    _write_manifest(tmp_path, ["1.parquet", "2.parquet", "3.parquet"], 4)
+    source = _source(tmp_path, files)
+    with pytest.raises(TableScanError) as caught:
+        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
+    assert "3 files/4 rows" in str(caught.value)
+
+
+def test_complete_conversion_passes_through_a_symlink_farm(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    _write_chunks(real, 3)
+    _write_manifest(real, ["1.parquet", "2.parquet", "3.parquet"], 3)
+    farm = tmp_path / "farm"
+    farm.mkdir()
+    for entry in real.iterdir():
+        (farm / entry.name).symlink_to(entry)
+    source = _source(farm, [f"labevents/{i}.parquet" for i in range(1, 11)])
+    assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 3
+
+
+def test_unmanifested_installation_falls_back_to_the_directory_with_a_warning(tmp_path, caplog):
+    files = _write_chunks(tmp_path, 3)
+    source = _source(tmp_path, files)
+    with caplog.at_level("WARNING", logger="easyicu.storage_layout"):
+        assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 3
+    assert "table_scan_unmanifested" in caplog.text
+
+
+def test_a_table_converted_part_by_part_is_one_inventory(tmp_path):
+    import json
+
+    files = _write_chunks(tmp_path, 3)
+    entries = [
+        {"table": "labevents", "row_count": 1, "outputs": [{"relative_path": f"labevents/{i}.parquet"}]}
+        for i in range(1, 4)
+    ]
+    (tmp_path / "conversion_manifest.json").write_text(json.dumps({"tables": entries}))
+    source = _source(tmp_path, files)
+    assert len(verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))) == 3
+    (tmp_path / "labevents" / "2.parquet").unlink()
+    with pytest.raises(TableScanError):
+        verify_flat_scan(source, "labevents", flat_table_files(source, "labevents"))
