@@ -187,6 +187,9 @@ def declared_native_export_inventory(*, export_path: Path, expected_manifest_sha
             result[key] = value
         return result
 
+    from easyicu.export_publication import require_no_in_progress_marker
+
+    require_no_in_progress_marker(Path(export_path))  # an interrupted export
     with AnchoredDirectory.open(Path(export_path)) as directory:
         raw = directory.read_bytes("_manifest.json", max_bytes=16 * 1024 * 1024)
         directory.assert_still_selected()
@@ -282,7 +285,21 @@ def native_planning_metadata(*, export_path: Path, database: str | None = None):
     from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
     from easyicu.webserver.dataio import ExportCohortError
 
+    from easyicu.export_publication import (
+        UNPUBLISHED_CODE,
+        NativeExportUnpublishedError,
+        require_no_in_progress_marker,
+    )
+
     root = Path(export_path).expanduser()
+    try:
+        # Refused unconditionally: with or without a manifest beside it, a
+        # marked folder is an interrupted export, never a plannable source.
+        require_no_in_progress_marker(root)
+    except NativeExportUnpublishedError as exc:
+        raise ExportCohortError(
+            UNPUBLISHED_CODE, {"reason": exc.reason, "message": str(exc)}
+        ) from exc
     if not os.path.lexists(root / "_manifest.json"):
         return None
     try:

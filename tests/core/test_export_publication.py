@@ -570,3 +570,104 @@ def test_a_farm_shaped_source_root_is_accepted(web_source, tmp_path):
     assert (farm / "conversion_manifest.json").exists()
     assert publication.folder_unpublished_reason(farm, module_names=api.EXTRACT_MODULES) is None
     assert dataio.scan_path(str(farm))["ok"] is True
+
+
+# --- delta13p B13: receipts are validated by their owners ----------------------
+
+@pytest.mark.parametrize("export_file", [
+    "demographics.parquet", "demographics.manifest.json", "feature_definitions.json",
+])
+def test_an_invalid_receipt_beside_any_export_file_is_refused(tmp_path, export_file):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "conversion_manifest.json").write_text("{not json", encoding="utf-8")
+    (folder / export_file).write_bytes(b"x")
+    assert publication.folder_unpublished_reason(
+        folder, module_names=api.EXTRACT_MODULES
+    ) == publication.REASON_AMBIGUOUS
+
+
+@pytest.mark.parametrize(("receipt", "payload", "reason"), [
+    ("conversion_manifest.json", "{not json", "conversion_manifest_unreadable"),
+    ("conversion_manifest.json", '{"schema_version": "other/1", "tables": []}',
+     "conversion_manifest_schema_invalid"),
+    ("conversion_manifest.json", '{"schema_version": "easyicu.conversion_manifest/1"}',
+     "conversion_manifest_unreadable"),
+    ("community_preparation_manifest.json", "{not json",
+     "database_detection_identity_receipt_invalid"),
+    ("community_preparation_manifest.json", '{"database": "eicu"}',
+     "database_detection_identity_receipt_invalid"),
+])
+def test_a_malformed_receipt_alone_is_a_typed_source_error(tmp_path, receipt, payload, reason):
+    from easyicu.webserver import dataio
+
+    folder = tmp_path / "source"
+    folder.mkdir()
+    (folder / receipt).write_text(payload, encoding="utf-8")
+    with pytest.raises(publication.SourceReceiptInvalidError) as caught:
+        publication.folder_unpublished_reason(folder, module_names=api.EXTRACT_MODULES)
+    assert (caught.value.code, caught.value.reason) == ("source_receipt_invalid", reason)
+    answer = dataio.scan_path(str(folder))
+    assert (answer["ok"], answer["error"], answer["reason"]) == (False, "source_receipt_invalid", reason)
+
+
+def test_the_converter_receipt_satisfies_its_validator(web_source):
+    from easyicu.storage_layout import validate_conversion_manifest
+
+    validate_conversion_manifest(web_source.raw)  # the converter and reader agree
+    assert publication.folder_unpublished_reason(
+        web_source.raw, module_names=api.EXTRACT_MODULES
+    ) is None
+
+
+def test_native_planning_readers_refuse_a_marker(marked):
+    from easyicu.webserver.dataio import ExportCohortError
+    from easyicu.webserver.raw_preparation_dependencies import (
+        declared_native_export_inventory,
+        native_planning_metadata,
+    )
+
+    with pytest.raises(ExportCohortError) as planning:
+        native_planning_metadata(export_path=marked)
+    assert planning.value.error == "native_export_unpublished"
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        declared_native_export_inventory(
+            export_path=marked, expected_manifest_sha256="0" * 64, expected_database="hirid",
+        )
+
+
+@pytest.mark.parametrize("state", ["marker", "no_manifest", "marker_with_manifest"])
+def test_the_source_status_profiler_never_decodes_an_unpublished_export(tmp_path, monkeypatch, state):
+    """CLI -> profile_rowwise_derived_concept -> decoder: nothing is decoded."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from easyicu.research_agent.discovery import idea_mining_source_status as status
+
+    database = tmp_path / "exports" / "miiv"
+    database.mkdir(parents=True)
+    pq.write_table(pa.table({"stay_id": [1, 2]}), database / "demographics.parquet")
+    pq.write_table(pa.table({"stay_id": [1], "charttime": [0.0], "ca": [8.0], "alb": [4.0]}),
+                   database / "chemistry.parquet")
+    if state != "no_manifest":
+        (database / publication.IN_PROGRESS_MARKER).write_text("", encoding="utf-8")
+    if state == "marker_with_manifest":
+        (database / "_manifest.json").write_text("{}", encoding="utf-8")
+
+    decoded: list[str] = []
+
+    def spy(name):
+        def refuse(*_args, **_kwargs):
+            decoded.append(name)
+            raise AssertionError(f"decoder reached: {name}")
+        return refuse
+
+    for name in ("read_schema", "read_table", "ParquetFile"):
+        monkeypatch.setattr(status.pq, name, spy(name))
+    cli = _load_script("r13partial_source_status", "tools/profile_idea_mining_source_status.py")
+    with pytest.raises(publication.NativeExportUnpublishedError):
+        cli.main([
+            "--export-root", str(tmp_path / "exports"), "--databases", "miiv",
+            "--out-dir", str(tmp_path / "out"),
+        ])
+    assert decoded == []

@@ -41,6 +41,17 @@ _MARKER_TEXT = (
 )
 
 
+class SourceReceiptInvalidError(ValueError):
+    """A folder relies on a source preparation receipt that its owner rejects."""
+
+    code = "source_receipt_invalid"
+
+    def __init__(self, message: str, *, reason: str, path: Union[str, Path]) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.path = str(path)
+
+
 class NativeExportUnpublishedError(ValueError):
     """An export directory is not a published native export."""
 
@@ -165,8 +176,11 @@ def folder_unpublished_reason(
     definitions) is an unpublished export (``manifest_missing``), and
     ``export_source_ambiguous`` when a source preparation receipt sits beside
     it: missing export sidecars never prove a source, and a receipt never
-    turns export files into one. Any other folder (a prepared source, a raw
-    CSV source) is left to its own contract.
+    turns export files into one. A receipt that classifies a folder as a
+    source must satisfy its owner's validator (``storage_layout`` for the
+    conversion receipt, ``databases.detection`` for the community receipt),
+    else :class:`SourceReceiptInvalidError` (``source_receipt_invalid``). A
+    raw CSV folder (no receipt) is left to its own detection contract.
     """
 
     root = Path(export_dir)
@@ -181,7 +195,29 @@ def folder_unpublished_reason(
         if any(os.path.lexists(root / name) for name in SOURCE_PREPARATION_MANIFESTS):
             return REASON_AMBIGUOUS
         return REASON_MANIFEST_MISSING
+    _validate_source_receipts(root)
     return None
+
+
+def _validate_source_receipts(root: Path) -> None:
+    """A receipt that classifies a folder as a source must satisfy its owner."""
+
+    from .databases.detection import DatabaseDetectionError, validate_community_receipt
+    from .storage_layout import StorageIntegrityError, validate_conversion_manifest
+
+    conversion, community = SOURCE_PREPARATION_MANIFESTS
+    try:
+        if os.path.lexists(root / conversion):
+            validate_conversion_manifest(root)
+        if os.path.lexists(root / community):
+            validate_community_receipt(root)
+    except StorageIntegrityError as exc:
+        raise SourceReceiptInvalidError(
+            f"{root}: {exc}", reason=getattr(exc, "reason", "conversion_manifest_unreadable"),
+            path=root,
+        ) from exc
+    except DatabaseDetectionError as exc:
+        raise SourceReceiptInvalidError(f"{root}: {exc}", reason=exc.code, path=root) from exc
 
 
 def require_published_export_package(export_dir: Union[str, Path]) -> Path:

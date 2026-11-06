@@ -770,6 +770,8 @@ def _visible_parquet(directory: Path) -> set[Path]:
 
 
 CONVERSION_MANIFEST = "conversion_manifest.json"  # written by io.data_converter
+#: The schema io.data_converter.write_conversion_manifest writes.
+CONVERSION_MANIFEST_SCHEMA = "easyicu.conversion_manifest/1"
 _CONVERSION_INDEX: dict[tuple[str, int, int], dict[str, tuple[str, frozenset, int | None]]] = {}
 _FALLBACK_WARNED: set[tuple[str, str]] = set()
 
@@ -835,6 +837,32 @@ def _check_derived_from(path: Path, derived: dict | None) -> None:
             "table_scan_manifest_stale", path.name,
             f"derived from {source} (sha256 {derived['sha256'][:12]}), "
             f"which is now {digest[:12]}; regenerate the derived manifest",
+        )
+
+
+def validate_conversion_manifest(base: Path) -> None:
+    """Check a folder's conversion receipt by this owner's reader rules.
+
+    The receipt must exist, parse, carry the converter's schema and a table
+    list whose entries this reader accepts, and its ``derived_from`` binding
+    (a farm view) must still hold. Raises :class:`TableScanError`
+    (``conversion_manifest_missing`` / ``conversion_manifest_unreadable`` /
+    ``conversion_manifest_schema_invalid`` or a derived-binding reason).
+    """
+
+    path = Path(base) / CONVERSION_MANIFEST
+    if _conversion_index(Path(base)) is None:
+        raise TableScanError("conversion_manifest_missing", path.name, "no receipt")
+    try:
+        schema = json.loads(path.read_text(encoding="utf-8")).get("schema_version")
+    except (OSError, ValueError, AttributeError) as exc:
+        raise TableScanError(
+            "conversion_manifest_unreadable", path.name, str(exc)[:200]
+        ) from exc
+    if schema != CONVERSION_MANIFEST_SCHEMA:
+        raise TableScanError(
+            "conversion_manifest_schema_invalid", path.name,
+            f"schema_version must be {CONVERSION_MANIFEST_SCHEMA!r}",
         )
 
 

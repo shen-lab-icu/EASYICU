@@ -47,6 +47,7 @@ from easyicu.export_publication import (
     REASON_IN_PROGRESS,
     UNPUBLISHED_CODE,
     NativeExportUnpublishedError,
+    SourceReceiptInvalidError,
     begin_native_export,
     finish_native_export,
     folder_unpublished_reason,
@@ -317,7 +318,14 @@ def _unpublished_export_error(
     else:
         from easyicu.api.extraction import EXTRACT_MODULES
 
-        reason = folder_unpublished_reason(path, module_names=EXTRACT_MODULES)
+        try:
+            reason = folder_unpublished_reason(path, module_names=EXTRACT_MODULES)
+        except SourceReceiptInvalidError as exc:
+            return {
+                "ok": False, "error": exc.code, "reason": exc.reason, "path": str(path),
+                "ready": False,
+                "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
+            }
     if reason is None:
         return None
     return {
