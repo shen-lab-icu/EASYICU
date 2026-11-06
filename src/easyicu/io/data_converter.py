@@ -220,6 +220,31 @@ class ConversionStopped(Exception):
 MANIFEST_MISSING_REBUILD_REQUIRED = "conversion_manifest_missing_rebuild_required"
 
 
+class ConversionSourceUnreadable(Exception):
+    """A source or output directory could not be listed; nothing is decided.
+
+    ``reason`` is the stable code ``conversion_source_unreadable``. Skipping
+    the directory would convert (or declare converted) a partial source, so
+    the scan stops with the path and the operating-system cause.
+    """
+
+    reason = "conversion_source_unreadable"
+
+    def __init__(self, path: "str | Path", cause: OSError) -> None:
+        self.path = Path(path)
+        self.errno = getattr(cause, "errno", None)
+        super().__init__(
+            f"{self.reason}: cannot list {self.path} "
+            f"({type(cause).__name__}: {getattr(cause, 'strerror', None) or cause})"
+        )
+        self.__cause__ = cause
+
+
+def _raise_unreadable(error: OSError) -> None:
+    """``os.walk`` onerror hook: a directory it cannot list is a failure."""
+    raise ConversionSourceUnreadable(getattr(error, "filename", None) or "?", error) from error
+
+
 class ConversionNoSourceFiles(Exception):
     """No CSV source and no converted output: the folder cannot be prepared.
 
@@ -816,12 +841,13 @@ class DataConverter:
         # loop or list a file twice.
         visited_dirs: Set[Tuple[int, int]] = set()
         for search_path in search_paths:
-            for root, dirs, files in os.walk(search_path, topdown=True, followlinks=True):
+            for root, dirs, files in os.walk(
+                search_path, topdown=True, onerror=_raise_unreadable, followlinks=True,
+            ):
                 try:
                     root_stat = os.stat(root)
-                except OSError:
-                    dirs[:] = []
-                    continue
+                except OSError as exc:
+                    raise ConversionSourceUnreadable(root, exc) from exc
                 root_id = (root_stat.st_dev, root_stat.st_ino)
                 if root_id in visited_dirs:
                     dirs[:] = []
@@ -833,6 +859,10 @@ class DataConverter:
                 for d in dirs:
                     dl = d.lower()
                     if dl in excluded_dirs:
+                        continue
+                    # Hidden folders (.Trashes, .Spotlight-V100, …) are not
+                    # sources, as hidden files are not (_is_hidden_sidecar).
+                    if d.startswith('.'):
                         continue
                     # Skip `<table>_bucket/` shard layouts entirely —
                     # they only ever contain parquet, not CSV.
@@ -3119,8 +3149,8 @@ class DataConverter:
         """
         try:
             entries = list(self.data_path.iterdir())
-        except OSError:
-            return False
+        except OSError as exc:
+            raise ConversionSourceUnreadable(self.data_path, exc) from exc
         for entry in entries:
             name = entry.name
             if name.startswith('.'):
@@ -3134,8 +3164,8 @@ class DataConverter:
                         for child in entry.iterdir()
                     ):
                         return True
-                except OSError:
-                    continue
+                except OSError as exc:
+                    raise ConversionSourceUnreadable(entry, exc) from exc
         return False
 
     def _find_table_shards(self, table_name: str) -> List[Path]:
