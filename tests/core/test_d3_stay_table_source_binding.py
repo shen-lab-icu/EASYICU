@@ -27,6 +27,7 @@ from easyicu.concept.stay_tables import (
     StayTableSourceChanged,
     clear_stay_tables,
     source_binding,
+    stay_table_batch,
     stay_table_frame,
     stay_table_reads,
 )
@@ -87,32 +88,40 @@ def _fresh_owner():
     clear_stay_tables()
 
 
+# A streamed export opens one stay_table_batch around its batches; the loads
+# of one batch (several top-level calls) run inside it, as here.
+
+
 def test_the_same_files_are_read_once_per_batch_across_sources(tmp_path):
     root = _install(tmp_path / "eicu")
     before = stay_table_reads()
-    _hr(_source(root), [1, 2])
-    _hr(_source(root), [1, 2])
+    with stay_table_batch():
+        _hr(_source(root), [1, 2])
+        _hr(_source(root), [1, 2])
     assert stay_table_reads() - before == 1
 
 
 def test_a_replaced_stay_table_within_the_batch_is_refused_not_reused(tmp_path):
     root = _install(tmp_path / "eicu")
-    first = _hr(_source(root), [2, 4])
-    # Same path, new bytes: stay 2 now stays 40 h instead of 24 h.
-    write_fixture_parquet(_patient((48, 40, 36, 12)), root / "patient.parquet", index=False)
-    with pytest.raises(StorageIntegrityError) as error:
-        _hr(_source(root), [2, 4])
+    with stay_table_batch():
+        first = _hr(_source(root), [2, 4])
+        # Same path, new bytes: stay 2 now stays 40 h instead of 24 h.
+        write_fixture_parquet(_patient((48, 40, 36, 12)), root / "patient.parquet", index=False)
+        with pytest.raises(StorageIntegrityError) as error:
+            _hr(_source(root), [2, 4])
+    assert isinstance(error.value, StayTableSourceChanged)
     assert error.value.reason == "stay_table_source_changed"
     assert len(first)  # the first batch read was ordinary
 
 
 def test_a_touched_stay_table_within_the_batch_is_refused(tmp_path):
     root = _install(tmp_path / "eicu")
-    _hr(_source(root), [1, 2])
-    stat = (root / "patient.parquet").stat()
-    os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-    with pytest.raises(StayTableSourceChanged) as error:
+    with stay_table_batch():
         _hr(_source(root), [1, 2])
+        stat = (root / "patient.parquet").stat()
+        os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        with pytest.raises(StayTableSourceChanged) as error:
+            _hr(_source(root), [1, 2])
     assert error.value.reason == "stay_table_source_changed"
 
 

@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import ConceptDictionary, ConceptResolver
-from easyicu.concept.stay_tables import clear_stay_tables, stay_table_reads
+from easyicu.concept.stay_tables import clear_stay_tables, stay_table_batch, stay_table_reads
 from easyicu.config import load_src_cfg
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 from tests.support.bucket_storage import write_fixture_parquet
@@ -68,12 +68,13 @@ def _fresh_owner():
 def test_one_read_per_batch_across_resolvers(tmp_path):
     source = _source(tmp_path / "eicu")
     before = stay_table_reads()
-    _hr(source, [1, 2])
-    # A dependency load of the same batch on a fresh resolver and source.
-    _hr(ICUDataSource(load_src_cfg("eicu"), base_path=tmp_path / "eicu", enable_cache=False), [1, 2])
-    assert stay_table_reads() - before == 1
-    _hr(source, [3, 4])  # the next batch
-    assert stay_table_reads() - before == 2
+    with stay_table_batch():  # a streamed export's batch scope
+        _hr(source, [1, 2])
+        # A dependency load of the same batch on a fresh resolver and source.
+        _hr(ICUDataSource(load_src_cfg("eicu"), base_path=tmp_path / "eicu", enable_cache=False), [1, 2])
+        assert stay_table_reads() - before == 1
+        _hr(source, [3, 4])  # the next batch
+        assert stay_table_reads() - before == 2
 
 
 def test_batch_clip_equals_a_clip_from_the_whole_table(tmp_path):

@@ -2152,6 +2152,13 @@ class ConceptResolver:
                 logger.info("✅  概念 '%s' 已加载 (行数: %s)", name, row_count)
             return name, concept_table
 
+        if is_top_level:
+            # The stay-table batch this call reads under: the enclosing one
+            # (a streamed export's batch) or this call alone, released when
+            # it returns (``concept.stay_tables``).
+            from .stay_tables import open_stay_table_batch
+
+            self._stay_batch, self._stay_batch_close = open_stay_table_batch()
         try:
             results: Dict[str, ICUTable] = {}
             if effective_workers > 1 and total > 1:
@@ -2413,6 +2420,11 @@ class ConceptResolver:
         finally:
             # 🔧 嵌套调用深度跟踪：减少深度计数器
             self._load_depth -= 1
+            if is_top_level:
+                close_stay_batch = self.__dict__.pop("_stay_batch_close", None)
+                self.__dict__.pop("_stay_batch", None)
+                if close_stay_batch is not None:
+                    close_stay_batch()
             # 🔧 只有顶层调用才清除概念缓存和inflight，避免递归概念内部调用清除外层所需的缓存
             if is_top_level:
                 with self._cache_lock:
@@ -6378,7 +6390,11 @@ class ConceptResolver:
             # One process-level owner per batch: the resolvers of one batch (a
             # module's load and its dependency loads) share the read. It is
             # released at the batch boundary and when the batch changes.
-            frame = stay_table_frame(binding, scope, read)
+            # Keyed by the batch too: a finished call's frame is never met
+            # by a later call outside its batch.
+            frame = stay_table_frame(
+                binding, (getattr(self, "_stay_batch", None), scope), read
+            )
         if wanted is not None:
             column = next(c for c in frame.columns if c.casefold() == id_col.casefold())
             frame = frame.loc[frame[column].isin(wanted)].reset_index(drop=True)

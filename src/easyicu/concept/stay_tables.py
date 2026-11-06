@@ -20,19 +20,27 @@ Every lookup resolves and stats the files again (no data is re-read):
 - a source without validated files (an in-memory or CSV source) is its own
   identity and shares nothing with other source objects.
 
-Lifetime: one batch scope. An entry lives only while its scope is the
-latest one (another scope evicts it) and is released at the streamed batch
-boundary by ``clear_stay_tables`` (``api.extraction`` calls it with the
-batch's loaders). A resolver's unscoped (whole-cohort) memo uses the same
+Lifetime: one batch scope (:func:`stay_table_batch`). A streamed export
+opens one around its batches, so a module's load and its dependency loads
+(several top-level calls, several resolvers) share the read; the batch
+boundary releases it (``clear_stay_tables``, called by ``api.extraction``
+with the batch's loaders). A top-level ``load_concepts`` outside any batch
+is its own batch and releases its entries when it returns, so a later call
+in the same process (a rerun, another read path) reads the current files
+instead of meeting a frame held from a finished call (Codex delta5). Within
+a scope an entry lives only while its stays are the latest ones (another
+stay set evicts it). A resolver's unscoped (whole-cohort) memo uses the same
 binding check through ``checked_memo_frame``.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import contextvars
 from dataclasses import dataclass
 import os
 import threading
-from typing import Callable
+from typing import Callable, Iterator, Optional
 
 import pandas as pd
 
@@ -69,6 +77,50 @@ class _Entry:
 _LOCK = threading.RLock()
 _STORE: dict[tuple, _Entry] = {}
 _READS = {"count": 0}
+_BATCH: contextvars.ContextVar = contextvars.ContextVar("easyicu_stay_table_batch", default=None)
+
+
+def open_stay_table_batch() -> tuple[object, Optional[Callable[[], None]]]:
+    """Join the active batch, or open one: ``(token, close)``.
+
+    ``close`` is None when an enclosing batch is active (it owns the
+    release); otherwise calling it ends this batch and releases every entry
+    read under it.
+    """
+    active = _BATCH.get()
+    if active is not None:
+        return active, None
+    token = object()
+    reset = _BATCH.set(token)
+
+    def close() -> None:
+        try:
+            _BATCH.reset(reset)
+        except ValueError:  # closed from another context than it was opened in
+            _BATCH.set(None)
+        _release(token)
+
+    return token, close
+
+
+@contextmanager
+def stay_table_batch() -> Iterator[object]:
+    """One batch: every top-level load inside it shares the stay-table reads."""
+    token, close = open_stay_table_batch()
+    try:
+        yield token
+    finally:
+        if close is not None:
+            close()
+
+
+def _release(token: object) -> None:
+    with _LOCK:
+        for key in [
+            k for k in _STORE
+            if isinstance(k[-1], tuple) and k[-1] and k[-1][0] is token
+        ]:
+            del _STORE[key]
 
 
 def _versions(table: str, paths) -> tuple:

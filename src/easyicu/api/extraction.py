@@ -2810,15 +2810,18 @@ def _write_isolated_stream_batch(
     frame = None
     table = None
     try:
-        batch = _load_stream_module_batch(
-            _lc,
-            module_name=module_name,
-            concepts=concepts,
-            load_kwargs=load_kwargs,
-            patient_ids=patient_ids,
-            loader=None,
-            pyarrow_module=pa,
-        )
+        from ..concept.stay_tables import stay_table_batch
+
+        with stay_table_batch():
+            batch = _load_stream_module_batch(
+                _lc,
+                module_name=module_name,
+                concepts=concepts,
+                load_kwargs=load_kwargs,
+                patient_ids=patient_ids,
+                loader=None,
+                pyarrow_module=pa,
+            )
         frame = _normalise_module_frame_for_parquet(
             batch,
             concepts,
@@ -3645,16 +3648,22 @@ def _run_module_extraction(
                     "streamed module export requires patient_ids and batch_size"
                 )
             streamed = True
-            stream_info = _stream_module_batches_to_parquet(
-                module_name,
-                concepts,
-                kwargs,
-                patient_ids_filter,
-                int(batch_size),
-                output_dir,
-                loader=loader,
-                adaptive_batch_growth=adaptive_stream_batches,
-            )
+            from ..concept.stay_tables import stay_table_batch
+
+            # One stay-table batch scope across the module's loads: a batch's
+            # module and dependency loads share the read; the batch boundary
+            # releases it (_clear_stream_loader_caches).
+            with stay_table_batch():
+                stream_info = _stream_module_batches_to_parquet(
+                    module_name,
+                    concepts,
+                    kwargs,
+                    patient_ids_filter,
+                    int(batch_size),
+                    output_dir,
+                    loader=loader,
+                    adaptive_batch_growth=adaptive_stream_batches,
+                )
             if stream_info is not None:
                 saved[module_name] = stream_info
         else:
