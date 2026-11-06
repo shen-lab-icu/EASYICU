@@ -4,11 +4,13 @@ This module owns the code identity recorded in every native export's
 ``runtime_provenance``. The identity comes from one of three sources, in order:
 
 ``git_checkout``
-    The imported package is ``<checkout>/src/easyicu`` of a Git checkout whose
-    top level is exactly that checkout. A package that merely sits somewhere
-    inside another repository (a virtual environment under a checkout, a copied
-    tree under an unrelated repository) is not that checkout and never borrows
-    its commit.
+    The imported package (symlinks resolved) is exactly ``<root>/src/easyicu``,
+    ``<root>`` is the Git top level, its ``pyproject.toml`` names the EasyICU
+    project, and Git tracks the imported package there (``__init__.py`` and
+    this module). A package anywhere else inside a repository (vendored,
+    installed into ``site-packages`` or a target directory under a checkout, a
+    look-alike copy whose files Git does not track, or a symlink into any of
+    these) is not that checkout and never borrows its commit.
 ``build_stamp``
     The package was built from a Git checkout and carries the
     ``_build_identity.json`` stamp written at build time (wheel, sdist, desktop
@@ -25,6 +27,7 @@ import hashlib
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -37,6 +40,9 @@ SOURCE_UNKNOWN = "unknown"
 
 REASON_UNAVAILABLE = "code_identity_unavailable"
 REASON_STAMP_INVALID = "code_identity_stamp_invalid"
+
+PROJECT_NAME = "easyicu"
+_TRACKED = ("src/easyicu/__init__.py", "src/easyicu/code_identity.py")
 
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -53,15 +59,31 @@ def _git(repository: Path, *arguments: str, text: bool = True) -> Any:
     ).stdout
 
 
+def _is_easyicu_project(root: Path) -> bool:
+    try:
+        with (root / "pyproject.toml").open("rb") as handle:
+            project = tomllib.load(handle).get("project") or {}
+    except (OSError, ValueError):
+        return False
+    return project.get("name") == PROJECT_NAME
+
+
 def git_checkout_identity(repository_root: Path) -> Optional[Dict[str, Any]]:
-    """Return the identity of ``repository_root`` when it is itself a Git checkout."""
+    """Return the identity of ``repository_root`` when it is an EasyICU checkout.
+
+    ``repository_root`` must be the Git top level, hold the EasyICU project
+    metadata, and track the package files that are imported from it.
+    """
 
     root = Path(repository_root).resolve()
+    if not _is_easyicu_project(root):
+        return None
     try:
         top_level = Path(_git(root, "rev-parse", "--show-toplevel").strip()).resolve()
+        if top_level != root:
+            return None
+        _git(root, "ls-files", "--error-unmatch", "--", *_TRACKED)
     except (OSError, subprocess.SubprocessError, ValueError):
-        return None
-    if top_level != root:
         return None
     try:
         commit = _git(root, "rev-parse", "HEAD").strip()
@@ -110,6 +132,7 @@ def _stamp_identity(package_root: Path) -> Optional[Dict[str, Any]]:
         and isinstance(payload.get("commit"), str)
         and _COMMIT.fullmatch(payload["commit"]) is not None
         and isinstance(payload.get("dirty"), bool)
+        and "diff_sha256" in payload
         and (
             (payload["dirty"] and isinstance(payload.get("diff_sha256"), str)
              and _SHA256.fullmatch(payload["diff_sha256"]) is not None)
@@ -141,9 +164,10 @@ def resolve_code_identity(package_root: Path) -> Dict[str, Any]:
     """Resolve the identity of the imported ``easyicu`` package at ``package_root``."""
 
     root = Path(package_root).resolve()
-    identity = git_checkout_identity(root.parents[1])
-    if identity is not None:
-        return identity
+    if root.name == PROJECT_NAME and root.parent.name == "src":
+        identity = git_checkout_identity(root.parent.parent)
+        if identity is not None:
+            return identity
     stamp = _stamp_identity(root)
     if stamp is not None:
         return stamp

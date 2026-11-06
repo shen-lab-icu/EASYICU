@@ -143,3 +143,105 @@ def test_a_package_inside_another_repository_never_borrows_its_commit(tmp_path):
 
     assert identity["source"] == code_identity.SOURCE_UNKNOWN
     assert identity["commit"] is None
+
+
+# delta7p D7P-OUTER-HEAD: git_checkout only for <root>/src/easyicu where <root>
+# is the Git top level, names the EasyICU project, and tracks the package.
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+
+
+def _repo(root: Path, *, name: str | None, tracked: tuple[str, ...], untracked=()) -> Path:
+    root.mkdir(parents=True)
+    _git("init", "-q", cwd=root)
+    (root / "README").write_text("r\n")
+    if name is not None:
+        (root / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0"\n')
+    for relative in (*tracked, *untracked):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# x\n")
+    _git("add", "README", *(["pyproject.toml"] if name is not None else []), *tracked, cwd=root)
+    _git(
+        "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "commit", "-q", "-m", "r", cwd=root,
+    )
+    return root
+
+
+_PACKAGE_FILES = ("__init__.py", "code_identity.py")
+
+
+def _assert_not_borrowed(package: Path) -> None:
+    identity = code_identity.resolve_code_identity(package)
+    assert identity["source"] == code_identity.SOURCE_UNKNOWN
+    assert identity["reason_code"] == code_identity.REASON_UNAVAILABLE
+    assert identity["commit"] is None
+
+
+@needs_git
+def test_an_easyicu_checkout_with_the_package_tracked_is_a_git_checkout(tmp_path):
+    root = _repo(
+        tmp_path / "checkout", name="easyicu",
+        tracked=tuple(f"src/easyicu/{f}" for f in _PACKAGE_FILES),
+    )
+
+    identity = code_identity.resolve_code_identity(root / "src" / "easyicu")
+
+    assert identity["source"] == code_identity.SOURCE_GIT_CHECKOUT
+    assert identity["commit"] == _git("rev-parse", "HEAD", cwd=root)
+    assert identity["dirty"] is False
+
+
+@needs_git
+def test_a_vendored_install_inside_another_repository_is_not_a_checkout(tmp_path):
+    outer = _repo(
+        tmp_path / "outer", name="other-project",
+        tracked=tuple(f"vendor/easyicu/{f}" for f in _PACKAGE_FILES),
+    )
+    _assert_not_borrowed(outer / "vendor" / "easyicu")
+
+
+@needs_git
+def test_a_package_under_src_of_a_different_project_is_not_a_checkout(tmp_path):
+    outer = _repo(
+        tmp_path / "outer", name="other-project",
+        tracked=tuple(f"src/easyicu/{f}" for f in _PACKAGE_FILES),
+    )
+    _assert_not_borrowed(outer / "src" / "easyicu")
+
+
+@needs_git
+def test_a_look_alike_tree_whose_package_git_does_not_track_is_not_a_checkout(tmp_path):
+    outer = _repo(
+        tmp_path / "lookalike", name="easyicu", tracked=(),
+        untracked=tuple(f"src/easyicu/{f}" for f in _PACKAGE_FILES),
+    )
+    _assert_not_borrowed(outer / "src" / "easyicu")
+
+
+@needs_git
+def test_a_symlinked_package_is_judged_where_it_really_lives(tmp_path):
+    outer = _repo(
+        tmp_path / "outer", name="other-project",
+        tracked=tuple(f"vendor/easyicu/{f}" for f in _PACKAGE_FILES),
+    )
+    link = tmp_path / "shim" / "src" / "easyicu"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(outer / "vendor" / "easyicu", target_is_directory=True)
+
+    _assert_not_borrowed(link)
+
+
+def test_a_stamp_without_every_field_is_a_typed_unknown(tmp_path):
+    package = tmp_path / "site" / "lib" / "easyicu"
+    package.mkdir(parents=True)
+    (package / code_identity.BUILD_IDENTITY_FILE).write_text(json.dumps({
+        "schema": code_identity.BUILD_IDENTITY_SCHEMA,
+        "version": "0.1.0", "commit": "a" * 40, "dirty": False,
+    }))
+
+    identity = code_identity.resolve_code_identity(package)
+
+    assert identity["source"] == code_identity.SOURCE_UNKNOWN
+    assert identity["reason_code"] == code_identity.REASON_STAMP_INVALID
