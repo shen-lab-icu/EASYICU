@@ -20,7 +20,7 @@ from easyicu import source_bounds
 from easyicu.concept.aggregation_route import force_raw_aggregation
 from easyicu.source_bounds import SourceBoundsAuditError, collect_bounds_drops
 from easyicu.value_failures import TYPED_VALUE_FAILURES
-from tests.core.test_bounds_drops_batch_invariant import _STAYS, _eicu, _sic
+from tests.support.bounds_sources import _STAYS, _eicu, _sic
 from tests.support.urine_raw_source import _load
 
 pytestmark = pytest.mark.filterwarnings("ignore")
