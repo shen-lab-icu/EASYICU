@@ -5,9 +5,10 @@ top-level ``load_concepts`` opens one, or joins the run's. It is released on
 every exit path (return, exception, ``KeyboardInterrupt``), so a rerun after
 a refused batch reads the stable installation again. Concurrent top-level
 calls never share or evict each other's payload. On one shared resolver a
-second context's call waits for the first instead of being taken for a
-nested call. A streamed run binds once, drops each batch's payload at the
-batch clear, and leaves nothing held after a memory retry or an isolated
+call from another context is refused at once with ``ResolverBusyError``
+(never waits, never taken for a nested call); a ``copy_context`` worker joins
+the running call. A streamed run binds once, drops each batch's payload at
+the batch clear, and leaves nothing held after a memory retry or an isolated
 batch. Rows are synthetic.
 """
 
@@ -16,6 +17,8 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +33,7 @@ from easyicu.concept.stay_tables import (
     held_stay_tables,
     stay_table_reads,
 )
+from easyicu.resolver_errors import ResolverBusyError
 from easyicu.resources import load_dictionary
 from easyicu.storage_binding import active_unit, binding_unit, live_units
 from tests.support.inprocess_extraction import inprocess_mp_context
@@ -143,30 +147,33 @@ def test_a_touch_between_calls_is_read_again_and_a_rerun_after_a_refusal_succeed
     _released(resolver)
 
 
-@pytest.mark.parametrize("shared", [False, True], ids=["own-resolvers", "shared-resolver"])
-def test_concurrent_top_level_calls_neither_share_nor_refuse(tmp_path, monkeypatch, shared):
-    source = _eicu(tmp_path / "eicu")
-    stay_sets = ([1, 2], [1, 2], [2, 3])
-    serial = {tuple(s): _load(_resolver(), source, s) for s in ({1, 2}, {2, 3})}
-    common = _resolver()
+def _slow_first_read(monkeypatch):
+    """Hold the first stay-table read open so other calls start while it is live."""
     first_inside = threading.Event()
     real = stay_tables.stay_table_frame
 
     def slow_first(data_source, table, stays, read, **kwargs):
         if not first_inside.is_set():
             first_inside.set()
-            time.sleep(0.5)  # the other calls start while this one is live
+            time.sleep(0.5)
         return real(data_source, table, stays, read, **kwargs)
 
     monkeypatch.setattr(stay_tables, "stay_table_frame", slow_first)
+    return first_inside
+
+
+def test_concurrent_top_level_calls_on_own_resolvers_neither_share_nor_refuse(tmp_path, monkeypatch):
+    source = _eicu(tmp_path / "eicu")
+    stay_sets = ([1, 2], [1, 2], [2, 3])
+    serial = {tuple(s): _load(_resolver(), source, s) for s in ({1, 2}, {2, 3})}
+    first_inside = _slow_first_read(monkeypatch)
     results: dict = {}
 
     def call(index, stays):
-        resolver = common if shared else _resolver()
         if index:
             first_inside.wait(timeout=60)
         try:
-            results[index] = _load(resolver, source, stays)
+            results[index] = _load(_resolver(), source, stays)
         except Exception as error:  # noqa: BLE001 - reported by the assertion below
             results[index] = error
 
@@ -182,14 +189,87 @@ def test_concurrent_top_level_calls_neither_share_nor_refuse(tmp_path, monkeypat
         pd.testing.assert_frame_equal(results[index], serial[tuple(stays)], check_exact=True)
     # Each call is its own unit: no payload is shared across calls.
     assert stay_table_reads() - before == len(stay_sets)
-    _released(common)
+    _released()
 
 
-def test_concurrent_calls_with_concept_worker_pools_do_not_deadlock(tmp_path):
+def test_two_overlapping_top_level_calls_on_one_shared_resolver_one_is_refused_busy(tmp_path, monkeypatch):
+    """A second context's call is refused at once; it neither waits nor nests."""
+    source = _eicu(tmp_path / "eicu")
+    expected = _load(_resolver(), source, _IDS)
+    shared = _resolver()
+    first_inside = _slow_first_read(monkeypatch)
+    results: dict = {}
+    timings: dict = {}
+
+    def first():
+        results["first"] = _load(shared, source, _IDS)
+
+    def second():
+        assert first_inside.wait(timeout=60)  # the first call is live now
+        started = time.monotonic()
+        try:
+            results["second"] = _load(shared, source, _IDS)
+        except BaseException as error:  # noqa: BLE001 - asserted below
+            results["second"] = error
+        timings["second"] = time.monotonic() - started
+        timings["first_alive"] = runner.is_alive()
+
+    runner = threading.Thread(target=first, daemon=True)
+    other = threading.Thread(target=second, daemon=True)
+    runner.start()
+    other.start()
+    other.join(timeout=60)
+    runner.join(timeout=60)
+    assert not runner.is_alive() and not other.is_alive(), "a call never returned"
+    busy = results["second"]
+    assert isinstance(busy, ResolverBusyError), busy
+    assert busy.reason == "resolver_busy"
+    assert "copy_context" in str(busy) and "separate resolver" in str(busy)
+    assert timings["first_alive"] is True  # refused while the first call was still running
+    assert timings["second"] < 0.4  # at once, not after the first call finished
+    pd.testing.assert_frame_equal(results["first"], expected, check_exact=True)
+    _released(shared)
+    # The refusal held nothing: the resolver serves the next call.
+    pd.testing.assert_frame_equal(_load(shared, source, _IDS), expected, check_exact=True)
+    _released(shared)
+
+
+def test_a_plain_pool_reentry_into_a_running_call_is_refused_busy_not_deadlocked(tmp_path, monkeypatch):
+    """A plain ThreadPoolExecutor worker does not carry the call's context."""
+    source = _eicu(tmp_path / "eicu")
+    expected = _load(_resolver(), source, _IDS)
+    resolver = _resolver()
+    real = stay_tables.stay_table_frame
+    seen: dict = {}
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def reenter_from_plain_pool(data_source, table, stays, read, **kwargs):
+        if "outcome" not in seen:
+            seen["outcome"] = None
+            future = pool.submit(_load, resolver, source, [1])
+            try:
+                future.result(timeout=30)  # guard: a regression fails here, it does not hang
+                seen["outcome"] = "returned"
+            except FutureTimeout:
+                seen["outcome"] = "hung"
+            except ResolverBusyError as error:
+                seen["outcome"] = error
+        return real(data_source, table, stays, read, **kwargs)
+
+    monkeypatch.setattr(stay_tables, "stay_table_frame", reenter_from_plain_pool)
+    try:
+        result = _load(resolver, source, _IDS)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    assert isinstance(seen["outcome"], ResolverBusyError), seen["outcome"]
+    pd.testing.assert_frame_equal(result, expected, check_exact=True)
+    _released(resolver)
+
+
+def test_copy_context_concept_workers_join_their_call_without_deadlock(tmp_path):
     """Lock ordering: a call's concept workers (copied context) never take the call lock."""
     source = _eicu(tmp_path / "eicu")
     names = ["pap_mean", "pap_sys", "pap_dia", "hr"]
-    shared = _resolver()
 
     def load(resolver):
         return resolver.load_concepts(
@@ -198,11 +278,16 @@ def test_concurrent_calls_with_concept_worker_pools_do_not_deadlock(tmp_path):
         )
 
     expected = load(_resolver())
+    shared = _resolver()
+    # One shared resolver, repeated calls with a worker pool: every worker joins.
+    for _ in range(2):
+        pd.testing.assert_frame_equal(load(shared), expected, check_exact=True)
+        _released(shared)
     results: dict = {}
 
     def call(index):
         try:
-            results[index] = load(shared)
+            results[index] = load(_resolver())
         except BaseException as error:  # noqa: BLE001 - reported below
             results[index] = error
 
@@ -215,7 +300,7 @@ def test_concurrent_calls_with_concept_worker_pools_do_not_deadlock(tmp_path):
     for index in range(3):
         assert isinstance(results[index], pd.DataFrame), results[index]
         pd.testing.assert_frame_equal(results[index], expected, check_exact=True)
-    _released(shared)
+    _released()
 
 
 def test_a_nested_call_from_a_copied_context_thread_joins_the_outer_call(tmp_path, monkeypatch):

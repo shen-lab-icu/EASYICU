@@ -752,6 +752,7 @@ def _in_binding_unit(method):
 
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        from ..resolver_errors import ResolverBusyError
         from ..storage_binding import active_unit, binding_unit
         from .stay_tables import StayTableUnbound
 
@@ -763,11 +764,15 @@ def _in_binding_unit(method):
                 raise StayTableUnbound("load_concepts")
             return method(self, *args, **kwargs)
         # A top-level call in this context. The resolver's per-call state
-        # (depth, batch scope, request caches) is per instance, so another
-        # context's top-level call on the same resolver (a concurrent
-        # request on a shared loader) waits for this one instead of being
-        # taken for a nested call (B-STAY-SCOPE).
-        with _top_level_call_lock(self):
+        # (depth, batch scope, request caches) is per instance, so one
+        # top-level call runs at a time (B-STAY-SCOPE). Another context's
+        # call is refused at once, never made to wait: a plain thread-pool
+        # worker re-entering the resolver while the call holding it waits
+        # for that worker would wait forever (B18-REENTRY-DEADLOCK).
+        lock = _top_level_call_lock(self)
+        if not lock.acquire(blocking=False):
+            raise ResolverBusyError(id(self))
+        try:
             if getattr(self, "_load_depth", 0):
                 # No call of this resolver is live (this context holds its
                 # lock), yet it looks nested: the outer call and its unit are
@@ -784,6 +789,8 @@ def _in_binding_unit(method):
                             self._end_top_level_load()
             finally:
                 _RESOLVER_CALLS.reset(token)
+        finally:
+            lock.release()
 
     return wrapper
 

@@ -7,6 +7,17 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK]
+
+**What changed.** Values do not move. A `ConceptResolver` runs one top-level
+`load_concepts` call at a time. A call from another context while one is
+running is refused at once with `ResolverBusyError` (`resolver_busy`, a typed
+value failure) instead of waiting, so a plain thread-pool worker that
+re-enters a running call can no longer deadlock it. Work that re-enters the
+running call joins it when run with `contextvars.copy_context().run` (the
+built-in concept workers already do this). Concurrent callers use one
+resolver each.
+
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 
 **What changed.** A concept loaded through DuckDB hourly aggregation now
