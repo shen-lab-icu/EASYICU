@@ -52,10 +52,13 @@ def _miiv(root):
 def test_the_shared_tuple_names_every_type():
     # lead-r13 delta4: the exact-sum refusal (D4-EXACT-CATCH) and the undeclared
     # time-axis unit (D4-AXIS-CATCH) are value failures too; a broad catch must
-    # not turn them into an empty or unaggregated result.
+    # not turn them into an empty or unaggregated result. So is a failure to
+    # count the source-bounds drops (Codex delta7x B-AUDIT-CATCH).
+    from easyicu.source_bounds import SourceBoundsAuditError
+
     assert set(TYPED_VALUE_FAILURES) == {
         IntervalAggregationError, StorageIntegrityError, ExactSumOverflowError,
-        TimeAxisUnitError,
+        TimeAxisUnitError, SourceBoundsAuditError,
     }
 
 

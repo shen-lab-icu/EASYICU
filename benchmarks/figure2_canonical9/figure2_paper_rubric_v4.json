@@ -1178,6 +1178,7 @@
     "src/easyicu/scores/urine_output.py",
     "src/easyicu/scores/urine_windows.py",
     "src/easyicu/scripts/extract_features.py",
+    "src/easyicu/source_bounds.py",
     "src/easyicu/source_death_times.py",
     "src/easyicu/state_paths.py",
     "src/easyicu/storage_layout.py",
@@ -1549,7 +1550,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "ade1e6584516c588611aa7ba2ad3a077fa472a84c6852f59caae008b80e373ca",
+  "scorer_tree_sha256": "67c601f90ad2ad054747bae884e7e006986f0ff157b337bfa3e03cd3110187b3",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

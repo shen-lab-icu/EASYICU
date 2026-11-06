@@ -19,6 +19,12 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 import pandas as pd
 
 from ..base import BaseICULoader, detect_database_type, get_default_data_path
+from ..source_bounds import (
+    accounting as source_bounds_accounting,
+    bounds_scope,
+    bounds_totals,
+    merge_bounds_drops,
+)
 from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
@@ -2172,8 +2178,6 @@ _BOUNDS_METADATA_KEYS = (
     "bounds_raw_transformed_non_null",
     "bounds_bounded_transformed_non_null",
     "bounds_bounded_aggregate_non_null",
-    "bounds_unit_suspect",
-    "bounds_unbounded_retry",
     "bounds_skipped",
     "bounds_status",
 )
@@ -2267,26 +2271,15 @@ def _enforce_concept_bounds(df, concept_name):
     mn, mx = bnd
     v = _pd.to_numeric(df[concept_name], errors="coerce")
     numeric = v.notna()
-    # A median outside [min, max] used to skip enforcement as "probably another
-    # unit" (sentinel -1). Whether it skipped depended on the rows in the frame,
-    # so the frame's values now contradict the declared bounds and it refuses
-    # (lead-r13 magnitude/format sweep #14). The SQL loader refuses the same
-    # case instead of retrying without bounds.
-    if mn is not None and mx is not None and int(numeric.sum()) >= 100:
-        med = float(v[numeric].median())
-        if med < mn or med > mx:
-            from ..utils.declared_units import UndeclaredUnitError
-
-            raise UndeclaredUnitError(
-                reason="bounds_unit_suspect", quantity=str(concept_name),
-                site="api.extraction._enforce_concept_bounds",
-                detail=f"median {med:g} of {int(numeric.sum())} values lies outside [{mn}, {mx}]",
-            )
     in_range = _pd.Series(True, index=df.index)
     if mn is not None:
         in_range &= v >= mn
     if mx is not None:
         in_range &= v <= mx
+    # A median outside [min, max] used to skip enforcement as "probably another
+    # unit" (sentinel -1); whether it skipped depended on the rows in the frame
+    # (lead-r13 magnitude/format sweep #14). Values are dropped per row, as in
+    # ricu, whatever else the frame holds (lead-r13 bounds ruling).
     # keep non-numeric/missing rows (NaN is "missing", not "out of range") and
     # numeric rows that are within [min, max]; drop only genuine out-of-range values.
     keep = (~numeric) | in_range
@@ -2770,6 +2763,11 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     return result
 
 
+def _stream_batch_bounds_sidecar(part: Path) -> Path:
+    """Where an isolated batch process leaves its bounds counts for the parent."""
+    return Path(part).with_name(f".{Path(part).name}.bounds.json")
+
+
 def _load_stream_module_batch(
     load_concepts_fn,
     *,
@@ -2844,22 +2842,29 @@ def _write_isolated_stream_batch(
     batch = None
     frame = None
     table = None
+    # This batch's bounds counts go back to the parent beside its part, and
+    # only when the batch succeeded (a killed child leaves none).
+    bounds_sidecar = _stream_batch_bounds_sidecar(target)
+    bounds_sidecar.unlink(missing_ok=True)
     try:
-        batch = _load_stream_module_batch(
-            _lc,
-            module_name=module_name,
-            concepts=concepts,
-            load_kwargs=load_kwargs,
-            patient_ids=patient_ids,
-            loader=None,
-            pyarrow_module=pa,
-        )
+        with bounds_scope() as bounds_records:
+            batch = _load_stream_module_batch(
+                _lc,
+                module_name=module_name,
+                concepts=concepts,
+                load_kwargs=load_kwargs,
+                patient_ids=patient_ids,
+                loader=None,
+                pyarrow_module=pa,
+            )
         frame = _normalise_module_frame_for_parquet(
             batch,
             concepts,
             reorder=False,
         )
         if frame is None:
+            with source_bounds_accounting("isolated_batch_hand_off"):
+                _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
             return
         id_col, requested_ids = next(iter(patient_ids.items()))
         if id_col in frame.columns:
@@ -2879,6 +2884,8 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
+        with source_bounds_accounting("isolated_batch_hand_off"):
+            _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
     except BaseException as exc:
         # The parent classifies the exit from evidence, not from text: say
         # whether a memory exception (by type) stopped this child.
@@ -3363,6 +3370,7 @@ def _stream_module_batches_to_parquet(
             frame = None
             output_rows = 0
             part_name = None
+            batch_bounds: Dict = {}
             batch_part = destination.with_name(f".{module_name}.batch-{index:05d}.parquet")
             if batch_part.exists() or batch_part.is_symlink():
                 # An uncommitted part of a killed attempt (the ledger did not
@@ -3461,21 +3469,32 @@ def _stream_module_batches_to_parquet(
                         if evidence:
                             raise StreamBatchMemoryExhausted(message, **failure)
                         raise StreamBatchWorkerKilled(message, failure_class, **failure)
+                    with source_bounds_accounting(f"isolated_batch_hand_back[{module_name}:{index}]"):
+                        bounds_sidecar = _stream_batch_bounds_sidecar(batch_part)
+                        if not bounds_sidecar.is_file():
+                            raise FileNotFoundError(
+                                f"isolated batch {index} left no bounds counts"
+                            )
+                        batch_bounds = json.loads(bounds_sidecar.read_text(encoding="utf-8"))
+                        bounds_sidecar.unlink()
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
                         if schema is None:
                             schema = pq.read_schema(batch_part)
                 else:
-                    batch = _load_stream_module_batch(
-                        _lc,
-                        module_name=module_name,
-                        concepts=concepts,
-                        load_kwargs=batch_load_kwargs,
-                        patient_ids={id_col: batch_ids},
-                        loader=loader,
-                        pyarrow_module=pa,
-                    )
+                    with bounds_scope() as bounds_records:
+                        batch = _load_stream_module_batch(
+                            _lc,
+                            module_name=module_name,
+                            concepts=concepts,
+                            load_kwargs=batch_load_kwargs,
+                            patient_ids={id_col: batch_ids},
+                            loader=loader,
+                            pyarrow_module=pa,
+                        )
+                    with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
+                        batch_bounds = bounds_totals(bounds_records)
                     frame = _normalise_module_frame_for_parquet(
                         batch,
                         concepts,
@@ -3521,6 +3540,8 @@ def _stream_module_batches_to_parquet(
                     "output_rows": output_rows,
                     "batch_process_isolation": isolate_batch_process,
                     "part": part_name,
+                    # Committed with the batch: a resumed run sums these.
+                    "source_bounds": batch_bounds,
                     **batch_memory,
                 }
             )
@@ -3589,8 +3610,12 @@ def _stream_module_batches_to_parquet(
         "rows": rows,
         "concepts": [name for name in concepts if name in produced_concepts],
         "stream_batches": [
-            {k: v for k, v in b.items() if k != "part"} for b in batch_telemetry
+            {k: v for k, v in b.items() if k not in ("part", "source_bounds")}
+            for b in batch_telemetry
         ],
+        "source_bounds": merge_bounds_drops(
+            *(b.get("source_bounds") for b in batch_telemetry)
+        ),
         "stream_resume_events": resume_events,
         "initial_batch_size": int(initial_batch_size),
         "final_planned_batch_size": current_batch_size,
@@ -3673,6 +3698,10 @@ def _run_module_extraction(
     result = None
     memory_exhausted = False
     stream_failure = None
+    # Bounds counts of a whole-module load (a streamed module commits its
+    # own per batch); a retried load starts its counts afresh.
+    module_bounds_scope = bounds_scope()
+    module_bounds_records = module_bounds_scope.__enter__()
     try:
         if stream_output_batches:
             if not patient_ids_filter or not batch_size:
@@ -3725,6 +3754,7 @@ def _run_module_extraction(
                 f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
             )
             kwargs["batch_size"] = fallback_bs
+            module_bounds_records.clear()
             try:
                 result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
@@ -3751,6 +3781,8 @@ def _run_module_extraction(
         # is retried like a memory-killed worker; message text is not read.
         memory_exhausted = _is_memory_exception(e)
         result = {}
+    finally:
+        module_bounds_scope.__exit__(None, None, None)
 
     # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
     # 与 web 端(dataio.py)完全一致的成熟路径。**不再自造合并**——避免 endtime 列冲突、
@@ -3803,6 +3835,11 @@ def _run_module_extraction(
         "elapsed_sec": round(elapsed, 1),
         **memory_stats,
     }
+    manifest["source_bounds"] = (
+        dict(stream_info.get("source_bounds") or {})
+        if stream_info is not None
+        else ({} if errors else bounds_totals(module_bounds_records))
+    )
     if stream_info is not None:
         manifest["stream_batches"] = stream_info.get("stream_batches", [])
         manifest["initial_batch_size"] = stream_info.get("initial_batch_size")
@@ -6972,9 +7009,10 @@ def _try_publish_native_export_arrow_fast_path(
                 }
             else:
                 for concept, record in batch_bounds_audit.items():
-                    bounds_audit[concept]["excluded_out_of_bounds"] = int(
-                        bounds_audit[concept]["excluded_out_of_bounds"]
-                    ) + int(record["excluded_out_of_bounds"])
+                    for field in ("excluded_out_of_bounds", "stays_all_out_of_bounds"):
+                        bounds_audit[concept][field] = int(
+                            bounds_audit[concept].get(field, 0)
+                        ) + int(record.get(field, 0))
             if semantic_audit is None:
                 semantic_audit = {
                     concept: dict(record)
@@ -7284,6 +7322,7 @@ def _enforce_native_export_concept_bounds(
             minimum is not None or maximum is not None
         )
         excluded = 0
+        stays_all_out = 0
         if bounded:
             out_of_bounds = frame[concept].notna()
             if minimum is not None:
@@ -7296,11 +7335,26 @@ def _enforce_native_export_concept_bounds(
                 )
                 out_of_bounds |= above_maximum
             excluded = int(out_of_bounds.sum())
+            # Dropped per cell, whatever shares the frame (as in ricu); the
+            # stays whose every value is excluded are counted, never refused.
+            if excluded and "stay_id" in frame.columns:
+                present = frame[concept].notna()
+                per_stay = (
+                    pd.DataFrame({
+                        "stay": frame["stay_id"].to_numpy(),
+                        "present": present.to_numpy(),
+                        "kept": (present & ~out_of_bounds).to_numpy(),
+                    })
+                    .groupby("stay", sort=False, dropna=False)[["present", "kept"]]
+                    .sum()
+                )
+                stays_all_out = int(((per_stay["present"] > 0) & (per_stay["kept"] == 0)).sum())
             if excluded:
                 frame.loc[out_of_bounds, concept] = np.nan
 
         record: Dict[str, object] = {
             "excluded_out_of_bounds": excluded,
+            "stays_all_out_of_bounds": stays_all_out,
         }
         if bounded:
             record["declared_bounds"] = {
@@ -7711,9 +7765,10 @@ def _publish_native_export_v2(
                         database=normalized_database,
                     )
                     for concept, post_audit in post_consolidation_bounds.items():
-                        bounds_audit[concept]["excluded_out_of_bounds"] += int(
-                            post_audit["excluded_out_of_bounds"]
-                        )
+                        for field in ("excluded_out_of_bounds", "stays_all_out_of_bounds"):
+                            bounds_audit[concept][field] = int(
+                                bounds_audit[concept].get(field, 0)
+                            ) + int(post_audit.get(field, 0))
                 else:
                     # Null physical bound violations before taking a duplicate-key
                     # median; otherwise two invalid source values could average to
@@ -7840,6 +7895,15 @@ def _publish_native_export_v2(
                 "excluded_out_of_bounds": bounds_audit[concept][
                     "excluded_out_of_bounds"
                 ],
+                "stays_all_out_of_bounds": int(
+                    bounds_audit[concept].get("stays_all_out_of_bounds", 0)
+                ),
+                # Source values the loaders dropped by the declared bounds,
+                # per source table (source_bounds); counts only.
+                "source_bounds": dict(
+                    ((result["modules"].get(module) or {}).get("source_bounds") or {}).get(concept)
+                    or {}
+                ),
             }
             if concept in semantic_audit:
                 status["excluded_semantically_invalid"] = int(
@@ -8015,6 +8079,17 @@ def _publish_native_export_v2(
     if result.get("storage_fallbacks"):
         # Published (a corrupt cache falls back to its true source), but marked.
         manifest["storage_fallbacks"] = list(result["storage_fallbacks"])
+    # Values outside declared bounds are dropped, never refused: the receipt
+    # carries the totals and the release QC warns on suspect sources.
+    from ..io.data_quality import source_bounds_warnings
+
+    manifest["source_bounds_drops"] = {
+        module: dict((result["modules"].get(module) or {}).get("source_bounds") or {})
+        for module in modules
+    }
+    manifest["qc_warnings"] = {
+        "source_bounds_suspect": source_bounds_warnings(manifest["source_bounds_drops"]),
+    }
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -8518,6 +8593,7 @@ def extract_database(
             0.0,
         )
         mod_result["stream_batches"] = manifest.get("stream_batches", [])
+        mod_result["source_bounds"] = dict(manifest.get("source_bounds") or {})
         mod_result["batch_process_isolation"] = manifest.get(
             "batch_process_isolation",
             False,
@@ -8538,6 +8614,7 @@ def extract_database(
             "errors": mod_result["errors"],
             "warnings": mod_result["warnings"],
             "bounds": mod_result["bounds"],
+            "source_bounds": mod_result["source_bounds"],
             "elapsed_sec": mod_result["elapsed"],
             "start_rss_mb": manifest.get("start_rss_mb", 0.0),
             "peak_rss_mb": mod_result["peak_rss_mb"],

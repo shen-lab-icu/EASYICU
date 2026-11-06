@@ -3171,6 +3171,7 @@ def load_bucketed_table_aggregated(
     itemid_col: Optional[str] = None,
     retain_source_time: bool = False,
     icu_window: Optional["IcuEpisodeWindow"] = None,
+    source_bounds_concept: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -3424,7 +3425,7 @@ def load_bucketed_table_aggregated(
     # - value_transform (fahr_to_cels/percent_as_numeric): raw column 可能是 VARCHAR 或不同单位
     # - _has_inline_convert (binary_op(*, factor)): raw 值单位与 min/max 不同（如 µmol/L vs mg/dL）
     # 对这些路径不能在 WHERE 中按 raw column 过滤；下方会先转换每个原始值，
-    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 unit-suspect 审计。
+    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 source_bounds 记录。
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     
@@ -4143,39 +4144,26 @@ def load_bucketed_table_aggregated(
             bounded_aggregate_non_null = int(
                 pd.to_numeric(df[value_column], errors="coerce").notna().sum()
             )
-            unit_suspect = bool(
-                raw_non_null >= 100
-                and bounded_non_null == 0
-                and bounded_aggregate_non_null == 0
-            )
-            unbounded_retry = False
-            if unit_suspect:
-                # At least 100 values in this batch and none within the
-                # declared bounds. This used to retry without bounds and keep
-                # them as "probably another unit", a decision that depended on
-                # the batch: 99 values, or a single in-range one, dropped them
-                # all. The bounds are declared, and the values contradict them
-                # in this batch; refuse rather than guess (lead-r13
-                # magnitude/format sweep #14; it never fired on the
-                # six-database sample at batch 50 or one-shot).
-                from .utils.declared_units import UndeclaredUnitError
+            # Values outside the declared bounds are dropped per row, as in
+            # ricu, whatever shares this read; the counts are recorded per
+            # stay (lead-r13 bounds ruling: no refusal, no unit guess).
+            from .source_bounds import record_read_counts
 
-                raise UndeclaredUnitError(
-                    reason="bounds_unit_suspect",
-                    quantity=str(value_column),
-                    site=f"datasource.load_bucketed_table_aggregated[{db_name}.{table_name}]",
-                    detail=(
-                        f"{raw_non_null} values in this batch and none within the declared "
-                        f"bounds [{value_min}, {value_max}]"
-                    ),
-                )
+            record_read_counts(
+                database=db_name,
+                concept=source_bounds_concept or str(value_column),
+                table=table_name,
+                stays=patient_ids,
+                frame=df,
+                id_column=id_col if id_col in df.columns else df.columns[0],
+                raw_column=_raw_count_col,
+                bounded_column=_bounded_count_col,
+            )
             df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
             bounds_diagnostics = {
                 "bounds_raw_transformed_non_null": raw_non_null,
                 "bounds_bounded_transformed_non_null": bounded_non_null,
                 "bounds_bounded_aggregate_non_null": bounded_aggregate_non_null,
-                "bounds_unit_suspect": unit_suspect,
-                "bounds_unbounded_retry": unbounded_retry,
             }
             df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
         if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput":
@@ -4186,7 +4174,6 @@ def load_bucketed_table_aggregated(
             bounds_diagnostics is not None
             and not value_transform
             and not _has_inline_convert
-            and not bounds_diagnostics["bounds_unit_suspect"]
         ):
             # The former raw-value WHERE bounds omitted groups containing only
             # invalid values. Preserve that output shape while retaining the
@@ -4295,22 +4282,47 @@ def load_bucketed_table_multi_aggregated(
     _interval_seconds = interval_minutes * 60.0
 
     # ── Build CASE WHEN select expressions ─────────────────
-    select_exprs = []
-    for concept_name, ids in concept_itemids.items():
-        if ids_are_strings:
-            ids_sql = ", ".join(f"'{x}'" for x in ids)
-        else:
-            ids_sql = ", ".join(str(int(x)) for x in ids)
-        bounds = (concept_bounds or {}).get(concept_name, {})
-        value_conditions = [f"o.{itemid_col} IN ({ids_sql})"]
-        if bounds.get("min") is not None:
-            value_conditions.append(f"o.{value_column} >= {bounds['min']}")
-        if bounds.get("max") is not None:
-            value_conditions.append(f"o.{value_column} <= {bounds['max']}")
-        case_when = " AND ".join(value_conditions)
-        select_exprs.append(
-            f"{_multi_agg(f'CASE WHEN {case_when} THEN o.{value_column} END')} AS {concept_name}"
-        )
+    # A bounded concept also counts its values before and after the bounds;
+    # the per-stay counts are recorded (source_bounds), never used to decide.
+    _multi_raw_prefix = "__easyicu_multi_raw_non_null_"
+    _multi_bounded_prefix = "__easyicu_multi_bounded_non_null_"
+    _multi_bounded = []  # (concept, diagnostic suffix, bounds)
+
+    def _concept_select_exprs(prefix: str) -> List[str]:
+        exprs = []
+        for position, (concept_name, ids) in enumerate(concept_itemids.items()):
+            if ids_are_strings:
+                ids_sql = ", ".join(f"'{x}'" for x in ids)
+            else:
+                ids_sql = ", ".join(str(int(x)) for x in ids)
+            bounds = (concept_bounds or {}).get(concept_name, {})
+            item_match = f"{prefix}{itemid_col} IN ({ids_sql})"
+            value_conditions = [item_match]
+            if bounds.get("min") is not None:
+                value_conditions.append(f"{prefix}{value_column} >= {bounds['min']}")
+            if bounds.get("max") is not None:
+                value_conditions.append(f"{prefix}{value_column} <= {bounds['max']}")
+            case_when = " AND ".join(value_conditions)
+            exprs.append(
+                f"{_multi_agg(f'CASE WHEN {case_when} THEN {prefix}{value_column} END')} AS {concept_name}"
+            )
+            if bounds.get("min") is not None or bounds.get("max") is not None:
+                exprs.append(
+                    f"COUNT(CASE WHEN {item_match} THEN {prefix}{value_column} END) "
+                    f"AS {_multi_raw_prefix}{position}"
+                )
+                exprs.append(
+                    f"COUNT(CASE WHEN {case_when} THEN {prefix}{value_column} END) "
+                    f"AS {_multi_bounded_prefix}{position}"
+                )
+        return exprs
+
+    for _position, _concept in enumerate(concept_itemids):
+        _bounds = (concept_bounds or {}).get(_concept, {})
+        if _bounds.get("min") is not None or _bounds.get("max") is not None:
+            _multi_bounded.append((_concept, _position, _bounds))
+
+    select_exprs = _concept_select_exprs("o.")
     select_sql = ",\n            ".join(select_exprs)
 
     if ids_are_strings:
@@ -4412,22 +4424,7 @@ def load_bucketed_table_multi_aggregated(
                 f"EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 60.0 / 60.0", stay_col,
             )
             # Outer select expressions without table alias
-            _outer_select_exprs = []
-            for concept_name, ids in concept_itemids.items():
-                if ids_are_strings:
-                    ids_sql = ", ".join(f"'{x}'" for x in ids)
-                else:
-                    ids_sql = ", ".join(str(int(x)) for x in ids)
-                bounds = (concept_bounds or {}).get(concept_name, {})
-                value_conditions = [f"{itemid_col} IN ({ids_sql})"]
-                if bounds.get("min") is not None:
-                    value_conditions.append(f"{value_column} >= {bounds['min']}")
-                if bounds.get("max") is not None:
-                    value_conditions.append(f"{value_column} <= {bounds['max']}")
-                case_when = " AND ".join(value_conditions)
-                _outer_select_exprs.append(
-                    f"{_multi_agg(f'CASE WHEN {case_when} THEN {value_column} END')} AS {concept_name}"
-                )
+            _outer_select_exprs = _concept_select_exprs("")
             _outer_select_sql = ",\n                ".join(_outer_select_exprs)
 
             if patient_ids:
@@ -4660,6 +4657,22 @@ def load_bucketed_table_multi_aggregated(
                 df[_concept] = exact_terms_to_values(
                     df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
                 )
+    if _multi_bounded:
+        from .source_bounds import record_read_counts
+
+        _diagnostic_columns = []
+        _audit_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
+        for _concept, _position, _bounds in _multi_bounded:
+            _raw_col = f"{_multi_raw_prefix}{_position}"
+            _bounded_col = f"{_multi_bounded_prefix}{_position}"
+            _diagnostic_columns += [_raw_col, _bounded_col]
+            if _raw_col not in df.columns or _audit_id is None:
+                continue
+            record_read_counts(
+                database=db_name, concept=_concept, table=table_name, stays=patient_ids,
+                frame=df, id_column=_audit_id, raw_column=_raw_col, bounded_column=_bounded_col,
+            )
+        df = df.drop(columns=_diagnostic_columns, errors="ignore")
     df = finish_miiv_lab_frame(df)
     if _base_db == "sic":
         _mark_icu_relative_charttime(df)
@@ -4734,6 +4747,7 @@ def load_wide_table_aggregated(
     agg_func: str = 'median',  # 'median' (default, matches R ricu), 'first', 'mean', 'max', 'min'
     column_bounds: Optional[dict] = None,  # {col_name: (min_val, max_val)} for pre-aggregation filtering
     icu_window: Optional["IcuEpisodeWindow"] = None,
+    column_concepts: Optional[dict] = None,  # {col_name: [concept, ...]} names the bounds counts
 ) -> pd.DataFrame:
     """
     🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
@@ -4796,6 +4810,7 @@ def load_wide_table_aggregated(
                 agg_func=agg_func,
                 column_bounds=column_bounds,
                 icu_window=icu_window,
+                column_concepts=column_concepts,
             )
             chunk = chunk.sort_values(
                 key_columns,
@@ -4878,9 +4893,18 @@ def load_wide_table_aggregated(
     # 单次扫描，单次 GROUP BY，无 FULL OUTER JOIN 中间结果膨胀
     # 🔧 FIX: 使用 CASE WHEN 实现 per-column filter_bounds（R ricu pre-aggregation filtering）
     # 将超出 [min, max] 范围的值替换为 NULL，这样 MEDIAN 会忽略它们
+    # A bounded column also counts its values before and after the bounds; the
+    # per-stay counts are recorded (source_bounds), never used to decide.
+    _wide_raw_prefix = "__easyicu_wide_raw_non_null_"
+    _wide_bounded_prefix = "__easyicu_wide_bounded_non_null_"
+    _wide_bounded = []  # (column, position, (min, max))
+    for _position, _column in enumerate(value_columns):
+        _bounds = (column_bounds or {}).get(_column)
+        if _bounds and (_bounds[0] is not None or _bounds[1] is not None):
+            _wide_bounded.append((_column, _position, _bounds))
     if column_bounds:
         agg_parts = []
-        for col in value_columns:
+        for position, col in enumerate(value_columns):
             bounds = column_bounds.get(col)
             if bounds:
                 vmin, vmax = bounds
@@ -4891,6 +4915,14 @@ def load_wide_table_aggregated(
                     conditions.append(f"{col} <= {vmax}")
                 filter_expr = " AND ".join(conditions)
                 agg_parts.append(f"{_wide_agg(f'CASE WHEN {filter_expr} THEN {col} END')} as {col}")
+                if conditions:
+                    agg_parts.append(
+                        f"COUNT({col}) as {_wide_raw_prefix}{position}"
+                    )
+                    agg_parts.append(
+                        f"COUNT(CASE WHEN {filter_expr} THEN {col} END) "
+                        f"as {_wide_bounded_prefix}{position}"
+                    )
             else:
                 agg_parts.append(f"{_wide_agg(col)} as {col}")
         agg_exprs = ", ".join(agg_parts)
@@ -4920,7 +4952,7 @@ def load_wide_table_aggregated(
             f"WHERE {id_col}", f"WHERE o.{id_col}"
         )
         community_agg_parts = []
-        for column in value_columns:
+        for position, column in enumerate(value_columns):
             quoted_column = _duckdb_identifier(column)
             numeric_column = f"TRY_CAST(o.{quoted_column} AS DOUBLE)"
             bounds = (column_bounds or {}).get(column)
@@ -4936,6 +4968,14 @@ def load_wide_table_aggregated(
                     f"{_wide_agg(f'CASE WHEN {condition} THEN {numeric_column} END')} "
                     f"AS {quoted_column}"
                 )
+                if conditions:
+                    community_agg_parts.append(
+                        f"COUNT({numeric_column}) AS {_wide_raw_prefix}{position}"
+                    )
+                    community_agg_parts.append(
+                        f"COUNT(CASE WHEN {condition} THEN {numeric_column} END) "
+                        f"AS {_wide_bounded_prefix}{position}"
+                    )
             else:
                 community_agg_parts.append(
                     f"{_wide_agg(numeric_column)} AS {quoted_column}"
@@ -5001,6 +5041,23 @@ def load_wide_table_aggregated(
                 df[_column] = exact_terms_to_values(
                     df[_column], "mean" if duckdb_agg == "AVG" else "sum"
                 )
+    if _wide_bounded:
+        from .source_bounds import record_read_counts
+
+        _diagnostic_columns = []
+        _audit_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
+        for _column, _position, _bounds in _wide_bounded:
+            _raw_col = f"{_wide_raw_prefix}{_position}"
+            _bounded_col = f"{_wide_bounded_prefix}{_position}"
+            _diagnostic_columns += [_raw_col, _bounded_col]
+            if _raw_col not in df.columns or _audit_id is None:
+                continue
+            for _concept in (column_concepts or {}).get(_column) or [_column]:
+                record_read_counts(
+                    database=db_name, concept=_concept, table=table_name, stays=patient_ids,
+                    frame=df, id_column=_audit_id, raw_column=_raw_col, bounded_column=_bounded_col,
+                )
+        df = df.drop(columns=_diagnostic_columns, errors="ignore")
     logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
 

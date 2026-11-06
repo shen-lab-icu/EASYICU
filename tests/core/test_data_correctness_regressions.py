@@ -493,8 +493,6 @@ def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
         "bounds_raw_transformed_non_null": 2,
         "bounds_bounded_transformed_non_null": 1,
         "bounds_bounded_aggregate_non_null": 1,
-        "bounds_unit_suspect": False,
-        "bounds_unbounded_retry": False,
     }
 
 
@@ -861,8 +859,9 @@ def test_mimic_hospital_value_transform_carries_unit_through_rolling_cte(
     assert result.loc[result["valuenum"].notna(), "valuenum"].tolist() == [100.0]
 
 
-def test_transformed_bounds_refuse_when_all_values_are_unit_suspect(tmp_path):
-    # lead-r13 sweep #14: no unbounded retry; the batch contradicts the bounds.
+def test_transformed_bounds_drop_and_count_when_all_values_are_out_of_bounds(tmp_path):
+    # lead-r13 bounds ruling: no unbounded retry and no refusal; the values
+    # are dropped per row and the read's counts are recorded.
     pd.DataFrame(
         {
             "patientunitstayid": [1] * 100,
@@ -892,10 +891,10 @@ def test_transformed_bounds_refuse_when_all_values_are_unit_suspect(tmp_path):
         },
     )
 
-    from easyicu.utils.declared_units import UndeclaredUnitError
+    from easyicu.source_bounds import collect_bounds_drops
 
-    with pytest.raises(UndeclaredUnitError) as caught:
-        load_bucketed_table_aggregated(
+    with collect_bounds_drops(tmp_path) as drops:
+        result = load_bucketed_table_aggregated(
             source,
             "labs",
             "value",
@@ -905,11 +904,13 @@ def test_transformed_bounds_refuse_when_all_values_are_unit_suspect(tmp_path):
             value_max=42,
             value_transform='TRY_CAST("value" AS DOUBLE)',
         )
-    assert caught.value.reason == "bounds_unit_suspect"
-    assert "100 values in this batch" in str(caught.value)
+    assert int(result["value"].notna().sum()) == 0
+    assert drops == {"value": {"labs": {
+        "dropped_values": 100, "stays_all_out_of_bounds": 1, "stays_read": 1,
+    }}}
 
 
-def test_untransformed_bounds_refuse_when_all_values_are_unit_suspect(
+def test_untransformed_bounds_drop_and_count_when_all_values_are_out_of_bounds(
     tmp_path,
 ):
     pd.DataFrame(
@@ -941,10 +942,10 @@ def test_untransformed_bounds_refuse_when_all_values_are_unit_suspect(
         },
     )
 
-    from easyicu.utils.declared_units import UndeclaredUnitError
+    from easyicu.source_bounds import collect_bounds_drops
 
-    with pytest.raises(UndeclaredUnitError) as caught:
-        load_bucketed_table_aggregated(
+    with collect_bounds_drops(tmp_path) as drops:
+        result = load_bucketed_table_aggregated(
             source,
             "labs",
             "value",
@@ -952,11 +953,15 @@ def test_untransformed_bounds_refuse_when_all_values_are_unit_suspect(
             patient_ids=[1],
             value_min=32,
             value_max=42,
+            source_bounds_concept="temp",
         )
-    assert caught.value.reason == "bounds_unit_suspect"
+    assert result.empty
+    assert drops == {"temp": {"labs": {
+        "dropped_values": 100, "stays_all_out_of_bounds": 1, "stays_read": 1,
+    }}}
 
 
-def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):
+def test_untransformed_bounds_keep_empty_out_of_bounds_batch(tmp_path):
     pd.DataFrame(
         {
             "patientunitstayid": [1] * 99,
@@ -1001,8 +1006,6 @@ def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):
         "bounds_raw_transformed_non_null": 99,
         "bounds_bounded_transformed_non_null": 0,
         "bounds_bounded_aggregate_non_null": 0,
-        "bounds_unit_suspect": False,
-        "bounds_unbounded_retry": False,
     }
 
 
