@@ -188,3 +188,40 @@ def test_no_path_falls_back_to_a_floating_point_summation():
 
     source = inspect.getsource(exact_sum)
     assert "np.sum(" not in source and ".sum()" not in source
+
+
+_TINY = 5e-324  # smallest positive subnormal
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [_BIG, _TINY],                      # two values: rounds to max, exact total beyond it
+        [-_BIG, -_TINY],
+        [_BIG, _TINY, 0.0],                 # fsum path: rounds to max
+        [_BIG, _BIG, -_BIG, _TINY],         # intermediate overflow, then the integer kernel
+        [-_BIG, -_BIG, _BIG, -_TINY],
+    ],
+)
+def test_a_true_total_just_beyond_the_range_is_refused_not_rounded_to_max(values):
+    """lead-r13 delta4 D4-EXACT-RANGE: compare the exact total with the largest
+    finite float64 before rounding, in every order."""
+    from fractions import Fraction
+
+    assert abs(sum(Fraction(v) for v in values)) > Fraction(_BIG)  # independent oracle
+    for order in itertools.permutations(values):
+        with pytest.raises(ExactSumOverflowError) as caught:
+            exact_group_totals(np.zeros(len(order), dtype=np.int64), np.array(order), 1)
+        assert caught.value.reason == EXACT_SUM_OVERFLOW
+
+
+@pytest.mark.parametrize(
+    "values", [[_BIG], [_BIG, 0.0], [_BIG, -_TINY], [_BIG, _BIG, -_BIG], [_BIG, -_TINY, 0.0, 0.0]]
+)
+def test_a_true_total_at_or_below_the_largest_finite_value_is_published(values):
+    from fractions import Fraction
+
+    exact = sum(Fraction(v) for v in values)
+    for order in itertools.permutations(values):
+        totals, _ = exact_group_totals(np.zeros(len(order), dtype=np.int64), np.array(order), 1)
+        assert Fraction(totals[0]) == Fraction(float(exact))
