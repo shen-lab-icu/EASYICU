@@ -128,7 +128,15 @@ def builder_code() -> dict[str, Any]:
         return done.stdout.strip()
 
     commit = git("rev-parse", "HEAD")
-    status = git("status", "--porcelain", "--untracked-files=all")
+    # The same cleanliness rule as the seal tool: ignored files (bytecode, build
+    # output) and submodule changes make a checkout dirty too.
+    status = git(
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignored",
+        "--ignore-submodules=none",
+    )
     if not commit or status is None:
         return {"source": "unavailable", "commit": None, "dirty": None}
     return {"source": "git", "commit": commit, "dirty": bool(status)}

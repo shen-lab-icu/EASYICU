@@ -589,7 +589,15 @@ def test_manifest_and_receipt_carry_the_same_builder_code(tmp_path, entry):
     expected = {
         "source": "git",
         "commit": _git("rev-parse", "HEAD"),
-        "dirty": bool(_git("status", "--porcelain", "--untracked-files=all")),
+        "dirty": bool(
+            _git(
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignored",
+                "--ignore-submodules=none",
+            )
+        ),
     }
     assert manifest["builder_code"] == receipt["builder_code"] == expected
     assert len(expected["commit"]) == 40
@@ -618,3 +626,40 @@ def test_builder_source_carries_the_seal_tool_float_fidelity_mark():
         builder.FloatFidelityError("c", {}, {}).reason
         == "bucket_float_fidelity_mismatch"
     )
+
+
+def test_an_ignored_file_in_the_checkout_makes_builder_code_dirty(
+    tmp_path, monkeypatch
+):
+    """Matches the seal tool's clean-checkout rule (--ignored), N36-DIRTY."""
+    import shutil
+    import subprocess
+
+    repo = tmp_path / "checkout"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / ".gitignore").write_text("*.log\n__pycache__/\n")
+    (repo / "scripts" / "build_itemid_bucket_cache.py").write_text("# stand-in\n")
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "stand-in")
+    monkeypatch.setattr(
+        builder, "__file__", str(repo / "scripts" / "build_itemid_bucket_cache.py")
+    )
+    head = git("rev-parse", "HEAD")
+    assert builder.builder_code() == {"source": "git", "commit": head, "dirty": False}
+    (repo / "scripts" / "__pycache__").mkdir()
+    (repo / "scripts" / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\0")
+    assert builder.builder_code() == {"source": "git", "commit": head, "dirty": True}
+    shutil.rmtree(repo / "scripts" / "__pycache__")
+    (repo / "build.log").write_text("x\n")
+    assert builder.builder_code()["dirty"] is True
