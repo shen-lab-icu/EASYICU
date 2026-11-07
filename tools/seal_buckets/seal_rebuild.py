@@ -82,6 +82,23 @@ the memgate admits it, then DBs run in parallel):
   if mimic_cv_dir_r13 already exists; every link target must resolve inside the allowed roots.
 Writes: only new roots/staging under b6_root, b6_root/_scratch/seal_<sha9>/, and the work directory.
 Never databases/, the CareVue view, or any current root. Receipts hold aggregates and paths only.
+
+Operator runbook (there is no automatic resume; a refused root stays refused until an operator acts):
+  1. Find the marker beside the target in b6_root: .<target>.seal_PENDING (renamed, never committed:
+     a crash between the rename and the commit) or .<target>.seal_REFUSED (verification failed after
+     the rename). First make sure no run of that SHA and mode is alive: no seal_rebuild process, no
+     seal-<sha9>-<mode>-* scope, and the .seal_<sha9>_<mode>.lock files in work_root and b6_root free.
+  2. Check both receipts: the in-root <target>/_SEAL_BUILD_RECEIPT.json (verdict PASS, seal_sha, build,
+     db) and the external $WORK_ROOT/seal_<sha9>/<build>/receipt_<db>.json (verdict PASS, no failure,
+     install.read_only_verified, install.in_root_receipt_sha256 == sha256 of the in-root receipt).
+  3. COMMIT only when the target carries a pending marker, no refusal marker, and both receipts pass
+     every acceptance check: operator_commit() re-runs accept_root (pending aside), removes the pending
+     marker and accepts the root again (one line; arguments: tool, target, external receipt, seal sha,
+     build, db):
+python3 -I -c 'import runpy,sys;from pathlib import Path;m=runpy.run_path(sys.argv[1]);print(m["operator_commit"](Path(sys.argv[2]),Path(sys.argv[3]),*sys.argv[4:])["verdict"])' tools/seal_buckets/seal_rebuild.py TARGET RECEIPT SHA BUILD DB
+  4. REMOVE in every other case (a refusal marker, a FAILED, missing or mismatched receipt): the target
+     and its markers are deleted by the operator (make the tree writable first), then the run is
+     repeated. The tool never commits a refused root and never removes anything on its own.
 """
 
 from __future__ import annotations
@@ -1090,16 +1107,35 @@ def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
     }
 
 
+def operator_commit(
+    target: Path, external: Path, seal_sha: str, build: str, db: str
+) -> dict:
+    """Runbook step 3: commit a pending root only when every acceptance check passes (pending aside)."""
+    if not pending_marker(target).is_file():
+        raise SealError("root_not_pending", target.name)
+    accept_root(target, external, seal_sha, build, db, allow_pending=True)
+    commit_install(target)
+    return accept_root(target, external, seal_sha, build, db)
+
+
 def commit_install(target: Path) -> None:
     """The commit: remove the pending marker once the external PASS receipt is durable."""
     pending_marker(target).unlink()
     _fsync_dir(target.parent)
 
 
-def accept_root(root: Path, external: Path, seal_sha: str, build: str, db: str) -> dict:
+def accept_root(
+    root: Path,
+    external: Path,
+    seal_sha: str,
+    build: str,
+    db: str,
+    *,
+    allow_pending: bool = False,
+) -> dict:
     """The acceptance gate for an installed root: a verified external PASS receipt, no refusal marker,
-    the in-root receipt bound by sha256 and itself PASS for this SHA, build and DB, and a read-only tree.
-    Returns the in-root receipt."""
+    no pending marker (only operator_commit passes allow_pending), the in-root receipt bound by sha256
+    and itself PASS for this SHA, build and DB, and a read-only tree. Returns the in-root receipt."""
     try:
         ext = json.loads(external.read_text())
     except (OSError, ValueError) as exc:
@@ -1118,7 +1154,9 @@ def accept_root(root: Path, external: Path, seal_sha: str, build: str, db: str) 
         raise SealError("receipt_unbound", external.name)
     if refusal_marker(root).exists() or refusal_marker(root).is_symlink():
         raise SealError("root_refused", root.name)
-    if pending_marker(root).exists() or pending_marker(root).is_symlink():
+    if not allow_pending and (
+        pending_marker(root).exists() or pending_marker(root).is_symlink()
+    ):
         raise SealError("root_pending", root.name)
     if (
         not (root / IN_ROOT_RECEIPT).is_file()
@@ -1803,7 +1841,11 @@ def probe(seal: Seal) -> list[tuple[str, str]]:
 
 # ----------------------------------------------------------------------------- main
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        epilog=__doc__[__doc__.index("Operator runbook") :],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("sha")
     ap.add_argument("mode", choices=MODES)
     ap.add_argument("--config", type=Path)
