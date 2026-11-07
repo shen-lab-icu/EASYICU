@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Union
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from ..patient_filter import PatientFilter
 from ..value_failures import TYPED_VALUE_FAILURES
@@ -87,21 +88,40 @@ def get_all_patient_ids_impl(
         storage = None
 
         from ..storage_layout import (
-            PRESENCE_VALID, refuse_broken_presence, table_presence, unreadable_file,
-            unreadable_file_errors,
+            ORDINAL, PRESENCE_VALID, refuse_broken_presence, restore_frame_order,
+            table_presence, unreadable_file, unreadable_file_errors,
         )
 
         def _ids(table: str, presence) -> tuple[List, str]:
-            ids: List = []
+            # IDs in the source's own order, deduplicated in that order; the
+            # cap is applied last, by the caller (B-D30-COHORT-ORDER).
+            frames = []
             for shard in presence.files:
                 try:
-                    frame = pd.read_parquet(shard, columns=[id_col])
+                    names = pq.read_schema(shard).names
+                    columns = [id_col, ORDINAL] if ORDINAL in names else [id_col]
+                    frames.append(pd.read_parquet(shard, columns=columns))
                 except unreadable_file_errors() as exc:
                     # Present but unreadable is corruption, not absence: no
                     # CSV sibling stands in for it (delta17c).
                     raise unreadable_file(table, shard, exc) from exc
-                ids.extend(frame[id_col].dropna().unique().tolist())
-            return list(dict.fromkeys(ids)), "source_file_order"
+            ordinals = [ORDINAL in f.columns for f in frames]
+            if all(ordinals):
+                # The normal readers' source-order restoration (bucket parts
+                # carry the source ordinal).
+                order = "source_file_order"
+                frame = restore_frame_order(pd.concat(frames, ignore_index=True))
+                ids = frame[id_col].dropna().tolist()
+            elif presence.layout == "bucket":
+                # A legacy bucket without the ordinal cannot say its source
+                # order; it uses the identifier order, and says so.
+                order = "identifier_order"
+                ids = sorted(pd.concat(frames, ignore_index=True)[id_col].dropna().tolist())
+            else:
+                # Flat files and shards: the files in name order, rows in file order.
+                order = "source_file_order"
+                ids = [v for f in frames for v in f[id_col].dropna().tolist()]
+            return list(dict.fromkeys(ids)), order
 
         # One owner decides, for every path and case the storage contract
         # covers: absent, valid (a single file, shards or a bucket, validated)
