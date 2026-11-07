@@ -25,7 +25,7 @@
     {
       "name": "memgate.py",
       "path": "tools/formal/memgate.py",
-      "sha256": "36e05046cb20ec367b3576224bcf42adb89084a29344b34968ed3143ec76d385"
+      "sha256": "5a86ade410ec74babb077a447996df2113fa73132b467193cb13d3d212c8f23e"
     },
     {
       "name": "formal_run_receipt.py",

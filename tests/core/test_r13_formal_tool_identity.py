@@ -894,7 +894,7 @@ def test_every_isolated_step_of_the_wrapper_sets_a_private_tmpdir():
     lines = WRAPPER.read_text().splitlines()
     launches = [i for i, line in enumerate(lines)
                 if "env -i" in line and not line.lstrip().startswith("#")]
-    assert len(launches) == 5
+    assert len(launches) == 6  # includes the pre-read REQUIRED_LAYOUT admission
     for i in launches:
         block = " ".join(lines[i:i + 3])
         assert "TMPDIR=" in block, lines[i]

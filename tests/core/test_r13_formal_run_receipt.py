@@ -592,9 +592,9 @@ def test_a_declared_view_read_records_its_chain(tmp_path, monkeypatch, real_admi
     assert chain["farm_manifest_sha256"] == receipt.sha256_file(farm / "conversion_manifest.json")
 
 
-def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeypatch, real_admission):
-    # MIMIC-III services prefers CSV over a converted parquet beside it; the
-    # consumed-files event, not the parquet resolver, must name the CSV.
+def test_a_csv_only_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeypatch, real_admission):
+    # The shared table decision selects CSV when Parquet is absent. The
+    # consumed-files event must name the CSV that this reader actually used.
     from easyicu.datasource import ICUDataSource
     from easyicu.resources import load_data_sources
     from easyicu.storage_layout import SCAN_FALLBACK_LOG_ENV, read_consumed_log
@@ -605,7 +605,6 @@ def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, m
                           "transfertime": ["2150-01-01 00:00:00"], "prev_service": [None],
                           "curr_service": ["MED"]})
     frame.to_csv(root / "services.csv.gz", index=False)
-    frame.assign(curr_service="SURG").to_parquet(root / "services.parquet", index=False)
     # Hospital tables are mapped to ICU stays: a MIMIC-III source has icustays.
     pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
                   "intime": pd.to_datetime(["2150-01-01"]),
@@ -614,7 +613,7 @@ def test_a_csv_preferring_reader_is_receipted_by_the_csv_it_consumed(tmp_path, m
     (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
         {"table": "services", "status": "completed",
          "input": {"relative_path": "services.csv.gz"},
-         "outputs": [{"relative_path": "services.parquet"}]},
+         "outputs": []},
         {"table": "icustays", "status": "completed",
          "outputs": [{"relative_path": "icustays.parquet"}]}]}))
     log = tmp_path / "run_storage_log.jsonl"
@@ -1212,13 +1211,12 @@ def _mimic_services(tmp_path: Path, *, listed: bool) -> Path:
                           "transfertime": ["2150-01-01 00:00:00"], "prev_service": [None],
                           "curr_service": ["MED"]})
     frame.to_csv(root / "services.csv.gz", index=False)
-    frame.to_parquet(root / "services.parquet", index=False)
     pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
                   "intime": pd.to_datetime(["2150-01-01"]),
                   "outtime": pd.to_datetime(["2150-01-03"])}).to_parquet(
         root / "icustays.parquet", index=False)
     services = {"table": "services", "status": "completed",
-                "outputs": [{"relative_path": "services.parquet"}]}
+                "outputs": []}
     if listed:
         services["input"] = {"relative_path": "services.csv.gz"}
     (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
@@ -1371,7 +1369,10 @@ def test_a_bucket_built_from_another_tables_sources_is_refused_by_the_snapshot(
 
     with pytest.raises(formal_inputs.InputSnapshotError) as error:
         formal_inputs.plan_input_files("sic", root)
-    assert error.value.code == "bucket_derived_from_other_table"
+    # The shared source decision refuses the mismatched flat/bucket pair
+    # before the snapshot's later derived-table check can select that bucket.
+    assert error.value.code == "input_bucket_invalid"
+    assert error.value.details["reason"] == "table_source_ambiguous"
 
 
 def test_bucket_sources_that_are_not_the_owner_manifests_outputs_are_refused(tmp_path):
@@ -1527,22 +1528,20 @@ def test_a_stale_nested_bucket_the_resolver_selects_is_refused(tmp_path):
     with pytest.raises(formal_inputs.InputSnapshotError) as error:
         formal_inputs.plan_input_files("sic", root)
     assert error.value.code == "input_bucket_invalid"
-    assert error.value.details["reason"] == "bucket_derived_from_missing"
+    assert error.value.details["reason"] == "table_source_ambiguous"
 
 
-def test_a_shadowed_installation_of_a_registered_table_is_listed_as_unused(tmp_path):
+def test_a_shadowed_installation_of_a_registered_table_is_refused(tmp_path):
     from easyicu import formal_inputs
 
     prepared = _prepared(tmp_path / "prepared")
     root = _sic_layout_root(tmp_path, prepared)
-    stale = _stale_copy(root / "laboratory_bucket", root / "icu" / "laboratory_bucket")
+    _stale_copy(root / "laboratory_bucket", root / "icu" / "laboratory_bucket")
 
-    planned = formal_inputs.plan_input_files("sic", root)
-
-    assert [b["layout_realpath"] for b in planned["buckets"]] == [
-        os.path.realpath(root / "laboratory_bucket")]
-    assert planned["unused_installations"] == [{
-        "path": str(stale), "realpath": os.path.realpath(stale), "registered_table": True}]
+    with pytest.raises(formal_inputs.InputSnapshotError) as error:
+        formal_inputs.plan_input_files("sic", root)
+    assert error.value.code == "input_bucket_invalid"
+    assert error.value.details["reason"] == "table_source_ambiguous"
 
 
 def test_a_run_that_read_an_unused_installation_is_refused(tmp_path, monkeypatch):
@@ -2040,8 +2039,13 @@ def _seal_spy(monkeypatch, fail=None):
     from easyicu import storage_seal_publication as slpub
 
     calls = []
+    read_time_check = slpub.assert_seal_published
 
     def spy(root, *, formal):
+        if not formal:
+            # This spy counts formal acceptance checks. Keep the merged
+            # read-time publication defense real during fixture construction.
+            return read_time_check(root, formal=False)
         calls.append((str(root), formal))
         if fail:
             raise slpub.SealPublicationError(fail, Path(root).parent)
@@ -2227,6 +2231,8 @@ def test_an_accepted_install_passes_the_real_seal_check(tmp_path, monkeypatch):
 @pytest.mark.parametrize("change", ["accepted", "no_receipt", "verdict", "sha", "pending",
                                      "refused"])
 def test_an_unaccepted_install_gets_no_pass_receipt(tmp_path, monkeypatch, change):
+    from easyicu.storage_seal_publication import SealPublicationError
+
     monkeypatch.setattr(receipt, "_seal_published", _REAL_SEAL_PUBLISHED)
     prepared = _prepared(tmp_path / "prepared")
     root = _sic_layout_root(tmp_path, prepared)
@@ -2251,11 +2257,15 @@ def test_an_unaccepted_install_gets_no_pass_receipt(tmp_path, monkeypatch, chang
             {"table": "laboratory", "layout_path": str(bucket)}]
         assert receipt.write_run_receipt(tmp_path / "run", built).is_file()
         return
-    with pytest.raises(receipt.ReceiptError) as error:
+    error_type = SealPublicationError if change in {"pending", "refused"} else receipt.ReceiptError
+    with pytest.raises(error_type) as error:
         _sic_receipt(tmp_path, root, reads, monkeypatch, after_run=mark)
     expected = {"pending": "bucket_install_unpublished", "refused": "bucket_install_refused"}.get(
         change, "bucket_install_unaccepted")
-    assert error.value.code == expected
+    if change in {"pending", "refused"}:
+        assert error.value.reason == expected  # entry gate preserves the typed refusal
+    else:
+        assert error.value.code == expected
     assert not (tmp_path / "run" / "RUN_RECEIPT.json").exists()
 
 

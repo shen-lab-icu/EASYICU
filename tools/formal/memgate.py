@@ -7,11 +7,7 @@ Usage:
   memgate.py wait MAX_BYTES MODE   block until admitted (bench3.sh holds memgate.lock around it)
   memgate.py self MODE             inside a bench scope: own memory.max, own scope excluded
 """
-import fcntl
-import glob
-import os
-import sys
-import time
+import fcntl, glob, os, sys, time
 
 BUDGET = 380 * 2**30  # temporary 380 until the seal (supervisor 2026-11-06 ~17:20Z; executor gate 70); restore 260 after
 LOCK = "/home/zhuhb/easyicu_dev9/demo_sources/bench_local/memgate.lock"
