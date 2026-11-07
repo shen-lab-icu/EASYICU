@@ -7,6 +7,39 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-06 — stay discovery: one table source in any spelling, in source order [lead-r13, `9999037c3`, `b668b2023`, `c114100d3`]
+
+**What changed.** The stay universe an extraction uses when it is given no
+patient IDs (and any cap on it) can differ from earlier exports in these
+cases:
+
+- **One source, any spelling.** Stay discovery and the table reader share
+  one matcher (`storage_layout.match_table_entries`). It lists the actual
+  directory entries, case-insensitively, under the installation and its
+  `icu`/`hosp` directories. A table spelled `IcuStays.parquet`,
+  `IcuStays/` or `icustays.PARQUET` is now the stay table; before, stay
+  discovery could fall back to the stay CSV while the reader used the
+  Parquet.
+- **Refusals instead of a pick.** Two independent sources of one table
+  (case variants, the base and `icu`, two nested folders, links to
+  different folders) refuse with `table_source_ambiguous`. A flat table
+  beside the bucket whose `derived_from` binds it is one source. A dangling
+  link, an empty table folder, or a folder named `.parquet` refuses
+  (`table_scan_file_unreadable`, `table_layout_broken`), even beside a valid
+  source. The stay CSV is read only when no Parquet entry exists.
+- **Source order before the cap.** IDs follow the source order the readers
+  restore (bucket parts carry the source ordinal); duplicates keep their
+  first occurrence, and `max_patients` is applied last. A capped cohort is
+  the same on flat, sharded and bucket installations of one source.
+- **Legacy buckets without the source ordinal.** These cannot state their
+  source order. Their IDs are now sorted by identifier, and the listing says
+  `identifier_order`. The full ID set is unchanged, but a **capped** cohort
+  from such a bucket can differ from the one an earlier version took in
+  physical file order.
+
+The G1 benchmark cohorts are not affected: they take the full ID set with no
+cap, sort it and draw a seeded sample, so discovery order never enters them.
+
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 
 **What changed.** A concept loaded through DuckDB hourly aggregation now
