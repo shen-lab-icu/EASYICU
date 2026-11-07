@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Build or adopt a verified, atomically installed physical Parquet layout."""
+"""Build or adopt a verified, atomically installed physical Parquet layout.
+
+Operator note: run with PYTHONPATH=<checkout>/src and PYTHONDONTWRITEBYTECODE=1.
+The builder refuses an easyicu imported from anywhere but this checkout's src
+(builder_import_origin_mismatch). Without PYTHONDONTWRITEBYTECODE=1, importing
+from <checkout>/src writes __pycache__ into the checkout, which the manifest
+then records as builder_code.dirty=true, and a seal refuses that build.
+"""
 
 from __future__ import annotations
 
