@@ -448,7 +448,21 @@ def _peek_columns(path: Path, table: str) -> List[str]:
 
 def _member_refusal(exc: Exception, folder: Any = None) -> Dict[str, Any]:
     """A visible refusal for a damaged or unreadable export member."""
-    member = getattr(exc, "member", "")
+    raw_member = str(getattr(exc, "member", "") or "")
+    member_path = Path(raw_member)
+    if member_path.is_absolute() and folder:
+        try:
+            member_path = member_path.relative_to(Path(folder).absolute())
+        except ValueError:
+            pass
+    # Unsafe manifest coordinates may be absolute, including on another OS.
+    # Without a package-relative coordinate, expose only a stable short hash.
+    if (member_path.is_absolute() or ".." in member_path.parts
+            or "\\" in raw_member or "\x00" in raw_member
+            or re.match(r"^[A-Za-z]:", raw_member)):
+        member = "member-" + hashlib.sha256(raw_member.encode("utf-8")).hexdigest()[:12]
+    else:
+        member = member_path.as_posix() if raw_member else ""
     return {
         "ok": False, "error": exc.code, "reason": getattr(exc, "reason", exc.code),
         # The member's logical name only; host paths stay in the server log.
@@ -1507,11 +1521,13 @@ def _write_feature_definition_files(
             "file": json_name,
             "kind": "feature_definitions",
             "records": payload.get("record_count", 0),
+            **member_digest_record(out / json_name),
         },
         {
             "file": csv_name,
             "kind": "feature_definitions_csv",
             "records": payload.get("record_count", 0),
+            **member_digest_record(out / csv_name),
         },
     ]
 
@@ -3208,16 +3224,22 @@ def make_export_runner(
             # Every member below records sha256/bytes; readers then require them.
             MEMBER_INTEGRITY_KEY: dict(MEMBER_INTEGRITY_DECLARATION),
         }
-        (out / "_manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        finish_native_export(out)
         (out / "README.md").write_text(
             _render_export_readme(
                 manifest, files=files, definition_files=definition_files
             ),
             encoding="utf-8",
         )
+        # The shared member inventory accepts auxiliary files too. Keep the
+        # table-only ``files`` inventory stable for schema and row readers.
+        manifest["exported_files"] = [
+            *definition_files,
+            {"file": "README.md", "kind": "readme", **member_digest_record(out / "README.md")},
+        ]
+        (out / "_manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        finish_native_export(out)
         from easyicu.synthetic_exports import record_generated_export
         record_generated_export(data_path, out, source_proof=synthetic_input_proof)
         return {

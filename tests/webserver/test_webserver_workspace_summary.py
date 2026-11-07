@@ -369,11 +369,12 @@ def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Pat
                 "entry_mode": "module_grouped_full_export",
                 "modules": [
                     {
-                        "group": "sepsis3_sofa2",
-                        "file": "sepsis3_sofa2_sep3_sofa2.parquet",
-                        "rows": 2,
-                        "feature_cols": 1,
+                        "group": dataio._infer_export_module(Path(file_name)),
+                        "file": file_name,
+                        "rows": len(frame),
+                        "feature_cols": len(set(frame.columns) - {"stay_id", "charttime"}),
                     }
+                    for file_name, frame in tables.items()
                 ],
             },
             indent=2,
