@@ -501,16 +501,16 @@ def _derived_from_base(root: Path, derived: dict) -> Path:
 
     A layout built beside its data (the builder's default output) records no
     ``source_root``: its sources are relative to the bucket directory's
-    parent, as before. A layout built to another output root records
+    physical (resolved) parent. A layout built to another output root records
     ``source_root``, the builder's data path relative to the real (resolved)
     parent of the bucket directory, or absolute when no relative path
     exists; the reader resolves it the same way, so opening the layout
-    directly or through a symlink placed beside the source finds the same
-    files. Recorded file paths stay confined below this directory.
+    directly or through a bucket-only symlink farm finds the same files.
+    Recorded file paths stay confined below this directory.
     """
     recorded = derived.get("source_root")
     if recorded is None:
-        return root.parent
+        return root.resolve().parent
     relative = PurePosixPath(recorded)
     if relative.is_absolute():
         return Path(recorded)

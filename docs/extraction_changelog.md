@@ -11,6 +11,10 @@ remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
 - Correct an **unreleased regression** introduced by `7f72fd643`: the shared owner selected `CHARTEVENTS.csv` but bypassed its strict parser. The owner still determines CSV eligibility; a selected MIMIC-III chartevents CSV with an item selector now uses the strict reader, preserving item filtering, declared-schema validation of unselected columns, and numeric-looking VALUE as text.
 
+## 2026-11-07 — resolve bucket lineage at its physical install [lead-r13, B57-CV-LINEAGE-ANCHOR]
+
+- A bucket linked into a bucket-only CareVue farm now resolves its default `derived_from` paths beside the physical bucket installation. The farm needs no flat chartevents entry. Source-set and size/mtime checks, physical inode pairing, and bucket inventory validation remain in force; missing physical sources and missing parts still refuse.
+
 ## 2026-11-07 — one complete table decision and loader [lead-r13, `7f72fd643`]
 
 - **B-D47-NESTED / B-D47-CSV:** reader, cohort and resolver use `storage_layout.table_decision`, including recursive nested search and typed listing refusals (also inside a table's inventory); configured CSV is eligible only when Parquet is absent, and a supplied Parquet loader cannot override absence. A healthy HiRID `General/` beside `general_table.csv` now serves Parquet to both readers, and independent root plus nested sources refuse. Bound-source missing refusals keep their existing priority.
