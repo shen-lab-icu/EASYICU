@@ -84,6 +84,7 @@ class _Unit:
         self.layouts: dict = {k: dict(v) for k, v in snapshot.get("layouts", {}).items()}
         self.consumed: dict = {}  # (table, path) -> {table, path, realpath, format}
         self.caches: dict = {}  # payload owners' caches, dropped with the unit
+        self.holds = 1  # its opener; each joined worker adds one (``retain_unit``)
 
 
 @dataclass(frozen=True)
@@ -115,9 +116,28 @@ def binding_unit(snapshot: Optional[dict] = None) -> Iterator[_Unit]:
         yield unit
     finally:
         _UNIT.reset(reset)
-        with _LOCK:
-            _LIVE.discard(unit)
-            unit.caches.clear()
+        release_unit(unit)
+
+
+def retain_unit(unit) -> bool:
+    """Keep a live unit open for one more user; False if it already closed."""
+    with _LOCK:
+        if unit not in _LIVE:
+            return False
+        unit.holds += 1
+        return True
+
+
+def release_unit(unit) -> None:
+    """Drop one hold; the last one closes the unit and drops its payload."""
+    with _LOCK:
+        if unit not in _LIVE:
+            return
+        unit.holds -= 1
+        if unit.holds > 0:
+            return
+        _LIVE.discard(unit)
+        unit.caches.clear()
 
 
 def in_binding_unit(function):

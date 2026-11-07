@@ -34,6 +34,7 @@ import re
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
+import functools
 import numpy as np
 import pandas as pd
 import logging
@@ -42,6 +43,7 @@ from ..base import BaseICULoader
 from ..concept.data_source_contract import ConceptDataSourceStorage
 from ..storage_layout import StorageIntegrityError
 from ..value_failures import TYPED_VALUE_FAILURES
+from ..resolver_pool import resolver_call_scope
 from ..databases.profiles import get_database_profile, public_database_keys
 from ..table.duration import (
     get_dur_var_unit,
@@ -1030,6 +1032,23 @@ def _concepts_need_sofa2(concepts) -> bool:
     )
 
 
+def _one_resolver_per_call(function):
+    """Each call holds one resolver from the shared loader's pool (B18).
+
+    The global loader is shared across threads; ``easyicu.resolver_pool``
+    lends this call one resolver for all its loads and returns it on exit.
+    A nested call in the same context joins the outer call's resolver.
+    """
+
+    @functools.wraps(function)
+    def scoped(*args, **kwargs):
+        with resolver_call_scope():
+            return function(*args, **kwargs)
+
+    return scoped
+
+
+@_one_resolver_per_call
 def load_concepts(
     concepts: Union[str, List[str]],
     patient_ids: Optional[Union[List, Dict]] = None,
