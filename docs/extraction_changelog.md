@@ -7,6 +7,19 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-07 — restore strict MIMIC-III CSV dispatch [lead-r13, B-D56-STRICT-CSV]
+
+- Correct an **unreleased regression** introduced by `7f72fd643`: the shared owner selected `CHARTEVENTS.csv` but bypassed its strict parser. The owner still determines CSV eligibility; a selected MIMIC-III chartevents CSV with an item selector now uses the strict reader, preserving item filtering, declared-schema validation of unselected columns, and numeric-looking VALUE as text.
+
+## 2026-11-07 — resolve bucket lineage at its physical install [lead-r13, B57-CV-LINEAGE-ANCHOR]
+
+- A bucket linked into a bucket-only CareVue farm now resolves its default `derived_from` paths beside the physical bucket installation. The farm needs no flat chartevents entry. Source-set and size/mtime checks, physical inode pairing, and bucket inventory validation remain in force; missing physical sources and missing parts still refuse.
+
+## 2026-11-07 — special-reader Parquet inventory agreement [lead-r13, NB-D56-HELPER-PARQUET-GLOB]
+
+- eICU I/O reads the resolver's validated files, and MIMIC directory schema inspection uses the selected backend's resolved files. Auxiliary flat/directory enumerators recognize `.pq` and mixed-case Parquet suffixes as the owner does. Consumption still checks file identity. Reusing the owner decision across an entire cold read remains deferred.
+- MIMIC optional quality columns are retained before backend dispatch; the validated file tuple is forwarded through DuckDB/Arrow fallbacks so a fallback adapter cannot lose the table context needed to retain ERROR/ISERROR.
+
 Deviations from ricu 0.6.3, and the rules this release aligned with ricu, are
 listed in [ricu_deviations.md](ricu_deviations.md). Counts of 1–9 are written
 as "<10". "Sample" means the 3,000-stay server sample of a database used for

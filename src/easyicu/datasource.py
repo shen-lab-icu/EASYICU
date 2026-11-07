@@ -1643,6 +1643,22 @@ class ICUDataSource:
                 )
         if callable(loader):
             frame = loader()
+        elif (
+            disk_loader and loader is not None
+            and self.config.name == 'mimic' and table_name == 'chartevents'
+            and str(loader).lower().endswith(('.csv', '.csv.gz'))
+            and concept_itemid_filter is not None
+        ):
+            # The owner decides whether CSV is eligible. Its selected loader
+            # still needs the strict MIMIC parser: item filtering, full-schema
+            # validation and VALUE-as-text must precede the generic CSV path.
+            csv_path = Path(loader)
+            storage_layout.csv_table_scan(self, table_name, csv_path)
+            frame = self._read_mimic3_csv_fallback(
+                csv_path=csv_path, columns=columns,
+                itemid_filter=concept_itemid_filter,
+                patient_ids_filter=patient_ids_filter,
+            )
         elif loader is not None:
             frame = self._read_file(
                 Path(loader), columns, 
@@ -1823,10 +1839,11 @@ class ICUDataSource:
         if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput" and (path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}):
             from .concept.eicu_io import read_io_parquet
 
-            if scan_loader is not None:
-                # Validates the inventory read_io_parquet scans (same files).
-                self.resolve_target_files(table_name, loader=scan_loader)
-            return read_io_parquet(path, columns, patient_ids_filter, concept_itemid_filter)
+            files = (self.resolve_target_files(table_name, loader=scan_loader)
+                     if scan_loader is not None else None)
+            return read_io_parquet(
+                path, columns, patient_ids_filter, concept_itemid_filter, files=files,
+            )
         
         # 🚀 优先使用概念特定的 itemid 过滤器（精确过滤，性能最佳）
         # 如果传入了 concept_itemid_filter，直接使用，跳过全局白名单
@@ -1854,7 +1871,17 @@ class ICUDataSource:
             itemid_filter_config = ('variableid', HIRID_OBSERVATIONS_VARIABLEIDS)
         
         # Handle directory (partitioned data)
-        columns = mimic_disk_columns(self, path, table_name, columns)
+        resolved_files = None
+        if path.is_dir() and scan_loader is not None and db_name in {'mimic', 'mimic_demo', 'miiv'}:
+            filter_col, filter_ids = itemid_filter_config or (None, None)
+            stay_col, stay_ids = _direct_stay_predicate(patient_ids_filter)
+            resolved_files = self.resolve_target_files(
+                table_name, filter_col, filter_ids, loader=scan_loader,
+                stay_column=stay_col, stay_values=stay_ids,
+            )
+        # Retain optional quality fields before a backend/fallback can lose
+        # table context. Inspection and consumption use the same resolved set.
+        columns = mimic_disk_columns(self, path, table_name, columns, files=resolved_files)
         if path.is_dir():
             if DEBUG_MODE:
                 logger.debug(f"读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
@@ -1889,11 +1916,13 @@ class ICUDataSource:
                     table_name=table_name,
                     wide_table_value_columns=wide_table_value_columns,  # 🚀 传递宽表value列用于NULL过滤
                     scan_loader=scan_loader,
+                    resolved_files=resolved_files,
                 )
             else:
                 return self._read_partitioned_data_optimized(
                     path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
                     table_name=table_name, scan_loader=scan_loader,
+                    resolved_files=resolved_files,
                 )
         
         suffix = path.suffix.lower()
@@ -2475,7 +2504,7 @@ class ICUDataSource:
         """Find MIMIC-III CHARTEVENTS.csv.gz file."""
         return self._resolve_mimic3_csv('chartevents')
 
-    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None, scan_loader: Optional[Path] = None) -> pd.DataFrame:
+    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None, scan_loader: Optional[Path] = None, resolved_files: Optional[Tuple[Path, ...]] = None) -> pd.DataFrame:
         """使用 DuckDB 读取分区数据（高性能版本）
         
         DuckDB 对单患者/小批量患者查询特别高效，比 PyArrow 快 5-6 倍。
@@ -2504,11 +2533,12 @@ class ICUDataSource:
             return self._read_partitioned_data_optimized(
                 directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
                 table_name=table_name, scan_loader=scan_loader,
+                resolved_files=resolved_files,
             )
         
         filter_col, filter_ids = itemid_filter_config or (None, None)
         stay_col, stay_ids = _direct_stay_predicate(patient_ids_filter)
-        target_files = (
+        target_files = resolved_files if resolved_files is not None else (
             self.resolve_target_files(
                 table_name, filter_col, filter_ids, loader=scan_loader,
                 stay_column=stay_col, stay_values=stay_ids,
@@ -2521,6 +2551,7 @@ class ICUDataSource:
         )
         if not target_files:
             return storage_layout.empty_frame(directory, columns)
+        columns = mimic_disk_columns(self, directory, table_name, columns, files=target_files)
         target_relation = storage_layout.parquet_relation(target_files)
 
         # Entry clocks are optional in older converted partitions. Inspect the
@@ -2655,9 +2686,10 @@ class ICUDataSource:
             return self._read_partitioned_data_optimized(
                 directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
                 table_name=table_name, scan_loader=scan_loader,
+                resolved_files=target_files,
             )
     
-    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, scan_loader: Optional[Path] = None) -> pd.DataFrame:
+    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, scan_loader: Optional[Path] = None, resolved_files: Optional[Tuple[Path, ...]] = None) -> pd.DataFrame:
         """读取分区数据（优化版本）
         
         Args:
@@ -2672,18 +2704,21 @@ class ICUDataSource:
 
         filter_col, filter_values = itemid_filter_config or (None, None)
         stay_col, stay_ids = _direct_stay_predicate(patient_ids_filter)
-        if table_name and scan_loader is not None:
-            resolved_files = self.resolve_target_files(
-                table_name, filter_col, filter_values, loader=scan_loader,
-                stay_column=stay_col, stay_values=stay_ids,
-            )
-        else:
-            resolved_files = storage_layout.files_for_directory(
-                self, directory, filter_col, filter_values,
-                stay_column=stay_col, stay_values=stay_ids,
-            )
+        if resolved_files is None:
+            # A supplied set was already validated and recorded by the caller.
+            if table_name and scan_loader is not None:
+                resolved_files = self.resolve_target_files(
+                    table_name, filter_col, filter_values, loader=scan_loader,
+                    stay_column=stay_col, stay_values=stay_ids,
+                )
+            else:
+                resolved_files = storage_layout.files_for_directory(
+                    self, directory, filter_col, filter_values,
+                    stay_column=stay_col, stay_values=stay_ids,
+                )
         if not resolved_files:
             return storage_layout.empty_frame(directory, columns)
+        columns = mimic_disk_columns(self, directory, table_name, columns, files=resolved_files)
         try:
             import pyarrow.dataset as ds
             
@@ -5265,13 +5300,14 @@ def mimic_source_columns(database: str, table: str, columns, available):
     return list(dict.fromkeys([*columns, *(by_lower[c] for c in optional if c in by_lower)]))
 
 
-def mimic_disk_columns(source, path: Path, table: str, columns):
+def mimic_disk_columns(source, path: Path, table: str, columns, *, files=None):
     """Inspect only schemas/CSV headers to retain optional MIMIC fields."""
     requested = mimic_source_columns(source.config.name, table, columns, ["error", "iserror", "rateuom", "patientweight", "statusdescription", "cancelreason", *LAB_OPTIONAL_COLUMNS])
     if requested == columns:
         return columns
     if path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}:
-        files = enumerate_bucket_parquet_files(path) if path.is_dir() else [path]
+        if files is None:
+            files = enumerate_bucket_parquet_files(path) if path.is_dir() else [path]
         available = source._get_parquet_columns_for_files(files)
     elif path.name.lower().endswith((".csv", ".csv.gz")):
         available = pd.read_csv(path, nrows=0).columns
