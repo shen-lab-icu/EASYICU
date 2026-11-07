@@ -15,6 +15,11 @@ from easyicu.research_agent.discovery.idea_mining_source_status import (
 )
 
 
+def _publish(database) -> None:
+    """The profiler reads published exports only (B-EXPORT-PARTIAL)."""
+    (database / "_manifest.json").write_text("{}", encoding="utf-8")
+
+
 def _formula(columns):
     return pc.add(
         pc.cast(columns["ca"], pa.float64()),
@@ -49,6 +54,7 @@ def _write_miiv(
 ):
     database = root / "miiv"
     database.mkdir(parents=True)
+    _publish(database)
     pq.write_table(pa.table(demographics), database / "demographics.parquet")
     if chemistry is not None:
         pq.write_table(pa.table(chemistry), database / "chemistry.parquet")
@@ -270,6 +276,7 @@ def test_measurement_audit_requires_enough_databases_and_coverage_contrast(tmp_p
     )
     database = tmp_path / "mimic"
     database.mkdir()
+    _publish(database)
     pq.write_table(
         pa.table({"icustay_id": [10, 11, 12]}),
         database / "demographics.parquet",
@@ -335,6 +342,7 @@ def test_pair_answerability_requires_joint_predictor_outcome_stays(tmp_path):
     )
     database = tmp_path / "mimic"
     database.mkdir()
+    _publish(database)
     pq.write_table(
         pa.table({"icustay_id": [10, 11, 12]}),
         database / "demographics.parquet",

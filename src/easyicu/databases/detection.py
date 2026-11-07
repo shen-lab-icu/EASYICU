@@ -253,6 +253,25 @@ def _content_candidates(path: Path) -> set[str]:
     }
 
 
+def validate_community_receipt(path: Union[str, Path]) -> str:
+    """Return the database a community preparation receipt names, or raise.
+
+    Uses the receipt rules of :func:`_community_identity`; raises
+    :class:`DatabaseDetectionError` (``database_detection_identity_receipt_invalid``).
+    """
+
+    root = Path(path)
+    if not (root / "community_preparation_manifest.json").is_file():
+        raise DatabaseDetectionError(
+            "database_detection_identity_receipt_invalid",
+            f"Community database identity receipt is missing in {root}.",
+            data_path=root,
+        )
+    database = _community_identity(root)
+    assert database is not None
+    return database
+
+
 def _community_identity(path: Path) -> Optional[str]:
     """Resolve explicit receipts and distinctive raw layouts for new sources."""
 

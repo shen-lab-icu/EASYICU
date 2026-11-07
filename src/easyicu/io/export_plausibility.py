@@ -16,6 +16,7 @@ from typing import Any
 
 from easyicu.concept.catalog import CONCEPT_DICTIONARY, CONCEPT_GROUPS_INTERNAL
 from easyicu.concept.export_metadata import metadata_definition_for_concept
+from easyicu.export_publication import require_published_native_export
 from easyicu.resources import load_dictionary
 from easyicu.scores.sofa2_aggregate import SOFA2_COMPONENT_NAMES
 
@@ -145,7 +146,8 @@ def _numeric_check(
 
 def _views(connection, root: Path, dictionary) -> dict[str, dict]:
     root = root.resolve(strict=True)
-    manifest = json.loads((root / "_manifest.json").read_text(encoding="utf-8"))
+    manifest_path = require_published_native_export(root)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema_version") != "easyicu_native_export_v2"

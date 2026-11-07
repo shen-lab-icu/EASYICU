@@ -418,5 +418,6 @@ def test_failed_native_publication_raises_and_leaves_no_raw_module_file(
     assert (quarantine / "demographics.parquet").exists()
     record = json.loads((quarantine / "_publication_failed.json").read_text(encoding="utf-8"))
     assert record["reason_code"] == "native_export_v2_publication_failed"
-    assert record["moved"] == ["demographics.parquet"]
+    # The in-progress marker travels with the unpublished files (B-EXPORT-PARTIAL).
+    assert record["moved"] == ["_IN_PROGRESS", "demographics.parquet"]
     assert _failure_records(output_dir)  # the worker failure record stays readable

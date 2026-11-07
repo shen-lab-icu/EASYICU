@@ -41,6 +41,8 @@ def test_raw_oracle_validates_values_and_source_completeness(tmp_path, fault):
         after = after.iloc[:0]
     before.to_parquet(tmp_path / 'before.parquet', index=False)
     after.to_parquet(tmp_path / 'after.parquet', index=False)
+    # Both module files come from published exports (B-EXPORT-PARTIAL gate).
+    (tmp_path / '_manifest.json').write_text('{}', encoding='utf-8')
     args = SimpleNamespace(raw=str(raw), before=str(tmp_path / 'before.parquet'),
                            after=str(tmp_path / 'after.parquet'))
     output = tmp_path / 'receipt.json'

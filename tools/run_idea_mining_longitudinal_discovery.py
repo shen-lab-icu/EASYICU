@@ -108,6 +108,10 @@ def main(argv: list[str] | None = None) -> int:
 
     all_profiles = []
     module_audit: list[dict[str, object]] = []
+    from easyicu.export_publication import require_published_export_package
+
+    for database in databases:
+        require_published_export_package(data_root / database)
     for module in modules:
         paths = {
             database: data_root / database / f"{module}.parquet"

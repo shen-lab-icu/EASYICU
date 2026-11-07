@@ -273,6 +273,11 @@ def display_unit(unit: str | None) -> str | None:
 
 
 def module_names(root: Path) -> list[str]:
+    from easyicu.export_publication import require_published_export_package
+
+    for database in DATABASES:
+        # Interrupted or unpublished exports hold raw module files.
+        require_published_export_package(root / database)
     module_sets = [
         {path.stem for path in (root / database).glob("*.parquet")}
         for database in DATABASES

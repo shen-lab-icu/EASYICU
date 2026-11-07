@@ -1224,6 +1224,7 @@ def test_completed_producer_staging_is_native_published_without_reextracting(
             }
         )
     )
+    (staging / "_IN_PROGRESS").write_text("", encoding="utf-8")  # interrupted run
     publish_calls: list[dict[str, object]] = []
 
     def fake_publish(**kwargs):
@@ -1238,6 +1239,15 @@ def test_completed_producer_staging_is_native_published_without_reextracting(
         "extract_database",
         lambda *args, **kwargs: pytest.fail("completed staging was recomputed"),
     )
+    cleared: list[Path] = []
+    real_finish = refresher.finish_native_export
+
+    def recording_finish(root):
+        real_finish(root)
+        assert not (Path(root) / "_IN_PROGRESS").exists()
+        cleared.append(Path(root))
+
+    monkeypatch.setattr(refresher, "finish_native_export", recording_finish)
 
     result = refresher._refresh_one_database(
         database="eicu",
@@ -1251,6 +1261,9 @@ def test_completed_producer_staging_is_native_published_without_reextracting(
 
     assert len(publish_calls) == 1
     assert publish_calls[0]["require_stay_time_bounds"] is True
+    # The recovery completes the interrupted extraction's transaction: the
+    # marker is cleared after its publish, before promotion.
+    assert cleared == [staging]
     assert not staging.exists()
     assert (destination / "sepsis3_sofa2.parquet").is_file()
     assert not (destination / "outcome.parquet").exists()

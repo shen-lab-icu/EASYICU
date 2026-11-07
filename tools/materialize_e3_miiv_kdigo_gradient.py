@@ -32,6 +32,7 @@ from tools.e3_strict_kdigo_window import (
     derive_strict_kdigo_window,
     strict_kdigo_summary,
 )
+from easyicu.export_publication import require_published_export_package
 from easyicu.scores.aki_profiles import load_renal_aki_bundle
 from easyicu.scores.kdigo_aki import load_kdigo_aki
 
@@ -237,6 +238,7 @@ def _one_row_per_stay(
     columns: list[str],
     label: str,
 ) -> pd.DataFrame:
+    require_published_export_package(Path(path).parent)  # file-level: its package
     frame = pd.read_parquet(_regular_file(path, label=label), columns=columns)
     if frame["stay_id"].isna().any() or frame["stay_id"].duplicated().any():
         raise ValueError(f"{label} must have one non-null row per stay")
@@ -244,6 +246,7 @@ def _one_row_per_stay(
 
 
 def _charlson_24h(path: Path) -> pd.DataFrame:
+    require_published_export_package(Path(path).parent)  # file-level: its package
     frame = pd.read_parquet(
         _regular_file(path, label="full6 other_scores"),
         columns=["stay_id", "charttime", "charlson"],
@@ -287,6 +290,7 @@ def _assemble_cohort(
     identity_path: Path,
     identity_sha256: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    require_published_export_package(export_root)
     icustays = pd.read_parquet(
         _regular_file(raw_root / "icu/icustays.parquet", label="raw icustays"),
         columns=["subject_id", "hadm_id", "stay_id", "intime"],
@@ -405,6 +409,8 @@ def main() -> int:
 
     raw_root = _regular_dir(args.raw_root, label="raw MIMIC-IV root")
     export_root = _regular_dir(args.full6_export_root, label="full6 MIIV export")
+    # Refuse an unpublished export before any work (B-EXPORT-PARTIAL).
+    require_published_export_package(export_root)
     identity_path = _regular_file(args.identity_bridge, label="identity bridge")
     output_dir = args.output_dir.expanduser()
     if not output_dir.is_absolute() or output_dir.is_symlink():

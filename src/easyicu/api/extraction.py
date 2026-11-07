@@ -19,6 +19,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 import pandas as pd
 
 from ..base import BaseICULoader, detect_database_type, get_default_data_path
+from ..export_publication import begin_native_export, finish_native_export
 from ..source_bounds import (
     accounting as source_bounds_accounting,
     bounds_scope,
@@ -8106,6 +8107,9 @@ def _publish_native_export_v2(
     manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
     temporary_manifest.write_bytes(manifest_bytes)
     os.replace(temporary_manifest, root_manifest)
+    # The marker belongs to the transaction that opened it (extraction, a
+    # staged-refresh recovery, a release republication), which clears it after
+    # its own final receipts; publishing a package never clears it here.
     return {
         "manifest": str(root_manifest),
         # Hash the producer's sealed bytes, never re-trust a subsequent read.
@@ -8447,6 +8451,11 @@ def extract_database(
                 "use a fresh output directory"
             )
         entries_before_extraction = _output_entries(output_dir)
+        # Raw module outputs land in output_dir before publication canonicalises
+        # them; the marker keeps an interrupted run from looking finished. It is
+        # created after the snapshot so a publication-failure quarantine moves it
+        # together with the unpublished files. A stale marker is refused.
+        begin_native_export(output_dir)
 
     if verbose:
         rss = get_rss_mb()
@@ -9177,6 +9186,7 @@ def extract_database(
                 f"{exc} [unpublished files moved to {quarantine}]",
                 quarantine=quarantine,
             ) from exc
+        finish_native_export(output_dir)
 
     total_elapsed = time.time() - t_start
     result["total_elapsed"] = round(total_elapsed, 1)

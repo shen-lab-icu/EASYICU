@@ -27,6 +27,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from easyicu.databases.profiles import get_database_profile
+from easyicu.export_publication import require_published_export_package
 
 SOURCE_STATUS_SCHEMA_VERSION = "easyicu.idea_mining_source_status/1"
 
@@ -656,6 +657,9 @@ def _profile_database(
 ) -> DatabaseDerivedConceptProfile:
     profile = get_database_profile(database)
     database_dir = export_root / profile.key
+    # Consumption boundary: no schema or table of an unpublished export (an
+    # in-progress marker, or no root manifest) reaches the decoder.
+    require_published_export_package(database_dir)
     denominator_path = database_dir / f"{spec.denominator_table}.parquet"
     source_path = database_dir / f"{spec.source_table}.parquet"
     if not denominator_path.is_file():

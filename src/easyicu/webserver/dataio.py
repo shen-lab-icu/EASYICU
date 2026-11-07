@@ -43,6 +43,17 @@ from easyicu.concept_output_sources import (
     compile_concept_load_plan,
 )
 from easyicu.databases import normalize_database_key
+from easyicu.export_publication import (
+    REASON_IN_PROGRESS,
+    UNPUBLISHED_CODE,
+    NativeExportUnpublishedError,
+    SourceReceiptInvalidError,
+    begin_native_export,
+    finish_native_export,
+    folder_unpublished_reason,
+    require_published_export_package,
+    unpublished_reason,
+)
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
 from easyicu.webserver import entity_ids as entity_id_contract
@@ -287,6 +298,46 @@ def _shortcuts(home: Path) -> List[Dict[str, str]]:
     return out
 
 
+def _unpublished_export_error(
+    path: Path, *, export_only: bool = False
+) -> Optional[Dict[str, Any]]:
+    """Refuse a folder an interrupted extraction or web export left behind.
+
+    Its module files are raw, unpublished outputs (native ids, raw dtypes,
+    rows outside the episode window), so no screen may treat it as data.
+    ``export_only`` entry points require a published package outright; shared
+    entry points also serve sources, recognised by their own preparation
+    receipt (see ``export_publication.folder_unpublished_reason``).
+    """
+    if export_only:
+        try:
+            require_published_export_package(path)
+            reason = None
+        except NativeExportUnpublishedError as exc:
+            reason = exc.reason
+    else:
+        from easyicu.api.extraction import EXTRACT_MODULES
+
+        try:
+            reason = folder_unpublished_reason(path, module_names=EXTRACT_MODULES)
+        except SourceReceiptInvalidError as exc:
+            return {
+                "ok": False, "error": exc.code, "reason": exc.reason, "path": str(path),
+                "ready": False,
+                "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
+            }
+    if reason is None:
+        return None
+    return {
+        "ok": False,
+        "error": UNPUBLISHED_CODE,
+        "reason": reason,
+        "path": str(path),
+        "ready": False,
+        "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
+    }
+
+
 def _has_glob(path: Path, pattern: str) -> bool:
     try:
         return next(path.glob(pattern), None) is not None
@@ -400,6 +451,9 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
 
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     try:
         db_key = _detect_database(path)
@@ -2718,6 +2772,15 @@ def make_export_runner(
             }
         )
 
+        # Mark the folder before the old manifest goes and before any module
+        # file is written; only the new manifest clears it, so an interrupted
+        # or cancelled export is never read as a finished one.
+        try:
+            begin_native_export(out)
+        except NativeExportUnpublishedError as exc:
+            raise ExportCohortError(
+                UNPUBLISHED_CODE, {"reason": exc.reason, "message": str(exc)}
+            ) from exc
         current_manifest = out / "_manifest.json"
         if current_manifest.exists() or current_manifest.is_symlink():
             if current_manifest.is_symlink() or not current_manifest.is_file():
@@ -3077,6 +3140,7 @@ def make_export_runner(
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        finish_native_export(out)
         (out / "README.md").write_text(
             _render_export_readme(
                 manifest, files=files, definition_files=definition_files
@@ -3127,6 +3191,9 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path, export_only=True)
+    if unpublished is not None:
+        return unpublished
 
     manifest_path = path / "_manifest.json"
     require_path(manifest_path, instance_owned=True)
@@ -3538,6 +3605,9 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     from easyicu.synthetic_source_provenance import source_description, source_fields
     synthetic = source_description(path)
@@ -3595,6 +3665,9 @@ def describe_source_tables(raw_path: str, *, planning_metadata_only: bool = Fals
         pass
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
+    unpublished = _unpublished_export_error(path)
+    if unpublished is not None:
+        return unpublished
 
     # Native planning needs only the manifest and its digest-bound column
     # sidecar. Do not inspect Parquet footers or snapshot patient-bearing files.
@@ -3863,6 +3936,8 @@ def _read_export_manifest(path: Path) -> Dict[str, Any]:
     import json
     from easyicu.webserver.hosted import require_path
 
+    if unpublished_reason(path) == REASON_IN_PROGRESS:
+        return {}  # an interrupted extraction: never a readable manifest
     for name in ("_manifest.json", "easyicu_export_manifest.json"):
         manifest_path = path / name
         require_path(manifest_path, instance_owned=True)
@@ -4136,8 +4211,13 @@ def read_export_projection(
     stay_ids: Optional[set[str]] = None,
     entity_column: str = "stay_id",
 ) -> Any:
-    """Public, projected export reader for bounded webserver owners."""
+    """Public, projected export reader for bounded webserver owners.
 
+    A file-level reader: its parent package must be published (no in-progress
+    marker, a native or legacy root manifest).
+    """
+
+    require_published_export_package(Path(path).parent)
     return _read_export_projection(
         path,
         columns=columns,

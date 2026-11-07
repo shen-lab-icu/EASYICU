@@ -756,6 +756,15 @@ def _validate_export_package(
     expected_commit: str,
     expected_database: str | None = None,
 ) -> dict[str, Any]:
+    from easyicu.export_publication import (
+        NativeExportUnpublishedError,
+        require_published_native_export,
+    )
+
+    try:
+        require_published_native_export(export_root)
+    except NativeExportUnpublishedError as exc:
+        raise ExtractionRunError(f"{exc.code} ({exc.reason}): {export_root}") from exc
     manifest_path = export_root / "_manifest.json"
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise ExtractionRunError(f"missing regular native manifest: {manifest_path}")

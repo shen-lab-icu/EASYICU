@@ -125,6 +125,9 @@ def test_republisher_preserves_source_and_requires_fresh_release_seal(
 
     assert output == destination
     assert (source / "run_manifest.json").read_bytes() == source_run_manifest_before
+    # A completed republication clears every target's in-progress marker.
+    for database in module.DATABASES:
+        assert not (destination / "exports" / database / "_IN_PROGRESS").exists()
     assert (source / "run_metadata.json").exists()
     assert not (destination / "run_metadata.json").exists()
     assert not (destination / "module_extraction_timing.csv").exists()
