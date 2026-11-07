@@ -7,6 +7,7 @@ are checked together. All tables are synthetic.
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.dataset as ds
 import pytest
 
 from easyicu import storage_layout as sl
@@ -14,9 +15,9 @@ from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 
 
-@pytest.mark.parametrize("database", ["eicu", "mimic"])
+@pytest.mark.parametrize("database,backend", [("eicu", "duckdb"), ("mimic", "duckdb"), ("mimic", "arrow")])
 @pytest.mark.parametrize("suffix", [".pq", ".PQ", ".PARQUET", ".PaRqUeT"])
-def test_owner_resolver_and_special_reader_agree_on_every_suffix(tmp_path, monkeypatch, database, suffix):
+def test_owner_resolver_and_special_reader_agree_on_every_suffix(tmp_path, monkeypatch, database, backend, suffix):
     table = "intakeoutput" if database == "eicu" else "chartevents"
     directory = tmp_path / table
     directory.mkdir()
@@ -44,6 +45,7 @@ def test_owner_resolver_and_special_reader_agree_on_every_suffix(tmp_path, monke
     inspected = []
     relation = sl.parquet_relation
     schemas = source._get_parquet_columns_for_files
+    dataset = ds.dataset
 
     def observe_relation(files, **kwargs):
         files = tuple(Path(p) for p in files)
@@ -55,8 +57,20 @@ def test_owner_resolver_and_special_reader_agree_on_every_suffix(tmp_path, monke
         inspected.append(files)
         return schemas(files)
 
+    def observe_dataset(files, **kwargs):
+        consumed.append(tuple(Path(p) for p in files))
+        return dataset(files, **kwargs)
+
     monkeypatch.setattr(sl, "parquet_relation", observe_relation)
     monkeypatch.setattr(source, "_get_parquet_columns_for_files", observe_schemas)
+    monkeypatch.setattr(ds, "dataset", observe_dataset)
+    if backend == "arrow":
+        # A legacy fallback adapter may forward only columns and predicates.
+        # Optional quality projection must already be retained at dispatch.
+        monkeypatch.setattr(source, "_read_partitioned_data_duckdb", lambda *args, **kwargs:
+                            source._read_partitioned_data_optimized(
+                                *args[:3], itemid_filter_config=kwargs.get("itemid_filter_config"),
+                            ))
     count = len(source._load_raw_frame(table, columns))
     assert count == len(frame)
     assert consumed and all(files == resolved for files in consumed)

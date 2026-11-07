@@ -18,6 +18,7 @@ remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 ## 2026-11-07 — special-reader Parquet inventory agreement [lead-r13, NB-D56-HELPER-PARQUET-GLOB]
 
 - eICU I/O reads the resolver's validated files, and MIMIC directory schema inspection uses the selected backend's resolved files. Auxiliary flat/directory enumerators recognize `.pq` and mixed-case Parquet suffixes as the owner does. Consumption still checks file identity. Reusing the owner decision across an entire cold read remains deferred.
+- MIMIC optional quality columns are retained before backend dispatch; the validated file tuple is forwarded through DuckDB/Arrow fallbacks so a fallback adapter cannot lose the table context needed to retain ERROR/ISERROR.
 
 ## 2026-11-07 — one complete table decision and loader [lead-r13, `7f72fd643`]
 
