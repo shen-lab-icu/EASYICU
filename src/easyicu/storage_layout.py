@@ -2259,13 +2259,17 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     if index is not None:
         # A source alias must not lose manifest ownership just because its
         # spelling won physical deduplication. Rebind only a unique physical
-        # alias to an actual registered output; copies remain unregistered.
+        # alias to an output owned by this table or its configured logical
+        # aliases. Physical identity alone cannot establish table ownership.
+        table_names = {name.casefold() for name in _table_keys(source, table)}
         canonical = []
         for path in files:
             if _relative(base, path) not in index:
                 identity = _file_identity(path)
                 aliases = []
-                for relative in index:
+                for relative, (owner, _outputs, _rows) in index.items():
+                    if owner.casefold() not in table_names:
+                        continue
                     name = PurePosixPath(relative)
                     if name.is_absolute() or ".." in name.parts:
                         continue
