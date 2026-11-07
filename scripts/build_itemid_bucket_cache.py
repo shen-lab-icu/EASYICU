@@ -54,7 +54,10 @@ TABLE_CONFIGS = {
 # stay key is TABLE_CONFIGS' third field when the table is listed there,
 # otherwise --stay-key.
 VARIABLE_PROFILES = {
-    ("eicu", "nursecharting"): ("nursingchartcelltypevallabel", ["nursingchartcelltypevalname"]),
+    ("eicu", "nursecharting"): (
+        "nursingchartcelltypevallabel",
+        ["nursingchartcelltypevalname"],
+    ),
     ("eicu", "lab"): ("labname", []),
     ("eicu", "infusiondrug"): ("drugname", []),
     ("eicu", "intakeoutput"): ("celllabel", ["cellpath"]),
@@ -65,8 +68,14 @@ VARIABLE_PROFILES = {
     ("hirid", "observations"): ("variableid", []),
     ("sic", "medication"): ("DrugID", []),
 }
-STAY_KEYS = {"eicu": "patientunitstayid", "miiv": "stay_id", "mimic": "icustay_id",
-             "aumc": "admissionid", "hirid": "patientid", "sic": "CaseID"}
+STAY_KEYS = {
+    "eicu": "patientunitstayid",
+    "miiv": "stay_id",
+    "mimic": "icustay_id",
+    "aumc": "admissionid",
+    "hirid": "patientid",
+    "sic": "CaseID",
+}
 # Distinct secondary values kept in the manifest, summed over partitions.
 MAX_SECONDARY_VALUES = 200_000
 
@@ -143,10 +152,20 @@ def _identifier(value: str) -> str:
 _FLOAT_TYPES = frozenset({"FLOAT", "DOUBLE", "REAL", "FLOAT4", "FLOAT8"})
 _FLOAT_ALIASES = {"REAL": "FLOAT", "FLOAT4": "FLOAT", "FLOAT8": "DOUBLE"}
 _FLOAT_TOKEN = re.compile(r"\b(?:DOUBLE|FLOAT|REAL|FLOAT4|FLOAT8)\b")
-_INTEGER_TYPES = frozenset({
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
-    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
-})
+_INTEGER_TYPES = frozenset(
+    {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+        "UHUGEINT",
+    }
+)
 # A source shard's float column may be read into the table's unified type only
 # along these widenings: the flat reader (read_parquet union_by_name) applies
 # the same CAST, so the bucket must hold exactly what the flat path returns
@@ -179,7 +198,12 @@ class FloatFidelityError(RuntimeError):
         target: dict,
         reason: str = "bucket_float_fidelity_mismatch",
     ):
-        self.reason, self.column, self.source, self.target = reason, column, source, target
+        self.reason, self.column, self.source, self.target = (
+            reason,
+            column,
+            source,
+            target,
+        )
         super().__init__(f"{reason}: column {column!r} source {source} target {target}")
 
 
@@ -191,7 +215,9 @@ def _float_columns(schema: list[list[str]]) -> list[str]:
         if upper in _FLOAT_TYPES:
             columns.append(name)
         elif _FLOAT_TOKEN.search(upper):
-            raise FloatFidelityError(name, {"type": kind}, {}, reason="unsupported_nested_float")
+            raise FloatFidelityError(
+                name, {"type": kind}, {}, reason="unsupported_nested_float"
+            )
     return columns
 
 
@@ -221,7 +247,9 @@ def _check_source_float_types(con, source_files, schema, columns) -> None:
                 unified[column] == "DOUBLE" and _unified(kind).startswith("DECIMAL(")
             ):
                 raise FloatFidelityError(
-                    column, {"shard_type": kind}, {"unified_type": unified[column]},
+                    column,
+                    {"shard_type": kind},
+                    {"unified_type": unified[column]},
                     reason="bucket_float_source_type_unsupported",
                 )
 
@@ -253,7 +281,8 @@ def _source_batches(con, source_files, columns, unified, rows):
         present = {c.casefold(): c for c, _ in _schema(con, _relation([path]))}
         projection = ", ".join(
             f"CAST({_identifier(present[c.casefold()])} AS {unified[c]}) AS {_identifier(c)}"
-            if c.casefold() in present else f"CAST(NULL AS {unified[c]}) AS {_identifier(c)}"
+            if c.casefold() in present
+            else f"CAST(NULL AS {unified[c]}) AS {_identifier(c)}"
             for c in columns
         )
         reader = con.execute(
@@ -266,8 +295,12 @@ def _source_batches(con, source_files, columns, unified, rows):
             if not np.array_equal(row, np.arange(expected, expected + len(row))):
                 raise RuntimeError("bucket_float_source_order_unverifiable")
             expected += len(row)
-            yield batch.drop_columns(["__row"]) if hasattr(batch, "drop_columns") else pa.RecordBatch.from_arrays(
-                batch.columns[1:], names=batch.schema.names[1:]
+            yield (
+                batch.drop_columns(["__row"])
+                if hasattr(batch, "drop_columns")
+                else pa.RecordBatch.from_arrays(
+                    batch.columns[1:], names=batch.schema.names[1:]
+                )
             )
 
 
@@ -276,7 +309,13 @@ class _ColumnProfile:
         self.values = self.nulls = self.neg_zero = self.pos_zero = self.nan = 0
         self.digest = hashlib.sha256()
 
-    def update(self, ordinals: np.ndarray, valid: np.ndarray, values: np.ndarray, bits: np.ndarray) -> None:
+    def update(
+        self,
+        ordinals: np.ndarray,
+        valid: np.ndarray,
+        values: np.ndarray,
+        bits: np.ndarray,
+    ) -> None:
         zero = valid & (values == 0)
         negative = np.signbit(values)
         self.values += int(np.count_nonzero(valid))
@@ -284,13 +323,25 @@ class _ColumnProfile:
         self.neg_zero += int(np.count_nonzero(zero & negative))
         self.pos_zero += int(np.count_nonzero(zero & ~negative))
         self.nan += int(np.count_nonzero(valid & np.isnan(values)))
-        record = np.empty(ordinals.size, dtype=[("o", "<i8"), ("v", "u1"), ("b", "<u8")])
-        record["o"], record["v"], record["b"] = ordinals, valid, np.where(valid, bits, 0)
+        record = np.empty(
+            ordinals.size, dtype=[("o", "<i8"), ("v", "u1"), ("b", "<u8")]
+        )
+        record["o"], record["v"], record["b"] = (
+            ordinals,
+            valid,
+            np.where(valid, bits, 0),
+        )
         self.digest.update(record.tobytes())
 
     def result(self) -> dict:
-        return {"values": self.values, "nulls": self.nulls, "neg_zero": self.neg_zero,
-                "pos_zero": self.pos_zero, "nan": self.nan, "sha256": self.digest.hexdigest()}
+        return {
+            "values": self.values,
+            "nulls": self.nulls,
+            "neg_zero": self.neg_zero,
+            "pos_zero": self.pos_zero,
+            "nan": self.nan,
+            "sha256": self.digest.hexdigest(),
+        }
 
 
 def _float_arrays(column):
@@ -308,7 +359,9 @@ def _peak_rss_kb() -> int:
     return int(peak // 1024) if sys.platform == "darwin" else int(peak)
 
 
-def _assert_float_fidelity(con, source_files, target_files, schema) -> tuple[dict, dict]:
+def _assert_float_fidelity(
+    con, source_files, target_files, schema
+) -> tuple[dict, dict]:
     """Bind every float value to its source ordinal and compare bits exactly.
 
     Returns (fidelity, qc): ``fidelity`` is deterministic (manifest and receipt);
@@ -335,7 +388,9 @@ def _assert_float_fidelity(con, source_files, target_files, schema) -> tuple[dic
         f"SELECT {_identifier(ORDINAL)}, {', '.join(_identifier(c) for c in columns)} "
         f"FROM {_relation(target_files)} ORDER BY {_identifier(ORDINAL)}"
     ).fetch_record_batch(rows)
-    source_rows = _Rows(_source_batches(source_cursor, source_files, columns, unified, rows))
+    source_rows = _Rows(
+        _source_batches(source_cursor, source_files, columns, unified, rows)
+    )
     target_rows = _Rows(target)
     source_profile = {c: _ColumnProfile() for c in columns}
     target_profile = {c: _ColumnProfile() for c in columns}
@@ -348,13 +403,17 @@ def _assert_float_fidelity(con, source_files, target_files, schema) -> tuple[dic
             break
         if s is None or t is None or s.num_rows != t.num_rows:
             raise FloatFidelityError(
-                ORDINAL, {"rows_from": ordinal}, {"rows_from": ordinal},
+                ORDINAL,
+                {"rows_from": ordinal},
+                {"rows_from": ordinal},
                 reason="bucket_float_row_count_mismatch",
             )
         ordinals = np.arange(ordinal, ordinal + t.num_rows, dtype=np.int64)
         if not np.array_equal(t.column(0).to_numpy(), ordinals):
             raise FloatFidelityError(
-                ORDINAL, {"ordinal_from": ordinal}, {"ordinal_from": ordinal},
+                ORDINAL,
+                {"ordinal_from": ordinal},
+                {"ordinal_from": ordinal},
                 reason="bucket_ordinal_binding_mismatch",
             )
         for column in columns:
@@ -373,7 +432,11 @@ def _assert_float_fidelity(con, source_files, target_files, schema) -> tuple[dic
         if mismatched[column] or src != tgt:
             raise FloatFidelityError(
                 column,
-                {**src, "mismatched_rows": mismatched[column], "first_mismatch_ordinal": first[column]},
+                {
+                    **src,
+                    "mismatched_rows": mismatched[column],
+                    "first_mismatch_ordinal": first[column],
+                },
                 tgt,
             )
         fidelity["columns"][column] = src
@@ -388,7 +451,9 @@ def _assert_float_fidelity(con, source_files, target_files, schema) -> tuple[dic
     return fidelity, qc
 
 
-def _assert_float_fidelity_unordered(con, source_files, files, schema, key, count) -> tuple[dict, dict]:
+def _assert_float_fidelity_unordered(
+    con, source_files, files, schema, key, count
+) -> tuple[dict, dict]:
     """Adoption of a legacy cache without an ordinal: bind floats to the whole record.
 
     Per bucket, the multiset of complete source rows routed there
@@ -402,14 +467,19 @@ def _assert_float_fidelity_unordered(con, source_files, files, schema, key, coun
     """
     started, rss_before = time.monotonic(), _peak_rss_kb()
     columns = _float_columns(schema)
-    fidelity = {"algorithm": "adoption: per-bucket exact multiset of complete rows with float sign bits "
-                "(EXCEPT ALL both ways), refused when source records equal apart from a zero's sign "
-                "exist (no ordinal to bind them); NaN payloads not distinguished",
-                "dictionary_encoding": "unverified_legacy", "columns": {}}
+    fidelity = {
+        "algorithm": "adoption: per-bucket exact multiset of complete rows with float sign bits "
+        "(EXCEPT ALL both ways), refused when source records equal apart from a zero's sign "
+        "exist (no ordinal to bind them); NaN payloads not distinguished",
+        "dictionary_encoding": "unverified_legacy",
+        "columns": {},
+    }
     if not columns:
         return fidelity, {"wall_seconds": 0.0}
     _check_source_float_types(con, source_files, schema, columns)
-    signs = ", ".join(f"signbit({_identifier(c)}) AS {_identifier('__sign_' + c)}" for c in columns)
+    signs = ", ".join(
+        f"signbit({_identifier(c)}) AS {_identifier('__sign_' + c)}" for c in columns
+    )
     source = f"SELECT hash({_identifier(key)}) % {count} AS __bucket, *, {signs} FROM {_relation(source_files)}"
     target = " UNION ALL ".join(
         f"SELECT {int(f.parent.name.split('=')[1])}::UBIGINT AS __bucket, *, {signs} FROM {_relation([f])}"
@@ -420,14 +490,19 @@ def _assert_float_fidelity_unordered(con, source_files, files, schema, key, coun
         f"(SELECT count(*) FROM (({target}) EXCEPT ALL ({source})))"
     ).fetchone()
     if missing or extra:
-        raise FloatFidelityError("*", {"rows_not_in_bucket": int(missing)}, {"rows_not_in_source": int(extra)})
+        raise FloatFidelityError(
+            "*",
+            {"rows_not_in_bucket": int(missing)},
+            {"rows_not_in_source": int(extra)},
+        )
     # Without a source ordinal, records that are equal apart from the sign of a
     # zero cannot be told apart: a sign swap between them leaves the signed
     # multiset unchanged, yet FIRST() and other order-dependent reads change.
     # Such a source can only be certified by an ordinal-bound rebuild.
     normalized = ", ".join(
         f"CASE WHEN {_identifier(c)} = 0 THEN abs({_identifier(c)}) ELSE {_identifier(c)} END"
-        if c in columns else _identifier(c)
+        if c in columns
+        else _identifier(c)
         for c, _ in schema
     )
     pattern = " || ".join(
@@ -441,7 +516,9 @@ def _assert_float_fidelity_unordered(con, source_files, files, schema, key, coun
         raise FloatFidelityError(
             "*",
             {"sign_ambiguous_groups": int(ambiguous)},
-            {"required": "rebuild with build_bucket_cache (ordinal-bound fidelity check)"},
+            {
+                "required": "rebuild with build_bucket_cache (ordinal-bound fidelity check)"
+            },
             reason="adopt_sign_ambiguous_rebuild_required",
         )
     for column in columns:
@@ -451,10 +528,18 @@ def _assert_float_fidelity_unordered(con, source_files, files, schema, key, coun
             f"count(*) FILTER (WHERE {c} = 0 AND NOT signbit({c})), count(*) FILTER (WHERE isnan({c})) "
             f"FROM {_relation(source_files)}"
         ).fetchone()
-        fidelity["columns"][column] = {"values": values, "nulls": nulls, "neg_zero": neg,
-                                       "pos_zero": pos, "nan": nan}
-    qc = {"wall_seconds": round(time.monotonic() - started, 3),
-          "process_peak_rss_kb_before": rss_before, "process_peak_rss_kb_after": _peak_rss_kb()}
+        fidelity["columns"][column] = {
+            "values": values,
+            "nulls": nulls,
+            "neg_zero": neg,
+            "pos_zero": pos,
+            "nan": nan,
+        }
+    qc = {
+        "wall_seconds": round(time.monotonic() - started, 3),
+        "process_peak_rss_kb_before": rss_before,
+        "process_peak_rss_kb_after": _peak_rss_kb(),
+    }
     return fidelity, qc
 
 
@@ -506,7 +591,16 @@ def _inventory(root: Path) -> list[dict]:
 
 
 def _manifest(
-    root, *, key, key_type, count, scheme, breaks, sort, row_group_target, source_order,
+    root,
+    *,
+    key,
+    key_type,
+    count,
+    scheme,
+    breaks,
+    sort,
+    row_group_target,
+    source_order,
     derived_from=None,
 ):
     result = dict(
@@ -889,7 +983,9 @@ def build_variable_cache(
         raise FileExistsError(
             f"Inspect incomplete cache build before retrying: {temporary}"
         )
-    if target.is_relative_to(data_path / table) or any(target == p for p in source_files):
+    if target.is_relative_to(data_path / table) or any(
+        target == p for p in source_files
+    ):
         raise ValueError("output must be a new root, separate from the source")
     temporary.mkdir(parents=True)
     started = time.monotonic()
@@ -912,8 +1008,12 @@ def build_variable_cache(
             if key == stay_key or key in secondary_keys or stay_key in secondary_keys:
                 raise ValueError("key, stay key and secondary keys must differ")
             if {
-                ORDINAL, "bucket_id", "_easyicu_bucket_id", "_easyicu_partition_id",
-                "filename", "file_row_number",
+                ORDINAL,
+                "bucket_id",
+                "_easyicu_bucket_id",
+                "_easyicu_partition_id",
+                "filename",
+                "file_row_number",
             } & set(columns):
                 raise ValueError("Source contains a reserved storage column")
             types = dict(schema)
@@ -924,11 +1024,22 @@ def build_variable_cache(
             key_type, stay_type = types[key], types[stay_key]
             if sort_keys is None:
                 clock = next(
-                    (by_lower[c] for c in (
-                        "charttime", "nursingchartoffset", "labresultoffset",
-                        "infusionoffset", "intakeoutputoffset", "respchartoffset",
-                        "datetime", "measuredat", "starttime", "offset",
-                    ) if c in by_lower),
+                    (
+                        by_lower[c]
+                        for c in (
+                            "charttime",
+                            "nursingchartoffset",
+                            "labresultoffset",
+                            "infusionoffset",
+                            "intakeoutputoffset",
+                            "respchartoffset",
+                            "datetime",
+                            "measuredat",
+                            "starttime",
+                            "offset",
+                        )
+                        if c in by_lower
+                    ),
                     None,
                 )
                 sort_keys = [c for c in (stay_key, clock) if c]
@@ -937,7 +1048,9 @@ def build_variable_cache(
             if any(c not in columns for c in sort_keys):
                 raise ValueError("sort_keys must name source columns")
             sort = list(dict.fromkeys([*sort_keys, ORDINAL]))
-            source_rows = con.execute(f"SELECT count(*) FROM {source_relation}").fetchone()[0]
+            source_rows = con.execute(
+                f"SELECT count(*) FROM {source_relation}"
+            ).fetchone()[0]
             if not source_rows:
                 raise ValueError("a variable layout needs at least one source row")
             counts = con.execute(
@@ -949,12 +1062,19 @@ def build_variable_cache(
                 if isinstance(value, float) and not math.isfinite(value):
                     raise ValueError("variable key has a non-finite value")
                 modulus = min(bucket_count, _pow2_floor(rows // rows_per_bucket))
-                partitions.append({"id": pid, "value": value, "modulus": modulus, "rows": int(rows)})
-            con.execute("CREATE OR REPLACE TEMP TABLE _easyicu_partitions (pid BIGINT, value "
-                        f"{key_type}, span BIGINT)")
+                partitions.append(
+                    {"id": pid, "value": value, "modulus": modulus, "rows": int(rows)}
+                )
+            con.execute(
+                "CREATE OR REPLACE TEMP TABLE _easyicu_partitions (pid BIGINT, value "
+                f"{key_type}, span BIGINT)"
+            )
             con.executemany(
                 "INSERT INTO _easyicu_partitions VALUES (?, ?, ?)",
-                [(p["id"], p["value"], bucket_count // p["modulus"]) for p in partitions],
+                [
+                    (p["id"], p["value"], bucket_count // p["modulus"])
+                    for p in partitions
+                ],
             )
             if bucket_count > 1:
                 fractions = [i / bucket_count for i in range(1, bucket_count)]
@@ -997,13 +1117,17 @@ def build_variable_cache(
             for part in partitions:
                 pid, modulus = part["id"], part["modulus"]
                 partition_dir = temporary / f"{PARTITION_PREFIX}{pid}"
-                staged = sorted((staging / f"_easyicu_partition_id={pid}").glob("*.parquet"))
+                staged = sorted(
+                    (staging / f"_easyicu_partition_id={pid}").glob("*.parquet")
+                )
                 if not staged:
                     raise RuntimeError("variable_partition_staging_missing")
                 relation = _relation(staged)
-                per_bucket = dict(con.execute(
-                    f"SELECT _easyicu_bucket_id, count(*) FROM {relation} GROUP BY 1"
-                ).fetchall())
+                per_bucket = dict(
+                    con.execute(
+                        f"SELECT _easyicu_bucket_id, count(*) FROM {relation} GROUP BY 1"
+                    ).fetchall()
+                )
                 for bid in range(modulus):
                     directory = partition_dir / f"bucket_id={bid}"
                     directory.mkdir(parents=True)
@@ -1020,7 +1144,8 @@ def build_variable_cache(
                 part["secondary"] = {}
                 for column in secondary_keys:
                     values = [
-                        row[0] for row in con.execute(
+                        row[0]
+                        for row in con.execute(
                             f"SELECT DISTINCT {_identifier(column)} FROM {relation} "
                             f"WHERE {_identifier(column)} IS NOT NULL ORDER BY 1"
                         ).fetchall()
@@ -1032,14 +1157,18 @@ def build_variable_cache(
                 if sum(per_bucket.values()) != part["rows"]:
                     raise RuntimeError("variable_partition_row_mismatch")
             shutil.rmtree(staging, ignore_errors=True)
-            target_files = sorted(temporary.glob(f"{PARTITION_PREFIX}*/bucket_id=*/*.parquet"))
+            target_files = sorted(
+                temporary.glob(f"{PARTITION_PREFIX}*/bucket_id=*/*.parquet")
+            )
             target_relation = _relation(target_files)
             if (
                 _schema(con, f'(SELECT * EXCLUDE("{ORDINAL}") FROM {target_relation})')
                 != schema
             ):
                 raise RuntimeError("Schema mismatch")
-            fingerprint = _assert_multiset(con, source_relation, target_relation, columns)
+            fingerprint = _assert_multiset(
+                con, source_relation, target_relation, columns
+            )
             float_fidelity, float_fidelity_qc = _assert_float_fidelity(
                 con, source_files, target_files, schema
             )
@@ -1052,8 +1181,11 @@ def build_variable_cache(
                 source=str(data_path / table),
                 source_files=len(source_files),
                 source_inventory=[
-                    dict(path=str(p.relative_to(data_path)), size=p.stat().st_size,
-                         mtime_ns=p.stat().st_mtime_ns)
+                    dict(
+                        path=str(p.relative_to(data_path)),
+                        size=p.stat().st_size,
+                        mtime_ns=p.stat().st_mtime_ns,
+                    )
                     for p in source_files
                 ],
                 rows=source_rows,
@@ -1236,12 +1368,16 @@ def adopt_bucket_cache(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-path", type=Path, required=True)
-    parser.add_argument("--database", choices=sorted(set(TABLE_CONFIGS) | set(STAY_KEYS)))
+    parser.add_argument(
+        "--database", choices=sorted(set(TABLE_CONFIGS) | set(STAY_KEYS))
+    )
     parser.add_argument("--table")
     parser.add_argument("--key")
     parser.add_argument("--bucket-count", "--modulus", type=int, default=64)
     parser.add_argument(
-        "--scheme", choices=("hash", "range", VARIABLE_SCHEME), default="hash",
+        "--scheme",
+        choices=("hash", "range", VARIABLE_SCHEME),
+        default="hash",
         help=(
             f"{VARIABLE_SCHEME}: one partition per --key value, then stay ranges "
             "inside it (--stay-key; --bucket-count is the power-of-two number of "
@@ -1284,7 +1420,9 @@ def main() -> int:
     if args.scheme == VARIABLE_SCHEME:
         database = args.database or ""
         table = args.table or profile[0]
-        default_key, default_secondary = VARIABLE_PROFILES.get((database, table), (None, []))
+        default_key, default_secondary = VARIABLE_PROFILES.get(
+            (database, table), (None, [])
+        )
         result = build_variable_cache(
             args.data_path,
             table=table,
@@ -1293,7 +1431,9 @@ def main() -> int:
             bucket_count=args.bucket_count,
             rows_per_bucket=args.rows_per_bucket,
             secondary_keys=(
-                args.secondary_keys.split(",") if args.secondary_keys else default_secondary
+                args.secondary_keys.split(",")
+                if args.secondary_keys
+                else default_secondary
             ),
             memory_limit=args.memory_limit,
             threads=args.threads,
