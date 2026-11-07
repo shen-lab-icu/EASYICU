@@ -291,18 +291,23 @@ def test_hardlinked_bucket_metadata_walks_each_anchor_but_parses_once(tmp_path, 
         return read_text(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", spy)
+    parser = Mock(wraps=publication.json.loads)
+    monkeypatch.setattr(publication.json, "loads", parser)
     resolver = Mock(wraps=layout.resolve_derived_from_source)
     monkeypatch.setattr(layout, "resolve_derived_from_source", resolver)
     driver._source_publication_closure({"miiv": str(view)})
     assert len(reads) == 1
+    assert parser.call_count == 1
     anchors = {call.kwargs["bucket_root"] for call in resolver.call_args_list}
     reads.clear()
+    parser.reset_mock()
     (tmp_path / f".remote{publication.PENDING_SUFFIX}").write_text("{}")
     with pytest.raises(publication.SealPublicationError) as caught:
         driver._source_publication_closure({"miiv": str(view)})
     assert caught.value.reason == publication.UNPUBLISHED
     assert caught.value.install == remote
     assert len(reads) == 1
+    assert parser.call_count == 1
     assert anchors == set(buckets)
 
 

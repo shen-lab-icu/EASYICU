@@ -39,6 +39,7 @@ tree are refused before reading. Normal output writes and unrelated files in
 shared provenance directories no longer prevent resume; changed source
 identities and PENDING/REFUSED installs still refuse it. Digest schema `/3`
 refuses older identities. No clinical computation changes.
+Regression spies check both JSON parses and metadata reads once per inode.
 
 ## 2026-11-07 — bind publication resume to files and provenance [r13_slgate4, D60-RESUME-FILE, D60-RELATIVE-OVERREACH, D60-PROVENANCE-NAME]
 
