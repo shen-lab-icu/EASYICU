@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Seal-tip rebuild of the formal bucket roots (lead-r13 seal plan, supervisor approval 2026-11-06).
+"""Seal-tip rebuild of the formal bucket roots (lead-r13 seal plan, supervisor ruling 2026-11-07).
 
   (A) build1  rebuild every formal bucket root ONCE at the seal SHA with the float-fidelity builder:
               strict QC per table, footer scan per root; any failure stops the seal. CareVue builds a
-              bucket root and then assembles the formal link farm mimic_cv_dir_r13 around it.
+              bucket root and then assembles the bucket-only farm mimic_cv_bkt_s<sha9> around it.
   (B) build2  a second, fully independent build of every root from the same SHA (twin roots);
       compare v3 compare (bucket_compare.py) build1 vs build2: every part must be IDENTICAL.
   (C) the per-DB 20/20 formal-start gate is not run by this tool.
@@ -21,7 +21,7 @@ Usage (entry point: seal_rebuild.sh; never launched without coordinator-assigned
 The SHA must be the launcher's first argument. SEAL_MIRROR selects the git mirror (default the server
 mirror); SEAL_PYTHON selects the interpreter (default the server's EasyICU venv). The launcher extracts
 seal_rebuild.py, footer_scan.py and bucket_compare.py from regular blobs at that SHA into a fresh,
-read-only directory under SEAL_LAUNCH_ROOT (else TMPDIR, else /tmp), runs with -I -S, and removes the
+read-only directory under verified SEAL_LAUNCH_ROOT (else the trusted work_root), runs with -I -S, and removes the
 extraction on exit. No arguments or a lone -h/--help print static shell usage. Before
 taking run locks, the tool verifies its own bytes and both helpers against the seal SHA
 (tool_not_sealed), then records their SHA256 fingerprints as `tool` in bucket and farm receipts.
@@ -86,14 +86,27 @@ the memgate admits it, then DBs run in parallel):
           pending marker. accept_root refuses a root with a pending (root_pending) or refusal marker.
      A failure before (e) leaves only the hidden staging root; a crash between (e) and (f) leaves a
      read-only, verified root that stays refused (pending) until an operator decides.
-  CareVue (build1 only, after its bucket root PASSES): the farm b6_root/mimic_cv_dir_r13 is assembled the
-  same way (staging, ro, rename): the current farm's flat links and per-file dirs replicated exactly,
-  chartevents_bucket -> the new build1 bucket, conversion_manifest.json with data_path re-pointed; refused
-  if mimic_cv_dir_r13 already exists; every link target must resolve inside the allowed roots.
+  CareVue builds from the explicit build_input b6_root/mimic_cv_flat_r13, whose conversion manifest
+  must match CV_FLAT_MANIFEST_SHA256. Its chartevents.parquet resolves to the flat CareVue view;
+  the builder binds those bytes in derived_from.files. The farm is never a flat build input.
+  Historical conversion derived_from stays as provenance only for this pinned-input plan; all
+  other manifests still require their live derived_from source. After build1 PASSES, aggregate
+  carevue_origin evidence from the bucket and linked icustays is required in the external CareVue
+  receipts and the farm's in-root receipt. Non-CareVue stays/rows or mismatched source hashes refuse.
+  CareVue (build1 only, after its bucket root PASSES): b6_root/mimic_cv_bkt_s<sha9> is assembled the
+  same way (staging, ro, rename): reference links and per-file dirs are replicated EXCEPT flat
+  chartevents (chartevents.parquet or chartevents). chartevents_bucket links only to the new build1
+  mimic_cv_bucket_s<sha9>; build2 keeps its _build2 suffix and assembles no farm. The farm's conversion
+  manifest re-points data_path, removes chartevents from tables and records bucket-only provenance.
+  An existing target or staging root is refused; the old mimic_cv_dir_s<sha9> name and cross-name
+  collisions are refused without reuse or rename-over. Every link target stays inside allowed roots.
 Writes: only new roots/staging under b6_root, b6_root/_scratch/seal_<sha9>/, and the work directory.
 Never databases/, the CareVue view, or any current root. Receipts hold aggregates and paths only.
 
 Operator runbook (there is no automatic resume; a refused root stays refused until an operator acts):
+  CareVue's formal farm is mimic_cv_bkt_s<sha9>, with bucket-only chartevents via the build1 bucket.
+  Flat chartevents links/files/dirs or manifest table entries are refused before freeze, after rename
+  and at acceptance. mimic_cv_dir_s<sha9> is refused, including a collision beside the new farm name.
   Standalone acceptance also starts at the trusted shell entry, with the coordinator's full SHA:
     seal_rebuild.sh SHA accept --accept-root ROOT --external-receipt RECEIPT
       --accept-build build1|build2 --accept-db DB [--config CONFIG.json]
@@ -165,6 +178,24 @@ SKIP_RE = re.compile(
     r"^(_LEAD_R13_BUILD_RECEIPT\.json|_SEAL_BUILD_RECEIPT\.json|_lead_r13_build_.*\.log|_unused_.*|\..*)$"
 )
 CONVERSION_MANIFEST = "conversion_manifest.json"
+CV_FLAT_ENTRIES = frozenset({"chartevents", "chartevents.parquet"})
+CV_FLAT_MANIFEST_SHA256 = (
+    "a4464bbb04f307cdd1c1a9a60e8eca67dab8c48fd6005cc36cd98c64c86edb1f"
+)
+CV_ORIGIN_COUNTS = frozenset(
+    {
+        "carevue_stays",
+        "other_source_stays",
+        "rows_from_noncarevue_stays",
+        "itemid_ge_220000_rows",
+        "itemid_ge_220000_distinct_items",
+    }
+)
+CV_ORIGIN_KEYS = CV_ORIGIN_COUNTS | {
+    "icustays_dbsource_counts",
+    "flat_source_manifest_sha256",
+    "flat_source_chartevents_sha256",
+}
 IN_ROOT_RECEIPT = "_SEAL_BUILD_RECEIPT.json"
 REFUSAL_SUFFIX = ".seal_REFUSED"
 PENDING_SUFFIX = ".seal_PENDING"
@@ -317,13 +348,14 @@ PRODUCTION = {
         },
         "cv": {
             "current_root": f"{_B6}/mimic_cv_dir",
+            "build_input": f"{_B6}/mimic_cv_flat_r13",
             "database": "mimic",
             "mem_gib": 12,
             "threads": 2,
             "timeout_s": 21600,
             "tables": [["chartevents", _HASH64]],
             "farm": {
-                "name": "mimic_cv_dir",
+                "name": "mimic_cv_bkt",
                 "bucket_root": "mimic_cv_bucket",
                 "reference": f"{_B6}/mimic_cv_dir_r13",
             },
@@ -451,6 +483,12 @@ class Seal:
         cores: dict,
     ):
         self.cfg, self.mode, self.dry_run = cfg, mode, dry_run
+        cv_farm = cfg["dbs"].get("cv", {}).get("farm")
+        if cv_farm and (
+            cv_farm.get("name") != "mimic_cv_bkt"
+            or cv_farm.get("bucket_root") != "mimic_cv_bucket"
+        ):
+            raise SealError("farm_name_mismatch", str(cv_farm.get("name")))
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
             raise SealError("seal_sha_unknown", sha)
         self.b6 = Path(cfg["b6_root"])
@@ -483,6 +521,8 @@ class Seal:
     def target(self, db: str, mode: str | None = None) -> Path:
         mode = mode or self.mode
         spec = self.cfg["dbs"][db]
+        if db == "cv" and "farm" in spec:
+            check_cv_farm_name(self.b6 / f"mimic_cv_bkt_s{self.s9}", self.full)
         base = (
             spec["farm"]["bucket_root"]
             if "farm" in spec
@@ -494,7 +534,10 @@ class Seal:
         farm = self.cfg["dbs"][db].get("farm")
         if farm and self.mode not in ("build1", "compare"):
             raise SealError("operator_farm_mode_mismatch", self.mode)
-        return self.b6 / f"{farm['name']}_s{self.s9}" if farm else None
+        target = self.b6 / f"{farm['name']}_s{self.s9}" if farm else None
+        if target is not None and db == "cv":
+            check_cv_farm_name(target, self.full)
+        return target
 
     def staging(self, target: Path) -> Path:
         return target.parent / f".{target.name}.seal_staging"
@@ -925,13 +968,20 @@ def _conversion_decision(
         raise SealError("conversion_manifest_unreadable", src.parent.name) from exc
     if not isinstance(c, dict):
         raise SealError("conversion_manifest_unreadable", src.parent.name)
+    # Only CareVue plans bound to the explicit pinned flat input may retain retired conversion
+    # lineage as provenance. All other manifests keep the live derived_from verification.
+    cv_input = pinned.get("carevue_build_input")
+    if cv_input is not None:
+        verify_cv_flat_input(Path(cv_input))
     d = c.get("derived_from")
-    if d is None and not pinned["linked"]:
+    if d is None and not pinned["linked"] and cv_input is None:
         raise SealError("conversion_manifest_unbound", src.parent.name)
     if d is not None:
         if not isinstance(d, dict) or not d.get("path") or not d.get("sha256"):
             raise SealError("conversion_manifest_unbound", src.parent.name)
-        if not Path(d["path"]).is_file() or sha256_file(Path(d["path"])) != d["sha256"]:
+        if cv_input is None and (
+            not Path(d["path"]).is_file() or sha256_file(Path(d["path"])) != d["sha256"]
+        ):
             raise SealError("conversion_manifest_derived_from_changed", src.parent.name)
     data_path = c.get("data_path")
     if data_path == str(old_root):
@@ -949,7 +999,8 @@ def rewritten_conversion_manifest(
 
     Its source is read once and verified on those bytes (D29-CONVERSION-RACE): the file it resolves
     to must have the sha256 pinned at plan time, and a ``derived_from`` binding (always required of a
-    root's own, non-linked manifest) must still match its source. Only ``data_path`` may change: the
+    root's own, non-linked manifest) must still match its source, except for the explicitly pinned
+    CareVue build-input plan, where historical lineage remains provenance. Only ``data_path`` may change: the
     current root's path is re-pointed to the new root; a linked source manifest that names its own
     directory keeps it. Returns the new content, or None when the content is unchanged."""
     return _conversion_decision(
@@ -1202,6 +1253,166 @@ def bucket_set(root: Path, tables, *, links=None) -> dict:
     return out
 
 
+def check_cv_farm_name(farm: Path, sha: str) -> None:
+    """The old flat-carrying name cannot be a target or coexist with this SHA's bucket-only farm."""
+    if farm.name != f"mimic_cv_bkt_s{sha[:9]}":
+        raise SealError("farm_name_mismatch", farm.name)
+    legacy = farm.with_name(f"mimic_cv_dir_s{sha[:9]}")
+    for path in (
+        legacy,
+        legacy.with_name(f".{legacy.name}.seal_staging"),
+        pending_marker(legacy),
+        refusal_marker(legacy),
+    ):
+        if path.exists() or path.is_symlink():
+            raise SealError("farm_cross_name_collision", path.name)
+
+
+def cv_flat_table(entry) -> bool:
+    return (entry.get("table") if isinstance(entry, dict) else entry) == "chartevents"
+
+
+def check_cv_bucket_only(root: Path) -> None:
+    """Reject flat chartevents even when an internally consistent receipt records it."""
+    if CV_FLAT_ENTRIES.intersection(os.listdir(root)):
+        raise SealError("farm_flat_chartevents", root.name)
+    manifest = root / CONVERSION_MANIFEST
+    try:
+        content = json.loads(manifest.read_text())
+        tables = content["tables"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SealError("conversion_manifest_unreadable", root.name) from exc
+    if not isinstance(tables, list):
+        raise SealError("conversion_manifest_unreadable", root.name)
+    if any(cv_flat_table(entry) for entry in tables):
+        raise SealError("farm_flat_chartevents", CONVERSION_MANIFEST)
+
+
+def cv_chartevents_source_sha256(bucket_root: Path) -> str:
+    try:
+        manifest = json.loads(
+            (bucket_root / "chartevents_bucket/_BUCKET_MANIFEST.json").read_text()
+        )
+        files = manifest["derived_from"]["files"]
+        if len(files) != 1 or files[0]["path"] != "chartevents.parquet":
+            raise ValueError("explicit single flat source required")
+        digest = files[0]["sha256"]
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        raise SealError(
+            "carevue_origin_derived_from_invalid", bucket_root.name
+        ) from exc
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise SealError("carevue_origin_derived_from_invalid", bucket_root.name)
+    return digest
+
+
+def check_carevue_origin(origin, bucket_root: Path) -> None:
+    """Validate stored aggregate evidence without reading clinical rows at acceptance."""
+    if not isinstance(origin, dict) or set(origin) != CV_ORIGIN_KEYS:
+        raise SealError("carevue_origin_invalid", "missing object or incorrect keys")
+    counts = origin["icustays_dbsource_counts"]
+    if (
+        not isinstance(counts, dict)
+        or any(not isinstance(k, str) for k in counts)
+        or any(type(v) is not int or v < 0 for v in counts.values())
+        or any(type(origin[k]) is not int or origin[k] < 0 for k in CV_ORIGIN_COUNTS)
+    ):
+        raise SealError("carevue_origin_invalid", "counts")
+    for field in ("other_source_stays", "rows_from_noncarevue_stays"):
+        if origin[field] != 0:
+            raise SealError(f"carevue_origin_{field}", "must be zero")
+    if (
+        origin["carevue_stays"] != counts.get("carevue", 0)
+        or sum(v for k, v in counts.items() if k != "carevue") != 0
+        or origin["itemid_ge_220000_distinct_items"] > origin["itemid_ge_220000_rows"]
+    ):
+        raise SealError("carevue_origin_invalid", "inconsistent counts")
+    if origin["flat_source_manifest_sha256"] != CV_FLAT_MANIFEST_SHA256:
+        raise SealError("carevue_origin_flat_manifest_mismatch", "pinned manifest")
+    if origin["flat_source_chartevents_sha256"] != cv_chartevents_source_sha256(
+        bucket_root
+    ):
+        raise SealError(
+            "carevue_origin_chartevents_sha_mismatch", "bucket derived_from"
+        )
+
+
+def verify_cv_flat_input(flat: Path) -> str:
+    """Authenticate the explicit build input, independently of its historical conversion lineage."""
+    try:
+        digest = sha256_file(flat / CONVERSION_MANIFEST)
+    except OSError as exc:
+        raise SealError("carevue_origin_flat_source_unreadable", flat.name) from exc
+    if digest != CV_FLAT_MANIFEST_SHA256:
+        raise SealError("carevue_origin_flat_manifest_mismatch", "pinned manifest")
+    if not (flat / "chartevents.parquet").is_file():
+        raise SealError("carevue_origin_flat_source_unreadable", flat.name)
+    return digest
+
+
+def compute_carevue_origin(farm: Path, flat: Path, bucket_root: Path) -> dict:
+    """Read only the built bucket and linked icustays with DuckDB; retain aggregate results only."""
+    manifest_sha = verify_cv_flat_input(flat)
+    try:
+        chartevents_sha = sha256_file(flat / "chartevents.parquet")
+    except OSError as exc:
+        raise SealError("carevue_origin_flat_source_unreadable", flat.name) from exc
+    if chartevents_sha != cv_chartevents_source_sha256(bucket_root):
+        raise SealError(
+            "carevue_origin_chartevents_sha_mismatch", "bucket derived_from"
+        )
+    try:
+        import duckdb  # noqa: PLC0415 - no EasyICU import, including standalone acceptance
+
+        bucket = bucket_root / "chartevents_bucket"
+        manifest = json.loads((bucket / "_BUCKET_MANIFEST.json").read_text())
+        parts = [
+            str(bucket / entry["relative_path"]) for entry in manifest["inventory"]
+        ]
+        stays_file = farm / "icustays.parquet"
+        stays = (
+            [str(stays_file)]
+            if stays_file.is_file()
+            else [str(p) for p in sorted((farm / "icustays").rglob("*.parquet"))]
+        )
+        # An in-memory connection cannot use read_only=True. Only SELECTs read Parquet, and an
+        # empty temp_directory disables disk spilling; no database or source file is written.
+        with duckdb.connect(
+            ":memory:",
+            config={"threads": 1, "memory_limit": "1GB", "temp_directory": ""},
+        ) as con:
+            con.read_parquet(stays).create_view("stays")
+            con.read_parquet(parts).create_view("charts")
+            source_counts = dict(
+                con.execute(
+                    "SELECT coalesce(DBSOURCE, 'null'), count(*) FROM stays GROUP BY 1"
+                ).fetchall()
+            )
+            noncv, high_rows, high_items = con.execute(
+                "WITH cv AS (SELECT DISTINCT ICUSTAY_ID FROM stays WHERE DBSOURCE = 'carevue') "
+                "SELECT count(*) FILTER (WHERE s.ICUSTAY_ID IS NULL), "
+                "count(*) FILTER (WHERE c.ITEMID >= 220000), "
+                "count(DISTINCT c.ITEMID) FILTER (WHERE c.ITEMID >= 220000) "
+                "FROM charts c LEFT JOIN cv s USING (ICUSTAY_ID)"
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 - never expose query text, IDs or clinical rows
+        raise SealError("carevue_origin_query_failed", type(exc).__name__) from None
+    origin = {
+        "icustays_dbsource_counts": source_counts,
+        "carevue_stays": source_counts.get("carevue", 0),
+        "other_source_stays": sum(
+            v for k, v in source_counts.items() if k != "carevue"
+        ),
+        "rows_from_noncarevue_stays": noncv,
+        "itemid_ge_220000_rows": high_rows,
+        "itemid_ge_220000_distinct_items": high_items,
+        "flat_source_manifest_sha256": manifest_sha,
+        "flat_source_chartevents_sha256": chartevents_sha,
+    }
+    check_carevue_origin(origin, bucket_root)
+    return origin
+
+
 def verify_final_set(
     root: Path, inner: dict, validator: Validator, allowed_roots=None
 ) -> None:
@@ -1220,6 +1431,12 @@ def verify_final_set(
     ):
         raise SealError("validator_unpinned", root.name)
     if inner.get("schema", "").startswith("lead_r13.seal_farm_receipt"):
+        if inner.get("db") == "cv":
+            farm = Path(inner.get("farm", ""))
+            check_cv_farm_name(farm, inner["seal_sha"])
+            if root not in (farm, farm.with_name(f".{farm.name}.seal_staging")):
+                raise SealError("farm_name_mismatch", root.name)
+            check_cv_bucket_only(root)
         if allowed_roots is not None:
             check_links(root, allowed_roots)
         try:
@@ -1252,6 +1469,8 @@ def verify_final_set(
         if sha256_file(dependency_path) != inner.get("bucket_root_receipt_sha256"):
             raise SealError("farm_dependency_changed", bucket_root.name)
         verify_final_set(bucket_root, dependency, validator, allowed_roots)
+        if inner.get("db") == "cv":
+            check_carevue_origin(inner.get("carevue_origin"), bucket_root)
     else:
         tables = inner.get("tables") or {}
         recorded = inner.get("bucket_set")
@@ -1383,6 +1602,11 @@ def install(staging: Path, target: Path, in_root_receipt: dict, verify=None) -> 
     for p in (target, refusal_marker(target), pending_marker(target)):
         if p.exists() or p.is_symlink():
             raise SealError("target_exists", str(p))
+    if in_root_receipt.get("schema", "").startswith("lead_r13.seal_farm_receipt") and (
+        in_root_receipt.get("db") == "cv"
+    ):
+        check_cv_farm_name(target, in_root_receipt["seal_sha"])
+        check_cv_bucket_only(staging)
     in_root_sha = write_json(staging / IN_ROOT_RECEIPT, in_root_receipt)
     make_read_only(staging, include_root=True)
     verify_installed(staging, in_root_sha)
@@ -1606,6 +1830,12 @@ def accept_root(
         # a root is accepted only as built by the sealed tool of this SHA
         raise SealError("receipt_tool_not_sealed", root.name)
     verify_final_set(root, inner, validator, allowed_roots)
+    if db == "cv" and inner.get("schema", "").startswith("lead_r13.seal_farm_receipt"):
+        check_carevue_origin(ext.get("carevue_origin"), Path(inner["bucket_root"]))
+        if ext["carevue_origin"] != inner["carevue_origin"]:
+            raise SealError("carevue_origin_receipt_mismatch", root.name)
+    elif db == "cv" and build == "build1":
+        check_carevue_origin(ext.get("carevue_origin"), root)
     return inner
 
 
@@ -1800,22 +2030,33 @@ def plan_db(seal: Seal, db: str) -> dict:
         "tables": tables,
     }
     if "farm" in spec:
-        # the bucket root holds only the source entries of the rebuilt tables, same targets as the farm
+        # CareVue builds from the pinned flat view, even when the current farm is bucket-only.
+        source = Path(spec.get("build_input", seal.b6 / "mimic_cv_flat_r13"))
+        verify_cv_flat_input(source)
+        check_closure(source, allowed, "farm_link_outside_allowed_roots")
+        plan["build_input"] = str(source)
         keep = {n for t in tables for n in (f"{t}.parquet", t)} | {CONVERSION_MANIFEST}
-        entries = [e for e in farm_entries(cur, set(), allowed) if e[1] in keep]
+        entries = [e for e in farm_entries(source, set(), allowed) if e[1] in keep]
         if not entries:
             raise SealError("farm_source_missing", ",".join(tables))
         plan["entries"] = entries
+        for kind, _, payload in entries:
+            if kind == "manifest":
+                payload["carevue_build_input"] = str(source)
+                rewritten_conversion_manifest(
+                    source / CONVERSION_MANIFEST, source, target, payload
+                )
         if seal.mode == "build1":
             farm = seal.farm_target(db)
             for p in (farm, seal.staging(farm)):
                 if p.exists() or p.is_symlink():
                     raise SealError("farm_target_exists", str(p))
             plan["farm_entries"] = farm_entries(
-                cur, {f"{t}_bucket" for t in tables}, allowed
+                cur, {f"{t}_bucket" for t in tables} | CV_FLAT_ENTRIES, allowed
             )
             for kind, _, payload in plan["farm_entries"]:
                 if kind == "manifest":
+                    payload["carevue_build_input"] = str(source)
                     rewritten_conversion_manifest(
                         cur / CONVERSION_MANIFEST, cur, farm, payload
                     )
@@ -1925,6 +2166,8 @@ def check_farm_reference(plan_entries, reference: Path, tables) -> dict:
     skip = {f"{t}_bucket" for t in tables} | {
         n for n in os.listdir(reference) if SKIP_RE.match(n)
     }
+    if "chartevents" in tables:
+        skip |= CV_FLAT_ENTRIES
     ref = link_set(reference, skip)
     differ = sorted(n for n in set(planned) | set(ref) if planned.get(n) != ref.get(n))
     if differ:
@@ -1963,7 +2206,11 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         ):
             Path(env[key]).mkdir(parents=True, exist_ok=True)
         (scr / "cwd").mkdir()
-        materialize(plan["entries"], staging, cur, target)
+        materialize(
+            plan["entries"], staging, Path(plan.get("build_input", cur)), target
+        )
+        if "build_input" in plan:
+            receipt["build_input"] = plan["build_input"]
         check_links(staging, seal.cfg["allowed_roots"])
         receipt["links"] = plan["links"]
         receipt["conversion_manifest_sha256"] = sha256_file(
@@ -2151,6 +2398,25 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     staging = seal.staging(farm)
     links = {f"{t}_bucket": str(bucket_root / f"{t}_bucket") for t in plan["tables"]}
     materialize(plan["farm_entries"], staging, cur, farm, links)
+    manifest = staging / CONVERSION_MANIFEST
+    if db == "cv":
+        content = json.loads(manifest.read_text())
+        content["data_path"] = str(farm)
+        content["tables"] = [
+            entry for entry in content["tables"] if not cv_flat_table(entry)
+        ]
+        pinned = next(
+            payload for kind, _, payload in plan["farm_entries"] if kind == "manifest"
+        )
+        derived = content.setdefault(
+            "derived_from", {"path": pinned["source"], "sha256": pinned["sha256"]}
+        )
+        derived["note"] = (
+            str(derived.get("note", ""))
+            + "; chartevents is bucket-only via chartevents_bucket"
+        ).lstrip("; ")
+        write_json(manifest, content)
+        check_cv_bucket_only(staging)
     check_links(
         staging, seal.cfg["allowed_roots"], reason="farm_link_outside_allowed_roots"
     )
@@ -2158,7 +2424,6 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
         if not inside(staging / name, [seal.b6]):
             raise SealError("farm_link_outside_allowed_roots", name)
     names = sorted(os.listdir(staging))
-    manifest = staging / CONVERSION_MANIFEST
     record = {
         "schema": "lead_r13.seal_farm_receipt/2",
         "seal_sha": seal.full,
@@ -2180,6 +2445,15 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     validator, allowed = seal.validator(), seal.cfg["allowed_roots"]
     record["validator"] = validator.fingerprint
     record["tool"] = seal.tool()
+    if db == "cv":
+        record["carevue_origin"] = compute_carevue_origin(
+            staging, Path(plan["build_input"]), bucket_root
+        )
+        # Also expose the farm evidence on the CareVue bucket's external build receipt for #742.
+        external = seal.work / seal.mode / "receipt_cv.json"
+        bucket_receipt = json.loads(external.read_text())
+        bucket_receipt["carevue_origin"] = record["carevue_origin"]
+        write_json(external, bucket_receipt)
     record["link_set"] = link_set(staging, {IN_ROOT_RECEIPT}, identities=True)
     installed = install(
         staging,

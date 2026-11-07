@@ -16,6 +16,17 @@ deferred to it are compared against `2786ea872` there.
 
 ## lead-r13 — entries pending merge
 
+- [r13-sealtool6, supervisor ruling 2026-11-07; increment on `2835f702e`]
+  Publish CareVue as `mimic_cv_bkt_s<sha9>` with bucket-only chartevents;
+  retain `mimic_cv_bucket_s<sha9>` and the build2 suffix. Exclude flat
+  chartevents paths and manifest table entries, record bucket-only provenance,
+  and refuse flat entries or old `mimic_cv_dir_s<sha9>` collisions at publication
+  and acceptance. Build CareVue from the explicitly pinned `mimic_cv_flat_r13`
+  input even with a bucket-only reference farm, retaining retired conversion
+  lineage as provenance only for that pinned plan. Seal and recheck aggregate
+  `carevue_origin` evidence in external and farm receipts. Refuse missing,
+  temporary, or unwritable launch roots without fallback; derive the extraction
+  root from trusted `work_root` when no explicit launch root is supplied.
 - TODO(r13bounds): out-of-bounds values. The `bounds_unit_suspect` refusal
   introduced by `0aa5a8185` is being withdrawn; the line follows when that
   branch merges.

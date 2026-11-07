@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.seal_buckets import make_world, make_writable, seal_args
+from tests.support.seal_buckets import (
+    make_world,
+    make_writable,
+    mock_flat_manifest_pin,
+    seal_args,
+)
 from tools.seal_buckets import seal_rebuild as sr
 
 TOOLS = Path(sr.__file__).parent
@@ -22,6 +27,7 @@ TOOLS = Path(sr.__file__).parent
 
 @pytest.fixture
 def world(tmp_path, monkeypatch, request):
+    mock_flat_manifest_pin(monkeypatch)
     w = make_world(tmp_path / "w", mode=getattr(request, "param", "ok"))
     monkeypatch.setenv("SEAL_MIRROR", str(w["mirror"]))
     yield w
@@ -141,7 +147,9 @@ def test_standalone_acceptance_checks_the_receipt_tool_without_an_optional_pin(
 
 
 def test_standalone_shell_entry_uses_sealed_sr_and_validator(world, tmp_path, capsys):
-    _build(world, capsys)
+    # The shell runs the production CareVue pin; use SIC to test sealed code/validator trust
+    # without substituting the synthetic CareVue pin in the extracted process.
+    assert sr.main(seal_args(world, "build1", "--only", "sic")) == 0
     local = tmp_path / "local"
     local.mkdir()
     shutil.copyfile(TOOLS / "seal_rebuild.sh", local / "seal_rebuild.sh")
@@ -155,19 +163,19 @@ def test_standalone_shell_entry_uses_sealed_sr_and_validator(world, tmp_path, ca
         "--config",
         str(world["config"]),
         "--accept-root",
-        str(_seal(world).target("cv")),
+        str(_seal(world).target("sic")),
         "--external-receipt",
-        str(_external(world)),
+        str(_external(world, db="sic")),
         "--accept-build",
         "build1",
         "--accept-db",
-        "cv",
+        "sic",
     ]
     result = _entry(world, *args, launcher=local / "seal_rebuild.sh")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "cv ACCEPTED PASS" in result.stdout and not sentinel.exists()
-    target = _seal(world).target("cv")
-    part = next((target / "chartevents_bucket").rglob("*.parquet"))
+    assert "sic ACCEPTED PASS" in result.stdout and not sentinel.exists()
+    target = _seal(world).target("sic")
+    part = next((target / "medication_bucket").rglob("*.parquet"))
     make_writable(target)
     data = part.read_bytes()
     part.write_bytes(b"NOPE" + data[4:-4] + b"NOPE")

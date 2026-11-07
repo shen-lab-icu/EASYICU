@@ -22,6 +22,7 @@ from tests.support.seal_buckets import (
     make_writable,
     rewrite_config,
     seal_args,
+    synthetic_seal_argv,
 )
 from tools.seal_buckets import seal_rebuild as sr
 
@@ -31,7 +32,7 @@ WRAPPER = TOOL.with_name("seal_rebuild.sh")
 
 def _run(args, **env):
     return subprocess.run(
-        [sys.executable, "-I", str(TOOL), *args],
+        synthetic_seal_argv(TOOL, args),
         capture_output=True,
         text=True,
         env={**os.environ, **env},
@@ -184,7 +185,7 @@ def test_an_existing_target_or_staging_root_is_refused(world):
     result = _run(seal_args(world, "build1", "--dry-run"))
     assert result.returncode == 1 and "sic FAILED target_exists" in result.stdout
     staging.rmdir()
-    farm = _target(world, "mimic_cv_dir")
+    farm = _target(world, "mimic_cv_bkt")
     farm.mkdir()
     result = _run(seal_args(world, "build1", "--dry-run"))
     assert result.returncode == 1 and "cv FAILED farm_target_exists" in result.stdout
@@ -244,7 +245,7 @@ def test_build1_installs_read_only_roots_with_receipts_in_order_and_assembles_th
     sic, bucket, farm = (
         _target(world, "sic_cur"),
         _target(world, "mimic_cv_bucket"),
-        _target(world, "mimic_cv_dir"),
+        _target(world, "mimic_cv_bkt"),
     )
     for root in (sic, bucket, farm):
         assert root.is_dir() and _ro(root)
@@ -274,9 +275,14 @@ def test_build1_installs_read_only_roots_with_receipts_in_order_and_assembles_th
         "data_path"
     ] == str(sic)
     assert not (sic / "_lead_r13_build_medication.log").exists()
-    # the CareVue farm: the current farm's entries and targets, the new bucket, data_path re-pointed
+    # The CareVue farm preserves other links and exposes chartevents only via the new bucket.
     current = Path(json.loads(world["config"].read_text())["dbs"]["cv"]["current_root"])
-    skip = {"chartevents_bucket", sr.IN_ROOT_RECEIPT}
+    skip = {
+        "chartevents_bucket",
+        "chartevents.parquet",
+        "chartevents",
+        sr.IN_ROOT_RECEIPT,
+    }
     assert sr.link_set(farm, skip) == sr.link_set(current, skip)
     assert os.readlink(farm / "chartevents_bucket") == str(
         bucket / "chartevents_bucket"
@@ -284,9 +290,12 @@ def test_build1_installs_read_only_roots_with_receipts_in_order_and_assembles_th
     manifest = json.loads((farm / "conversion_manifest.json").read_text())
     original = json.loads((current / "conversion_manifest.json").read_text())
     assert manifest["data_path"] == str(farm)
-    assert {k: v for k, v in manifest.items() if k != "data_path"} == {
-        k: v for k, v in original.items() if k != "data_path"
-    }
+    assert manifest["tables"] == [{"table": "admissions"}]
+    assert manifest["derived_from"]["path"] == original["derived_from"]["path"]
+    assert manifest["derived_from"]["sha256"] == original["derived_from"]["sha256"]
+    assert "chartevents is bucket-only" in manifest["derived_from"]["note"]
+    assert not (farm / "chartevents.parquet").is_symlink()
+    assert not (farm / "chartevents").exists()
     farm_receipt = json.loads((work / "receipt_cv_farm.json").read_text())
     assert (
         farm_receipt["verdict"] == "PASS"
@@ -312,7 +321,7 @@ def test_build2_is_isolated_and_compare_requires_identical_twins(world):
     ).is_dir()
     assert _target(world, "sic_cur", "build2").is_dir()
     assert not _target(
-        world, "mimic_cv_dir", "build2"
+        world, "mimic_cv_bkt", "build2"
     ).exists()  # the farm is assembled once, from build1
     receipt = json.loads((work / "build2" / "receipt_sic.json").read_text())
     assert "HOME" in receipt["build_env_keys"]

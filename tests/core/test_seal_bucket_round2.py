@@ -21,6 +21,7 @@ from tests.support.seal_buckets import (
     make_world,
     make_writable,
     seal_args,
+    synthetic_seal_argv,
 )
 from tools.seal_buckets import footer_scan, negzero_table
 from tools.seal_buckets import seal_rebuild as sr
@@ -31,7 +32,7 @@ TOOLS = TOOL.parent
 
 def _run(args):
     return subprocess.run(
-        [sys.executable, "-I", str(TOOL), *args],
+        synthetic_seal_argv(TOOL, args),
         capture_output=True,
         text=True,
         timeout=600,

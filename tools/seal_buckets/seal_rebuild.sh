@@ -17,6 +17,7 @@ mirror=${SEAL_MIRROR:-/home/zhuhb/easyicu_dev9/codex_ws/_mirror.git}
 if [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ]; }; }; then
   echo "usage: seal_rebuild.sh SEAL_SHA build1|build2|compare|accept [options] (full SHA first)"
   echo "Use SEAL_SHA --help for the sealed tool's full help."
+  echo "CareVue publishes mimic_cv_bkt_s<sha9>; launch root: SEAL_LAUNCH_ROOT or configured work_root."
   if [ "$#" -eq 0 ]; then exit 2; fi
   exit 0
 fi
@@ -33,7 +34,43 @@ if ! full=$(git --git-dir "$gitd" rev-parse --verify --quiet "$1^{commit}"); the
   echo "all FAILED seal_sha_unknown $1"
   exit 1
 fi
-launch=$(mktemp -d "${SEAL_LAUNCH_ROOT:-${TMPDIR:-/tmp}}/seal_launch.XXXXXX")
+# Configuration and the full SHA are operator inputs. Never choose an extraction root from TMPDIR.
+# Validate before mktemp; a missing, shared-temporary or unwritable root has no fallback.
+config=
+previous=
+for arg in "$@"; do
+  if [ "$previous" = --config ]; then config=$arg; fi
+  case "$arg" in --config=*) config=${arg#--config=} ;; esac
+  previous=$arg
+done
+if ! launch_root=$("$python" -I -S -c '
+import json, os, pathlib, stat, sys
+explicit, config = sys.argv[1:]
+try:
+    root = explicit or (json.loads(pathlib.Path(config).read_text())["work_root"] if config
+                        else "/home/zhuhb/easyicu_dev9/demo_sources/bench_local/diag_build")
+    if not root:
+        raise FileNotFoundError()
+    path = pathlib.Path(root).resolve(strict=True)
+    if any(path == p or p in path.parents for p in map(pathlib.Path, ("/tmp", "/var/tmp", "/dev/shm"))):
+        sys.exit("all FAILED launch_root_unsafe")
+    mode = path.stat()
+    if (not stat.S_ISDIR(mode.st_mode) or not mode.st_mode & 0o222
+        or not os.access(path, os.W_OK | os.X_OK)):
+        sys.exit("all FAILED launch_root_unwritable")
+    if mode.st_uid != os.getuid() or mode.st_mode & 0o002:
+        sys.exit("all FAILED launch_root_not_private")
+    print(path)
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit("all FAILED launch_root_missing")
+' "${SEAL_LAUNCH_ROOT:-}" "$config" 2>&1); then
+  echo "$launch_root"
+  exit 1
+fi
+if ! launch=$(mktemp -d "$launch_root/seal_launch.XXXXXX"); then
+  echo "all FAILED launch_root_unwritable"
+  exit 1
+fi
 cleanup() { chmod -R u+w "${launch:?}"; rm -rf "${launch:?}"; }
 trap cleanup EXIT
 for name in seal_rebuild.py footer_scan.py bucket_compare.py; do

@@ -21,6 +21,38 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 ORDINAL = "_easyicu_source_ordinal"
+SYNTHETIC_FLAT_MANIFEST = b'{"tables": ["chartevents"], "synthetic": true}'
+
+
+def mock_flat_manifest_pin(monkeypatch):
+    """Mock only the production manifest digest for these exact synthetic fixture bytes.
+
+    No fixture can produce a SHA256 preimage of the production manifest. Substitute only the pin;
+    keep all hashing, flat chartevents binding and sealed tool fingerprints intact.
+    """
+    from tools.seal_buckets import seal_rebuild as sr
+
+    monkeypatch.setattr(
+        sr,
+        "CV_FLAT_MANIFEST_SHA256",
+        hashlib.sha256(SYNTHETIC_FLAT_MANIFEST).hexdigest(),
+        raising=False,
+    )
+
+
+def synthetic_seal_argv(tool, args):
+    """The same narrow hash mock in subprocess integration tests; source bytes stay sealed."""
+    boot = f"""
+import hashlib, importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("synthetic_sr", sys.argv[1])
+sr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sr)
+sr.CV_FLAT_MANIFEST_SHA256 = {hashlib.sha256(SYNTHETIC_FLAT_MANIFEST).hexdigest()!r}
+sys.exit(sr.main(sys.argv[2:]))
+"""
+    return [sys.executable, "-I", "-c", boot, str(tool), *args]
+
 
 FAKE_BUILDER = r'''#!/usr/bin/env python3
 """Fake bucket builder for seal-tool tests (contract mark: bucket_float_fidelity_mismatch)."""
@@ -277,6 +309,14 @@ def make_world(root: Path, mode: str = "ok", mark: bool = True) -> dict:
     )
     pq.write_table(pa.table({"subject_id": [1, 2]}), view / "admissions.parquet")
     pq.write_table(pa.table({"amount": [1.0, 2.0]}), view / "inputevents_cv.parquet")
+    pq.write_table(
+        pa.table({"ICUSTAY_ID": range(1, 20), "DBSOURCE": ["carevue"] * 19}),
+        view / "icustays.parquet",
+    )
+    flat = b6 / "mimic_cv_flat_r13"
+    flat.mkdir()
+    (flat / "conversion_manifest.json").write_bytes(SYNTHETIC_FLAT_MANIFEST)
+    os.symlink(view / "chartevents.parquet", flat / "chartevents.parquet")
     (view / "conversion_manifest.json").write_text(
         json.dumps({"tables": ["chartevents"]})
     )
@@ -286,7 +326,7 @@ def make_world(root: Path, mode: str = "ok", mark: bool = True) -> dict:
     _run_builder(builder, cvb, "chartevents", CV_TABLES[0][1])
     farm = b6 / "mimic_cv_dir"
     farm.mkdir()
-    for name in ("admissions.parquet", "chartevents.parquet"):
+    for name in ("admissions.parquet", "chartevents.parquet", "icustays.parquet"):
         os.symlink(view / name, farm / name)
     (farm / "inputevents_cv").mkdir()
     os.symlink(view / "inputevents_cv.parquet", farm / "inputevents_cv" / "1.parquet")
@@ -323,12 +363,13 @@ def make_world(root: Path, mode: str = "ok", mark: bool = True) -> dict:
             },
             "cv": {
                 "current_root": str(farm),
+                "build_input": str(flat),
                 "database": "mimic",
                 "mem_gib": 1,
                 "threads": 1,
                 "timeout_s": 120,
                 "tables": CV_TABLES,
-                "farm": {"name": "mimic_cv_dir", "bucket_root": "mimic_cv_bucket"},
+                "farm": {"name": "mimic_cv_bkt", "bucket_root": "mimic_cv_bucket"},
             },
         },
     }
