@@ -23,7 +23,7 @@ from easyicu.datasource import ICUDataSource
 from easyicu.patient_filter import PatientFilter, SourceTableNotInstalled
 from easyicu.resources import load_data_sources
 from easyicu.storage_layout import StorageIntegrityError, TableScanError, resolve_table_files
-from tests.support.bucket_storage import write_contract
+from tests.support.bucket_storage import bind_fixture_source, write_contract
 
 
 def _manifest(root, tables):
@@ -98,6 +98,7 @@ def test_patient_filter_reads_the_installation_the_owner_resolves(tmp_path):
     bucket.mkdir(parents=True)
     flat.to_parquet(bucket / "part.parquet")
     write_contract(tmp_path / "data_float_h_bucket", key="CaseID", modulus=1)
+    bind_fixture_source(tmp_path / "data_float_h_bucket", "data_float_h")
     source = _source("sic", tmp_path)
     owned = resolve_table_files(source, "data_float_h")
     assert all("data_float_h_bucket" in str(p) for p in owned)

@@ -1579,27 +1579,6 @@ class ICUDataSource:
         elif loader is None:
             loader = self._resolve_loader_from_disk(table_name)
 
-            # 🚀 MIMIC-III chartevents CSV fallback
-            # When bucket directory is not available (due to memory constraints during conversion),
-            # fall back to reading directly from CSV.gz with proper VALUE type handling
-            if loader is None and self.config.name == 'mimic' and table_name == 'chartevents':
-                csv_path = self._resolve_mimic3_chartevents_csv()
-                if csv_path is not None and concept_itemid_filter is not None:
-                    storage_layout.csv_table_scan(self, table_name, csv_path)
-                    # Use CSV fallback only when we have itemid filter (for performance)
-                    logger.info("MIMIC-III chartevents: bucket directory not found; using CSV fallback mode")
-                    frame = self._read_mimic3_csv_fallback(
-                        csv_path=csv_path,
-                        columns=columns,
-                        itemid_filter=concept_itemid_filter,
-                        patient_ids_filter=patient_ids_filter,
-                    )
-                    
-                    # An error-only or unmatched selection is a valid empty source.
-                    if enable_caching:
-                        self._cache_raw_frame(cache_key, frame)
-                    return frame
-            
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
                 # A table the conversion manifest lists is not "absent": it
@@ -1769,26 +1748,13 @@ class ICUDataSource:
         )
 
     def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
-        """检查扁平 parquet 目录（无 bucket_id 子目录结构）"""
-        if not self.base_path:
-            return None
-        cache_key = str(table_name).lower()
-        with self._lock:
-            cached_dir = self._flat_parquet_dir_cache.get(cache_key)
-        if cached_dir is not None:
-            return cached_dir
-
-        name_variants = [table_name, table_name.lower()]
-        for name in name_variants:
-            for dir_path in [
-                self.base_path / name,
-                self.base_path / "icu" / name,
-                self.base_path / "hosp" / name,
-            ]:
-                if dir_path.is_dir() and list(dir_path.glob("*.parquet"))[:1]:
-                    with self._lock:
-                        self._flat_parquet_dir_cache[cache_key] = dir_path
-                    return dir_path
+        """Return the owner's explicit flat directory variant, with shared refusals."""
+        decision = storage_layout.table_decision(self, table_name, flat_variant=True)
+        storage_layout.refuse_broken_presence(table_name, decision)
+        if decision.layout == "flat" and decision.loader is not None and decision.loader.is_dir():
+            with self._lock:
+                self._flat_parquet_dir_cache[str(table_name).lower()] = decision.loader
+            return decision.loader
         return None
 
     def _reconcile_loader(self, table_name: str, loader):
@@ -1920,6 +1886,10 @@ class ICUDataSource:
         if suffix == ".csv" or lower_name.endswith(".csv.gz"):
             if scan_loader is not None:
                 storage_layout.csv_table_scan(self, table_name, path)
+            if db_name == "mimic" and table_name == "chartevents":
+                return self._read_mimic3_csv_fallback(
+                    path, columns, concept_itemid_filter, patient_ids_filter, table_name=table_name,
+                )
             read_columns = list(columns) if columns else None
             filter_column = patient_ids_filter.column if patient_ids_filter else None
 
@@ -2182,6 +2152,7 @@ class ICUDataSource:
         columns: Optional[Iterable[str]],
         itemid_filter: Optional[Tuple[str, set]],
         patient_ids_filter: Optional[FilterSpec] = None,
+        *, table_name: Optional[str] = None,
     ) -> pd.DataFrame:
         """🚀 MIMIC-III chartevents CSV fallback: read directly from CSV.gz with correct VALUE type
         
@@ -2238,8 +2209,9 @@ class ICUDataSource:
         
         # Build WHERE conditions
         where_conditions = []
+        table = table_name or csv_path.name.split(".")[0].lower()
         header = list(pd.read_csv(csv_path, nrows=0).columns)
-        quality_sql = mimic_chart_quality_sql(self.config.name, csv_path.name.split('.')[0].lower(), header, alias='')
+        quality_sql = mimic_chart_quality_sql(self.config.name, table, header, alias='')
         if quality_sql:
             where_conditions.append(quality_sql.removeprefix(' AND '))
         
@@ -2291,7 +2263,6 @@ class ICUDataSource:
         # and reason classes. Quoted commas and quoted newlines stay legal.
         # DuckDB 1.5 rejects all four classes, so no post-parse line scan is
         # needed; a scan whose reject table was not recorded is refused too.
-        table = csv_path.name.split(".")[0].lower()
         columns_spec, timestamp_format = self._mimic3_csv_schema(table, header)
         rejects = f"easyicu_csv_rejects_{uuid.uuid4().hex}"
         options = f"""

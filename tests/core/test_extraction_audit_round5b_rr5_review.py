@@ -122,6 +122,7 @@ def _partial_panel(tmp_path, database, layout):
         directory.mkdir(parents=True)
         for file in flat.glob("*.parquet"):
             move_fixture_parquet(file, directory / file.name)
+        flat.rmdir()
         (directory.parent / "_COMPLETE").write_text("ready")
     return source
 
