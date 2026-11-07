@@ -912,10 +912,10 @@ def _classify(path: Path) -> TableMatch:
     if path.is_dir():
         if name.endswith("_bucket"):
             return TableMatch(path, "bucket")
-        has_parquet = any(
-            n.casefold().endswith(_PARQUET_SUFFIXES) and not n.startswith(".")
-            for n in _listdir(path)
-        )
+        # Establish the whole directory inventory even for a configured stem
+        # differing from the table name (e.g. HiRID general_table/). Otherwise
+        # verify_flat_scan's single-file shortcut could hide an unreadable child.
+        has_parquet = bool(_visible_parquet(path))
         return TableMatch(path, "directory" if has_parquet else "broken")
     if path.is_file() and name.endswith(_PARQUET_SUFFIXES):
         return TableMatch(path, "file")

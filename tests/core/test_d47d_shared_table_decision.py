@@ -43,12 +43,13 @@ def _readers(root, database="mimic"):
     assert raw["value"].tolist() == resolved["value"].tolist() == [60.0] * len(IDS)
 
 
-def _refusals(root):
-    source = _source(root)
+def _refusals(root, database="mimic"):
+    source = _source(root, database)
+    table = "general" if database == "hirid" else "icustays"
     calls = (
-        lambda: source._load_raw_frame("icustays", None),
-        lambda: get_all_patient_ids(root, database="mimic"),
-        lambda: source.resolve_target_files("icustays"),
+        lambda: source._load_raw_frame(table, None),
+        lambda: get_all_patient_ids(root, database=database),
+        lambda: source.resolve_target_files(table),
     )
     reasons = []
     for call in calls:
@@ -92,13 +93,18 @@ def test_configured_hirid_csv_is_used_only_when_parquet_is_absent(tmp_path, rela
 
 
 @pytest.mark.parametrize("denial", ["chmod", "listing_error"])
-@pytest.mark.parametrize("location", ["custom", "icustays/locked"])
+@pytest.mark.parametrize("location", ["custom", "icustays/locked", "GENERAL_TABLE/locked"])
 def test_unreadable_nested_directory_never_becomes_absent_csv(tmp_path, monkeypatch, denial, location):
-    _csv(tmp_path)
+    database = "hirid" if location.startswith("GENERAL_TABLE/") else "mimic"
+    _csv(tmp_path, database)
     blocked = tmp_path / location
     _parquet(blocked / "deeper" / "icustays.parquet")
     if location.startswith("icustays/"):
         _parquet(tmp_path / "icustays" / "part.parquet")
+    elif database == "hirid":
+        pd.DataFrame({"patientid": IDS, "value": [60.0] * len(IDS)}).to_parquet(
+            tmp_path / "GENERAL_TABLE" / "part.parquet", index=False,
+        )
     if denial == "chmod":
         blocked.chmod(0)
     else:
@@ -111,7 +117,7 @@ def test_unreadable_nested_directory_never_becomes_absent_csv(tmp_path, monkeypa
 
         monkeypatch.setattr(sl.os, "listdir", listing)
     try:
-        assert _refusals(tmp_path) == [sl.FILE_UNREADABLE] * 3
+        assert _refusals(tmp_path, database) == [sl.FILE_UNREADABLE] * 3
     finally:
         blocked.chmod(0o700)
 
