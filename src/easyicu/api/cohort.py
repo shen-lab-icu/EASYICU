@@ -8,7 +8,6 @@ from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Unio
 import pandas as pd
 
 from ..patient_filter import PatientFilter
-from ..storage_layout import StorageIntegrityError
 from ..value_failures import TYPED_VALUE_FAILURES
 from ..patient_filter import get_cohort_stats as _get_cohort_stats
 
@@ -106,18 +105,22 @@ def get_all_patient_ids_impl(
             if nested is not None:
                 parquet_file = nested
                 break
+        source_format = None
         if parquet_file is not None:
-            try:
-                (parquet_file,) = _validated(parquet_file.stem, parquet_file)
-                frame = pd.read_parquet(parquet_file, columns=[id_col])
-                all_ids = frame[id_col].dropna().unique().tolist()
-            except StorageIntegrityError:
-                raise
-            except Exception:
-                # A present but unreadable Parquet file may have a CSV sibling.
-                all_ids = None
+            from ..storage_layout import unreadable_file, unreadable_file_errors
 
-        if all_ids is None:
+            (parquet_file,) = _validated(parquet_file.stem, parquet_file)
+            try:
+                frame = pd.read_parquet(parquet_file, columns=[id_col])
+            except unreadable_file_errors() as exc:
+                # Present but unreadable is corruption, not absence: no CSV
+                # sibling stands in for it (delta17c).
+                raise unreadable_file(parquet_file.stem, parquet_file, exc) from exc
+            all_ids = frame[id_col].dropna().unique().tolist()
+            source_format = "parquet"
+        else:
+            # Only an ABSENT Parquet stay table falls back to its CSV, and the
+            # receipt says so (source_format csv_fallback).
             for suffix in (".csv", ".csv.gz"):
                 csv_file = root / f"{table_name}{suffix}"
                 if not csv_file.exists():
@@ -126,12 +129,10 @@ def get_all_patient_ids_impl(
                 from ..storage_layout import csv_table_scan
 
                 csv_table_scan(storage_source(resolved_database, root), table_name, csv_file)
-                try:
-                    frame = pd.read_csv(csv_file, usecols=[id_col])
-                    all_ids = frame[id_col].dropna().unique().tolist()
-                    break
-                except Exception:
-                    continue
+                frame = pd.read_csv(csv_file, usecols=[id_col])
+                all_ids = frame[id_col].dropna().unique().tolist()
+                source_format = "csv_fallback"
+                break
 
         if all_ids is None:
             shard_dir = root / table_name
@@ -141,6 +142,7 @@ def get_all_patient_ids_impl(
                     frame = pd.read_parquet(shard, columns=[id_col])
                     all_ids.extend(frame[id_col].dropna().unique().tolist())
                 all_ids = list(dict.fromkeys(all_ids))
+                source_format = "parquet"
             else:
                 loader = base_loader_cls(
                     database=resolved_database,
@@ -159,6 +161,7 @@ def get_all_patient_ids_impl(
 
         if listing is not None:
             listing["order"] = "source_file_order"
+            listing["source_format"] = source_format
 
         if max_patients and len(all_ids) > max_patients:
             all_ids = all_ids[:max_patients]

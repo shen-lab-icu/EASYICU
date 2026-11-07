@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 import logging
 import re
+import uuid
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
@@ -2478,7 +2479,8 @@ class ICUDataSource:
         
         # Build WHERE conditions
         where_conditions = []
-        quality_sql = mimic_chart_quality_sql(self.config.name, csv_path.name.split('.')[0].lower(), pd.read_csv(csv_path, nrows=0).columns, alias='')
+        header = list(pd.read_csv(csv_path, nrows=0).columns)
+        quality_sql = mimic_chart_quality_sql(self.config.name, csv_path.name.split('.')[0].lower(), header, alias='')
         if quality_sql:
             where_conditions.append(quality_sql.removeprefix(' AND '))
         
@@ -2519,43 +2521,123 @@ class ICUDataSource:
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
-        # 🔑 CRITICAL: Use types={'VALUE': 'VARCHAR'} to preserve GCS text values
-        # Without this, values like "4 Spontaneously" become NaN because DuckDB
-        # incorrectly detects VALUE as DOUBLE from early numeric rows
-        # NOTE: Do NOT use sample_size=-1 as it causes full file scan for type detection
-        chartevents_type_hint = ",\n                types={'VALUE': 'VARCHAR'}" if csv_path.name.upper().startswith("CHARTEVENTS") else ""
+        # Strict parsing with the table's declared schema (delta17c): the
+        # header must name the configured columns in order; every column is
+        # read with its configured type (VALUE stays text, so GCS strings such
+        # as "4 Spontaneously" survive) instead of sniffing; and RFC 4180 is
+        # enforced (strict_mode, no null padding). A row that does not parse
+        # (extra or missing columns, an unterminated quote, a value that does
+        # not cast) is never dropped or shifted: DuckDB stores it as a reject
+        # and any reject refuses the read with csv_rows_rejected, its row count
+        # and reason classes. Quoted commas and quoted newlines stay legal.
+        # DuckDB 1.5 rejects all four classes, so no post-parse line scan is
+        # needed; a scan whose reject table was not recorded is refused too.
+        table = csv_path.name.split(".")[0].lower()
+        columns_spec, timestamp_format = self._mimic3_csv_schema(table, header)
+        rejects = f"easyicu_csv_rejects_{uuid.uuid4().hex}"
         query = f"""
             SELECT {columns_sql}
-            FROM read_csv_auto(
+            FROM read_csv(
                 '{_duckdb_path(csv_path)}',
-                ignore_errors=true,
-                null_padding=true{chartevents_type_hint}
+                header=true,
+                auto_detect=false,
+                columns={columns_spec},
+                delim=',',
+                quote='"',
+                escape='"',
+                null_padding=false,
+                strict_mode=true,
+                timestampformat='{timestamp_format}',
+                store_rejects=true,
+                rejects_scan='{rejects}_scan',
+                rejects_table='{rejects}'
             )
             {where_clause}
         """
-        
+
         try:
             con = _get_duckdb_connection()
             try:
                 arrow_table = con.execute(query).fetch_arrow_table()
                 df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
                 del arrow_table
-            except Exception:
-                df = con.execute(query).fetchdf()
-            
+                recorded = con.execute(
+                    "SELECT count(*) FROM duckdb_tables() WHERE table_name = ?", [rejects]
+                ).fetchone()[0]
+                rejected = con.execute(
+                    f"SELECT error_type, count(DISTINCT line) FROM {rejects} GROUP BY 1 ORDER BY 1"
+                ).fetchall() if recorded else None
+                rows = con.execute(
+                    f"SELECT count(DISTINCT line) FROM {rejects}"
+                ).fetchone()[0] if recorded else None
+            finally:
+                for name in (rejects, f"{rejects}_scan"):
+                    con.execute(f"DROP TABLE IF EXISTS {name}")
+            if rejected is None:
+                raise storage_layout.TableScanError(
+                    "csv_rejects_unrecorded", table,
+                    f"{csv_path.name}: the strict scan recorded no reject table",
+                )
+            if rejected:
+                classes = ", ".join(f"{kind}={n}" for kind, n in rejected)
+                raise storage_layout.TableScanError(
+                    "csv_rows_rejected", table,
+                    f"{csv_path.name}: strict parsing rejected {rows} rows ({classes})",
+                )
+
             # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
             df.columns = [c.lower() for c in df.columns]
-            
+
             logger.info("CSV fallback succeeded: loaded %d rows", len(df))
             return df
-            
+
         except TYPED_VALUE_FAILURES:
             raise  # a typed failure keeps its type (D10D)
         except Exception as e:
+            # The class only: a reader message can quote a raw row.
             raise RuntimeError(
-                f"mimic3_chartevents_csv_read_failed: ({type(e).__name__}: {e})"
+                f"mimic3_chartevents_csv_read_failed: ({type(e).__name__})"
             ) from e
-    
+
+    _CSV_SPEC_TYPES = {
+        "col_integer": "BIGINT",
+        "col_double": "DOUBLE",
+        "col_character": "VARCHAR",
+        "col_datetime": "TIMESTAMP",
+    }
+
+    def _mimic3_csv_schema(self, table: str, header) -> Tuple[str, str]:
+        """The configured columns and types of a raw MIMIC-III CSV, checked against its header.
+
+        Returns the DuckDB ``columns`` struct literal and the timestamp format.
+        A header that does not name the configured columns in order, a column
+        spec without a DuckDB type, or more than one timestamp format is a
+        typed refusal: the strict reader never guesses a schema.
+        """
+        configured = list((self.config.get_table(table).columns or {}).values())
+        names = [str(c["name"]) for c in configured]
+        if [str(h) for h in header] != names:
+            raise storage_layout.TableScanError(
+                "csv_header_mismatch", table,
+                f"header has {len(header)} columns; the configuration declares {len(names)} "
+                "in a fixed order",
+            )
+        types, formats = [], set()
+        for column in configured:
+            duck = self._CSV_SPEC_TYPES.get(column.get("spec"))
+            if duck is None:
+                raise storage_layout.TableScanError(
+                    "csv_schema_unsupported", table, f"{column['name']}: spec {column.get('spec')!r}",
+                )
+            if duck == "TIMESTAMP":
+                formats.add(column.get("format") or "%Y-%m-%d %H:%M:%S")
+            types.append(f"'{column['name']}': '{duck}'")
+        if len(formats) > 1:
+            raise storage_layout.TableScanError(
+                "csv_schema_unsupported", table, f"{len(formats)} timestamp formats",
+            )
+        return "{" + ", ".join(types) + "}", next(iter(formats), "%Y-%m-%d %H:%M:%S")
+
     def _resolve_mimic3_csv(self, table_name: str) -> Optional[Path]:
         """Find an original MIMIC-III CSV/CSV.GZ file for a table.
         

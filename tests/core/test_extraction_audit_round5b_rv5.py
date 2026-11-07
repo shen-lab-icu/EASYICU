@@ -163,6 +163,17 @@ def test_RV_02_output_iserror_removed_on_all_load_paths(tmp_path, monkeypatch, d
         if path == "arrow_bucket":
             monkeypatch.setattr(source, "_read_partitioned_data_duckdb", lambda *args, **kwargs: source._read_partitioned_data_optimized(*args[:3], itemid_filter_config=kwargs.get("itemid_filter_config")))
         if path == "csv_fallback":
+            # The strict CSV reader takes the raw file's declared schema: every
+            # configured column in order, ISERROR as an integer (delta17c).
+            lower = rows.rename(columns=str.lower)
+            official = pd.DataFrame({
+                column["name"]: lower[column["name"].lower()]
+                if column["name"].lower() in lower else pd.Series([None] * len(lower), dtype=object)
+                for column in source.config.get_table("outputevents").columns.values()
+            })
+            flag = next(c for c in official if c.lower() == "iserror")
+            official[flag] = pd.to_numeric(official[flag]).astype("Int64")
+            official.to_csv(tmp_path / "OUTPUTEVENTS.csv.gz", index=False, date_format="%Y-%m-%d %H:%M:%S")
             frame = source._read_mimic3_csv_fallback(
                 tmp_path / "OUTPUTEVENTS.csv.gz", ["value"], ("itemid", {40055}),
             )
