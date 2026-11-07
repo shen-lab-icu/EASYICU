@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+import easyicu
+import easyicu.storage_layout as _storage_layout
 from easyicu.runtime import duckdb_spill
 from easyicu.storage_layout import (
     BUILDER_VERSION,
@@ -66,6 +69,60 @@ STAY_KEYS = {"eicu": "patientunitstayid", "miiv": "stay_id", "mimic": "icustay_i
              "aumc": "admissionid", "hirid": "patientid", "sic": "CaseID"}
 # Distinct secondary values kept in the manifest, summed over partitions.
 MAX_SECONDARY_VALUES = 200_000
+
+
+class ImportOriginError(RuntimeError):
+    """The easyicu package was imported from outside this script's checkout."""
+
+    reason = "builder_import_origin_mismatch"
+
+    def __init__(self, expected: str, modules: dict[str, str]):
+        self.expected = expected
+        self.modules = modules
+        super().__init__(
+            f"{self.reason}: easyicu must come from {expected}; imported {modules}"
+        )
+
+
+def builder_import_origin() -> dict[str, Any]:
+    """Assert that easyicu resolves to this checkout's src and describe where from.
+
+    An editable install elsewhere (for example a webapp runtime) would otherwise
+    silently supply storage_layout and duckdb_spill from a different commit.
+    """
+    expected = (Path(__file__).resolve().parents[1] / "src").resolve()
+    modules = {
+        module.__name__: os.path.realpath(module.__file__)
+        for module in (easyicu, _storage_layout, duckdb_spill)
+    }
+    if any(not Path(path).is_relative_to(expected) for path in modules.values()):
+        raise ImportOriginError(str(expected), modules)
+    return {"expected_src": str(expected), "modules": modules}
+
+
+def builder_code() -> dict[str, Any]:
+    """The commit this script was checked out at and whether that checkout is clean.
+
+    Recorded identically in the manifest and the build receipt, so a seal can
+    require builder_code.commit == the seal SHA and dirty == false. Outside a
+    git checkout the commit is None, which a seal refuses (builder_code_missing).
+    """
+    repo = Path(__file__).resolve().parents[1]
+
+    def git(*args: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return done.stdout.strip()
+
+    commit = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain", "--untracked-files=all")
+    if not commit or status is None:
+        return {"source": "unavailable", "commit": None, "dirty": None}
+    return {"source": "git", "commit": commit, "dirty": bool(status)}
 
 
 def _sql_string(value: str | Path) -> str:
@@ -337,13 +394,17 @@ def _assert_float_fidelity_unordered(con, source_files, files, schema, key, coun
     Per bucket, the multiset of complete source rows routed there
     (``hash(key) % count``) must equal the bucket's rows exactly, with each float
     column's sign bit carried alongside its value (EXCEPT ALL both ways), so
-    sign corruption cannot cancel across buckets or move between records. NaN
-    payloads are not distinguished on this path.
+    sign corruption cannot cancel across buckets or move between distinct
+    records. Records equal apart from the sign of a zero have no identity
+    without an ordinal, so such a source is refused
+    (``adopt_sign_ambiguous_rebuild_required``). NaN payloads are not
+    distinguished on this path.
     """
     started, rss_before = time.monotonic(), _peak_rss_kb()
     columns = _float_columns(schema)
     fidelity = {"algorithm": "adoption: per-bucket exact multiset of complete rows with float sign bits "
-                "(EXCEPT ALL both ways); NaN payloads not distinguished",
+                "(EXCEPT ALL both ways), refused when source records equal apart from a zero's sign "
+                "exist (no ordinal to bind them); NaN payloads not distinguished",
                 "dictionary_encoding": "unverified_legacy", "columns": {}}
     if not columns:
         return fidelity, {"wall_seconds": 0.0}
@@ -360,6 +421,29 @@ def _assert_float_fidelity_unordered(con, source_files, files, schema, key, coun
     ).fetchone()
     if missing or extra:
         raise FloatFidelityError("*", {"rows_not_in_bucket": int(missing)}, {"rows_not_in_source": int(extra)})
+    # Without a source ordinal, records that are equal apart from the sign of a
+    # zero cannot be told apart: a sign swap between them leaves the signed
+    # multiset unchanged, yet FIRST() and other order-dependent reads change.
+    # Such a source can only be certified by an ordinal-bound rebuild.
+    normalized = ", ".join(
+        f"CASE WHEN {_identifier(c)} = 0 THEN abs({_identifier(c)}) ELSE {_identifier(c)} END"
+        if c in columns else _identifier(c)
+        for c, _ in schema
+    )
+    pattern = " || ".join(
+        f"coalesce(signbit({_identifier(c)})::INTEGER::VARCHAR, 'n')" for c in columns
+    )
+    ambiguous = con.execute(
+        f"SELECT count(*) FROM (SELECT count(DISTINCT {pattern}) AS patterns "
+        f"FROM {_relation(source_files)} GROUP BY {normalized}) WHERE patterns > 1"
+    ).fetchone()[0]
+    if ambiguous:
+        raise FloatFidelityError(
+            "*",
+            {"sign_ambiguous_groups": int(ambiguous)},
+            {"required": "rebuild with build_bucket_cache (ordinal-bound fidelity check)"},
+            reason="adopt_sign_ambiguous_rebuild_required",
+        )
     for column in columns:
         c = _identifier(column)
         values, nulls, neg, pos, nan = con.execute(
@@ -519,6 +603,8 @@ def build_bucket_cache(
     verify_row_hash argument remains accepted for callers of the old builder.
     Spill storage is owned by easyicu.runtime.duckdb_spill.
     """
+    import_origin = builder_import_origin()
+    code = builder_code()
     data_path = Path(data_path).resolve()
     if not _IDENTIFIER.fullmatch(table) or not _IDENTIFIER.fullmatch(key):
         raise ValueError("table and key must be simple SQL identifiers")
@@ -711,6 +797,8 @@ def build_bucket_cache(
                 row_multiset_fingerprint=fingerprint,
                 float_fidelity=float_fidelity,
                 float_fidelity_qc=float_fidelity_qc,
+                import_origin=import_origin,
+                builder_code=code,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
             manifest = _manifest(
@@ -726,6 +814,7 @@ def build_bucket_cache(
                 source_order=ORDINAL,
             )
             manifest["float_fidelity"] = float_fidelity
+            manifest["builder_code"] = code
             (temporary / "_BUCKET_BUILD_RECEIPT.json").write_text(
                 json.dumps(receipt, indent=2, sort_keys=True) + "\n"
             )
@@ -771,6 +860,8 @@ def build_variable_cache(
     the row-multiset check, receipts and the atomic install are those of
     :func:`build_bucket_cache`.
     """
+    import_origin = builder_import_origin()
+    code = builder_code()
     data_path = Path(data_path).resolve()
     secondary_keys = list(secondary_keys or [])
     for name in (table, key, stay_key, *secondary_keys):
@@ -986,6 +1077,8 @@ def build_variable_cache(
                 row_multiset_fingerprint=fingerprint,
                 float_fidelity=float_fidelity,
                 float_fidelity_qc=float_fidelity_qc,
+                import_origin=import_origin,
+                builder_code=code,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
             manifest = dict(
@@ -1007,6 +1100,7 @@ def build_variable_cache(
                 source_order=ORDINAL,
                 row_group_target=row_group_target,
                 builder_version=BUILDER_VERSION,
+                builder_code=code,
                 float_fidelity=float_fidelity,
                 inventory=[
                     dict(
@@ -1045,6 +1139,8 @@ def adopt_bucket_cache(
     No Parquet bytes are rewritten. The old cache's scan order is retained.
     The manifest alone is installed atomically, after every check succeeds.
     """
+    import_origin = builder_import_origin()
+    code = builder_code()
     data_path = Path(data_path).resolve()
     root = Path(bucket_root) if bucket_root else data_path / f"{table}_bucket"
     receipt = json.loads((root / "_BUCKET_BUILD_RECEIPT.json").read_text())
@@ -1113,6 +1209,7 @@ def adopt_bucket_cache(
         source_order=None,
     )
     manifest["float_fidelity"] = float_fidelity
+    manifest["builder_code"] = code
     adoption = dict(
         schema="easyicu_bucket_adoption_v1",
         builder_version=BUILDER_VERSION,
@@ -1121,6 +1218,8 @@ def adopt_bucket_cache(
         row_multiset_fingerprint=fingerprint,
         float_fidelity=float_fidelity,
         float_fidelity_qc=float_fidelity_qc,
+        import_origin=import_origin,
+        builder_code=code,
     )
     # The adoption receipt first, the manifest last: the manifest is what
     # makes the cache readable, so it appears only after every check passed.

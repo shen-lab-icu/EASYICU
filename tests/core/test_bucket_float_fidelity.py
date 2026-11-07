@@ -425,3 +425,196 @@ def test_profile_counts_nan_and_signed_zero_per_record():
     assert (
         swapped.result()["sha256"] != result["sha256"]
     )  # same marginals, records differ
+
+
+def _tied_legacy_cache(root: Path, *, flip: bool) -> tuple[Path, Path]:
+    """The delta26b tie probe: records equal apart from the sign of a zero.
+
+    Every non-float field ties; the bucket flips every zero's sign, which keeps
+    the signed complete-row multiset but changes FIRST() over the bucket.
+    """
+    n = 12_000
+    value = np.tile(np.array([-0.0, 0.0]), n // 2)
+    table = pa.table(
+        {
+            "itemid": pa.array([1] * n, pa.int64()),
+            "seq": pa.array([10] * n, pa.int64()),
+            "v": pa.array(value, pa.float64()),
+        }
+    )
+    (root / "chartevents").mkdir(parents=True)
+    source = root / "chartevents" / "part.parquet"
+    pq.write_table(table, source, use_dictionary=False)
+    cache = root / "chartevents_bucket"
+    (cache / "bucket_id=0").mkdir(parents=True)
+    stored = -value if flip else value
+    pq.write_table(
+        table.set_column(2, "v", pa.array(stored, pa.float64())),
+        cache / "bucket_id=0" / "part.parquet",
+        use_dictionary=False,
+    )
+    with duckdb.connect() as con:
+        schema = builder._schema(con, builder._relation([source]))
+    (cache / "_BUCKET_BUILD_RECEIPT.json").write_text(
+        json.dumps(
+            {
+                "schema": builder.RECEIPT_SCHEMA,
+                "key": "itemid",
+                "bucket_count": 1,
+                "duckdb_version": duckdb.__version__,
+                "source_schema": schema,
+                "rows": n,
+            }
+        )
+    )
+    (cache / "_COMPLETE").write_text("complete\n")
+    return source, cache
+
+
+def test_adoption_refuses_records_tied_apart_from_a_zero_sign(tmp_path):
+    _, cache = _tied_legacy_cache(tmp_path, flip=True)
+    with pytest.raises(builder.FloatFidelityError) as caught:
+        builder.adopt_bucket_cache(
+            tmp_path, table="chartevents", key="itemid", threads=1, memory_limit="256MB"
+        )
+    assert caught.value.reason == "adopt_sign_ambiguous_rebuild_required"
+    assert caught.value.source == {"sign_ambiguous_groups": 1}
+    assert not (cache / MANIFEST).exists()
+    assert not (cache / builder.ADOPTION_RECEIPT).exists()
+
+
+def test_adoption_refuses_ambiguous_ties_even_when_the_bucket_is_unchanged(tmp_path):
+    # Without an ordinal the tie cannot be certified, whatever the stored order.
+    _, cache = _tied_legacy_cache(tmp_path, flip=False)
+    with pytest.raises(builder.FloatFidelityError) as caught:
+        builder.adopt_bucket_cache(
+            tmp_path, table="chartevents", key="itemid", threads=1, memory_limit="256MB"
+        )
+    assert caught.value.reason == "adopt_sign_ambiguous_rebuild_required"
+    assert not (cache / MANIFEST).exists()
+
+
+def test_an_ordinal_rebuild_of_the_tied_source_passes(tmp_path):
+    source, _ = _tied_legacy_cache(tmp_path / "legacy", flip=False)
+    root = tmp_path / "rebuild"
+    (root / "chartevents").mkdir(parents=True)
+    (root / "chartevents" / "part.parquet").write_bytes(source.read_bytes())
+    receipt = builder.build_bucket_cache(
+        root, table="chartevents", key="itemid", bucket_count=1, threads=1
+    )
+    assert receipt["float_fidelity"]["columns"]["v"]["neg_zero"] == 6000
+
+
+def _expected_src() -> Path:
+    return (Path(builder.__file__).resolve().parents[1] / "src").resolve()
+
+
+@pytest.mark.parametrize("variable", [False, True], ids=["hash", "variable_stay_range"])
+def test_build_receipt_records_an_import_origin_inside_this_checkout(
+    tmp_path, variable
+):
+    _source(tmp_path, n=2_000)
+    _build(tmp_path, variable)
+    receipt = json.loads(
+        (tmp_path / "chartevents_bucket" / "_BUCKET_BUILD_RECEIPT.json").read_text()
+    )
+    origin = receipt["import_origin"]
+    assert origin["expected_src"] == str(_expected_src())
+    assert set(origin["modules"]) == {
+        "easyicu",
+        "easyicu.storage_layout",
+        "easyicu.runtime.duckdb_spill",
+    }
+    for path in origin["modules"].values():
+        assert Path(path).is_relative_to(_expected_src()), path
+
+
+def test_adoption_receipt_records_the_import_origin(tmp_path):
+    cache = _legacy_cache(tmp_path, flip_sign=False)
+    builder.adopt_bucket_cache(tmp_path, threads=1, memory_limit="256MB")
+    adoption = json.loads((cache / builder.ADOPTION_RECEIPT).read_text())
+    assert adoption["import_origin"] == builder.builder_import_origin()
+
+
+@pytest.mark.parametrize("entry", ["hash", "variable_stay_range", "adopt"])
+def test_easyicu_from_another_checkout_is_refused_before_any_write(
+    tmp_path, monkeypatch, entry
+):
+    """An editable install elsewhere (e.g. a webapp runtime) must not supply easyicu."""
+    elsewhere = tmp_path / "webapp" / "src" / "easyicu" / "storage_layout.py"
+    monkeypatch.setattr(builder._storage_layout, "__file__", str(elsewhere))
+    if entry == "adopt":
+        cache = _legacy_cache(tmp_path, flip_sign=False)
+        before = sorted(p.name for p in cache.iterdir())
+    else:
+        _source(tmp_path, n=2_000)
+    with pytest.raises(builder.ImportOriginError) as caught:
+        if entry == "adopt":
+            builder.adopt_bucket_cache(tmp_path, threads=1, memory_limit="256MB")
+        else:
+            _build(tmp_path, entry == "variable_stay_range")
+    assert caught.value.reason == "builder_import_origin_mismatch"
+    assert caught.value.expected == str(_expected_src())
+    assert caught.value.modules["easyicu.storage_layout"] == str(elsewhere)
+    if entry == "adopt":
+        assert sorted(p.name for p in cache.iterdir()) == before
+    else:
+        assert not (tmp_path / "chartevents_bucket").exists()
+        assert not list(tmp_path.glob(".*bucket*"))
+
+
+def _git(*args: str) -> str:
+    import subprocess
+
+    repo = Path(builder.__file__).resolve().parents[1]
+    return subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize("entry", ["hash", "variable_stay_range", "adopt"])
+def test_manifest_and_receipt_carry_the_same_builder_code(tmp_path, entry):
+    """The seal tool requires manifest builder_code == receipt builder_code, commit == SHA."""
+    if entry == "adopt":
+        root = _legacy_cache(tmp_path, flip_sign=False)
+        builder.adopt_bucket_cache(tmp_path, threads=1, memory_limit="256MB")
+        receipt_name = builder.ADOPTION_RECEIPT
+    else:
+        _source(tmp_path, n=2_000)
+        _build(tmp_path, entry == "variable_stay_range")
+        root = tmp_path / "chartevents_bucket"
+        receipt_name = "_BUCKET_BUILD_RECEIPT.json"
+    manifest = json.loads((root / MANIFEST).read_text())
+    receipt = json.loads((root / receipt_name).read_text())
+    expected = {
+        "source": "git",
+        "commit": _git("rev-parse", "HEAD"),
+        "dirty": bool(_git("status", "--porcelain", "--untracked-files=all")),
+    }
+    assert manifest["builder_code"] == receipt["builder_code"] == expected
+    assert len(expected["commit"]) == 40
+    read_bucket_contract(root)  # the reader still accepts the manifest
+
+
+def test_builder_code_outside_a_git_checkout_has_no_commit(monkeypatch):
+    import subprocess
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(subprocess, "run", no_git)
+    assert builder.builder_code() == {
+        "source": "unavailable",
+        "commit": None,
+        "dirty": None,
+    }
+
+
+def test_builder_source_carries_the_seal_tool_float_fidelity_mark():
+    """The seal tool refuses a builder whose source lacks this reason (BUILDER_MARK)."""
+    source = Path(builder.__file__).read_text()
+    assert "bucket_float_fidelity_mismatch" in source
+    assert (
+        builder.FloatFidelityError("c", {}, {}).reason
+        == "bucket_float_fidelity_mismatch"
+    )

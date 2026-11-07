@@ -50,10 +50,28 @@ included. In detail:
   `unsupported_nested_float` for a float inside a LIST/STRUCT/MAP column.
 - `--adopt` of a legacy cache runs the same gate, bound to the whole record
   per bucket (NaN payloads not distinguished there), writes it to
-  `_BUCKET_ADOPTION_RECEIPT.json`, and refuses on a mismatch.
+  `_BUCKET_ADOPTION_RECEIPT.json`, and refuses on a mismatch. A legacy cache
+  has no source ordinal, so when its source holds records that are equal
+  apart from the sign of a zero, adoption is refused with
+  `adopt_sign_ambiguous_rebuild_required`: a sign swap between such records
+  would keep the row multiset yet change `FIRST()`. Rebuild it instead.
+- Fidelity is to the flat reader's value, after its type unification, not to
+  the shard's stored value. A shard read into DOUBLE from int64 loses the low
+  bits above 2^53 exactly as the flat reader does; the bucket matches flat.
 - The manifest and the build receipt record `float_fidelity` (per column:
   values, nulls, -0.0, +0.0, NaN and a sha256 over ordinal and bits); the
   receipt also records the check's wall time, batch size and peak RSS.
+- Before reading any data, the builder (build and `--adopt`) asserts that
+  `easyicu`, `easyicu.storage_layout` and `easyicu.runtime.duckdb_spill`
+  were imported from its own checkout's `src`, and records their paths as
+  `import_origin` in the build or adoption receipt. An editable install
+  elsewhere fails with `builder_import_origin_mismatch`; run the builder with
+  `PYTHONPATH=<checkout>/src`.
+- The manifest and the build (or adoption) receipt record the same
+  `builder_code` (`{"source": "git", "commit": <full SHA>, "dirty": <bool>}`)
+  taken from the script's own checkout at the start of the build, so a seal
+  can require the seal SHA and a clean checkout. Outside a git checkout the
+  commit is null, which a seal refuses.
 
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
