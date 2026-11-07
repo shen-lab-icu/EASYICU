@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -450,3 +451,193 @@ def test_an_unmapped_number_on_any_mapped_categorical_concept_is_a_loss():
     assert out["state"].isna().sum() == 2
     assert _losses(drops, "alarm_on") == 2  # '7' parses as a number and is still lost
     assert _instrument_rows(drops, "alarm_on") == 0
+
+
+# -- N31 (delta31v): positional stays, merge before dedup, intentional ------
+# missing at the parse point, unjudged reads typed, ledger-free API return.
+
+
+def _parse_context(concept="temp", definition=None):
+    from easyicu.concept.value_kind import SourceParseContext
+
+    return SourceParseContext(
+        database="unit", concept=concept, table="t",
+        definition=definition or _definition(concept, class_name="num_cncpt"),
+        id_column="stay",
+    )
+
+
+def test_a_duplicate_index_subset_parses_as_before_and_counts_by_position():
+    from easyicu.concept.value_kind import parse_source_numeric, source_parse_context
+
+    frame = pd.DataFrame(
+        {"stay": [1, 2, 3, 4], "temp": pd.Series(["36.6", "n/a", "37.0", "x"], index=[0, 0, 1, 1], dtype=object)},
+        index=[0, 0, 1, 1],  # e.g. two concatenated batches
+    )
+    mask = np.array([False, True, True, True])
+    before = pd.to_numeric(frame.loc[mask, "temp"], errors="coerce")
+    with collect_bounds_drops() as drops, source_parse_context(_parse_context()):
+        parsed = parse_source_numeric(frame.loc[mask, "temp"], frame=frame, rows=mask)
+    pd.testing.assert_series_equal(parsed, before)
+    [counts] = drops["temp"].values()
+    assert counts["non_numeric_values"] == 2
+    assert counts["stays_with_non_numeric"] == 2  # stays 2 and 4, by position
+    assert sorted(counts["_stays"]["bad"]) == ["2", "4"]
+    with collect_bounds_drops() as drops, source_parse_context(_parse_context()):
+        # Without ``rows`` the subset has no stay identity: counted, without a ledger.
+        whole = parse_source_numeric(frame.loc[mask, "temp"], frame=frame)
+    pd.testing.assert_series_equal(whole, before)
+    [counts] = drops["temp"].values()
+    assert counts["non_numeric_values"] == 2 and counts.get("_stays") is None
+
+
+def test_a_converted_unit_on_a_duplicate_index_frame_parses():
+    from easyicu.concept.callback_apply import _apply_callback, _apply_callback_body
+    from easyicu.concept.schema import ConceptSource
+
+    frame = pd.DataFrame({
+        "patientunitstayid": [1, 2, 3, 4],
+        "labresultoffset": 60.0,
+        "hgb": pd.Series(["120", "see note", "11.5", "95"], index=[0, 0, 1, 1], dtype=object),
+        "unit": ["g/L", "g/L", "g/dL", "g/L"],
+    }, index=[0, 0, 1, 1])  # two concatenated batches
+    source = ConceptSource(
+        table="lab", value_var="labresult", unit_var="unit",
+        callback="convert_unit(binary_op(`*`, 0.1), 'g/dL', 'g/L')",
+    )
+    definition = _definition("hgb", class_name="num_cncpt")
+    resolver = SimpleNamespace(dictionary={"hgb": definition})
+    data_source = SimpleNamespace(config=SimpleNamespace(name="eicu"))
+    # The pre-count parse: the same callback with no source context.
+    expected = _apply_callback_body(frame, source, "hgb", resolver=resolver, data_source=data_source)
+    with collect_bounds_drops() as drops:
+        out = _apply_callback(frame, source, "hgb", resolver=resolver, data_source=data_source)
+    pd.testing.assert_frame_equal(out, expected)
+    assert _losses(drops, "hgb") == 1
+
+
+def test_a_clean_then_anomalous_record_of_one_read_keeps_the_anomaly():
+    def record(bad):
+        frame = pd.DataFrame({"stay": [1, 2, 3], "values": [2, 2, 2], "bad": [bad, bad, 0]})
+        record_coercion_counts(
+            database="unit", concept="temp", table="t", stays=[1, 2, 3], frame=frame,
+            id_column="stay", values_column="values", non_numeric_column="bad",
+        )
+
+    with collect_bounds_drops() as drops:
+        record(0)  # a clean pass of the read
+        record(1)  # the same read, parsed again with anomalies
+    counts = drops["temp"]["t"]
+    assert counts["non_numeric_values"] == 2 and counts["stays_with_non_numeric"] == 2
+    fields = extraction.source_value_publication(
+        {"a": {"source_bounds": drops}}, ["a"], database="unit", dictionary=_DECLARED,
+    )
+    assert fields["source_values_not_numeric"]["temp"]["t"]["non_numeric_values"] == "<10"
+    with pytest.raises(ConceptValueKindUndeclared):
+        extraction.source_value_publication(
+            {"a": {"source_bounds": drops}}, ["a"], database="unit", dictionary=_CLASSLESS,
+        )
+
+
+def _intentional(drops, concept):
+    return sum(
+        int(counts.get("intentional_missing_rows", 0)) for counts in (drops.get(concept) or {}).values()
+    )
+
+
+def test_a_gcs_not_scored_is_missing_on_purpose_not_lost():
+    definition, source = _eicu_source("egcs", table="nursecharting", callback="eicu_gcs_coded")
+    frame = pd.DataFrame({
+        "patientunitstayid": [1, 2, 3, 4, 5],
+        "nursingchartoffset": 60,
+        "nursingchartcelltypevallabel": "Glasgow coma score",
+        "nursingchartcelltypevalname": "Eyes",
+        "nursingchartvalue": pd.Series(
+            ["4-->(E4) spontaneous", "3", "Unable to score due to medication", "not assessed", "see chart"],
+            dtype=object,
+        ),
+    })
+    value_column = source.value_var or "nursingchartvalue"
+    frame = frame.rename(columns={"nursingchartvalue": value_column})
+    out, drops = _through_callback("egcs", definition, source, frame)
+    assert out[value_column].tolist()[:2] == [4, 3] and out[value_column].isna().sum() == 3
+    assert _intentional(drops, "egcs") == 2
+    assert _losses(drops, "egcs") == 1  # 'see chart' is a lost value
+    fields = extraction.source_value_publication(
+        {"neurological": {"source_bounds": drops}}, ["neurological"],
+        database="eicu", dictionary={"egcs": definition},
+    )
+    [row] = fields["qc_warnings"]["intentional_missing_rows"]
+    assert (row["concept"], row["intentional_missing_rows"]) == ("egcs", "<10")
+
+
+def test_a_paused_infusion_rate_is_missing_on_purpose_not_lost():
+    definition, source = _eicu_source("propofol", table="infusiondrug")
+    frame = pd.DataFrame({
+        "patientunitstayid": [1, 2, 3, 4],
+        "infusionoffset": 60,
+        "drugname": "Propofol (mcg/kg/min)",
+        "drugrate": pd.Series(["20", "Paused", "held", "titrate"], dtype=object),
+    })
+    _out, drops = _through_callback("propofol", definition, source, frame)
+    assert _intentional(drops, "propofol") == 2
+    assert _losses(drops, "propofol") == 1
+
+
+@pytest.mark.parametrize("duplicate", ["index", "column"])
+def test_an_output_the_net_cannot_match_is_typed_audit_unknown(monkeypatch, duplicate):
+    from easyicu.concept import callback_apply
+
+    def opaque(frame, source, concept_name, *args, **kwargs):
+        frame = frame.copy()
+        frame["temperature"] = pd.to_numeric(frame["temperature"], errors="coerce")
+        if duplicate == "index":
+            return pd.concat([frame, frame])
+        return pd.concat([frame, frame[["temperature"]]], axis=1)
+
+    monkeypatch.setattr(callback_apply, "_apply_callback_body", opaque)
+    _out, drops = _callback(
+        "transform_fun(opaque)", _TEXT20, definition=_definition("temp_unit", class_name="num_cncpt"),
+    )
+    [counts] = drops["temp_unit"].values()
+    assert counts["boundary_reads_audit_unknown"] == 1
+    fields = extraction.source_value_publication(
+        {"vitals": {"source_bounds": drops}}, ["vitals"],
+        database="eicu", dictionary={"temp_unit": _definition("temp_unit", class_name="num_cncpt")},
+    )
+    [row] = fields["qc_warnings"]["boundary_reads_audit_unknown"]
+    assert row["union"] == "audit_unknown"
+    assert fields["source_values_not_numeric"]["temp_unit"]["vitalperiodic"]["union"] == "audit_unknown"
+
+
+def test_the_python_api_returns_counts_without_the_private_ledger(tmp_path, monkeypatch):
+    from easyicu.api.concepts import clear_global_loader
+    from easyicu.synthetic_sources import generate_source
+    from tests.support.inprocess_extraction import inprocess_mp_context
+
+    root = tmp_path / "sic"
+    generate_source(root, "sic", stays=6)
+    real_totals = extraction.bounds_totals
+
+    def totals(records):
+        out = dict(real_totals(records))
+        out["temp"] = {**out.get("temp", {}), "data_float_h": {
+            "dropped_values": 0, "stays_all_out_of_bounds": 0, "stays_read": 0,
+            "non_numeric_values": 3, "stays_with_non_numeric": 1, "stays_with_values": 2,
+            "_stays": {"seen": ["1", "2"], "bad": {"1": 3}},
+        }}
+        return out
+
+    monkeypatch.setattr(extraction, "bounds_totals", totals)
+    monkeypatch.setattr(extraction, "_get_extraction_mp_context", inprocess_mp_context)
+    try:
+        result = extraction.extract_database(
+            "sic", data_path=str(root), output_dir=str(tmp_path / "export"), modules=["outcome", "vitals"],
+            native_export_v2=True, verbose=False,
+        )
+    finally:
+        clear_global_loader()
+    counts = result["modules"]["vitals"]["source_bounds"]["temp"]["data_float_h"]
+    # The counts stay (integers, unrounded); only the ledger is withheld.
+    assert isinstance(counts["non_numeric_values"], int) and counts["non_numeric_values"] >= 3
+    assert "_stays" not in json.dumps(result, default=str)

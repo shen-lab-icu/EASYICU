@@ -277,9 +277,9 @@ class CallbackParseContract:
     when it is not the source's value column (eICU ``iv_exposure`` reads
     ``dosage`` whatever the value column holds). ``deliberate_missing``: the
     output rows the callback leaves missing on purpose (e.g. an unknown
-    route), which are not losses. ``categorical_map``: the callback maps
-    categories, so any unmapped value it leaves missing is a loss, even one
-    that would parse as a number.
+    route): never losses, counted as ``intentional_missing_rows``.
+    ``categorical_map``: the callback maps categories, so any unmapped value
+    it leaves missing is a loss, even one that would parse as a number.
     """
 
     parsed_column: Optional[str] = None
@@ -292,6 +292,8 @@ def parse_source_numeric(
     *,
     frame: Optional[pd.DataFrame] = None,
     parser: Optional[Callable[[pd.Series], pd.Series]] = None,
+    rows=None,
+    intentional_missing=None,
 ) -> pd.Series:
     """The first parse of a concept's raw source values into numbers.
 
@@ -303,15 +305,43 @@ def parse_source_numeric(
     numeric bounds) refuses it with ``ConceptValueKindUndeclared``. A concept
     declared text is a deliberate parse and is not counted. Nothing is
     inferred from dtypes: a numeric column has no value to lose.
+
+    ``rows`` (booleans, positional over ``frame``) says which rows of
+    ``frame`` ``values`` are, when ``values`` is a subset: stays are matched
+    by position, never by (possibly duplicate) index labels.
+    ``intentional_missing`` (booleans aligned with ``values``) marks cells
+    the parse grammar leaves missing on purpose (e.g. a GCS "unable to
+    score"): they are recorded as ``intentional_missing_rows``, never losses.
     """
     converted = parser(values) if parser is not None else pd.to_numeric(values, errors="coerce")
     if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
         return converted
-    _record_losses(values, pd.Series(converted, index=values.index), frame)
+    _record_losses(
+        values, pd.Series(np.asarray(converted), index=values.index), frame, rows=rows,
+        intentional=intentional_missing,
+    )
     return converted
 
 
-def _record_losses(values, converted, frame, *, all_kinds=False, non_result=None) -> None:
+def _stay_ids(values, frame, column, rows):
+    """Each cell's stay, matched by position (``rows`` for a subset); ``None`` if unknown."""
+    if frame is None or not column or column not in frame.columns:
+        return None
+    ids = frame[column].to_numpy()
+    if rows is not None:
+        ids = ids[np.asarray(rows, dtype=bool)]
+    elif len(values) != len(frame):
+        if not frame.index.is_unique:
+            return None  # a subset of a duplicate-labelled frame: no stay identity
+        ids = frame[column].reindex(values.index).to_numpy()
+    if len(ids) != len(values):
+        return None
+    return pd.Series(ids, index=values.index)
+
+
+def _record_losses(
+    values, converted, frame, *, all_kinds=False, non_result=None, rows=None, intentional=None,
+) -> None:
     """Record (and refuse for a classless concept) the cells of ``values`` lost in ``converted``."""
     context = _PARSE_CONTEXT.get()
     if context is None or context.definition is None:
@@ -325,13 +355,18 @@ def _record_losses(values, converted, frame, *, all_kinds=False, non_result=None
     from ..source_bounds import record_series_coercion
 
     context.parsed.append(True)
-    ids = None
-    if frame is not None and context.id_column and context.id_column in frame.columns:
-        ids = frame[context.id_column].reindex(values.index)
+    ids = _stay_ids(values, frame, context.id_column, rows)
+    if intentional is not None:
+        intentional = (
+            np.asarray(intentional, dtype=bool) & values.notna().to_numpy() & converted.isna().to_numpy()
+        )
+        # An intentional missing value is not a loss: keep it non-null here.
+        converted = converted.mask(intentional, 0.0)
     lost = record_series_coercion(
         database=context.database, concept=context.concept, table=context.table,
         stays=None if ids is None else ids.dropna().unique().tolist(),
         original=values, converted=converted, ids=ids, non_result=non_result,
+        intentional=intentional if intentional is not None and intentional.any() else None,
     )
     if lost and implicit:
         from ..source_bounds import small_count
@@ -374,27 +409,40 @@ def count_callback_losses(
     if not isinstance(result, pd.DataFrame) or value_column not in result.columns:
         return
     if not result.index.is_unique or not raw.index.is_unique or result.columns.duplicated().any():
+        # Rows cannot be matched to their raw values: the read is not
+        # judged, and says so (typed audit_unknown), instead of passing.
+        from ..source_bounds import record_boundary_audit_unknown
+
+        record_boundary_audit_unknown(
+            database=context.database, concept=context.concept, table=context.table,
+        )
         return
     kept = result.index.intersection(raw.index)
-    if contract.deliberate_missing is not None and len(kept):
-        deliberate = pd.Series(contract.deliberate_missing(result.loc[kept]), index=kept)
-        kept = kept[~deliberate.fillna(False).astype(bool).to_numpy()]
     if len(kept) == 0:
         return
+    deliberate = pd.Series(False, index=kept)
+    if contract.deliberate_missing is not None:
+        deliberate = pd.Series(
+            np.asarray(contract.deliberate_missing(result.loc[kept]), dtype=bool), index=kept
+        )
     original = raw.loc[kept]
     output = result.loc[kept, value_column]
     present = original.notna()
     instrument = present & names_an_instrument(original)
+    intentional = present & ~instrument & deliberate & output.isna()
     if contract.categorical_map:
-        candidate = present & ~instrument
+        candidate = present & ~instrument & ~intentional
     else:
-        candidate = present & ~instrument & pd.to_numeric(original, errors="coerce").isna()
+        candidate = (
+            present & ~instrument & ~intentional & pd.to_numeric(original, errors="coerce").isna()
+        )
     lost = candidate & output.isna()
-    if not bool(lost.any() or instrument.any()):
+    if not bool(lost.any() or instrument.any() or intentional.any()):
         return
     converted = pd.Series(np.where(lost.to_numpy(), np.nan, 0.0), index=kept)
     _record_losses(
         original, converted, raw_frame.loc[kept],
         all_kinds=contract.categorical_map,
         non_result=instrument.to_numpy() if bool(instrument.any()) else None,
+        intentional=intentional.to_numpy() if bool(intentional.any()) else None,
     )

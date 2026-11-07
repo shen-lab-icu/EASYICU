@@ -104,6 +104,20 @@ median, so the value depended on which stays shared the batch.
   assessment instrument (eICU 'Delirium Scale' rows: `CAM-ICU`, `ICDSC`) is
   not a result: it is counted as `non_result_instrument_rows` (QC category of
   that name), never as a loss. Counts and QC only; no value changes.
+- Boundary net (round 4, N31 review): values a parse grammar leaves missing
+  on purpose are marked where they are parsed and counted as
+  `intentional_missing_rows` (own QC category, never losses): eICU GCS
+  charting that says the item was not scored ("Unable to score ...", "not
+  assessed", a verbal `T`/`1T`), a paused/held/stopped/off infusion rate,
+  an order with an unknown route. A callback output that cannot be matched
+  to its raw values (duplicate row index or output column) is no longer
+  skipped: the read is `boundary_reads_audit_unknown` and its union
+  `audit_unknown`. A subset parse matches stays by position (a
+  duplicate-index frame parses as before instead of raising). Two records of
+  one read (a clean pass, then an anomalous one) are merged before
+  de-duplication, so the anomaly is kept. `extract_database()` returns the
+  counts without the private per-stay ledger. Counts and QC only; no value
+  changes.
 
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 

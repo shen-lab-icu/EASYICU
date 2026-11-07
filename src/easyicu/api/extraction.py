@@ -25,6 +25,7 @@ from ..source_bounds import (
     bounds_totals,
     merge_bounds_drops,
     public_bounds,
+    strip_private_ledgers,
 )
 from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
@@ -7563,7 +7564,9 @@ def source_value_publication(
     from ..io.data_quality import source_bounds_warnings, source_value_coercion_warnings
     from ..source_bounds import (
         AUDIT_UNKNOWN,
+        BOUNDARY_FIELD,
         INSTRUMENT_FIELD,
+        INTENTIONAL_FIELD,
         coercion_union,
         public_bounds,
         small_count,
@@ -7580,13 +7583,20 @@ def source_value_publication(
         internal[module] = dict(counts)
     _refuse_classless_non_numeric(internal, database=database, dictionary=dictionary)
     public = {module: public_bounds(internal[module]) for module in modules}
-    instrument_rows = [
-        {"concept": concept, "source_table": table,
-         INSTRUMENT_FIELD: small_count(row[INSTRUMENT_FIELD]), "union": row["union"]}
-        for concept, tables in coercion_union(internal).items()
-        for table, row in tables.items()
-        if row.get(INSTRUMENT_FIELD)
-    ]
+    # Side categories, each its own aggregate (never losses): rows naming an
+    # instrument, values missing on purpose, callback reads the boundary net
+    # could not judge (typed audit_unknown).
+    union_rows = coercion_union(internal)
+    side_rows = {
+        field: [
+            {"concept": concept, "source_table": table,
+             field: small_count(row[field]), "union": row["union"]}
+            for concept, tables in union_rows.items()
+            for table, row in tables.items()
+            if row.get(field)
+        ]
+        for field in (INSTRUMENT_FIELD, INTENTIONAL_FIELD, BOUNDARY_FIELD)
+    }
     union = {
         concept: {
             table: {
@@ -7595,7 +7605,7 @@ def source_value_publication(
             }
             for table, row in tables.items()
         }
-        for concept, tables in coercion_union(internal).items()
+        for concept, tables in union_rows.items()
     }
     return {
         "source_bounds_drops": public,
@@ -7604,8 +7614,7 @@ def source_value_publication(
         "qc_warnings": {
             "source_bounds_suspect": source_bounds_warnings(public),
             "source_values_not_numeric": source_value_coercion_warnings(internal),
-            # Rows whose value names an instrument (not results, never losses).
-            **({"non_result_instrument_rows": instrument_rows} if instrument_rows else {}),
+            **{field: rows for field, rows in side_rows.items() if rows},
             **(
                 {"source_value_counts_audit_unknown": [
                     {"module": module, "reason": AUDIT_UNKNOWN} for module in sorted(audit)
@@ -9403,6 +9412,18 @@ def extract_database(
             logger.warning(f"{len(all_warnings)} 警告: {all_warnings[:5]}")
         print(f"{'=' * 60}")
 
+    return _public_extraction_result(result)
+
+
+def _public_extraction_result(result: dict) -> dict:
+    """The Python API's return: each module's ``source_bounds`` without the private per-stay ledger.
+
+    The ledger (stay keys) serves the publication gate inside this call; the
+    caller gets the counts only (N31 review, F).
+    """
+    for module_result in (result.get("modules") or {}).values():
+        if isinstance(module_result, dict) and isinstance(module_result.get("source_bounds"), Mapping):
+            module_result["source_bounds"] = strip_private_ledgers(module_result["source_bounds"])
     return result
 
 

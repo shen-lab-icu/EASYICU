@@ -858,6 +858,20 @@ _KEEP_UNMAPPED = object()
 
 _EICU_GCS_CODED = re.compile(r"^\s*([1-6])\s*-->\s*(?:\(\s*([EMVemv])\s*([1-6])\s*\))?")
 _EICU_GCS_ITEM_LETTER = {"egcs": "E", "mgcs": "M", "motor_response": "M", "vgcs": "V"}
+#: GCS charting that says the item was not scored (not a result, not a loss):
+#: "Unable to score due to medication", "not assessed", a verbal "T"/"1T"
+#: (intubated). Missing on purpose; counted as ``intentional_missing_rows``.
+_EICU_GCS_NOT_ASSESSED = re.compile(
+    r"^\s*(?:unable\s+to\s+(?:score|assess|evaluate|test)"
+    r"|not\s+(?:assessed|scored|testable|evaluated|able\s+to\s+(?:score|assess))"
+    r"|untestable|intubated|(?:[1-5]\s*)?t(?:\s*[-(:].*)?$|nt\s*$)",
+    re.IGNORECASE,
+)
+
+
+def eicu_gcs_not_assessed(values: pd.Series) -> pd.Series:
+    """Rows whose GCS charting says the item was not scored."""
+    return values.astype("string").str.contains(_EICU_GCS_NOT_ASSESSED, na=False).astype(bool)
 
 
 def _eicu_gcs_score(values: pd.Series, letter: str | None = None) -> pd.Series:
@@ -1555,8 +1569,12 @@ def _apply_callback_body(
         if value_column not in frame.columns:
             raise KeyError("eicu_gcs_coded requires the nursecharting value column")
         frame = frame.copy()
-        frame[value_column] = _eicu_gcs_score(
-            frame[value_column], _EICU_GCS_ITEM_LETTER.get(concept_name or "")
+        letter = _EICU_GCS_ITEM_LETTER.get(concept_name or "")
+        # The real parse point: "not scored" charting is missing on purpose.
+        frame[value_column] = parse_source_numeric(
+            frame[value_column], frame=frame,
+            parser=lambda raw: _eicu_gcs_score(raw, letter),
+            intentional_missing=eicu_gcs_not_assessed(frame[value_column]),
         )
         return frame
 
@@ -2116,7 +2134,9 @@ def _apply_callback_body(
             if na_mask.any():
                 for fallback_col in ("value", "valuetext"):
                     if fallback_col in frame.columns and fallback_col != concept_name:
-                        fallback = parse_source_numeric(frame.loc[na_mask, fallback_col], frame=frame)
+                        fallback = parse_source_numeric(
+                            frame.loc[na_mask, fallback_col], frame=frame, rows=na_mask.to_numpy()
+                        )
                         series = series.where(~na_mask, fallback)
                         na_mask = series.isna()
                         if not na_mask.any():
@@ -2682,7 +2702,9 @@ def _apply_callback_body(
             # An empty source (e.g. the CareVue view's MetaVision table) has
             # nothing to convert; rows without the value column still fail.
             return frame
-        numeric = parse_source_numeric(frame.loc[mask, concept_name], frame=frame)
+        numeric = parse_source_numeric(
+            frame.loc[mask, concept_name], frame=frame, rows=np.asarray(mask, dtype=bool)
+        )
         transformed = _apply_binary_op(symbol, numeric, value)
         
         # 明确转换类型以避免 dtype 不兼容警告

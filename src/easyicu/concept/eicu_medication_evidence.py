@@ -15,6 +15,7 @@ import pandas as pd
 
 from .diuretics import FUROSEMIDE_EQUIVALENT_FACTORS
 from .eicu_source_qc import STAY, load_optional
+from .value_kind import parse_source_numeric
 
 _NONIV = re.compile(
     r"\b(?:po|oral|per\s+os|sl|sublingual|buccal|ngt?|ogt?|ft|peg|pegtube|"
@@ -89,10 +90,13 @@ def route_masked(out):
 def positive_infusion(frame, column):
     """Positive charted rate = exposure; zero = stop; unparseable = unknown."""
     out = frame.copy()
-    values = pd.to_numeric(frame[column], errors="coerce").astype("float64")
+    paused = frame[column].astype("string").str.strip().str.casefold().isin(["paused", "held", "stopped", "off"])
+    # A paused/held/stopped/off rate is missing on purpose, not a lost value.
+    values = parse_source_numeric(
+        frame[column], frame=frame, intentional_missing=paused.fillna(False).astype(bool)
+    ).astype("float64")
     finite = np.isfinite(values)
     out[column] = values.gt(0).astype("boolean").mask(~finite | values.lt(0))
-    paused = frame[column].astype("string").str.strip().str.casefold().isin(["paused", "held", "stopped", "off"])
     out["eicu_exposure_source"] = np.select([values.gt(0) & finite, values.eq(0), paused], ["infusion_positive", "infusion_stopped", "infusion_paused"], default="infusion_unknown")
     out.attrs["eicu_medication_audit"] = {"source": "charted_infusion", "positive": int((values.gt(0) & finite).sum()), "stopped": int(values.eq(0).sum()), "unknown": int(out[column].isna().sum())}
     return out
