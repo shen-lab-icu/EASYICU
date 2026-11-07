@@ -558,3 +558,46 @@ def source_bounds_warnings(
             "reason": "declared_bounds_reject_all_values_of_many_stays",
         })
     return rows
+
+
+def source_value_coercion_warnings(
+    drops_by_module: Dict[str, Dict[str, Dict[str, Dict[str, int]]]],
+) -> List[Dict[str, Any]]:
+    """Release-QC table of sources whose values of a declared numeric concept were not numbers.
+
+    Same input and thresholds as :func:`source_bounds_warnings`: a row needs
+    at least ``SOURCE_BOUNDS_WARN_MIN_STAYS`` stays with such a value, making
+    up at least ``SOURCE_BOUNDS_WARN_MIN_FRACTION`` of the stays the
+    conversion point had values for. The counts themselves are always in the
+    manifest (``non_numeric_values``); a row is a warning only. A source read
+    by several modules is one read of the same stays: its row carries the
+    unique counts of the module that read the most stays, never their sum.
+    """
+    best: Dict[tuple, tuple] = {}
+    for module in sorted(drops_by_module or {}):
+        for concept, tables in (drops_by_module[module] or {}).items():
+            for table, counts in (tables or {}).items():
+                key = (concept, table)
+                if key not in best or int(counts.get("stays_with_values", 0)) > int(best[key][1].get("stays_with_values", 0)):
+                    best[key] = (module, counts)
+    rows: List[Dict[str, Any]] = []
+    for (concept, table) in sorted(best):
+        module, counts = best[(concept, table)]
+        stays_bad = int(counts.get("stays_with_non_numeric", 0))
+        stays_read = int(counts.get("stays_with_values", 0))
+        if stays_bad < SOURCE_BOUNDS_WARN_MIN_STAYS or stays_read <= 0:
+            continue
+        fraction = stays_bad / stays_read
+        if fraction < SOURCE_BOUNDS_WARN_MIN_FRACTION:
+            continue
+        rows.append({
+            "concept": concept,
+            "source_table": table,
+            "module": module,
+            "stays_with_non_numeric": stays_bad,
+            "stays_with_values": stays_read,
+            "fraction_of_stays": round(fraction, 4),
+            "non_numeric_values": int(counts.get("non_numeric_values", 0)),
+            "reason": "declared_numeric_values_not_numeric",
+        })
+    return rows

@@ -5533,14 +5533,48 @@ class ConceptResolver:
                 # numeric. Sampling the first rows let the stays sharing a
                 # batch choose between median and first-row aggregation (AUMC
                 # vgcs: 6735 'Geïntubeerd' is text in a numeric concept).
-                from .value_kind import coerce_declared_values, declared_value_kind, implicitly_numeric
+                from ..source_bounds import record_series_coercion
+                from .value_kind import (
+                    ConceptValueKindUndeclared,
+                    coerce_declared_values,
+                    declared_value_kind,
+                    implicitly_numeric,
+                )
 
                 _database = getattr(data_source.config, "name", "")
-                combined[concept_name] = coerce_declared_values(
-                    combined[concept_name],
-                    declared_value_kind(definition, database=_database),
-                    refuse_text_for=(definition, _database) if implicitly_numeric(definition) else None,
+                _original = combined[concept_name]
+                _converted = coerce_declared_values(
+                    _original, declared_value_kind(definition, database=_database)
                 )
+                # Every non-null source value that does not convert is counted
+                # per concept and source (B-IMPLICIT-GATE), never dropped
+                # silently; a classless concept refuses it.
+                if isinstance(patient_ids, dict):
+                    _coerced_stays = list(next(iter(patient_ids.values()), []))
+                else:
+                    _coerced_stays = None if patient_ids is None else list(patient_ids)
+                _non_numeric = record_series_coercion(
+                    database=_database,
+                    concept=concept_name,
+                    table="+".join(sorted({str(getattr(src, "table", "")) for src in sources})),
+                    stays=_coerced_stays,
+                    original=_original,
+                    converted=_converted,
+                    ids=(
+                        combined[id_columns[0]]
+                        if id_columns and id_columns[0] in combined.columns else None
+                    ),
+                )
+                if _non_numeric and implicitly_numeric(definition):
+                    raise ConceptValueKindUndeclared(
+                        concept_id=definition.name, database=_database,
+                        class_name=definition.class_name,
+                        detail=(
+                            f"{_non_numeric} value(s) do not parse as numbers, and the "
+                            "concept is numeric only by default (no class, no numeric bounds)"
+                        ),
+                    )
+                combined[concept_name] = _converted
         
         sort_keys = [col for col in id_columns if col]
         if index_column:

@@ -3472,6 +3472,22 @@ def load_bucketed_table_aggregated(
             return f"LIST({expr}) FILTER (WHERE ({expr}) IS NOT NULL)"
         return f"{duckdb_agg}({expr})"
 
+    # Source values that do not convert to a number are counted in the same
+    # query: the column's non-null originals minus its converted values
+    # (B-IMPLICIT-GATE). Only while a counting scope is active (extraction).
+    from .source_bounds import scope_active as _coercion_scope_active
+
+    _coerce_values_col = "__easyicu_coerce_values"
+    _coerce_bad_col = "__easyicu_coerce_non_numeric"
+    # A numeric source column converts nothing; a VARCHAR one is cast per row.
+    _count_coercion = _coercion_scope_active() and _value_col_is_string
+
+    def _raw_value_ref(expr: str) -> Optional[str]:
+        match = re.search(
+            r'(?:\b[A-Za-z_][A-Za-z0-9_]*\.)?"?\b' + re.escape(str(value_column)) + r'\b"?', expr
+        )
+        return match.group(0) if match else None
+
     def _aggregate_select(expr: str):
         """Build bounded aggregation plus raw-value diagnostics."""
         bounded_expr = _bounded_value(expr)
@@ -3482,6 +3498,17 @@ def load_bucketed_table_aggregated(
             select += (
                 f", COUNT({expr}) as {_raw_count_col}"
                 f", COUNT({bounded_expr}) as {_bounded_count_col}"
+            )
+        raw_ref = _raw_value_ref(expr) if _count_coercion else None
+        if raw_ref is not None:
+            # Not a number: present, does not cast, and no declared transform
+            # (percent, unit) turned it into one. A transform that sets a
+            # numeric value to NA on purpose is not counted.
+            select += (
+                f", COUNT({raw_ref}) as {_coerce_values_col}"
+                f", COUNT(CASE WHEN {raw_ref} IS NOT NULL"
+                f" AND TRY_CAST({raw_ref} AS DOUBLE) IS NULL AND ({expr}) IS NULL THEN 1 END)"
+                f" as {_coerce_bad_col}"
             )
         return select, bounded_agg, unbounded_agg
     
@@ -4133,6 +4160,20 @@ def load_bucketed_table_aggregated(
 
     try:
         df = finish_miiv_lab_frame(_execute_aggregation(query))
+        if _coerce_bad_col in df.columns:
+            from .source_bounds import record_coercion_counts
+
+            record_coercion_counts(
+                database=db_name,
+                concept=source_bounds_concept or str(value_column),
+                table=table_name,
+                stays=patient_ids,
+                frame=df,
+                id_column=id_col if id_col in df.columns else df.columns[0],
+                values_column=_coerce_values_col,
+                non_numeric_column=_coerce_bad_col,
+            )
+            df = df.drop(columns=[_coerce_values_col, _coerce_bad_col])
         bounds_diagnostics = None
         if _needs_bounds_diagnostics and _raw_count_col in df.columns:
             raw_non_null = int(
@@ -4288,9 +4329,27 @@ def load_bucketed_table_multi_aggregated(
     _multi_raw_prefix = "__easyicu_multi_raw_non_null_"
     _multi_bounded_prefix = "__easyicu_multi_bounded_non_null_"
     _multi_bounded = []  # (concept, diagnostic suffix, bounds)
+    # A VARCHAR value column is cast per row, and its non-null values that do
+    # not convert are counted in the same query (B-IMPLICIT-GATE).
+    _multi_coerce_values = "__easyicu_multi_coerce_values_"
+    _multi_coerce_bad = "__easyicu_multi_coerce_non_numeric_"
+    try:
+        _value_type = conn.execute(
+            f"DESCRIBE SELECT {value_column} FROM {target_relation} LIMIT 0"
+        ).fetchall()
+        _multi_value_is_string = bool(_value_type) and (
+            str(_value_type[0][1]).upper().startswith(("VARCHAR", "STRING", "TEXT"))
+        )
+    except Exception:
+        _multi_value_is_string = False
+    from .source_bounds import scope_active as _coercion_scope_active
+
+    _multi_count_coercion = _multi_value_is_string and _coercion_scope_active()
 
     def _concept_select_exprs(prefix: str) -> List[str]:
         exprs = []
+        raw_value = f"{prefix}{value_column}"
+        value = f"TRY_CAST({raw_value} AS DOUBLE)" if _multi_value_is_string else raw_value
         for position, (concept_name, ids) in enumerate(concept_itemids.items()):
             if ids_are_strings:
                 ids_sql = ", ".join(f"'{x}'" for x in ids)
@@ -4300,20 +4359,30 @@ def load_bucketed_table_multi_aggregated(
             item_match = f"{prefix}{itemid_col} IN ({ids_sql})"
             value_conditions = [item_match]
             if bounds.get("min") is not None:
-                value_conditions.append(f"{prefix}{value_column} >= {bounds['min']}")
+                value_conditions.append(f"{value} >= {bounds['min']}")
             if bounds.get("max") is not None:
-                value_conditions.append(f"{prefix}{value_column} <= {bounds['max']}")
+                value_conditions.append(f"{value} <= {bounds['max']}")
             case_when = " AND ".join(value_conditions)
             exprs.append(
-                f"{_multi_agg(f'CASE WHEN {case_when} THEN {prefix}{value_column} END')} AS {concept_name}"
+                f"{_multi_agg(f'CASE WHEN {case_when} THEN {value} END')} AS {concept_name}"
             )
+            if _multi_count_coercion:
+                exprs.append(
+                    f"COUNT(CASE WHEN {item_match} THEN {raw_value} END) "
+                    f"AS {_multi_coerce_values}{position}"
+                )
+                exprs.append(
+                    f"COUNT(CASE WHEN {item_match} THEN {raw_value} END) - "
+                    f"COUNT(CASE WHEN {item_match} THEN {value} END) "
+                    f"AS {_multi_coerce_bad}{position}"
+                )
             if bounds.get("min") is not None or bounds.get("max") is not None:
                 exprs.append(
-                    f"COUNT(CASE WHEN {item_match} THEN {prefix}{value_column} END) "
+                    f"COUNT(CASE WHEN {item_match} THEN {value} END) "
                     f"AS {_multi_raw_prefix}{position}"
                 )
                 exprs.append(
-                    f"COUNT(CASE WHEN {case_when} THEN {prefix}{value_column} END) "
+                    f"COUNT(CASE WHEN {case_when} THEN {value} END) "
                     f"AS {_multi_bounded_prefix}{position}"
                 )
         return exprs
@@ -4658,6 +4727,22 @@ def load_bucketed_table_multi_aggregated(
                 df[_concept] = exact_terms_to_values(
                     df[_concept], "mean" if duckdb_agg == "AVG" else "sum"
                 )
+    if _multi_count_coercion:
+        from .source_bounds import record_coercion_counts
+
+        _coerce_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
+        _coerce_columns = []
+        for _position, _concept in enumerate(concept_itemids):
+            _values_col = f"{_multi_coerce_values}{_position}"
+            _bad_col = f"{_multi_coerce_bad}{_position}"
+            _coerce_columns += [_values_col, _bad_col]
+            if _values_col in df.columns and _coerce_id is not None:
+                record_coercion_counts(
+                    database=db_name, concept=_concept, table=table_name, stays=patient_ids,
+                    frame=df, id_column=_coerce_id, values_column=_values_col,
+                    non_numeric_column=_bad_col,
+                )
+        df = df.drop(columns=[c for c in _coerce_columns if c in df.columns])
     if _multi_bounded:
         from .source_bounds import record_read_counts
 
@@ -4937,6 +5022,14 @@ def load_wide_table_aggregated(
     # union_by_name=true if the fast path raises a schema-mismatch error.
     # The direct wide-result path publishes these rows without another sort.
     # Match the chunked path's key order, regardless of GROUP BY scheduling.
+    from .source_bounds import scope_active as _coercion_scope_active
+
+    _wide_coerce_values = "__easyicu_wide_coerce_values_"
+    _wide_coerce_bad = "__easyicu_wide_coerce_non_numeric_"
+    # Only the community wide tables cast their values per row.
+    _wide_count_coercion = (
+        db_name in {"zhejiang_eicu", "jinhua", "zigong"} and _coercion_scope_active()
+    )
     if db_name in {"zhejiang_eicu", "jinhua", "zigong"}:
         source_scale = {
             "zhejiang_eicu": 24.0,
@@ -4956,6 +5049,16 @@ def load_wide_table_aggregated(
         for position, column in enumerate(value_columns):
             quoted_column = _duckdb_identifier(column)
             numeric_column = f"TRY_CAST(o.{quoted_column} AS DOUBLE)"
+            if _wide_count_coercion:
+                # Non-null source values that do not cast are counted in the
+                # same query (B-IMPLICIT-GATE).
+                community_agg_parts.append(
+                    f"COUNT(o.{quoted_column}) AS {_wide_coerce_values}{position}"
+                )
+                community_agg_parts.append(
+                    f"COUNT(o.{quoted_column}) - COUNT({numeric_column}) "
+                    f"AS {_wide_coerce_bad}{position}"
+                )
             bounds = (column_bounds or {}).get(column)
             if bounds:
                 lower, upper = bounds
@@ -5042,6 +5145,24 @@ def load_wide_table_aggregated(
                 df[_column] = exact_terms_to_values(
                     df[_column], "mean" if duckdb_agg == "AVG" else "sum"
                 )
+    if _wide_count_coercion:
+        from .source_bounds import record_coercion_counts
+
+        _coerce_columns = []
+        _coerce_id = id_col if id_col in df.columns else (df.columns[0] if len(df.columns) else None)
+        for _position, _column in enumerate(value_columns):
+            _values_col = f"{_wide_coerce_values}{_position}"
+            _bad_col = f"{_wide_coerce_bad}{_position}"
+            _coerce_columns += [_values_col, _bad_col]
+            if _values_col not in df.columns or _coerce_id is None:
+                continue
+            for _concept in (column_concepts or {}).get(_column) or [_column]:
+                record_coercion_counts(
+                    database=db_name, concept=_concept, table=table_name, stays=patient_ids,
+                    frame=df, id_column=_coerce_id, values_column=_values_col,
+                    non_numeric_column=_bad_col,
+                )
+        df = df.drop(columns=[c for c in _coerce_columns if c in df.columns])
     if _wide_bounded:
         from .source_bounds import record_read_counts
 

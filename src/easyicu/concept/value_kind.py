@@ -87,6 +87,7 @@ class ConceptValueKindUndeclared(ConceptError):
         self.concept_id = str(concept_id)
         self.database = str(database)
         self.class_name = class_name
+        self.detail = detail
         super().__init__(
             f"concept {self.concept_id!r} on {self.database!r}: "
             + (detail or (
@@ -97,6 +98,15 @@ class ConceptValueKindUndeclared(ConceptError):
             + ". Refusing to decide from the batch's values; declare class "
             "(num_cncpt, lgl_cncpt, fct_cncpt or chr_cncpt)."
         )
+
+    def __reduce__(self):  # crosses process boundaries with its fields
+        return (_rebuild_undeclared, (self.concept_id, self.database, self.class_name, self.detail))
+
+
+def _rebuild_undeclared(concept_id, database, class_name, detail):
+    return ConceptValueKindUndeclared(
+        concept_id=concept_id, database=database, class_name=class_name, detail=detail
+    )
 
 
 def _units(definition) -> list[str]:

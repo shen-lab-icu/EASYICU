@@ -45,12 +45,23 @@ median, so the value depended on which stays shared the batch.
   `tgcs` as text; it is now NaN and the co-hour median is taken.
 - Export: a declared numeric or logical concept column is written as numbers;
   a declared text concept stays text whatever its values look like.
+- Counted conversion (B-IMPLICIT-GATE): every source value of a declared
+  numeric concept that is not a number becomes NaN and is counted per concept
+  and source, at each conversion point (raw resolver, single/multi/wide SQL,
+  module export), in the manifest's `source_bounds_drops` records
+  (`non_numeric_values`, `stays_with_non_numeric`, `stays_with_values`), with
+  the QC warning `source_values_not_numeric` at the bounds thresholds. The
+  12 formerly classless raw measurements (`bnd`, `bun_raw`, `crea_raw`,
+  `etco2_raw`, `hct_raw`, `hgb_raw`, `inr_pt`, `minute_vol_raw`,
+  `myoglobin_raw`, `na_raw`, `ph_raw`, `temp_raw`) declare `num_cncpt`; on
+  the six G1 samples none of their source values is non-numeric.
 - **Migration.** Custom concepts must declare `class` for logical/categorical
   values; a classless concept is numeric and refuses non-numeric values
-  (`ConceptValueKindUndeclared`, naming the concept). An explicitly declared
-  `num_cncpt` keeps turning non-numeric values into NaN. A `rec_cncpt` with
-  no unit and no registered recipe kind raises the same error. The community
-  overlay's `adv_resp` now declares `lgl_cncpt`.
+  (`ConceptValueKindUndeclared`, naming the concept and the count; an
+  extraction that meets one is not published). An explicitly declared
+  `num_cncpt` keeps turning non-numeric values into NaN, counted. A
+  `rec_cncpt` with no unit and no registered recipe kind raises the same
+  error. The community overlay's `adv_resp` now declares `lgl_cncpt`.
 - Demos (eICU, MIIV, MIMIC-III, default mode, 20 modules): identical to the
   base; no cell that held a value became NaN.
 

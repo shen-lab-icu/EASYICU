@@ -2472,16 +2472,37 @@ def _normalise_module_frame_for_parquet(result, concepts, *, reorder=True):
     # batch's cells happen to parse: a text concept whose batch holds only
     # numeric-looking codes stays text.  Owner sidecar columns outside the
     # dictionary keep the all-cells-parse rule.
+    # A declared column's non-null cells that do not convert are counted
+    # per concept (source "export"), never dropped silently (B-IMPLICIT-GATE).
     kinds = _declared_export_value_kinds()
+    id_column = next((c for c in _NATIVE_EXPORT_ID_COLUMNS if c in result.columns), None)
     for column in result.columns:
         if result[column].dtype == object:
             kind = kinds.get(column)
             if kind == "text":
                 continue
             numeric = pd.to_numeric(result[column], errors="coerce")
-            if kind is not None or bool((numeric.notna() | result[column].isna()).all()):
+            if kind is not None:
+                from ..source_bounds import record_series_coercion
+
+                ids = result[id_column] if id_column is not None else None
+                record_series_coercion(
+                    database="export", concept=str(column), table="export",
+                    stays=None if ids is None else ids.dropna().unique().tolist(),
+                    original=result[column], converted=numeric, ids=ids,
+                )
+                result[column] = numeric
+            elif bool((numeric.notna() | result[column].isna()).all()):
                 result[column] = numeric
     return result
+
+
+def _normalise_counted(result, concepts, *, reorder=True):
+    """``_normalise_module_frame_for_parquet`` plus its non-numeric counts (bounds shape)."""
+    with bounds_scope() as records:
+        frame = _normalise_module_frame_for_parquet(result, concepts, reorder=reorder)
+    with source_bounds_accounting("export_coercion"):
+        return frame, bounds_totals(records)
 
 
 @lru_cache(maxsize=1)
@@ -2873,14 +2894,12 @@ def _write_isolated_stream_batch(
                 loader=None,
                 pyarrow_module=pa,
             )
-        frame = _normalise_module_frame_for_parquet(
-            batch,
-            concepts,
-            reorder=False,
-        )
+        frame, export_counts = _normalise_counted(batch, concepts, reorder=False)
         if frame is None:
             with source_bounds_accounting("isolated_batch_hand_off"):
-                _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
+                _write_json_atomic(
+                    bounds_sidecar, merge_bounds_drops(bounds_totals(bounds_records), export_counts)
+                )
             return
         id_col, requested_ids = next(iter(patient_ids.items()))
         if id_col in frame.columns:
@@ -2901,7 +2920,9 @@ def _write_isolated_stream_batch(
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
         with source_bounds_accounting("isolated_batch_hand_off"):
-            _write_json_atomic(bounds_sidecar, bounds_totals(bounds_records))
+            _write_json_atomic(
+                bounds_sidecar, merge_bounds_drops(bounds_totals(bounds_records), export_counts)
+            )
     except BaseException as exc:
         # The parent classifies the exit from evidence, not from text: say
         # whether a memory exception (by type) stopped this child.
@@ -3511,11 +3532,9 @@ def _stream_module_batches_to_parquet(
                         )
                     with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
                         batch_bounds = bounds_totals(bounds_records)
-                    frame = _normalise_module_frame_for_parquet(
-                        batch,
-                        concepts,
-                        reorder=False,
-                    )
+                    frame, export_counts = _normalise_counted(batch, concepts, reorder=False)
+                    with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
+                        batch_bounds = merge_bounds_drops(batch_bounds, export_counts)
                     if frame is not None:
                         if id_col in frame.columns:
                             outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
@@ -3717,6 +3736,7 @@ def _run_module_extraction(
     # Bounds counts of a whole-module load (a streamed module commits its
     # own per batch); a retried load starts its counts afresh.
     module_bounds_scope = bounds_scope()
+    module_export_counts: dict = {}
     module_bounds_records = module_bounds_scope.__enter__()
     try:
         if stream_output_batches:
@@ -3809,11 +3829,7 @@ def _run_module_extraction(
         pass
     elif isinstance(result, pd.DataFrame) and len(result) > 0:
         try:
-            result = _normalise_module_frame_for_parquet(
-                result,
-                concepts,
-                reorder=False,
-            )
+            result, module_export_counts = _normalise_counted(result, concepts, reorder=False)
             _cols = [c for c in concepts if c in result.columns]
             path = os.path.join(output_dir, f"{module_name}.parquet")
             import pyarrow as pa
@@ -3854,7 +3870,9 @@ def _run_module_extraction(
     manifest["source_bounds"] = (
         dict(stream_info.get("source_bounds") or {})
         if stream_info is not None
-        else ({} if errors else bounds_totals(module_bounds_records))
+        else ({} if errors else merge_bounds_drops(
+            bounds_totals(module_bounds_records), module_export_counts
+        ))
     )
     if stream_info is not None:
         manifest["stream_batches"] = stream_info.get("stream_batches", [])
@@ -7478,6 +7496,34 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
     }
 
 
+def _refuse_classless_non_numeric(drops_by_module: Mapping, *, database: str) -> None:
+    """Refuse a run in which a classless, unbounded concept lost non-numeric values.
+
+    Such a concept is numeric only by default (ricu ``num_cncpt``); its text
+    would otherwise become NaN without a declaration. Raises the typed
+    ``ConceptValueKindUndeclared`` naming the concept and the count.
+    """
+    from ..concept.value_kind import ConceptValueKindUndeclared, implicitly_numeric
+    from ..source_bounds import non_numeric_by_concept
+
+    counts = non_numeric_by_concept(*(drops_by_module or {}).values())
+    offending = sorted(name for name, count in counts.items() if count > 0)
+    if not offending:
+        return
+    dictionary = load_dictionary(include_sofa2=True)
+    for name in offending:
+        definition = dictionary[name] if name in dictionary.keys() else None
+        if definition is None or implicitly_numeric(definition):
+            raise ConceptValueKindUndeclared(
+                concept_id=name, database=database,
+                class_name=None if definition is None else definition.class_name,
+                detail=(
+                    f"{counts[name]} source value(s) do not parse as numbers, and the "
+                    "concept is numeric only by default (no class, no numeric bounds)"
+                ),
+            )
+
+
 def _publish_native_export_v2(
     *,
     database: str,
@@ -8097,14 +8143,21 @@ def _publish_native_export_v2(
         manifest["storage_fallbacks"] = list(result["storage_fallbacks"])
     # Values outside declared bounds are dropped, never refused: the receipt
     # carries the totals and the release QC warns on suspect sources.
-    from ..io.data_quality import source_bounds_warnings
+    from ..io.data_quality import source_bounds_warnings, source_value_coercion_warnings
 
     manifest["source_bounds_drops"] = {
         module: dict((result["modules"].get(module) or {}).get("source_bounds") or {})
         for module in modules
     }
+    # Source values of a declared numeric concept that were not numbers are
+    # counted in the same records (non_numeric_values); a classless concept
+    # with any of them refuses publication (B-IMPLICIT-GATE).
+    _refuse_classless_non_numeric(manifest["source_bounds_drops"], database=database)
     manifest["qc_warnings"] = {
         "source_bounds_suspect": source_bounds_warnings(manifest["source_bounds_drops"]),
+        "source_values_not_numeric": source_value_coercion_warnings(
+            manifest["source_bounds_drops"]
+        ),
     }
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
@@ -9189,6 +9242,12 @@ def extract_database(
             quarantine = _quarantine_unpublished_outputs(
                 output_dir, entries_before_extraction, exc
             )
+            from ..concept.value_kind import ConceptValueKindUndeclared
+
+            if isinstance(exc, ConceptValueKindUndeclared):
+                # The typed refusal itself, unpublished (no root manifest).
+                exc.quarantine = quarantine
+                raise
             raise NativeExportPublicationError(
                 f"{exc} [unpublished files moved to {quarantine}]",
                 quarantine=quarantine,

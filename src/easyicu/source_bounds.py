@@ -12,6 +12,22 @@ instead, per concept and source table:
 ``stays_read``
     stays with at least one value.
 
+The same owner counts a declared numeric (or logical) concept's source values
+that are not numbers, at every point that converts them (the raw resolver,
+the single/multi/wide SQL aggregations, the module export). A non-null
+original that becomes NaN/NULL is counted, never converted silently
+(B-IMPLICIT-GATE):
+
+``non_numeric_values``
+    non-null source values that became NaN/NULL;
+``stays_with_non_numeric``
+    stays with at least one such value;
+``stays_with_values``
+    stays with at least one non-null source value at that conversion point.
+
+A concept without a class and without bounds that has any such value is
+refused at publication (``ConceptValueKindUndeclared``).
+
 Every bounded reader calls :func:`record_read_counts`. The record goes to the
 innermost active :func:`bounds_scope` of this process (a reader outside any
 scope records nothing). Extraction opens one scope per committed unit of work
@@ -39,6 +55,9 @@ __all__ = [
     "stay_set_digest",
     "record_bounds_drops",
     "record_read_counts",
+    "record_coercion_counts",
+    "record_series_coercion",
+    "non_numeric_by_concept",
     "bounds_scope",
     "scope_active",
     "bounds_totals",
@@ -46,7 +65,9 @@ __all__ = [
     "collect_bounds_drops",
 ]
 
-_FIELDS = ("dropped_values", "stays_all_out_of_bounds", "stays_read")
+_BOUNDS_FIELDS = ("dropped_values", "stays_all_out_of_bounds", "stays_read")
+_COERCION_FIELDS = ("non_numeric_values", "stays_with_non_numeric", "stays_with_values")
+_FIELDS = _BOUNDS_FIELDS + _COERCION_FIELDS
 
 
 class SourceBoundsAuditError(RuntimeError):
@@ -100,6 +121,7 @@ def record_bounds_drops(
         if not _SCOPES:
             return
         _SCOPES[-1].append({
+            "kind": "bounds",
             "database": str(database),
             "concept": str(concept),
             "table": str(table),
@@ -108,6 +130,83 @@ def record_bounds_drops(
             "stays_all_out_of_bounds": int(stays_all_out_of_bounds),
             "stays_read": int(stays_read),
         })
+
+
+def record_coercion_counts(
+    *,
+    database: str,
+    concept: str,
+    table: str,
+    stays: Optional[Iterable],
+    frame,
+    id_column: str,
+    values_column: str,
+    non_numeric_column: str,
+) -> None:
+    """Record one conversion point's non-numeric counts for one read.
+
+    ``frame`` has an id column and two count columns at any grain: the
+    non-null source values and those of them that did not convert to a
+    number. They are summed per stay. A no-op outside any scope.
+    """
+    if not scope_active() or frame is None:
+        return
+    with accounting(f"coercion[{database}.{table}:{concept}]"):
+        import pandas as pd
+
+        if len(frame) == 0 or id_column not in frame.columns:
+            values = non_numeric = pd.Series([], dtype="int64")
+        else:
+            per_stay = (
+                frame[[id_column, values_column, non_numeric_column]]
+                .assign(**{
+                    values_column: pd.to_numeric(frame[values_column], errors="coerce").fillna(0),
+                    non_numeric_column: pd.to_numeric(frame[non_numeric_column], errors="coerce").fillna(0),
+                })
+                .groupby(id_column, sort=False, dropna=False)[[values_column, non_numeric_column]]
+                .sum()
+            )
+            values = per_stay[values_column].astype("int64")
+            non_numeric = per_stay[non_numeric_column].astype("int64")
+        with _LOCK:
+            if not _SCOPES:
+                return
+            _SCOPES[-1].append({
+                "kind": "coercion",
+                "database": str(database),
+                "concept": str(concept),
+                "table": str(table),
+                "read": stay_set_digest(stays),
+                "non_numeric_values": int(non_numeric.sum()),
+                "stays_with_non_numeric": int((non_numeric > 0).sum()),
+                "stays_with_values": int((values > 0).sum()),
+            })
+
+
+def record_series_coercion(
+    *, database: str, concept: str, table: str, stays: Optional[Iterable], original, converted, ids
+) -> int:
+    """Count the non-null ``original`` cells that are null in ``converted``; record them.
+
+    ``ids`` gives each cell's stay (aligned with ``original``). Returns the
+    number of non-numeric values (also outside any scope).
+    """
+    import pandas as pd
+
+    present = original.notna().to_numpy()
+    lost = present & converted.isna().to_numpy()
+    count = int(lost.sum())
+    if scope_active():
+        record_coercion_counts(
+            database=database, concept=concept, table=table, stays=stays,
+            frame=pd.DataFrame({
+                "stay": pd.Series(ids).to_numpy() if ids is not None else 0,
+                "values": present.astype("int64"),
+                "non_numeric": lost.astype("int64"),
+            }),
+            id_column="stay", values_column="values", non_numeric_column="non_numeric",
+        )
+    return count
 
 
 def scope_active() -> bool:
@@ -196,15 +295,17 @@ def _bounds_totals(records: Iterable[Mapping]) -> dict:
     totals: dict = {}
     seen: set = set()
     for entry in records:
-        key = (entry["database"], entry["concept"], entry["table"], entry["read"])
+        kind = entry.get("kind", "bounds")
+        key = (kind, entry["database"], entry["concept"], entry["table"], entry["read"])
         if key in seen:
             continue
         seen.add(key)
         counts = totals.setdefault(entry["concept"], {}).setdefault(
-            entry["table"], dict.fromkeys(_FIELDS, 0)
+            entry["table"], dict.fromkeys(_BOUNDS_FIELDS, 0)
         )
-        for field in _FIELDS:
-            counts[field] += int(entry[field])
+        # Coercion fields appear where a conversion point counted (sparse).
+        for field in _BOUNDS_FIELDS if kind == "bounds" else _COERCION_FIELDS:
+            counts[field] = counts.get(field, 0) + int(entry.get(field, 0))
     return _merge_bounds_drops(totals)
 
 
@@ -219,13 +320,37 @@ def _merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
     for part in parts:
         for concept, tables in (part or {}).items():
             for table, counts in (tables or {}).items():
-                target = merged.setdefault(concept, {}).setdefault(table, dict.fromkeys(_FIELDS, 0))
+                target = merged.setdefault(concept, {}).setdefault(table, dict.fromkeys(_BOUNDS_FIELDS, 0))
                 for field in _FIELDS:
-                    target[field] += int(counts.get(field, 0))
+                    if field in _BOUNDS_FIELDS or field in (counts or {}):
+                        target[field] = target.get(field, 0) + int(counts.get(field, 0))
     return {
         concept: {table: dict(merged[concept][table]) for table in sorted(merged[concept])}
         for concept in sorted(merged)
     }
+
+
+def non_numeric_by_concept(*parts: Optional[Mapping]) -> dict:
+    """``{concept: non_numeric_values}``: unique per concept and source, summed over sources.
+
+    ``parts`` are ``{concept: {table: counts}}`` totals of the modules of one
+    run. A source read by several modules is the same read of the same
+    stays, so it is counted once: the module that read the most stays
+    (as :func:`easyicu.io.data_quality.source_value_coercion_warnings`
+    reports it), never the sum across the modules that read it.
+    """
+    best: dict = {}
+    for part in parts:
+        for concept, tables in (part or {}).items():
+            for table, counts in (tables or {}).items():
+                counts = counts or {}
+                rank = (int(counts.get("stays_with_values", 0)), int(counts.get("non_numeric_values", 0)))
+                if (concept, table) not in best or rank > best[(concept, table)]:
+                    best[(concept, table)] = rank
+    out: dict = {}
+    for (concept, _table), (_stays, non_numeric) in best.items():
+        out[concept] = out.get(concept, 0) + non_numeric
+    return out
 
 
 @contextmanager

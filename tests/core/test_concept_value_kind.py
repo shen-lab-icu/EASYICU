@@ -144,18 +144,18 @@ def test_a_declared_numeric_concept_turns_text_into_missing(declaration):
 
 
 @pytest.mark.parametrize("include_sofa2", [False, True])
-def test_shipped_implicit_numerics_are_the_unbounded_raw_measurements(include_sofa2):
+def test_no_shipped_concept_is_numeric_only_by_default(include_sofa2):
     from easyicu.concept.value_kind import implicitly_numeric
     from easyicu.resources import load_dictionary
 
     dictionary = load_dictionary(include_sofa2=include_sofa2)
-    implicit = sorted(name for name in dictionary.keys() if implicitly_numeric(dictionary[name]))
-    # Each reads a numeric value column (labs, numericitems, observations), so
-    # the refusal can only fire on a source that starts publishing text.
-    assert implicit == [
-        "bnd", "bun_raw", "crea_raw", "etco2_raw", "hct_raw", "hgb_raw", "inr_pt", "minute_vol_raw",
-        "myoglobin_raw", "na_raw", "ph_raw", "temp_raw",
-    ]
+    # The former unbounded raw measurements (bnd, bun_raw, crea_raw, etco2_raw,
+    # hct_raw, hgb_raw, inr_pt, minute_vol_raw, myoglobin_raw, na_raw, ph_raw,
+    # temp_raw) declare num_cncpt (B-IMPLICIT-GATE): the publish-time refusal
+    # of a classless concept can only fire on a user's custom concept.
+    assert sorted(name for name in dictionary.keys() if implicitly_numeric(dictionary[name])) == []
+    for name in ("bnd", "inr_pt", "temp_raw"):
+        assert dictionary[name].class_name == "num_cncpt"
     for name in dictionary.keys():
         declared_value_kind(dictionary[name], database="any")
 

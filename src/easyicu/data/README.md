@@ -80,7 +80,9 @@ load_concept_dictionaries(extra_names=["sofa2-dict"])
 
 Custom concepts must declare `class` for logical/categorical values
 (`lgl_cncpt`, `fct_cncpt`, `chr_cncpt`); a classless concept is numeric and
-refuses non-numeric values with `ConceptValueKindUndeclared`.
+refuses non-numeric values with `ConceptValueKindUndeclared`; a declared
+numeric concept turns them into NaN and counts them in the manifest
+(`non_numeric_values`).
 
 ### Why not merge `sofa2-dict.json` into `concept-dict.json`?
 
