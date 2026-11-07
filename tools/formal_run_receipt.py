@@ -40,6 +40,11 @@ exited. It binds the run to the sealed code and to its inputs:
   ``derived_from`` sources as snapshotted);
 * no storage fallback: a formal run that read through one is
   ``storage_fallback_in_formal_run`` (with counts per reason);
+* no declared table read as empty for want of a physical source unless the
+  root's REQUIRED_LAYOUT.json ``declared_absent`` allowlist excuses it: the
+  native manifest's ``storage_unavailable`` list is copied (an empty list
+  included) with the entry that excused each record, and any other record is
+  ``storage_unavailable_in_formal_run``, naming the tables and their causes;
 * ``REQUIRED_LAYOUT.json`` in the run root (``complete: true``, per database
   {table: {layout: flat|csv|bucket, root_realpath}}, schema /2): its sha256 is
   recorded and every read of every table must have been served from the
@@ -85,6 +90,30 @@ FLAT_KINDS = ("flat", "csv")  # served under the input root (a listed CSV is its
 # A consumed entry in the receipt: the storage owner's table_consumed event
 # without the log's own keys (``event``, ``root``), which are checked and dropped.
 CONSUMED_KEYS = ("table", "path", "realpath", "format")
+DECLARED_ABSENT_KEYS = ("db", "table", "reason", "evidence", "readers")
+DECLARED_ABSENT_TEXT_KEYS = ("db", "table", "reason", "evidence")
+# The user-approved allowlist, sealed with this tool: a run's REQUIRED_LAYOUT.json
+# may excuse a table only with an entry equal to one of these.
+APPROVED_DECLARED_ABSENT_FILE = Path(__file__).with_name("formal_declared_absent.json")
+
+
+def approved_declared_absent() -> tuple[List[Dict[str, Any]], str]:
+    """The approved declared_absent entries and the sha256 of their file."""
+    payload = load_json_object(APPROVED_DECLARED_ABSENT_FILE, APPROVED_DECLARED_ABSENT_FILE.name)
+    entries = payload.get("entries")
+    if payload.get("schema") != "easyicu.declared_absent/1" or not isinstance(entries, list):
+        raise ReceiptError("receipt_input_malformed",
+                           f"{APPROVED_DECLARED_ABSENT_FILE.name} is not an approved allowlist",
+                           input=APPROVED_DECLARED_ABSENT_FILE.name)
+    return entries, sha256_file(APPROVED_DECLARED_ABSENT_FILE)
+
+
+def _declared_absent_entry_valid(entry: Any) -> bool:
+    return (
+        isinstance(entry, dict) and set(entry) == set(DECLARED_ABSENT_KEYS)
+        and all(isinstance(entry[k], str) and entry[k].strip() for k in DECLARED_ABSENT_TEXT_KEYS)
+        and type(entry["readers"]) is int and entry["readers"] == 0
+    )
 CONSUMED_LOG_KEYS = ("event", "root")
 RECEIPT_SCHEMA = "easyicu.formal_run_receipt/1"
 SIC_DATABASES = {"sic", "sicdb"}
@@ -654,6 +683,47 @@ def _check_bucket_read(db: str, table: str, read: Mapping[str, Any], real: str,
                            "bound for the installation", database=db, table=table)
 
 
+def _storage_unavailable(db: str, manifest: Mapping[str, Any],
+                         declared_absent: Iterable[Mapping[str, str]] = ()) -> List[Dict[str, Any]]:
+    """Declared tables the run read as empty because they have no physical source.
+
+    The storage owner records each one (``table_unavailable``, delta17w) and
+    the native manifest publishes them as ``storage_unavailable``. The list is
+    always copied into the receipt, each record with the ``declared_absent``
+    entry of the run's REQUIRED_LAYOUT.json that excuses it. In a formal run a
+    record no entry excuses is a stop (``storage_unavailable_in_formal_run``,
+    naming the tables and keeping each record's cause), and a manifest that
+    does not record the list at all cannot show there were none
+    (``storage_unavailable_missing``).
+    """
+    if "storage_unavailable" not in manifest:
+        raise ReceiptError("storage_unavailable_missing",
+                           f"{db} native manifest does not record which declared tables had "
+                           "no physical source", database=db)
+    records = manifest["storage_unavailable"]
+    if not isinstance(records, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("table"), str) for r in records):
+        raise ReceiptError("receipt_input_malformed",
+                           f"{db} native manifest storage_unavailable is not a list of records",
+                           database=db)
+    allowed = {str(e["table"]).lower(): dict(e) for e in declared_absent if e.get("db") == db}
+    excused, refused = [], []
+    for record in records:
+        entry = allowed.get(record["table"].lower())
+        (refused if entry is None else excused).append({**record, "excused_by": entry})
+    if refused:
+        tables = sorted({r["table"] for r in refused})
+        raise ReceiptError(
+            "storage_unavailable_in_formal_run",
+            f"{db} read {len(tables)} declared table(s) with no physical source as empty and "
+            "not declared absent for this root: " + ", ".join(tables),
+            database=db, tables=tables,
+            causes=[{k: r.get(k) for k in ("table", "reason_code", "availability", "manifest",
+                                            "module")} for r in refused],
+        )
+    return excused
+
+
 def _refuse_fallbacks(db: str, fallbacks: Any) -> None:
     """G3: a formal run reads only what its layout says; any storage fallback is a stop."""
     if not fallbacks:
@@ -675,8 +745,15 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
     ``root_realpath`` is required for a bucket (the installation it must be
     served from) and optional for a flat table (default: the database's
     input). ``complete`` states the list names every table the run may read.
-    Anything else, schema /1 included, or a database the run extracts
-    without an entry, is a stop.
+    Optional ``declared_absent``: the root's allowlist of declared tables a
+    formal run may read as empty, [{"db", "table", "reason", "evidence",
+    "readers": 0}] (non-empty strings, each (db, table) once); absent means
+    empty. Each entry must equal one of the user-approved entries sealed with
+    this tool (``formal_declared_absent.json``), else
+    ``declared_absent_not_approved``. Only these may appear in a formal run's
+    ``storage_unavailable``. Anything else,
+    schema /1 included, or a database the run extracts without an entry, is
+    a stop.
     """
     path = Path(run_root) / REQUIRED_LAYOUT_FILE
     if not path.is_file():
@@ -685,7 +762,7 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
     payload = load_json_object(path, REQUIRED_LAYOUT_FILE)
     listed = payload.get("databases")
     if payload.get("schema") != REQUIRED_LAYOUT_SCHEMA or not isinstance(listed, dict) or (
-            set(payload) - {"schema", "complete", "databases"}):
+            set(payload) - {"schema", "complete", "databases", "declared_absent"}):
         raise ReceiptError("receipt_input_malformed",
                            f"{REQUIRED_LAYOUT_FILE} is not a {REQUIRED_LAYOUT_SCHEMA} list",
                            input=REQUIRED_LAYOUT_FILE)
@@ -704,6 +781,24 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
                                f"{REQUIRED_LAYOUT_FILE} {db}: each table once, as "
                                "{layout: flat|csv|bucket, root_realpath} (required for a bucket)",
                                input=REQUIRED_LAYOUT_FILE, database=db)
+    absent = payload.get("declared_absent", [])
+    keys = [(e.get("db"), str(e.get("table")).lower()) for e in absent
+            if isinstance(e, dict)] if isinstance(absent, list) else []
+    if not isinstance(absent, list) or len(keys) != len(absent) or len(set(keys)) != len(keys) or (
+        not all(_declared_absent_entry_valid(e) for e in absent)
+    ):
+        raise ReceiptError("receipt_input_malformed",
+                           f"{REQUIRED_LAYOUT_FILE} declared_absent must list each (db, table) "
+                           "once as {db, table, reason, evidence, readers: 0}",
+                           input=REQUIRED_LAYOUT_FILE)
+    approved, _sha = approved_declared_absent()
+    unapproved = [e for e in absent if e not in approved]
+    if unapproved:
+        raise ReceiptError("declared_absent_not_approved",
+                           f"{REQUIRED_LAYOUT_FILE} declared_absent names "
+                           f"{len(unapproved)} entr(y/ies) the approved allowlist does not hold",
+                           input=REQUIRED_LAYOUT_FILE,
+                           entries=[{"db": e["db"], "table": e["table"]} for e in unapproved])
     return payload, sha256_file(path)
 
 
@@ -839,7 +934,8 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                       exit_status: Any, sealed_sha: str,
                       version: Optional[str] = None,
                       snapshots: Optional[tuple] = None,
-                      required: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
+                      required: Optional[Mapping[str, str]] = None,
+                      declared_absent: Iterable[Mapping[str, str]] = ()) -> Dict[str, Any]:
     out = run_root / db
     input_real = Path(input_dir).resolve()
     input_manifest = input_real / "conversion_manifest.json"
@@ -924,6 +1020,7 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
                               section["storage_reads"], before)
     _refuse_fallbacks(db, manifest.get("storage_fallbacks"))
     section["storage_fallbacks"] = []
+    section["storage_unavailable"] = _storage_unavailable(db, manifest, declared_absent)
     section["layout_requirement"] = _layout_requirement(db, input_dir, required, observed)
     return section
 
@@ -974,7 +1071,8 @@ def build_run_receipt(
         try:
             section = _database_section(run_root, db, input_dir, cores, exits.get(db),
                                         sealed_sha, code.get("version"), (pre, post),
-                                        required["databases"][db])
+                                        required["databases"][db],
+                                        required.get("declared_absent", []))
             if db in SIC_DATABASES:
                 section["cases_binding"] = sic_cases_binding(Path(input_dir), Path(scratch), code)
         except (KeyError, TypeError, AttributeError) as exc:
@@ -991,7 +1089,9 @@ def build_run_receipt(
         "code_identity": code,
         "input_snapshot": snapshot_files,
         "required_layout": {"path": str((run_root / REQUIRED_LAYOUT_FILE).resolve()),
-                            "sha256": required_sha, "complete": True},
+                            "sha256": required_sha, "complete": True,
+                            "declared_absent": list(required.get("declared_absent", [])),
+                            "approved_declared_absent_sha256": approved_declared_absent()[1]},
         "parameters": dict(parameters or {}),
         "run_root": str(run_root.resolve()),
         "wall_seconds": None if started_at is None else round(finished - float(started_at), 1),

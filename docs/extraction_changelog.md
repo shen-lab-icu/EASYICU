@@ -827,6 +827,22 @@ cases:
 
 The G1 benchmark cohorts are not affected: they take the full ID set with no
 cap, sort it and draw a seeded sample, so discovery order never enters them.
+## 2026-11-07 — a formal run never reads an uninstalled declared table as empty unless the root declares it absent [lead-r13, r13prov]
+
+**What changed.** No extracted value changes. The formal-run receipt
+(`tools/formal_run_receipt.py`) now copies each database's
+`storage_unavailable` list from the native manifest (declared tables read as
+empty because no physical source exists, delta17w), an empty list included.
+A non-empty list refuses the receipt (`storage_unavailable_in_formal_run`,
+naming the tables and their recorded causes) unless every table is excused by
+the run's `REQUIRED_LAYOUT.json` `declared_absent` allowlist ({db, table,
+reason, evidence, readers: 0}); each excused record carries its entry. A
+run's allowlist may hold only entries of the user-approved list sealed with
+the tool (`tools/formal_declared_absent.json`: MIIV `demo` and AUMC `vital`,
+ricu module-output names declared as tables; CareVue `datetimeevents`, a view
+omission; all unread), else `declared_absent_not_approved`. HiRID `ordinal`
+and `variables` are present (configured-name lookup) and never allowlisted.
+Ordinary (non-formal) extractions still record the list and do not refuse.
 
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 

@@ -1,0 +1,39 @@
+{
+  "schema": "easyicu.declared_absent/1",
+  "note": "Approved allowlist of declared tables a formal root may read as empty (no physical source). A run's REQUIRED_LAYOUT.json declared_absent may list only entries that equal one of these. readers = formal readers found by a grep of the 7 dictionaries and src at 2b5fd2a4f. Changing this file needs the user's reseal approval.",
+  "entries": [
+    {
+      "db": "miiv",
+      "table": "demo",
+      "reason": "ricu module-output name declared as a table; not a source table; 0 readers",
+      "evidence": "mimiciv/SHA256SUMS.txt (33 lines) lists no demo file; no *miiv_demo* under the root or its source",
+      "readers": 0
+    },
+    {
+      "db": "aumc",
+      "table": "vital",
+      "reason": "ricu module-output name declared as a table; not a source table; 0 readers",
+      "evidence": "installed 7-table AUMCdb set; no release checksum list on the server",
+      "readers": 0
+    },
+    {
+      "db": "mimic",
+      "table": "datetimeevents",
+      "reason": "view omission, unread (0 readers in dictionaries/src)",
+      "evidence": "MIMIC-III 1.4 ships DATETIMEEVENTS.csv.gz; the CareVue view (manifest eb698096…) omits it",
+      "readers": 0
+    }
+  ],
+  "not_absent": [
+    {
+      "db": "hirid",
+      "table": "ordinal",
+      "status": "present (resolved by configured-name lookup: ordinal_vars_ref.parquet), unread; never allowlisted"
+    },
+    {
+      "db": "hirid",
+      "table": "variables",
+      "status": "present (resolved by configured-name lookup: hirid_variable_reference.parquet), unread; never allowlisted"
+    }
+  ]
+}

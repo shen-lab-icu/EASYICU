@@ -182,7 +182,7 @@ def _required(reads: list) -> dict:
 def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
               version: str = CODE["version"], consumed=None,
               installed: str | None = "9.9.9", tables=None, required=None,
-              fallbacks=None) -> Path:
+              fallbacks=None, unavailable=()) -> Path:
     run = tmp_path / "run"
     export = run / "sic" / "export"
     export.mkdir(parents=True)
@@ -220,6 +220,7 @@ def _run_root(tmp_path: Path, prepared: Path, *, commit: str, reads=None,
                             "tables": tables},
         "storage_consumed": consumed,
         **({"storage_fallbacks": fallbacks} if fallbacks is not None else {}),
+        **({"storage_unavailable": list(unavailable)} if unavailable is not None else {}),
     }))
     return run
 
@@ -825,6 +826,9 @@ def test_a_real_extraction_delivers_every_consumed_file_to_the_receipt(tmp_path)
                                       verified["files"], published["storage_reads"], snapshot)
     assert set(observed) == {e["table"] for e in consumed}
     assert not published.get("storage_fallbacks")
+    # Every declared table this run read had a physical source.
+    assert published["storage_unavailable"] == []
+    assert receipt._storage_unavailable("hirid", published) == []
 
 
 # G1: the code that ran carries no working-tree diff.
@@ -1658,3 +1662,209 @@ def test_the_listed_csv_named_in_other_case_on_a_case_insensitive_fs_is_accepted
         monkeypatch.setattr(storage_layout, "_case_insensitive_at", lambda path: True)
 
     assert storage_layout.listed_csv_input(root, "services", upper)
+
+
+# delta17w follow-up: a formal run never reads a declared table as empty for
+# want of a physical source unless the root's REQUIRED_LAYOUT.json
+# ``declared_absent`` allowlist excuses it (fail-closed; the allowlist is empty
+# until the user approves its entries).
+
+_PHARMA = {"event": "table_unavailable", "root": "/x", "table": "pharma",
+           "availability": "source_unavailable", "reason_code": "declared_table_not_installed",
+           "manifest": "unlisted", "missing_tables": ["pharma"], "module": "medications"}
+_EXCUSE = {"db": "sic", "table": "pharma", "reason": "fixture reason",
+           "evidence": "fixture evidence", "readers": 0}
+
+
+def _approve(monkeypatch, *entries):
+    """Stand in for the sealed approved allowlist (tests of the real file below)."""
+    monkeypatch.setattr(receipt, "approved_declared_absent", lambda: (list(entries), "a" * 64))
+
+
+def test_a_declared_table_read_as_empty_stops_a_formal_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[_PHARMA])
+    assert error.value.code == "storage_unavailable_in_formal_run"
+    assert error.value.details["database"] == "sic"
+    assert error.value.details["tables"] == ["pharma"]
+    (cause,) = error.value.details["causes"]
+    assert cause["reason_code"] == "declared_table_not_installed"
+    assert cause["module"] == "medications"
+
+
+@pytest.mark.parametrize("excuse", [
+    {**_EXCUSE, "db": "eicu"},          # another database's entry
+    {**_EXCUSE, "table": "pharmaref"},  # another table
+])
+def test_an_allowlist_entry_for_something_else_does_not_excuse_it(tmp_path, monkeypatch, excuse):
+    _approve(monkeypatch, excuse)
+    prepared = _prepared(tmp_path / "prepared")
+    required = {**_required([_flat(prepared, "cases", prepared)]), "declared_absent": [excuse]}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[_PHARMA],
+                     required=required)
+    assert error.value.code == "storage_unavailable_in_formal_run"
+
+
+def test_a_declared_absent_table_is_recorded_with_its_excuse_and_passes(tmp_path, monkeypatch):
+    _approve(monkeypatch, _EXCUSE)
+    prepared = _prepared(tmp_path / "prepared")
+    required = {**_required([_flat(prepared, "cases", prepared)]), "declared_absent": [_EXCUSE]}
+
+    built = _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[_PHARMA],
+                         required=required)
+
+    (record,) = built["databases"]["sic"]["storage_unavailable"]
+    assert record["table"] == "pharma" and record["excused_by"] == _EXCUSE
+    assert built["required_layout"]["declared_absent"] == [_EXCUSE]
+    assert built["required_layout"]["approved_declared_absent_sha256"] == "a" * 64
+
+
+def test_an_empty_unavailable_list_passes_and_is_recorded(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    built = _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[])
+
+    assert built["databases"]["sic"]["storage_unavailable"] == []
+    assert built["required_layout"]["declared_absent"] == []
+
+
+def test_a_manifest_that_does_not_record_unavailability_stops_the_receipt(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=None)
+    assert error.value.code == "storage_unavailable_missing"
+
+
+@pytest.mark.parametrize("absent", [
+    {"db": "sic", "table": "pharma"},
+    {**_EXCUSE, "evidence": ""},
+    {**_EXCUSE, "extra": "x"},
+    {**_EXCUSE, "readers": 1},
+    {**_EXCUSE, "readers": False},
+    {k: v for k, v in _EXCUSE.items() if k != "readers"},
+    "pharma",
+])
+def test_a_malformed_declared_absent_entry_stops_the_receipt(tmp_path, monkeypatch, absent):
+    prepared = _prepared(tmp_path / "prepared")
+    required = {**_required([_flat(prepared, "cases", prepared)]), "declared_absent": [absent]}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, required=required)
+    assert error.value.code == "receipt_input_malformed"
+
+
+def test_a_duplicate_declared_absent_entry_stops_the_receipt(tmp_path, monkeypatch):
+    _approve(monkeypatch, _EXCUSE, {**_EXCUSE, "table": "PHARMA"})
+    prepared = _prepared(tmp_path / "prepared")
+    required = {**_required([_flat(prepared, "cases", prepared)]),
+                "declared_absent": [_EXCUSE, {**_EXCUSE, "table": "PHARMA"}]}
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, required=required)
+    assert error.value.code == "receipt_input_malformed"
+
+
+def test_a_non_formal_run_records_an_uninstalled_table_and_a_formal_receipt_refuses_it(tmp_path):
+    # A real extraction (no receipt) reads the missing table as empty and
+    # records it; it does not refuse. The same native manifest in a formal
+    # receipt is a stop unless the root declares the table absent.
+    import shutil
+
+    from easyicu.api.concepts import clear_global_loader
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    root = tmp_path / "hirid"
+    generate_source(root, "hirid", stays=3)
+    shutil.rmtree(root / "pharma")
+    output = tmp_path / "export"
+    try:
+        result = extract_database(
+            "hirid", data_path=str(root), output_dir=str(output),
+            modules=["outcome", "medications"], native_export_v2=True, verbose=False,
+        )
+    finally:
+        clear_global_loader()
+
+    published = json.loads((output / "_manifest.json").read_text())
+    assert "pharma" in {r["table"] for r in published["storage_unavailable"]}
+    assert result["storage_unavailable"]
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt._storage_unavailable("hirid", published)
+    assert error.value.code == "storage_unavailable_in_formal_run"
+    assert "pharma" in error.value.details["tables"]
+    excuse = [{"db": "hirid", "table": t, "reason": "fixture", "evidence": "fixture", "readers": 0}
+              for t in sorted({r["table"] for r in published["storage_unavailable"]})]
+    excused = receipt._storage_unavailable("hirid", published, excuse)
+    assert {r["excused_by"]["table"] for r in excused} == {r["table"] for r in excused}
+
+
+# The approved allowlist (user-approved with the reseal; supervisor texts).
+
+_APPROVED = {
+    ("miiv", "demo"): ("ricu module-output name declared as a table; not a source table; "
+                       "0 readers"),
+    ("aumc", "vital"): ("ricu module-output name declared as a table; not a source table; "
+                        "0 readers"),
+    ("mimic", "datetimeevents"): "view omission, unread (0 readers in dictionaries/src)",
+}
+
+
+def test_the_approved_allowlist_is_exactly_the_three_reviewed_entries():
+    entries, digest = receipt.approved_declared_absent()
+
+    assert {(e["db"], e["table"]): e["reason"] for e in entries} == _APPROVED
+    assert all(e["readers"] == 0 for e in entries) and len(digest) == 64
+    by_key = {(e["db"], e["table"]): e for e in entries}
+    assert by_key[("aumc", "vital")]["evidence"] == (
+        "installed 7-table AUMCdb set; no release checksum list on the server")
+    carevue = by_key[("mimic", "datetimeevents")]
+    assert carevue["evidence"] == ("MIMIC-III 1.4 ships DATETIMEEVENTS.csv.gz; the CareVue view "
+                                   "(manifest eb698096\u2026) omits it")
+    assert "omission" in carevue["reason"] and "not shipped" not in json.dumps(carevue)
+    # HiRID ordinal/variables are present (configured-name lookup): never allowlisted.
+    assert not {("hirid", "ordinal"), ("hirid", "variables")} & set(by_key)
+
+
+def test_the_three_approved_entries_excuse_exactly_their_tables(tmp_path):
+    entries, _digest = receipt.approved_declared_absent()
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "REQUIRED_LAYOUT.json").write_text(json.dumps({
+        "schema": "easyicu.required_layout/2", "complete": True, "declared_absent": entries,
+        "databases": {db: {"t": {"layout": "flat"}} for db in ("miiv", "aumc", "mimic")}}))
+    payload, _sha = receipt.load_required_layout(run, ["miiv", "aumc", "mimic"])
+
+    for (db, table), _reason in _APPROVED.items():
+        record = {**_PHARMA, "table": table}
+        (excused,) = receipt._storage_unavailable(
+            db, {"storage_unavailable": [record]}, payload["declared_absent"])
+        assert excused["excused_by"]["table"] == table and excused["excused_by"]["db"] == db
+        with pytest.raises(receipt.ReceiptError) as error:  # a fourth, unlisted table
+            receipt._storage_unavailable(
+                db, {"storage_unavailable": [record, {**_PHARMA, "table": "unlisted"}]},
+                payload["declared_absent"])
+        assert error.value.code == "storage_unavailable_in_formal_run"
+        assert error.value.details["tables"] == ["unlisted"]
+
+
+@pytest.mark.parametrize("entry", [
+    {"db": "hirid", "table": "ordinal", "reason": "x", "evidence": "y", "readers": 0},
+    {"db": "mimic", "table": "datetimeevents", "reason": "not shipped", "evidence": "y",
+     "readers": 0},
+])
+def test_a_declared_absent_entry_not_in_the_approved_allowlist_is_refused(tmp_path, entry):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "REQUIRED_LAYOUT.json").write_text(json.dumps({
+        "schema": "easyicu.required_layout/2", "complete": True, "declared_absent": [entry],
+        "databases": {"hirid": {"t": {"layout": "flat"}}}}))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.load_required_layout(run, ["hirid"])
+    assert error.value.code == "declared_absent_not_approved"
