@@ -7,6 +7,14 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-07 — one complete table decision and loader [lead-r13, `7f72fd643`]
+
+- **B-D47-NESTED / B-D47-CSV:** reader, cohort and resolver use `storage_layout.table_decision`, including recursive nested search and typed listing refusals; configured CSV is eligible only when Parquet is absent. A healthy HiRID `General/` beside `general_table.csv` now serves Parquet to both readers, and independent root plus nested sources refuse.
+- **B-D47-HARDLINK-PAIR:** verified flat/bucket provenance is compared by device and inode, so a hardlink alias cannot change the selected source; an independent copy still refuses.
+- **NB racy CSV aliases:** the unit's racy set and the CSV validation memo both use realpath, preserving the racy refusal to memoize across path aliases.
+- **NB B-D47-CACHE:** candidate creation during a run is outside the immutable-data-root contract and remains covered by slpub's start-of-run closure gate; no cache rescan fix is claimed here.
+- **NB B-D47-DERIVED-SHA:** runtime provenance checks use the recorded source set, size and mtime, with device/inode identity for pairing and run binding. At `review-r13sealtool` (`059f1ec9c`), `tools/seal_buckets/bucket_compare.py:179–195` checks source stat values but does **not** hash bucket `derived_from` source bytes; the separate conversion-manifest SHA check in `seal_rebuild.py:825–832` does not verify those bucket sources. No seal-time bucket-source SHA guarantee is claimed.
+
 ## 2026-11-06 — stay discovery: one table source in any spelling, in source order [lead-r13, `9999037c3`, `b668b2023`, `c114100d3`]
 
 **What changed.** The stay universe an extraction uses when it is given no
