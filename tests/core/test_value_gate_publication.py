@@ -169,7 +169,14 @@ def test_a_staging_recovery_passes_every_module_count(tmp_path, monkeypatch):
     root = tmp_path / "staging"
     _module_manifests(root, ["outcome", "vitals"], {"vitals": _PUBLISHED})
     captured = {}
-    monkeypatch.setattr(refresher, "_publish_native_export_v2", lambda **kwargs: captured.update(kwargs))
+
+    def publish(**kwargs):
+        # The real publisher writes the root manifest; the recovery then clears
+        # _IN_PROGRESS, which finish_native_export refuses without it.
+        captured.update(kwargs)
+        (root / "_manifest.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(refresher, "_publish_native_export_v2", publish)
     refresher._recover_native_staging_publication(
         database="eicu", data_path="unused", staging_root=root,
         modules=["outcome", "vitals"], resource_budget_mb=8192.0,
