@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .datasource import ICUDataSource
-from .concept import ConceptResolver, ConceptDictionary, defer_until_resolver_idle
+from .concept import ConceptResolver, ConceptDictionary, defer_until_resolver_idle, resolver_is_idle
 from .value_failures import TYPED_VALUE_FAILURES
 from .resolver_pool import ResolverPool, call_resolver, resolver_call_scope
 from .storage_binding import binding_unit, child_binding, in_binding_unit
@@ -494,6 +494,7 @@ class BaseICULoader:
                         self._create_resolver_clone,
                         on_create=self._register_pool_resolver,
                         defer_until_idle=defer_until_resolver_idle,
+                        is_idle=resolver_is_idle,
                     )
                     self._resolver_pool = pool
         return pool

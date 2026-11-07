@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from dataclasses import dataclass, field, replace, asdict
 from pathlib import Path
-from threading import Condition, Lock, RLock, get_ident, local as thread_local
+from threading import Condition, Lock, RLock, local as thread_local
 from typing import Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Optional, Union
 
 import numpy as np
@@ -759,6 +759,7 @@ def _in_binding_unit(method):
         from .stay_tables import StayTableUnbound
 
         calls = _RESOLVER_CALLS.get()
+        previous_role = _TOP_CALL.get()
         record = next((call for call in calls if call.resolver_id == id(self)), None)
         if record is not None:
             # Nested: recursion, or a concept worker run in the call's copied
@@ -773,11 +774,17 @@ def _in_binding_unit(method):
                 if unit is None or not retain_unit(unit):
                     unit = None
                     raise StayTableUnbound("load_concepts")
+                _TOP_CALL.set(None)
                 return method(self, *args, **kwargs)
             finally:
-                if unit is not None:
-                    release_unit(unit)  # the unit closes with its last user
-                record.guard.leave(record, entry)
+                try:
+                    _TOP_CALL.set(previous_role)
+                finally:
+                    try:
+                        if unit is not None:
+                            release_unit(unit)  # the unit closes with its last user
+                    finally:
+                        record.guard.leave(record, entry)
         # A top-level call in this context. The resolver's per-call state
         # (depth, batch scope, request caches) is per instance, so one
         # top-level call runs at a time (B-STAY-SCOPE). Another context's
@@ -799,6 +806,7 @@ def _in_binding_unit(method):
                 # gone. Refuse rather than run unbound (D8C-RECOVERY-OWNER).
                 raise StayTableUnbound("load_concepts")
             _RESOLVER_CALLS.set(calls + (record,))
+            _TOP_CALL.set(record)
             with binding_unit():
                 try:
                     return method(self, *args, **kwargs)
@@ -810,8 +818,17 @@ def _in_binding_unit(method):
                     # the call (``_ResolverCall.finish``, D35-JOIN-CANCEL-DEPTH).
                     guard.close_and_wait(record, resolver_pool_config()["wait_seconds"])
         finally:
-            _RESOLVER_CALLS.set(calls)
-            guard.leave(record, record)
+            try:
+                _RESOLVER_CALLS.set(calls)
+            finally:
+                try:
+                    _TOP_CALL.set(previous_role)
+                finally:
+                    try:
+                        if guard.call is record:
+                            self._clear_request_state()  # this thread, even after a preload fails
+                    finally:
+                        guard.leave(record, record)
 
     return wrapper
 
@@ -819,33 +836,22 @@ def _in_binding_unit(method):
 class _ResolverCall:
     """One top-level call of one resolver; its users are the call and its joined workers."""
 
-    __slots__ = ("guard", "resolver", "resolver_id", "owner_thread", "users", "closed",
-                 "finishing", "cleanup")
+    __slots__ = ("guard", "resolver", "resolver_id", "users", "closed", "finishing")
 
     def __init__(self, guard: "_CallGuard", resolver) -> None:
         self.guard = guard
         self.resolver = resolver
         self.resolver_id = id(resolver)
-        self.owner_thread = get_ident()
         self.users = {self}  # the call itself; joined workers add their own entries
         self.closed = False
         self.finishing = False
-        self.cleanup: list = []  # shared cleanup deferred to the last user
 
     def finish(self) -> None:
-        """Run by the last user: the call's shared cleanup, then depth repair."""
+        """Only the last user resets depth and ends this top-level record, once."""
         resolver = self.resolver
-        pending, self.cleanup = self.cleanup, []
-        if resolver is not None and getattr(resolver, "_load_depth", 0):
-            # A call left before its own finally ran (or a worker was
-            # interrupted): nothing of this call is running any more.
+        with resolver._cache_lock:
             resolver._load_depth = 0
-            if not pending:
-                pending.append(resolver._release_call_caches)
-            if get_ident() == self.owner_thread:
-                resolver._clear_request_state()
-        for step in pending:
-            step()
+        resolver._end_top_level_load()
 
 
 class _CallGuard:
@@ -888,14 +894,6 @@ class _CallGuard:
                     raise ResolverJoinTimeout(len(record.users - {record}), wait_seconds)
                 self.changed.wait(remaining)
 
-    def defer_cleanup(self, record: _ResolverCall, step) -> bool:
-        """Leave ``step`` to the call's last user; False if the call is not held."""
-        with self.mutex:
-            if self.call is not record or record.finishing:
-                return False
-            record.cleanup.append(step)
-            return True
-
     def leave(self, record: _ResolverCall, entry) -> None:
         with self.mutex:
             if self.call is not record:
@@ -937,6 +935,13 @@ def _call_guard(resolver) -> _CallGuard:
     return guard
 
 
+def resolver_is_idle(resolver) -> bool:
+    """Whether this resolver has finished its call and all shared cleanup."""
+    guard = _call_guard(resolver)
+    with guard.mutex:
+        return guard.call is None
+
+
 def defer_until_resolver_idle(resolver, callback) -> bool:
     """For the resolver pool: return a leased resolver only after its call ends."""
     return _call_guard(resolver).defer(callback)
@@ -947,6 +952,11 @@ def defer_until_resolver_idle(resolver, callback) -> bool:
 _RESOLVER_CALLS: contextvars.ContextVar = contextvars.ContextVar(
     "easyicu_resolver_calls", default=()
 )
+
+
+# The role of the current wrapper invocation, independent of shared body depth.
+# A copied-context worker joins the record but never becomes its top-level owner.
+_TOP_CALL: contextvars.ContextVar = contextvars.ContextVar("easyicu_top_call", default=None)
 
 
 class ConceptResolver:
@@ -1684,9 +1694,10 @@ class ConceptResolver:
             else None
         )
         
-        # 🔧 嵌套调用深度跟踪：递归概念会嵌套调用 load_concepts
-        # 只有顶层调用才应该清除缓存
-        is_top_level = self._load_depth == 0
+        # Body depth can reach zero while joined workers have yet to enter.
+        # Only the wrapper's owner role initializes the record's batch scope.
+        record = _TOP_CALL.get()
+        is_top_level = record is not None and record.resolver is self
         if is_top_level:
             # A recursive parent can calculate a component that is also an
             # explicitly requested output (SOFA-2 is the production example).
@@ -1698,7 +1709,6 @@ class ConceptResolver:
             # The batch's stays scope every stay-origin table read of this
             # call (``_stay_table``): one read per table per batch.
             self._batch_stays = _batch_stay_scope(patient_ids)
-        self._load_depth += 1
         
         # 🚀 性能优化: 不要清空 _concept_cache，保留用于递归调用的缓存
         # 只在顶层调用时初始化（检查是否已存在）
@@ -2375,7 +2385,11 @@ class ConceptResolver:
                 logger.info("✅  概念 '%s' 已加载 (行数: %s)", name, row_count)
             return name, concept_table
 
+        depth_entered = False
         try:
+            with self._cache_lock:
+                self._load_depth += 1
+                depth_entered = True
             results: Dict[str, ICUTable] = {}
             if effective_workers > 1 and total > 1:
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
@@ -2636,24 +2650,15 @@ class ConceptResolver:
             )
             return merged
         finally:
-            # 🔧 嵌套调用深度跟踪：减少深度计数器
-            self._load_depth -= 1
-            # 🔧 只有顶层调用才清除概念缓存和inflight，避免递归概念内部调用清除外层所需的缓存
-            if is_top_level:
-                self._finish_top_level_load()
+            with self._cache_lock:
+                if depth_entered:
+                    self._load_depth -= 1
+            # Shared state ends with the record, after all joined users leave.
 
     def _end_top_level_load(self) -> None:
         """Release a top-level call's caches and request state (every exit path)."""
         self._clear_request_state()
         self._release_call_caches()
-
-    def _finish_top_level_load(self) -> None:
-        """End of the top-level body: this thread's request state now; shared caches
-        once the call's last joined worker has left (D35-JOIN-CANCEL-DEPTH)."""
-        self._clear_request_state()
-        record = next((c for c in _RESOLVER_CALLS.get() if c.resolver_id == id(self)), None)
-        if record is None or not record.guard.defer_cleanup(record, self._release_call_caches):
-            self._release_call_caches()
 
     def _clear_request_state(self) -> None:
         """This thread's request state (inflight set, requested results)."""

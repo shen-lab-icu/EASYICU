@@ -20,6 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -464,6 +465,7 @@ def test_an_interrupted_join_wait_leaves_depth_to_the_last_user(tmp_path, monkey
     real = stay_tables.stay_table_frame
     frame, box = _owner_with_unjoined_worker(resolver, source, worker_waits_for=release)
     monkeypatch.setattr(stay_tables, "stay_table_frame", frame)
+    ends = _track_call_end(monkeypatch, resolver)
     concept_file = concept_module.__file__
     hit: list = []
 
@@ -490,8 +492,10 @@ def test_an_interrupted_join_wait_leaves_depth_to_the_last_user(tmp_path, monkey
         thread.join(timeout=30)
         assert hit and isinstance(box["owner"], KeyboardInterrupt), box.get("owner")
         assert box["worker"].is_alive()
-        # The worker still runs inside the call: its depth and guard are intact.
-        assert resolver._load_depth >= 1
+        # A worker may still be preloading, before its counted body starts.
+        # Its joined entry and guard must survive the owner's interruption.
+        assert resolver._load_depth >= 0
+        assert concept_module._call_guard(resolver).call.users
         assert _guard_held(resolver)
     finally:
         release.set()
@@ -499,6 +503,7 @@ def test_an_interrupted_join_wait_leaves_depth_to_the_last_user(tmp_path, monkey
     assert isinstance(box["nested"], pd.DataFrame), box["nested"]
     assert resolver._load_depth == 0 and not _guard_held(resolver)
     monkeypatch.setattr(stay_tables, "stay_table_frame", real)
+    assert ends == [(0, 0)]
     # A fresh call is served, not refused as unbound.
     pd.testing.assert_frame_equal(_load(resolver, source), expected, check_exact=True)
 
@@ -678,3 +683,309 @@ def test_extraction_hands_its_frozen_pool_config_to_each_module_worker(tmp_path,
     manifest = json.loads((tmp_path / "export" / "_manifest.json").read_text(encoding="utf-8"))
     provenance = manifest["runtime_provenance"]
     assert (provenance["resolver_pool_size"], provenance["resolver_pool_wait_seconds"]) == (3, 7.0)
+
+
+# -- delta35t_ar (Argon cross-review) -------------------------------------------
+
+def _late_rows_eicu(root, *, value_shift=0.0):
+    """Three stays with one in-window and one after-discharge row each (bounds matter)."""
+    from tests.support.urine_raw_source import _source
+
+    ids = np.arange(1, 4)
+    return _source(
+        root, "eicu",
+        patient=pd.DataFrame({
+            "patientunitstayid": ids, "patienthealthsystemstayid": ids,
+            "unitdischargeoffset": [600, 900, 1200], "hospitaladmitoffset": 0,
+            "admissionweight": 70.0,
+        }),
+        vitalperiodic=pd.DataFrame({
+            "vitalperiodicid": np.arange(1, 7),
+            "patientunitstayid": [1, 2, 3, 1, 2, 3],
+            # in-window, then far past discharge + 24 h (kept only by a 366-day default)
+            "observationoffset": [150, 150, 150, 9000, 9000, 9000],
+            "pasystolic": 25.0, "padiastolic": 15.0,
+            "pamean": np.array([30.0, 31.0, 32.0, 40.0, 41.0, 42.0]) + value_shift,
+            "heartrate": 80.0,
+        }),
+    )
+
+
+def _gate_in_wrapper_before_method(event_to_wait, entered=None):
+    """A tracer holding a nested call at its ``return method(...)`` (joined, not yet in the body)."""
+    concept_file = concept_module.__file__
+    done: list = []
+
+    def tracer(frame_, event, arg):
+        if (not done and event == "line" and frame_.f_code.co_filename == concept_file
+                and frame_.f_code.co_name == "wrapper"
+                and _line_starts(frame_, "return method(self, *args, **kwargs)")):
+            done.append(True)
+            if entered is not None:
+                entered.set()
+            event_to_wait.wait(timeout=30)
+        return tracer
+
+    return tracer
+
+
+def test_a_late_joiner_never_takes_over_the_calls_batch_stays(tmp_path, monkeypatch):
+    """Argon probe_08 part B, as values: each stay keeps its own discharge bound."""
+    source = _late_rows_eicu(tmp_path / "eicu")
+    resolver = _resolver()
+    serial_1 = _load(_resolver(), source, [1])
+    serial_2 = _load(_resolver(), source, [2])
+    serial_3 = _load(_resolver(), source, [3])
+    assert len(serial_1) == len(serial_2) == len(serial_3) == 1
+    owner_closing, w1_in_body, w2_in_body = (threading.Event() for _ in range(3))
+    w1_gated, w2_gated, late_gated = (threading.Event() for _ in range(3))
+    real = stay_tables.stay_table_frame
+    role = threading.local()
+    box: dict = {}
+
+    def run_worker(name, stays, gate_event, entered):
+        def body():
+            role.name = name
+            sys.settrace(_gate_in_wrapper_before_method(gate_event, entered))
+            try:
+                box[name] = _load(resolver, source, stays)
+            except BaseException as error:  # noqa: BLE001 - asserted below
+                box[name] = error
+            finally:
+                sys.settrace(None)
+        return body
+
+    def frame(data_source, table, stays, read, **kwargs):
+        name = getattr(role, "name", None)
+        if name == "w1":
+            w1_in_body.set()
+        elif name == "w2":
+            w2_in_body.set()
+        elif name is None and "w1" not in box and "threads" not in box:
+            # The owner's body: start two joined workers held before their bodies.
+            box["threads"] = [
+                threading.Thread(target=contextvars.copy_context().run,
+                                 args=(run_worker("w1", [1], owner_closing, w1_gated),), daemon=True),
+                threading.Thread(target=contextvars.copy_context().run,
+                                 args=(run_worker("w2", [2], w1_in_body, w2_gated),), daemon=True),
+                threading.Thread(target=contextvars.copy_context().run,
+                                 args=(run_worker("late", [3], w2_in_body, late_gated),), daemon=True),
+            ]
+            for thread in box["threads"]:
+                thread.start()
+            assert all(event.wait(timeout=30) for event in (w1_gated, w2_gated, late_gated))
+        return real(data_source, table, stays, read, **kwargs)
+
+    concept_file = concept_module.__file__
+
+    def owner_tracer(frame_, event, arg):
+        if (event == "line" and frame_.f_code.co_filename == concept_file
+                and frame_.f_code.co_name == "wrapper"
+                and _line_starts(frame_, "guard.close_and_wait(")):
+            owner_closing.set()  # the owner's body is done: release the late joiner
+        return owner_tracer
+
+    monkeypatch.setattr(stay_tables, "stay_table_frame", frame)
+    sys.settrace(owner_tracer)
+    try:
+        _load(resolver, source)
+    finally:
+        sys.settrace(None)
+        owner_closing.set()
+        w1_in_body.set()
+        w2_in_body.set()
+    for thread in box["threads"]:
+        thread.join(timeout=60)
+        assert not thread.is_alive()
+    pd.testing.assert_frame_equal(box["w1"], serial_1, check_exact=True)
+    pd.testing.assert_frame_equal(box["w2"], serial_2, check_exact=True)
+    pd.testing.assert_frame_equal(box["late"], serial_3, check_exact=True)
+
+
+def test_a_calls_joined_worker_leaves_no_cache_for_the_next_call(tmp_path, monkeypatch):
+    """Argon probe_08 part A: per-call caches are cleared once, after the last user."""
+    source = _eicu(tmp_path / "eicu")
+    resolver = _resolver()
+    ends = _track_call_end(monkeypatch, resolver)
+    release = threading.Event()
+    real = stay_tables.stay_table_frame
+    frame, box = _owner_with_unjoined_worker(resolver, source, worker_waits_for=release)
+    monkeypatch.setattr(stay_tables, "stay_table_frame", frame)
+    threading.Timer(0.3, release.set).start()  # the worker finishes during the owner's wait
+    _load(resolver, source)
+    box["worker"].join(timeout=60)
+    assert isinstance(box["nested"], pd.DataFrame), box["nested"]
+    assert ends == [(0, 0)]
+    assert resolver._concept_data_cache == {}
+    assert resolver._raw_concept_cache == {} and resolver._table_cache == {}
+    assert resolver._load_depth == 0 and not _guard_held(resolver)
+    monkeypatch.setattr(stay_tables, "stay_table_frame", real)
+
+    fresh = _late_rows_eicu(tmp_path / "fresh", value_shift=10.0)
+    pd.testing.assert_frame_equal(_load(resolver, fresh), _load(_resolver(), fresh), check_exact=True)
+
+
+def test_a_nested_call_failing_before_its_body_leaves_depth_balanced(tmp_path, monkeypatch):
+    """Argon probe_08 part C: the nested depth increment sits inside the try."""
+    source = _eicu(tmp_path / "eicu")
+    resolver = _resolver()
+    expected = _load(_resolver(), source)
+    real = stay_tables.stay_table_frame
+    seen: dict = {}
+
+    def nested_fails_early(data_source, table, stays, read, **kwargs):
+        if "done" not in seen:
+            seen["done"] = True
+            real_inflight = resolver._get_inflight
+
+            def refuse():
+                raise LookupError("synthetic failure before the nested body")
+
+            resolver._get_inflight = refuse
+            seen["depth_before"] = resolver._load_depth
+            try:
+                _load(resolver, source, [1])
+            except LookupError:
+                seen["depth_after"] = resolver._load_depth
+            finally:
+                resolver._get_inflight = real_inflight
+        return real(data_source, table, stays, read, **kwargs)
+
+    monkeypatch.setattr(stay_tables, "stay_table_frame", nested_fails_early)
+    pd.testing.assert_frame_equal(_load(resolver, source), expected, check_exact=True)
+    assert seen["depth_after"] == seen["depth_before"]
+    assert resolver._load_depth == 0 and not _guard_held(resolver)
+    monkeypatch.setattr(stay_tables, "stay_table_frame", real)
+    pd.testing.assert_frame_equal(_load(resolver, source), expected, check_exact=True)
+
+
+@pytest.mark.parametrize("where", ["scope-var-reset", "resolver-calls-reset", "nested-unit-release"])
+def test_an_interrupt_in_the_cleanup_window_leaks_nothing(tmp_path, monkeypatch, where):
+    """Argon probe_10 (a)/(b): cleanup still runs when interrupted before it starts."""
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "0.3")
+    old_scope = pool_module._CALL_SCOPE.get()
+    old_calls = concept_module._RESOLVER_CALLS.get()
+    if where == "scope-var-reset":
+        pool = ResolverPool(object(), object, size=1, wait_seconds=0.3)
+        filename, function, prefix = pool_module.__file__, "resolver_call_scope", "_CALL_SCOPE.set(None)"
+    else:
+        source = _eicu(tmp_path / "eicu")
+        resolver = _resolver()
+        filename, function, prefix = concept_module.__file__, "wrapper", "_RESOLVER_CALLS.set(calls)"
+    if where == "nested-unit-release":
+        filename, function, prefix = concept_module.__file__, "wrapper", "release_unit(unit)"
+    hit: list = []
+
+    def tracer(frame_, event, arg):
+        if (not hit and event == "line" and frame_.f_code.co_filename == filename
+                and frame_.f_code.co_name == function and _line_starts(frame_, prefix)):
+            hit.append(True)
+            raise KeyboardInterrupt()
+        return tracer
+
+    sys.settrace(tracer)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            if where == "scope-var-reset":
+                with resolver_call_scope():
+                    call_resolver(pool)
+            elif where == "nested-unit-release":
+                def nested():
+                    _load(resolver, source, [1])
+                # A wrapper test double isolates the nested cleanup window.
+                concept_module._in_binding_unit(lambda self: nested())(resolver)
+            else:
+                _load(resolver, source)
+    finally:
+        sys.settrace(None)
+        pool_module._CALL_SCOPE.set(old_scope)
+        concept_module._RESOLVER_CALLS.set(old_calls)
+    assert hit
+    if where == "scope-var-reset":
+        assert pool.stats()["idle"] == 1
+    else:
+        assert not _guard_held(resolver)
+        with ThreadPoolExecutor(max_workers=1) as other:
+            other.submit(_load, resolver, source).result(timeout=60)
+
+
+def test_an_interrupted_return_callback_does_not_strand_a_pooled_resolver(tmp_path):
+    """Argon probe_10 (c): a slot waiting for its resolver's call is reclaimed once it is idle."""
+    from easyicu.concept import defer_until_resolver_idle
+
+    source = _eicu(tmp_path / "eicu")
+    resolver = _resolver()
+    is_idle = getattr(concept_module, "resolver_is_idle", None)
+    kwargs = {"is_idle": is_idle} if is_idle is not None else {}
+    pool = ResolverPool(resolver, _resolver, size=1, wait_seconds=0.3,
+                        defer_until_idle=defer_until_resolver_idle, **kwargs)
+    guard = concept_module._call_guard(resolver)
+    record = concept_module._ResolverCall(guard, resolver)
+    assert guard.enter(record)  # the resolver's call is running
+    with resolver_call_scope():
+        call_resolver(pool)
+    assert pool.stats()["idle"] == 0  # released to wait for the running call
+    hit: list = []
+
+    def tracer(frame_, event, arg):
+        if (not hit and event == "line" and frame_.f_code.co_filename == concept_module.__file__
+                and frame_.f_code.co_name == "leave" and _line_starts(frame_, "for callback in after")):
+            hit.append(True)
+            raise KeyboardInterrupt()
+        return tracer
+
+    sys.settrace(tracer)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            guard.leave(record, record)
+    finally:
+        sys.settrace(None)
+    assert hit and not _guard_held(resolver)
+    with resolver_call_scope():  # the next call gets it
+        assert call_resolver(pool) is resolver
+    assert pool.stats()["idle"] == 1
+    pd.testing.assert_frame_equal(_load(resolver, source), _load(_resolver(), source), check_exact=True)
+
+
+def _track_call_end(monkeypatch, resolver):
+    ends = []
+    real = resolver._end_top_level_load
+
+    def end():
+        record = concept_module._call_guard(resolver).call
+        ends.append((len(record.users), resolver._load_depth))
+        real()
+
+    monkeypatch.setattr(resolver, "_end_top_level_load", end)
+    return ends
+
+
+@pytest.mark.parametrize("recover", ["stats", "checkout"])
+def test_a_delayed_return_callback_cannot_release_a_newer_lease(recover):
+    """Recovery may race the original callback; only its own lease is returnable."""
+    resolver = _resolver()
+    is_idle = getattr(concept_module, "resolver_is_idle", None)
+    kwargs = {"is_idle": is_idle} if is_idle is not None else {}
+    pool = ResolverPool(
+        resolver, _resolver, size=1, wait_seconds=0.3,
+        defer_until_idle=concept_module.defer_until_resolver_idle, **kwargs,
+    )
+    guard = concept_module._call_guard(resolver)
+    first = concept_module._ResolverCall(guard, resolver)
+    assert guard.enter(first)
+    with resolver_call_scope():
+        assert call_resolver(pool) is resolver
+    delayed = guard.after.pop()
+    guard.leave(first, first)
+    if recover == "stats":
+        assert pool.stats()["idle"] == 1
+    with resolver_call_scope():
+        assert call_resolver(pool) is resolver
+        second = concept_module._ResolverCall(guard, resolver)
+        assert guard.enter(second)
+    try:
+        delayed()
+        assert pool.stats()["idle"] == 0
+    finally:
+        guard.leave(second, second)
+    assert pool.stats()["idle"] == 1

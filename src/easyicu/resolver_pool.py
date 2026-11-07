@@ -159,11 +159,12 @@ def _reset_resolver_pool_config() -> None:
 
 
 class _Slot:
-    __slots__ = ("resolver", "owner")
+    __slots__ = ("resolver", "owner", "returning_owner")
 
     def __init__(self, resolver, owner=None) -> None:
         self.resolver = resolver
         self.owner = owner  # None = idle; a scope = leased; _RETURNING = waiting for its call
+        self.returning_owner = None
 
 
 _RETURNING = object()
@@ -181,6 +182,7 @@ class ResolverPool:
         wait_seconds: Optional[float] = None,
         on_create: Optional[Callable[[object], None]] = None,
         defer_until_idle: Optional[Callable[[object, Callable[[], None]], bool]] = None,
+        is_idle: Optional[Callable[[object], bool]] = None,
     ) -> None:
         config = resolver_pool_config() if size is None or wait_seconds is None else None
         self.size = config["size"] if size is None else int(size)
@@ -193,6 +195,7 @@ class ResolverPool:
         self._factory = factory
         self._on_create = on_create
         self._defer_until_idle = defer_until_idle
+        self._is_idle = is_idle
         self._slots: list = [_Slot(primary)]
         self._condition = threading.Condition()
 
@@ -247,24 +250,35 @@ class ResolverPool:
         # Under the condition. The deferral is registered before the slot is
         # marked, and ``_returned`` accepts either mark, so an interrupt in
         # between cannot strand the slot.
+        slot.returning_owner = owner
         if self._defer_until_idle is not None and self._defer_until_idle(
             slot.resolver, lambda slot=slot, owner=owner: self._returned(slot, owner)
         ):
             slot.owner = _RETURNING
         else:
             slot.owner = None
+            slot.returning_owner = None
 
     def _reclaim_finished(self) -> None:
-        """Take back leases of scopes that finished but whose release did not complete."""
+        """Recover interrupted scope releases and interrupted idle callbacks."""
         for slot in self._slots:
+            if slot.owner is _RETURNING:
+                if self._is_idle is not None and self._is_idle(slot.resolver):
+                    slot.owner = None
+                    slot.returning_owner = None
+                    self._condition.notify_all()
+                continue
             finished = getattr(slot.owner, "finished", None)
             if finished is not None and finished():
                 self._return_slot(slot, slot.owner)
 
     def _returned(self, slot, owner) -> None:
         with self._condition:
-            if slot.owner is _RETURNING or slot.owner is owner:
+            # Recovery can make the resolver available before this callback runs.
+            # An old callback must not release a newer scope's pending return.
+            if (slot.owner is _RETURNING and slot.returning_owner is owner) or slot.owner is owner:
                 slot.owner = None
+                slot.returning_owner = None
                 self._condition.notify_all()
 
     def checkin(self, resolver) -> None:
@@ -276,6 +290,7 @@ class ResolverPool:
             if slot.owner is None:
                 raise RuntimeError("resolver_pool_double_return: this resolver is already idle")
             slot.owner = None
+            slot.returning_owner = None
             self._condition.notify_all()
 
     def members(self) -> tuple:
@@ -284,6 +299,7 @@ class ResolverPool:
 
     def stats(self) -> dict:
         with self._condition:
+            self._reclaim_finished()
             return {
                 "size": self.size,
                 "members": len(self._slots),
@@ -353,8 +369,10 @@ def resolver_call_scope() -> Iterator[None]:
         _CALL_SCOPE.set(scope)
         yield
     finally:
-        _CALL_SCOPE.set(None)  # this branch only runs with no scope bound
-        scope.leave(scope.owner)
+        try:
+            _CALL_SCOPE.set(None)  # this branch only runs with no scope bound
+        finally:
+            scope.leave(scope.owner)
 
 
 def call_resolver(pool: ResolverPool):
