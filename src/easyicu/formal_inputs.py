@@ -1,7 +1,8 @@
 """Formal runs: the inputs did not change, by hashing before and after the run.
 
 A formal run snapshots every input file of each database before any job
-starts (sha256 plus size, mtime_ns and inode), and hashes the same set again
+starts (sha256 plus size, mtime_ns and inode; a file whose stat identity,
+ctime included, moves while it is hashed is refused), and hashes the same set again
 after every job has exited and before the run receipt is written. Any
 difference makes the run invalid. Runtime source binding
 (``easyicu.storage_binding``) stays as defence in depth; it is best-effort,
@@ -297,14 +298,18 @@ def plan_input_files(database: str, data_path: str | Path) -> Dict[str, Any]:
     }
 
 
+def _stat_identity(stat: os.stat_result) -> tuple:
+    """The storage binding's stat identity (``storage_binding.stat_identity``):
+    an mtime restored with utime still moves ctime."""
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+
+
 def _hash(path: str) -> Dict[str, Any]:
     before = os.stat(path)
     with open(path, "rb") as handle:
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
     after = os.stat(path)
-    if (before.st_size, before.st_mtime_ns, before.st_ino) != (
-        after.st_size, after.st_mtime_ns, after.st_ino
-    ):
+    if _stat_identity(before) != _stat_identity(after):
         raise InputSnapshotError("input_changed_while_hashed", "an input changed while hashed",
                                  realpath=path)
     return {"size": after.st_size, "mtime_ns": after.st_mtime_ns, "ino": after.st_ino,

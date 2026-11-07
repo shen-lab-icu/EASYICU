@@ -89,6 +89,29 @@ def test_an_input_modified_during_the_run_stops_it(tmp_path):
     assert error.value.details["changed"] == [str(other.resolve())]
 
 
+def test_a_same_size_rewrite_with_mtime_restored_while_hashed_is_refused(tmp_path, monkeypatch):
+    # delta25d stat identity: utime restores mtime but ctime still moves.
+    import time
+
+    root = _installation(tmp_path)
+    target = next(root.rglob("*.parquet"))
+    real = formal_inputs.hashlib.file_digest
+    done = []
+
+    def rewrite_while_hashing(handle, name):
+        digest = real(handle, name)
+        if not done and os.path.realpath(handle.name) == str(target.resolve()):
+            done.append(True)
+            time.sleep(0.02)
+            _rewrite_same_stat(target)
+        return digest
+
+    monkeypatch.setattr(formal_inputs.hashlib, "file_digest", rewrite_while_hashing)
+    with pytest.raises(formal_inputs.InputSnapshotError) as error:
+        formal_inputs.take_snapshot([f"hirid:{root}"])
+    assert done and error.value.code == "input_changed_while_hashed"
+
+
 def test_an_input_added_during_the_run_stops_it(tmp_path):
     root = _installation(tmp_path)
     snapshot = formal_inputs.take_snapshot([f"hirid:{root}"])

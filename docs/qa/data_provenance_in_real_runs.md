@@ -90,9 +90,15 @@ Known limit: deliberate stat forgery, which rewrites the content and then
 restores ctime as well (for example through the system clock or raw device
 access), is not detected. Such a run is not a formal run. Formal runs get
 content identity from a full-SHA snapshot of every input file taken before and
-after the run. This tree has no owner for that snapshot: the prov lane
-provides it at merge. Until then, a run's content identity is the stat
-identity above.
+after the run: `easyicu.formal_inputs` takes it
+(`src/easyicu/formal_inputs.py:374` `take_snapshot`, `:383` `verify_snapshot`;
+a file whose stat identity moves while it is hashed is refused, `:307`
+`_hash`), and the formal receipt requires both snapshots to agree
+(`tools/formal_run_receipt.py:1049` `_snapshot_section`,
+`input_changed_during_run`) and binds every consumed file to its snapshot
+sha256 (`tools/formal_run_receipt.py:572` `_consumed`,
+`storage_consumed_outside_snapshot`). A non-formal run's content identity is
+the stat identity above.
 
 ## Renderer handoff
 
