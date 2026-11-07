@@ -1833,10 +1833,11 @@ class ICUDataSource:
         if db_name in {"eicu", "eicu_demo"} and table_name == "intakeoutput" and (path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}):
             from .concept.eicu_io import read_io_parquet
 
-            if scan_loader is not None:
-                # Validates the inventory read_io_parquet scans (same files).
-                self.resolve_target_files(table_name, loader=scan_loader)
-            return read_io_parquet(path, columns, patient_ids_filter, concept_itemid_filter)
+            files = (self.resolve_target_files(table_name, loader=scan_loader)
+                     if scan_loader is not None else None)
+            return read_io_parquet(
+                path, columns, patient_ids_filter, concept_itemid_filter, files=files,
+            )
         
         # 🚀 优先使用概念特定的 itemid 过滤器（精确过滤，性能最佳）
         # 如果传入了 concept_itemid_filter，直接使用，跳过全局白名单
@@ -1864,7 +1865,8 @@ class ICUDataSource:
             itemid_filter_config = ('variableid', HIRID_OBSERVATIONS_VARIABLEIDS)
         
         # Handle directory (partitioned data)
-        columns = mimic_disk_columns(self, path, table_name, columns)
+        if not path.is_dir():
+            columns = mimic_disk_columns(self, path, table_name, columns)
         if path.is_dir():
             if DEBUG_MODE:
                 logger.debug(f"读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
@@ -2526,6 +2528,7 @@ class ICUDataSource:
         )
         if not target_files:
             return storage_layout.empty_frame(directory, columns)
+        columns = mimic_disk_columns(self, directory, table_name, columns, files=target_files)
         target_relation = storage_layout.parquet_relation(target_files)
 
         # Entry clocks are optional in older converted partitions. Inspect the
@@ -2689,6 +2692,7 @@ class ICUDataSource:
             )
         if not resolved_files:
             return storage_layout.empty_frame(directory, columns)
+        columns = mimic_disk_columns(self, directory, table_name, columns, files=resolved_files)
         try:
             import pyarrow.dataset as ds
             
@@ -5073,13 +5077,14 @@ def mimic_source_columns(database: str, table: str, columns, available):
     return list(dict.fromkeys([*columns, *(by_lower[c] for c in optional if c in by_lower)]))
 
 
-def mimic_disk_columns(source, path: Path, table: str, columns):
+def mimic_disk_columns(source, path: Path, table: str, columns, *, files=None):
     """Inspect only schemas/CSV headers to retain optional MIMIC fields."""
     requested = mimic_source_columns(source.config.name, table, columns, ["error", "iserror", "rateuom", "patientweight", "statusdescription", "cancelreason", *LAB_OPTIONAL_COLUMNS])
     if requested == columns:
         return columns
     if path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}:
-        files = enumerate_bucket_parquet_files(path) if path.is_dir() else [path]
+        if files is None:
+            files = enumerate_bucket_parquet_files(path) if path.is_dir() else [path]
         available = source._get_parquet_columns_for_files(files)
     elif path.name.lower().endswith((".csv", ".csv.gz")):
         available = pd.read_csv(path, nrows=0).columns

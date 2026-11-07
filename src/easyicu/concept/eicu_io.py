@@ -46,15 +46,20 @@ def finish_io_audit(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def read_io_parquet(path, columns, patient_filter, item_filter):
+def read_io_parquet(path, columns, patient_filter, item_filter, *, files=None):
     """Stay/selector scoped parquet scan with bounded DuckDB memory and spill."""
     from ..datasource import (
         FilterOp, _duckdb_identifier, _duckdb_read_parquet_clause,
         _duckdb_sql_literal, _get_duckdb_connection,
     )
 
+    from .. import storage_layout
+
     connection = _get_duckdb_connection()
-    read = (_duckdb_read_parquet_clause(path, hive_partitioning=False) if path.is_dir()
+    # A disk reader supplies the owner's validated set. Do not discover a
+    # second inventory with different suffix or partition rules.
+    read = (storage_layout.parquet_relation(files) if files is not None else
+            _duckdb_read_parquet_clause(path, hive_partitioning=False) if path.is_dir()
             else f"read_parquet({_duckdb_sql_literal(str(path))})")
     predicates = []
     if patient_filter is not None and patient_filter.op == FilterOp.IN:

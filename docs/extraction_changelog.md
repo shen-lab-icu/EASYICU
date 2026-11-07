@@ -15,6 +15,10 @@ remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
 - A bucket linked into a bucket-only CareVue farm now resolves its default `derived_from` paths beside the physical bucket installation. The farm needs no flat chartevents entry. Source-set and size/mtime checks, physical inode pairing, and bucket inventory validation remain in force; missing physical sources and missing parts still refuse.
 
+## 2026-11-07 — special-reader Parquet inventory agreement [lead-r13, NB-D56-HELPER-PARQUET-GLOB]
+
+- eICU I/O reads the resolver's validated files, and MIMIC directory schema inspection uses the selected backend's resolved files. Auxiliary flat/directory enumerators recognize `.pq` and mixed-case Parquet suffixes as the owner does. Consumption still checks file identity. Reusing the owner decision across an entire cold read remains deferred.
+
 ## 2026-11-07 — one complete table decision and loader [lead-r13, `7f72fd643`]
 
 - **B-D47-NESTED / B-D47-CSV:** reader, cohort and resolver use `storage_layout.table_decision`, including recursive nested search and typed listing refusals (also inside a table's inventory); configured CSV is eligible only when Parquet is absent, and a supplied Parquet loader cannot override absence. A healthy HiRID `General/` beside `general_table.csv` now serves Parquet to both readers, and independent root plus nested sources refuse. Bound-source missing refusals keep their existing priority.

@@ -812,7 +812,9 @@ def flat_table_files(source, table: str) -> tuple[Path, ...]:
     for path in candidates:
         if path.is_dir():
             files = tuple(
-                sorted(p for p in path.glob("*.parquet") if not p.name.startswith("."))
+                sorted(path / name for name in _listdir(path)
+                       if not name.startswith(".") and name.casefold().endswith(_PARQUET_SUFFIXES)
+                       and (path / name).is_file())
             )
             if files:
                 return files
@@ -2294,11 +2296,11 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
             ).files
         except BucketLayoutError:
             flat = root.with_name(root.name.removesuffix("_bucket"))
-            if flat != root and flat.is_dir() and any(flat.glob("*.parquet")):
+            if flat != root and flat.is_dir() and _visible_parquet(flat):
                 return enumerate_parquet_files(flat)
             raise
     else:
-        paths = sorted(p for p in root.rglob("*.parquet") if not p.name.startswith("."))
+        paths = sorted(_visible_parquet(root))
     return [p.as_posix() for p in paths]
 
 
