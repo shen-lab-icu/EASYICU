@@ -137,6 +137,44 @@ def test_a_supplied_loader_cannot_override_the_shared_absent_decision(tmp_path):
     assert error.value.reason == "table_scan_loader_mismatch"
 
 
+@pytest.mark.parametrize("entry", [
+    "resolve_table_files", "flat_table_files", "flat_table_scan",
+    "resolve_target_files", "resolve_flat_parquet_directory", "load_table",
+    "raw_frame", "read_file", "cohort",
+])
+def test_wrong_table_hardlink_cannot_hide_a_missing_registered_output(tmp_path, monkeypatch, entry):
+    monkeypatch.delenv(sl.ALLOW_UNREGISTERED_SCAN_ENV, raising=False)
+    other = tmp_path / "other.parquet"
+    _parquet(other)
+    missing = tmp_path / "icustays.parquet"
+    alias = tmp_path / "ICUSTAYS.parquet"
+    os.link(other, alias)
+    (tmp_path / sl.CONVERSION_MANIFEST).write_text(json.dumps({"tables": [
+        {"table": table, "row_count": len(IDS), "outputs": [
+            {"relative_path": path.name, "size_bytes": other.stat().st_size},
+        ]}
+        for table, path in (("icustays", missing), ("other", other))
+    ]}))
+    source = _source(tmp_path)
+    calls = {
+        "resolve_table_files": lambda: sl.resolve_table_files(source, "icustays"),
+        "flat_table_files": lambda: sl.flat_table_files(source, "icustays"),
+        "flat_table_scan": lambda: sl.flat_table_scan(source, "icustays", alias),
+        "resolve_target_files": lambda: source.resolve_target_files("icustays"),
+        "resolve_flat_parquet_directory": lambda: source.resolve_flat_parquet_directory("icustays"),
+        "load_table": lambda: source.load_table("icustays"),
+        "raw_frame": lambda: source._load_raw_frame("icustays", None),
+        "read_file": lambda: source._read_file(alias, None, table_name="icustays", disk_loader=True),
+        "cohort": lambda: get_all_patient_ids(tmp_path, database="mimic"),
+    }
+    assert not missing.exists()
+    with sb.binding_unit():
+        with pytest.raises(sl.StorageIntegrityError) as error:
+            calls[entry]()
+        assert error.value.reason == "table_scan_unregistered"
+        assert not sb.consumed_files()
+
+
 def test_verified_derived_pair_uses_inode_even_when_alias_sorts_first(tmp_path):
     _csv(tmp_path)
     flat = tmp_path / "icustays.parquet"
