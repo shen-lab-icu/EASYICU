@@ -112,22 +112,55 @@ def merge_index_name(tables: Mapping[str, ICUTable | TsTbl]) -> str | None:
     return target
 
 
-def batch_index_dtype(tables: Mapping[str, ICUTable | TsTbl], aligned_index: str | None):
-    """The time-index dtype a batch's populated tables share, else None.
+def _index_of(table) -> str | None:
+    return getattr(table, "index_var", None) or getattr(table, "index_column", None)
+
+
+def validate_row_bearing_axes(tables: Mapping[str, ICUTable | TsTbl]) -> None:
+    """Row-bearing tables either all carry a time index or none does.
+
+    Checked before any table is merged, so the order of the tables never
+    decides whether a populated table without the batch index is accepted.
+    """
+    populated = [_index_of(table) for table in tables.values() if len(table.data)]
+    if any(populated) and not all(populated):
+        raise ValueError("All concepts must share identical index column to merge")
+
+
+def batch_time_axis(
+    tables: Mapping[str, ICUTable | TsTbl],
+    aligned_index: str | None,
+    *,
+    relative_axis: bool,
+):
+    """The time axis ``(name, dtype)`` an index-less empty slice takes, else ``(None, None)``.
 
     A concept with no rows in a patient batch can come back without a
-    declared index (its raw frame never reached time alignment).  The
-    resolver gives such an empty slice this batch's index name and dtype so
-    the merged frame matches the unbatched one; populated tables are the only
-    authority for it.
+    declared index (its raw frame never reached time alignment).  The axis
+    comes from, in order: a populated table's index; an empty table that
+    declares a numeric (aligned) index; and, when every table is an
+    undeclared empty slice, the resolver's contract for this load -- the
+    admission-relative hour axis (float64) on the time column all of them
+    declare.  Raw datetime columns are never an axis donor.
     """
-    if not aligned_index:
-        return None
     for table in tables.values():
-        index = getattr(table, "index_var", None) or getattr(table, "index_column", None)
+        index = _index_of(table)
         if index and len(table.data) and index in table.data:
-            return table.data[index].dtype
-    return None
+            return aligned_index or index, table.data[index].dtype
+    for table in tables.values():
+        index = _index_of(table)
+        if index and index in table.data and pd.api.types.is_numeric_dtype(table.data[index]):
+            return aligned_index or index, table.data[index].dtype
+    if relative_axis and tables and all(
+        not len(table.data) and not _index_of(table) for table in tables.values()
+    ):
+        shared = None
+        for table in tables.values():
+            declared = [c for c in (getattr(table, "time_columns", None) or []) if c in table.data]
+            shared = declared if shared is None else [c for c in shared if c in declared]
+        if shared:
+            return shared[0], np.dtype("float64")
+    return None, None
 
 
 _FILL_LOCK = threading.Lock()

@@ -26,6 +26,45 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-06 — empty batch slices, merge receipts and batched `concept_status` [r13mergeidx, `c4429b6f7`, `0339af69c`, `9d637841d`, delta22m follow-up]
+
+**Rule.** A module's published values do not depend on the patient batch
+size. Values are equal after key alignment (identifier and time columns), not
+in physical row order. Its `concept_status` map is the same at every batch
+size: a concept the loader never returned is
+`structurally_unavailable_placeholder`, and one it returned without a value in
+every batch is `produced_all_null`.
+
+- `c4429b6f7`: a concept with no rows in a patient batch can come back without
+  a declared time index (raw datetime `charttime` plus `valueuom`). The
+  resolver merge now gives it the batch's index name and dtype from a populated
+  table. Before, `renal_urine_chem` stopped at batch 50 on the MIMIC-III
+  CareVue sample ("All concepts must share identical index column to merge"),
+  and publication was refused. With the empty concept listed first, the merge
+  kept the raw datetime column silently. Default (unbatched) values are
+  unchanged on all five sample databases.
+- `0339af69c`: every (batch, concept) pair filled this way is recorded as
+  `merge_empty_index_filled`: per batch in `stream_batches`, per module as
+  `[{batch_id, concept}]` (`batch_id` null for a whole-module load), and on the
+  module's `_manifest.json` files entry. An empty list means no fill.
+- `9d637841d`: a streamed module counted every column of a part schema as
+  produced, including the null column Arrow adds for each requested concept.
+  So unmapped or unsupported concepts were `produced_all_null` when batched
+  and `structurally_unavailable_placeholder` by default. On the samples that
+  affected 31 entries: CareVue 3, MIIV 2, eICU 14, AUMC 4, SIC 8 (mostly
+  outcome columns). Produced is now the union of the loader's own columns over
+  batches; default statuses are unchanged.
+- delta22m follow-up:
+  - an all-empty batch takes its axis from the load's contract (the declared
+    numeric index, or admission-relative float64 hours on the time column all
+    slices declare), with no duplicate raw time column;
+  - a populated table without the time index is refused before merging,
+    whatever its position (before, it was accepted when listed first);
+  - a whole-module memory retry drops the failed attempt's fills and bounds
+    counts;
+  - a missing isolated-batch receipt is a typed `stream_failure`
+    (`batch_receipt_missing`, with the batch and sidecar kind).
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

@@ -3024,6 +3024,19 @@ class StreamBatchWorkerKilled(StreamBatchFailure):
     """An isolated batch worker died without memory evidence."""
 
 
+class StreamBatchReceiptMissing(StreamBatchFailure):
+    """An isolated batch left its part but not one of its receipt sidecars."""
+
+    default_failure_class = "batch_receipt_missing"
+
+    def __init__(self, message: str, *, sidecar_kind: str, **kwargs):
+        super().__init__(message, **kwargs)
+        self.sidecar_kind = sidecar_kind
+
+    def to_record(self) -> Dict[str, object]:
+        return {**super().to_record(), "sidecar_kind": self.sidecar_kind}
+
+
 def _isolated_batch_retry_history(module: str, events: Sequence[Mapping]) -> List[Dict]:
     """``stream_retry_history`` entries for a module's batch-level retries.
 
@@ -3497,18 +3510,30 @@ def _stream_module_batches_to_parquet(
                         if evidence:
                             raise StreamBatchMemoryExhausted(message, **failure)
                         raise StreamBatchWorkerKilled(message, failure_class, **failure)
+                    bounds_sidecar = _stream_batch_bounds_sidecar(batch_part)
+                    if not bounds_sidecar.is_file():
+                        # Typed, and outside the bounds-accounting wrapper: a
+                        # missing receipt is a batch failure, not an audit error.
+                        raise StreamBatchReceiptMissing(
+                            f"isolated batch {index} left no bounds counts",
+                            sidecar_kind="bounds",
+                            batch_index=index,
+                            start_offset=start,
+                            batch_size=len(batch_ids),
+                            resume_events=resume_events,
+                        )
                     with source_bounds_accounting(f"isolated_batch_hand_back[{module_name}:{index}]"):
-                        bounds_sidecar = _stream_batch_bounds_sidecar(batch_part)
-                        if not bounds_sidecar.is_file():
-                            raise FileNotFoundError(
-                                f"isolated batch {index} left no bounds counts"
-                            )
                         batch_bounds = json.loads(bounds_sidecar.read_text(encoding="utf-8"))
                         bounds_sidecar.unlink()
                     fill_sidecar = _stream_batch_fill_sidecar(batch_part)
                     if not fill_sidecar.is_file():
-                        raise FileNotFoundError(
-                            f"isolated batch {index} left no batch receipt"
+                        raise StreamBatchReceiptMissing(
+                            f"isolated batch {index} left no batch receipt",
+                            sidecar_kind="batch_receipt",
+                            batch_index=index,
+                            start_offset=start,
+                            batch_size=len(batch_ids),
+                            resume_events=resume_events,
                         )
                     batch_receipt = json.loads(fill_sidecar.read_text(encoding="utf-8"))
                     fill_sidecar.unlink()
@@ -3801,7 +3826,10 @@ def _run_module_extraction(
                 f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
             )
             kwargs["batch_size"] = fallback_bs
+            # Only the committed attempt counts: the failed attempt's bounds
+            # and merge fills are dropped before the retry.
             module_bounds_records.clear()
+            module_fills.clear()
             try:
                 result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
