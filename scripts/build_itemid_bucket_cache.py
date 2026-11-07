@@ -643,7 +643,7 @@ def _manifest(
         builder_version=BUILDER_VERSION,
         # Which code wrote this layout; its duckdb version is ``hash``'s (hash
         # layouts) or the build receipt's.
-        builder_code=_builder_code(),
+        builder_code_identity=_builder_code(),
         duckdb_version=duckdb.__version__,
         inventory=_inventory(root),
     )
@@ -916,7 +916,7 @@ def build_bucket_cache(
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
                 builder_version=BUILDER_VERSION,
-                builder_code=_builder_code(),
+                builder_code_identity=_builder_code(),
                 derived_from=derived,
                 source=str(data_path / table),
                 source_files=len(source_files),
@@ -1227,7 +1227,7 @@ def build_variable_cache(
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
                 builder_version=BUILDER_VERSION,
-                builder_code=_builder_code(),
+                builder_code_identity=_builder_code(),
                 derived_from=derived,
                 layout_scheme=VARIABLE_SCHEME,
                 source=str(data_path / table),
@@ -1286,6 +1286,7 @@ def build_variable_cache(
                 builder_version=BUILDER_VERSION,
                 builder_code=code,
                 float_fidelity=float_fidelity,
+                builder_code_identity=_builder_code(),
                 duckdb_version=duckdb.__version__,
                 inventory=[
                     dict(

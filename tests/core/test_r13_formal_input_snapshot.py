@@ -246,9 +246,9 @@ def test_a_built_layout_records_the_code_and_engine_that_wrote_it(tmp_path):
 
     package = Path(formal_inputs.__file__).resolve().parent
     identity = code_identity.resolve_code_identity(package)
-    assert manifest["builder_code"]["source"] == identity["source"]
-    assert manifest["builder_code"]["commit"] == identity["commit"]
-    assert manifest["builder_code"]["version"] == identity["version"]
+    assert manifest["builder_code_identity"]["source"] == identity["source"]
+    assert manifest["builder_code_identity"]["commit"] == identity["commit"]
+    assert manifest["builder_code_identity"]["version"] == identity["version"]
     assert manifest["duckdb_version"] == duckdb.__version__
     assert manifest["builder_version"].startswith("easyicu.bucket_builder/")
     # The layout with its extra metadata still opens.
@@ -288,5 +288,5 @@ def test_every_layout_scheme_records_its_builder_in_manifest_and_receipt(tmp_pat
     identity = code_identity.resolve_code_identity(Path(formal_inputs.__file__).resolve().parent)
     expected = {k: identity[k] for k in ("source", "commit", "dirty", "version")}
     for record in (manifest, build):
-        assert {k: record["builder_code"][k] for k in expected} == expected
+        assert {k: record["builder_code_identity"][k] for k in expected} == expected
         assert record["duckdb_version"] == duckdb.__version__
