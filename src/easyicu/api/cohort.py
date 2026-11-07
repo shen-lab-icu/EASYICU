@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Union
 
@@ -87,28 +86,14 @@ def get_all_patient_ids_impl(
         all_ids: Optional[List] = None
         storage = None
 
-        def _validated(table: str, loader: Path):
-            # The storage policy's validated set for the location chosen here.
-            nonlocal storage
-            if storage is None:
-                from ..datasource import storage_source
+        from ..storage_layout import (
+            PRESENCE_VALID, refuse_broken_presence, table_presence, unreadable_file,
+            unreadable_file_errors,
+        )
 
-                storage = storage_source(resolved_database, root)
-            return storage.resolve_target_files(table, loader=loader)
-
-        from ..storage_layout import unreadable_file, unreadable_file_errors
-
-        def _broken_link(name: str) -> Optional[Path]:
-            # A dangling link is a present, broken source, not an absent one.
-            candidates = [root / f"{name}.parquet", root / name, root / f"{name}_bucket"]
-            candidates += sorted(root.glob(f"*/{name}.parquet"))
-            return next(
-                (c for c in candidates if os.path.lexists(c) and not c.exists()), None
-            )
-
-        def _ids(table: str, files) -> List:
+        def _ids(table: str, presence) -> tuple[List, str]:
             ids: List = []
-            for shard in files:
+            for shard in presence.files:
                 try:
                     frame = pd.read_parquet(shard, columns=[id_col])
                 except unreadable_file_errors() as exc:
@@ -116,23 +101,22 @@ def get_all_patient_ids_impl(
                     # CSV sibling stands in for it (delta17c).
                     raise unreadable_file(table, shard, exc) from exc
                 ids.extend(frame[id_col].dropna().unique().tolist())
-            return list(dict.fromkeys(ids))
+            return list(dict.fromkeys(ids)), "source_file_order"
 
-        # Every supported Parquet layout (a single file, a shard directory, a
-        # bucket) is resolved and validated by the storage owner first; the
-        # CSV is read only when no Parquet layout exists at all (delta25d).
+        # One owner decides, for every path and case the storage contract
+        # covers: absent, valid (a single file, shards or a bucket, validated)
+        # or broken. A broken table refuses; only an absent one may fall back
+        # to its CSV (B-D30-COHORT-PRESENCE).
+        from ..datasource import storage_source
+
+        storage = storage_source(resolved_database, root)
         source_format = None
+        order = "source_file_order"
         for name in name_candidates:
-            broken = _broken_link(name)
-            if broken is not None:
-                raise unreadable_file(name, broken, FileNotFoundError("dangling link"))
-            files = _validated(name, None)
-            if not files:
-                nested = next(iter(sorted(root.glob(f"*/{name}.parquet"))), None)
-                if nested is not None:
-                    files = _validated(nested.stem, nested)
-            if files:
-                all_ids = _ids(name, files)
+            presence = table_presence(storage, name, subdirectories=True)
+            refuse_broken_presence(name, presence)
+            if presence.state == PRESENCE_VALID:
+                all_ids, order = _ids(name, presence)
                 source_format = "parquet"
                 break
         if all_ids is None:
@@ -142,10 +126,9 @@ def get_all_patient_ids_impl(
                 csv_file = root / f"{table_name}{suffix}"
                 if not csv_file.exists():
                     continue
-                from ..datasource import storage_source
                 from ..storage_layout import csv_table_scan
 
-                csv_table_scan(storage_source(resolved_database, root), table_name, csv_file)
+                csv_table_scan(storage, table_name, csv_file)
                 frame = pd.read_csv(csv_file, usecols=[id_col])
                 all_ids = frame[id_col].dropna().unique().tolist()
                 source_format = "csv_fallback"
@@ -168,7 +151,7 @@ def get_all_patient_ids_impl(
             return list(sampled or []), id_col
 
         if listing is not None:
-            listing["order"] = "source_file_order"
+            listing["order"] = order
             listing["source_format"] = source_format
 
         if max_patients and len(all_ids) > max_patients:

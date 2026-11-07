@@ -821,6 +821,108 @@ def flat_table_files(source, table: str) -> tuple[Path, ...]:
     return ()
 
 
+PRESENCE_ABSENT = "absent"
+PRESENCE_VALID = "valid"
+PRESENCE_BROKEN = "broken"
+LAYOUT_BROKEN = "table_layout_broken"
+
+
+@dataclass(frozen=True)
+class TablePresence:
+    """Whether a table has a Parquet installation, from the owner's own contract.
+
+    ``state`` is ``absent`` (no candidate exists), ``valid`` (``files`` is
+    the owner's validated set, possibly a healthy zero-row file) or
+    ``broken`` (a candidate exists but is a dangling link, or holds no
+    file the owner can read). ``layout`` is ``bucket`` or ``flat`` for a
+    valid table.
+    """
+
+    state: str
+    files: tuple = ()
+    layout: str | None = None
+    path: Path | None = None
+
+
+def _presence_candidates(source, table: str, subdirectories: bool) -> tuple[list, list]:
+    """Every place the owner's path and case contract could find ``table``.
+
+    Returns (roots, leaves): the ``icu``/``hosp`` roots, whose dangling link
+    hides every leaf below it, and the leaf candidates: the configured file
+    or directory, then ``<name>``, ``<name>.parquet``, ``<name>.pq`` and
+    ``<name>_bucket`` under each root for the name in its configured, lower
+    and upper case.
+    """
+    base = Path(source.base_path)
+    roots = [base, base / "icu", base / "hosp"]
+    leaves: list = []
+    try:
+        entries = [
+            entry.get("path") or entry.get("file")
+            for entry in source.config.get_table(table).files
+        ]
+        for entry in (e for e in entries if e):
+            path = base / entry
+            if len(entries) > 1:
+                path = path.parent
+            if path.suffix.lower() in {"", ".parquet", ".pq"}:
+                leaves.append(path)
+    except (AttributeError, KeyError, ValueError):
+        pass
+    for root in roots:
+        for name in dict.fromkeys((table, table.lower(), table.upper())):
+            leaves += [root / name, root / f"{name}.parquet", root / f"{name}.pq",
+                       root / f"{name}_bucket"]
+    if subdirectories:
+        for name in dict.fromkeys((table, table.lower(), table.upper())):
+            leaves += sorted(base.glob(f"*/{name}.parquet"))
+    return roots[1:], list(dict.fromkeys(leaves))
+
+
+def table_presence(source, table: str, *, subdirectories: bool = False) -> TablePresence:
+    """The one presence decision for a table: absent, valid or broken (delta30d).
+
+    A dangling link at any candidate (or at the ``icu``/``hosp`` root above
+    it) is broken. Otherwise the owner resolves and validates the layout
+    (:func:`resolve_table_files`: bucket contract or flat scan, typed on
+    failure); its files make the table valid, even when they hold zero
+    rows. A candidate that exists but yields no file the owner reads (an
+    empty directory, a directory named ``.parquet``) is broken. Only a
+    table with no candidate at all is absent. ``subdirectories`` also admits
+    a ``*/<table>.parquet`` file through the owner's loader scan.
+    """
+    if source.base_path is None:
+        return TablePresence(PRESENCE_ABSENT)
+    roots, leaves = _presence_candidates(source, table, subdirectories)
+    for path in (*roots, *leaves):
+        if os.path.lexists(path) and not path.exists():
+            return TablePresence(PRESENCE_BROKEN, path=path)
+    files = resolve_table_files(source, table)
+    if not files and subdirectories:
+        nested = [p for p in leaves if p.parent.parent == Path(source.base_path)
+                  and p.parent.name not in {"icu", "hosp"} and p.is_file()]
+        if nested:
+            files = resolve_table_files(source, table, loader=nested[0])
+    if files:
+        layout = "bucket" if source.resolve_bucket_directory(table) is not None else "flat"
+        return TablePresence(PRESENCE_VALID, tuple(files), layout)
+    present = next((p for p in leaves if p.exists()), None)
+    if present is not None:
+        return TablePresence(PRESENCE_BROKEN, path=present)
+    return TablePresence(PRESENCE_ABSENT)
+
+
+def refuse_broken_presence(table: str, presence: TablePresence) -> None:
+    """A present table with nothing readable is an integrity failure, never absence."""
+    if presence.state != PRESENCE_BROKEN:
+        return
+    if os.path.lexists(presence.path) and not presence.path.exists():
+        raise TableScanError(FILE_UNREADABLE, table, f"{presence.path.name}: dangling link")
+    raise TableScanError(
+        LAYOUT_BROKEN, table, f"{presence.path.name}: present without a readable Parquet file",
+    )
+
+
 class TableScanError(StorageIntegrityError):
     """A flat table scan does not cover the table's complete on-disk inventory."""
 
