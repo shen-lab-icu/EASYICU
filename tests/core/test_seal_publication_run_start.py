@@ -385,7 +385,9 @@ def _committed_ledger(tmp_path, monkeypatch):
     kwargs = {"database": "miiv", "data_path": str(root), "concepts": ["hr"]}
     # Isolate publication identity from the pre-existing code/data signatures.
     monkeypatch.setattr(extraction, "_stream_code_identity_sha256", lambda _: "code")
-    monkeypatch.setattr(extraction, "_stream_source_identity_sha256", lambda _: "data")
+    monkeypatch.setattr(
+        extraction, "_stream_source_identity_sha256", lambda _, *, excluded_paths=(): "data",
+    )
     identity = extraction._stream_ledger_identity(
         "test_module",
         ["hr"],
@@ -470,7 +472,9 @@ def test_committed_resume_with_original_closure_assembles_without_reloading(
     )
     ledger = json.loads(ledger_path.read_text())
     original = ledger["seal_publication_closure_sha256"]
-    assert original == _source(root).seal_publication_closure["sha256"]
+    # The full digest binds the configured root set. Use the same real
+    # datasource configuration as the stream identity, not _source's fixture.
+    assert original == datasource.storage_source("miiv", root).seal_publication_closure["sha256"]
     gate = Mock(wraps=datasource.assert_roots_published)
     monkeypatch.setattr(datasource, "assert_roots_published", gate)
     loader = Mock(side_effect=AssertionError("committed batches must not reload"))
@@ -529,13 +533,8 @@ def test_closure_digest_is_sorted_reproducible_and_walk_opens_no_table(
     probed = [(call.args[0], call.args[1]) for call in markers.call_args_list]
     assert len(probed) == len(set(probed))
     second = publication.assert_roots_published([table, root, root])
-    directories = {root, table.parent, *root.parents}
-    expected = json.dumps(
-        [[str(p), False, False] for p in sorted(directories)], separators=(",", ":")
-    )
-    import hashlib
-
-    assert first.sha256 == hashlib.sha256(expected.encode()).hexdigest()
+    # Configured roots are bound even when they reach the same directories.
+    assert first.sha256 != publication.assert_roots_published([root]).sha256
     assert first == second
     assert first.marker_hits == 0
     assert first.link_hops == 3

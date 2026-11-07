@@ -510,13 +510,9 @@ def _derived_from_base(root: Path, derived: dict) -> Path:
     directly or through a symlink placed beside the source finds the same
     files. Recorded file paths stay confined below this directory.
     """
-    recorded = derived.get("source_root")
-    if recorded is None:
-        return root.parent
-    relative = PurePosixPath(recorded)
-    if relative.is_absolute():
-        return Path(recorded)
-    return root.resolve().parent.joinpath(*relative.parts)
+    return resolve_derived_from_source(
+        ".", bucket_root=root, source_root=derived.get("source_root"),
+    )
 
 
 def _derived_source(root: Path, derived: dict, entry: dict) -> Path:
@@ -528,7 +524,9 @@ def _derived_source(root: Path, derived: dict, entry: dict) -> Path:
     relative = PurePosixPath(entry["path"])
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise BucketLayoutError("bucket_derived_from_invalid", root)
-    return _derived_from_base(root, derived).joinpath(*relative.parts)
+    return resolve_derived_from_source(
+        entry["path"], bucket_root=root, source_root=derived.get("source_root"),
+    )
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -1360,6 +1358,29 @@ def _derived_binding(path: Path, manifest: dict) -> dict | None:
     return {"path": source, "sha256": digest}
 
 
+def resolve_derived_from_source(
+    source: str, *, bucket_root: Path | None = None, source_root: str | None = None,
+) -> Path:
+    """Resolve provenance exactly as the storage readers do on this layout.
+
+    Conversion-manifest ``derived_from.path`` uses Path(source), including its
+    cwd-relative semantics. Bucket ``derived_from.files`` is relative to the
+    bucket's logical parent when no source_root was recorded. A recorded
+    source_root is absolute or relative to the bucket's resolved parent,
+    preserving the out-of-tree builder contract. Keep every anchor decision
+    here so the publication gate and readers share future binding changes.
+    """
+    if bucket_root is None:
+        return Path(source)
+    if source_root is None:
+        base = bucket_root.parent
+    elif PurePosixPath(source_root).is_absolute():
+        base = Path(source_root)
+    else:
+        base = bucket_root.resolve().parent.joinpath(*PurePosixPath(source_root).parts)
+    return base.joinpath(*PurePosixPath(source).parts)
+
+
 def _check_derived_from(path: Path, derived: dict | None) -> None:
     """A manifest derived from another (a symlink farm's) must match its source.
 
@@ -1369,7 +1390,7 @@ def _check_derived_from(path: Path, derived: dict | None) -> None:
     """
     if derived is None:
         return
-    source = Path(derived["path"])
+    source = resolve_derived_from_source(derived["path"])
     try:
         stat = source.stat()
         key = (str(source), stat.st_size, stat.st_mtime_ns)
@@ -1580,7 +1601,7 @@ def _declared_view(manifest: Path) -> dict[tuple[str, str], int]:
         own = json.loads(raw_own)
         derived = own.get("derived_from")
         if isinstance(derived, dict) and derived.get("path") and derived.get("sha256"):
-            source = Path(derived["path"])
+            source = resolve_derived_from_source(derived["path"])
             raw = source.read_bytes()
             if hashlib.sha256(raw).hexdigest() == derived["sha256"]:
                 declared = {
@@ -1621,7 +1642,7 @@ def declared_view_chain(base) -> dict[str, str] | None:
         derived = json.loads(raw).get("derived_from")
         if not (isinstance(derived, dict) and derived.get("path") and derived.get("sha256")):
             return None
-        source = hashlib.sha256(Path(derived["path"]).read_bytes()).hexdigest()
+        source = hashlib.sha256(resolve_derived_from_source(derived["path"]).read_bytes()).hexdigest()
     except (OSError, ValueError, AttributeError):
         return None
     if source != derived["sha256"]:

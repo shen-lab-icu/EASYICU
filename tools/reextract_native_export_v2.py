@@ -359,7 +359,9 @@ def _resolve_data_paths(args: argparse.Namespace) -> dict[str, str]:
     return resolved
 
 
-def _source_publication_closure(data_paths: Mapping[str, str]) -> dict[str, Any]:
+def _source_publication_closure(
+    data_paths: Mapping[str, str], *, output_root: Path | None = None,
+) -> dict[str, Any]:
     """Gate all configured sources before cohort reads or export reuse."""
     if str(SOURCE_ROOT) not in sys.path:
         sys.path.insert(0, str(SOURCE_ROOT))
@@ -379,7 +381,9 @@ def _source_publication_closure(data_paths: Mapping[str, str]) -> dict[str, Any]
         roots.extend(
             configured_publication_roots(config, path) if config is not None else [path]
         )
-    return assert_roots_published(roots).to_dict()
+    return assert_roots_published(
+        roots, excluded_paths=() if output_root is None else (output_root,),
+    ).to_dict()
 
 
 def _resolve_batch_overrides(values: Sequence[str]) -> dict[str, int]:
@@ -1587,7 +1591,7 @@ def _load_resume_manifest(
     batch_overrides: Mapping[str, int] | None = None,
     module_batch_overrides: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
-    closure = _source_publication_closure(data_paths)
+    closure = _source_publication_closure(data_paths, output_root=run_root)
     manifest = _read_json_object(run_root / "run_manifest.json", label="run manifest")
     if manifest.get("schema_version") != RUN_SCHEMA_VERSION:
         raise ExtractionRunError("resume root has an unsupported run manifest")
@@ -1863,7 +1867,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     psutil_module, monitoring = _load_psutil(args.resource_policy)
     memory = _detect_effective_memory(psutil_module)
     data_paths = _resolve_data_paths(args)
-    publication_closure = _source_publication_closure(data_paths)
+    publication_closure = _source_publication_closure(
+        data_paths, output_root=Path(args.output_root).expanduser().resolve(),
+    )
     batch_overrides = _resolve_batch_overrides(args.database_batch_size)
     module_batch_overrides = _resolve_module_batch_overrides(
         args.module_batch_size

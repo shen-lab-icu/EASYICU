@@ -32,6 +32,36 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-07 — retain provenance contexts and exclude run outputs [r13_slgate5, D61-PROVENANCE-CONTEXT, D61-OUTPUT-CLOSURE]
+
+Publication checks parse hard-linked metadata once per inode but expand source
+bindings at every bucket anchor through `resolve_derived_from_source`. Metadata
+and bound-source files contribute their own identities and ancestor marker
+checks without recursively hashing their parent directories. Configured and
+data-linked installs retain their full scans, including sibling subroots.
+Launcher and stream digests exclude their configured output trees (including
+ledgers/parts) and active extraction logs; explicit inputs inside an output
+tree are refused before reading. Normal output writes and unrelated files in
+shared provenance directories no longer prevent resume; changed source
+identities and PENDING/REFUSED installs still refuse it. Digest schema `/3`
+refuses older identities. No clinical computation changes.
+Regression spies check both JSON parses and metadata reads once per inode.
+
+## 2026-11-07 — bind publication resume to files and provenance [r13_slgate4, D60-RESUME-FILE, D60-RELATIVE-OVERREACH, D60-PROVENANCE-NAME]
+
+The closure digest now includes configured roots, every link edge and per-hop
+target, every reached file's device/inode/size/mtime_ns, and provenance edges.
+Launcher reuse and stream resume compare the complete digest, refusing old
+directory-only identities or changed files/links with a typed error. File
+identity uses stat/readlink only; tables are never opened by the gate.
+`storage_layout.resolve_derived_from_source` owns provenance anchoring for
+both readers and the gate, preserving this base's cwd-relative conversion
+binding and install-relative bucket-file binding. There is no guessed second
+location. Metadata reached by `derived_from.path` is parsed regardless of its
+basename, with real-file identity deduplication; `derived_from.files` remains
+path-only. Deliberate same-user tampering and the older low-level API backlog
+remain outside this change.
+
 ## 2026-11-07 — primary seal publication gate at run start [r13_slgate]
 
 Every configured data root must pass a full publication-closure walk before
@@ -40,9 +70,8 @@ ledger acceptance. Base-loader path/schema discovery and reused API loaders
 also gate their supplied or bound roots before reading. The walk follows
 every symlink hop (including intermediate farms), all subroots and table
 directories/files, and `derived_from` and `bucket_links` targets. It uses
-directory metadata and provenance JSON only. Relative recorded paths cover
-both metadata-relative and legacy reader cwd
-bindings (`derived_from.files` retain their install-relative binding).
+directory metadata and provenance JSON only. Relative recorded paths use the
+reader's cwd binding (`derived_from.files` retain their install-relative binding).
 It never opens table contents or schemas. A dangling marker link counts.
 Either marker raises `SealPublicationError` before the first data read. The
 existing read-time checks remain as defense in depth, and the function-level
@@ -54,8 +83,9 @@ since callers can invoke them before constructing a loader. The reviewed
 concept, special-score and KDIGO exception handlers preserve
 `StorageIntegrityError` rather than translating it into an ordinary failure.
 
-The start identity is the SHA-256 of canonical JSON containing sorted directory
-realpaths and their PENDING/REFUSED booleans. Every directory encountered,
+The start identity is the SHA-256 of canonical JSON containing configured roots,
+sorted directory realpaths and their PENDING/REFUSED booleans, link/provenance
+edges, and final file stat identities (extended by r13_slgate4). Every directory encountered,
 including path ancestors, is treated as an install candidate so that install
 boundaries are never inferred from naming conventions. Native manifest
 `runtime_provenance.seal_publication_closure` records the digest and walk
