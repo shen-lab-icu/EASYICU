@@ -2549,10 +2549,7 @@ class ICUDataSource:
         table = csv_path.name.split(".")[0].lower()
         columns_spec, timestamp_format = self._mimic3_csv_schema(table, header)
         rejects = f"easyicu_csv_rejects_{uuid.uuid4().hex}"
-        query = f"""
-            SELECT {columns_sql}
-            FROM read_csv(
-                '{_duckdb_path(csv_path)}',
+        options = f"""
                 header=true,
                 auto_detect=false,
                 columns={columns_spec},
@@ -2561,7 +2558,11 @@ class ICUDataSource:
                 escape='"',
                 null_padding=false,
                 strict_mode=true,
-                timestampformat='{timestamp_format}',
+                timestampformat='{timestamp_format}'"""
+        query = f"""
+            SELECT {columns_sql}
+            FROM read_csv(
+                '{_duckdb_path(csv_path)}',{options},
                 store_rejects=true,
                 rejects_scan='{rejects}_scan',
                 rejects_table='{rejects}'
@@ -2598,6 +2599,13 @@ class ICUDataSource:
                     "csv_rows_rejected", table,
                     f"{csv_path.name}: strict parsing rejected {rows} rows ({classes})",
                 )
+            # Declared types bind only on the columns a query reads, so the
+            # selection alone would let a bad VALUENUM through when only
+            # itemid/value are read (B-D25-CSV-PROJECTION). The rows reach
+            # the caller only after the whole file passed a full-schema scan.
+            # It runs after the selection so that rows the selection itself
+            # rejects are reported with their per-class counts.
+            self._validate_mimic3_csv(con, csv_path, table, header, options)
 
             # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
             df.columns = [c.lower() for c in df.columns]
@@ -2612,6 +2620,49 @@ class ICUDataSource:
             raise RuntimeError(
                 f"mimic3_chartevents_csv_read_failed: ({type(e).__name__})"
             ) from e
+
+    _CSV_VALIDATED: set = set()
+    _CSV_VALIDATED_LOCK = _threading.Lock()
+
+    @classmethod
+    def _validate_mimic3_csv(cls, con, csv_path: Path, table: str, header, options: str) -> None:
+        """Cast every declared column of the whole file, once per file version (B-D25-CSV-PROJECTION).
+
+        The scan aggregates every column, so the reader parses and casts each
+        one on every row: the optimizer cannot prune a column the result
+        depends on. It runs without a reject store, so a parse or cast error
+        anywhere in the file raises. The refusal is ``csv_rows_rejected``
+        with the error class only (a reader message can quote a raw row). A
+        file version that passed is not scanned again in this process: the
+        memo key is the realpath plus the binding's stat identity (size,
+        mtime_ns, ctime_ns, ino, dev). A racily clean file is never memoized.
+        """
+        import duckdb
+
+        from .storage_binding import StorageSourceChanged, racily_clean, stat_identity
+
+        before = stat_identity(table, csv_path)
+        key = (os.path.realpath(csv_path), *before)
+        with cls._CSV_VALIDATED_LOCK:
+            if key in cls._CSV_VALIDATED:
+                return
+        counts = ", ".join('count("' + str(name).replace('"', '""') + '")' for name in header)
+        try:
+            con.execute(
+                f"SELECT count(*), {counts} FROM read_csv('{_duckdb_path(csv_path)}',{options})"
+            ).fetchone()
+        except (duckdb.ConversionException, duckdb.InvalidInputException) as exc:
+            kind = "CAST" if isinstance(exc, duckdb.ConversionException) else "PARSE"
+            raise storage_layout.TableScanError(
+                "csv_rows_rejected", table,
+                f"{csv_path.name}: the full-schema validation scan refused the file ({kind})",
+            ) from None
+        after = stat_identity(table, csv_path)
+        if after != before:
+            raise StorageSourceChanged("storage_source_changed", table, str(csv_path))
+        if not racily_clean(after):
+            with cls._CSV_VALIDATED_LOCK:
+                cls._CSV_VALIDATED.add(key)
 
     _CSV_SPEC_TYPES = {
         "col_integer": "BIGINT",

@@ -152,6 +152,11 @@ def _version(table: str, path: str) -> tuple:
     return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
 
 
+def stat_identity(table: str, path) -> tuple:
+    """The stat identity the binding records for ``path`` (see :func:`_version`)."""
+    return _version(table, str(path))
+
+
 def racily_clean(version: tuple, now_ns: Optional[int] = None) -> bool:
     """Whether a file of this stat identity changed within ``RACY_WINDOW_NS`` of now.
 
