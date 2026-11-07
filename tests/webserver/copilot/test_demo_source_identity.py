@@ -27,6 +27,7 @@ from easyicu.webserver.pi_copilot.source_recommendation import (
     registered_sources_for_database,
 )
 from tests.support.node import run_node
+from tests.support.published_export import record_member_digests
 
 offer_owner = importlib.import_module("easyicu.webserver.pi_copilot.registered_source_offer")
 
@@ -270,6 +271,7 @@ def test_an_explicit_demo_name_keeps_the_demo_identity_in_the_listing(tmp_path, 
         "schema_version": "easyicu_native_export_v2", "database": database, "format": "parquet",
         "column_metadata": reference.to_dict(), "files": [{"file": "demographics.parquet", "rows": 0}],
     }))
+    record_member_digests(root)
     demo = export(database)
     demo["path"] = str(root)
     monkeypatch.setattr(sources, "load_registry", lambda **_kwargs: {"sources": [demo]})

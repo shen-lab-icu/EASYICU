@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from easyicu.webserver import crossdb_review, dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.app import app
+from tests.support.published_export import record_member_digests
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +43,7 @@ def _fake_export(monkeypatch: pytest.MonkeyPatch) -> None:
             manifest = {"schema_version": "easyicu_native_export_v2", "database": "miiv",
                         "format": "csv", "patient_count": 2, "files": files}
             (out / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            record_member_digests(out)  # the writer records every member's digest
             return {"out_dir": str(out), "manifest": "_manifest.json", "files": files}
 
         return runner

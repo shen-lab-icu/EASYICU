@@ -114,18 +114,24 @@ def audit(root):
     print(f"库: {dbs}\n" + "=" * 78)
     bugs = []
     from easyicu.export_publication import (
+        ExportMemberIntegrityError,
+        ExportMemberUnreadableError,
         NativeExportUnpublishedError,
-        require_published_export_package,
+        require_verified_export_package,
     )
 
     for db in dbs:
         try:
-            require_published_export_package(os.path.join(root, db))
+            require_verified_export_package(os.path.join(root, db))
         except NativeExportUnpublishedError as exc:
             print(f"    {db:6s} REFUSED {exc.code} ({exc.reason})")
             bugs.append(("PUBLICATION", db, "-", [exc.code]))
+        except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+            reason = getattr(exc, "reason", exc.code)
+            print(f"    {db:6s} REFUSED {exc.code} ({reason})")
+            bugs.append(("INTEGRITY", db, "-", [exc.code]))
     if bugs:
-        print(f"❌ {len(bugs)} 个库的导出未发布(中断或缺 _manifest.json), 拒绝审计")
+        print(f"❌ {len(bugs)} 个库的导出未发布或成员完整性未通过, 拒绝审计")
         return 1
     for gname, g in SPECIAL_GROUPS.items():
         mod, concepts, excl = g["module"], g["concepts"], g["excluded_dbs"]

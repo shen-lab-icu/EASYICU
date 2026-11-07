@@ -40,7 +40,10 @@ from easyicu.research_agent.discovery.idea_mining import (  # noqa: E402
     map_literature_idea_to_executable_candidate,
     run_idea_mining_dry_run,
 )
-from easyicu.export_publication import require_published_export_package  # noqa: E402
+from easyicu.export_publication import (  # noqa: E402
+    require_verified_export_package,
+    verify_member_integrity,
+)
 from easyicu.research_agent.literature import CitationRecord  # noqa: E402
 from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole  # noqa: E402
@@ -1030,7 +1033,8 @@ class DeterministicGapExtractor:
 def _aggregate_column(
     data_dir: Path, file_name: str, column: str, method: str
 ) -> pd.DataFrame:
-    require_published_export_package(data_dir)
+    require_verified_export_package(data_dir)
+    verify_member_integrity(data_dir, data_dir / file_name, formal=True)
     df = pd.read_parquet(data_dir / file_name, columns=["stay_id", column])
     if method == "median":
         return df.groupby("stay_id", as_index=False)[column].median()
@@ -1040,7 +1044,9 @@ def _aggregate_column(
 
 
 def build_wide_cohort(data_dir: Path, output_path: Path) -> dict[str, Any]:
-    require_published_export_package(data_dir)
+    require_verified_export_package(data_dir)
+    verify_member_integrity(
+        data_dir, data_dir / "outcome_death_los_hosp_los_icu.parquet", formal=True)
     outcome = pd.read_parquet(data_dir / "outcome_death_los_hosp_los_icu.parquet")
     wide = outcome[["stay_id", "death"]].drop_duplicates("stay_id").copy()
     wide["death"] = wide["death"].fillna(0).astype(int)
@@ -1302,7 +1308,7 @@ def run_yield_smoke(
     top_n: int,
 ) -> dict[str, Any]:
     # Refuse an unpublished export before any literature or data work.
-    require_published_export_package(data_dir)
+    require_verified_export_package(data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     articles = fetch_review_editorial_articles(retmax=article_count)
     materials = build_materials(articles)

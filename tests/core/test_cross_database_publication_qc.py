@@ -667,6 +667,7 @@ def test_qc_a02_fails_closed_on_end_to_end_metadata_gap(
             entries.append(
                 {
                     "module": module_name,
+                    "file": parquet_path.name,  # native manifests key members by file
                     "availability": "available",
                     "rows": 1,
                     "concepts": 1,

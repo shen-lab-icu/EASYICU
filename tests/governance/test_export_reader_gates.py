@@ -24,6 +24,7 @@ READER_CALLS = frozenset({
 })
 GATE_CALLS = frozenset({
     "require_published_export_package", "require_published_native_export",
+    "require_verified_export_package",
     "require_no_in_progress_marker", "open_export_package", "index_export_package",
     "inspect_export_layout",
 })
@@ -155,7 +156,8 @@ def test_the_contract_list_has_no_stale_entries():
 # --- member integrity (r13exportsha) -----------------------------------------
 
 INTEGRITY_CALLS = frozenset({"verify_member_integrity", "require_member_digest",
-                             "verify_package_members", "_verify_export_member"})
+                             "verify_package_members", "_verify_export_member",
+                             "formal_integrity_scope", "require_verified_export_package"})
 
 #: Package owners that open export members for screens, intake or tools. Each
 #: must compare the member with its manifest record (size + SHA-256).
@@ -168,6 +170,7 @@ INTEGRITY_OWNERS = (
     "src/easyicu/webserver/ideas/mining.py",
     "src/easyicu/webserver/patient_drilldown/coverage.py",
     "src/easyicu/webserver/catalog.py",
+    "src/easyicu/research_agent/discovery/idea_mining_source_status.py",
 )
 
 #: Formal / release tools keep their own full (unmemoised) parquet_sha256 check.
@@ -178,21 +181,35 @@ FORMAL_SHA_CHECKS = {
     "src/easyicu/api/derivation_context.py": "parquet_sha256",
 }
 
-#: Publication-gated tool readers that do not yet compare member digests. A
-#: follow-up may route them through verify_member_integrity; new tools may not
-#: join this list without review.
-INTEGRITY_PENDING_TOOLS = frozenset({
-    "tools/audit_extraction_coverage.py",
-    "tools/build_discovery_universe.py",
-    "tools/materialize_e3_miiv_kdigo_gradient.py",
-    "tools/run_idea_mining_longitudinal_discovery.py",
-    "tools/run_idea_mining_real_discovery.py",
-    "tools/run_idea_mining_s6_validation_harness.py",
-    "tools/verify_aumc_ventilator_sources.py",
-    "scripts/mine_discovery_gpt54.py",
-    "scripts/figures/QC-A01_cross_database_distributions.py",
-    "scripts/figures/QC-A02_easyicu_cross_database_reliability_audit.py",
-})
+#: Formal consumers that verify members with ``formal=True`` (an unrecorded
+#: manifest is refused) or run inside ``formal_integrity_scope``.
+FORMAL_INTEGRITY_CONSUMERS = {
+    "scripts/figures/QC-A01_cross_database_distributions.py":
+        "documented publication-QC CLI (scripts/figures/README.md)",
+    "scripts/figures/QC-A02_easyicu_cross_database_reliability_audit.py":
+        "documented publication-QC CLI (scripts/figures/README.md)",
+    "tools/materialize_e3_miiv_kdigo_gradient.py":
+        "reproduces the Figure 2 canonical E3 benchmark input",
+    "tools/run_research_agent_bench.py": "formal benchmark (Figure 4 / Case B)",
+    "tools/audit_extraction_coverage.py":
+        "developer coverage audit; gated formally, so no unverified pass",
+    "tools/build_discovery_universe.py": "discovery inputs; every globbed member verified",
+    "tools/run_idea_mining_longitudinal_discovery.py":
+        "listed experimental (docs/research_agent_capability_inventory.md); "
+        "gated anyway: each profiled module verified",
+    "tools/run_idea_mining_real_discovery.py": "every globbed member verified",
+    "tools/run_idea_mining_s6_validation_harness.py": "each consumed member verified",
+    "scripts/mine_discovery_gpt54.py": "every globbed and consumed member verified",
+    "src/easyicu/research_agent/discovery/idea_mining_source_status.py":
+        "source-status profiles are evidence; package and each table verified",
+}
+
+#: Publication-gated tool readers that do not compare member digests, each
+#: with why it is not on a formal, refresh, webserver or documented-user path
+#: and the experimental/uncertified notice it prints in its own output.
+#: New tools may not join without review; stale entries fail. Empty since
+#: r13exportsha delta27e: every gated tool verifies members formally.
+INTEGRITY_PENDING_TOOLS: dict[str, str] = {}
 
 
 def test_member_owners_compare_each_member_with_its_manifest_record():
@@ -216,6 +233,15 @@ def test_every_gated_tool_reader_verifies_members_or_is_listed_pending():
         if gated and path not in FORMAL_SHA_CHECKS
         and not (_call_names(ast.parse(text)) & INTEGRITY_CALLS)
     }
-    assert unverified <= INTEGRITY_PENDING_TOOLS, sorted(unverified - INTEGRITY_PENDING_TOOLS)
-    stale = sorted(INTEGRITY_PENDING_TOOLS - unverified)
+    pending = set(INTEGRITY_PENDING_TOOLS)
+    assert unverified <= pending, sorted(unverified - pending)
+    stale = sorted(pending - unverified)
     assert not stale, f"now verified or gone; remove from INTEGRITY_PENDING_TOOLS: {stale}"
+
+
+def test_formal_consumers_refuse_an_unrecorded_manifest():
+    for path, why in FORMAL_INTEGRITY_CONSUMERS.items():
+        text = (REPO / path).read_text(encoding="utf-8")
+        assert ("formal=True" in text or "formal_integrity_scope" in text
+                or "require_verified_export_package" in text), (path, why)
+    assert all(INTEGRITY_PENDING_TOOLS.values())

@@ -235,7 +235,9 @@ def test_run_binding_preserves_typed_refusal_for_unreadable_layout(tmp_path, alr
         else "research_pipeline_manifest_invalid"
     )
     if not already_bound:
-        assert caught.value.detail["intake_error_code"] == "export_package_unreadable"
+        # The rewritten member no longer matches its recorded digest; that typed
+        # refusal precedes any parse of the unreadable bytes.
+        assert caught.value.detail["intake_error_code"] == "export_member_integrity_failed"
 
 
 def test_submission_refuses_an_old_package_before_provider_or_planner(tmp_path, monkeypatch):

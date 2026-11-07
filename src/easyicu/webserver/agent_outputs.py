@@ -96,6 +96,8 @@ def build_agent_output_artifacts(
     }
     for artifact in artifacts.values():
         artifact["sampling"] = sampling
+        # Per consumed member: verified, or unrecorded (no manifest digests).
+        artifact["export_member_integrity"] = dict(context["member_integrity"])
     return artifacts
 
 
@@ -279,6 +281,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     files = [f for f in source.get("files", []) if isinstance(f, dict)]
     manifest = load_published_manifest(root)
     entries: List[Tuple[str, Path, Dict[str, Any]]] = []
+    member_integrity: Dict[str, str] = {}
     for meta in files:
         module = str(meta.get("module") or "")
         file_name = str(meta.get("file") or "")
@@ -288,8 +291,9 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         # A listed module that is missing, damaged or replaced is refused,
         # never dropped from the analysis (no silent module loss).
         if not path.is_file():
-            raise member_unreadable(path, FileNotFoundError(file_name))
-        verify_member_integrity(root, path, manifest=manifest)
+            missing = FileNotFoundError(file_name)
+            raise member_unreadable(path, missing) from missing
+        member_integrity[file_name] = verify_member_integrity(root, path, manifest=manifest)
         entries.append((module, path, meta))
 
     id_entry = next((entry for entry in entries if entry[0] == "demographics"), None)
@@ -357,6 +361,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     total_entities = len(all_entity_ids)
     return {
         "frames": frames,
+        "member_integrity": member_integrity,
         "entity_ids": entity_ids,
         "sampling": {
             "total_entities": total_entities,

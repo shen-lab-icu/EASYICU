@@ -108,15 +108,21 @@ def main(argv: list[str] | None = None) -> int:
 
     all_profiles = []
     module_audit: list[dict[str, object]] = []
-    from easyicu.export_publication import require_published_export_package
+    from easyicu.export_publication import (
+        require_verified_export_package,
+        verify_member_integrity,
+    )
 
     for database in databases:
-        require_published_export_package(data_root / database)
+        require_verified_export_package(data_root / database)
     for module in modules:
         paths = {
             database: data_root / database / f"{module}.parquet"
             for database in databases
         }
+        for database, path in paths.items():
+            if path.is_file():  # an unlisted module is refused, never read unverified
+                verify_member_integrity(data_root / database, path, formal=True)
         schemas = {
             database: pq.read_schema(path)
             for database, path in paths.items()

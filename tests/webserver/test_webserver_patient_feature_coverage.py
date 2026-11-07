@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from easyicu import concept_catalog
 from easyicu.webserver import dataio
+from tests.support.published_export import record_member_digests
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.app import app
 from easyicu.webserver.patient_drilldown import coverage
@@ -90,6 +91,7 @@ def _write_export(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    record_member_digests(root)
     source_store.register_source(
         str(root), label="Coverage fixture", active=True, crossdb=True
     )
@@ -150,6 +152,7 @@ def _write_eicu_export(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    record_member_digests(root)
     source_store.register_source(
         str(root), label="eICU identifier fixture", active=True, crossdb=True
     )

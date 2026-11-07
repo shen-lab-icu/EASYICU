@@ -46,6 +46,9 @@ from easyicu.databases import normalize_database_key
 from easyicu.export_publication import (
     REASON_IN_PROGRESS,
     UNPUBLISHED_CODE,
+    INTEGRITY_VERIFIED,
+    MEMBER_INTEGRITY_DECLARATION,
+    MEMBER_INTEGRITY_KEY,
     ExportMemberIntegrityError,
     ExportMemberUnreadableError,
     NativeExportUnpublishedError,
@@ -53,8 +56,11 @@ from easyicu.export_publication import (
     begin_native_export,
     finish_native_export,
     folder_unpublished_reason,
+    integrity_status,
+    load_published_manifest,
     member_digest_record,
     member_unreadable,
+    require_listed_members_present,
     require_published_export_package,
     unpublished_reason,
     verify_member_integrity,
@@ -442,7 +448,8 @@ def _member_refusal(exc: Exception) -> Dict[str, Any]:
     """A visible refusal for a damaged or unreadable export member."""
     return {
         "ok": False, "error": exc.code, "reason": getattr(exc, "reason", exc.code),
-        "member": getattr(exc, "member", ""), "path": str(Path(exc.path).parent),
+        # The member's logical name only; host paths stay in the server log.
+        "member": getattr(exc, "member", ""),
         "ready": False,
         "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
     }
@@ -460,9 +467,17 @@ def _refuse_damaged_members(function):
     @functools.wraps(function)
     def wrapper(*args, **kwargs):
         try:
-            return function(*args, **kwargs)
+            result = function(*args, **kwargs)
         except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
             return _member_refusal(exc)
+        # Visible, never silent: members whose manifest recorded no digests
+        # are named (status + "integrity unrecorded · re-export to verify").
+        if isinstance(result, dict) and isinstance(result.get("files"), list):
+            statuses = [row.get("integrity") for row in result["files"]
+                        if isinstance(row, dict) and row.get("integrity")]
+            if statuses:
+                result["member_integrity"] = integrity_status(statuses)
+        return result
 
     return wrapper
 
@@ -3174,6 +3189,8 @@ def make_export_runner(
             ),
             "column_metadata": metadata_ref.to_dict(),
             "data_provenance": data_provenance,
+            # Every member below records sha256/bytes; readers then require them.
+            MEMBER_INTEGRITY_KEY: dict(MEMBER_INTEGRITY_DECLARATION),
         }
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -3892,6 +3909,10 @@ def validate_research_pipeline_source(
                         "relative_path": item.relative_path,
                         "sha256": item.identity.sha256,
                         "size_bytes": item.identity.size,
+                        # Only an unrecorded member adds the key, so bindings
+                        # of verified packages keep their stored digest.
+                        **({"integrity": item.integrity}
+                           if item.integrity != INTEGRITY_VERIFIED else {}),
                     }
                     for item in sorted(package.files, key=lambda value: value.relative_path)
                 ],
@@ -4049,6 +4070,14 @@ def _export_file_inventory(
     }
     out: List[Dict[str, Any]] = []
     is_export = any((path / name).is_file() for name in _MODULE_MANIFESTS)
+    authority: Optional[Dict[str, Any]] = None
+    if is_export:
+        # The manifest is authoritative: a listed member that is missing
+        # refuses instead of leaving a silently smaller export.
+        authority = {k: v for k, v in manifest.items() if k != "_manifest_file"}
+        if not authority:
+            authority = load_published_manifest(path)
+        require_listed_members_present(path, authority)
     for f in sorted(path.iterdir(), key=lambda p: p.name):
         require_path(f, instance_owned=True)
         if (
@@ -4060,12 +4089,15 @@ def _export_file_inventory(
             continue
         if f.suffix.lower() not in {".csv", ".parquet", ".xlsx"}:
             continue
+        integrity = None
         if is_export:
             # Size + SHA-256 against the published manifest (memoised per file).
             # A converted source folder has no export manifest: its tables are
             # governed by the source contract, not by export publication.
-            verify_member_integrity(path, f, manifest=manifest or None)
+            integrity = verify_member_integrity(path, f, manifest=authority)
         meta = dict(manifest_files.get(f.name, {}))
+        if integrity is not None:
+            meta["integrity"] = integrity
         if "file" not in meta:
             meta["file"] = f.name
         if "module" not in meta:
@@ -4265,8 +4297,11 @@ def read_export_projection(
     marker, a native or legacy root manifest).
     """
 
-    require_published_export_package(Path(path).parent)
-    verify_member_integrity(Path(path).parent, Path(path))
+    # One absolute path at the entry: a caller-relative path is never joined
+    # to its root twice.
+    path = Path(path).absolute()
+    require_published_export_package(path.parent)
+    verify_member_integrity(path.parent, path)
     return _read_export_projection(
         path,
         columns=columns,

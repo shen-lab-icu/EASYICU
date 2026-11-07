@@ -15,6 +15,7 @@ from easyicu.concept.metadata_sidecar import (
 )
 from easyicu.resources import load_dictionary
 from easyicu.webserver import dataio
+from tests.support.published_export import record_member_digests
 
 
 def _native_demo(root):
@@ -38,6 +39,7 @@ def _native_demo(root):
         "column_metadata": reference.to_dict(),
     }
     (root / "_manifest.json").write_text(json.dumps(manifest))
+    manifest = record_member_digests(root)  # the writer records every member's digest
     # Shared eICU column names cannot distinguish a demo from the full data.
     (root / "patient.csv").write_text("patientunitstayid,uniquepid\n")
     return root, manifest
@@ -91,7 +93,9 @@ def test_an_unreadable_manifest_member_is_a_typed_scan_failure(tmp_path):
     (root / "demographics.parquet").write_bytes(b"not a parquet file")
     result = dataio.scan_path(str(root))
     assert result["ok"] is False
-    assert result["error"] == "export_layout_invalid"
+    # The rewritten member no longer matches its recorded digest: that typed
+    # refusal comes before any attempt to parse it.
+    assert result["error"] == "export_member_integrity_failed"
 
 
 @pytest.mark.parametrize(("defect", "reason"), [

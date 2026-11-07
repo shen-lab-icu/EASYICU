@@ -71,6 +71,7 @@ from tests.webserver.copilot.research_workflow_fixtures import (
     _acquisition_receipt,
     _foundation_profile,
 )
+from tests.support.published_export import record_member_digests
 
 QUESTION = (
     "Which organ-dysfunction trajectory classes emerge over the first 72 h of "
@@ -444,6 +445,7 @@ def _export(root: Path) -> Path:
                               "concepts": 1, "concept_ids": ["age"], "rows": 1,
                               "column_metadata_columns": ["age"]})
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # the fixture re-publishes its added member
     return root
 
 

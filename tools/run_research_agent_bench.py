@@ -6783,4 +6783,10 @@ def _run_one_item_from_cohort(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    sys.exit(main())
+    _bootstrap_imports()
+    from easyicu.export_publication import formal_integrity_scope
+
+    # Benchmark evidence is formal: an export whose manifest recorded no
+    # member digests is refused here and in every worker process.
+    with formal_integrity_scope():
+        sys.exit(main())

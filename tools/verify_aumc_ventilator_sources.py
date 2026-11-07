@@ -28,12 +28,19 @@ def main():
 
 
 def verify(args, output, con):
-    from easyicu.export_publication import require_published_export_package
+    from easyicu.export_publication import (
+        require_published_export_package,
+        verify_member_integrity,
+    )
 
     # --before/--after are ventilator module files of two exports: each must
-    # come from a published package (B-EXPORT-PARTIAL).
-    for module_file in (args.before, args.after):
+    # come from a published package (B-EXPORT-PARTIAL) and match the size and
+    # SHA-256 its manifest records (documented checker; unrecorded is named).
+    member_integrity = {}
+    for label, module_file in (("before", args.before), ("after", args.after)):
         require_published_export_package(Path(module_file).parent)
+        member_integrity[label] = verify_member_integrity(
+            Path(module_file).parent, Path(module_file))
     con.read_parquet(args.before).create_view('old')
     con.read_parquet(args.after).create_view('new')
     raw = Path(args.raw)
@@ -122,6 +129,13 @@ def verify(args, output, con):
         'missing_mode_outputs':missing_mode_outputs,
         'missing_tidal_outputs':missing_tidal_outputs,
         'unaffected_columns_equal':not any(unchanged.values()),
+        'export_member_integrity':member_integrity,
+        # A pre-digest export can still be compared, but the result is not
+        # certified: its bytes cannot be tied to what was published.
+        'integrity_certified':set(member_integrity.values())=={'verified'},
+        'certification_note':(None if set(member_integrity.values())=={'verified'}
+                              else 'uncertified: export integrity unrecorded; '
+                                   're-export to verify'),
     }
     report['passed'] = (
         report['schema_equal'] and key_counts[4]==0 and not any(unchanged.values())

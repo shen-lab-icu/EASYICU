@@ -26,6 +26,7 @@ from easyicu.research_agent.intake.export_package import (
 from easyicu.webserver.first_observed_deferred_execution import (
     _verify_raw_patient_values,
 )
+from tests.support.published_export import record_member_digests
 
 
 def test_nullable_hospital_outcome_is_preserved_and_raw_mismatch_refused(tmp_path):
@@ -71,6 +72,7 @@ def test_nullable_hospital_outcome_is_preserved_and_raw_mismatch_refused(tmp_pat
     manifest["files"][0]["concepts"] += 1
     manifest["files"][0]["column_metadata_columns"].append("sex")
     manifest_path.write_text(json.dumps(manifest))
+    record_member_digests(root)  # the fixture re-publishes its rewritten members
     raw = tmp_path / "patient.parquet"
     pd.DataFrame(
         {
@@ -179,38 +181,41 @@ def test_nullable_hospital_outcome_is_preserved_and_raw_mismatch_refused(tmp_pat
         female["outcome_denominator"],
         female["outcome_events"],
     ) == (2, 1, 1, 0)
-    # Replacing the exported outcome while retaining the same manifest must
-    # fail the independent source-value check, including unknown -> survivor.
+    # Replacing the exported outcome while retaining the same manifest is now
+    # refused at intake: the member no longer matches its recorded digest.
+    original_outcomes = (root / "outcomes.parquet").read_bytes()
     outcomes_changed = outcomes.copy()
     outcomes_changed.loc[1, "death"] = False
     outcomes_changed.to_parquet(root / "outcomes.parquet", index=False)
     with host_deferred_export_read_scope(
         manifest_sha256=manifest_sha, columns_by_file=columns
     ):
-        mismatch = acquire_universe_for_question(
-            export_dir=root,
-            question="synthetic",
-            llm=None,
-            output_dir=tmp_path / "mismatch",
-            stem="cohort",
-            target_outcome="death",
-            primary_exposure_concept="sex",
-            outcome_concepts=["death"],
-            required_feature_concepts=["sex"],
-            static_concepts=["sex"],
-            allowed_modules=["labs", "outcomes"],
-            concept_selection_authority="host_exact",
-            database="eicu",
-            emit_trajectory=False,
-            first_observed_icu_coordinate=coordinate,
-        )
-    with pytest.raises(ValueError, match="raw_value_mismatch"):
-        _verify_raw_patient_values(
-            cohort_path=mismatch.universe_path,
-            raw_source=source,
-            coordinate=coordinate,
-            declaration=declaration,
-        )
+        with pytest.raises(Exception) as replaced:
+            acquire_universe_for_question(
+                export_dir=root,
+                question="synthetic",
+                llm=None,
+                output_dir=tmp_path / "mismatch",
+                stem="cohort",
+                target_outcome="death",
+                primary_exposure_concept="sex",
+                outcome_concepts=["death"],
+                required_feature_concepts=["sex"],
+                static_concepts=["sex"],
+                allowed_modules=["labs", "outcomes"],
+                concept_selection_authority="host_exact",
+                database="eicu",
+                emit_trajectory=False,
+                first_observed_icu_coordinate=coordinate,
+            )
+    chain, cause = [], replaced.value
+    while cause is not None:
+        chain.append(f"{type(cause).__name__}: {cause}")
+        cause = cause.__cause__ or cause.__context__
+    assert any("member_sha256_mismatch" in item or "SHA-256" in item for item in chain), chain
+    (root / "outcomes.parquet").write_bytes(original_outcomes)
+    # The independent source-value check (unknown -> survivor on the raw side)
+    # is exercised next against the accepted universe.
     changed = pd.read_parquet(raw)
     changed.loc[1, "hospitaldischargestatus"] = "Alive"
     changed.to_parquet(raw, index=False)

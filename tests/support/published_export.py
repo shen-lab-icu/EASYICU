@@ -110,11 +110,76 @@ def damaged_copy(export: Path, destination: Path, damage: str) -> Path:
 
 
 def strip_digests(export: Path) -> None:
-    """Make ``export`` look like a pre-digest manifest (listing only)."""
+    """Delete every member digest field (the manifest keeps its schema)."""
 
     path = export / "_manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     for entry in manifest["files"]:
-        entry.pop("parquet_sha256", None)
-        entry.pop("parquet_bytes", None)
+        for key in ("parquet_sha256", "parquet_bytes", "sha256", "bytes"):
+            entry.pop(key, None)
     path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def make_pre_integrity_web_export(export: Path) -> None:
+    """Rewrite the manifest in the web writer's format before 6064eaf6a.
+
+    That writer labelled exports ``easyicu_native_export_v2`` with data_path,
+    cohort_contract and column_metadata, but no ``export_kind``, no
+    ``contract_revision`` and no member digests: readers can only call it
+    unrecorded (non-formal) or refuse it (formal).
+    """
+
+    strip_digests(export)
+    path = export / "_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    for key in ("member_integrity", "export_kind", "contract_revision"):
+        manifest.pop(key, None)
+    manifest.setdefault("data_path", "/synthetic/raw")
+    manifest.setdefault("cohort_contract", {"preset": "all_icu"})
+    assert "column_metadata" in manifest
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def record_member_digests(export: Path, *, manifest_name: str = "_manifest.json") -> dict:
+    """Make a fixture export's manifest record a digest for every member.
+
+    Fixture writers that hand-build a manifest list their files but never
+    hashed them; a digest-bearing reader refuses such a manifest. This fills
+    ``parquet_sha256``/``parquet_bytes`` for each listed ``files`` entry (a
+    manifest without a ``files`` list gets the root-level ``*.parquet`` files)
+    and declares the member-integrity contract. Call it again after a fixture
+    rewrites a member on purpose (a new export, not a damaged one).
+    """
+
+    from easyicu.export_publication import (
+        MEMBER_INTEGRITY_DECLARATION,
+        MEMBER_INTEGRITY_KEY,
+        member_digest_record,
+    )
+
+    path = export / manifest_name
+    manifest = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+    entries = manifest.get("files")
+    if not isinstance(entries, list):
+        entries = []
+    normalised: list[dict] = []
+    for entry in entries:
+        normalised.append(dict(entry) if isinstance(entry, dict) else {"file": str(entry)})
+    if not isinstance(manifest.get("files"), list):
+        # No inventory at all: the folder's root-level parquet files are it.
+        normalised = [{"file": member.name} for member in sorted(export.glob("*.parquet"))]
+    for entry in normalised:
+        target = export / str(entry["file"])
+        if target.is_file():
+            record = member_digest_record(target)
+            keys = (("parquet_sha256", "parquet_bytes") if target.suffix == ".parquet"
+                    else ("sha256", "bytes"))
+            for stale in ("parquet_sha256", "parquet_bytes", "sha256", "bytes"):
+                entry.pop(stale, None)
+            entry[keys[0]], entry[keys[1]] = record["sha256"], record["bytes"]
+    manifest["files"] = normalised
+    manifest[MEMBER_INTEGRITY_KEY] = dict(MEMBER_INTEGRITY_DECLARATION)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest

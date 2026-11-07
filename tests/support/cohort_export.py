@@ -13,6 +13,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from tests.support.published_export import record_member_digests
+
 # Hospital-sized shape: 19 modules, 108 M rows, largest module 16 M.
 MODULES = {
     "demographics": (200_859, ("age", "sex")),
@@ -153,6 +155,7 @@ def write_cohort_export(
     }
     _write_column_metadata(root, manifest, entity_column)
     (root / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # every member's digest, as the writer records
     return {
         "ok": True,
         "path": str(root),

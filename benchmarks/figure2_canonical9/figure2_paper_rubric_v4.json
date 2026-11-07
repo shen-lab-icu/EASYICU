@@ -188,6 +188,7 @@
     "src/easyicu/demo_data.py",
     "src/easyicu/demo_release_pack.py",
     "src/easyicu/easy.py",
+    "src/easyicu/export_publication.py",
     "src/easyicu/extensions/__init__.py",
     "src/easyicu/extensions/contracts.py",
     "src/easyicu/extensions/mcp_client.py",
@@ -1550,7 +1551,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "67c601f90ad2ad054747bae884e7e006986f0ff157b337bfa3e03cd3110187b3",
+  "scorer_tree_sha256": "0ade27db236d177beec4095b408745c73815a76d788d09cf3b8f12eb8fb9a4c5",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

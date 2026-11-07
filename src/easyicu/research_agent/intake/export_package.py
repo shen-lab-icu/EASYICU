@@ -76,10 +76,14 @@ from easyicu.concept.metadata_sidecar import (
 )
 from easyicu.export_publication import (
     INTEGRITY_FAILED_CODE,
+    INTEGRITY_VERIFIED,
     UNREADABLE_CODE,
     ExportMemberIntegrityError,
     ExportMemberUnreadableError,
     NativeExportUnpublishedError,
+    integrity_status,
+    manifest_member_records,
+    require_listed_members_present,
     require_member_digest,
     require_no_in_progress_marker,
     verify_member_integrity,
@@ -563,6 +567,9 @@ class ExportPhysicalFile:
     identity: FileIdentity
     _snapshot: _RetainedVerifiedSnapshot = field(repr=False, compare=False)
     excel_sheet: Optional[str] = None
+    #: ``verified``, or ``unrecorded`` (the manifest's writer recorded no
+    #: digests; accepted only outside formal scope, shown to the user).
+    integrity: str = INTEGRITY_VERIFIED
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,6 +595,12 @@ class ExportPackage:
     source_seal_kind: Optional[str]
     data_provenance: Optional[ExportDataProvenance] = None
     declared_time_origin: Optional[str] = None
+
+    @property
+    def member_integrity(self) -> Dict[str, str]:
+        """``{relative_path: verified|unrecorded}`` for every consumed member."""
+
+        return {item.relative_path: item.integrity for item in self.files}
 
     def index_dict(self) -> Dict[str, Dict[str, object]]:
         """Return the compatibility index shape used by existing callers."""
@@ -629,7 +642,7 @@ def _read_json(path: Path, *, label: str) -> tuple[dict[str, Any], bytes]:
     return payload, raw
 
 
-def _safe_manifest_file(root: Path, value: object, *, label: str) -> Path:
+def _require_safe_coordinate(value: object, *, label: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ExportPackageError(f"{label} must name a non-empty relative file")
     relative = Path(value)
@@ -644,6 +657,11 @@ def _safe_manifest_file(root: Path, value: object, *, label: str) -> Path:
             code="manifest_path_escape",
             member=value,
         )
+    return relative
+
+
+def _safe_manifest_file(root: Path, value: object, *, label: str) -> Path:
+    relative = _require_safe_coordinate(value, label=label)
     candidate = root.joinpath(relative)
     cursor = root
     for part in relative.parts:
@@ -1588,6 +1606,17 @@ def _open_export_package_impl(
     physical_files: list[ExportPhysicalFile] = []
     concept_index: dict[str, Mapping[str, object]] = {}
     entries = _manifest_file_entries(manifest, manifest_kind=manifest_kind)
+    for entry in entries:
+        # A coordinate that escapes the root is refused as such before any
+        # presence or digest check touches the filesystem.
+        _require_safe_coordinate(entry.get("file"), label="manifest file")
+    try:
+        # One per-member normalised record set (shared owner), and the
+        # manifest's digest contract decided per manifest (anti-downgrade).
+        manifest_member_records(manifest)
+        require_listed_members_present(root, manifest)
+    except ExportMemberIntegrityError as exc:
+        raise _member_integrity_error(exc) from exc
     if read_scope is not None and {
         str(entry.get("file") or "") for entry in entries
     } != set(read_scope["columns"]):
@@ -1644,12 +1673,15 @@ def _open_export_package_impl(
                 f"manifest format {manifest_format!r} conflicts with {path.name!r}",
                 code="manifest_format_mismatch",
             )
+        integrity_verdict: list[str] = []
+
         def _verify_identity(identity: FileIdentity, *, _relative: str = relative_path,
-                             _path: Path = path) -> None:
+                             _path: Path = path, _verdict: list[str] = integrity_verdict) -> None:
             try:
-                require_member_digest(
-                    entries, _relative, sha256=identity.sha256, size=identity.size, path=_path
-                )
+                _verdict.append(require_member_digest(
+                    manifest, _relative, sha256=identity.sha256, size=identity.size,
+                    path=_path,
+                ))
             except ExportMemberIntegrityError as exc:
                 raise _member_integrity_error(exc) from exc
 
@@ -1697,6 +1729,7 @@ def _open_export_package_impl(
             identity=identity,
             _snapshot=retained_snapshot,
             excel_sheet=excel_sheet,
+            integrity=integrity_verdict[0],
         )
         physical_files.append(physical_file)
 
@@ -1929,6 +1962,7 @@ def inspect_export_layout(
         _safe_manifest_file(root, reference.file, label="column metadata sidecar")
     entries = _manifest_file_entries(manifest, manifest_kind=kind)
     seen = set()
+    member_statuses: list[str] = []
     for entry in entries:
         path = _safe_manifest_file(root, entry.get("file"), label="export member")
         if path in seen:
@@ -1942,7 +1976,7 @@ def inspect_export_layout(
             raise ExportPackageError("invalid row count", code="manifest_row_count_invalid")
         try:
             # Size first, then a memoised SHA-256 (once per process per file).
-            verify_member_integrity(root, path, manifest={"files": entries})
+            member_statuses.append(verify_member_integrity(root, path, manifest=manifest))
         except ExportMemberIntegrityError as exc:
             raise _member_integrity_error(exc) from exc
         except ExportMemberUnreadableError as exc:
@@ -1969,7 +2003,8 @@ def inspect_export_layout(
         require_export_time_window_authority(
             manifest, modules=[str(entry.get("module") or entry.get("group") or "") for entry in entries],
         )
-    return {"database": database, "files": len(entries), "readiness_scope": "layout_only"}
+    return {"database": database, "files": len(entries), "readiness_scope": "layout_only",
+            "member_integrity": integrity_status(member_statuses, manifest=manifest)}
 
 
 def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:

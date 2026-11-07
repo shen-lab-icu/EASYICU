@@ -23,6 +23,7 @@ from easyicu.concept.metadata_sidecar import (
     write_content_addressed_sidecar,
 )
 from easyicu.research_agent.intake import export_package as intake
+from tests.support.published_export import record_member_digests
 from easyicu.resources import load_data_sources, load_dictionary
 
 
@@ -120,6 +121,7 @@ def typed_native_export(
         ),
         encoding="utf-8",
     )
+    record_member_digests(root)  # every member's digest, as the writer records
     return root
 
 

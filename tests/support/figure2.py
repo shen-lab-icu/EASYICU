@@ -29,6 +29,7 @@ from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.intake import export_package as intake
+from tests.support.published_export import record_member_digests
 from easyicu.research_agent.intake.materialized_metadata import (
     implementation_bundle_sha256,
     load_verified_materialized_cohort_authority,
@@ -151,6 +152,7 @@ def _typed_export(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    record_member_digests(root)  # every member's digest, as the writer records
     return root
 
 

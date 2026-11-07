@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from tests.support.plausibility_export import change_column, screening_export
+from tests.support.published_export import record_member_digests
 
 
 def report(root: Path, **kwargs) -> dict:
@@ -71,6 +72,7 @@ def test_los_is_in_days_and_duplicates_do_not_weight_stay_statistics(tmp_path) -
     path = root / "outcome.parquet"
     frame = pd.read_parquet(path)
     pd.concat([frame, frame.iloc[-1:]]).to_parquet(path, index=False)
+    record_member_digests(root)  # a re-published fixture, not damage
     current = report(root)["current"]
     assert current["stays"]["outcome"]["duplicate_stays"] == 1
     assert current["stays"]["icu_los"]["above_60_days"] == 3
@@ -109,6 +111,7 @@ def test_sofa_maxima_are_paired_per_stay_and_components_per_time(tmp_path) -> No
             frame.loc[0, "sofa2_resp"] = None
             frame.loc[0, "sofa2"] = 5.0
         pd.concat([frame, extra]).to_parquet(path, index=False)
+        record_member_digests(root)  # a re-published fixture, not damage
     scores = report(root)["current"]["scores"]
     comparison = scores["sofa_comparison"]
     assert comparison["paired_stays"] == 4
@@ -257,6 +260,7 @@ def test_null_share_and_los_warning_thresholds(tmp_path) -> None:
     frame = pd.concat([frame.iloc[:1]] * 25, ignore_index=True)
     frame["hr"] = [None] * 24 + [80.0]
     frame.to_parquet(path, index=False)
+    record_member_digests(root)  # a re-published fixture, not damage
     change_column(root, "outcome", "los_icu", [61.0, 60.0, 2.0, 2.0])
     current = report(root)["current"]
     assert current["concepts"]["vitals.hr"]["null_share"] == 0.96
@@ -274,6 +278,7 @@ def test_module_coverage_excludes_receipts_and_null_values(tmp_path) -> None:
             frame[column] = None
     frame["sofa2_available"] = True
     frame.to_parquet(path, index=False)
+    record_member_digests(root)  # a re-published fixture, not damage
     coverage = report(root)["current"]["coverage"]["modules"]["sofa2_score"]
     assert coverage["stays_with_value"] == 0
     assert coverage["verdict"] == "warn"
@@ -327,6 +332,7 @@ def test_missing_modules_and_empty_exports_are_unavailable_not_healthy(
     assert current["coverage"]["key_concepts"]["lactate"]["verdict"] == "warn"
     path = root / "vitals.parquet"
     pd.read_parquet(path).iloc[:0].to_parquet(path, index=False)
+    record_member_digests(root)  # a re-published fixture, not damage
     result = report(root)
     assert result["current"]["stay_count"] == 0
     assert result["current"]["coverage"]["modules"]["vitals"]["share"] is None
@@ -341,11 +347,13 @@ def test_sepsis_is_deduplicated_per_stay_and_invalid_flags_fail(tmp_path) -> Non
     extra = frame.iloc[1:2].copy()
     extra["charttime"] = 1.0
     pd.concat([frame, extra]).to_parquet(path, index=False)
+    record_member_digests(root)  # a re-published fixture, not damage
     stats = report(root)["current"]["scores"]["sepsis"]["sep3_sofa1"]
     assert stats["positive_stays"] == 1
     assert stats["prevalence"] == 0.25
     frame.loc[0, "sep3_sofa1"] = 2.0
     frame.to_parquet(path, index=False)
+    record_member_digests(root)  # a re-published fixture, not damage
     stats = report(root)["current"]["scores"]["sepsis"]["sep3_sofa1"]
     assert stats["invalid_count"] == 1
     assert stats["verdict"] == "fail"

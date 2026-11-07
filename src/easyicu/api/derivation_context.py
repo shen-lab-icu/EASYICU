@@ -503,6 +503,14 @@ def validate_derivation_manifest(
                 "outcome",
             }:
                 continue
+            if not isinstance(entry.get("parquet_sha256"), str) or not isinstance(
+                entry.get("parquet_bytes"), int
+            ):
+                # Formal: a module without a recorded digest is refused, never
+                # read as unrecorded (member_digest_not_recorded).
+                raise DerivationContextError(
+                    "published module records no digest (member_digest_not_recorded)"
+                )
             ref = {
                 "file": entry["file"],
                 "sha256": entry["parquet_sha256"],

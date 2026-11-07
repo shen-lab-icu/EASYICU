@@ -39,6 +39,7 @@ from easyicu.webserver.trajectory_runtime_projection import (
     trajectory_provenance_path,
 )
 from tests.support.typed_trajectory import typed_trajectory_export
+from tests.support.published_export import record_member_digests
 
 _COORDINATES = ("sofa2_resp", "sofa2_cardio", "lact")
 
@@ -283,6 +284,7 @@ def _export(root: Path) -> Path:
                        "concept_ids": ["age"], "column_metadata_columns": ["age"], "rows": 1}],
         }), encoding="utf-8",
     )
+    record_member_digests(root)  # the writer records every member's digest
     return root
 
 

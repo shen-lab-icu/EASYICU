@@ -11,20 +11,43 @@ import os
 import re
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from easyicu.export_publication import (
+    INTEGRITY_UNRECORDED,
     UNPUBLISHED_CODE,
     ExportMemberIntegrityError,
     ExportMemberUnreadableError,
     NativeExportUnpublishedError,
+    integrity_status,
+    member_unreadable,
+    require_listed_members_present,
     require_published_native_export,
     verify_member_integrity,
 )
+
 from easyicu.webserver import sources, state_paths
 from easyicu.webserver.hosted import require_instance_path, require_path
+
+
+INTEGRITY_RECEIPT_NAME = "EASYICU_MEMBER_INTEGRITY.json"
+
+
+def _require_readable(path: Path) -> None:
+    """An unverified member must at least parse (footer / header)."""
+
+    try:
+        if path.suffix.lower() == ".parquet":
+            import pyarrow.parquet as pq
+
+            _ = pq.ParquetFile(path).metadata
+        elif path.suffix.lower() == ".csv":
+            with path.open(encoding="utf-8-sig") as handle:
+                handle.readline()
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
 
 
 MAX_EXPORT_DOWNLOAD_BYTES = 512 * 1024 * 1024
@@ -45,6 +68,8 @@ class ExportDownloadBundle:
     source_id: str
     source_bytes: int
     file_count: int
+    #: ``{member: verified|unrecorded}``; also written into the archive.
+    member_integrity: Mapping[str, str] = dataclass_field(default_factory=dict)
 
 
 def _source_for_id(source_id: str, registry: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -173,19 +198,28 @@ def prepare_registered_export_bundle(
         )
 
     files = _manifest_files(root, manifest)
-    # Never zip a module file that differs from what the manifest published.
-    for row in manifest.get("files") or []:
-        if not (isinstance(row, Mapping) and row.get("file")):
-            continue
-        try:
-            verify_member_integrity(root, str(row["file"]), manifest=dict(manifest))
-        except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
-            raise ExportDownloadError(
-                exc.code,
-                "An export file no longer matches its published manifest "
-                f"({exc.member}); re-run the extraction before downloading.",
-                status_code=409,
-            ) from exc
+    # Never zip a module file that differs from, or is missing from, what the
+    # manifest published. An explicitly legacy manifest without digests is
+    # downloadable only outside formal scope, after a format-readability
+    # check, and the archive states that its members are unverified.
+    member_integrity: dict[str, str] = {}
+    try:
+        require_listed_members_present(root, dict(manifest))
+        for row in manifest.get("files") or []:
+            if not (isinstance(row, Mapping) and row.get("file")):
+                continue
+            name = str(row["file"])
+            status = verify_member_integrity(root, name, manifest=dict(manifest))
+            if status == INTEGRITY_UNRECORDED:
+                _require_readable(root / name)
+            member_integrity[name] = status
+    except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+        raise ExportDownloadError(
+            exc.code,
+            "An export file no longer matches its published manifest "
+            f"({exc.member}); re-run the extraction before downloading.",
+            status_code=409,
+        ) from exc
     source_bytes = sum(path.stat().st_size for path in files)
     if source_bytes > max_source_bytes:
         raise ExportDownloadError(
@@ -208,6 +242,11 @@ def prepare_registered_export_bundle(
         ) as archive:
             for path in files:
                 archive.write(path, arcname=path.relative_to(root.resolve(strict=True)))
+            archive.writestr(INTEGRITY_RECEIPT_NAME, json.dumps(
+                {**integrity_status(member_integrity.values(), manifest=dict(manifest)),
+                 "members": member_integrity},
+                indent=2, sort_keys=True,
+            ))
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
@@ -217,6 +256,7 @@ def prepare_registered_export_bundle(
         source_id=source_id,
         source_bytes=source_bytes,
         file_count=len(files),
+        member_integrity=member_integrity,
     )
 
 

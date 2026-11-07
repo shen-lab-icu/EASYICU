@@ -8076,6 +8076,8 @@ def _publish_native_export_v2(
         "files": files,
         "feature_definitions": {"included": False},
         "column_metadata": sidecar_ref.to_dict(),
+        # Every member records parquet_sha256/parquet_bytes; readers require them.
+        "member_integrity": {"algorithm": "sha256", "scope": "every_member"},
     }
     if result.get("storage_fallbacks"):
         # Published (a corrupt cache falls back to its true source), but marked.

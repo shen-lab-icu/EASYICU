@@ -273,11 +273,18 @@ def display_unit(unit: str | None) -> str | None:
 
 
 def module_names(root: Path) -> list[str]:
-    from easyicu.export_publication import require_published_export_package
+    from easyicu.export_publication import (
+        require_published_export_package,
+        verify_package_members,
+    )
 
     for database in DATABASES:
         # Interrupted or unpublished exports hold raw module files.
         require_published_export_package(root / database)
+        # Publication QC is formal: every module must match the size and
+        # SHA-256 its manifest records; an unrecorded manifest is refused.
+        verify_package_members(
+            root / database, sorted((root / database).glob("*.parquet")), formal=True)
     module_sets = [
         {path.stem for path in (root / database).glob("*.parquet")}
         for database in DATABASES

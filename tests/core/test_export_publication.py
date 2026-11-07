@@ -12,6 +12,7 @@ Synthetic rows only.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -684,13 +685,18 @@ def _b15_package(root: Path, state: str) -> Path:
     root.mkdir(parents=True)
     if state.startswith("marker"):
         (root / publication.IN_PROGRESS_MARKER).write_text("", encoding="utf-8")
-    if state in {"marker_with_manifest", "published"}:
-        (root / publication.NATIVE_MANIFEST).write_text("{}", encoding="utf-8")
     frame = pd.DataFrame({"stay_id": [1, 2], "charttime": [1.0, 2.0], "charlson": [0, 1],
                           "death": [0, 1], "map": [70.0, 80.0]})
-    for name in ("first_day.parquet", "other_scores.parquet",
-                 "vitals_dbp_hr_map_resp_etc7.parquet"):
+    names = ("first_day.parquet", "other_scores.parquet", "vitals_dbp_hr_map_resp_etc7.parquet")
+    for name in names:
         frame.to_parquet(root / name)
+    if state in {"marker_with_manifest", "published"}:
+        # A published manifest records each member's digest (benchmark tools
+        # refuse an unrecorded manifest).
+        files = [{"file": name, **publication.member_digest_record(root / name)}
+                 for name in names]
+        (root / publication.NATIVE_MANIFEST).write_text(
+            json.dumps({"files": files}), encoding="utf-8")
     return root
 
 
@@ -745,8 +751,11 @@ def test_the_s6_harness_gates_its_cohort_builders_and_smoke(tmp_path, monkeypatc
     aggregated = harness._aggregate_column(
         root, "vitals_dbp_hr_map_resp_etc7.parquet", "map", "median")
     assert list(aggregated["map"]) == [70.0, 80.0]
-    with pytest.raises(FileNotFoundError):  # past the gate: the outcome module is absent
+    # Past the publication gate: an absent outcome module is refused before any
+    # read, with the missing file as the chained cause.
+    with pytest.raises(publication.ExportMemberUnreadableError) as absent:
         harness.build_wide_cohort(root, tmp_path / "wide.parquet")
+    assert isinstance(absent.value.__cause__, FileNotFoundError)
     with pytest.raises(_Fetched):
         smoke()
 

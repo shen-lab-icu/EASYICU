@@ -32,7 +32,10 @@ from tools.e3_strict_kdigo_window import (
     derive_strict_kdigo_window,
     strict_kdigo_summary,
 )
-from easyicu.export_publication import require_published_export_package
+from easyicu.export_publication import (
+    require_published_export_package,
+    verify_member_integrity,
+)
 from easyicu.scores.aki_profiles import load_renal_aki_bundle
 from easyicu.scores.kdigo_aki import load_kdigo_aki
 
@@ -239,6 +242,8 @@ def _one_row_per_stay(
     label: str,
 ) -> pd.DataFrame:
     require_published_export_package(Path(path).parent)  # file-level: its package
+    # Benchmark input (Figure 2 E3): formal, an unrecorded digest is refused.
+    verify_member_integrity(Path(path).parent, Path(path), formal=True)
     frame = pd.read_parquet(_regular_file(path, label=label), columns=columns)
     if frame["stay_id"].isna().any() or frame["stay_id"].duplicated().any():
         raise ValueError(f"{label} must have one non-null row per stay")
@@ -247,6 +252,7 @@ def _one_row_per_stay(
 
 def _charlson_24h(path: Path) -> pd.DataFrame:
     require_published_export_package(Path(path).parent)  # file-level: its package
+    verify_member_integrity(Path(path).parent, Path(path), formal=True)
     frame = pd.read_parquet(
         _regular_file(path, label="full6 other_scores"),
         columns=["stay_id", "charttime", "charlson"],
