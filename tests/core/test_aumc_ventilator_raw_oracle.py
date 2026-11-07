@@ -8,6 +8,8 @@ import duckdb
 import pandas as pd
 import pytest
 
+from easyicu import export_publication as publication
+
 
 @pytest.mark.parametrize('fault', [None, 'float32', 'hybrid', 'tidal', 'missing'])
 def test_raw_oracle_validates_values_and_source_completeness(tmp_path, fault):
@@ -39,10 +41,18 @@ def test_raw_oracle_validates_values_and_source_completeness(tmp_path, fault):
         after['tidal_vol'] = 1424.5
     elif fault == 'missing':
         after = after.iloc[:0]
+    publication.begin_native_export(tmp_path)
     before.to_parquet(tmp_path / 'before.parquet', index=False)
     after.to_parquet(tmp_path / 'after.parquet', index=False)
     # Both module files come from published exports (B-EXPORT-PARTIAL gate).
-    (tmp_path / '_manifest.json').write_text('{}', encoding='utf-8')
+    (tmp_path / '_manifest.json').write_text(json.dumps({
+        publication.MEMBER_INTEGRITY_KEY: publication.MEMBER_INTEGRITY_DECLARATION,
+        'files': [
+            {'file': name, **publication.member_digest_record(tmp_path / name)}
+            for name in ('before.parquet', 'after.parquet')
+        ],
+    }), encoding='utf-8')
+    publication.finish_native_export(tmp_path)
     args = SimpleNamespace(raw=str(raw), before=str(tmp_path / 'before.parquet'),
                            after=str(tmp_path / 'after.parquet'))
     output = tmp_path / 'receipt.json'
