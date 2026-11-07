@@ -2000,6 +2000,14 @@ def bmi(
     return merged
 
 
+#: Stay keys the legacy merge/LOCF helpers group by.  SICdb's CaseID was
+#: missing, so on SICdb frames these helpers merged and carried values across
+#: stays (2026-11-06 fill audit).
+_LEGACY_STAY_KEYS = (
+    'stay_id', 'hadm_id', 'subject_id', 'icustay_id', 'patientunitstayid',
+    'admissionid', 'patientid', 'CaseID',
+)
+
 def gcs(
     egcs: pd.DataFrame,
     vgcs: pd.DataFrame, 
@@ -2034,7 +2042,7 @@ def gcs(
     """
     # Find common ID and time columns
     sample_df = egcs if not egcs.empty else vgcs if not vgcs.empty else mgcs
-    id_cols = [col for col in sample_df.columns if col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+    id_cols = [col for col in sample_df.columns if col in _LEGACY_STAY_KEYS]
     time_col = None
     for tc in ['time', 'charttime', 'index_var']:
         if tc in sample_df.columns:
@@ -2318,7 +2326,7 @@ def vaso_ind(
     
     # Find common columns for merging
     sample_df = dfs[0]
-    id_cols = [col for col in sample_df.columns if col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+    id_cols = [col for col in sample_df.columns if col in _LEGACY_STAY_KEYS]
     time_col = None
     for tc in ['time', 'charttime', 'index_var']:
         if tc in sample_df.columns:
@@ -2403,7 +2411,7 @@ def supp_o2(
     """
     # Find merge columns
     sample_df = fio2 if not fio2.empty else vent_ind
-    id_cols = [col for col in sample_df.columns if col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+    id_cols = [col for col in sample_df.columns if col in _LEGACY_STAY_KEYS]
     time_col = None
     for tc in ['time', 'charttime', 'index_var']:
         if tc in sample_df.columns:
@@ -2496,7 +2504,7 @@ def susp_inf(
     if sample_df is None or sample_df.empty:
         return pd.DataFrame(columns=['susp_inf'])
     
-    id_cols = [col for col in sample_df.columns if col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+    id_cols = [col for col in sample_df.columns if col in _LEGACY_STAY_KEYS]
     time_col = None
     for tc in ['time', 'charttime', 'index_var']:
         if tc in sample_df.columns:

@@ -6044,23 +6044,124 @@ def _infection_empty_result(
     return result
 
 
+def _incomplete_component(
+    tables: Dict[str, ICUTable], components: Iterable[str],
+) -> Optional[ConceptAvailabilityRecord]:
+    """The first required component whose own receipt is not complete.
+
+    Blocked, table-missing or not-evaluable inputs cannot support "no
+    qualifying event": an empty result over them is not evaluable.
+    """
+    for name in components:
+        record = table_availability(tables.get(name), name)
+        if record is not None and (
+            record.status == "blocked"
+            or record.missing_tables
+            or record.evaluation_status == "not_evaluable"
+        ):
+            return record
+    return None
+
+
+def _not_evaluable_from(
+    record: ConceptAvailabilityRecord, tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+) -> ICUTable:
+    reason_code = record.reason_code if record.evaluation_status == "not_evaluable" else None
+    return _infection_empty_result(
+        tables, ctx,
+        reason_code=reason_code or (
+            "required_source_table_missing" if record.missing_tables
+            else "required_component_missing"
+        ),
+        evaluation_status="not_evaluable",
+        source=record,
+    )
+
+
+def _evaluated_empty_result(
+    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext, components: Iterable[str],
+) -> ICUTable:
+    """An empty event set: evaluated only when every required input is complete."""
+    components = tuple(components)
+    if any(name not in tables for name in components):
+        # A required input that was never loaded cannot support "no event"
+        # (delta11r NB-COMPONENT-ABSENT).
+        return _infection_empty_result(
+            tables, ctx, reason_code="required_component_missing",
+            evaluation_status="not_evaluable",
+        )
+    incomplete = _incomplete_component(tables, components)
+    if incomplete is not None:
+        return _not_evaluable_from(incomplete, tables, ctx)
+    # The same table list as _with_evaluated_empty_receipt: one receipt for
+    # every empty event set, whichever path produced it.
+    return _infection_empty_result(
+        tables, ctx, reason_code="no_qualifying_events_observed",
+        evaluation_status="evaluated", source=table_availability(tables.get("abx"), "abx"),
+    )
+
+
+def _with_evaluated_empty_receipt(
+    table: ICUTable,
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    components: Iterable[str],
+) -> ICUTable:
+    """Give an empty event set from complete sources its one receipt.
+
+    Whether a stay set holds no qualifying event is a property of those stays,
+    so the receipt cannot name why *this* batch is empty (no antibiotics, no
+    suspected infection, no SOFA rise): a batch-wise reason made the published
+    status depend on which stays shared the last batch (2026-11-06 ruling).
+    Structural gaps keep their own source-level receipts: an empty result
+    over a blocked, table-missing or not-evaluable required input is not
+    evaluable (delta9r B-SEPSIS-SCORE-RECEIPT).
+    """
+    if table.data.empty and table_availability(table, ctx.concept_name) is None:
+        incomplete = _incomplete_component(tables, components)
+        if incomplete is not None:
+            return _not_evaluable_from(incomplete, tables, ctx)
+        source = table_availability(tables.get("abx"), "abx")
+        set_table_availability(table, ConceptAvailabilityRecord(
+            concept=ctx.concept_name,
+            database=_callback_source_name(ctx.data_source),
+            reason="data_missing",
+            n_rows=0,
+            sources_defined=source.sources_defined if source else (),
+            reason_code="no_qualifying_events_observed",
+            evaluation_status="evaluated",
+        ))
+    return table
+
+
 def _sepsis_infection_disposition(
-    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    components: Iterable[str],
 ) -> Optional[ICUTable]:
+    """Inherit the suspected-infection receipt of an empty susp_inf.
+
+    A not-evaluable susp_inf passes through unchanged.  An evaluated one ("no
+    qualifying event") is inherited only when every other required component
+    is complete: an empty SOFA over a missing source table is not a searched
+    negative (delta10r).
+    """
     record = table_availability(tables.get("susp_inf"), "susp_inf")
-    if record is not None and record.evaluation_status is not None:
+    if record is None or record.evaluation_status is None:
+        return None
+    if record.evaluation_status == "not_evaluable":
         return _infection_empty_result(
             tables, ctx, reason_code=record.reason_code,
-            evaluation_status=record.evaluation_status, source=record,
+            evaluation_status="not_evaluable", source=record,
         )
-    return None
+    return _evaluated_empty_result(tables, ctx, components)
 
 
 def _callback_sep3(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    disposition = _sepsis_infection_disposition(tables, ctx)
+    disposition = _sepsis_infection_disposition(tables, ctx, ("sofa", "susp_inf"))
     if disposition is not None:
         return disposition
     # Check if required tables exist
@@ -6078,12 +6179,10 @@ def _callback_sep3(
         convert_ids=True
     )
     
-    # Check if tables still exist after conversion (they may have been removed if empty)
+    # Both components were loaded; one the schema step removed was empty.
+    # No rows in these stays is data, not a missing component.
     if "sofa" not in converted_tables or "susp_inf" not in converted_tables:
-        return _infection_empty_result(
-            tables, ctx, reason_code="required_component_missing",
-            evaluation_status="not_evaluable",
-        )
+        return _evaluated_empty_result(tables, ctx, ("sofa", "susp_inf"))
     
     # Use converted tables
     sofa_tbl = converted_tables["sofa"]
@@ -6117,13 +6216,16 @@ def _callback_sep3(
         keep_components=_callback_bool(kwargs.get("keep_components"), False),
     )
 
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3")
+    return _with_evaluated_empty_receipt(
+        _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3"),
+        tables, ctx, ("sofa", "susp_inf"),
+    )
 
 def _callback_sep3_sofa2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    disposition = _sepsis_infection_disposition(tables, ctx)
+    disposition = _sepsis_infection_disposition(tables, ctx, ("sofa2", "susp_inf"))
     if disposition is not None:
         return disposition
     if "sofa2" not in tables or "susp_inf" not in tables:
@@ -6139,10 +6241,9 @@ def _callback_sep3_sofa2(
     )
 
     if "sofa2" not in converted_tables or "susp_inf" not in converted_tables:
-        return _infection_empty_result(
-            tables, ctx, reason_code="required_component_missing",
-            evaluation_status="not_evaluable",
-        )
+        # Both loaded; a component removed as empty is data, not a gap, unless
+        # its own receipt says the source is incomplete.
+        return _evaluated_empty_result(tables, ctx, ("sofa2", "susp_inf"))
 
     sofa2_tbl = converted_tables["sofa2"]
     susp_tbl = converted_tables["susp_inf"]
@@ -6186,7 +6287,10 @@ def _callback_sep3_sofa2(
         keep_components=_callback_bool(kwargs.get("keep_components"), False),
     )
 
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3_sofa2")
+    return _with_evaluated_empty_receipt(
+        _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3_sofa2"),
+        tables, ctx, ("sofa2", "susp_inf"),
+    )
 
 def _callback_vaso60(
     tables: Dict[str, ICUTable],
@@ -6841,10 +6945,7 @@ def _callback_susp_inf(
                 evaluation_status="not_evaluable", source=record,
             )
     if si_mode in {"and", "abx", "icd_abx"} and tables["abx"].data.empty:
-        return _infection_empty_result(
-            tables, ctx, reason_code="no_antibiotics_observed",
-            evaluation_status="evaluated", source=table_availability(tables["abx"], "abx"),
-        )
+        return _evaluated_empty_result(tables, ctx, required)
 
     unsupported_strict_si_dbs = {"hirid", "sic", "sicdb"}
     samp_data = getattr(tables.get("samp"), "data", None)
@@ -6923,12 +7024,12 @@ def _callback_susp_inf(
             f"{len(result)} suspected infection events"
         )
         
-        return _as_icutbl(
+        return _with_evaluated_empty_receipt(_as_icutbl(
             result,
             id_columns=id_columns,
             index_column=abx_idx,
             value_column="susp_inf",
-        )
+        ), tables, ctx, required)
     
     # ===== 原有策略: and/or/abx/samp =====
     # Convert ID columns if needed (hadm_id → stay_id) before merging
@@ -6989,7 +7090,10 @@ def _callback_susp_inf(
         keep_components=keep_components,
     )
 
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
+    return _with_evaluated_empty_receipt(
+        _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf"),
+        tables, ctx, required,
+    )
 
 def _callback_gcs(
     tables: Dict[str, ICUTable],
@@ -7916,7 +8020,11 @@ def _callback_kdigo_aki(
         rrt_modalities_complete,
         rrt_sources_resolved,
     )
-    from easyicu.scores.kdigo_aki import detect_id_col, detect_time_col
+    from easyicu.scores.kdigo_aki import (
+        detect_id_col,
+        detect_time_col,
+        kdigo_component_sources,
+    )
     
     # Extract DataFrames from tables
     crea_tbl = tables.get('kdigo_creatinine_input')
@@ -8017,6 +8125,9 @@ def _callback_kdigo_aki(
             getattr(ctx.data_source, "base_path", None),
             patient_ids=_normalize_patient_ids(ctx.patient_ids, id_col),
         ),
+        # Source-level, not batch-level: which component sources this
+        # installation provides decides source_absent vs patient_data_absent.
+        component_sources=kdigo_component_sources(ctx.data_source),
     )
     
     if result.empty:

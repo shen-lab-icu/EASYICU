@@ -173,7 +173,7 @@ def test_empty_antibiotics_are_evaluated_but_absent_inputs_are_unavailable(tmp_p
         else:
             assert status["availability"] == "produced_all_null"
             assert status["evaluation_status"] == "evaluated"
-            assert status["reason_code"] == "no_antibiotics_observed"
+            assert status["reason_code"] == "no_qualifying_events_observed"
         frame = pd.read_parquet(paths.export / entries[module]["file"])
         assert "patientunitstayid" in frame
         assert "stay_id" not in frame
@@ -247,7 +247,7 @@ def test_suspicion_component_gaps_return_typed_receipts(component):
     )
     assert receipt["reason_code"] == {
         "missing": "required_component_missing",
-        "empty_without_time": "no_antibiotics_observed",
+        "empty_without_time": "no_qualifying_events_observed",
         "populated_without_time": "antibiotic_time_index_missing",
     }[component]
 
@@ -393,7 +393,7 @@ def test_non_antibiotic_medications_do_not_make_infection_positive(tmp_path):
     manifest = _export(paths, "eicu", ["sepsis_shared"])
     status = manifest["files"][0]["concept_status"]["susp_inf"]
     assert status["availability"] == "produced_all_null"
-    assert status["reason_code"] == "no_antibiotics_observed"
+    assert status["reason_code"] == "no_qualifying_events_observed"
     assert status["evaluation_status"] == "evaluated"
 
 

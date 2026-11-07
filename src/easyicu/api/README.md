@@ -60,9 +60,11 @@ publication. Existing catalog coverage and review readers exclude both null
 statuses from observed coverage.
 
 For suspected infection and both Sepsis-3 outputs, complete required source
-tables with no antibiotic events yield `produced_all_null`,
-`evaluation_status=evaluated`, and `reason_code=no_antibiotics_observed`.
-The empty positive-event set represents zero positive stays. Missing any
+tables with no qualifying event yield `produced_all_null`,
+`evaluation_status=evaluated`, and `reason_code=no_qualifying_events_observed`,
+whether the stays had no antibiotic, no matching culture or no SOFA rise.
+The empty positive-event set represents zero positive stays; one code for every
+such reason keeps the status independent of extraction batching. Missing any
 required antibiotic source table yields `structurally_unavailable_placeholder`,
 `evaluation_status=not_evaluable`, `reason_code=required_source_table_missing`,
 and the missing table names. This includes a partial multi-table antibiotic

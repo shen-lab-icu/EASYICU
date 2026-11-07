@@ -21,7 +21,7 @@ ConceptAvailabilityReason = Literal[
 ConceptAvailabilityStatus = Literal["full", "degraded", "blocked"]
 ConceptEvaluationStatus = Literal["evaluated", "not_evaluable"]
 ConceptEvaluationReason = Literal[
-    "no_antibiotics_observed",
+    "no_qualifying_events_observed",
     "required_source_table_missing",
     "required_component_missing",
     "antibiotic_time_index_missing",

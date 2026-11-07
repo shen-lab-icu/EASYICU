@@ -242,8 +242,10 @@ def _renal_loader_inputs() -> dict[str, pd.DataFrame]:
 def _rrt_availability(monkeypatch, record, *, on_disk=("chartevents", "procedureevents")):
     """Stand in for the two owners the RRT receipt reads.
 
-    ``on_disk`` is what the data source resolves; ``record`` is the concept
-    loader's availability record for ``rrt``.
+    ``on_disk`` is which of the two RRT tables the data source resolves; every
+    other table (creatinine, urine) is present, as on a real installation, so
+    the KDIGO component receipt agrees with the preloaded component rows.
+    ``record`` is the concept loader's availability record for ``rrt``.
     """
 
     import easyicu.api as api
@@ -262,7 +264,11 @@ def _rrt_availability(monkeypatch, record, *, on_disk=("chartevents", "procedure
     monkeypatch.setattr(
         ICUDataSource,
         "resolve_loader_from_disk",
-        lambda self, table: f"/bound/source/{table}.parquet" if table in on_disk else None,
+        lambda self, table: (
+            f"/bound/source/{table}.parquet"
+            if table in on_disk or table not in {"chartevents", "procedureevents"}
+            else None
+        ),
     )
     return requests
 

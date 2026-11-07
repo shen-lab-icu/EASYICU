@@ -31,6 +31,7 @@ Author: EasyICU Team
 Date: 2026-01-26
 """
 
+from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Mapping
 import pandas as pd
 import numpy as np
@@ -80,6 +81,125 @@ class KDIGOComponentSchemaError(KDIGOComponentError):
 
 class KDIGOComponentCalculationError(KDIGOComponentError):
     """A declared component failed while its phenotype was being calculated."""
+
+
+@dataclass(frozen=True)
+class KDIGOComponentSources:
+    """Run-level receipt: whether this installation provides each component source.
+
+    ``True`` means the database maps the component and at least one of its
+    defined source tables is present, so a stay without rows lacks *patient*
+    data.  ``False`` means the source itself is absent.  The receipt describes
+    the installation, never the stays that happen to share an extraction
+    batch: a batch in which no stay has rows must label those stays exactly as
+    a whole-cohort run would (2026-11-06, batch-invariant reason codes).
+    """
+
+    creatinine: bool
+    urine: bool
+    rrt: bool
+
+
+#: The general concept each KDIGO component input reads.
+_COMPONENT_SOURCE_CONCEPTS = (
+    ("creatinine", "crea"),
+    ("urine", "urine"),
+    ("rrt", "rrt"),
+)
+
+
+def _concept_source_present(concept: str, data_source: Any) -> Optional[bool]:
+    """Whether ``data_source`` maps ``concept`` and has one of its tables.
+
+    ``None`` means the data source cannot answer (no config, resolver or
+    dictionary entry, or a mapping without source tables).
+    """
+
+    from easyicu.resources import load_dictionary
+
+    config = getattr(data_source, "config", None)
+    resolve = getattr(data_source, "resolve_loader_from_disk", None)
+    definition = load_dictionary().get(concept)
+    if config is None or resolve is None or definition is None:
+        return None
+    try:
+        sources = definition.for_data_source(config)
+    except (AttributeError, TypeError):
+        return None
+    if not sources:
+        return False
+    tables = sorted({str(s.table) for s in sources if getattr(s, "table", None)})
+    if not tables:
+        return None
+    return any(resolve(table) is not None for table in tables)
+
+
+def kdigo_component_sources(data_source: Any) -> Optional[KDIGOComponentSources]:
+    """The installation-level source receipt for the KDIGO components.
+
+    Returns ``None`` when any component cannot be decided; callers then keep
+    the historical per-call labels instead of guessing.
+    """
+
+    flags = {
+        component: _concept_source_present(concept, data_source)
+        for component, concept in _COMPONENT_SOURCE_CONCEPTS
+    }
+    if any(flag is None for flag in flags.values()):
+        return None
+    return KDIGOComponentSources(**{k: bool(v) for k, v in flags.items()})
+
+
+def kdigo_component_sources_for_path(
+    database: str, data_path: Optional[str]
+) -> Optional[KDIGOComponentSources]:
+    """:func:`kdigo_component_sources` for a registered database at ``data_path``.
+
+    A path that is not an installation directory (an in-memory or stub loader
+    carries a nominal path) cannot answer, so the receipt is ``None`` there.
+    """
+
+    from pathlib import Path
+
+    if data_path is None or not Path(data_path).is_dir():
+        return None
+    from easyicu.datasource import ICUDataSource
+    from easyicu.resources import load_data_sources
+
+    try:
+        config = load_data_sources().get(database)
+    except KeyError:
+        return None
+    return kdigo_component_sources(ICUDataSource(config, base_path=data_path))
+
+
+def _component_source_present(
+    component: str,
+    frame: Optional[pd.DataFrame],
+    sources: Optional[KDIGOComponentSources],
+) -> bool:
+    """Whether ``component``'s source exists, from the receipt when given.
+
+    Without a receipt the historical per-call inference (rows present) is kept
+    for direct callers that pass whole-cohort frames; batched extraction must
+    pass the receipt.  Rows for a source the receipt declares absent are a
+    contract violation and fail loudly.
+    """
+
+    has_rows = isinstance(frame, pd.DataFrame) and not frame.empty
+    if sources is None:
+        return has_rows
+    present = bool(getattr(sources, component))
+    if has_rows and not present:
+        raise KDIGOComponentSchemaError(
+            component=component,
+            reason_code=f"kdigo_{component}_rows_without_declared_source",
+            message=(
+                f"{component} rows were supplied although the source receipt "
+                "declares the source absent"
+            ),
+        )
+    return present
 
 
 def _strict_numeric_component(
@@ -626,11 +746,18 @@ def _calculate_uo_rates_simple(
     Returns:
         DataFrame with columns: id_col, time_col, uo_rt_6hr, uo_rt_12hr, uo_rt_24hr
     """
-    if urine_df.empty or weight_df.empty:
+    if urine_df.empty:
         return pd.DataFrame()
 
     urine = urine_df.copy()
-    weight = weight_df.copy()
+    # An extraction batch in which no stay has a weight row still yields the
+    # collection-window coverage and an unassessable rate per urine row, as
+    # those stays would in a whole-cohort frame.
+    weight = (
+        weight_df.copy()
+        if isinstance(weight_df, pd.DataFrame)
+        else pd.DataFrame()
+    )
     if urine_col not in urine.columns:
         urine_col = next(
             (column for column in ("urine", "value", "valuenum") if column in urine),
@@ -680,24 +807,26 @@ def _calculate_uo_rates_simple(
     values[urine_col] = values[urine_col].where(groups[urine_col].count() == groups.size())
     urine = values.reset_index()
 
-    if weight_col not in weight.columns:
+    weight_rows = not weight.empty
+    if weight_rows and weight_col not in weight.columns:
         weight_col = next(
             (column for column in ("weight", "value", "valuenum") if column in weight),
             "",
         )
-    if not weight_col:
+    if weight_rows and not weight_col:
         raise KDIGOComponentSchemaError(
             component="weight",
             reason_code="kdigo_weight_value_column_missing",
             message="Weight source has no detectable value column",
         )
-    weight[weight_col] = _strict_numeric_component(
-        weight[weight_col],
-        component="weight",
-        reason_code="kdigo_weight_numeric_encoding_invalid",
-        field_name="weight",
-    )
-    weight_id_col = _detect_id_col(weight)
+    if weight_rows:
+        weight[weight_col] = _strict_numeric_component(
+            weight[weight_col],
+            component="weight",
+            reason_code="kdigo_weight_numeric_encoding_invalid",
+            field_name="weight",
+        )
+    weight_id_col = _detect_id_col(weight) if weight_rows else None
 
     keyed_weight = None
     if weight_id_col and weight_id_col in weight.columns:
@@ -725,6 +854,8 @@ def _calculate_uo_rates_simple(
         weight_per_patient = keyed_weight.set_index(weight_id_col)[
             weight_col
         ].to_dict()
+    elif not weight_rows:
+        weight_per_patient = {}
     else:
         resolution = resolve_unkeyed_single_entity_weight(
             urine,
@@ -979,6 +1110,7 @@ def kdigo_stages(
     interval: Optional[pd.Timedelta] = None,
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
     rrt_source_complete: bool = False,
+    component_sources: Optional[KDIGOComponentSources] = None,
 ) -> pd.DataFrame:
     """Calculate component-neutral KDIGO AKI staging.
     
@@ -1011,6 +1143,10 @@ def kdigo_stages(
             successfully searched for the requested cohort. Because the
             source is positive-event encoded, no event then constitutes a
             criterion-negative RRT component rather than missing data.
+        component_sources: Run-level receipt of which component sources the
+            installation provides.  It decides ``source_absent`` versus
+            ``patient_data_absent``; without it an empty frame is read as an
+            absent source, which is only valid for whole-cohort callers.
         
     Returns:
         DataFrame with combined AKI staging including:
@@ -1037,6 +1173,9 @@ def kdigo_stages(
                 reason_code=f"kdigo_{component}_source_not_dataframe",
                 message=f"{component} source must be a pandas DataFrame when supplied",
             )
+    crea_present = _component_source_present("creatinine", crea_df, component_sources)
+    urine_present = _component_source_present("urine", urine_df, component_sources)
+    rrt_present = _component_source_present("rrt", rrt_df, component_sources)
     source_frames = tuple(
         frame
         for frame in (crea_df, urine_df, rrt_df)
@@ -1107,17 +1246,15 @@ def kdigo_stages(
         result = crea_staging.copy()
     result['creat_assessable'] = result['aki_stage_creat'].notna()
     
-    # Calculate urine output-based staging if data available
-    if (
-        urine_df is not None
-        and weight_df is not None
-        and not urine_df.empty
-        and not weight_df.empty
-    ):
+    # Calculate urine output-based staging whenever urine rows exist.  A stay
+    # without a valid weight is labelled per row by ``kdigo_uo``; deciding it
+    # from an empty weight frame would make the label (and the window
+    # coverage receipts) depend on which stays share an extraction batch.
+    if urine_df is not None and not urine_df.empty:
         try:
             uo_staging = kdigo_uo(
                 urine_df,
-                weight_df,
+                weight_df if isinstance(weight_df, pd.DataFrame) else pd.DataFrame(),
                 id_col,
                 time_col,
                 urine_col,
@@ -1181,10 +1318,9 @@ def kdigo_stages(
     else:
         result['aki_stage_uo'] = pd.Series(pd.NA, index=result.index, dtype="Int64")
         result['uo_assessable'] = False
-        if urine_df is None or urine_df.empty:
-            result['uo_assessment_reason'] = "source_absent"
-        else:
-            result['uo_assessment_reason'] = "missing_weight"
+        result['uo_assessment_reason'] = (
+            "patient_data_absent" if urine_present else "source_absent"
+        )
         result['weight_available'] = False
 
     def _component_timeline(
@@ -1320,7 +1456,9 @@ def kdigo_stages(
         result['aki_stage_creat'] > 0, 'creatinine_ascertainment'
     ] = "positive"
     result['creatinine_ascertainment_reason'] = pd.Series(
-        "source_absent", index=result.index, dtype="string"
+        "patient_data_absent" if crea_present else "source_absent",
+        index=result.index,
+        dtype="string",
     )
     if crea_df is not None and not crea_df.empty:
         creat_patients = set(crea_df[id_col].dropna().tolist())
@@ -1350,6 +1488,8 @@ def kdigo_stages(
         (
             "source_searched_no_active_rrt"
             if rrt_source_complete
+            else "patient_data_absent"
+            if rrt_present
             else "source_absent"
         ),
         index=result.index,
@@ -1381,7 +1521,9 @@ def kdigo_stages(
         # A successfully queried positive-event source can legitimately be
         # empty for a cohort. Preserve that completed search as negative RRT
         # evidence instead of silently reverting to unknown.
-        result['rrt_ascertainment'] = "negative"
+        result['rrt_ascertainment'] = pd.Series(
+            "negative", index=result.index, dtype="string"
+        )
     rrt_positive = result['aki_stage_rrt'].where(
         result['aki_stage_rrt'] > 0, pd.NA
     )
@@ -1671,6 +1813,9 @@ def load_kdigo_aki(
         interval=pd.Timedelta(hours=1),
         observation_window_coverage=observation_window_coverage,
         rrt_source_complete=rrt_source_complete,
+        component_sources=kdigo_component_sources_for_path(
+            database, data_path
+        ),
     )
     
     if verbose and not result.empty:
@@ -1955,6 +2100,9 @@ strict_numeric_component = _strict_numeric_component
 
 
 __all__ = [
+    "KDIGOComponentSources",
+    "kdigo_component_sources",
+    "kdigo_component_sources_for_path",
     "detect_id_col",
     "detect_time_col",
     "detect_value_col",
