@@ -1350,7 +1350,7 @@ def replay_consumed(where, captured) -> None:
     cached frame came from, never only a Parquet candidate.
     """
     groups: dict[tuple, list] = {}
-    for table, path, fmt, sha256, _version in captured:
+    for table, path, fmt, sha256, _version, _racy in captured:
         groups.setdefault((table, fmt, bool(sha256)), []).append(path)
     for (table, fmt, sha256), paths in groups.items():
         record_consumed(where, table, paths, fmt, sha256=sha256)
@@ -1377,7 +1377,7 @@ def payload_identity(source, captured) -> tuple[dict, ...] | None:
     from .storage_binding import bound_layout, bound_sha256, source_key
 
     groups: dict[tuple[str, str], set] = {}
-    for table, path, fmt, _sha, _version in captured:
+    for table, path, fmt, _sha, _version, _racy in captured:
         kind = {FORMAT_CSV: "csv", FORMAT_PARQUET: "flat"}.get(fmt, "bucket")
         groups.setdefault((table, kind), set()).add(str(path))
     base = getattr(source, "base_path", None)

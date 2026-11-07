@@ -254,13 +254,21 @@ def consume(
     captured = _CAPTURE.get()
     if captured is not None:
         for path in paths:
-            captured.append((table, path, fmt, sha256, _version(table, path)))
+            version = _version(table, path)
+            # Frozen now: a read that started racily clean stays untrusted
+            # however long it runs (B-D30-RACY-AGE).
+            was_racy = racily_clean(version) or (
+                unit is not None and path in unit.racy
+            )
+            captured.append((table, path, fmt, sha256, version, was_racy))
     return entries
 
 
 @contextmanager
 def capturing_consumed() -> Iterator[list]:
-    """Collect what is consumed in this context: (table, path, format, sha256, version).
+    """Collect what is consumed in this context: (table, path, format, sha256, version, was_racy).
+
+    ``was_racy`` is decided when the file is consumed and never re-decided.
 
     A payload cache stores these with the payload, so a later hit records
     and verifies the same sources (``storage_layout.replay_consumed``).
@@ -283,14 +291,18 @@ def current_capture() -> Optional[tuple]:
 
 
 def captured_racily_clean(captured) -> bool:
-    """Whether any captured file was racily clean when read: no cache may keep its payload."""
-    now = time.time_ns()
-    return any(racily_clean(entry[-1], now) for entry in captured)
+    """Whether any captured file was racily clean when it was consumed.
+
+    The flag was frozen at capture; it is not re-decided now, so a long
+    read cannot age a racy source into a cacheable one. No cache may keep
+    such a payload.
+    """
+    return any(entry[5] for entry in captured)
 
 
 def captured_still_current(captured) -> bool:
     """Whether every captured file still has the version it had when read."""
-    for table, path, _fmt, _sha, version in captured:
+    for table, path, _fmt, _sha, version, _racy in captured:
         try:
             if _version(table, path) != version:
                 return False

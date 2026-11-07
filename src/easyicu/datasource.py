@@ -2635,13 +2635,21 @@ class ICUDataSource:
         with the error class only (a reader message can quote a raw row). A
         file version that passed is not scanned again in this process: the
         memo key is the realpath plus the binding's stat identity (size,
-        mtime_ns, ctime_ns, ino, dev). A racily clean file is never memoized.
+        mtime_ns, ctime_ns, ino, dev). A file racily clean when the scan
+        starts is never memoized, however long the scan runs: the flag is
+        frozen from the stat taken before the scan (B-D30-RACY-AGE).
         """
         import duckdb
 
-        from .storage_binding import StorageSourceChanged, racily_clean, stat_identity
+        from .storage_binding import (
+            StorageSourceChanged, active_unit, racily_clean, stat_identity,
+        )
 
         before = stat_identity(table, csv_path)
+        unit = active_unit()
+        was_racy = racily_clean(before) or (
+            unit is not None and str(csv_path) in unit.racy
+        )
         key = (os.path.realpath(csv_path), *before)
         with cls._CSV_VALIDATED_LOCK:
             if key in cls._CSV_VALIDATED:
@@ -2660,7 +2668,7 @@ class ICUDataSource:
         after = stat_identity(table, csv_path)
         if after != before:
             raise StorageSourceChanged("storage_source_changed", table, str(csv_path))
-        if not racily_clean(after):
+        if not was_racy and not racily_clean(after):
             with cls._CSV_VALIDATED_LOCK:
                 cls._CSV_VALIDATED.add(key)
 
