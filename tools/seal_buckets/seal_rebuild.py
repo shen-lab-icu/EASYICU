@@ -28,9 +28,10 @@ refused (seal_run_locked).
 Review round 2 (delta26t) contracts:
   * checkouts and scratch are created exclusively (an existing path or a link below the tool's roots is
     refused); scratch carries this run's owner token and only owned scratch is removed;
-  * the builder runs as `python -S -c BUILDER_BOOT <builder>` (builder_argv): no site hook runs, the
-    import path is the clone's src + stdlib + the interpreter's site-packages (SEAL_SITE_PACKAGES, named
-    explicitly); easyicu must import from that clone at the seal SHA, and after the builder ends every
+  * the builder runs as `python -I -S -c BUILDER_BOOT <builder>` (builder_argv), with cwd outside the
+    staging root: no PYTHONPATH, cwd or site hook adds code; the boot first resets the path to the
+    standard library, then adds the clone's src and the interpreter's site-packages (SEAL_SITE_PACKAGES,
+    named explicitly; the lookup itself runs -I -S with a scrubbed env); easyicu must import from that clone at the seal SHA, and after the builder ends every
     easyicu.* module must come from the clone and every duckdb.*/pyarrow.* module from that
     site-packages (builder_import_origin_mismatch otherwise); the receipt records import_origin {path,
     head, modules, mismatched}; footer_scan/bucket_compare/negzero_table never import easyicu;
@@ -142,22 +143,26 @@ ADOPTION_RECEIPT = "_BUCKET_ADOPTION_RECEIPT.json"
 SOURCE_ORDINAL = "_easyicu_source_ordinal"
 FORBIDDEN_CORES = ((5, 105), (146, 179), (224, 1 << 20))
 ORIGIN_EXIT = 97
-# Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -S`:
-# no site hook (sitecustomize, usercustomize, .pth) runs, and the import path is set here explicitly --
-# the clone's src, the interpreter's standard library, and this interpreter's own site-packages (named
-# by the seal as SEAL_SITE_PACKAGES; its .pth lines are not executed). Before the builder runs, `easyicu` must import from the
-# clone's src at the seal SHA; after it ends (normally or by sys.exit), every loaded easyicu.* module must
-# come from the clone's src and every duckdb.*/pyarrow.* module from that site-packages. Any mismatch is
-# exit 97 (builder_import_origin_mismatch); the record (paths, head, modules) goes to SEAL_ORIGIN_OUT.
+# Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
+# no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
+# The boot's first statements (only the builtin sys module is touched) reset sys.path to the standard
+# library under sys.base_prefix; then the clone's src and the interpreter's own site-packages (named by
+# the seal as SEAL_SITE_PACKAGES; its .pth lines are not executed) are added, and only then is anything
+# imported. Before the builder runs, `easyicu` must import from the clone's src at the seal SHA; after it
+# ends (normally or by sys.exit), every loaded easyicu.* module must come from the clone's src and every
+# duckdb.*/pyarrow.* module from that site-packages. Any mismatch is exit 97
+# (builder_import_origin_mismatch); the record (paths, head, modules) goes to SEAL_ORIGIN_OUT.
 BUILDER_BOOT = r"""
-import json, os, runpy, subprocess, sys
+import sys
+_lib = sys.base_prefix + "/" + sys.platlibdir + "/python%d.%d" % sys.version_info[:2]
+sys.path[:] = [sys.base_prefix + "/" + sys.platlibdir + "/python%d%d.zip" % sys.version_info[:2],
+               _lib, _lib + "/lib-dynload"]
+import json, os, runpy, subprocess
 clone, sha, out = os.environ["SEAL_CLONE"], os.environ["SEAL_SHA"], os.environ["SEAL_ORIGIN_OUT"]
 real = os.path.realpath
 src = real(os.path.join(clone, "src"))
 site = [real(os.environ["SEAL_SITE_PACKAGES"])]
-base = real(sys.base_prefix) + os.sep
-stdlib = [p for p in sys.path if p and real(p).startswith(base) and not real(p).startswith(src)]
-sys.path[:] = [src, *stdlib, *site]
+sys.path[:] = [src, *sys.path, *site]
 roots = {"easyicu": [src], "duckdb": site, "pyarrow": site}
 record = {"path": None, "head": None, "sys_path": list(sys.path), "site_packages": site,
           "modules": {}, "mismatched": [], "complete": False}
@@ -506,14 +511,28 @@ def verify_checkout(code: Path, full: str) -> None:
 
 
 def builder_argv(python: str, builder: Path) -> list[str]:
-    """How every builder is launched: -S (no site hooks) and the boot, never `python <builder>`."""
-    return [python, "-S", "-c", BUILDER_BOOT, str(builder)]
+    """How every builder is launched: -I -S (no PYTHONPATH, no cwd, no site hooks) and the boot, never
+    `python <builder>`; callers also run it with a scrubbed env and a cwd outside the staging root.
+    -I ignores every PYTHON* variable, so -B is given explicitly: no bytecode is written into the
+    checkout (it must stay clean, ignored files included)."""
+    return [python, "-I", "-S", "-B", "-c", BUILDER_BOOT, str(builder)]
+
+
+# The site-packages query runs isolated like the builder: -I -S, a scrubbed env, cwd "/", and the path
+# reset to the standard library before sysconfig is imported.
+_SITE_QUERY = (
+    "import sys\n"
+    "_lib = sys.base_prefix + '/' + sys.platlibdir + '/python%d.%d' % sys.version_info[:2]\n"
+    "sys.path[:] = [_lib, _lib + '/lib-dynload']\n"
+    "import sysconfig\n"
+    "print(sysconfig.get_paths()['purelib'])\n"
+)
 
 
 def site_packages(python: str) -> str:
     """The configured interpreter's own site-packages, named explicitly for the -S builder boot: a
     venv's lib/python*/site-packages (from its pyvenv.cfg layout, nothing executed), else the
-    interpreter's purelib asked under -S (no site hooks)."""
+    interpreter's purelib asked under -I -S with a scrubbed env (nothing inherited)."""
     venv = Path(python).parent.parent
     if (venv / "pyvenv.cfg").is_file():
         found = sorted(venv.glob("lib/python3*/site-packages"))
@@ -521,14 +540,11 @@ def site_packages(python: str) -> str:
             raise SealError("site_packages_unresolved", str(venv))
         return str(found[0])
     done = subprocess.run(
-        [
-            python,
-            "-S",
-            "-c",
-            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
-        ],
+        [python, "-I", "-S", "-c", _SITE_QUERY],
         capture_output=True,
         text=True,
+        cwd="/",
+        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
     )
     path = done.stdout.strip()
     if done.returncode != 0 or not Path(path).is_dir():
@@ -1471,6 +1487,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
             "PYTHONPYCACHEPREFIX",
         ):
             Path(env[key]).mkdir(parents=True, exist_ok=True)
+        (scr / "cwd").mkdir()
         materialize(plan["entries"], staging, cur, target)
         check_links(staging, seal.cfg["allowed_roots"])
         for table, args in spec["tables"]:
@@ -1497,7 +1514,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
                 argv,
                 {**env, "SEAL_ORIGIN_OUT": str(origin_out)},
                 out / f"build_{db}_{table}.log",
-                staging,
+                scr / "cwd",  # never the staging root (D34-BOOT-ISOLATION)
                 spec["mem_gib"],
                 spec["timeout_s"],
             )
@@ -1808,9 +1825,10 @@ def probe(seal: Seal) -> list[tuple[str, str]]:
             "--memory-limit",
             "1GB",
         ]
+        (base / "cwd").mkdir(exist_ok=True)
         done = subprocess.run(
             cmd,
-            cwd=data,
+            cwd=base / "cwd",
             env={**env, "SEAL_ORIGIN_OUT": str(origin_out)},
             capture_output=True,
             text=True,

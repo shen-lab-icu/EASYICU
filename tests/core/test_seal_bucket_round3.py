@@ -557,7 +557,7 @@ def _clone(tmp_path: Path, builder_text: str) -> tuple[Path, str, Path]:
     return clone, sha, builder
 
 
-def _boot(tmp_path, clone, sha, builder, site):
+def _boot(tmp_path, clone, sha, builder, site, cwd=None):
     origin = tmp_path / "origin.json"
     env = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -574,7 +574,7 @@ def _boot(tmp_path, clone, sha, builder, site):
     )
     done = subprocess.run(
         launch(sys.executable, builder),
-        cwd=tmp_path,
+        cwd=cwd or tmp_path,
         env=env,
         capture_output=True,
         text=True,
@@ -632,3 +632,60 @@ def test_a_foreign_easyicu_or_pyarrow_module_loaded_any_other_way_fails_the_buil
     assert "builder_import_origin_mismatch" in done.stderr
     assert origin["mismatched"] == ["easyicu.storage_layout", "pyarrow"]
     assert not sr.origin_ok(origin, clone, sha)
+
+
+# ---- D34-BOOT-ISOLATION (delta34s): neither the current directory nor PYTHONPATH reaches the boot
+
+
+def test_boot_cwd_stdlib_shadow(tmp_path):
+    """Reviewer probe boot_cwd_stdlib_shadow: a data-root entry json.py (a link the containment rules
+    allow) in the builder's cwd must never run before the path is fixed."""
+    mark = tmp_path / "shadow_executed"
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    poison = allowed / "json.py"
+    poison.write_text(
+        f"open({str(mark)!r}, 'w').write('executed')\n"
+        "import os, sys, importlib\n"
+        "here = os.path.realpath(os.getcwd())\n"
+        "sys.path[:] = [x for x in sys.path if os.path.realpath(x or os.getcwd()) != here]\n"
+        "sys.modules.pop('json', None)\n"
+        "globals().update(importlib.import_module('json').__dict__)\n"
+    )
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    sr.materialize(
+        [("link", "json.py", str(poison))], stage / "data", allowed, stage / "final"
+    )
+    sr.check_links(stage / "data", [allowed, stage])
+    clone, sha, builder = _clone(tmp_path, "import json\n")
+    done, origin = _boot(
+        tmp_path,
+        clone,
+        sha,
+        builder,
+        Path(pa.__file__).parent.parent,
+        cwd=stage / "data",
+    )
+    assert done.returncode == 0, done.stderr
+    assert not mark.exists()
+    assert sr.origin_ok(origin, clone, sha)
+
+
+def test_site_packages_environment_shadow(tmp_path, monkeypatch):
+    """Reviewer probe site_packages_environment_shadow: the non-venv site-packages lookup inherits
+    nothing; a foreign sysconfig on PYTHONPATH cannot pick the site-packages directory."""
+    poison, fake = tmp_path / "poison", tmp_path / "fake_site"
+    poison.mkdir()
+    fake.mkdir()
+    (poison / "sysconfig.py").write_text(
+        "def get_paths():\n    return {'purelib': " + repr(str(fake)) + "}\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(poison))
+    base_python = Path(sys.base_prefix) / "bin" / "python3"
+    assert not (
+        base_python.parent.parent / "pyvenv.cfg"
+    ).exists()  # the non-venv branch
+    selected = sr.site_packages(str(base_python))
+    assert selected != str(fake)
+    assert Path(selected).is_dir()
