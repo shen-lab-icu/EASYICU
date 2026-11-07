@@ -592,9 +592,9 @@ def test_a_declared_view_read_records_its_chain(tmp_path, monkeypatch, real_admi
     assert chain["farm_manifest_sha256"] == receipt.sha256_file(farm / "conversion_manifest.json")
 
 
-def test_a_csv_only_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeypatch, real_admission):
-    # The shared table decision selects CSV when Parquet is absent. The
-    # consumed-files event must name the CSV that this reader actually used.
+def test_an_explicit_csv_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeypatch, real_admission):
+    # Exercise the explicit CSV read owner. Automatic table selection now
+    # chooses Parquet; the explicit reader must still receipt its actual CSV.
     from easyicu.datasource import ICUDataSource
     from easyicu.resources import load_data_sources
     from easyicu.storage_layout import SCAN_FALLBACK_LOG_ENV, read_consumed_log
@@ -605,6 +605,7 @@ def test_a_csv_only_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeyp
                           "transfertime": ["2150-01-01 00:00:00"], "prev_service": [None],
                           "curr_service": ["MED"]})
     frame.to_csv(root / "services.csv.gz", index=False)
+    frame.assign(curr_service="SURG").to_parquet(root / "services.parquet", index=False)
     # Hospital tables are mapped to ICU stays: a MIMIC-III source has icustays.
     pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
                   "intime": pd.to_datetime(["2150-01-01"]),
@@ -613,12 +614,16 @@ def test_a_csv_only_reader_is_receipted_by_the_csv_it_consumed(tmp_path, monkeyp
     (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
         {"table": "services", "status": "completed",
          "input": {"relative_path": "services.csv.gz"},
-         "outputs": []},
+         "outputs": [{"relative_path": "services.parquet"}]},
         {"table": "icustays", "status": "completed",
          "outputs": [{"relative_path": "icustays.parquet"}]}]}))
     log = tmp_path / "run_storage_log.jsonl"
     monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
-    ICUDataSource(config=load_data_sources().get("mimic"), base_path=root).load_table("services")
+    from easyicu.storage_binding import binding_unit
+
+    source = ICUDataSource(config=load_data_sources().get("mimic"), base_path=root)
+    with binding_unit(None):
+        source._read_file(root / "services.csv.gz", None, table_name="services", disk_loader=True)
     consumed = [dict(e) for e in read_consumed_log(log) if e["table"] == "services"]
 
     assert [c["format"] for c in consumed] == ["csv"]
@@ -1211,12 +1216,13 @@ def _mimic_services(tmp_path: Path, *, listed: bool) -> Path:
                           "transfertime": ["2150-01-01 00:00:00"], "prev_service": [None],
                           "curr_service": ["MED"]})
     frame.to_csv(root / "services.csv.gz", index=False)
+    frame.to_parquet(root / "services.parquet", index=False)
     pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
                   "intime": pd.to_datetime(["2150-01-01"]),
                   "outtime": pd.to_datetime(["2150-01-03"])}).to_parquet(
         root / "icustays.parquet", index=False)
     services = {"table": "services", "status": "completed",
-                "outputs": []}
+                "outputs": [{"relative_path": "services.parquet"}]}
     if listed:
         services["input"] = {"relative_path": "services.csv.gz"}
     (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
@@ -1226,7 +1232,7 @@ def _mimic_services(tmp_path: Path, *, listed: bool) -> Path:
 
 
 def _services_run(tmp_path: Path, monkeypatch, *, listed: bool):
-    """Load MIMIC-III services through the real reader; return the run's storage record."""
+    """Read through the explicit CSV owner, including its real policy checks."""
     from easyicu import formal_inputs
     from easyicu.datasource import ICUDataSource
     from easyicu.resources import load_data_sources
@@ -1240,8 +1246,8 @@ def _services_run(tmp_path: Path, monkeypatch, *, listed: bool):
     log = tmp_path / "run_storage_log.jsonl"
     monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
     with binding_unit(None):
-        ICUDataSource(config=load_data_sources().get("mimic"), base_path=root).load_table(
-            "services")
+        source = ICUDataSource(config=load_data_sources().get("mimic"), base_path=root)
+        source._read_file(root / "services.csv.gz", None, table_name="services", disk_loader=True)
     consumed = [dict(e) for e in read_consumed_log(log)]
     fallbacks = list(read_scan_fallback_log(log))
     reads = table_layout_receipt(read_table_read_log(log), fallbacks)
