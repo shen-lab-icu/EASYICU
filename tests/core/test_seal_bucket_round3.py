@@ -6,6 +6,7 @@ refusal (or the repaired behaviour). Synthetic installs only: no clinical data, 
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -156,6 +157,27 @@ MUTATIONS = {
         True,
         lambda r: (r / "var_id=2" / "bucket_id=0").mkdir(parents=True),
     ),
+    "variable_partition_id_out_of_order": (
+        True,
+        lambda r: _edit_manifest(r, lambda m: m["partitions"][1].update(id=5)),
+    ),
+    "manifest_missing": (False, lambda r: (r / "_BUCKET_MANIFEST.json").unlink()),
+    "complete_marker_missing": (False, lambda r: (r / "_COMPLETE").unlink()),
+    "hash_other_duckdb": (
+        False,
+        lambda r: _edit_manifest(r, lambda m: m["hash"].update(duckdb_version="0.0.0")),
+    ),
+    "derived_from_malformed": (
+        False,
+        lambda r: _edit_manifest(
+            r, lambda m: m["derived_from"]["files"][0].update(sha256="x")
+        ),
+    ),
+    "derived_from_source_missing": (False, lambda r: (r.parent / "t.parquet").unlink()),
+    "derived_from_source_changed": (
+        False,
+        lambda r: (r.parent / "t.parquet").write_bytes(b"changed source, other size"),
+    ),
 }
 
 
@@ -182,6 +204,67 @@ def test_the_comparator_and_the_resolver_decide_every_install_alike(tmp_path):
     assert decisions["variable_missing_empty_partition"] == "bucket_partition_missing"
     assert decisions["variable_missing_empty_bucket"] == "bucket_modulus_mismatch"
     assert all(v != "ok" for k, v in decisions.items() if not k.endswith("_good"))
+
+
+# Reached only with allow_legacy=True (the receipted AUMC itemid cache); a seal never accepts a legacy
+# layout, and BC (like SL with allow_legacy=False) reports one as bucket_manifest_invalid.
+LEGACY_ONLY = {"bucket_legacy_unverifiable": {"_legacy_manifest"}}
+
+
+def _resolver_reason_codes() -> dict[str, set[str]]:
+    """Every reason code read_bucket_contract and _read_variable_contract can raise, derived from the
+    storage_layout source: string first arguments of StorageIntegrityError-family constructors in those
+    readers and every module function they (transitively) call. Code -> raising functions."""
+    tree = ast.parse(Path(sl.__file__).read_text())
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    errors = {"StorageIntegrityError"}
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+    while True:
+        more = {
+            c.name
+            for c in classes
+            if any(isinstance(b, ast.Name) and b.id in errors for b in c.bases)
+        } - errors
+        if not more:
+            break
+        errors |= more
+    codes: dict[str, set[str]] = {}
+    todo, seen = ["read_bucket_contract", "_read_variable_contract"], set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for node in ast.walk(functions[name]):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                continue
+            if node.func.id in functions:
+                todo.append(node.func.id)
+            if (
+                node.func.id in errors
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                codes.setdefault(node.args[0].value, set()).add(name)
+    return codes
+
+
+def test_every_resolver_reason_code_is_exercised_with_parity(tmp_path):
+    codes = _resolver_reason_codes()
+    assert len(codes) >= 10  # the walk found the readers' codes
+    for code, raisers in LEGACY_ONLY.items():
+        assert codes.get(code) == raisers, code
+    covered = set()
+    for name, (variable, mutate) in MUTATIONS.items():
+        root = _install(tmp_path / name, variable)
+        if mutate:
+            mutate(root)
+        resolver = _decision(sl.read_bucket_contract, root)
+        assert _decision(bc.validate_contract, root) == resolver, name
+        covered.add(resolver)
+    uncovered = sorted(set(codes) - set(LEGACY_ONLY) - covered)
+    assert not uncovered, f"resolver reason codes without a parity case: {uncovered}"
 
 
 @pytest.mark.parametrize("variable", [False, True])
