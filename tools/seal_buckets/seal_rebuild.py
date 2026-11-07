@@ -166,7 +166,7 @@ import time
 import types
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 EXIT_OK, EXIT_FAIL, EXIT_USAGE = 0, 1, 2
 MODES = ("build1", "build2", "compare", "accept")
@@ -218,7 +218,7 @@ SEALED_TOOLS = (
     VALIDATOR_REL,
 )
 HELPER_TOOLS = ("tools/seal_buckets/footer_scan.py", VALIDATOR_REL)
-VALIDATOR_SHA256 = "9a90bf08c9b2bd3f443cfa17f3ae487e13f71f86838b3e9eb2b716945e48aa7e"
+VALIDATOR_SHA256 = "db2245c29fc5379e760904403da6e5a0151f73395ed08221d08b535900698f2d"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
 # The boot's first statements (only the builtin sys module is touched) reset sys.path to the standard
@@ -1395,6 +1395,8 @@ def compute_carevue_origin(farm: Path, flat: Path, bucket_root: Path) -> dict:
                 "count(DISTINCT c.ITEMID) FILTER (WHERE c.ITEMID >= 220000) "
                 "FROM charts c LEFT JOIN cv s USING (ICUSTAY_ID)"
             ).fetchone()
+    except SealError:
+        raise
     except Exception as exc:  # noqa: BLE001 - never expose query text, IDs or clinical rows
         raise SealError("carevue_origin_query_failed", type(exc).__name__) from None
     origin = {
@@ -1411,6 +1413,72 @@ def compute_carevue_origin(farm: Path, flat: Path, bucket_root: Path) -> dict:
     }
     check_carevue_origin(origin, bucket_root)
     return origin
+
+
+def check_farm_bucket_sources(root: Path, links: dict) -> None:
+    """Check lineage through every bound farm bucket using only the standard library.
+
+    Relative source names belong to the physical bucket installation. Source symlinks there are
+    retained: their targets are bound by the dependency's link_set and checked against allowed_roots.
+    The lineage path itself must stay relative and cannot traverse outside that installation.
+    """
+    linked_buckets = {
+        path.name
+        for path in root.iterdir()
+        if path.name.endswith("_bucket") and path.is_symlink()
+    }
+    if linked_buckets != set(links):
+        raise SealError("farm_bucket_links_changed", root.name)
+    for name, target in links.items():
+        bucket = root / name
+        if not bucket.is_symlink() or os.readlink(bucket) != target:
+            raise SealError("farm_link_changed", name)
+        try:
+            physical = bucket.resolve(strict=True)
+            manifest = json.loads((physical / "_BUCKET_MANIFEST.json").read_text())
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SealError("bucket_derived_from_invalid", name) from exc
+        if not isinstance(manifest, dict):
+            raise SealError("bucket_derived_from_invalid", name)
+        if "derived_from" not in manifest:
+            continue
+        derived = manifest["derived_from"]
+        files = derived.get("files") if isinstance(derived, dict) else None
+        if not isinstance(files, list) or not files:
+            raise SealError("bucket_derived_from_invalid", name)
+        for entry in files:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("path"), str)
+                or "\0" in entry["path"]
+                or type(entry.get("size")) is not int
+                or entry["size"] < 0
+                or type(entry.get("mtime_ns")) is not int
+                or (
+                    "sha256" in entry
+                    and (
+                        not isinstance(entry["sha256"], str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+                    )
+                )
+            ):
+                raise SealError("bucket_derived_from_invalid", name)
+            relative = PurePosixPath(entry["path"])
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                raise SealError("bucket_derived_from_invalid", name)
+            source = physical.parent.joinpath(*relative.parts)
+            try:
+                source_stat = source.stat()
+                if not stat.S_ISREG(source_stat.st_mode):
+                    raise SealError("bucket_derived_from_source_missing", name)
+                if (
+                    source_stat.st_size != entry["size"]
+                    or source_stat.st_mtime_ns != entry["mtime_ns"]
+                    or ("sha256" in entry and sha256_file(source) != entry["sha256"])
+                ):
+                    raise SealError("bucket_derived_from_source_changed", name)
+            except OSError as exc:
+                raise SealError("bucket_derived_from_source_missing", name) from exc
 
 
 def verify_final_set(
@@ -1437,6 +1505,7 @@ def verify_final_set(
             if root not in (farm, farm.with_name(f".{farm.name}.seal_staging")):
                 raise SealError("farm_name_mismatch", root.name)
             check_cv_bucket_only(root)
+        check_farm_bucket_sources(root, inner.get("bucket_links") or {})
         if allowed_roots is not None:
             check_links(root, allowed_roots)
         try:
@@ -1448,9 +1517,6 @@ def verify_final_set(
         names = sorted(n for n in os.listdir(root) if n != IN_ROOT_RECEIPT)
         if names != sorted(inner.get("entries") or []):
             raise SealError("farm_entries_changed", root.name)
-        for name, link in (inner.get("bucket_links") or {}).items():
-            if not (root / name).is_symlink() or os.readlink(root / name) != link:
-                raise SealError("farm_link_changed", name)
         manifest = root / CONVERSION_MANIFEST
         recorded = inner.get("conversion_manifest_sha256")
         if (sha256_file(manifest) if manifest.is_file() else None) != recorded:
@@ -1607,6 +1673,8 @@ def install(staging: Path, target: Path, in_root_receipt: dict, verify=None) -> 
     ):
         check_cv_farm_name(target, in_root_receipt["seal_sha"])
         check_cv_bucket_only(staging)
+    if in_root_receipt.get("schema", "").startswith("lead_r13.seal_farm_receipt"):
+        check_farm_bucket_sources(staging, in_root_receipt.get("bucket_links") or {})
     in_root_sha = write_json(staging / IN_ROOT_RECEIPT, in_root_receipt)
     make_read_only(staging, include_root=True)
     verify_installed(staging, in_root_sha)

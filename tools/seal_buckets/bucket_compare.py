@@ -180,11 +180,14 @@ def _verify_sources(root: Path, manifest: dict) -> None:
     derived = manifest.get("derived_from")
     if derived is None:
         return
+    # A farm links a bucket without exposing its flat sources. Resolve the verified bucket first;
+    # its physical installation, rather than the logical farm, owns the relative source names.
+    install = root.resolve(strict=True).parent
     for entry in derived["files"]:
         relative = PurePosixPath(entry["path"])
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise _sie("bucket_derived_from_invalid", root)
-        source = root.parent.joinpath(*relative.parts)
+        source = install.joinpath(*relative.parts)
         try:
             st = source.stat()
         except OSError as exc:

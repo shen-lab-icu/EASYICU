@@ -16,6 +16,11 @@ deferred to it are compared against `2786ea872` there.
 
 ## lead-r13 — entries pending merge
 
+- [r13-sealtool7, delta57s B57-CV-LINEAGE-ANCHOR; increment on `70c247850`]
+  Resolve comparator lineage at the verified physical bucket installation. Check every farm bucket's
+  relative source paths, size, mtime and recorded SHA256 before freeze, after rename and at acceptance;
+  refuse traversal or missing/changed sources. Preserve typed `SealError` diagnostics in CareVue
+  origin queries. The EasyICU reader fix belongs to the d5fixB lane.
 - [r13-sealtool6, supervisor ruling 2026-11-07; increment on `2835f702e`]
   Publish CareVue as `mimic_cv_bkt_s<sha9>` with bucket-only chartevents;
   retain `mimic_cv_bucket_s<sha9>` and the build2 suffix. Exclude flat
