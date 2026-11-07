@@ -844,6 +844,15 @@ omission; all unread), else `declared_absent_not_approved`. HiRID `ordinal`
 and `variables` are present (configured-name lookup) and never allowlisted.
 Ordinary (non-formal) extractions still record the list and do not refuse.
 
+The receipt also verifies the formal tool scripts the run executes against
+the seal tree: the receipt tool, its approved allowlist and the wrapper that
+started it (now committed as `tools/formal/bench7v3e.sh`) must each equal the
+git blob at the sealed commit, else `formal_tool_script_mismatch`; their
+sha256s are recorded (`tool_scripts`). `REQUIRED_LAYOUT.json` and the
+approved allowlist refuse a duplicate key at any level
+(`receipt_input_duplicate_key`), and their db/table names are deduplicated by
+casefold.
+
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 
 **What changed.** A concept loaded through DuckDB hourly aggregation now

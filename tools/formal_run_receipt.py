@@ -52,6 +52,15 @@ exited. It binds the run to the sealed code and to its inputs:
   else ``layout_deviation``;
 * the code carries no working-tree diff: the code identity's and the native
   manifest's ``diff_sha256`` are copied and must be null;
+* every formal tool script the run executes is the seal tree's: this tool,
+  its approved allowlist (``tools/formal_declared_absent.json``) and the
+  wrapper that started it (the nearest ancestor shell's script, read through
+  its open descriptor) must each hash to the git blob at the sealed commit
+  (the wrapper under ``tools/formal/``), else ``formal_tool_script_mismatch``;
+  the sha256s are recorded (``tool_scripts``);
+* REQUIRED_LAYOUT.json and the approved allowlist are parsed rejecting a
+  duplicate key at any level (``receipt_input_duplicate_key``); names are
+  deduplicated by casefold;
 * for SICdb, ``cases_binding``: the prepared conversion manifest records
   ``cases.parquet`` from ``cases.csv.gz`` without content digests and without
   a converter commit, so the receipt carries both sha256s, the manifest record
@@ -77,6 +86,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -99,13 +109,14 @@ APPROVED_DECLARED_ABSENT_FILE = Path(__file__).with_name("formal_declared_absent
 
 def approved_declared_absent() -> tuple[List[Dict[str, Any]], str]:
     """The approved declared_absent entries and the sha256 of their file."""
-    payload = load_json_object(APPROVED_DECLARED_ABSENT_FILE, APPROVED_DECLARED_ABSENT_FILE.name)
+    payload, digest = load_json_object_and_sha(APPROVED_DECLARED_ABSENT_FILE,
+                                               APPROVED_DECLARED_ABSENT_FILE.name)
     entries = payload.get("entries")
     if payload.get("schema") != "easyicu.declared_absent/1" or not isinstance(entries, list):
         raise ReceiptError("receipt_input_malformed",
                            f"{APPROVED_DECLARED_ABSENT_FILE.name} is not an approved allowlist",
                            input=APPROVED_DECLARED_ABSENT_FILE.name)
-    return entries, sha256_file(APPROVED_DECLARED_ABSENT_FILE)
+    return entries, digest
 
 
 def _declared_absent_entry_valid(entry: Any) -> bool:
@@ -129,20 +140,61 @@ class ReceiptError(Exception):
         self.details = details
 
 
-def load_json_object(path: Path, what: str) -> Dict[str, Any]:
-    """A JSON object input of the receipt; anything else is a typed stop."""
+class _DuplicateKey(ValueError):
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def _unique_object(pairs: List[tuple[str, Any]]) -> Dict[str, Any]:
+    """``object_pairs_hook``: a key repeated in one object, at any level, is a stop."""
+    out: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise _DuplicateKey(key)
+        out[key] = value
+    return out
+
+
+def _parse_json_object(raw: bytes, path: Path, what: str, *, unique_keys: bool) -> Dict[str, Any]:
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ReceiptError("receipt_input_missing", f"{what} is missing",
-                           input=what, path=str(path)) from exc
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        payload = json.loads(raw.decode("utf-8"),
+                             object_pairs_hook=_unique_object if unique_keys else None)
+    except _DuplicateKey as exc:
+        raise ReceiptError("receipt_input_duplicate_key",
+                           f"{what} repeats the key {exc.key!r} in one object",
+                           input=what, path=str(path), key=exc.key) from exc
+    except (UnicodeDecodeError, ValueError) as exc:
         raise ReceiptError("receipt_input_malformed", f"{what} is not readable JSON",
                            input=what, path=str(path)) from exc
     if not isinstance(payload, dict):
         raise ReceiptError("receipt_input_malformed", f"{what} is not a JSON object",
                            input=what, path=str(path))
     return payload
+
+
+def _read_input(path: Path, what: str) -> bytes:
+    try:
+        return Path(path).read_bytes()
+    except FileNotFoundError as exc:
+        raise ReceiptError("receipt_input_missing", f"{what} is missing",
+                           input=what, path=str(path)) from exc
+    except OSError as exc:
+        raise ReceiptError("receipt_input_malformed", f"{what} is not readable JSON",
+                           input=what, path=str(path)) from exc
+
+
+def load_json_object(path: Path, what: str) -> Dict[str, Any]:
+    """A JSON object input of the receipt; anything else is a typed stop."""
+    return _parse_json_object(_read_input(path, what), path, what, unique_keys=False)
+
+
+def load_json_object_and_sha(path: Path, what: str) -> tuple[Dict[str, Any], str]:
+    """A contract input: a JSON object with no key repeated in any object, and
+    the sha256 of exactly the bytes parsed."""
+    raw = _read_input(path, what)
+    return (_parse_json_object(raw, path, what, unique_keys=True),
+            hashlib.sha256(raw).hexdigest())
 
 
 def sha256_file(path: Path) -> str:
@@ -194,6 +246,101 @@ def sealed_code_identity(sealed_sha: str) -> Dict[str, Any]:
         "installed_dist_version": installed_dist_version(),
         "import_path": str(Path(easyicu.__file__).resolve().parent),
     }
+
+
+# Formal tool scripts and where the seal tree holds them; the wrapper lives
+# under tools/formal/ by its own file name.
+RECEIPT_SEAL_PATH = "tools/formal_run_receipt.py"
+APPROVED_SEAL_PATH = "tools/formal_declared_absent.json"
+WRAPPER_SEAL_DIR = "tools/formal"
+_SCRIPT_FD = 255  # bash keeps the script it is reading open on this descriptor
+_PROC = Path("/proc")
+
+
+def executing_wrapper() -> tuple[str, bytes]:
+    """The wrapper script that started this process, and its bytes.
+
+    The nearest ancestor process holding a regular file open as its script
+    (bash's descriptor 255; a ``( ... )`` subshell does not keep it) is the
+    wrapper. Its bytes are read through that descriptor, so a file replaced
+    on disk after the shell opened it still hashes as what ran. No such
+    ancestor (or no /proc) is ``formal_tool_script_unidentified``.
+    """
+    pid = os.getppid()
+    seen = set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        fd = _PROC / str(pid) / "fd" / str(_SCRIPT_FD)
+        try:
+            target = os.readlink(fd)
+            if os.path.isabs(target) and fd.is_file():
+                return target, fd.read_bytes()
+        except OSError:
+            pass
+        try:
+            stat = (_PROC / str(pid) / "stat").read_text()
+            pid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    raise ReceiptError("formal_tool_script_unidentified",
+                       "no ancestor shell holds the formal wrapper script open; a formal "
+                       "receipt is written only by its wrapper")
+
+
+def _seal_blob(repo: Path, sealed_sha: str, seal_path: str) -> Optional[bytes]:
+    """The file at ``seal_path`` in the sealed commit's tree, or None if it has none."""
+    try:
+        done = subprocess.run(["git", "-C", str(repo), "cat-file", "blob",
+                               f"{sealed_sha}:{seal_path}"], capture_output=True, check=False)
+    except OSError as exc:
+        raise ReceiptError("formal_tool_script_unverifiable", "git is not runnable",
+                           seal_path=seal_path) from exc
+    return done.stdout if done.returncode == 0 else None
+
+
+def _seal_tree_root(code: Mapping[str, Any]) -> Path:
+    import_path = code.get("import_path")
+    done = subprocess.run(["git", "-C", str(import_path), "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True, check=False) if import_path else None
+    if done is None or done.returncode != 0 or not done.stdout.strip():
+        raise ReceiptError("formal_tool_script_unverifiable",
+                           "the sealed checkout's git tree is not readable",
+                           import_path=import_path)
+    return Path(done.stdout.strip())
+
+
+def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any],
+                        approved_sha256: str) -> List[Dict[str, Any]]:
+    """Every formal tool script this run executes must be the seal tree's blob.
+
+    The receipt tool itself (this file, as loaded), its approved allowlist
+    (``approved_sha256``: the bytes the receipt parsed) and the wrapper that
+    started it. Returns their records; any difference, or a script the seal
+    tree does not hold, is ``formal_tool_script_mismatch``.
+    """
+    repo = _seal_tree_root(code)
+    wrapper_path, wrapper_bytes = executing_wrapper()
+    wrapper_name = Path(wrapper_path.removesuffix(" (deleted)")).name
+    scripts = [
+        ("receipt", str(Path(__file__).resolve()), RECEIPT_SEAL_PATH,
+         sha256_file(Path(__file__).resolve())),
+        ("approved_declared_absent", str(APPROVED_DECLARED_ABSENT_FILE.resolve()),
+         APPROVED_SEAL_PATH, approved_sha256),
+        ("wrapper", wrapper_path, f"{WRAPPER_SEAL_DIR}/{wrapper_name}",
+         hashlib.sha256(wrapper_bytes).hexdigest()),
+    ]
+    records = []
+    for role, path, seal_path, digest in scripts:
+        blob = _seal_blob(repo, sealed_sha, seal_path)
+        seal_digest = None if blob is None else hashlib.sha256(blob).hexdigest()
+        if seal_digest != digest:
+            raise ReceiptError(
+                "formal_tool_script_mismatch",
+                f"the {role} script the run executed is not the seal tree's {seal_path}",
+                role=role, path=path, seal_path=seal_path, sha256=digest,
+                seal_sha256=seal_digest, sealed_sha=sealed_sha)
+        records.append({"role": role, "path": path, "seal_path": seal_path, "sha256": digest})
+    return records
 
 
 def _canonical(value: Any) -> Any:
@@ -706,10 +853,10 @@ def _storage_unavailable(db: str, manifest: Mapping[str, Any],
         raise ReceiptError("receipt_input_malformed",
                            f"{db} native manifest storage_unavailable is not a list of records",
                            database=db)
-    allowed = {str(e["table"]).lower(): dict(e) for e in declared_absent if e.get("db") == db}
+    allowed = {str(e["table"]).casefold(): dict(e) for e in declared_absent if e.get("db") == db}
     excused, refused = [], []
     for record in records:
-        entry = allowed.get(record["table"].lower())
+        entry = allowed.get(record["table"].casefold())
         (refused if entry is None else excused).append({**record, "excused_by": entry})
     if refused:
         tables = sorted({r["table"] for r in refused})
@@ -737,7 +884,9 @@ def _refuse_fallbacks(db: str, fallbacks: Any) -> None:
                        database=db, count=sum(kinds.values()), kinds=dict(sorted(kinds.items())))
 
 
-def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict[str, Any], str]:
+def load_required_layout(run_root: Path, databases: Iterable[str],
+                         approved: Optional[tuple[List[Dict[str, Any]], str]] = None,
+                         ) -> tuple[Dict[str, Any], str]:
     """G4: the run's REQUIRED_LAYOUT.json and its sha256.
 
     {"schema": "easyicu.required_layout/2", "complete": true, "databases":
@@ -759,10 +908,11 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
     if not path.is_file():
         raise ReceiptError("required_layout_missing",
                            f"the run root has no {REQUIRED_LAYOUT_FILE}", path=str(path))
-    payload = load_json_object(path, REQUIRED_LAYOUT_FILE)
+    payload, digest = load_json_object_and_sha(path, REQUIRED_LAYOUT_FILE)
     listed = payload.get("databases")
     if payload.get("schema") != REQUIRED_LAYOUT_SCHEMA or not isinstance(listed, dict) or (
-            set(payload) - {"schema", "complete", "databases", "declared_absent"}):
+            set(payload) - {"schema", "complete", "databases", "declared_absent"}) or (
+            len({str(db).casefold() for db in listed}) != len(listed)):
         raise ReceiptError("receipt_input_malformed",
                            f"{REQUIRED_LAYOUT_FILE} is not a {REQUIRED_LAYOUT_SCHEMA} list",
                            input=REQUIRED_LAYOUT_FILE)
@@ -774,7 +924,7 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
         if not isinstance(tables, dict) or not tables:
             raise ReceiptError("required_layout_missing",
                                f"{REQUIRED_LAYOUT_FILE} lists no layout for {db}", database=db)
-        names = [str(t).lower() for t in tables]
+        names = [str(t).casefold() for t in tables]
         if len(set(names)) != len(names) or not all(
                 _required_entry_valid(v) for v in tables.values()):
             raise ReceiptError("receipt_input_malformed",
@@ -782,7 +932,7 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
                                "{layout: flat|csv|bucket, root_realpath} (required for a bucket)",
                                input=REQUIRED_LAYOUT_FILE, database=db)
     absent = payload.get("declared_absent", [])
-    keys = [(e.get("db"), str(e.get("table")).lower()) for e in absent
+    keys = [(str(e.get("db")).casefold(), str(e.get("table")).casefold()) for e in absent
             if isinstance(e, dict)] if isinstance(absent, list) else []
     if not isinstance(absent, list) or len(keys) != len(absent) or len(set(keys)) != len(keys) or (
         not all(_declared_absent_entry_valid(e) for e in absent)
@@ -791,15 +941,15 @@ def load_required_layout(run_root: Path, databases: Iterable[str]) -> tuple[Dict
                            f"{REQUIRED_LAYOUT_FILE} declared_absent must list each (db, table) "
                            "once as {db, table, reason, evidence, readers: 0}",
                            input=REQUIRED_LAYOUT_FILE)
-    approved, _sha = approved_declared_absent()
-    unapproved = [e for e in absent if e not in approved]
+    allowlist, _sha = approved if approved is not None else approved_declared_absent()
+    unapproved = [e for e in absent if e not in allowlist]
     if unapproved:
         raise ReceiptError("declared_absent_not_approved",
                            f"{REQUIRED_LAYOUT_FILE} declared_absent names "
                            f"{len(unapproved)} entr(y/ies) the approved allowlist does not hold",
                            input=REQUIRED_LAYOUT_FILE,
                            entries=[{"db": e["db"], "table": e["table"]} for e in unapproved])
-    return payload, sha256_file(path)
+    return payload, digest
 
 
 def _required_entry_valid(entry: Any) -> bool:
@@ -826,11 +976,11 @@ def _layout_requirement(db: str, input_dir: str, required: Optional[Mapping[str,
     wanted = {}
     for table, entry in required.items():
         root = entry.get("root_realpath") or input_dir
-        wanted[str(table).lower()] = {"layout": entry["layout"],
+        wanted[str(table).casefold()] = {"layout": entry["layout"],
                                       "root_realpath": os.path.realpath(root)}
     deviations = []
     for table, reads in sorted(observed.items()):
-        need = wanted.get(table.lower())
+        need = wanted.get(table.casefold())
         for read in reads:
             if need != read:
                 deviations.append({"table": table, "required": need, "observed": read})
@@ -838,11 +988,11 @@ def _layout_requirement(db: str, input_dir: str, required: Optional[Mapping[str,
         raise ReceiptError("layout_deviation",
                            f"{db}: {len(deviations)} read(s) not served from the required "
                            "layout and root", database=db, deviations=deviations)
-    read_tables = {t.lower() for t in observed}
+    read_tables = {t.casefold() for t in observed}
     return {
-        "required": {t: wanted[str(t).lower()] for t in sorted(required)},
+        "required": {t: wanted[str(t).casefold()] for t in sorted(required)},
         "observed": dict(sorted(observed.items())),
-        "not_read": sorted(t for t in required if str(t).lower() not in read_tables),
+        "not_read": sorted(t for t in required if str(t).casefold() not in read_tables),
     }
 
 
@@ -1061,9 +1211,12 @@ def build_run_receipt(
     specs = list(specs)
     _refuse_paths_inside_inputs({"scratch": Path(scratch), "run_root": run_root}, specs)
     code = sealed_code_identity(sealed_sha)
+    approved = approved_declared_absent()
+    approved_sha = approved[1]
+    tool_scripts = formal_tool_scripts(sealed_sha, code, approved_sha)
     pre, post, snapshot_files = _snapshots(run_root)
     required, required_sha = load_required_layout(
-        run_root, [spec.split(":", 2)[0] for spec in specs])
+        run_root, [spec.split(":", 2)[0] for spec in specs], approved)
     exits = _status_exits(run_root)
     databases: Dict[str, Any] = {}
     for spec in specs:
@@ -1087,11 +1240,12 @@ def build_run_receipt(
         "sealed_sha": sealed_sha,
         "easyicu_version": code.get("version"),
         "code_identity": code,
+        "tool_scripts": tool_scripts,
         "input_snapshot": snapshot_files,
         "required_layout": {"path": str((run_root / REQUIRED_LAYOUT_FILE).resolve()),
                             "sha256": required_sha, "complete": True,
                             "declared_absent": list(required.get("declared_absent", [])),
-                            "approved_declared_absent_sha256": approved_declared_absent()[1]},
+                            "approved_declared_absent_sha256": approved_sha},
         "parameters": dict(parameters or {}),
         "run_root": str(run_root.resolve()),
         "wall_seconds": None if started_at is None else round(finished - float(started_at), 1),

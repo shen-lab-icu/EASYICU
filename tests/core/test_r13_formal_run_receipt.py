@@ -127,6 +127,18 @@ def real_admission(monkeypatch):
     monkeypatch.setattr(receipt, "_admit_consumed", _REAL_ADMISSION)
 
 
+_REAL_TOOL_SCRIPTS = receipt.formal_tool_scripts
+_TOOL_RECORDS = [{"role": "receipt", "path": str(TOOL), "seal_path": "tools/formal_run_receipt.py",
+                  "sha256": "d" * 64}]
+
+
+@pytest.fixture(autouse=True)
+def _tool_scripts(monkeypatch):
+    """Stand in for the seal-tree check of the tool scripts (tested below with a real tree)."""
+    monkeypatch.setattr(receipt, "formal_tool_scripts",
+                        lambda sha, code, approved_sha: list(_TOOL_RECORDS))
+
+
 def _consumed(path: Path, table: str = "cases", fmt: str = "parquet") -> dict:
     return {"table": table, "path": str(path), "realpath": os.path.realpath(path),
             "format": fmt}
@@ -1868,3 +1880,303 @@ def test_a_declared_absent_entry_not_in_the_approved_allowlist_is_refused(tmp_pa
     with pytest.raises(receipt.ReceiptError) as error:
         receipt.load_required_layout(run, ["hirid"])
     assert error.value.code == "declared_absent_not_approved"
+
+
+# r13prov 3 additions (after delta28p).
+# (1) The formal tool scripts the run executes are the seal tree's blobs.
+
+WRAPPER = TOOL.parent / "formal" / "bench7v3e.sh"
+INSTALLED_WRAPPER_SHA256 = "3222d90bfc20a913bda77b48e862b29f559237142c236a69b7d5c5900760b9dd"
+
+
+def test_the_committed_wrapper_is_byte_identical_to_the_installed_one():
+    assert receipt.sha256_file(WRAPPER) == INSTALLED_WRAPPER_SHA256
+
+
+def _git(repo: Path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def _seal_tree(tmp_path: Path, **override: bytes) -> tuple[Path, str]:
+    """A git checkout whose one commit holds the formal tool scripts (``override``
+    replaces one by its seal path's file name)."""
+    repo = tmp_path / "seal"
+    files = {
+        "tools/formal_run_receipt.py": TOOL.read_bytes(),
+        "tools/formal_declared_absent.json": receipt.APPROVED_DECLARED_ABSENT_FILE.read_bytes(),
+        "tools/formal/bench7v3e.sh": WRAPPER.read_bytes(),
+        "src/easyicu/__init__.py": b"",
+    }
+    for name, data in override.items():
+        (key,) = [k for k in files if Path(k).name.replace(".", "_") == name]
+        files[key] = data
+    for relative, data in files.items():
+        (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+        (repo / relative).write_bytes(data)
+    _git(repo.parent, "init", "-q", str(repo))
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seal")
+    return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def _check_tools(repo: Path, sha: str, monkeypatch, wrapper: bytes | None = None,
+                 wrapper_path: str = "/srv/bench_local/bench7v3e.sh"):
+    data = WRAPPER.read_bytes() if wrapper is None else wrapper
+    monkeypatch.setattr(receipt, "executing_wrapper", lambda: (wrapper_path, data))
+    return _REAL_TOOL_SCRIPTS(sha, {"import_path": str(repo / "src" / "easyicu")},
+                              receipt.approved_declared_absent()[1])
+
+
+def test_matching_tool_scripts_are_recorded_with_their_seal_paths(tmp_path, monkeypatch):
+    repo, sha = _seal_tree(tmp_path)
+
+    records = _check_tools(repo, sha, monkeypatch)
+
+    assert {r["role"]: (r["seal_path"], r["sha256"]) for r in records} == {
+        "receipt": ("tools/formal_run_receipt.py", receipt.sha256_file(TOOL)),
+        "approved_declared_absent": ("tools/formal_declared_absent.json",
+                                     receipt.sha256_file(receipt.APPROVED_DECLARED_ABSENT_FILE)),
+        "wrapper": ("tools/formal/bench7v3e.sh", INSTALLED_WRAPPER_SHA256),
+    }
+    assert {r["role"]: r["path"] for r in records}["wrapper"] == "/srv/bench_local/bench7v3e.sh"
+
+
+@pytest.mark.parametrize("change", ["wrapper", "wrapper_name", "receipt", "approved_sealed",
+                                    "approved_run"])
+def test_a_tool_script_that_is_not_the_seal_trees_is_refused(tmp_path, monkeypatch, change):
+    wrapper, name = None, "/srv/bench_local/bench7v3e.sh"
+    role = {"wrapper": "wrapper", "wrapper_name": "wrapper", "receipt": "receipt"}.get(
+        change, "approved_declared_absent")
+    if change == "wrapper":
+        wrapper = WRAPPER.read_bytes().replace(b"MemoryMax=8G", b"MemoryMax=9G", 1)
+        assert wrapper != WRAPPER.read_bytes()
+    if change == "wrapper_name":  # a wrapper the seal tree does not hold at all
+        name = "/srv/bench_local/bench7v3f.sh"
+    override = {}
+    if change == "receipt":
+        override["formal_run_receipt_py"] = TOOL.read_bytes() + b"\n"
+    if change == "approved_sealed":
+        override["formal_declared_absent_json"] = (
+            receipt.APPROVED_DECLARED_ABSENT_FILE.read_bytes() + b"\n")
+    repo, sha = _seal_tree(tmp_path, **override)
+    if change == "approved_run":  # the run read an allowlist other than the sealed one
+        edited = tmp_path / "approved" / "formal_declared_absent.json"
+        edited.parent.mkdir()
+        payload = json.loads(receipt.APPROVED_DECLARED_ABSENT_FILE.read_text())
+        payload["entries"] = payload["entries"][:1]
+        edited.write_text(json.dumps(payload))
+        monkeypatch.setattr(receipt, "APPROVED_DECLARED_ABSENT_FILE", edited)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _check_tools(repo, sha, monkeypatch, wrapper=wrapper, wrapper_path=name)
+    assert error.value.code == "formal_tool_script_mismatch"
+    assert error.value.details["role"] == role
+    if change == "wrapper_name":
+        assert error.value.details["seal_path"] == "tools/formal/bench7v3f.sh"
+        assert error.value.details["seal_sha256"] is None
+    else:
+        assert error.value.details["seal_sha256"] != error.value.details["sha256"]
+
+
+def test_the_receipt_records_the_tool_scripts_and_stops_on_a_mismatch(tmp_path, monkeypatch):
+    repo, sha = _seal_tree(tmp_path)
+    prepared = _prepared(tmp_path / "prepared")
+    seen = {}
+
+    def check(sealed, code, approved_sha):
+        seen["approved_sha"] = approved_sha
+        return _check_tools(repo, sha, monkeypatch)
+
+    monkeypatch.setattr(receipt, "formal_tool_scripts", check)
+    built = _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[])
+
+    assert [r["role"] for r in built["tool_scripts"]] == [
+        "receipt", "approved_declared_absent", "wrapper"]
+    assert seen["approved_sha"] == built["required_layout"]["approved_declared_absent_sha256"]
+
+    shutil.rmtree(tmp_path / "run")
+    monkeypatch.setattr(receipt, "formal_tool_scripts", lambda sealed, code, approved_sha:
+                        _check_tools(repo, sha, monkeypatch, wrapper=b"#!/bin/bash\n"))
+    with pytest.raises(receipt.ReceiptError) as error:
+        _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[])
+    assert error.value.code == "formal_tool_script_mismatch"
+
+
+def _proc(tmp_path: Path, chain: list) -> Path:
+    """A stand-in /proc: ``chain`` is [(pid, ppid, fd255 target or None)]."""
+    proc = tmp_path / "proc"
+    for pid, ppid, target in chain:
+        (proc / str(pid) / "fd").mkdir(parents=True)
+        (proc / str(pid) / "stat").write_text(f"{pid} (b a) sh) S {ppid} 1 1 0\n")
+        if target is not None:
+            os.symlink(target, proc / str(pid) / "fd" / "255")
+    return proc
+
+
+def test_the_wrapper_is_the_nearest_ancestor_shells_open_script(tmp_path, monkeypatch):
+    script = tmp_path / "bench_local" / "bench7v3e.sh"
+    script.parent.mkdir()
+    script.write_bytes(b"#!/bin/bash\necho wrapper\n")
+    outer = tmp_path / "harness.sh"
+    outer.write_bytes(b"#!/bin/bash\n")
+    # timeout (no fd) <- subshell (no fd) <- wrapper (script) <- harness (script)
+    proc = _proc(tmp_path, [(50, 40, None), (40, 30, "/dev/null"), (30, 20, str(script)),
+                            (20, 1, str(outer))])
+    monkeypatch.setattr(receipt, "_PROC", proc)
+    monkeypatch.setattr(receipt.os, "getppid", lambda: 50)
+
+    assert receipt.executing_wrapper() == (str(script), b"#!/bin/bash\necho wrapper\n")
+
+
+def test_no_ancestor_shell_script_is_a_typed_stop(tmp_path, monkeypatch):
+    proc = _proc(tmp_path, [(50, 40, None), (40, 1, "/dev/null")])
+    monkeypatch.setattr(receipt, "_PROC", proc)
+    monkeypatch.setattr(receipt.os, "getppid", lambda: 50)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.executing_wrapper()
+    assert error.value.code == "formal_tool_script_unidentified"
+
+
+# (2) Contract inputs reject a duplicate key at any level; names dedup by casefold.
+
+_LAYOUT_HEAD = '"schema": "easyicu.required_layout/2", "complete": true'
+
+
+@pytest.mark.parametrize("text", [
+    '{' + _LAYOUT_HEAD + ', "complete": true, "databases": {"sic": {"t": {"layout": "flat"}}}}',
+    '{' + _LAYOUT_HEAD + ', "databases": {"sic": {"t": {"layout": "flat"}}, '
+    '"sic": {"t": {"layout": "flat"}}}}',
+    '{' + _LAYOUT_HEAD + ', "databases": {"sic": {"t": {"layout": "flat"}, '
+    '"t": {"layout": "flat"}}}}',
+    '{' + _LAYOUT_HEAD + ', "databases": {"sic": {"t": {"layout": "flat", "layout": "bucket"}}}}',
+    '{' + _LAYOUT_HEAD + ', "databases": {"sic": {"t": {"layout": "flat"}}}, "declared_absent": '
+    '[{"db": "sic", "table": "x", "reason": "r", "evidence": "e", "readers": 0, "readers": 0}]}',
+])
+def test_a_duplicate_key_in_required_layout_at_any_level_is_refused(tmp_path, text):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "REQUIRED_LAYOUT.json").write_text(text)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.load_required_layout(run, ["sic"])
+    assert error.value.code == "receipt_input_duplicate_key"
+    assert error.value.details["input"] == "REQUIRED_LAYOUT.json"
+
+
+@pytest.mark.parametrize("text", [
+    '{"schema": "easyicu.declared_absent/1", "schema": "easyicu.declared_absent/1", '
+    '"entries": []}',
+    '{"schema": "easyicu.declared_absent/1", "entries": [{"db": "mimic", "db": "mimic", '
+    '"table": "t", "reason": "r", "evidence": "e", "readers": 0}]}',
+])
+def test_a_duplicate_key_in_the_approved_allowlist_is_refused(tmp_path, monkeypatch, text):
+    approved = tmp_path / "formal_declared_absent.json"
+    approved.write_text(text)
+    monkeypatch.setattr(receipt, "APPROVED_DECLARED_ABSENT_FILE", approved)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.approved_declared_absent()
+    assert error.value.code == "receipt_input_duplicate_key"
+
+
+def test_the_layout_digest_is_of_the_bytes_parsed(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    text = '{' + _LAYOUT_HEAD + ', "databases": {"sic": {"t": {"layout": "flat"}}}}'
+    (run / "REQUIRED_LAYOUT.json").write_text(text)
+
+    _payload, digest = receipt.load_required_layout(run, ["sic"])
+    assert digest == receipt.sha256_file(run / "REQUIRED_LAYOUT.json")
+
+
+@pytest.mark.parametrize("pair", [
+    ({"db": "sic", "table": "STRASSE"}, {"db": "sic", "table": "straße"}),  # lower() differs
+    ({"db": "sic", "table": "pharma"}, {"db": "SIC", "table": "pharma"}),
+])
+def test_declared_absent_entries_equal_under_casefold_are_duplicates(tmp_path, monkeypatch, pair):
+    entries = [{**_EXCUSE, **names} for names in pair]
+    _approve(monkeypatch, *entries)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "REQUIRED_LAYOUT.json").write_text(json.dumps({
+        "schema": "easyicu.required_layout/2", "complete": True, "declared_absent": entries,
+        "databases": {"sic": {"t": {"layout": "flat"}}}}))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.load_required_layout(run, ["sic"])
+    assert error.value.code == "receipt_input_malformed"
+
+
+@pytest.mark.parametrize("databases", [
+    {"sic": {"STRASSE": {"layout": "flat"}, "straße": {"layout": "flat"}}},
+    {"sic": {"t": {"layout": "flat"}}, "SIC": {"t": {"layout": "flat"}}},
+])
+def test_required_names_equal_under_casefold_are_duplicates(tmp_path, databases):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "REQUIRED_LAYOUT.json").write_text(json.dumps({
+        "schema": "easyicu.required_layout/2", "complete": True, "databases": databases}))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.load_required_layout(run, ["sic"])
+    assert error.value.code == "receipt_input_malformed"
+
+
+def test_an_unavailable_record_matches_its_entry_under_casefold():
+    entry = {**_EXCUSE, "table": "straße"}
+
+    (excused,) = receipt._storage_unavailable(
+        "sic", {"storage_unavailable": [{**_PHARMA, "table": "STRASSE"}]}, [entry])
+    assert excused["excused_by"] == entry
+
+
+# (3) The label a CareVue root's reads carry is the configured database name
+# "mimic" (the bench spec's db; RUN_RECEIPT, native manifest and snapshot of
+# the interim CareVue run all say "mimic"), so the approved datetimeevents entry
+# excuses the record the storage owner really writes.
+
+def test_the_approved_carevue_entry_excuses_the_record_the_storage_owner_writes(
+        tmp_path, monkeypatch):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.resources import load_data_sources
+    from easyicu.storage_layout import SCAN_FALLBACK_LOG_ENV, read_unavailable_log
+
+    root = tmp_path / "carevue"
+    root.mkdir()
+    pd.DataFrame({"subject_id": [10], "hadm_id": [100], "icustay_id": [1000],
+                  "intime": pd.to_datetime(["2150-01-01"]),
+                  "outtime": pd.to_datetime(["2150-01-03"])}).to_parquet(
+        root / "icustays.parquet", index=False)
+    (root / "conversion_manifest.json").write_text(json.dumps({"tables": [
+        {"table": "icustays", "status": "completed",
+         "outputs": [{"relative_path": "icustays.parquet"}]}]}))
+    log = tmp_path / "log.jsonl"
+    monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
+    config = load_data_sources().get("mimic")
+    assert config.name == "mimic" and "datetimeevents" in config.tables
+    with pytest.raises(Exception):  # the reader gets no frame; the absence is logged
+        ICUDataSource(config=config, base_path=root).load_table("datetimeevents")
+    (record,) = read_unavailable_log(log)
+    assert record["table"] == "datetimeevents"
+    assert record["reason_code"] == "declared_table_not_installed"
+
+    entries, _digest = receipt.approved_declared_absent()  # the real sealed allowlist
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "REQUIRED_LAYOUT.json").write_text(json.dumps({
+        "schema": "easyicu.required_layout/2", "complete": True,
+        "declared_absent": [e for e in entries if e["db"] == "mimic"],
+        "databases": {"mimic": {"icustays": {"layout": "flat"}}}}))
+    payload, _sha = receipt.load_required_layout(run, ["mimic"])
+    manifest = {"storage_unavailable": [record]}
+
+    (excused,) = receipt._storage_unavailable("mimic", manifest, payload["declared_absent"])
+    assert excused["excused_by"]["db"] == "mimic"
+    assert excused["excused_by"]["table"] == "datetimeevents"
+    with pytest.raises(receipt.ReceiptError) as error:  # any other label is not excused
+        receipt._storage_unavailable("mimic_cv", manifest, payload["declared_absent"])
+    assert error.value.code == "storage_unavailable_in_formal_run"
