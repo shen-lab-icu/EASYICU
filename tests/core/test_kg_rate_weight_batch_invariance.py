@@ -466,3 +466,81 @@ def test_hirid_multi_file_table_with_only_its_csv_is_missing_not_empty(tmp_path,
     with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
         loader._read_declared_table("pharma", None)
     assert loader._table_cache == {}
+
+
+# --- delta20w: ICU start times come from the bound source and its id_configs
+
+
+def _miiv_stays(root, start, table="icustays"):
+    # Synthetic: one stay, a fixed start.
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"stay_id": [1], "intime": [pd.Timestamp(start)]}).to_parquet(root / f"{table}.parquet")
+
+
+def _miiv_source(root, config=None):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+
+    return ICUDataSource(config or load_src_cfg("miiv"), base_path=root)
+
+
+def _events():
+    return pd.DataFrame({"stay_id": [1], "charttime": [pd.Timestamp("2100-01-01 06:00")]})
+
+
+def _both_helpers(loader):
+    first = loader._convert_time_column_to_hours(_events(), "charttime", "stay_id")
+    second = loader._convert_time_to_hours(_events(), "icustay")
+    return float(first["charttime"].iloc[0]), float(second["charttime"].iloc[0])
+
+
+def test_start_times_of_an_explicit_source_without_an_env_root(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    _miiv_stays(tmp_path, "2100-01-01 00:00")
+    loader = ConceptLoader(_miiv_source(tmp_path), low_memory=False)
+    assert _both_helpers(loader) == (6.0, 6.0)
+
+
+def test_start_times_never_come_from_a_same_name_attached_source(tmp_path, monkeypatch):
+    from easyicu.io.attach import data as attached
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    _miiv_stays(tmp_path / "attached", "2100-01-01 05:00")  # would give 1 h
+    _miiv_stays(tmp_path / "bound", "2100-01-01 00:00")
+    attached.attach_src(load_src_cfg("miiv"), tmp_path / "attached", force=True)
+    try:
+        loader = ConceptLoader(_miiv_source(tmp_path / "bound"), low_memory=False)
+        hours = _both_helpers(loader)
+    finally:
+        attached.detach_src("miiv")
+    assert hours == (6.0, 6.0)
+
+
+def test_start_times_use_the_bound_sources_own_id_table(tmp_path, monkeypatch):
+    from easyicu.config import TableConfig
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    config = load_src_cfg("miiv").model_copy(deep=True)
+    config.tables["site_stays"] = TableConfig(name="site_stays", files=[{"path": "site_stays.parquet"}])
+    config.id_configs["icustay"] = config.id_configs["icustay"].model_copy(update={"table": "site_stays"})
+    _miiv_stays(tmp_path, "2100-01-01 00:00", table="site_stays")
+    loader = ConceptLoader(_miiv_source(tmp_path, config), low_memory=False)
+    assert _both_helpers(loader) == (6.0, 6.0)
+
+
+def test_a_bound_loader_never_selects_again():
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    loader = ConceptLoader("miiv", data_path=None, low_memory=False)
+    with pytest.raises(StorageIntegrityError, match="legacy_loader_source_reselect"):
+        loader._select_source("miiv", "/elsewhere")

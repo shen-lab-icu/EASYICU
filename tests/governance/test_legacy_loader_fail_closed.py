@@ -82,3 +82,77 @@ def test_declared_absence_is_decided_before_the_read():
     for owner, handler in _handlers(tree):
         if handler.type is not None and "MissingTableSourceError" in ast.unparse(handler.type):
             assert owner == "_read_declared_table" and _ends_in_raise(handler.body)
+
+
+# --- delta20w: the loader resolves its source once (D20W-TIME-RESELECT class)
+
+# Calls that select or build a data source, or resolve a root, by name.
+_RESOLVING_CALLS = {
+    "load_table", "load_id_tbl", "select_table_source", "load_src_cfg",
+    "ICUDataSource", "get_source", "is_attached", "attach_src",
+}
+_RESOLVING_IMPORTS = _RESOLVING_CALLS | {"attach"}
+
+# (owning function, name) -> why it may resolve.  Nothing else may.
+ALLOWED_RESOLUTION = {
+    ("_select_source", "select_table_source"): "the one by-name selection, at construction",
+    ("_select_source", "ICUDataSource"): "a DataSourceConfig passed to the constructor",
+    ("_select_source", "data_path"): "the constructor's root for that selection",
+    ("__init__", "data_path"): "stores the constructor argument and passes it to _select_source",
+    ("load_concepts", "data_path"): "the module entry forwards data_path to ConceptLoader",
+}
+
+
+def _owned_nodes(tree):
+    found = []
+
+    def visit(node, owner):
+        for child in ast.iter_child_nodes(node):
+            name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else owner
+            found.append((name, child))
+            visit(child, name)
+
+    visit(tree, "<module>")
+    return found
+
+
+def test_source_resolution_happens_only_in_select_source():
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+    offenders = []
+    for owner, node in _owned_nodes(tree):
+        hit = None
+        if isinstance(node, ast.Call):
+            func = node.func
+            # ``source.load_table(...)`` on a source object reads through it;
+            # a bare or module-qualified resolver call selects by name.
+            if isinstance(func, ast.Name) and func.id in _RESOLVING_CALLS:
+                hit = func.id
+            elif (
+                isinstance(func, ast.Attribute)
+                and func.attr in _RESOLVING_CALLS - {"load_table"}
+            ):
+                hit = func.attr
+            elif (
+                isinstance(func, ast.Attribute) and func.attr == "load_table"
+                and isinstance(func.value, ast.Name) and func.value.id in {"table", "easyicu"}
+            ):
+                hit = "load_table"
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = {alias.name.split(".")[-1] for alias in node.names}
+            module = getattr(node, "module", None) or ""
+            if names & _RESOLVING_IMPORTS or module.endswith("attach"):
+                bad = sorted(names & _RESOLVING_IMPORTS) or [module]
+                hit = "import " + ",".join(bad)
+        elif isinstance(node, ast.Attribute) and node.attr == "data_path":
+            hit = "data_path"
+        elif isinstance(node, ast.Name) and node.id == "data_path":
+            hit = "data_path"
+        if hit is None:
+            continue
+        key = hit.replace("import ", "")
+        if (owner, key) in ALLOWED_RESOLUTION:
+            continue
+        if owner == "<module>" and hit == "import ICUDataSource":
+            continue  # the type used for isinstance and annotations
+        offenders.append(f"{owner}:{getattr(node, 'lineno', '?')} {hit}")
+    assert not offenders, "\n".join(sorted(set(offenders)))

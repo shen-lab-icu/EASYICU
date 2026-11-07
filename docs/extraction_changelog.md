@@ -44,14 +44,33 @@ deferred to it are compared against `2786ea872` there.
   `hirid_rate_kg`, `mimic_kg_rate` and `sic_rate_kg` already did.
 - Failure handling (deprecated `ConceptLoader`, every database): the loader
   fails closed.
-  - One source per loader. Preload, the declared check, the cache and every
-    read use one bound source object, and each cache entry records the source
-    that produced it. A source passed to the constructor is that object and is
-    never re-selected by name. A configuration passed to the constructor is
-    read with that configuration; before, its tables were read with the
-    packaged configuration. A database name binds the source `load_table`
-    selects (`easyicu.table.select_table_source`: an attached source first,
-    with its own configuration and registrations).
+  - One source per loader, bound at construction. Preload, the declared
+    check, the cache, every read and the ICU start times used to place
+    datetime columns on the ICU-hour axis use that one source object. Each
+    cache entry records the source that produced it.
+  - ICU start times come from the bound source's own `id_configs`: its ID
+    table, ID column and start column. They used to be re-loaded by database
+    name with the packaged configuration. With a source passed to the
+    constructor, that could take start times from a different root (a
+    same-name attached source gave wrong hours) or find none at all, which
+    left the column unconverted. A selection by name after binding raises
+    `legacy_loader_source_reselect`, and
+    `tests/governance/test_legacy_loader_fail_closed.py` rejects any other
+    resolution site in the module.
+  - Root selection:
+    - An `ICUDataSource` passed to the constructor uses its own root and
+      registrations. It is never re-selected by name.
+    - A `DataSourceConfig` is read with that configuration, from `data_path`
+      only. It inherits no environment root and no attached source; with
+      `data_path=None` it has no root. Before, its tables were read with the
+      packaged configuration.
+    - A database name binds the source `load_table` selects
+      (`easyicu.table.select_table_source`). That is an attached source
+      first, then `data_path`, then `EASYICU_<SRC>_PATH`, then
+      `EASYICU_DATA_PATH`.
+  - A loader bound to an `ICUDataSource` holds that source's lock and cannot
+    be pickled. Worker processes started by fork share it; spawn is not
+    certified.
   - An empty read comes only from a table the bound source does not declare.
     That is decided before the read.
   - A declared table without a file raises `declared_table_source_missing`, a
@@ -66,7 +85,8 @@ deferred to it are compared against `2786ea872` there.
 - Public API change: `easyicu.table.load_table` on an attached source now
   accepts a `path` equal to the source's base path (or `None`) and raises
   `ValueError` for a different one. It used to raise `TypeError` for any
-  `path`. Its read half is also available as `easyicu.table.read_table_from`.
+  `path`. Its read half is also available as `easyicu.table.read_table_from`,
+  and `load_id_tbl`'s ID-table rule as `easyicu.table.id_table_name`.
   - Any other read, ID-lookup, time-conversion, unit-conversion, preload or
     sub-concept failure propagates. A recursive concept is never built or
     cached from a healthy subset of its sub-concepts.

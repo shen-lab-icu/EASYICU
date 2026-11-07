@@ -11,7 +11,7 @@ import pandas as pd
 
 from .value_failures import TYPED_VALUE_FAILURES
 from .concept import Concept, load_dictionary
-from .config import DataSourceConfig, TableConfig, load_src_cfg
+from .config import DataSourceConfig, TableConfig
 from .datasource import ICUDataSource, MissingTableSourceError
 from .storage_layout import TableScanError, verify_flat_scan
 from .table import read_table_from
@@ -165,24 +165,15 @@ class ConceptLoader:
             low_memory: 低内存模式（None=自动检测，True=强制启用，False=禁用）
                         低内存模式使用 DuckDB filter pushdown，避免加载全表
         """
-        self._data_source: Optional[ICUDataSource] = None
-        # The one source every read of this loader uses (see _bound_source).
-        self._bound: Optional[tuple] = None
-        self._explicit_source: Optional[ICUDataSource] = None
-        self._explicit_config = False
-        if isinstance(src, ICUDataSource):
-            self._data_source = src
-            self._explicit_source = src
-            self.src = src.config
-        elif isinstance(src, DataSourceConfig):
-            self.src = src
-            self._explicit_config = True
-        elif isinstance(src, str):
-            self.src = load_src_cfg(src)
-        else:
+        if not isinstance(src, (ICUDataSource, DataSourceConfig, str)):
             raise TypeError(f"不支持的数据源类型: {type(src)}")
-        self._src_name = self.src.name
+        # The one source every read of this loader uses, selected here once
+        # (see _select_source); nothing re-resolves it by name afterwards.
+        self._bound: Optional[tuple] = None
         self.data_path = data_path
+        self._select_source(src, data_path)
+        self.src = self._table_source().config
+        self._src_name = self.src.name
         
         # 🚀 低内存模式：自动检测或手动指定
         # HiRID 强制使用低内存模式（observations 表有 7.77 亿行）
@@ -202,9 +193,7 @@ class ConceptLoader:
                 available_gb = psutil.virtual_memory().available / (1024 ** 3)
                 self._low_memory = available_gb < 24
         
-        # 🚀 低内存模式下，自动创建 ICUDataSource 以启用 filter pushdown
-        if self._low_memory and self._data_source is None and data_path:
-            self._data_source = self._table_source()
+        if self._low_memory:
             logger.info(f"🧠 低内存模式启用 for {self._src_name}")
         
         self._id_lookup_cache: Optional[pd.DataFrame] = None
@@ -218,41 +207,68 @@ class ConceptLoader:
             return None
         return self.src.tables.get(table_name)
 
-    def _bound_source(self) -> tuple:
-        """``(source, resolved_from, resolved_base_path)``, bound once.
+    def _select_source(self, src, data_path) -> None:
+        """Bind this loader's one source.  The only source resolution here.
 
-        Preload, the declared check, the cache and every read use this one
-        object.  A source passed to the constructor is that object and is
-        never re-resolved by name; a configuration passed to the constructor
-        is read with that configuration.  For a database name, the source is
-        the one ``load_table`` selects (``easyicu.table.select_table_source``:
-        an attached source first), selected once.
+        Root-selection rule:
+
+        - an ``ICUDataSource``: that object, with its own root and
+          registrations; never re-resolved by name;
+        - a ``DataSourceConfig``: ``ICUDataSource(config, data_path)``.  Only
+          ``data_path`` gives the root: no environment root, no attached
+          source;
+        - a database name: the source ``load_table`` selects
+          (``easyicu.table.select_table_source``: an attached source first,
+          then ``data_path``, ``EASYICU_<SRC>_PATH``, ``EASYICU_DATA_PATH``).
+
+        A loader bound to an ``ICUDataSource`` holds its lock and cannot be
+        pickled; worker processes started by fork share it, spawn is not
+        certified.
         """
-        bound = getattr(self, '_bound', None)
-        if bound is not None:
-            return bound
-        explicit = getattr(self, '_explicit_source', None)
-        if explicit is not None:
-            base = getattr(explicit, 'base_path', None)
-            bound = (explicit, 'explicit_source', None if base is None else str(base))
-        elif getattr(self, '_explicit_config', False):
+        if getattr(self, '_bound', None) is not None:
+            raise TableScanError(
+                "legacy_loader_source_reselect", str(getattr(self, '_src_name', src)),
+                "this loader already has a bound source; it is never re-selected",
+            )
+        if isinstance(src, ICUDataSource):
+            base = getattr(src, 'base_path', None)
+            bound = (src, 'explicit_source', None if base is None else str(base))
+        elif isinstance(src, DataSourceConfig):
             from pathlib import Path
 
-            base = Path(self.data_path) if self.data_path else None
+            base = Path(data_path) if data_path else None
             bound = (
-                ICUDataSource(self.src, base_path=base),
+                ICUDataSource(src, base_path=base),
                 'explicit_config',
                 None if base is None else str(base),
             )
         else:
             from .table import select_table_source
 
-            bound = select_table_source(self._src_name, {'path': self.data_path})
+            bound = select_table_source(src, {'path': data_path})
         self._bound = bound
+
+    def _bound_source(self) -> tuple:
+        """``(source, resolved_from, resolved_base_path)`` bound at construction.
+
+        Preload, the declared check, the cache, the ID tables and every read
+        use this one object.
+        """
+        bound = getattr(self, '_bound', None)
+        if bound is None:
+            raise TableScanError(
+                "legacy_loader_unbound", str(getattr(self, '_src_name', '?')),
+                "the loader has no bound source",
+            )
         return bound
 
+    @property
+    def _data_source(self):
+        """The bound source (kept for callers that read ``_data_source``)."""
+        return self._table_source()
+
     def _table_source(self):
-        """The bound source object (see :meth:`_bound_source`)."""
+        """The bound source object (see :meth:`_select_source`)."""
         return self._bound_source()[0]
 
     def _cached_table(self, table_name: str, source) -> Optional[pd.DataFrame]:
@@ -777,10 +793,8 @@ class ConceptLoader:
             
             # 🚀 重要：必须重用 ConceptLoader 的数据源，以便共享表缓存和预加载的数据
             # 如果创建新的数据源，预加载的表会丢失
-            if self._data_source is None:
-                raise RuntimeError("rec_cncpt concepts require a data source, but none is available")
-            
-            data_source = self._data_source
+            # The loader's one bound source.
+            data_source = self._table_source()
             
             # 创建 ConceptResolver（它会从数据源加载表）
             resolver = ConceptResolver(load_dictionary(self._src_name))
@@ -1086,7 +1100,7 @@ class ConceptLoader:
                 unit_column=source.unit_var,
                 resolver=None,  # ConceptLoader不使用resolver
                 patient_ids=patient_ids,
-                data_source=self._data_source,
+                data_source=self._table_source(),
                 interval=interval,
             )
 
@@ -1200,6 +1214,35 @@ class ConceptLoader:
                 f"per-kg rate could not be loaded ({type(exc).__name__}: {exc})"
             ) from exc
 
+    def _id_start_times(
+        self, id_type: str, id_col: Optional[str], candidates: Sequence[str],
+    ) -> tuple:
+        """``(frame, start_column)`` for ``id_type``, or ``(None, None)``.
+
+        Read from the bound source, with that source's own ``id_configs``
+        (its ID table, ID column and start column), through the declared
+        check and the cache.  ``(None, None)`` when the start column is not
+        a time this helper converts against (``candidates``), or the frame
+        has no ID column: then no conversion happens, as before.
+        """
+        from .table import id_table_name
+
+        config = self._table_source().config
+        id_cfg = (getattr(config, 'id_configs', None) or {}).get(id_type)
+        start = getattr(id_cfg, 'start', None)
+        if not id_col or not start or start not in candidates:
+            return None, None
+        if id_col != getattr(id_cfg, 'id', None):
+            return None, None
+        table = id_table_name(config, id_type)
+        frame = self._read_declared_table(table, [id_col, start])
+        if frame is None:
+            raise TableScanError(
+                "legacy_id_table_undeclared", table,
+                f"the {id_type} ID table is not declared by the bound source",
+            )
+        return frame, start
+
     def _convert_time_column_to_hours(
         self,
         df: pd.DataFrame,
@@ -1219,20 +1262,11 @@ class ConceptLoader:
         df = df.copy()
         df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
             
-        # 获取ICU入院时间
-        from .table import load_id_tbl
-        icu_times = load_id_tbl(self._src_name, 'icustay', path=self.data_path)
-            
-        # 🔧 FIX: 支持不同数据库的入院时间列名
-        # MIMIC-IV: intime, HiRID: admissiontime, eICU: hospitaladmittime, AUMC: admittedat
+        # ICU start times from the bound source and its own id_configs.
         intime_candidates = ['intime', 'admissiontime', 'hospitaladmittime', 'admittedat']
-        intime_col = None
-        for cand in intime_candidates:
-            if cand in icu_times.columns:
-                intime_col = cand
-                break
+        icu_times, intime_col = self._id_start_times('icustay', id_col, intime_candidates)
             
-        if not icu_times.empty and intime_col:
+        if icu_times is not None and not icu_times.empty and intime_col:
             if id_col and id_col in df.columns and id_col in icu_times.columns:
                 df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
                 df[intime_col] = pd.to_datetime(df[intime_col], errors='coerce')
@@ -1255,17 +1289,15 @@ class ConceptLoader:
             df[time_col]
         ):
             return df
-        if self._data_source is None or not id_col or id_col not in df.columns:
+        if not id_col or id_col not in df.columns:
             raise ValueError(
                 "MIMIC duration time alignment requires a data source and ICU stay id"
             )
         try:
-            table = self._data_source.load_table(
-                'icustays',
-                columns=[id_col, 'intime'],
-                verbose=False,
-            )
-            bounds = table.data if hasattr(table, 'data') else table
+            # The bound source, its declared check and cache.
+            bounds = self._read_declared_table('icustays', [id_col, 'intime'])
+            if bounds is None:
+                raise ValueError("icustays is not declared by the bound source")
         except Exception as exc:
             raise ValueError(
                 "MIMIC duration time alignment could not load ICU intime"
@@ -1587,24 +1619,15 @@ class ConceptLoader:
         
         # 1. 转换时间列为相对小时数
         if time_col_name and not pd.api.types.is_numeric_dtype(df[time_col_name]):
-            # 加载ICU入院时间
-            from easyicu.table import load_id_tbl
-            icu_times = load_id_tbl(self._src_name, id_type, path=self.data_path)
+            # Start times from the bound source and its own id_configs.
+            intime_candidates = ['intime', 'admittedat', 'admissiontime',
+                                 'hospitaladmittime', 'ICUOffset']
+            id_col = self._get_id_column(df, id_type)
+            icu_times, intime_col = self._id_start_times(id_type, id_col, intime_candidates)
             
-            if not icu_times.empty:
-                # 检测 intime 列名（不同数据库使用不同列名）
-                intime_candidates = ['intime', 'admittedat', 'admissiontime', 
-                                     'hospitaladmittime', 'ICUOffset']
-                intime_col = None
-                for cand in intime_candidates:
-                    if cand in icu_times.columns:
-                        intime_col = cand
-                        break
-                
+            if icu_times is not None and not icu_times.empty:
                 if intime_col is not None:
-                    # 确定ID列名
-                    id_col = self._get_id_column(df, id_type)
-                    if id_col and id_col in df.columns:
+                    if id_col and id_col in df.columns and id_col in icu_times.columns:
                         # 合并入院时间
                         df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
                         
@@ -1959,14 +1982,6 @@ class ConceptLoader:
             mode_str = "并行" if parallel_mode else "串行"
             print(f"⚡ 预加载表 ({mode_str}模式)...")
         
-        # 🚀 初始化 ICUDataSource（如果还没有）
-        # 这对 rec_cncpt 概念至关重要，因为 ConceptResolver 需要数据源对象
-        if self._data_source is None:
-            # The loader's one bound source (see _bound_source).
-            self._data_source = self._table_source()
-            if verbose:
-                print(f"  初始化数据源: {self._src_name}")
-            
         # 1. Identify required tables and columns - 递归收集所有依赖
         table_columns = {} # table_name -> set of columns
         
@@ -2060,7 +2075,7 @@ class ConceptLoader:
                 print(f"  Loading {table_name} with {len(columns)} columns...")
             
             # 🚀 优化：如果有 data_source，使用它并传递患者过滤器以在读取时就过滤
-            if self._data_source is not None and patient_ids is not None:
+            if patient_ids is not None:
                 # 构造患者过滤器
                 from .datasource import FilterSpec, FilterOp
                 # 确定ID列名

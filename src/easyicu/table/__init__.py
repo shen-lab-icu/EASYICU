@@ -1701,6 +1701,18 @@ def read_table_from(
     result.attrs["easyicu_table_name"] = table_name
     return result
 
+def id_table_name(cfg, id_type: str) -> str:
+    """The table holding ``id_type`` in ``cfg``: its ``id_configs``, else ricu's default."""
+    id_cfg = (getattr(cfg, 'id_configs', None) or {}).get(id_type)
+    if id_cfg is not None and id_cfg.table:
+        return id_cfg.table
+    defaults = {'icustay': 'icustays', 'hadm': 'admissions', 'patient': 'patients'}
+    if id_type not in defaults:
+        raise ValueError(
+            f"Unknown id_type '{id_type}' for source '{getattr(cfg, 'name', cfg)}'"
+        )
+    return defaults[id_type]
+
 def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     """
     Load ID table for a given ID type (R ricu load_id_tbl).
@@ -1720,24 +1732,7 @@ def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     
     # Load source configuration
     cfg = load_src_cfg(src)
-    
-    # Try to find table from id_configs
-    table_name = None
-    if hasattr(cfg, 'id_configs') and id_type in cfg.id_configs:
-        id_cfg = cfg.id_configs[id_type]
-        if id_cfg.table:
-            table_name = id_cfg.table
-    
-    # Fallback logic if not explicitly configured
-    if not table_name:
-        if id_type == 'icustay':
-            table_name = 'icustays'
-        elif id_type == 'hadm':
-            table_name = 'admissions'
-        elif id_type == 'patient':
-            table_name = 'patients'
-        else:
-            raise ValueError(f"Unknown id_type '{id_type}' for source '{src}'")
+    table_name = id_table_name(cfg, id_type)
     
     # Load the table
     try:
