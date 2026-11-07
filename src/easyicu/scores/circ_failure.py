@@ -455,6 +455,8 @@ def load_circ_failure(
                         not r.empty or c in core_concepts
                     ):
                         loaded_dfs[c] = r
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as exc:
                     # Grading without a drug's evidence would silently lower
                     # circulatory-failure levels for the whole batch.

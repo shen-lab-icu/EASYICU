@@ -1334,6 +1334,8 @@ class ConceptLoader:
             bounds = self._read_declared_table('icustays', [id_col, 'intime'])
             if bounds is None:
                 raise ValueError("icustays is not declared by the bound source")
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise ValueError(
                 "MIMIC duration time alignment could not load ICU intime"

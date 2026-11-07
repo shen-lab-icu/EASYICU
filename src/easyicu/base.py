@@ -7,6 +7,7 @@ from across the codebase, reducing code duplication.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import logging
 import threading
@@ -19,6 +20,8 @@ import pandas as pd
 
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
+from .value_failures import TYPED_VALUE_FAILURES
+from .storage_binding import binding_unit, child_binding, in_binding_unit
 from .databases.detection import (
     DatabaseDetectionError,
     detect_database_identity,
@@ -371,6 +374,8 @@ class BaseICULoader:
             if self.verbose:
                 logger.info(f"Initialized datasource for {self.database}")
 
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize datasource: {e}")
 
@@ -416,6 +421,8 @@ class BaseICULoader:
                 concept_count = len(list(self.concept_dict.keys()))
                 logger.info(f"Initialized concept system with {concept_count} concepts")
 
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize concept system: {e}")
 
@@ -571,6 +578,9 @@ class BaseICULoader:
         # Fallback to treating the string as a packaged resource name
         return load_dictionary(str(source))
 
+    # One public call is one binding unit: its chunks (threads in a copied
+    # context, processes from the binding) verify against one binding.
+    @in_binding_unit
     def load_concepts(
         self,
         concepts: Union[str, List[str]],
@@ -660,6 +670,8 @@ class BaseICULoader:
         except StorageIntegrityError:
             # A typed storage refusal keeps its type and stable reason code.
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             raise RuntimeError(f"Failed to load concepts {concepts}: {e}")
         # 🚀 优化：移除finally中的强制清除缓存
@@ -1133,6 +1145,7 @@ class BaseICULoader:
                         "datasource_config": self.datasource.config,
                         "concept_dict": self.concept_dict,
                         "verbose": self.verbose,
+                        "stay_binding": child_binding(self.datasource),
                     }
                     with ProcessPoolExecutor(
                         max_workers=parallel_workers,
@@ -1175,6 +1188,7 @@ class BaseICULoader:
                     with ThreadPoolExecutor(**executor_params) as executor:
                         future_map = {
                             executor.submit(
+                                contextvars.copy_context().run,
                                 _load_chunk_isolated,
                                 batch_ids,
                             ): idx
@@ -1296,10 +1310,12 @@ def detect_database_type(
     return loader.database
 
 _PROCESS_WORKER_LOADER: Optional[BaseICULoader] = None
+_PROCESS_WORKER_STAY_BINDING: Optional[Dict[str, Any]] = None
 
 def _init_parallel_chunk_worker(payload: Dict[str, Any]) -> None:
     """Initializer for process-based chunk workers."""
-    global _PROCESS_WORKER_LOADER
+    global _PROCESS_WORKER_LOADER, _PROCESS_WORKER_STAY_BINDING
+    _PROCESS_WORKER_STAY_BINDING = payload.get("stay_binding")
     loader = BaseICULoader.__new__(BaseICULoader)
     loader.verbose = payload.get("verbose", False)
     loader.database = payload.get("database")
@@ -1336,19 +1352,20 @@ def _process_chunk_task(args: tuple) -> Union[pd.DataFrame, Dict[str, pd.DataFra
 
     batch_loader = _PROCESS_WORKER_LOADER._create_loader_clone()
     try:
-        return batch_loader._load_concepts_once(
-            concepts,
-            batch_ids,
-            interval,
-            win_length,
-            aggregate,
-            keep_components,
-            merge,
-            r_compatible,
-            concept_workers,
-            extra_kwargs,
-            preserve_cache=False,
-            resolver=batch_loader.concept_resolver,
-        )
+        with binding_unit(_PROCESS_WORKER_STAY_BINDING):
+            return batch_loader._load_concepts_once(
+                concepts,
+                batch_ids,
+                interval,
+                win_length,
+                aggregate,
+                keep_components,
+                merge,
+                r_compatible,
+                concept_workers,
+                extra_kwargs,
+                preserve_cache=False,
+                resolver=batch_loader.concept_resolver,
+            )
     finally:
         batch_loader.clear_cache()

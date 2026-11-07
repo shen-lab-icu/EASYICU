@@ -462,6 +462,7 @@ def extract_miiv_arterial_blood_gas(data_source, *, allowed_stay_ids: Sequence[i
     ]
     if len(clocks) != 1:
         raise scoped.SourceEventContractError("one_icustays_parquet_required")
+    scoped._consumed_clock(data_source, clocks[0])
     lab_paths = scoped._files(data_source, "labevents", list(LAB_ITEMS))
     chart_paths = scoped._files(data_source, "chartevents", list(CHART_ITEMS))
     scoped._schemas(lab_paths, {"specimen_id", "labevent_id"}, set())

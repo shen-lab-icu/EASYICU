@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Union
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from ..patient_filter import PatientFilter
-from ..storage_layout import StorageIntegrityError
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..patient_filter import get_cohort_stats as _get_cohort_stats
 
 
@@ -79,90 +80,94 @@ def get_all_patient_ids_impl(
         database_id_config=database_id_config,
     )
     root = Path(data_path)
-    aliases = {"general": ("general", "general_table")}
-    name_candidates = aliases.get(table_name, (table_name,))
 
     try:
         all_ids: Optional[List] = None
-        parquet_file = None
         storage = None
 
-        def _validated(table: str, loader: Path):
-            # The storage policy's validated set for the location chosen here.
-            nonlocal storage
-            if storage is None:
-                from ..datasource import storage_source
+        from ..storage_layout import (
+            ORDINAL, PRESENCE_VALID, refuse_broken_presence, restore_frame_order,
+            table_decision, unreadable_file, unreadable_file_errors,
+        )
 
-                storage = storage_source(resolved_database, root)
-            return storage.resolve_target_files(table, loader=loader)
-
-        for name in name_candidates:
-            flat = root / f"{name}.parquet"
-            if flat.exists():
-                parquet_file = flat
-                break
-            nested = next(iter(sorted(root.glob(f"*/{name}.parquet"))), None)
-            if nested is not None:
-                parquet_file = nested
-                break
-        if parquet_file is not None:
-            try:
-                (parquet_file,) = _validated(parquet_file.stem, parquet_file)
-                frame = pd.read_parquet(parquet_file, columns=[id_col])
-                all_ids = frame[id_col].dropna().unique().tolist()
-            except StorageIntegrityError:
-                raise
-            except Exception:
-                # A present but unreadable Parquet file may have a CSV sibling.
-                all_ids = None
-
-        if all_ids is None:
-            for suffix in (".csv", ".csv.gz"):
-                csv_file = root / f"{table_name}{suffix}"
-                if not csv_file.exists():
-                    continue
-                from ..datasource import storage_source
-                from ..storage_layout import csv_table_scan
-
-                csv_table_scan(storage_source(resolved_database, root), table_name, csv_file)
+        def _ids(table: str, presence) -> tuple[List, str]:
+            # IDs in the source's own order, deduplicated in that order; the
+            # cap is applied last, by the caller (B-D30-COHORT-ORDER).
+            frames = []
+            for shard in presence.files:
                 try:
-                    frame = pd.read_csv(csv_file, usecols=[id_col])
-                    all_ids = frame[id_col].dropna().unique().tolist()
-                    break
-                except Exception:
-                    continue
+                    names = pq.read_schema(shard).names
+                    columns = [id_col, ORDINAL] if ORDINAL in names else [id_col]
+                    frames.append(pd.read_parquet(shard, columns=columns))
+                except unreadable_file_errors() as exc:
+                    # Present but unreadable is corruption, not absence: no
+                    # CSV sibling stands in for it (delta17c).
+                    raise unreadable_file(table, shard, exc) from exc
+            ordinals = [ORDINAL in f.columns for f in frames]
+            if all(ordinals):
+                # The normal readers' source-order restoration (bucket parts
+                # carry the source ordinal).
+                order = "source_file_order"
+                frame = restore_frame_order(pd.concat(frames, ignore_index=True))
+                ids = frame[id_col].dropna().tolist()
+            elif presence.layout == "bucket":
+                # A legacy bucket without the ordinal cannot say its source
+                # order; it uses the identifier order, and says so.
+                order = "identifier_order"
+                ids = sorted(pd.concat(frames, ignore_index=True)[id_col].dropna().tolist())
+            else:
+                # Flat files and shards: the files in name order, rows in file order.
+                order = "source_file_order"
+                ids = [v for f in frames for v in f[id_col].dropna().tolist()]
+            return list(dict.fromkeys(ids)), order
+
+        # One owner decides, for every path and case the storage contract
+        # covers: absent, valid (a single file, shards or a bucket, validated)
+        # or broken. A broken table refuses; only an absent one may fall back
+        # to its CSV (B-D30-COHORT-PRESENCE).
+        from ..datasource import storage_source
+
+        storage = storage_source(resolved_database, root)
+        source_format = None
+        order = "source_file_order"
+        presence = table_decision(storage, table_name)
+        refuse_broken_presence(table_name, presence)
+        if presence.state == PRESENCE_VALID:
+            all_ids, order = _ids(table_name, presence)
+            source_format = "parquet"
+        elif presence.loader is not None:
+            # Only the owner's ABSENT decision can supply a CSV loader.
+            from ..storage_layout import csv_table_scan
+
+            csv_table_scan(storage, table_name, presence.loader)
+            frame = pd.read_csv(presence.loader, usecols=[id_col])
+            all_ids = frame[id_col].dropna().unique().tolist()
+            source_format = "csv_fallback"
 
         if all_ids is None:
-            shard_dir = root / table_name
-            if shard_dir.is_dir():
-                all_ids = []
-                for shard in _validated(table_name, shard_dir):
-                    frame = pd.read_parquet(shard, columns=[id_col])
-                    all_ids.extend(frame[id_col].dropna().unique().tolist())
-                all_ids = list(dict.fromkeys(all_ids))
-            else:
-                loader = base_loader_cls(
-                    database=resolved_database,
-                    data_path=root,
-                    verbose=False,
-                )
-                sampled = sample_patient_ids_fn(
-                    loader,
-                    max_patients or 999_999_999,
-                    verbose=False,
-                    sample_strategy=_LOADER_SAMPLE_STRATEGY,
-                )
-                if listing is not None and sampled is not None:
-                    listing["order"] = _SAMPLE_ORDER[_LOADER_SAMPLE_STRATEGY]
-                return list(sampled or []), id_col
+            loader = base_loader_cls(
+                database=resolved_database,
+                data_path=root,
+                verbose=False,
+            )
+            sampled = sample_patient_ids_fn(
+                loader,
+                max_patients or 999_999_999,
+                verbose=False,
+                sample_strategy=_LOADER_SAMPLE_STRATEGY,
+            )
+            if listing is not None and sampled is not None:
+                listing["order"] = _SAMPLE_ORDER[_LOADER_SAMPLE_STRATEGY]
+            return list(sampled or []), id_col
 
         if listing is not None:
-            listing["order"] = "source_file_order"
+            listing["order"] = order
+            listing["source_format"] = source_format
 
         if max_patients and len(all_ids) > max_patients:
             all_ids = all_ids[:max_patients]
         return all_ids, id_col
-    except StorageIntegrityError:
+    except TYPED_VALUE_FAILURES:
         raise
     except Exception as exc:
         raise PatientIdDiscoveryError(

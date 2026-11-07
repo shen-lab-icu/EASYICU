@@ -82,8 +82,9 @@ def test_component_merge_without_keys_raises():
             _merge_tables({"weight": timed, "height": timed2}, ctx=SimpleNamespace(), how="inner")
 
 
-def test_eicu_optional_channel_absent_file_is_empty_but_key_error_raises():
+def test_eicu_optional_channel_absent_table_is_empty_but_key_error_raises():
     from easyicu.concept.eicu_source_qc import load_optional
+    from easyicu.datasource import MissingTableSourceError
 
     class _Source:
         def __init__(self, exc):
@@ -92,7 +93,10 @@ def test_eicu_optional_channel_absent_file_is_empty_but_key_error_raises():
         def load_table(self, *_args, **_kwargs):
             raise self.exc
 
-    assert load_optional(_Source(FileNotFoundError("x")), "respiratorycare", [1], ["a"]).empty
+    # Absence is the source's MissingTableSourceError (recorded first, delta17w).
+    assert load_optional(_Source(MissingTableSourceError("x")), "respiratorycare", [1], ["a"]).empty
+    with pytest.raises(FileNotFoundError):  # a vanished file is not absence
+        load_optional(_Source(FileNotFoundError("x")), "respiratorycare", [1], ["a"])
     with pytest.raises(RuntimeError, match="eicu_optional_channel_read_failed"):
         load_optional(_Source(KeyError("patientunitstayid")), "respiratorycare", [1], ["a"])
 
@@ -117,6 +121,7 @@ def test_partitioned_read_failure_raises_instead_of_empty(tmp_path, monkeypatch)
 
     from easyicu.config import DataSourceConfig
     from easyicu.datasource import ICUDataSource
+    from easyicu.storage_layout import StorageIntegrityError
 
     table = tmp_path / "tbl"
     table.mkdir()
@@ -128,7 +133,8 @@ def test_partitioned_read_failure_raises_instead_of_empty(tmp_path, monkeypatch)
 
     monkeypatch.setattr(pads, "dataset", boom)
     monkeypatch.setattr(pd, "read_parquet", boom)
-    with pytest.raises(RuntimeError, match="partitioned_read_failed: tbl"):
+    # An unreadable shard is the storage owner's typed refusal (delta17c).
+    with pytest.raises(StorageIntegrityError, match="table_scan_file_unreadable: tbl"):
         source._read_partitioned_data_optimized(table, ["a"], None)
 
 

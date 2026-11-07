@@ -4,10 +4,10 @@ The owner used to key a held frame by database + installation path only,
 and a warm hit returned it without asking the storage owner again: a new
 source object over the same path, whose stay table had been replaced or
 removed, got the old discharge bounds and weights. Now every lookup
-resolves the table's validated files and stats them:
-- another file set misses;
-- the same files with another size or mtime raise
-  ``stay_table_source_changed``;
+resolves the table's validated files and stats them against the unit's
+binding (Codex delta8c):
+- another file set within one unit, or the same files with another size,
+  mtime or inode, raise ``stay_table_source_changed``;
 - a validated file that is gone raises ``stay_table_source_missing``.
 One read per table per batch still holds. Rows are synthetic.
 """
@@ -23,13 +23,11 @@ import pytest
 from easyicu.concept import ConceptDictionary, ConceptResolver
 from easyicu.concept.errors import ConceptTableReadError
 from easyicu.concept.stay_tables import (
-    SourceBinding,
     StayTableSourceChanged,
-    clear_stay_tables,
-    source_binding,
     stay_table_frame,
     stay_table_reads,
 )
+from easyicu.storage_binding import binding_unit
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu.storage_layout import StorageIntegrityError
@@ -80,39 +78,40 @@ def _hr(source, stays):
     )
 
 
-@pytest.fixture(autouse=True)
-def _fresh_owner():
-    clear_stay_tables()
-    yield
-    clear_stay_tables()
+# A run (an extraction, or a loader call) opens one binding_unit; the
+# loads inside it (several top-level resolver calls) share it, as here.
 
 
 def test_the_same_files_are_read_once_per_batch_across_sources(tmp_path):
     root = _install(tmp_path / "eicu")
     before = stay_table_reads()
-    _hr(_source(root), [1, 2])
-    _hr(_source(root), [1, 2])
+    with binding_unit():
+        _hr(_source(root), [1, 2])
+        _hr(_source(root), [1, 2])
     assert stay_table_reads() - before == 1
 
 
 def test_a_replaced_stay_table_within_the_batch_is_refused_not_reused(tmp_path):
     root = _install(tmp_path / "eicu")
-    first = _hr(_source(root), [2, 4])
-    # Same path, new bytes: stay 2 now stays 40 h instead of 24 h.
-    write_fixture_parquet(_patient((48, 40, 36, 12)), root / "patient.parquet", index=False)
-    with pytest.raises(StorageIntegrityError) as error:
-        _hr(_source(root), [2, 4])
+    with binding_unit():
+        first = _hr(_source(root), [2, 4])
+        # Same path, new bytes: stay 2 now stays 40 h instead of 24 h.
+        write_fixture_parquet(_patient((48, 40, 36, 12)), root / "patient.parquet", index=False)
+        with pytest.raises(StorageIntegrityError) as error:
+            _hr(_source(root), [2, 4])
+    assert isinstance(error.value, StayTableSourceChanged)
     assert error.value.reason == "stay_table_source_changed"
     assert len(first)  # the first batch read was ordinary
 
 
 def test_a_touched_stay_table_within_the_batch_is_refused(tmp_path):
     root = _install(tmp_path / "eicu")
-    _hr(_source(root), [1, 2])
-    stat = (root / "patient.parquet").stat()
-    os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-    with pytest.raises(StayTableSourceChanged) as error:
+    with binding_unit():
         _hr(_source(root), [1, 2])
+        stat = (root / "patient.parquet").stat()
+        os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        with pytest.raises(StayTableSourceChanged) as error:
+            _hr(_source(root), [1, 2])
     assert error.value.reason == "stay_table_source_changed"
 
 
@@ -126,26 +125,25 @@ def test_a_removed_stay_table_is_never_served_from_the_held_frame(tmp_path):
         _hr(_source(root), [1, 2])
 
 
-def test_a_new_batch_reads_the_new_bytes(tmp_path):
+def test_a_new_unit_reads_the_new_bytes(tmp_path):
     root = _install(tmp_path / "eicu")
     _hr(_source(root), [2, 4])
     write_fixture_parquet(_patient((48, 40, 36, 12)), root / "patient.parquet", index=False)
-    clear_stay_tables()  # the streamed batch boundary
-    later = _hr(_source(root), [2, 4])
-    clear_stay_tables()
+    later = _hr(_source(root), [2, 4])  # another call: another unit
     fresh = _hr(_source(_install(tmp_path / "fresh", (48, 40, 36, 12))), [2, 4])
     pd.testing.assert_frame_equal(later, fresh, check_exact=True)
 
 
-def test_the_unscoped_memo_of_one_resolver_is_bound_too(tmp_path):
+def test_an_unscoped_read_is_bound_too(tmp_path):
     root = _install(tmp_path / "eicu")
     source = _source(root)
     resolver = ConceptResolver(ConceptDictionary.from_json(DICTIONARY))
-    resolver._stay_table(source, "patient")
-    stat = (root / "patient.parquet").stat()
-    os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-    with pytest.raises(StayTableSourceChanged):
+    with binding_unit():
         resolver._stay_table(source, "patient")
+        stat = (root / "patient.parquet").stat()
+        os.utime(root / "patient.parquet", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        with pytest.raises(StayTableSourceChanged):
+            resolver._stay_table(source, "patient")
 
 
 class _Files:
@@ -160,33 +158,43 @@ class _Files:
         return self._files
 
 
-def test_a_source_over_the_same_path_naming_other_files_misses(tmp_path):
+def _reader(reads, tag):
+    def read():
+        reads.append(tag)
+        return pd.DataFrame({"x": [tag]})
+    return read
+
+
+def test_a_source_over_the_same_path_naming_other_files_is_refused(tmp_path):
     a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
     a.write_bytes(b"a"), b.write_bytes(b"bb")
-    reads = []
-
-    def read(tag):
-        def _read():
-            reads.append(tag)
-            return pd.DataFrame({"x": [tag]})
-        return _read
-
-    scope = ("patientunitstayid", frozenset({1}))
-    first = stay_table_frame(source_binding(_Files(tmp_path, [a]), "patient"), scope, read("a"))
-    second = stay_table_frame(source_binding(_Files(tmp_path, [b]), "patient"), scope, read("b"))
-    assert reads == ["a", "b"]
-    assert first["x"].tolist() == ["a"] and second["x"].tolist() == ["b"]
+    reads: list = []
+    stays = ("patientunitstayid", frozenset({1}))
+    with binding_unit():
+        first = stay_table_frame(_Files(tmp_path, [a]), "patient", stays, _reader(reads, "a"))
+        # The unit is bound to file a for this source table: another file set
+        # is a changed source, never another frame of the same run.
+        with pytest.raises(StayTableSourceChanged) as error:
+            stay_table_frame(_Files(tmp_path, [b]), "patient", stays, _reader(reads, "b"))
+    assert error.value.reason == "stay_table_source_changed"
+    assert reads == ["a"] and first["x"].tolist() == ["a"]
+    with binding_unit():  # a new run binds the new file set
+        second = stay_table_frame(_Files(tmp_path, [b]), "patient", stays, _reader(reads, "b"))
+    assert second["x"].tolist() == ["b"]
 
 
 def test_a_validated_file_that_is_gone_is_a_typed_failure(tmp_path):
     gone = tmp_path / "patient.parquet"
-    with pytest.raises(StayTableSourceChanged) as error:
-        source_binding(_Files(tmp_path, [gone]), "patient")
+    with binding_unit(), pytest.raises(StayTableSourceChanged) as error:
+        stay_table_frame(_Files(tmp_path, [gone]), "patient", None, _reader([], "x"))
     assert error.value.reason == "stay_table_source_missing"
     assert isinstance(error.value, StorageIntegrityError)
 
 
 def test_a_source_without_files_shares_nothing(tmp_path):
+    reads: list = []
     one, two = _Files(tmp_path, []), _Files(tmp_path, [])
-    assert source_binding(one, "patient") != source_binding(two, "patient")
-    assert isinstance(source_binding(one, "patient"), SourceBinding)
+    with binding_unit():
+        stay_table_frame(one, "patient", None, _reader(reads, "one"))
+        stay_table_frame(two, "patient", None, _reader(reads, "two"))
+    assert reads == ["one", "two"]

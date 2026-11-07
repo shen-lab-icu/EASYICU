@@ -60,6 +60,40 @@ blank-unit behavior are explicit. Existing row and browser disclosure scanners
 apply to preview, download and bundles. Historical/unbound inputs and unknown
 concepts yield typed `not_recorded`; no retrospective provenance is invented.
 
+### Warm raw-frame caches
+
+A raw table payload held in `ICUDataSource`'s cache is served again only after
+its owner revalidates the source on every hit
+(`storage_layout.revalidate_payload`):
+
+- the resolver's layout choice and file set, or the deliberate flat scan;
+- the bucket contract, with its full part inventory and sizes;
+- the CSV admission;
+- the conversion or bucket manifest sha256, read from its bytes.
+
+Within a binding unit that has bound the source, a mismatch raises
+`storage_source_changed` / `storage_source_missing`. Only a new unit may
+refresh the payload.
+
+Data files are bound by their stat identity: size, mtime_ns, ctime_ns, inode
+and device. A rewrite in place that keeps the inode and size and restores the
+mtime with `utime` still moves ctime. That makes it a new version, and a warm
+hit refuses it (`storage_source_changed`) or reads it again.
+
+A file that changed within 2 s of its first read is racily clean: a rewrite
+inside the filesystem's timestamp granularity could keep every stat field. No
+payload cache keeps a frame read from such a file. Within the binding unit it
+is bound by content: its sha256 is taken at first sight, and every later
+check re-hashes it. Manifests and build receipts are always bound by sha256.
+
+Known limit: deliberate stat forgery, which rewrites the content and then
+restores ctime as well (for example through the system clock or raw device
+access), is not detected. Such a run is not a formal run. Formal runs get
+content identity from a full-SHA snapshot of every input file taken before and
+after the run. This tree has no owner for that snapshot: the prov lane
+provides it at merge. Until then, a run's content identity is the stat
+identity above.
+
 ## Renderer handoff
 
 The backend publishes these fields; the lead can use the existing renderers:

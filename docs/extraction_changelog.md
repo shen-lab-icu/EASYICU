@@ -708,6 +708,48 @@ Execution only; a module that finishes publishes the same values.
   counted here.
 
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `0d3a03f94`, `691e24f3e`]
+## 2026-11-07 — one complete table decision and loader [lead-r13, `7f72fd643`]
+
+- **B-D47-NESTED / B-D47-CSV:** reader, cohort and resolver use `storage_layout.table_decision`, including recursive nested search and typed listing refusals (also inside a table's inventory); configured CSV is eligible only when Parquet is absent, and a supplied Parquet loader cannot override absence. A healthy HiRID `General/` beside `general_table.csv` now serves Parquet to both readers, and independent root plus nested sources refuse. Bound-source missing refusals keep their existing priority.
+- **B-D47-HARDLINK-PAIR:** verified flat/bucket provenance is compared by device and inode, so a hardlink alias cannot change the selected source; an independent copy still refuses.
+- **NB racy CSV aliases:** the unit's racy set and the CSV validation memo both use realpath, preserving the racy refusal to memoize across path aliases.
+- **NB B-D47-CACHE:** candidate creation during a run is outside the immutable-data-root contract and remains covered by slpub's start-of-run closure gate; no cache rescan fix is claimed here.
+- **NB B-D47-DERIVED-SHA:** runtime provenance checks use the recorded source set, size and mtime, with device/inode identity for pairing and run binding. At `review-r13sealtool` (`059f1ec9c`), `tools/seal_buckets/bucket_compare.py:179–195` checks source stat values but does **not** hash bucket `derived_from` source bytes; the separate conversion-manifest SHA check in `seal_rebuild.py:825–832` does not verify those bucket sources. No seal-time bucket-source SHA guarantee is claimed.
+
+## 2026-11-06 — stay discovery: one table source in any spelling, in source order [lead-r13, `9999037c3`, `b668b2023`, `c114100d3`]
+
+**What changed.** The stay universe an extraction uses when it is given no
+patient IDs (and any cap on it) can differ from earlier exports in these
+cases:
+
+- **One source, any spelling.** Stay discovery and the table reader share
+  one matcher (`storage_layout.match_table_entries`). It lists the actual
+  directory entries, case-insensitively, under the installation and its
+  `icu`/`hosp` directories. A table spelled `IcuStays.parquet`,
+  `IcuStays/` or `icustays.PARQUET` is now the stay table; before, stay
+  discovery could fall back to the stay CSV while the reader used the
+  Parquet.
+- **Refusals instead of a pick.** Two independent sources of one table
+  (case variants, the base and `icu`, two nested folders, links to
+  different folders) refuse with `table_source_ambiguous`. A flat table
+  beside the bucket whose `derived_from` binds it is one source. A dangling
+  link, an empty table folder, or a folder named `.parquet` refuses
+  (`table_scan_file_unreadable`, `table_layout_broken`), even beside a valid
+  source. The stay CSV is read only when no Parquet entry exists.
+- **Source order before the cap.** IDs follow the source order the readers
+  restore (bucket parts carry the source ordinal); duplicates keep their
+  first occurrence, and `max_patients` is applied last. A capped cohort is
+  the same on flat, sharded and bucket installations of one source.
+- **Legacy buckets without the source ordinal.** These cannot state their
+  source order. Their IDs are now sorted by identifier, and the listing says
+  `identifier_order`. The full ID set is unchanged, but a **capped** cohort
+  from such a bucket can differ from the one an earlier version took in
+  physical file order.
+
+The G1 benchmark cohorts are not affected: they take the full ID set with no
+cap, sort it and draw a seeded sample, so discovery order never enters them.
+
+## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 
 **What changed.** A concept loaded through DuckDB hourly aggregation now
 publishes byte-identical rows, values and dtypes to the same concept loaded

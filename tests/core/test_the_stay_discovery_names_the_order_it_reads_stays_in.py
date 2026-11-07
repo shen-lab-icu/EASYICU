@@ -26,7 +26,8 @@ def test_a_stay_table_is_read_in_its_own_order(tmp_path) -> None:
     )
 
     assert (ids, id_col) == ([30, 10], "stay_id")
-    assert listing == {"order": "source_file_order"}
+    # The receipt also names the stay table's format (delta17c).
+    assert listing == {"order": "source_file_order", "source_format": "parquet"}
     # Without the record, the discovery returns what it always did.
     assert api.get_all_patient_ids(tmp_path, database="miiv", max_patients=2) == (
         [30, 10],

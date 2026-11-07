@@ -1951,3 +1951,13 @@ def test_miiv_absolute_times_outside_the_icu_episode_are_quarantined():
     assert out["value"].tolist() == [2.0, 3.0]
     assert "intime" not in out.columns
     assert "outtime" not in out.columns
+
+
+@pytest.fixture(autouse=True)
+def _one_run():
+    """Each test is one run: resolver internals called directly read stay
+    tables under its source binding (Codex delta8c), as load_concepts does."""
+    from easyicu.storage_binding import binding_unit
+
+    with binding_unit():
+        yield

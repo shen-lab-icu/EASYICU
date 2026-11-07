@@ -2641,10 +2641,11 @@ def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
 
 
 def _clear_stream_loader_caches(loader) -> None:
-    from ..concept.stay_tables import clear_stay_tables
+    from ..concept.stay_tables import drop_stay_table_frames
 
-    # The batch's stay-origin tables are released with its loaders.
-    clear_stay_tables()
+    # The batch's stay-origin payload is dropped with its loaders; the run's
+    # source binding stays, so later reads still verify against it.
+    drop_stay_table_frames()
     if loader is None:
         # Streamed exports disable module grouping, so this helper normally
         # receives no explicitly shared loader.  ``load_concepts`` still owns
@@ -2872,9 +2873,14 @@ def _write_isolated_stream_batch(
     concepts: List[str],
     load_kwargs: Dict,
     patient_ids: Dict,
+    stay_binding: Optional[Dict],
     destination: str,
 ) -> None:
-    """Extract one patient batch and atomically write it from a fresh process."""
+    """Extract one patient batch and atomically write it from a fresh process.
+
+    ``stay_binding`` is the parent run's source binding: this child's
+    storage reads verify against it (``storage_binding``).
+    """
 
     import os
     from pathlib import Path
@@ -2900,7 +2906,9 @@ def _write_isolated_stream_batch(
     fill_sidecar = _stream_batch_fill_sidecar(target)
     fill_sidecar.unlink(missing_ok=True)
     try:
-        with bounds_scope() as bounds_records, merge_fill_scope() as batch_fills:
+        from ..storage_binding import binding_unit
+
+        with binding_unit(stay_binding), bounds_scope() as bounds_records, merge_fill_scope() as batch_fills:
             batch = _load_stream_module_batch(
                 _lc,
                 module_name=module_name,
@@ -3379,6 +3387,14 @@ def _stream_module_batches_to_parquet(
         module_name,
     ) in _DEFERRED_STREAM_MERGE_TARGETS
     batch_process_context = _get_extraction_mp_context(mp) if isolate_batch_process else None
+    stay_binding = None
+    if isolate_batch_process and load_kwargs.get("data_path"):
+        from ..storage_binding import child_binding
+        from ..datasource import storage_source
+
+        stay_binding = child_binding(storage_source(
+            str(load_kwargs.get("database") or ""), str(load_kwargs["data_path"]),
+        ))
     writer = None
     keep_parts = False
     # The module schema: the first batch's (a resumed run reads it back from
@@ -3470,6 +3486,7 @@ def _stream_module_batches_to_parquet(
                             concepts,
                             batch_load_kwargs,
                             {id_col: batch_ids},
+                            stay_binding,
                             str(batch_part),
                         ),
                         daemon=False,
@@ -3744,6 +3761,28 @@ def batch_telemetry_first_part(batch_telemetry) -> Optional[str]:
     return None
 
 
+def _tags_storage_module(module_name_of):
+    """Run a module load with its storage module tag set, and restored after.
+
+    Availability records made while the module loads (in this process, or
+    in an isolated child started meanwhile) name the module (delta17w).
+    """
+    import functools
+
+    def decorate(function):
+        @functools.wraps(function)
+        def wrapper(*args, **kwargs):
+            from ..storage_layout import storage_module
+
+            with storage_module(module_name_of(args, kwargs)):
+                return function(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
+
+
+@_tags_storage_module(lambda args, kwargs: kwargs.get("module_name", args[0] if args else None))
 def _run_module_extraction(
     module_name: str,
     concepts: List[str],
@@ -3820,16 +3859,22 @@ def _run_module_extraction(
                     "streamed module export requires patient_ids and batch_size"
                 )
             streamed = True
-            stream_info = _stream_module_batches_to_parquet(
-                module_name,
-                concepts,
-                kwargs,
-                patient_ids_filter,
-                int(batch_size),
-                output_dir,
-                loader=loader,
-                adaptive_batch_growth=adaptive_stream_batches,
-            )
+            from ..storage_binding import binding_unit
+
+            # One binding unit across the module's batches (or the run's, when a
+            # group worker opened it): every read verifies against one source
+            # binding; batch boundaries drop only the stay-table payload.
+            with binding_unit():
+                stream_info = _stream_module_batches_to_parquet(
+                    module_name,
+                    concepts,
+                    kwargs,
+                    patient_ids_filter,
+                    int(batch_size),
+                    output_dir,
+                    loader=loader,
+                    adaptive_batch_growth=adaptive_stream_batches,
+                )
             if stream_info is not None:
                 saved[module_name] = stream_info
         else:
@@ -3937,6 +3982,8 @@ def _run_module_extraction(
 
     elapsed = time.time() - t0
     memory_stats = module_memory_sampler.stop()
+    from ..storage_layout import module_unavailability
+
     manifest = {
         "module": module_name,
         "saved": saved,
@@ -3944,6 +3991,8 @@ def _run_module_extraction(
         "warnings": warnings,
         "memory_exhausted": bool(memory_exhausted),
         "elapsed_sec": round(elapsed, 1),
+        # Declared tables with no physical source, read as empty (delta17w).
+        "storage_unavailable": module_unavailability(module_name),
         **memory_stats,
     }
     # (batch, concept) pairs whose empty slice took the batch index; a
@@ -4137,6 +4186,7 @@ def _consolidate_special_score_dependency(
     return grouped[[id_col, time_col, score_name]]
 
 
+@_tags_storage_module(lambda args, kwargs: "special_concepts")
 def _stream_special_extraction_batches(
     special_modules: List[str],
     database: str,
@@ -4506,8 +4556,11 @@ def _stream_special_extraction_batches(
         raise
 
     _mark_failure_stage("special_stream_write_manifest")
+    from ..storage_layout import module_unavailability
+
     manifest = {
         "module": "special_concepts",
+        "storage_unavailable": module_unavailability("special_concepts"),
         "saved": saved,
         "derivation_contexts": ({"sep3_sofa1": context.finish(expected_ids=all_ids)}
                                 if context is not None and not errors else {}),
@@ -5149,8 +5202,12 @@ def _extract_module_group_worker(
     adaptive_stream_batches: bool = False,
     resource_budget_mb: Optional[float] = None,
     max_workers: Optional[int] = None,
+    stay_binding: Optional[Dict] = None,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
+
+    ``stay_binding`` is the extraction run's source binding; every module of
+    the group verifies against it (``storage_binding``).
 
     keep_cache 让组内模块共享 raw/table 缓存（受 EASYICU_CACHE_BUDGET_MB
     字节预算约束），chartevents/labevents 等重表每组只扫一次，而不是每
@@ -5168,8 +5225,9 @@ def _extract_module_group_worker(
     else:
         _extract_worker_env_setup(data_path, resource_budget_mb, max_workers=max_workers)
     from easyicu.api import keep_cache as _keep_cache
+    from easyicu.storage_binding import binding_unit
 
-    with _keep_cache(
+    with binding_unit(stay_binding), _keep_cache(
         database=database, data_path=data_path, use_sofa2=use_sofa2
     ) as _loader:
         for module_name, concepts in module_specs:
@@ -8375,6 +8433,12 @@ def _publish_native_export_v2(
     manifest.update(source_value_publication(
         result.get("modules") or {}, modules, database=database, dictionary=dictionary
     ))
+    if result.get("storage_binding"):
+        manifest["storage_binding"] = dict(result["storage_binding"])
+    if "storage_consumed" in result:
+        manifest["storage_consumed"] = list(result["storage_consumed"])
+    if "storage_unavailable" in result:
+        manifest["storage_unavailable"] = list(result["storage_unavailable"])
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -8471,6 +8535,60 @@ def _quarantine_unpublished_outputs(
     return str(target)
 
 
+def _keeps_storage_evidence(function):
+    """A failed extraction keeps its storage evidence and cleans up its run log.
+
+    ``extract_database`` points ``EASYICU_SCAN_FALLBACK_LOG`` at its own run
+    log and, on success, restores it and removes the log itself. When it
+    raises while that log is still active, the same exception object
+    propagates unchanged; an ``Exception`` first gets ``storage_evidence``
+    ({storage_consumed, storage_fallbacks} as read from the log, or
+    {"error": "<type>: <reason>"} if the log cannot be read). The variable is
+    restored and the log removed on any exit (D10D-CONSUMED-DELIVERY).
+    """
+    import functools
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        from ..storage_layout import (
+            SCAN_FALLBACK_LOG_ENV, read_consumed_log, read_scan_fallback_log,
+        )
+
+        previous = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+        try:
+            return function(*args, **kwargs)
+        except Exception as exc:
+            run_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+            if run_log and run_log != previous and not hasattr(exc, "storage_evidence"):
+                try:
+                    evidence = {
+                        "storage_consumed": [dict(e) for e in read_consumed_log(run_log)],
+                        "storage_fallbacks": list(read_scan_fallback_log(run_log)),
+                    }
+                except (OSError, ValueError, TypeError) as read_error:
+                    evidence = {"error": f"{type(read_error).__name__}: storage_run_log_unreadable"}
+                try:
+                    exc.storage_evidence = evidence
+                except AttributeError:  # an exception type that takes no attributes
+                    pass
+            raise
+        finally:
+            run_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+            if run_log != previous:  # still the run's own log: it never got to clean up
+                if previous is None:
+                    os.environ.pop(SCAN_FALLBACK_LOG_ENV, None)
+                else:
+                    os.environ[SCAN_FALLBACK_LOG_ENV] = previous
+                if run_log:
+                    try:
+                        os.unlink(run_log)
+                    except OSError:  # never masks the exception being raised
+                        pass
+
+    return wrapper
+
+
+@_keeps_storage_evidence
 def extract_database(
     database: str,
     data_path: Optional[Union[str, Path]] = None,
@@ -8803,6 +8921,15 @@ def extract_database(
     )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
+    # The run's source binding, opened here with the stay-origin table
+    # pinned: every group worker (and its isolated batch children) verifies
+    # against it and extends it as it resolves tables.
+    from ..storage_binding import child_binding
+    from ..datasource import storage_source
+
+    run_stay_binding = (
+        child_binding(storage_source(database, data_path)) if data_path else None
+    )
     if (automatic_batch or normalized_module_batch_sizes) and not group_flag:
         # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.
         # Their measured policies differ on eICU (SOFA-1 is 67k, SOFA-2 is
@@ -8900,6 +9027,7 @@ def extract_database(
         # module result, its published manifest and the release receipt; the
         # batch-level retries join the run's retry history (D3-LEDGER).
         mod_result["stream_resume_events"] = list(manifest.get("stream_resume_events") or [])
+        mod_result["storage_unavailable"] = list(manifest.get("storage_unavailable") or [])
         if manifest.get("stream_failure") is not None:
             mod_result["stream_failure"] = dict(manifest["stream_failure"])
         result["stream_retry_history"].extend(
@@ -8910,6 +9038,7 @@ def extract_database(
             "saved": {},
             "errors": mod_result["errors"],
             "warnings": mod_result["warnings"],
+            "storage_unavailable": mod_result["storage_unavailable"],
             "bounds": mod_result["bounds"],
             # Counts only: the private per-stay ledger stays in this process.
             "source_bounds": public_bounds(mod_result["source_bounds"]),
@@ -9051,12 +9180,15 @@ def extract_database(
                         "peak_working_set_mb",
                         0.0,
                     ),
+                    # The special stream reads for every special module at once.
+                    "storage_unavailable": list(manifest.get("storage_unavailable") or []),
                 }
                 output_manifest = {
                     "module": mod_name,
                     "saved": {},
                     "errors": mod_result["errors"],
                     "warnings": mod_result["warnings"],
+                    "storage_unavailable": mod_result["storage_unavailable"],
                     "bounds": mod_result["bounds"],
                     "elapsed_sec": sp_elapsed,
                     "start_rss_mb": manifest.get("start_rss_mb", 0.0),
@@ -9185,6 +9317,7 @@ def extract_database(
                 group_adaptive_stream_batches,
                 resource_budget_mb,
                 max_workers,
+                run_stay_binding,
             ),
             # A memory-heavy streamed module may create one fresh process per
             # patient batch so the OS, not allocator heuristics, owns teardown.
@@ -9457,6 +9590,35 @@ def extract_database(
         shutil.rmtree(tmp_root, ignore_errors=True)
 
     result["storage_fallbacks"] = list(read_scan_fallback_log(scan_fallback_log))
+    # Every file any worker consumed, from the storage owner's table_consumed
+    # events in the shared run log (formal-run receipt, delta9p B9P-CSV-BINDING).
+    from ..storage_layout import read_consumed_log
+
+    result["storage_consumed"] = [dict(e) for e in read_consumed_log(scan_fallback_log)]
+    # The run binding's digest as the parent holds it: the snapshot every
+    # group worker and isolated child verifies against (each extends it in its
+    # own process; those extensions are not merged back here).
+    from ..storage_binding import binding_summary, binding_unit
+
+    with binding_unit(run_stay_binding):
+        run_binding = binding_summary()
+    result["storage_binding"] = {
+        "digest": run_binding.digest,
+        "files": run_binding.files,
+        "scope": "parent_run_binding",
+    }
+    # What served every consumed table, from every worker's table_layout
+    # events; a consumed table without one is storage_layout_unrecorded (D10D).
+    from ..storage_layout import consumed_table_layouts, read_layout_log
+
+    result["storage_binding"]["tables"] = consumed_table_layouts(
+        result["storage_consumed"], read_layout_log(scan_fallback_log)
+    )
+    # Declared tables with no physical source that were read as empty, from
+    # every worker (delta17w); each module's own are in its receipt.
+    from ..storage_layout import read_unavailable_log
+
+    result["storage_unavailable"] = [dict(e) for e in read_unavailable_log(scan_fallback_log)]
     if previous_fallback_log is None:
         os.environ.pop(SCAN_FALLBACK_LOG_ENV, None)
     else:
@@ -9486,10 +9648,16 @@ def extract_database(
                 # The typed refusal itself, unpublished (no root manifest).
                 exc.quarantine = quarantine
                 raise
-            raise NativeExportPublicationError(
+            error = NativeExportPublicationError(
                 f"{exc} [unpublished files moved to {quarantine}]",
                 quarantine=quarantine,
-            ) from exc
+            )
+            # The run's storage evidence survives the refusal (D10D).
+            error.storage_evidence = {
+                "storage_consumed": list(result.get("storage_consumed", [])),
+                "storage_fallbacks": list(result.get("storage_fallbacks", [])),
+            }
+            raise error from exc
         finish_native_export(output_dir)
 
     total_elapsed = time.time() - t_start

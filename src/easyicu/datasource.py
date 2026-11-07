@@ -5,11 +5,13 @@ from __future__ import annotations
 from easyicu.runtime import duckdb_spill
 from . import storage_layout
 import enum
+import os
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import logging
 import re
+import uuid
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
@@ -45,6 +47,25 @@ class SourceTimeFormatError(storage_layout.StorageIntegrityError):
             f"{other} non-numeric non-blank values; the source declares relative "
             "offsets, so this column cannot be read as either"
         )
+
+
+def _consumed_clock_table(data_source: Any, table: str, path) -> Path:
+    """Record a clock/identity table a DuckDB query opens by name as consumed.
+
+    These relations (AUMC ``admissions``, SICdb ``cases``, HiRID ``general``,
+    MIMIC ``icustays``, community ``stays``) are joined in SQL beside the
+    resolved event files. The file actually read is bound and logged through
+    the one consumed-files source (``storage_layout.record_consumed``).
+    """
+    path = Path(path)
+    if path.is_file():
+        fmt = (
+            storage_layout.FORMAT_CSV
+            if path.name.lower().endswith((".csv", ".csv.gz"))
+            else storage_layout.FORMAT_PARQUET
+        )
+        storage_layout.record_consumed(data_source, table, (path,), fmt)
+    return path
 
 
 def _duckdb_path(p) -> str:
@@ -115,8 +136,10 @@ def _aumc_admissions_relation_sql(data_source: Any) -> str:
             continue
         sql_path = _duckdb_path(candidate).replace("'", "''")
         if candidate.suffix.lower() in {".parquet", ".pq"}:
+            _consumed_clock_table(data_source, "admissions", candidate)
             return f"read_parquet('{sql_path}')"
         if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            _consumed_clock_table(data_source, "admissions", candidate)
             return f"read_csv_auto('{sql_path}', header=true)"
 
     raise FileNotFoundError(
@@ -159,8 +182,10 @@ def _sic_cases_relation_sql(data_source: Any) -> str:
             continue
         sql_path = _duckdb_path(candidate).replace("'", "''")
         if candidate.suffix.lower() in {".parquet", ".pq"}:
+            _consumed_clock_table(data_source, "cases", candidate)
             return f"read_parquet('{sql_path}')"
         if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            _consumed_clock_table(data_source, "cases", candidate)
             return f"read_csv_auto('{sql_path}', header=true)"
 
     raise FileNotFoundError(
@@ -632,6 +657,7 @@ class ICUDataSource:
         }
         self.enable_cache = enable_cache
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
+        self._table_cache_sources: dict = {}  # cache_key -> (identity, captured reads) of the payload
         self._preloaded_tables: dict = {}  # 🚀 预加载的完整表（用于多患者批处理）
         self._bucket_dir_logged: set = set()  # 🔧 已打印日志的分桶目录（避免重复日志）
         self._bucket_dir_cache: dict = {}  # 缓存已发现的分桶目录（只缓存正结果）
@@ -681,6 +707,7 @@ class ICUDataSource:
         """清除表缓存,释放内存。"""
         with self._lock:
             self._table_cache.clear()
+            self._table_cache_sources.clear()
             self._preloaded_tables.clear()
             self._bucket_dir_cache.clear()
             self._flat_parquet_dir_cache.clear()
@@ -1001,6 +1028,8 @@ class ICUDataSource:
                                     patient_ids_filter = mapped_filter
                                     if verbose:
                                         logger.info(f"✅ [{table_name}] 映射成功: {len(spec.value)} stay_ids -> {len(valid_hadm_ids)} hadm_ids")
+                            except TYPED_VALUE_FAILURES:
+                                raise  # a typed failure keeps its type (D10D)
                             except Exception as e:
                                 # Left on stay_id, a hospital table without that
                                 # column would come back empty for the batch.
@@ -1391,6 +1420,8 @@ class ICUDataSource:
                         if verbose:
                             logger.debug(f"[{table_name}] 补全 {target_id_col} 后更新 id_columns: subject_id → {target_id_col}")
                         
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as e:
                     # A half-joined frame (no stay column, or rows not yet
                     # deduplicated to the target stays) must not be returned.
@@ -1487,11 +1518,22 @@ class ICUDataSource:
         cache_key = (table_name, tuple(sorted(columns)) if columns else None, filter_key, itemid_filter_key)
         
         # 检查缓存
+        from .storage_binding import capturing_consumed
+
         cached_frame = None
         if enable_caching:
             with self._lock:
                 cached_frame = self._table_cache.get(cache_key)
-        
+                cached_sources = self._table_cache_sources.get(cache_key)
+            # A payload is served only after its owner revalidates every source
+            # it was read from (D14D); a hit records them again, CSV included.
+            # A source this run already bound that changed or vanished raises.
+            if cached_frame is not None and (
+                cached_sources is None
+                or not storage_layout.revalidate_payload(self, *cached_sources)
+            ):
+                cached_frame = None
+
         if cached_frame is not None:
             # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
             # 这样多个概念可以共享同一个缓存的表副本
@@ -1505,7 +1547,28 @@ class ICUDataSource:
                 return patient_ids_filter.apply(cached_frame)
             # 如果不需要过滤，返回切片视图而非副本
             return cached_frame[:]
-        
+
+        with capturing_consumed():
+            return self._load_raw_frame_uncached(
+                table_name, columns, patient_ids_filter, concept_itemid_filter,
+                wide_table_value_columns, enable_caching, cache_key,
+            )
+
+    def _load_raw_frame_uncached(
+        self,
+        table_name: str,
+        columns: Optional[Iterable[str]],
+        patient_ids_filter: Optional[FilterSpec],
+        concept_itemid_filter: Optional[Tuple[str, set]],
+        wide_table_value_columns: Optional[List[str]],
+        enable_caching: bool,
+        cache_key: tuple,
+    ) -> pd.DataFrame:
+        """The read behind :meth:`_load_raw_frame`'s payload cache.
+
+        It runs inside ``capturing_consumed``: a cached payload is stored with
+        the files it was read from (D10D warm-cache sources).
+        """
         loader = self._table_sources.get(table_name)
         # A registered source is the caller's own file; a disk loader is
         # bound to the storage policy's validated file set.
@@ -1514,55 +1577,8 @@ class ICUDataSource:
         if loader is None and dataset_cfg is not None:
             frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
         elif loader is None:
-            # 🚀 优先检查分桶目录（无论是单文件还是多文件配置）
-            # 分桶目录性能远优于普通目录或单个parquet
-            bucket_loader = self._resolve_bucket_directory(table_name)
-            if bucket_loader is not None:
-                loader = bucket_loader
-            else:
-                # 修复：检查是否为多文件配置，如果是，使用目录路径
-                table_cfg = self.config.get_table(table_name)
-                if len(table_cfg.files) > 1:
-                    # 多文件配置：使用目录路径以启用多文件读取
-                    base_path = self.base_path or Path.cwd()
-                    if table_cfg.files:
-                        # HiRID特殊处理：配置中的CSV路径与实际parquet目录不同
-                        # observation_tables/csv/ -> observations/
-                        # pharma_records/csv/ -> pharma/
-                        if self.config.name == 'hirid':
-                            hirid_table_dir_mapping = {
-                                'observations': 'observations',
-                                'pharma': 'pharma',
-                            }
-                            if table_name in hirid_table_dir_mapping:
-                                mapped_dir = base_path / hirid_table_dir_mapping[table_name]
-                                if mapped_dir.is_dir():
-                                    parquet_files = list(mapped_dir.glob("*.parquet")) + list(mapped_dir.glob("*.pq"))
-                                    if parquet_files:
-                                        loader = mapped_dir
-                        
-                        # 如果HiRID映射未找到，使用默认逻辑
-                        if loader is None:
-                            # 获取目录路径（从第一个文件路径中提取）
-                            first_file = table_cfg.files[0]
-                            # 处理字符串或字典格式
-                            if isinstance(first_file, dict):
-                                first_path = Path(first_file.get('path', first_file.get('name', '')))
-                            else:
-                                first_path = Path(first_file)
-                            
-                            multi_file_dir = base_path / first_path.parent
-                            if multi_file_dir.is_dir():
-                                loader = multi_file_dir
-                            else:
-                                # 回退到单个文件解析
-                                loader = self._resolve_loader_from_disk(table_name)
-                    else:
-                        # 回退到单个文件解析
-                        loader = self._resolve_loader_from_disk(table_name)
-                else:
-                    loader = self._resolve_loader_from_disk(table_name)
-            
+            loader = self._resolve_loader_from_disk(table_name)
+
             # 🚀 MIMIC-III chartevents CSV fallback
             # When bucket directory is not available (due to memory constraints during conversion),
             # fall back to reading directly from CSV.gz with proper VALUE type handling
@@ -1581,14 +1597,25 @@ class ICUDataSource:
                     
                     # An error-only or unmatched selection is a valid empty source.
                     if enable_caching:
-                        with self._lock:
-                            self._table_cache[cache_key] = frame
+                        self._cache_raw_frame(cache_key, frame)
                     return frame
             
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
-                # A table the conversion manifest lists is not "absent".
-                storage_layout.verify_flat_scan(self, table_name, ())
+                # A table the conversion manifest lists is not "absent": it
+                # raises table_scan_files_missing here (delta17w case 1). A
+                # table this run already read and bound is missing, not absent
+                # (storage_source_missing), with or without a warm payload.
+                seen = storage_layout.resolve_table_files(self, table_name, consume=False)
+                if seen:
+                    raise storage_layout.TableScanError(
+                        "table_scan_loader_mismatch", table_name,
+                        f"the storage policy resolves {len(seen)} files the reader did not find",
+                    )
+                # Unlisted, or no manifest: absent may give empty, never
+                # silently. The record is written before the empty return or
+                # the MissingTableSourceError below (delta17w case 2).
+                storage_layout.record_table_unavailable(self, table_name)
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:
@@ -1667,9 +1694,8 @@ class ICUDataSource:
         # ⚡ 性能优化: 缓存原始frame，返回过滤后的结果
         # 不缓存需要特殊处理的表（labevents/admissions等）
         if enable_caching:
-            with self._lock:
-                # 缓存原始未过滤的表
-                self._table_cache[cache_key] = frame
+            # 缓存原始未过滤的表
+            self._cache_raw_frame(cache_key, frame)
         
         # 应用patient过滤(如果有)
         if patient_ids_filter:
@@ -1677,6 +1703,27 @@ class ICUDataSource:
         
         # 未过滤且未缓存时返回切片
         return frame[:] if self.enable_cache else frame
+
+    def _cache_raw_frame(self, cache_key: tuple, frame: pd.DataFrame) -> None:
+        """Keep a raw payload with the files it was read from.
+
+        A payload read from a racily clean file (changed within the stat
+        window of the read) is not kept: its stat identity cannot tell a
+        later same-stat rewrite from the bytes read (B-D17D-CONTENT).
+        """
+        from .storage_binding import captured_racily_clean, current_capture
+
+        captured = current_capture()
+        if captured is not None and captured_racily_clean(captured):
+            return
+        identity = (
+            None if captured is None else storage_layout.payload_identity(self, captured)
+        )
+        with self._lock:
+            self._table_cache[cache_key] = frame
+            self._table_cache_sources[cache_key] = (
+                None if captured is None else (identity, captured)
+            )
 
     def resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
         """Return a partitioned table directory through the public layout contract."""
@@ -1696,30 +1743,10 @@ class ICUDataSource:
         return self._resolve_loader_from_disk(table_name)
 
     def _resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
-        """Prefer a validated installation; reject corrupt caches without a flat source."""
-        if not self.base_path:
-            return None
-        failure = None
-        for base in (self.base_path, self.base_path / "icu", self.base_path / "hosp"):
-            for name in dict.fromkeys((table_name, table_name.lower())):
-                root = base / f"{name}_bucket"
-                if not root.is_dir():
-                    continue
-                try:
-                    storage_layout.read_bucket_contract(
-                        root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
-                    )
-                except storage_layout.BucketLayoutError as exc:
-                    failure = exc
-                    continue
-                self._bucket_dir_cache[str(table_name).lower()] = root
-                return root
-        if failure is not None:
-            if not storage_layout.flat_table_files(self, table_name):
-                raise failure
-            logger.warning("Ignoring physical cache: %s", failure.reason)
-            storage_layout.record_bucket_fallback(self, table_name, failure)
-        return None
+        """Return the bucket selected by the shared, complete decision owner."""
+        decision = storage_layout.table_decision(self, table_name)
+        storage_layout.refuse_broken_presence(table_name, decision)
+        return decision.loader if decision.layout == "bucket" else None
 
     def resolve_target_files(
         self, table_name: str, selector_column: Optional[str] = None,
@@ -1727,15 +1754,18 @@ class ICUDataSource:
         *, loader: Optional[Path] = None,
         stay_column: Optional[str] = None,
         stay_values: Optional[Iterable[object]] = None,
+        consume: bool = True,
     ) -> Tuple[Path, ...]:
         """Resolve table + selector through the single storage policy owner.
 
         ``stay_column``/``stay_values`` are the caller's direct stay predicate
-        (``column IN values``), used to narrow a variable × stay layout.
+        (``column IN values``), used to narrow a variable × stay layout. The
+        result is recorded as consumed; a precheck or probe passes
+        ``consume=False``.
         """
         return storage_layout.resolve_table_files(
             self, table_name, selector_column, selector_values, loader=loader,
-            stay_column=stay_column, stay_values=stay_values,
+            stay_column=stay_column, stay_values=stay_values, consume=consume,
         )
 
     def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
@@ -1761,175 +1791,20 @@ class ICUDataSource:
                     return dir_path
         return None
 
+    def _reconcile_loader(self, table_name: str, loader):
+        """Compatibility wrapper: disk loader choices belong to the owner."""
+        if not self.base_path or callable(loader):
+            return loader
+        return self._resolve_loader_from_disk(table_name)
+
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
-        if not self.base_path:
-            return None
+        decision = storage_layout.table_decision(self, table_name)
+        storage_layout.refuse_broken_presence(table_name, decision)
+        return decision.loader
 
-        def _case_insensitive_existing_path(path: Path) -> Optional[Path]:
-            """Resolve a file path even when the exported ICU table uses camelCase.
-
-            Some public eICU exports keep table names such as ``vitalPeriodic``
-            while EasyICU's concept dictionary normalizes table keys to
-            lowercase (``vitalperiodic``). On case-sensitive volumes this would
-            silently make valid real-data tables unavailable.
-            """
-            if path.exists():
-                return path
-            parent = path.parent
-            if not parent.is_dir():
-                return None
-            target = path.name.lower()
-            for child in parent.iterdir():
-                if child.name.lower() == target:
-                    return child
-            return None
-
-        if self.config.name == 'mimic' and table_name == 'services':
-            # MIMIC-III services is a small hospital-level table used by the
-            # demographics ``adm`` concept. Prefer the original CSV when it is
-            # available because some user-side parquet conversions of this
-            # file can abort inside Arrow before Python can catch the error.
-            for candidate in [
-                self.base_path / "SERVICES.csv.gz",
-                self.base_path / "services.csv.gz",
-                self.base_path / "SERVICES.csv",
-                self.base_path / "services.csv",
-            ]:
-                resolved_csv = _case_insensitive_existing_path(candidate)
-                if resolved_csv is not None:
-                    return resolved_csv
-        
-        # 🚀 优先级最高：检查分桶目录（性能最优）
-        # 分桶目录命名规则：{table_name}_bucket
-        # 必须在检查配置文件之前，因为分桶目录是性能优化的关键
-        bucket_dir = self._resolve_bucket_directory(table_name)
-        if bucket_dir is not None:
-            return bucket_dir
-        
-        table_cfg = self.config.get_table(table_name)
-        explicit = table_cfg.first_file()
-        
-        if explicit:
-            explicit_path = self.base_path / explicit
-            if explicit_path.exists():
-                # Accept directories (partitioned datasets) and Parquet files immediately
-                if explicit_path.is_dir():
-                    # 🔧 2026-05-11: 必须验证目录里真的有 parquet 文件再返回。
-                    # 否则 eICU 等数据库会因为同名目录残留旧的 .fst 文件而被误认为
-                    # parquet 分区数据集，导致 read_parquet('{dir}/*.parquet') 找不到文件
-                    # 然后回退到 fst 路径，丢失大量数据（实测 vitalperiodic 5M → 357k 行）。
-                    if list(explicit_path.glob("*.parquet"))[:1] or list(explicit_path.glob("*.pq"))[:1]:
-                        return explicit_path
-                    # 否则继续搜索同级 / 子目录的单文件 parquet（下方逻辑）
-                elif explicit_path.suffix.lower() in {".parquet", ".pq"}:
-                    return explicit_path
-                # Otherwise continue searching for a Parquet counterpart below
-        
-        # MIMIC-IV 文件名映射: 配置中的表名 -> 文件系统中的实际文件名
-        # 因为 MIMIC-IV 改了表名,但配置文件还是用的旧名
-        # MIMIC-IV 将 MIMIC-III 的两个表合并了:
-        # - procedureevents_mv -> procedureevents
-        # - inputevents_cv 和 inputevents_mv -> inputevents
-        # 注意：对于miiv数据源，概念字典中直接使用procedureevents和inputevents
-        # 但如果数据源配置中没有定义这些表，需要从旧表名映射
-
-        config_to_file_mappings = {
-            'procedureevents_mv': 'procedureevents',  # 配置名 -> 文件名
-            'inputevents_mv': 'inputevents',
-            'inputevents_cv': 'inputevents',  # MIMIC-IV 合并了这两个表
-        }
-        
-        # 对于miiv数据源，如果请求的表在配置中不存在，尝试从映射中查找
-        # 例如：概念字典请求procedureevents，但配置中可能只有procedureevents_mv的定义
-        if self.config.name == 'miiv':
-            # 反向映射：如果请求的表名不在配置中，尝试查找对应的旧表名
-            reverse_mapping = {
-                'procedureevents': 'procedureevents_mv',
-                'inputevents': 'inputevents_mv',  # 优先使用inputevents_mv
-            }
-            if table_name not in self.config.tables and table_name in reverse_mapping:
-                # 使用映射后的表名查找文件
-                mapped_table = reverse_mapping[table_name]
-                file_base_name = config_to_file_mappings.get(mapped_table, table_name)
-            else:
-                file_base_name = config_to_file_mappings.get(table_name, table_name)
-        else:
-            # 获取实际要查找的文件名
-            file_base_name = config_to_file_mappings.get(table_name, table_name)
-
-            # 从表配置中获取实际的文件名（如果存在）
-            if table_name in self.config.tables:
-                table_config = self.config.tables[table_name]
-                if hasattr(table_config, 'files') and table_config.files:
-                    # 获取第一个文件的路径，去掉扩展名
-                    file_info = table_config.files[0]
-                    if isinstance(file_info, dict) and 'path' in file_info:
-                        file_path = file_info['path']
-                    elif hasattr(file_info, 'path'):
-                        file_path = file_info.path
-                    else:
-                        file_path = str(file_info)
-                    # 去掉扩展名，获取基础文件名（处理复合扩展名如.csv.gz）
-                    parts = file_path.split('.')
-                    if len(parts) >= 2:
-                        # 处理复合扩展名如 .csv.gz
-                        if parts[-1] == 'gz' and len(parts) >= 3 and parts[-2] == 'csv':
-                            file_base_name = '.'.join(parts[:-2])
-                        else:
-                            file_base_name = '.'.join(parts[:-1])
-                    else:
-                        file_base_name = file_path
-        
-        # Only support Parquet format - try different name variations
-        for name in [file_base_name, file_base_name.lower(), table_name, table_name.lower()]:
-            # 🚀 优先检查 bucket 目录（分桶格式，性能最优）
-            # 必须在检查 .parquet 文件之前，因为分桶目录可能与表同名
-            # 检查多个可能的位置：base_path 和子目录（如 icu/, hosp/）
-            bucket_dir = self._resolve_bucket_directory(name)
-            if bucket_dir is not None:
-                return bucket_dir
-            
-            # Try .parquet extension - 检查多个可能的位置
-            # MIMIC-IV 的表可能在 icu/ 或 hosp/ 子目录下
-            possible_parquet_paths = [
-                self.base_path / f"{name}.parquet",  # 直接在 base_path 下
-                self.base_path / "icu" / f"{name}.parquet",  # MIIV icu 子目录
-                self.base_path / "hosp" / f"{name}.parquet",  # MIIV hosp 子目录
-            ]
-            for parquet_candidate in possible_parquet_paths:
-                resolved = _case_insensitive_existing_path(parquet_candidate)
-                if resolved is not None:
-                    return resolved
-            
-            # Try .pq extension (short form) - 同样检查子目录
-            possible_pq_paths = [
-                self.base_path / f"{name}.pq",
-                self.base_path / "icu" / f"{name}.pq",
-                self.base_path / "hosp" / f"{name}.pq",
-            ]
-            for pq_candidate in possible_pq_paths:
-                resolved = _case_insensitive_existing_path(pq_candidate)
-                if resolved is not None:
-                    return resolved
-        
-        # Check subdirectory for partitioned parquet data (common in hirid observations)
-        if self.base_path is not None:
-            for name in [table_name, table_name.lower()]:
-                # 检查普通分区目录
-                subdir = self.base_path / name
-                if subdir.is_dir():
-                    # Look for Parquet files
-                    parquet_files = list(subdir.glob("*.parquet")) + list(subdir.glob("*.pq"))
-                    if parquet_files:
-                        return subdir
-        
-        # Fall back to explicit file if it exists (e.g., CSV) so that callers can handle it
-        if explicit:
-            explicit_path = self.base_path / explicit
-            if explicit_path.exists():
-                return explicit_path
-
-        return None
+    def _resolve_loader_candidate(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
+        """Compatibility entry point for the shared source decision."""
+        return self._resolve_loader_from_disk(table_name)
 
     def _get_minimal_columns(self, table_name: str) -> Optional[List[str]]:
         """获取表的最小必要列集（性能优化）"""
@@ -2247,6 +2122,9 @@ class ICUDataSource:
             Path(bucket_dir), allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
         )
         targets, files = layout.select(self, selector_column, itemids)
+        storage_layout.record_bucket_consumed(
+            self, Path(bucket_dir).name.removesuffix("_bucket"), layout, files
+        )
         return targets, layout.modulus, files
 
     def _get_parquet_columns_for_files(self, files: Iterable[Path]) -> set:
@@ -2360,7 +2238,8 @@ class ICUDataSource:
         
         # Build WHERE conditions
         where_conditions = []
-        quality_sql = mimic_chart_quality_sql(self.config.name, csv_path.name.split('.')[0].lower(), pd.read_csv(csv_path, nrows=0).columns, alias='')
+        header = list(pd.read_csv(csv_path, nrows=0).columns)
+        quality_sql = mimic_chart_quality_sql(self.config.name, csv_path.name.split('.')[0].lower(), header, alias='')
         if quality_sql:
             where_conditions.append(quality_sql.removeprefix(' AND '))
         
@@ -2401,41 +2280,182 @@ class ICUDataSource:
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
-        # 🔑 CRITICAL: Use types={'VALUE': 'VARCHAR'} to preserve GCS text values
-        # Without this, values like "4 Spontaneously" become NaN because DuckDB
-        # incorrectly detects VALUE as DOUBLE from early numeric rows
-        # NOTE: Do NOT use sample_size=-1 as it causes full file scan for type detection
-        chartevents_type_hint = ",\n                types={'VALUE': 'VARCHAR'}" if csv_path.name.upper().startswith("CHARTEVENTS") else ""
+        # Strict parsing with the table's declared schema (delta17c): the
+        # header must name the configured columns in order; every column is
+        # read with its configured type (VALUE stays text, so GCS strings such
+        # as "4 Spontaneously" survive) instead of sniffing; and RFC 4180 is
+        # enforced (strict_mode, no null padding). A row that does not parse
+        # (extra or missing columns, an unterminated quote, a value that does
+        # not cast) is never dropped or shifted: DuckDB stores it as a reject
+        # and any reject refuses the read with csv_rows_rejected, its row count
+        # and reason classes. Quoted commas and quoted newlines stay legal.
+        # DuckDB 1.5 rejects all four classes, so no post-parse line scan is
+        # needed; a scan whose reject table was not recorded is refused too.
+        table = csv_path.name.split(".")[0].lower()
+        columns_spec, timestamp_format = self._mimic3_csv_schema(table, header)
+        rejects = f"easyicu_csv_rejects_{uuid.uuid4().hex}"
+        options = f"""
+                header=true,
+                auto_detect=false,
+                columns={columns_spec},
+                delim=',',
+                quote='"',
+                escape='"',
+                null_padding=false,
+                strict_mode=true,
+                timestampformat='{timestamp_format}'"""
         query = f"""
             SELECT {columns_sql}
-            FROM read_csv_auto(
-                '{_duckdb_path(csv_path)}',
-                ignore_errors=true,
-                null_padding=true{chartevents_type_hint}
+            FROM read_csv(
+                '{_duckdb_path(csv_path)}',{options},
+                store_rejects=true,
+                rejects_scan='{rejects}_scan',
+                rejects_table='{rejects}'
             )
             {where_clause}
         """
-        
+
         try:
             con = _get_duckdb_connection()
             try:
                 arrow_table = con.execute(query).fetch_arrow_table()
                 df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
                 del arrow_table
-            except Exception:
-                df = con.execute(query).fetchdf()
-            
+                recorded = con.execute(
+                    "SELECT count(*) FROM duckdb_tables() WHERE table_name = ?", [rejects]
+                ).fetchone()[0]
+                rejected = con.execute(
+                    f"SELECT error_type, count(DISTINCT line) FROM {rejects} GROUP BY 1 ORDER BY 1"
+                ).fetchall() if recorded else None
+                rows = con.execute(
+                    f"SELECT count(DISTINCT line) FROM {rejects}"
+                ).fetchone()[0] if recorded else None
+            finally:
+                for name in (rejects, f"{rejects}_scan"):
+                    con.execute(f"DROP TABLE IF EXISTS {name}")
+            if rejected is None:
+                raise storage_layout.TableScanError(
+                    "csv_rejects_unrecorded", table,
+                    f"{csv_path.name}: the strict scan recorded no reject table",
+                )
+            if rejected:
+                classes = ", ".join(f"{kind}={n}" for kind, n in rejected)
+                raise storage_layout.TableScanError(
+                    "csv_rows_rejected", table,
+                    f"{csv_path.name}: strict parsing rejected {rows} rows ({classes})",
+                )
+            # Declared types bind only on the columns a query reads, so the
+            # selection alone would let a bad VALUENUM through when only
+            # itemid/value are read (B-D25-CSV-PROJECTION). The rows reach
+            # the caller only after the whole file passed a full-schema scan.
+            # It runs after the selection so that rows the selection itself
+            # rejects are reported with their per-class counts.
+            self._validate_mimic3_csv(con, csv_path, table, header, options)
+
             # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
             df.columns = [c.lower() for c in df.columns]
-            
+
             logger.info("CSV fallback succeeded: loaded %d rows", len(df))
             return df
-            
+
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
+            # The class only: a reader message can quote a raw row.
             raise RuntimeError(
-                f"mimic3_chartevents_csv_read_failed: ({type(e).__name__}: {e})"
+                f"mimic3_chartevents_csv_read_failed: ({type(e).__name__})"
             ) from e
-    
+
+    _CSV_VALIDATED: set = set()
+    _CSV_VALIDATED_LOCK = _threading.Lock()
+
+    @classmethod
+    def _validate_mimic3_csv(cls, con, csv_path: Path, table: str, header, options: str) -> None:
+        """Cast every declared column of the whole file, once per file version (B-D25-CSV-PROJECTION).
+
+        The scan aggregates every column, so the reader parses and casts each
+        one on every row: the optimizer cannot prune a column the result
+        depends on. It runs without a reject store, so a parse or cast error
+        anywhere in the file raises. The refusal is ``csv_rows_rejected``
+        with the error class only (a reader message can quote a raw row). A
+        file version that passed is not scanned again in this process: the
+        memo key is the realpath plus the binding's stat identity (size,
+        mtime_ns, ctime_ns, ino, dev). A file racily clean when the scan
+        starts is never memoized, however long the scan runs: the flag is
+        frozen from the stat taken before the scan (B-D30-RACY-AGE).
+        """
+        import duckdb
+
+        from .storage_binding import (
+            StorageSourceChanged, active_unit, racily_clean, stat_identity,
+        )
+
+        before = stat_identity(table, csv_path)
+        unit = active_unit()
+        was_racy = racily_clean(before) or (
+            unit is not None and os.path.realpath(csv_path) in unit.racy
+        )
+        key = (os.path.realpath(csv_path), *before)
+        with cls._CSV_VALIDATED_LOCK:
+            if key in cls._CSV_VALIDATED:
+                return
+        counts = ", ".join('count("' + str(name).replace('"', '""') + '")' for name in header)
+        try:
+            con.execute(
+                f"SELECT count(*), {counts} FROM read_csv('{_duckdb_path(csv_path)}',{options})"
+            ).fetchone()
+        except (duckdb.ConversionException, duckdb.InvalidInputException) as exc:
+            kind = "CAST" if isinstance(exc, duckdb.ConversionException) else "PARSE"
+            raise storage_layout.TableScanError(
+                "csv_rows_rejected", table,
+                f"{csv_path.name}: the full-schema validation scan refused the file ({kind})",
+            ) from None
+        after = stat_identity(table, csv_path)
+        if after != before:
+            raise StorageSourceChanged("storage_source_changed", table, str(csv_path))
+        if not was_racy and not racily_clean(after):
+            with cls._CSV_VALIDATED_LOCK:
+                cls._CSV_VALIDATED.add(key)
+
+    _CSV_SPEC_TYPES = {
+        "col_integer": "BIGINT",
+        "col_double": "DOUBLE",
+        "col_character": "VARCHAR",
+        "col_datetime": "TIMESTAMP",
+    }
+
+    def _mimic3_csv_schema(self, table: str, header) -> Tuple[str, str]:
+        """The configured columns and types of a raw MIMIC-III CSV, checked against its header.
+
+        Returns the DuckDB ``columns`` struct literal and the timestamp format.
+        A header that does not name the configured columns in order, a column
+        spec without a DuckDB type, or more than one timestamp format is a
+        typed refusal: the strict reader never guesses a schema.
+        """
+        configured = list((self.config.get_table(table).columns or {}).values())
+        names = [str(c["name"]) for c in configured]
+        if [str(h) for h in header] != names:
+            raise storage_layout.TableScanError(
+                "csv_header_mismatch", table,
+                f"header has {len(header)} columns; the configuration declares {len(names)} "
+                "in a fixed order",
+            )
+        types, formats = [], set()
+        for column in configured:
+            duck = self._CSV_SPEC_TYPES.get(column.get("spec"))
+            if duck is None:
+                raise storage_layout.TableScanError(
+                    "csv_schema_unsupported", table, f"{column['name']}: spec {column.get('spec')!r}",
+                )
+            if duck == "TIMESTAMP":
+                formats.add(column.get("format") or "%Y-%m-%d %H:%M:%S")
+            types.append(f"'{column['name']}': '{duck}'")
+        if len(formats) > 1:
+            raise storage_layout.TableScanError(
+                "csv_schema_unsupported", table, f"{len(formats)} timestamp formats",
+            )
+        return "{" + ", ".join(types) + "}", next(iter(formats), "%Y-%m-%d %H:%M:%S")
+
     def _resolve_mimic3_csv(self, table_name: str) -> Optional[Path]:
         """Find an original MIMIC-III CSV/CSV.GZ file for a table.
         
@@ -2678,11 +2698,14 @@ class ICUDataSource:
             import pyarrow.dataset as ds
             
             # 🚀 使用PyArrow Dataset - 最快的方式
+            # Every resolved file is read: a corrupt or unreadable shard fails
+            # the scan and the per-file read below names it with a typed
+            # refusal (table_scan_file_unreadable). It is never excluded.
             dataset = ds.dataset(
                 [str(p) for p in resolved_files],
                 format='parquet',
                 partitioning=None,
-                exclude_invalid_files=True
+                exclude_invalid_files=False,
             )
             schema_names = list(dataset.schema.names)
             schema_by_lower = {
@@ -2844,14 +2867,20 @@ class ICUDataSource:
                 
                 # 快速读取+过滤
                 chunks = []
+                unreadable = storage_layout.unreadable_file_errors()
                 for file_path in parquet_files:
-                    if columns:
-                        wanted = list(columns)
-                        if storage_layout.ORDINAL in storage_layout.parquet_columns(file_path):
-                            wanted.append(storage_layout.ORDINAL)
-                        df_chunk = pd.read_parquet(file_path, columns=wanted)
-                    else:
-                        df_chunk = pd.read_parquet(file_path)
+                    try:
+                        if columns:
+                            wanted = list(columns)
+                            if storage_layout.ORDINAL in storage_layout.parquet_columns(file_path):
+                                wanted.append(storage_layout.ORDINAL)
+                            df_chunk = pd.read_parquet(file_path, columns=wanted)
+                        else:
+                            df_chunk = pd.read_parquet(file_path)
+                    except unreadable as exc:
+                        raise storage_layout.unreadable_file(
+                            table_name or directory.name, file_path, exc
+                        ) from exc
                     
                     # 立即应用过滤（减少内存占用）
                     if filter_ids and id_column and id_column in df_chunk.columns:
@@ -2873,6 +2902,8 @@ class ICUDataSource:
                     else:
                         return pd.DataFrame()
             
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as e:
                 # Both the dataset scan and the per-file read failed on the
                 # resolved files.  The legacy fallback globs only top-level
@@ -3210,7 +3241,7 @@ def load_bucketed_table_aggregated(
     db_name = data_source.config.name if hasattr(data_source.config, 'name') else 'unknown'
     
     base_path = data_source.base_path
-    if not data_source.resolve_target_files(table_name):
+    if not data_source.resolve_target_files(table_name, consume=False):  # existence probe
         raise ValueError(f"Cannot find parquet source for {table_name}")
 
     table_cfg = None
@@ -3325,6 +3356,8 @@ def load_bucketed_table_aggregated(
                     f"SELECT * FROM {target_relation} LIMIT 0"
                 ).description
             }
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise RuntimeError(
                 f"Could not inspect Parquet schema for {table_name!r}"
@@ -3650,6 +3683,7 @@ def load_bucketed_table_aggregated(
                 if general_csv.exists():
                     general_path = general_csv
                     general_read_func = "read_csv"
+        _consumed_clock_table(data_source, "general", general_path)
 
         # HiRID: 使用 general 表的 admissiontime 计算相对小时数
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
@@ -3730,6 +3764,7 @@ def load_bucketed_table_aggregated(
             icustays_csv = base_path / "icustays.csv.gz"
             if icustays_csv.exists():
                 icustays_path = icustays_csv
+        _consumed_clock_table(data_source, "icustays", icustays_path)
 
         stay_col = "icustay_id" if db_name in ("mimic", "mimic_demo") else "stay_id"
 
@@ -3963,7 +3998,7 @@ def load_bucketed_table_aggregated(
         # calendar timestamps: Zhejiang uses days, Jinhua minutes, and Zigong
         # hours. Convert to hours, subtract the generated stay origin, and
         # preserve the native encounter key.
-        stays_path = base_path / "stays.parquet"
+        stays_path = _consumed_clock_table(data_source, "stays", base_path / "stays.parquet")
         _interval_hours = interval_minutes / 60.0
         source_scale = {
             "zhejiang_eicu": 24.0,
@@ -4297,7 +4332,7 @@ def load_bucketed_table_multi_aggregated(
     else:
         all_itemids = sorted({int(x) for ids in concept_itemids.values() for x in ids})
 
-    if not data_source.resolve_target_files(table_name):
+    if not data_source.resolve_target_files(table_name, consume=False):  # existence probe
         raise ValueError(f"Cannot find parquet source for {table_name}")
 
     conn = _get_duckdb_connection()
@@ -4423,6 +4458,7 @@ def load_bucketed_table_multi_aggregated(
             icustays_path = base_path / 'icu' / 'icustays.parquet'
         if not icustays_path.exists() and (base_path / 'icustays.csv.gz').exists():
             icustays_path = base_path / 'icustays.csv.gz'
+        _consumed_clock_table(data_source, 'icustays', icustays_path)
         _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
 
         # hadm_id mapping for hospital tables (labevents etc.)
@@ -4432,6 +4468,8 @@ def load_bucketed_table_multi_aggregated(
                 raw_columns = {col[0] for col in conn.execute(
                     f"SELECT * FROM {target_relation} LIMIT 0"
                 ).description}
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as exc:
                 raise RuntimeError(
                     f"Could not inspect Parquet schema for {table_name!r}"
@@ -4609,6 +4647,7 @@ def load_bucketed_table_multi_aggregated(
                 if general_csv.exists():
                     general_path = general_csv
                     gen_read = 'read_csv'
+        _consumed_clock_table(data_source, 'general', general_path)
         p_clause = _patient_clause(id_col, patient_ids) + _window_sql.condition(
             f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0", f"o.{id_col}",
         )
@@ -5091,7 +5130,7 @@ def load_wide_table_aggregated(
             f"    {time_expression} AS charttime,\n"
             f"    {community_agg_exprs}\n"
             "FROM {read_expr} o\n"
-            f"JOIN read_parquet('{_duckdb_path(data_source.base_path / 'stays.parquet')}') a "
+            f"JOIN read_parquet('{_duckdb_path(_consumed_clock_table(data_source, 'stays', data_source.base_path / 'stays.parquet'))}') a "
             f"ON o.{quoted_id} = a.{quoted_id}\n"
             f"{community_where}\n"
             f"GROUP BY o.{quoted_id}, {time_expression}\n"

@@ -2006,6 +2006,12 @@ def _resolve_export_cohort(
                 "max_patients_applied": bool(max_n),
                 **sampling,
                 "applied_filters": [],
+                # Which stay-table file the universe was read from; csv_fallback
+                # only when the Parquet stay table is absent (delta17c).
+                **(
+                    {"source_format": listing["source_format"]}
+                    if listing.get("source_format") else {}
+                ),
                 # Discovery now counts the eligible stays before sampling.
                 # Keep the historical report unchanged for nonbinding caps,
                 # including the case where the cap equals the source count.

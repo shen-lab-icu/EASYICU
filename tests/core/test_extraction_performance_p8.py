@@ -17,6 +17,7 @@ from easyicu.concept.callback_apply import _apply_callback
 from easyicu.concept.eicu_sedation_scale import RASS_SCALE_CALLBACK
 from easyicu.concept.eicu_source_callbacks import cached_auxiliary_source
 from easyicu.concept.schema import ConceptSource
+from easyicu.datasource import MissingTableSourceError
 from easyicu.datasource import FilterOp, FilterSpec
 from easyicu.scores.kdigo_aki import _calculate_uo_rates_simple
 from easyicu.scores.urine_output import descriptive_windows
@@ -224,7 +225,7 @@ def test_b3_auxiliary_lab_selectors_share_one_union_read():
         def load_table(self, name, *, columns=None, filters=None, verbose=False):
             self.calls[name] += 1
             if name != "lab":
-                raise FileNotFoundError(name)
+                raise MissingTableSourceError(name)  # the source's absence signal
             data = self.lab.copy()
             for spec in filters or ():
                 data = spec.apply(data)

@@ -41,6 +41,7 @@ import logging
 from ..base import BaseICULoader
 from ..concept.data_source_contract import ConceptDataSourceStorage
 from ..storage_layout import StorageIntegrityError
+from ..value_failures import TYPED_VALUE_FAILURES
 from ..databases.profiles import get_database_profile, public_database_keys
 from ..table.duration import (
     get_dur_var_unit,
@@ -1947,6 +1948,9 @@ def load_concepts(
                     else:
                         for c in columns:
                             special_dict[c] = aki_df[id_time + [c]].copy()
+            except TYPED_VALUE_FAILURES:
+                # A storage refusal or exact-value failure keeps its type (D10D).
+                raise
             except Exception as e:
                 # A producer failure is not an unavailable concept: native-v2
                 # would seal the missing column as structurally absent.
@@ -1982,6 +1986,9 @@ def load_concepts(
                     for c in sorted(_need_circ):
                         if c in cf_df.columns:
                             special_dict[c] = cf_df[id_time + [c]].copy()
+            except TYPED_VALUE_FAILURES:
+                # A storage refusal or exact-value failure keeps its type (D10D).
+                raise
             except Exception as e:
                 raise RuntimeError(f"circ_failure_load_failed: {e}") from e
         if _need_comorb:
@@ -2005,6 +2012,9 @@ def load_concepts(
                         patient_ids=special_patient_ids,
                         verbose=verbose,
                     )
+                except TYPED_VALUE_FAILURES:
+                    # A storage refusal or exact-value failure keeps its type (D10D).
+                    raise
                 except Exception as e:
                     raise RuntimeError(f"comorbidity_load_failed:{c}: {e}") from e
                 if not isinstance(como, pd.DataFrame) or como.empty:
@@ -2030,6 +2040,9 @@ def load_concepts(
                     output_concepts=sorted(_need_outcome),
                     source=getattr(loader, "datasource", None),
                 )
+            except TYPED_VALUE_FAILURES:
+                # A storage refusal or exact-value failure keeps its type (D10D).
+                raise
             except Exception as e:
                 if "icu_death" in _need_outcome:
                     raise
@@ -2060,6 +2073,9 @@ def load_concepts(
                     patient_ids=special_patient_ids,
                     verbose=verbose,
                 )
+            except TYPED_VALUE_FAILURES:
+                # A storage refusal or exact-value failure keeps its type (D10D).
+                raise
             except Exception as e:
                 raise RuntimeError(f"microbiology_load_failed: {e}") from e
             if isinstance(mic, pd.DataFrame) and not mic.empty:
@@ -2119,6 +2135,9 @@ def load_concepts(
                         if join_cols:
                             try:
                                 result = result.merge(sdf, on=join_cols, how="outer")
+                            except TYPED_VALUE_FAILURES:
+                                # A storage refusal or exact-value failure keeps its type (D10D).
+                                raise
                             except Exception as e:
                                 raise RuntimeError(
                                     f"special_concept_merge_failed:{name!r}: {e}"

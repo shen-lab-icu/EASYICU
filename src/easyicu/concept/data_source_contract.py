@@ -26,6 +26,7 @@ class ConceptDataSourceStorage(Protocol):
         self, table_name: str, selector_column: Optional[str] = None,
         selector_values: Optional[Iterable[object]] = None,
         *, loader: Optional[Path] = None,
+        consume: bool = True,
     ) -> Tuple[Path, ...]: ...
 
     def get_bucket_files_for_ids(

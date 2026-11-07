@@ -41,10 +41,14 @@ def load_optional(data_source, table, stays, columns=None, *, selectors=()):
             table, columns=columns,
             filters=[*filters, *selectors], verbose=False,
         )
-    except (FileNotFoundError, MissingTableSourceError):
-        # An absent optional table carries no evidence.  Any other KeyError
-        # is a schema or code fault, not absence, and must not empty the
-        # channel.
+    except MissingTableSourceError:
+        # An absent optional table carries no evidence. The source owner raises
+        # this only for a table the conversion manifest does not list (or with
+        # no manifest), after recording it as source_unavailable (delta17w).
+        # A listed table whose files are missing raises a TableScanError, and a
+        # FileNotFoundError is a vanished file, not absence: both propagate.
+        # Any other KeyError is a schema or code fault, not absence, and must
+        # not empty the channel.
         return pd.DataFrame(columns=columns)
     except KeyError as exc:
         raise RuntimeError(

@@ -44,6 +44,9 @@ def _hirid_time(root, frame, source=None):
         path = Path(root) / "observations.parquet"
         if not path.is_file():
             return pd.Series(float("nan"), index=frame.index)
+        from easyicu.storage_layout import FORMAT_PARQUET, record_consumed
+
+        record_consumed(Path(root), "observations", (path,), FORMAT_PARQUET)
         expression = "read_parquet('" + str(path).replace("'", "''") + "')"
     else:
         expression = expressions[1]

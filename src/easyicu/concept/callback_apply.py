@@ -552,6 +552,8 @@ def _load_mimic_icu_outtimes(
             verbose=False,
         )
         bounds = table.data if hasattr(table, "data") else table
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as exc:
         raise ValueError(
             "MIMIC duration callback could not load ICU outtime for clipping"
@@ -1365,6 +1367,8 @@ def _apply_callback_body(
                     if hasattr(extubation_table, "data")
                     else extubation_table
                 )
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as exc:
                 database = getattr(
                     getattr(data_source, "config", None), "name", "mimic"
@@ -1912,6 +1916,8 @@ def _apply_callback_body(
             # 2026-11-03 audit round 2 (R2-03): survivors are False at their
             # last observation, not missing (death was all-TRUE).
             alive_pids = set(general_df.loc[status == 'alive', id_col].unique())
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise ConceptExtractionUnavailable(
                 concept_id=concept_name,
@@ -2800,6 +2806,8 @@ def _apply_callback_body(
                 sub_var=sub_var,
                 val_col=val_col,
             )
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise ValueError(f"dex_to_10 conversion failed: {exc}") from exc
     
@@ -2922,6 +2930,8 @@ def _apply_callback_body(
                 id_cols=id_cols,
                 sub_var=source.sub_var,
             )
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise ValueError(
                 f"grp_mount_to_rate conversion failed: {exc}"
@@ -3555,6 +3565,8 @@ def _apply_callback_body(
                     
                     if weight_per_patient is not None and not weight_per_patient.empty:
                         frame = frame.merge(weight_per_patient, on=id_col, how='left')
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as e:
                 # A load failure is not "no weight" (see mimic_kg_rate).
                 raise RuntimeError(
@@ -3885,6 +3897,8 @@ def _apply_callback_body(
                             if col in frame.columns and col != concept_name and col != 'stay_id':
                                 frame = frame.drop(columns=[col])
                     
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed failure keeps its type (D10D)
                 except Exception as e:
                     # The fallback coerced date-of-birth strings to numbers,
                     # which made every age missing without an error.
@@ -3964,6 +3978,8 @@ def _apply_callback_body(
                                     .rename('weight').reset_index()
                                 )
                                 frame = frame.merge(per_stay, on=id_col, how='left')
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as exc:
                 # A load failure is not "no weight": NA-ing every rate of the
                 # batch would silently drop data.  Stays genuinely without a
@@ -4122,6 +4138,8 @@ def _apply_callback_body(
                             if weight_id_col:
                                 weight_agg = weight_df.groupby(weight_id_col)['weight'].first().reset_index()
                                 frame = frame.merge(weight_agg, on=weight_id_col, how='left')
+            except TYPED_VALUE_FAILURES:
+                raise  # a typed failure keeps its type (D10D)
             except Exception as exc:
                 raise RuntimeError(
                     f"sic_rate_kg_weight_load_failed: weight for {concept_name} "
@@ -4694,6 +4712,8 @@ def _apply_callback_body(
             )
             return result.drop(columns=["_wbc_row_position", "_wbc_aligned_hour"])
 
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as e:
             # A failed computation is not an unavailable WBC: surface it.
             raise RuntimeError(

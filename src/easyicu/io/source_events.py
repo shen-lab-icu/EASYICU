@@ -60,6 +60,13 @@ class SourceEventContractError(ValueError):
         super().__init__(reason)
 
 
+
+def _consumed_clock(data_source, path) -> None:
+    """The ``icustays`` clock is opened by name: record it as consumed (bound, logged)."""
+    from ..storage_layout import FORMAT_PARQUET, record_consumed
+
+    record_consumed(data_source, "icustays", (path,), FORMAT_PARQUET)
+
 def _sha(path: Path) -> str:
     result = hashlib.sha256()
     with path.open("rb") as handle:
@@ -337,6 +344,7 @@ def extract_miiv_respiratory_events(
     clock_paths = [p.resolve() for p in clock_candidates if p.is_file()]
     if len(clock_paths) != 1:
         raise SourceEventContractError("one_icustays_parquet_required")
+    _consumed_clock(data_source, clock_paths[0])
     sources = {table: _files(data_source, table, sorted({i for s in specs if s['table'] == table for i in s['ids']}))
                for table in sorted({s['table'] for s in specs})}
     specimen_rule = SPECIMEN_RULES["miiv"]

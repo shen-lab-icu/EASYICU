@@ -39,6 +39,7 @@ from easyicu.storage_layout import (
     SCHEMA,
     VARIABLE_SCHEME,
     arrow_key_type,
+    bucket_source_files,
 )
 
 RECEIPT_SCHEMA = "easyicu_itemid_bucket_cache_v1"
@@ -649,13 +650,32 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _derived_from(data_path: Path, table: str, source_files) -> dict:
+def _source_root(data_path: Path, target: Path) -> str | None:
+    """Where the reader finds the data path from the installed bucket directory.
+
+    None for the default output beside the data (the reader uses the bucket's
+    parent); otherwise the data path relative to the bucket's real parent, or
+    absolute when no relative path exists (another drive on Windows).
+    """
+    parent = Path(target).resolve().parent
+    if parent == data_path:
+        return None
+    try:
+        return Path(os.path.relpath(data_path, parent)).as_posix()
+    except ValueError:
+        return data_path.as_posix()
+
+
+def _derived_from(data_path: Path, table: str, source_files, target: Path) -> dict:
     """Bind the installation to the exact source bytes it was built from.
 
     Paths are relative to the data path as given (a symlinked file in an
-    assembly directory is hashed through its link, i.e. the data it names).
+    assembly directory is hashed through its link, i.e. the data it names);
+    a bucket built to another output root also records ``source_root``.
     """
+    source_root = _source_root(data_path, target)
     return dict(
+        **({} if source_root is None else {"source_root": source_root}),
         table=table,
         files=[
             dict(
@@ -670,10 +690,8 @@ def _derived_from(data_path: Path, table: str, source_files) -> dict:
 
 
 def _source_files(data_path, table):
-    directory = data_path / table
-    files = sorted(p for p in directory.glob("*.parquet") if not p.name.startswith("."))
-    if not files and (data_path / f"{table}.parquet").is_file():
-        files = [data_path / f"{table}.parquet"]
+    # The reader checks a layout's derived_from against this same rule.
+    files = list(bucket_source_files(data_path, table))
     if not files:
         raise FileNotFoundError(f"No flat Parquet source for {table} under {data_path}")
     return files
@@ -877,7 +895,7 @@ def build_bucket_cache(
             float_fidelity, float_fidelity_qc = _assert_float_fidelity(
                 con, source_files, target_files, schema
             )
-            derived = _derived_from(data_path, table, source_files)
+            derived = _derived_from(data_path, table, source_files, target)
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
                 builder_version=BUILDER_VERSION,
@@ -1187,7 +1205,7 @@ def build_variable_cache(
             float_fidelity, float_fidelity_qc = _assert_float_fidelity(
                 con, source_files, target_files, schema
             )
-            derived = _derived_from(data_path, table, source_files)
+            derived = _derived_from(data_path, table, source_files, target)
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
                 builder_version=BUILDER_VERSION,

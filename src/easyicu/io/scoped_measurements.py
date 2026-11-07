@@ -285,6 +285,7 @@ def extract_miiv_measurement_events(
     ]
     if len(clocks) != 1:
         raise scoped.SourceEventContractError("one_icustays_parquet_required")
+    scoped._consumed_clock(data_source, clocks[0])
     sources = {
         t: scoped._files(
             data_source,

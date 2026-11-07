@@ -37,6 +37,8 @@ import pandas as pd
 import numpy as np
 import logging
 
+from ..value_failures import TYPED_VALUE_FAILURES
+
 from easyicu.utils.thresholds import REL_EPS, ge, le, lt
 from easyicu.urine_weight_linkage import (
     ConflictingKeyedWeightError,
@@ -1230,6 +1232,8 @@ def kdigo_stages(
             )
         except KDIGOComponentError:
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise KDIGOComponentCalculationError(
                 component="creatinine",
@@ -1309,6 +1313,8 @@ def kdigo_stages(
                 result['weight_available'] = False
         except KDIGOComponentError:
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise KDIGOComponentCalculationError(
                 component="urine_output",
@@ -1370,6 +1376,8 @@ def kdigo_stages(
         )
     except KDIGOComponentError:
         raise
+    except TYPED_VALUE_FAILURES:
+        raise  # a typed failure keeps its type (D10D)
     except Exception as exc:
         raise KDIGOComponentSchemaError(
             component="combined_aki",
@@ -1432,6 +1440,8 @@ def kdigo_stages(
             result.loc[rrt_mask, 'aki_stage_rrt'] = 3
         except KDIGOComponentError:
             raise
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise KDIGOComponentCalculationError(
                 component="rrt",
@@ -1760,6 +1770,8 @@ def load_kdigo_aki(
                 if clock is not None:
                     frame = frame.rename(columns={clock: "charttime"})
             return frame
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
         except Exception as exc:
             raise KDIGOComponentLoadError(
                 component=concept,

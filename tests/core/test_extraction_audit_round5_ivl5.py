@@ -231,6 +231,25 @@ def test_r5c_iv_014_short_fluid_intervals_use_absolute_tolerance():
     assert cumulative.data.fluid_balance_cumulative.tolist() == pytest.approx([40., 70.])
 
 
+def _declared_chartevents_csv(rows: pd.DataFrame, path) -> None:
+    """A raw MIMIC-III CHARTEVENTS CSV in its declared schema (the strict CSV reader's contract).
+
+    Every configured column in order; integer columns as integers; timestamps
+    in the configured format. Columns the rows lack are empty.
+    """
+    lower = rows.rename(columns=str.lower)
+    table = pd.DataFrame(index=lower.index)
+    for column in load_src_cfg("mimic").get_table("chartevents").columns.values():
+        name, key = column["name"], column["name"].lower()
+        values = lower[key] if key in lower else pd.Series([None] * len(lower), index=lower.index, dtype=object)
+        if column["spec"] == "col_integer":
+            values = pd.to_numeric(values).astype("Int64")
+        elif column["spec"] == "col_datetime":
+            values = pd.to_datetime(values).dt.strftime(column.get("format") or "%Y-%m-%d %H:%M:%S")
+        table[name] = values
+    table.to_csv(path, index=False)
+
+
 @pytest.mark.parametrize("storage", ["parquet", "csv", "callable", "preloaded", "dataset"])
 def test_r5c_iii_008_projection_never_discards_the_error_filter(tmp_path, storage):
     rows = pd.DataFrame({"icustay_id": [101, 101], "charttime": pd.to_datetime(["2140-01-02 01:00"] * 2),
@@ -243,7 +262,7 @@ def test_r5c_iii_008_projection_never_discards_the_error_filter(tmp_path, storag
     if storage in {"parquet", "dataset"}:
         write_fixture_parquet(rows, tmp_path / "chartevents.parquet", index=False)
     elif storage == "csv":
-        rows.rename(columns=str.upper).to_csv(tmp_path / "CHARTEVENTS.csv.gz", index=False)
+        _declared_chartevents_csv(rows, tmp_path / "CHARTEVENTS.csv.gz")
     elif storage == "callable":
         source.register_table_source("chartevents", lambda: rows.copy())
     else:
@@ -300,9 +319,11 @@ def test_r5c_iv_008_overlap_is_counted_and_resolved_by_rolling_attribution(tmp_p
 
 
 def test_r5c_iii_008_error_only_csv_is_a_valid_empty_source(tmp_path):
-    pd.DataFrame({"ICUSTAY_ID": [101], "CHARTTIME": ["2140-01-02"], "ITEMID": [211],
-                  "VALUENUM": [900.], "VALUE": ["900"], "VALUEUOM": ["bpm"], "ERROR": [1.]}).to_csv(
-        tmp_path / "CHARTEVENTS.csv.gz", index=False)
+    _declared_chartevents_csv(
+        pd.DataFrame({"ICUSTAY_ID": [101], "CHARTTIME": ["2140-01-02"], "ITEMID": [211],
+                      "VALUENUM": [900.], "VALUE": ["900"], "VALUEUOM": ["bpm"], "ERROR": [1.]}),
+        tmp_path / "CHARTEVENTS.csv.gz",
+    )
     source = ICUDataSource(load_src_cfg("mimic"), base_path=tmp_path, enable_cache=False)
     result = source.load_table("chartevents", filters=[FilterSpec("itemid", FilterOp.IN, [211])])
     assert result.data.empty
