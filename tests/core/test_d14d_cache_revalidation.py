@@ -24,6 +24,7 @@ import pytest
 
 from easyicu.config import load_src_cfg
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
+from easyicu import storage_binding
 from easyicu.storage_binding import StorageSourceChanged, binding_unit, consumed_files
 from easyicu.storage_layout import MANIFEST
 from tests.support.bucket_storage import b6_source, install_layout
@@ -60,6 +61,15 @@ def _read(source, itemids=None):
 def _add_shard(root: Path) -> None:
     frame = pd.read_parquet(root / TABLE / "1.parquet")
     frame.assign(valuenum=frame["valuenum"] + 1000).to_parquet(root / TABLE / "2.parquet", index=False)
+
+
+@pytest.fixture(autouse=True)
+def _settled_files(monkeypatch):
+    """Fixtures here are written just before they are read, so every file is
+    racily clean and no payload would be cached (delta25d). These tests are
+    about warm entries: they model an installation written long before the run.
+    """
+    monkeypatch.setattr(storage_binding, "RACY_WINDOW_NS", 0)
 
 
 @pytest.fixture

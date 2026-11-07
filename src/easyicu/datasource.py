@@ -1650,8 +1650,15 @@ class ICUDataSource:
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
                 # A table the conversion manifest lists is not "absent": it
-                # raises table_scan_files_missing here (delta17w case 1).
-                storage_layout.verify_flat_scan(self, table_name, ())
+                # raises table_scan_files_missing here (delta17w case 1). A
+                # table this run already read and bound is missing, not absent
+                # (storage_source_missing), with or without a warm payload.
+                seen = storage_layout.resolve_table_files(self, table_name, consume=False)
+                if seen:
+                    raise storage_layout.TableScanError(
+                        "table_scan_loader_mismatch", table_name,
+                        f"the storage policy resolves {len(seen)} files the reader did not find",
+                    )
                 # Unlisted, or no manifest: absent may give empty, never
                 # silently. The record is written before the empty return or
                 # the MissingTableSourceError below (delta17w case 2).
@@ -1745,10 +1752,17 @@ class ICUDataSource:
         return frame[:] if self.enable_cache else frame
 
     def _cache_raw_frame(self, cache_key: tuple, frame: pd.DataFrame) -> None:
-        """Keep a raw payload with the files it was read from."""
-        from .storage_binding import current_capture
+        """Keep a raw payload with the files it was read from.
+
+        A payload read from a racily clean file (changed within the stat
+        window of the read) is not kept: its stat identity cannot tell a
+        later same-stat rewrite from the bytes read (B-D17D-CONTENT).
+        """
+        from .storage_binding import captured_racily_clean, current_capture
 
         captured = current_capture()
+        if captured is not None and captured_racily_clean(captured):
+            return
         identity = (
             None if captured is None else storage_layout.payload_identity(self, captured)
         )

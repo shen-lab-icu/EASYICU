@@ -9,7 +9,9 @@ What is bound is what the run consumes: the files a reader actually reads,
 captured at the point of reading through the one consumed-files source,
 ``storage_layout.record_consumed`` → :func:`consume`. Integrity prechecks of
 other candidates bind nothing (B9P-CSV-BINDING). That covers:
-- a flat table's validated file set, plus each file's (size, mtime_ns, ino);
+- a flat table's validated file set, plus each file's stat identity
+  (size, mtime_ns, ctime_ns, ino, dev): an mtime restored with utime still
+  moves ctime, so a same-size rewrite in place is a new version;
 - a CSV file that was read instead of the Parquet beside it;
 - the part files a bucket read selected;
 - the installation's manifest and build receipt, each with a sha256;
@@ -22,6 +24,15 @@ file raises ``storage_source_missing``. Both are ``StorageSourceChanged``,
 a ``StorageIntegrityError``. Outside any unit a read is not part of a run,
 and nothing is bound. Stay-origin tables are stricter: they refuse an
 unbound read (``concept.stay_tables``).
+
+A file changed within ``RACY_WINDOW_NS`` of its first read is racily clean:
+its stat cannot vouch for its content (a rewrite inside the filesystem's
+timestamp granularity keeps every stat field). Such a file is bound by its
+content as well: its sha256 is taken at first sight and every later check
+of it re-hashes. No payload cache keeps a frame read from it
+(:func:`racily_clean`). Deliberate stat forgery (ctime included) is outside
+this guard; a formal run's content identity comes from the full-SHA input
+snapshot taken before and after the run (``docs/qa/data_provenance_in_real_runs.md``).
 
 ``binding_summary()`` gives a stable digest of the sorted entries, for the
 run receipt.
@@ -37,6 +48,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from typing import Iterable, Iterator, Optional
 
 from .storage_layout import StorageIntegrityError
@@ -62,8 +74,11 @@ class _Unit:
     def __init__(self, snapshot: Optional[dict]):
         snapshot = snapshot or {}
         self.files: dict = dict(snapshot.get("files", {}))  # (database, base, table) -> paths
-        self.versions: dict = dict(snapshot.get("versions", {}))  # path -> (size, mtime_ns, ino)
+        # path -> (size, mtime_ns, ctime_ns, ino, dev)
+        self.versions: dict = dict(snapshot.get("versions", {}))
         self.sha256: dict = dict(snapshot.get("sha256", {}))  # path -> hex (manifests, receipts)
+        # Paths first read while racily clean: verified by content on every check.
+        self.racy: set = set(snapshot.get("racy", ()))
         # (database, base, table) -> {"layout": "flat"|"bucket", "root", "realpath"}:
         # the layout the storage policy chose for the table (D10D).
         self.layouts: dict = {k: dict(v) for k, v in snapshot.get("layouts", {}).items()}
@@ -125,12 +140,31 @@ def live_units() -> tuple:
         return tuple(_LIVE)
 
 
+RACY_WINDOW_NS = 2_000_000_000
+
+
 def _version(table: str, path: str) -> tuple:
+    """A file's stat identity: (size, mtime_ns, ctime_ns, ino, dev)."""
     try:
         stat = os.stat(path)
     except FileNotFoundError as exc:
         raise StorageSourceChanged("storage_source_missing", table, path) from exc
-    return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+
+
+def racily_clean(version: tuple, now_ns: Optional[int] = None) -> bool:
+    """Whether a file of this stat identity changed within ``RACY_WINDOW_NS`` of now.
+
+    Its stat then cannot vouch for its content: a rewrite in the same
+    timestamp tick keeps every field. A timestamp in the future counts too.
+    """
+    now = time.time_ns() if now_ns is None else now_ns
+    return now - max(version[1], version[2]) < RACY_WINDOW_NS
+
+
+def _content_sha256(path: str) -> str:
+    with open(path, "rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def bind_files(
@@ -154,13 +188,18 @@ def bind_files(
                 changed = sorted(set(held) ^ set(paths))[0]
                 raise StorageSourceChanged("storage_source_changed", table, changed)
         for path, version in now.items():
+            first = path not in unit.versions
             if unit.versions.setdefault(path, version) != version:
                 raise StorageSourceChanged("storage_source_changed", table, path)
-            if sha256 and path not in unit.sha256:
-                with open(path, "rb") as handle:
-                    unit.sha256[path] = hashlib.file_digest(handle, "sha256").hexdigest()
+            if first and racily_clean(version):
+                unit.racy.add(path)  # its stat cannot vouch for its content
+            if (sha256 or path in unit.racy) and path not in unit.sha256:
+                unit.sha256[path] = _content_sha256(path)
                 if _version(table, path) != version:  # rewritten while hashed
                     raise StorageSourceChanged("storage_source_changed", table, path)
+            elif path in unit.racy and _content_sha256(path) != unit.sha256[path]:
+                # Same stat, other bytes: a rewrite inside the timestamp tick.
+                raise StorageSourceChanged("storage_source_changed", table, path)
 
 
 def bound_set(key: Optional[tuple]) -> tuple:
@@ -236,6 +275,12 @@ def current_capture() -> Optional[tuple]:
     """What the innermost :func:`capturing_consumed` has collected so far; None outside one."""
     captured = _CAPTURE.get()
     return None if captured is None else tuple(captured)
+
+
+def captured_racily_clean(captured) -> bool:
+    """Whether any captured file was racily clean when read: no cache may keep its payload."""
+    now = time.time_ns()
+    return any(racily_clean(entry[-1], now) for entry in captured)
 
 
 def captured_still_current(captured) -> bool:
@@ -332,6 +377,7 @@ def _pinned(unit: _Unit, data_source) -> dict:
             "files": dict(unit.files),
             "versions": dict(unit.versions),
             "sha256": dict(unit.sha256),
+            "racy": sorted(unit.racy),
             "layouts": {k: dict(v) for k, v in unit.layouts.items()},
         }
 
