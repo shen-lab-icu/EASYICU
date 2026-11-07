@@ -488,6 +488,7 @@ def keep_cache(
         else:  # pragma: no cover - legacy resolver without cache accounting
             with resolver._cache_lock:
                 resolver._raw_concept_cache.clear()
+                getattr(resolver, "_raw_concept_grid", {}).clear()
                 resolver._table_cache.clear()
 
 

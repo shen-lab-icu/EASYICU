@@ -5631,28 +5631,16 @@ def _callback_urine24(
     coverage publishes urine24; min_win gates the separate daily estimate.
     HiRID rates use exact collection intervals with the same >12 h rejection.
     """
-    # Load urine if not in tables - 🚀 优化：使用 get_raw_concept 缓存
+    # A caller that did not pass urine gets it the way the recursive loader
+    # passes it: on the requested interval (ricu 0.6.3 ``urine24``:
+    # ``collect_dots("urine", interval, ...)``), whether or not the raw cache is
+    # warm (B-CACHE-WARMTH).
     if "urine" not in tables:
         try:
-            urine_tbl = None
-            if hasattr(ctx.resolver, 'get_raw_concept'):
-                urine_tbl = ctx.resolver.get_raw_concept("urine", ctx.data_source, ctx.patient_ids)
-            
-            if urine_tbl is not None:
-                tables["urine"] = urine_tbl
-            else:
-                loaded = ctx.resolver.load_concepts(
-                    ["urine"],
-                    ctx.data_source,
-                    merge=False,
-                    aggregate=None,
-                    patient_ids=ctx.patient_ids,
-                    interval=None,  # Load raw data without interval aggregation
-                )
-                if isinstance(loaded, dict):
-                    tables.update(loaded)
-                elif isinstance(loaded, ICUTable):
-                    tables["urine"] = loaded
+            tables.update(ctx.resolver.load_callback_inputs(
+                getattr(ctx, "concept_name", None) or "urine24", ["urine"], ctx.data_source,
+                ctx.patient_ids, ctx.interval,
+            ))
         except (KeyError, ValueError) as exc:
             # A failed urine load is not a stay without urine output.
             raise RuntimeError(
@@ -5760,21 +5748,11 @@ def _callback_vaso_ind(
 
         return vaso_indicator(tables, ctx)
 
-    # When upstream concepts request hourly alignment (ctx.interval != None),
-    # the duration tables may already have their start times floored to the hour.
-    # 🚀 优化：使用 get_raw_concept 缓存原始数据，避免重复加载
-    if ctx.interval:
-        refreshed: Dict[str, ICUTable] = {}
-        for name, tbl in tables.items():
-            raw_tbl = tbl
-            # 尝试从缓存获取原始数据
-            if hasattr(ctx.resolver, 'get_raw_concept'):
-                cached_raw = ctx.resolver.get_raw_concept(name, ctx.data_source, ctx.patient_ids)
-                if cached_raw is not None and not cached_raw.data.empty:
-                    raw_tbl = cached_raw
-            refreshed[name] = raw_tbl
-        tables = refreshed
-
+    # The duration tables are the ones loaded on the requested interval, as in
+    # ricu 0.6.3 ``vaso_ind`` (``collect_dots(cnc, interval, ..., merge_dat =
+    # TRUE)``). They were swapped for ungridded raw tables only when the raw
+    # cache happened to hold them, so the indicator depended on cache warmth
+    # (B-CACHE-WARMTH).
     merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     time_col = index_column or "starttime"
     cols = list(id_columns) + ([time_col] if time_col else [])
@@ -7517,33 +7495,16 @@ def _callback_uo_window(
     """
     from ..callbacks import _urine_window_avg
     
-    # Load required concepts - 🚀 优化：使用 get_raw_concept 缓存
+    # Inputs the caller did not pass are loaded gridded on ctx.interval, the
+    # path a standalone single-module run takes, whether or not the raw cache
+    # is warm (B-CACHE-WARMTH).
     required = ["urine", "weight"]
     missing = [c for c in required if c not in tables]
-    
     if missing:
-        # 优先从缓存获取
-        for concept in missing[:]:  # 使用副本迭代
-            if hasattr(ctx.resolver, 'get_raw_concept'):
-                cached = ctx.resolver.get_raw_concept(concept, ctx.data_source, ctx.patient_ids)
-                if cached is not None:
-                    tables[concept] = cached
-                    missing.remove(concept)
-        
-        # 剩余的批量加载
-        if missing:
-            loaded = ctx.resolver.load_concepts(
-                missing,
-                ctx.data_source,
-                merge=False,
-                aggregate=None,
-                patient_ids=ctx.patient_ids,
-                interval=ctx.interval,
-            )
-            if isinstance(loaded, ICUTable):
-                tables[missing[0]] = loaded
-            else:
-                tables.update(loaded)
+        tables.update(ctx.resolver.load_callback_inputs(
+            getattr(ctx, "concept_name", None) or f"uo_{window_hours}h", missing, ctx.data_source,
+            ctx.patient_ids, ctx.interval,
+        ))
     
     urine_tbl = tables.get("urine")
     weight_tbl = tables.get("weight")

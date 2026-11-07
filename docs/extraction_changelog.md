@@ -26,6 +26,47 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-06 — the raw-concept cache answers only on the grid an entry was loaded on, and callbacks read one input [lead-r13, `49418a0b7`, `bdddfc863`, `4d7fb8748`, `ddfd55bce`]
+
+- `49418a0b7` (D4-NATIVE-CACHE): an ungridded cache entry never answers an
+  hourly request. eICU `ett_gcs` forwards `rass` ungridded; the neurological
+  module then asked for hourly `rass` and got the raw rows (one chart per hour)
+  instead of the hourly aggregate.
+- `4d7fb8748` (B-CACHE-REVERSE): the reverse is refused too; an ungridded
+  request (`get_raw_concept`, `interval=None`, a forwarded load) never takes a
+  gridded entry.
+- `ddfd55bce` (B-CACHE-WARMTH): `vaso_ind` uses the durations on the requested
+  interval (ricu 0.6.3 `vaso_ind`); `urine24` (ricu 0.6.3 `urine24`) and the
+  `uo_6h`/`uo_12h`/`uo_24h` windows load any missing input as the recursive
+  loader does, gridded at the requested interval, the path a standalone
+  single-module run takes. The grid of each cache entry is a field of the
+  entry; an entry of unknown grid is a miss. `get_raw_concept` returns the raw
+  table or raises `RawConceptLoadError`, never None.
+- NB16-GRID-LIFECYCLE (follow-up to `ddfd55bce`): an entry's grid record is
+  dropped when the entry is evicted (per key or LRU) or the raw cache is
+  cleared, and is recorded only when the store succeeds. Memory only.
+
+**Rationale.** The cache key carries no grid, so a warm cache could answer a
+request with rows from another grid: the result depended on which concepts or
+modules had run earlier in the same call or keep-cache group.
+
+**Affected databases.** eICU (`rass` through `ett_gcs`); every database for
+the guard.
+
+**Impact.**
+- `49418a0b7`, eICU sample: `neurological.rass` 507 cells in 185 stays
+  (|Δ| 0.5–5; hours with two or more RASS charts now hold the hourly
+  aggregate, as a cold load); every other eICU module is byte-identical. eICU
+  demo: 204 cells in 89 stays. MIIV demo byte-identical. Full eICU: formal
+  `RUN_RECEIPT`.
+- `4d7fb8748` vs `372d563a1`: eICU, AUMC and MIIV samples and the eICU and
+  MIIV demos byte-identical (20/20 module files each).
+- `ddfd55bce`: a counts-only tracer on the eICU, MIIV, AUMC and MIMIC-III
+  CareVue samples found 0 calls of `vaso_ind`, `urine24` or the uo windows
+  that read a warm cache entry, so no published value changes.
+- NB16-GRID-LIFECYCLE: no value change; readers already treated a record
+  whose table was gone as unknown.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)
