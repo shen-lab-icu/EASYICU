@@ -53,11 +53,15 @@ exited. It binds the run to the sealed code and to its inputs:
 * the code carries no working-tree diff: the code identity's and the native
   manifest's ``diff_sha256`` are copied and must be null;
 * every formal tool script the run executes is the seal tree's: this tool,
-  its approved allowlist (``tools/formal_declared_absent.json``) and the
+  its approved allowlist (``tools/formal_declared_absent.json``), the
   wrapper that started it (the nearest ancestor shell's script, read through
-  its open descriptor) must each hash to the git blob at the sealed commit
-  (the wrapper under ``tools/formal/``), else ``formal_tool_script_mismatch``;
-  the sha256s are recorded (``tool_scripts``);
+  its open descriptor) and the drivers it ran from its own directory
+  (``bench_local.py``, ``inputs_bench_local.py``; unchanged since the run
+  started) must each hash to the git blob at the sealed commit (wrapper and
+  drivers under ``tools/formal/``), else ``formal_tool_script_mismatch``; a
+  module file there that shadows an importable module is
+  ``formal_tool_script_shadowed``; the sha256s are recorded
+  (``tool_scripts``);
 * REQUIRED_LAYOUT.json and the approved allowlist are parsed rejecting a
   duplicate key at any level (``receipt_input_duplicate_key``); names are
   deduplicated by casefold;
@@ -253,12 +257,19 @@ def sealed_code_identity(sealed_sha: str) -> Dict[str, Any]:
 RECEIPT_SEAL_PATH = "tools/formal_run_receipt.py"
 APPROVED_SEAL_PATH = "tools/formal_declared_absent.json"
 WRAPPER_SEAL_DIR = "tools/formal"
+# The Python drivers the wrapper runs from its own directory, by role:
+# bench_local.py is the extraction itself, inputs_bench_local.py the input
+# snapshot step. memgate.py, which the wrapper and bench_local.py also run, is
+# left out on purpose: it only decides when a job may start (memory admission)
+# and reads or writes no input, output, snapshot or receipt.
+WRAPPER_DRIVERS = (("extraction_driver", "bench_local.py"),
+                   ("snapshot_driver", "inputs_bench_local.py"))
 _SCRIPT_FD = 255  # bash keeps the script it is reading open on this descriptor
 _PROC = Path("/proc")
 
 
-def executing_wrapper() -> tuple[str, bytes]:
-    """The wrapper script that started this process, and its bytes.
+def executing_wrapper() -> tuple[str, bytes, os.stat_result]:
+    """The wrapper script that started this process, its bytes and its stat.
 
     The nearest ancestor process holding a regular file open as its script
     (bash's descriptor 255; a ``( ... )`` subshell does not keep it) is the
@@ -274,7 +285,7 @@ def executing_wrapper() -> tuple[str, bytes]:
         try:
             target = os.readlink(fd)
             if os.path.isabs(target) and fd.is_file():
-                return target, fd.read_bytes()
+                return target, fd.read_bytes(), os.stat(fd)
         except OSError:
             pass
         try:
@@ -309,18 +320,98 @@ def _seal_tree_root(code: Mapping[str, Any]) -> Path:
     return Path(done.stdout.strip())
 
 
-def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any],
-                        approved_sha256: str) -> List[Dict[str, Any]]:
+def _stat_identity(stat: os.stat_result) -> tuple:
+    # The storage binding's stat identity: utime restores mtime, not ctime.
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+
+
+def _unchanged_since_start(role: str, path: str, stat: os.stat_result,
+                           started_ns: int) -> None:
+    if max(stat.st_mtime_ns, stat.st_ctime_ns) >= started_ns:
+        raise ReceiptError(
+            "formal_tool_script_mismatch",
+            f"the {role} script changed after the run started, so its bytes now are not "
+            "proven to be the bytes it ran", role=role, path=path,
+            reason="changed_after_run_start")
+
+
+def _driver_bytes(role: str, path: Path, started_ns: int) -> bytes:
+    """A driver's bytes, hashed now and proven to be the bytes the run executed.
+
+    A Python driver has exited before the receipt runs and holds no file
+    open, so it is read from the wrapper's directory, where the wrapper ran
+    it. Its stat identity must not move while it is read, and its ctime (which
+    utime cannot restore) must predate the run's start: then these bytes were
+    on disk for the whole run.
+    """
+    try:
+        before = os.stat(path)
+        data = path.read_bytes()
+        after = os.stat(path)
+    except FileNotFoundError as exc:
+        raise ReceiptError("formal_tool_script_unidentified",
+                           f"the {role} {path.name} is not beside the wrapper",
+                           role=role, path=str(path)) from exc
+    if _stat_identity(before) != _stat_identity(after):
+        raise ReceiptError("formal_tool_script_mismatch", f"the {role} changed while hashed",
+                           role=role, path=str(path), reason="changed_while_hashed")
+    _unchanged_since_start(role, str(path), after, started_ns)
+    return data
+
+
+def _refuse_shadowing(directory: Path) -> None:
+    """A driver runs with its own directory first on sys.path: a module file
+    there that shadows the standard library or an installed module would run
+    unverified, as part of the extraction. Any such file is a stop."""
+    import importlib.machinery
+
+    own = os.path.realpath(Path(__file__).parent)
+    search = [p for p in sys.path if os.path.realpath(p or ".") != own]
+    names = set()
+    for entry in os.listdir(directory):
+        if entry.endswith(".py"):
+            names.add(entry[:-3])
+        elif (directory / entry / "__init__.py").is_file():
+            names.add(entry)
+    shadowing = sorted(
+        n for n in names
+        if n in sys.stdlib_module_names or n in sys.builtin_module_names
+        or importlib.machinery.PathFinder.find_spec(n, search) is not None)
+    if shadowing:
+        raise ReceiptError("formal_tool_script_shadowed",
+                           f"the wrapper's directory shadows {len(shadowing)} module(s) the "
+                           "drivers may import: " + ", ".join(shadowing),
+                           directory=str(directory), modules=shadowing)
+
+
+def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any], approved_sha256: str,
+                        started_at: Optional[float]) -> List[Dict[str, Any]]:
     """Every formal tool script this run executes must be the seal tree's blob.
 
     The receipt tool itself (this file, as loaded), its approved allowlist
-    (``approved_sha256``: the bytes the receipt parsed) and the wrapper that
-    started it. Returns their records; any difference, or a script the seal
-    tree does not hold, is ``formal_tool_script_mismatch``.
+    (``approved_sha256``: the bytes the receipt parsed), the wrapper that
+    started it (read through the descriptor its shell holds) and the drivers
+    the wrapper ran from its own directory (:data:`WRAPPER_DRIVERS`; see
+    :func:`_driver_bytes`). The wrapper and the drivers must not have changed
+    since ``started_at`` (the wrapper's start, epoch seconds). Returns their
+    records; any difference, or a script the seal tree does not hold, is
+    ``formal_tool_script_mismatch``.
     """
+    if started_at is None:
+        raise ReceiptError("formal_tool_script_unverifiable",
+                           "the run's start time is unknown, so no driver can be proven "
+                           "unchanged during the run")
+    started_ns = int(float(started_at)) * 1_000_000_000  # the wrapper's whole-second start
     repo = _seal_tree_root(code)
-    wrapper_path, wrapper_bytes = executing_wrapper()
-    wrapper_name = Path(wrapper_path.removesuffix(" (deleted)")).name
+    wrapper_path, wrapper_bytes, wrapper_stat = executing_wrapper()
+    _unchanged_since_start("wrapper", wrapper_path, wrapper_stat, started_ns)
+    wrapper_file = Path(wrapper_path.removesuffix(" (deleted)"))
+    wrapper_name = wrapper_file.name
+    _refuse_shadowing(wrapper_file.parent)
+    drivers = [(role, str(wrapper_file.parent / name), f"{WRAPPER_SEAL_DIR}/{name}",
+                hashlib.sha256(_driver_bytes(role, wrapper_file.parent / name,
+                                             started_ns)).hexdigest())
+               for role, name in WRAPPER_DRIVERS]
     scripts = [
         ("receipt", str(Path(__file__).resolve()), RECEIPT_SEAL_PATH,
          sha256_file(Path(__file__).resolve())),
@@ -328,6 +419,7 @@ def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any],
          APPROVED_SEAL_PATH, approved_sha256),
         ("wrapper", wrapper_path, f"{WRAPPER_SEAL_DIR}/{wrapper_name}",
          hashlib.sha256(wrapper_bytes).hexdigest()),
+        *drivers,
     ]
     records = []
     for role, path, seal_path, digest in scripts:
@@ -1213,7 +1305,7 @@ def build_run_receipt(
     code = sealed_code_identity(sealed_sha)
     approved = approved_declared_absent()
     approved_sha = approved[1]
-    tool_scripts = formal_tool_scripts(sealed_sha, code, approved_sha)
+    tool_scripts = formal_tool_scripts(sealed_sha, code, approved_sha, started_at)
     pre, post, snapshot_files = _snapshots(run_root)
     required, required_sha = load_required_layout(
         run_root, [spec.split(":", 2)[0] for spec in specs], approved)

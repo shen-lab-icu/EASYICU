@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -136,7 +137,7 @@ _TOOL_RECORDS = [{"role": "receipt", "path": str(TOOL), "seal_path": "tools/form
 def _tool_scripts(monkeypatch):
     """Stand in for the seal-tree check of the tool scripts (tested below with a real tree)."""
     monkeypatch.setattr(receipt, "formal_tool_scripts",
-                        lambda sha, code, approved_sha: list(_TOOL_RECORDS))
+                        lambda sha, code, approved_sha, started_at: list(_TOOL_RECORDS))
 
 
 def _consumed(path: Path, table: str = "cases", fmt: str = "parquet") -> dict:
@@ -1885,12 +1886,20 @@ def test_a_declared_absent_entry_not_in_the_approved_allowlist_is_refused(tmp_pa
 # r13prov 3 additions (after delta28p).
 # (1) The formal tool scripts the run executes are the seal tree's blobs.
 
-WRAPPER = TOOL.parent / "formal" / "bench7v3e.sh"
 INSTALLED_WRAPPER_SHA256 = "3222d90bfc20a913bda77b48e862b29f559237142c236a69b7d5c5900760b9dd"
 
 
-def test_the_committed_wrapper_is_byte_identical_to_the_installed_one():
-    assert receipt.sha256_file(WRAPPER) == INSTALLED_WRAPPER_SHA256
+FORMAL = TOOL.parent / "formal"
+INSTALLED = {  # sha256 of the installed copies the server wrapper runs
+    "bench7v3e.sh": INSTALLED_WRAPPER_SHA256,
+    "bench_local.py": "523190f23d9703e3d7377604f3389f9e3e1a1adf71c1934668c78891486ff6a9",
+    "inputs_bench_local.py": "f06eca62a1fbac7695c3abc4f4f51dfc27bda27eee4348148480cf0c1503e1ca",
+}
+
+
+@pytest.mark.parametrize("name", sorted(INSTALLED))
+def test_the_committed_formal_scripts_are_byte_identical_to_the_installed_ones(name):
+    assert receipt.sha256_file(FORMAL / name) == INSTALLED[name]
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1902,12 +1911,12 @@ def _git(repo: Path, *args: str) -> str:
 
 def _seal_tree(tmp_path: Path, **override: bytes) -> tuple[Path, str]:
     """A git checkout whose one commit holds the formal tool scripts (``override``
-    replaces one by its seal path's file name)."""
+    replaces one by its file name with dots as underscores)."""
     repo = tmp_path / "seal"
     files = {
         "tools/formal_run_receipt.py": TOOL.read_bytes(),
         "tools/formal_declared_absent.json": receipt.APPROVED_DECLARED_ABSENT_FILE.read_bytes(),
-        "tools/formal/bench7v3e.sh": WRAPPER.read_bytes(),
+        **{f"tools/formal/{name}": (FORMAL / name).read_bytes() for name in INSTALLED},
         "src/easyicu/__init__.py": b"",
     }
     for name, data in override.items():
@@ -1922,46 +1931,91 @@ def _seal_tree(tmp_path: Path, **override: bytes) -> tuple[Path, str]:
     return repo, _git(repo, "rev-parse", "HEAD")
 
 
-def _check_tools(repo: Path, sha: str, monkeypatch, wrapper: bytes | None = None,
-                 wrapper_path: str = "/srv/bench_local/bench7v3e.sh"):
-    data = WRAPPER.read_bytes() if wrapper is None else wrapper
-    monkeypatch.setattr(receipt, "executing_wrapper", lambda: (wrapper_path, data))
+def _bench_dir(tmp_path: Path, **files: bytes) -> Path:
+    """The server's bench directory: the wrapper, its drivers and memgate.py."""
+    bench = tmp_path / "bench_local"
+    bench.mkdir()
+    for name in INSTALLED:
+        (bench / name).write_bytes((FORMAL / name).read_bytes())
+    (bench / "memgate.py").write_bytes(b"# admission only\n")
+    for name, data in files.items():
+        (bench / name).write_bytes(data)
+    return bench
+
+
+def _check_tools(repo: Path, sha: str, monkeypatch, bench: Path,
+                 wrapper_name: str = "bench7v3e.sh", started_at: object = "future"):
+    path = bench / wrapper_name
+    monkeypatch.setattr(receipt, "executing_wrapper",
+                        lambda: (str(path), path.read_bytes(), os.stat(path)))
+    if started_at == "future":  # the run started after every file was written
+        started_at = time.time() + 2
     return _REAL_TOOL_SCRIPTS(sha, {"import_path": str(repo / "src" / "easyicu")},
-                              receipt.approved_declared_absent()[1])
+                              receipt.approved_declared_absent()[1], started_at)
 
 
 def test_matching_tool_scripts_are_recorded_with_their_seal_paths(tmp_path, monkeypatch):
     repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path)
 
-    records = _check_tools(repo, sha, monkeypatch)
+    records = _check_tools(repo, sha, monkeypatch, bench)
 
     assert {r["role"]: (r["seal_path"], r["sha256"]) for r in records} == {
         "receipt": ("tools/formal_run_receipt.py", receipt.sha256_file(TOOL)),
         "approved_declared_absent": ("tools/formal_declared_absent.json",
                                      receipt.sha256_file(receipt.APPROVED_DECLARED_ABSENT_FILE)),
-        "wrapper": ("tools/formal/bench7v3e.sh", INSTALLED_WRAPPER_SHA256),
+        "wrapper": ("tools/formal/bench7v3e.sh", INSTALLED["bench7v3e.sh"]),
+        "extraction_driver": ("tools/formal/bench_local.py", INSTALLED["bench_local.py"]),
+        "snapshot_driver": ("tools/formal/inputs_bench_local.py",
+                            INSTALLED["inputs_bench_local.py"]),
     }
-    assert {r["role"]: r["path"] for r in records}["wrapper"] == "/srv/bench_local/bench7v3e.sh"
+    paths = {r["role"]: r["path"] for r in records}
+    assert paths["wrapper"] == str(bench / "bench7v3e.sh")
+    assert paths["extraction_driver"] == str(bench / "bench_local.py")
+    # memgate.py (admission only) is not a formal tool script.
+    assert not any("memgate" in r["path"] for r in records)
 
 
-@pytest.mark.parametrize("change", ["wrapper", "wrapper_name", "receipt", "approved_sealed",
-                                    "approved_run"])
-def test_a_tool_script_that_is_not_the_seal_trees_is_refused(tmp_path, monkeypatch, change):
-    wrapper, name = None, "/srv/bench_local/bench7v3e.sh"
-    role = {"wrapper": "wrapper", "wrapper_name": "wrapper", "receipt": "receipt"}.get(
-        change, "approved_declared_absent")
+_EDIT = {"bench7v3e.sh": (b"MemoryMax=8G", b"MemoryMax=9G"),
+         "bench_local.py": (b"random.Random(20261104)", b"random.Random(20261105)"),
+         "inputs_bench_local.py": (b"sys.exit(main(", b"sys.exit(int(main(")}
+
+
+def _edited(name: str) -> bytes:
+    old, new = _EDIT[name]
+    data = (FORMAL / name).read_bytes()
+    assert data.count(old) >= 1
+    return data.replace(old, new, 1)
+
+
+@pytest.mark.parametrize("change,role", [
+    ("wrapper", "wrapper"), ("wrapper_name", "wrapper"),
+    ("extraction_driver", "extraction_driver"), ("snapshot_driver", "snapshot_driver"),
+    ("extraction_driver_sealed", "extraction_driver"),
+    ("receipt", "receipt"), ("approved_sealed", "approved_declared_absent"),
+    ("approved_run", "approved_declared_absent"),
+])
+def test_a_tool_script_that_is_not_the_seal_trees_is_refused(tmp_path, monkeypatch, change,
+                                                            role):
+    files, override, wrapper_name = {}, {}, "bench7v3e.sh"
     if change == "wrapper":
-        wrapper = WRAPPER.read_bytes().replace(b"MemoryMax=8G", b"MemoryMax=9G", 1)
-        assert wrapper != WRAPPER.read_bytes()
+        files["bench7v3e.sh"] = _edited("bench7v3e.sh")
     if change == "wrapper_name":  # a wrapper the seal tree does not hold at all
-        name = "/srv/bench_local/bench7v3f.sh"
-    override = {}
+        wrapper_name = "bench7v3f.sh"
+        files[wrapper_name] = (FORMAL / "bench7v3e.sh").read_bytes()
+    if change == "extraction_driver":
+        files["bench_local.py"] = _edited("bench_local.py")
+    if change == "snapshot_driver":
+        files["inputs_bench_local.py"] = _edited("inputs_bench_local.py")
+    if change == "extraction_driver_sealed":
+        override["bench_local_py"] = _edited("bench_local.py")
     if change == "receipt":
         override["formal_run_receipt_py"] = TOOL.read_bytes() + b"\n"
     if change == "approved_sealed":
         override["formal_declared_absent_json"] = (
             receipt.APPROVED_DECLARED_ABSENT_FILE.read_bytes() + b"\n")
     repo, sha = _seal_tree(tmp_path, **override)
+    bench = _bench_dir(tmp_path, **files)
     if change == "approved_run":  # the run read an allowlist other than the sealed one
         edited = tmp_path / "approved" / "formal_declared_absent.json"
         edited.parent.mkdir()
@@ -1971,7 +2025,7 @@ def test_a_tool_script_that_is_not_the_seal_trees_is_refused(tmp_path, monkeypat
         monkeypatch.setattr(receipt, "APPROVED_DECLARED_ABSENT_FILE", edited)
 
     with pytest.raises(receipt.ReceiptError) as error:
-        _check_tools(repo, sha, monkeypatch, wrapper=wrapper, wrapper_path=name)
+        _check_tools(repo, sha, monkeypatch, bench, wrapper_name=wrapper_name)
     assert error.value.code == "formal_tool_script_mismatch"
     assert error.value.details["role"] == role
     if change == "wrapper_name":
@@ -1981,28 +2035,115 @@ def test_a_tool_script_that_is_not_the_seal_trees_is_refused(tmp_path, monkeypat
         assert error.value.details["seal_sha256"] != error.value.details["sha256"]
 
 
+@pytest.mark.parametrize("missing,role", [("bench_local.py", "extraction_driver"),
+                                          ("inputs_bench_local.py", "snapshot_driver")])
+def test_a_driver_missing_beside_the_wrapper_is_unidentified(tmp_path, monkeypatch, missing,
+                                                             role):
+    repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path)
+    (bench / missing).unlink()
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _check_tools(repo, sha, monkeypatch, bench)
+    assert error.value.code == "formal_tool_script_unidentified"
+    assert error.value.details["role"] == role
+
+
+def test_a_script_changed_after_the_run_started_is_refused_even_with_sealed_bytes(
+        tmp_path, monkeypatch):
+    repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path)
+    time.sleep(1.1)
+    started = time.time()
+    # Swapped out and back: the same sealed bytes, mtime restored; ctime moved.
+    driver = bench / "bench_local.py"
+    stat = driver.stat()
+    data = driver.read_bytes()
+    driver.write_bytes(_edited("bench_local.py"))
+    driver.write_bytes(data)
+    os.utime(driver, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _check_tools(repo, sha, monkeypatch, bench, started_at=started)
+    assert error.value.code == "formal_tool_script_mismatch"
+    assert error.value.details["role"] == "extraction_driver"
+    assert error.value.details["reason"] == "changed_after_run_start"
+
+    with pytest.raises(receipt.ReceiptError) as error:  # the wrapper itself, too
+        _check_tools(repo, sha, monkeypatch, bench, started_at=started - 100)
+    assert error.value.details["role"] == "wrapper"
+    assert error.value.details["reason"] == "changed_after_run_start"
+
+
+def test_no_run_start_means_the_drivers_cannot_be_verified(tmp_path, monkeypatch):
+    repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path)
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _check_tools(repo, sha, monkeypatch, bench, started_at=None)
+    assert error.value.code == "formal_tool_script_unverifiable"
+
+
+def test_a_module_file_beside_the_drivers_that_shadows_an_import_is_refused(
+        tmp_path, monkeypatch):
+    repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path, **{"json.py": b"", "pandas.py": b""})
+
+    with pytest.raises(receipt.ReceiptError) as error:
+        _check_tools(repo, sha, monkeypatch, bench)
+    assert error.value.code == "formal_tool_script_shadowed"
+    assert error.value.details["modules"] == ["json", "pandas"]
+
+
+def test_helper_files_and_memgate_beside_the_drivers_are_not_formal_scripts(
+        tmp_path, monkeypatch):
+    # A name importable only from the receipt's own tools/ directory is not a
+    # shadow (the drivers' path has no tools/), and memgate.py is admission only.
+    repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path, **{"reextract_native_export_v2.py": b"",
+                                     "memgate.py": b"# edited\n"})
+
+    records = _check_tools(repo, sha, monkeypatch, bench)
+    assert len(records) == 5
+
+
 def test_the_receipt_records_the_tool_scripts_and_stops_on_a_mismatch(tmp_path, monkeypatch):
     repo, sha = _seal_tree(tmp_path)
+    bench = _bench_dir(tmp_path)
     prepared = _prepared(tmp_path / "prepared")
     seen = {}
 
-    def check(sealed, code, approved_sha):
+    def check(sealed, code, approved_sha, started_at):
         seen["approved_sha"] = approved_sha
-        return _check_tools(repo, sha, monkeypatch)
+        return _check_tools(repo, sha, monkeypatch, bench)
 
     monkeypatch.setattr(receipt, "formal_tool_scripts", check)
     built = _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[])
 
     assert [r["role"] for r in built["tool_scripts"]] == [
-        "receipt", "approved_declared_absent", "wrapper"]
+        "receipt", "approved_declared_absent", "wrapper", "extraction_driver",
+        "snapshot_driver"]
     assert seen["approved_sha"] == built["required_layout"]["approved_declared_absent_sha256"]
 
     shutil.rmtree(tmp_path / "run")
-    monkeypatch.setattr(receipt, "formal_tool_scripts", lambda sealed, code, approved_sha:
-                        _check_tools(repo, sha, monkeypatch, wrapper=b"#!/bin/bash\n"))
+    (bench / "bench_local.py").write_bytes(_edited("bench_local.py"))
     with pytest.raises(receipt.ReceiptError) as error:
         _sic_receipt(tmp_path, prepared, None, monkeypatch, unavailable=[])
     assert error.value.code == "formal_tool_script_mismatch"
+
+
+def test_the_receipt_passes_the_runs_start_to_the_tool_check(tmp_path, monkeypatch):
+    prepared = _prepared(tmp_path / "prepared")
+    run = _run_root(tmp_path, prepared, commit=CODE["commit"], unavailable=[])
+    monkeypatch.setattr(receipt, "sealed_code_identity", lambda sha: dict(CODE))
+    seen = {}
+    monkeypatch.setattr(receipt, "formal_tool_scripts",
+                        lambda sealed, code, approved_sha, started_at:
+                        seen.setdefault("started_at", started_at) and [])
+
+    receipt.build_run_receipt(run, CODE["commit"], [f"sic:{prepared}:144-145"],
+                              scratch=tmp_path / "scratch", started_at=1234.0)
+    assert seen["started_at"] == 1234.0
 
 
 def _proc(tmp_path: Path, chain: list) -> Path:
@@ -2028,7 +2169,9 @@ def test_the_wrapper_is_the_nearest_ancestor_shells_open_script(tmp_path, monkey
     monkeypatch.setattr(receipt, "_PROC", proc)
     monkeypatch.setattr(receipt.os, "getppid", lambda: 50)
 
-    assert receipt.executing_wrapper() == (str(script), b"#!/bin/bash\necho wrapper\n")
+    path, data, stat = receipt.executing_wrapper()
+    assert (path, data) == (str(script), b"#!/bin/bash\necho wrapper\n")
+    assert stat.st_ino == script.stat().st_ino
 
 
 def test_no_ancestor_shell_script_is_a_typed_stop(tmp_path, monkeypatch):
