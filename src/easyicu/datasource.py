@@ -1579,27 +1579,6 @@ class ICUDataSource:
         elif loader is None:
             loader = self._resolve_loader_from_disk(table_name)
 
-            # 🚀 MIMIC-III chartevents CSV fallback
-            # When bucket directory is not available (due to memory constraints during conversion),
-            # fall back to reading directly from CSV.gz with proper VALUE type handling
-            if loader is None and self.config.name == 'mimic' and table_name == 'chartevents':
-                csv_path = self._resolve_mimic3_chartevents_csv()
-                if csv_path is not None and concept_itemid_filter is not None:
-                    storage_layout.csv_table_scan(self, table_name, csv_path)
-                    # Use CSV fallback only when we have itemid filter (for performance)
-                    logger.info("MIMIC-III chartevents: bucket directory not found; using CSV fallback mode")
-                    frame = self._read_mimic3_csv_fallback(
-                        csv_path=csv_path,
-                        columns=columns,
-                        itemid_filter=concept_itemid_filter,
-                        patient_ids_filter=patient_ids_filter,
-                    )
-                    
-                    # An error-only or unmatched selection is a valid empty source.
-                    if enable_caching:
-                        self._cache_raw_frame(cache_key, frame)
-                    return frame
-            
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
                 # A table the conversion manifest lists is not "absent": it
@@ -1645,6 +1624,22 @@ class ICUDataSource:
                 )
         if callable(loader):
             frame = loader()
+        elif (
+            disk_loader and loader is not None
+            and self.config.name == 'mimic' and table_name == 'chartevents'
+            and str(loader).lower().endswith(('.csv', '.csv.gz'))
+            and concept_itemid_filter is not None
+        ):
+            # The owner decides whether CSV is eligible. Its selected loader
+            # still needs the strict MIMIC parser: item filtering, full-schema
+            # validation and VALUE-as-text must precede the generic CSV path.
+            csv_path = Path(loader)
+            storage_layout.csv_table_scan(self, table_name, csv_path)
+            frame = self._read_mimic3_csv_fallback(
+                csv_path=csv_path, columns=columns,
+                itemid_filter=concept_itemid_filter,
+                patient_ids_filter=patient_ids_filter,
+            )
         elif loader is not None:
             frame = self._read_file(
                 Path(loader), columns, 
