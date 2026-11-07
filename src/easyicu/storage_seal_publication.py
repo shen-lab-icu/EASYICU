@@ -330,6 +330,10 @@ def _publication_closure(
             if configuration is not None and (
                 configuration == path
                 or path.is_dir() and configuration.is_relative_to(path)
+                # FORMAL containment retains the owning directory of an
+                # external provenance/source file, without scanning it or
+                # adding unrelated siblings to the publication digest.
+                or not path.is_dir() and configuration.is_relative_to(path.parent)
             ):
                 raise SealPublicationError(
                     "formal_configuration_inside_input", path,
